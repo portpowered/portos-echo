@@ -120,10 +120,18 @@ class MakeTests(unittest.TestCase):
                               encoding="utf-8", errors="replace", timeout=120)
 
     def test_real_shell_nested_tools_and_recipe_failure(self):
-        result = self.run_make("probe")
+        env = os.environ.copy()
+        if WINDOWS:
+            tools = os.path.normcase(os.path.normpath(BOOT.discover(env["PATH"])))
+            env["PATH"] = os.pathsep.join(
+                part for part in env["PATH"].split(os.pathsep)
+                if os.path.normcase(os.path.normpath(part)) != tools)
+            self.assertIsNone(shutil.which("xargs", path=env["PATH"]))
+            self.assertIsNone(shutil.which("sh", path=env["PATH"]))
+        result = self.run_make("probe", env)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(result.stdout.splitlines(), ["<a>", "<b>", "nested-ok", "complete"])
-        result = self.run_make("fail")
+        result = self.run_make("fail", env)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("23", result.stdout)
         self.assertNotIn("must-not-run", result.stdout)
@@ -165,7 +173,7 @@ class MakeTests(unittest.TestCase):
                     (selected / "usr/bin").mkdir(parents=True)
                     if layout == "sh-only":
                         (selected / "usr/bin/sh.exe").touch()
-                    env["PATH"] = str(selected / "cmd") + os.pathsep + base
+                    env["PATH"] = os.pathsep.join((str(selected / "cmd"), str(Path(GIT).parent), base))
                 result = self.run_make("probe", env)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(diagnostic, result.stdout)
@@ -175,4 +183,4 @@ class MakeTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)
