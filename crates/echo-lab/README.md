@@ -28,6 +28,57 @@ check fails. The missing workflow is expected until el-f10. This inventory does
 not prove that gates pass or that M0 is complete. Use a trusted repository:
 GNU Make may evaluate makefile expressions even during a dry run.
 
+## Firmware probe
+
+Build both executables once from the repository root, then run the synthetic probe:
+
+```sh
+cargo build -p echo-lab --bins --locked
+target/debug/echo-lab probe --adb /absolute/path/to/target/debug/echo-lab-fake-adb --out /tmp/new-probe
+```
+
+On Windows, both executable names end in `.exe`. Supply an explicit executable
+path; there is no default adb lookup. The output directory must be new and its
+parent must exist. Keep probe artifacts outside the repository.
+
+`probe` discovers both serial properties in memory before collecting the fixed
+read-only observations. It refuses products other than `athena` with exit 2.
+Success (exit 0) prints the same JSON saved as `manifest.json`: UTC timestamp,
+tool version, build, six library MD5 comparisons, named input capabilities,
+effective display size/density, the named amplifier control values and sorted
+keyword-directory entries. Hash differences are observations, never permission
+to install anything. Directory entries do not prove model contents.
+
+Every captured stdout/stderr is scrubbed of both known nonempty serials before
+storage, including discovery output. Discovery failure discards child output.
+Sanitized raw records are numbered in fixed collection order as
+`raw/<index>.stdout.txt` and `raw/<index>.stderr.txt`; `raw/.gitignore` contains
+exactly `*` followed by a newline. This protects against accidental additions;
+do not force-add raw artifacts. Redaction covers the two discovered serial
+values; it cannot discover unrelated identifiers embedded in arbitrary output.
+
+Bad arguments, adb failures, malformed observations or local write failures
+return 1. Existing destinations are never overwritten, including concurrent
+callers. `manifest.json` is published last through a same-directory rename and
+is the completion marker. A file-write failure may leave sanitized incomplete
+raw files. A stdout failure after publication returns 1 with the completed file
+still available. There is no retry, watchdog or device latency guarantee;
+the operator handles interruption of a stalled real adb.
+
+Workers and reviewers use only the synthetic fake, which never invokes adb.
+Tests use Cargo's prebuilt binaries and isolated fixture overrides/command
+ledgers (`ECHO_LAB_FAKE_FIXTURE` and `ECHO_LAB_FAKE_LEDGER` on the fake only).
+Only the coordinator may run against real hardware under the program's T5
+authorization. Fake tests prove the CLI and persisted contract, not Android
+permissions, firmware output variants or real-device cleanup.
+
+The six-line 7080 hash reference is copied verbatim from
+[echo-dot-assist's pinned athena profile](https://github.com/Gamer92000/echo-dot-assist/blob/8646a4f2f4aeafde2d7aca7359d9eff555a169c0/devices/athena/probe.md5).
+That upstream reference is MIT licensed; its
+[copyright and permission notice](https://github.com/Gamer92000/echo-dot-assist/blob/8646a4f2f4aeafde2d7aca7359d9eff555a169c0/LICENSE)
+applies to the copied reference. These are the 7080 values, not the measured
+7809 firmware values.
+
 ## Artifact contract
 
 The report schema preserves the execution plan fields, adds tier, driver,
