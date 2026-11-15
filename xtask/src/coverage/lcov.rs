@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn merges_binary_records_by_source_line_and_branch_identity() {
-        let report = parse("TN:\nSF:C:\\repo\\a.rs\nDA:1,0\nBRDA:1,0,0,-\nend_of_record\nSF:C:/repo/a.rs\nDA:1,2\nDA:2,0,checksum\nBRDA:1,0,0,1\nBRDA:1,0,1,0\nend_of_record\n", "C:/repo").unwrap();
+        let report = parse("TN:\nSF:C:\\repo\\a.rs\nDA:1,0\nBRDA:1,0,0,-\nend_of_record\nSF:C:/repo/a.rs\nDA:1,2\nDA:2,0,checksum\nBRDA:1,0,0,1\nBRDA:1,0,1,0\nend_of_record\n", "C:/repo").unwrap(); // lint-rules: allow-literal LCOV parser coverage assertion fixture
         assert_eq!(report["a.rs"].lines, BTreeMap::from([(1, true), (2, false)]));
         assert_eq!(
             report["a.rs"].branches,
@@ -88,23 +88,23 @@ mod tests {
     fn malformed_missing_and_external_evidence_fails_closed() {
         for input in [
             "",
-            "DA:1,1",
+            "DA:1,1", // lint-rules: allow-literal LCOV parser coverage assertion fixture
             "end_of_record",
-            "SF:a.rs\nDA:1,1",
+            "SF:a.rs\nDA:1,1", // lint-rules: allow-literal LCOV parser coverage assertion fixture
             "SF:a.rs\nSF:b.rs",
             "SF:/else/a.rs",
             "SF:../a.rs",
             "SF:\n",
-            "SF:a.rs\nDA:1\n",
+            "SF:a.rs\nDA:1\n", // lint-rules: allow-literal LCOV parser coverage assertion fixture
             "SF:a.rs\nDA:x,1\n",
-            "SF:a.rs\nBRDA:1,0\n",
+            "SF:a.rs\nBRDA:1,0\n", // lint-rules: allow-literal LCOV parser coverage assertion fixture
             "SF:a.rs\nunknown\n",
             "SF:a.rs\nend_of_record\n",
         ] {
             assert!(parse(input, "/repo").is_err(), "accepted {input}");
         }
         let report = parse(
-            "SF:a.rs\nFN:1,f\nFNDA:1,f\nFNF:1\nFNH:1\nDA:1,1\nLF:1\nLH:1\nBRF:0\nBRH:0\nend_of_record",
+            "SF:a.rs\nFN:1,f\nFNDA:1,f\nFNF:1\nFNH:1\nDA:1,1\nLF:1\nLH:1\nBRF:0\nBRH:0\nend_of_record", // lint-rules: allow-literal LCOV parser coverage assertion fixture
             "/repo",
         )
         .unwrap();
