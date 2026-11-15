@@ -1,4 +1,5 @@
 //! Bridge-side delegated Responses backend. Wire compatibility is PROVISIONAL until M2.
+mod budget;
 mod conversation;
 mod events;
 mod transport;
@@ -42,7 +43,8 @@ pub struct ResponsesBackend<H, C> {
     credential: Arc<C>,
     transport: transport::Transport,
     config: AgentConfig,
-    tasks: Mutex<HashMap<TaskId, Arc<events::Events>>>,
+    budget: Arc<budget::Budget>,
+    tasks: Mutex<HashMap<TaskId, Option<Arc<events::Events>>>>,
     sequence: AtomicU64,
 }
 
@@ -79,6 +81,7 @@ impl<H, C> ResponsesBackend<H, C> {
         }
         Ok(Self {
             transport: transport::Transport::new(mode, base)?,
+            budget: Arc::new(budget::Budget::new(config.daily_request_cap)),
             config,
             host,
             credential,
@@ -96,13 +99,20 @@ impl<H: ToolHost + Send + Sync + 'static, C: ModelCredential + Send + Sync + 'st
     }
 
     async fn next_event(&self, id: &TaskId) -> Option<TaskEvent> {
-        let events = lock(&self.tasks).get(id).cloned()?;
-        events.next().await
+        let events = lock(&self.tasks).get(id).cloned().flatten()?;
+        let event = events.next().await;
+        if !matches!(event, Some(TaskEvent::Progress { .. })) {
+            lock(&self.tasks).insert(id.clone(), None);
+        }
+        event
     }
 
-    fn cancel(&self, id: &TaskId) -> impl Future<Output = Result<(), AgentError>> + Send {
-        let result = lock(&self.tasks).get(id).cloned().ok_or(AgentError::UnknownTask);
-        std::future::ready(result.map(|events| events.cancel(id)))
+    async fn cancel(&self, id: &TaskId) -> Result<(), AgentError> {
+        let events = lock(&self.tasks).get(id).cloned().ok_or(AgentError::UnknownTask)?;
+        if let Some(events) = events {
+            events.cancel(id).await;
+        }
+        Ok(())
     }
 }
 
@@ -116,20 +126,24 @@ impl<H: ToolHost + Send + Sync + 'static, C: ModelCredential + Send + Sync + 'st
         let credential = self.credential.clone();
         let transport = self.transport.clone();
         let config = self.config.clone();
+        let budget = self.budget.clone();
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(task.deadline_seconds.min(config.task_deadline_seconds));
         let worker_id = id.clone();
         let worker = tokio::spawn(async move {
-            let result = conversation::run(&worker_id, task, &config, &transport, &*host, &*credential).await;
+            let run = conversation::run(&worker_id, task, &config, &transport, &*host, &*credential, &budget);
+            let result = worker_events.drive(run, deadline).await;
             worker_events.finish(&worker_id, result);
         });
         events.set_worker(worker);
-        lock(&self.tasks).insert(id.clone(), events);
+        lock(&self.tasks).insert(id.clone(), Some(events));
         Ok(id)
     }
 }
 
 impl<H, C> Drop for ResponsesBackend<H, C> {
     fn drop(&mut self) {
-        for events in lock(&self.tasks).values() {
+        for events in lock(&self.tasks).values().flatten() {
             events.stop();
         }
     }
@@ -161,3 +175,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod backend_tests;

@@ -1,5 +1,5 @@
 use crate::{ModelCredential, transport::Transport};
-use echo_agent_api::{Task, ToolHost, ToolResult, ToolSpec};
+use echo_agent_api::{Task, ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::AgentConfig;
 use echo_contracts::ids::TaskId;
 use serde_json::{Value, json};
@@ -31,6 +31,7 @@ pub(crate) async fn run<H: ToolHost, C: ModelCredential>(
     transport: &Transport,
     host: &H,
     credential: &C,
+    budget: &crate::budget::Budget,
 ) -> Result<String, Failure> {
     let catalog = host.list_tools().await.map_err(|_| "tool catalog unavailable")?;
     let model = config.model.as_deref().ok_or("model credential unavailable")?;
@@ -41,7 +42,7 @@ pub(crate) async fn run<H: ToolHost, C: ModelCredential>(
     let mut seen = HashSet::new();
     loop {
         let items = transport
-            .request(credential, &request(model, &history, &catalog))
+            .request(credential, &request(model, &history, &catalog), budget)
             .await?;
         let calls = calls(&items, &catalog, &seen)?;
         if calls.is_empty() {
@@ -57,12 +58,16 @@ pub(crate) async fn run<H: ToolHost, C: ModelCredential>(
             let result = host
                 .call_tool(&call.name, call.args, &key)
                 .await
-                .unwrap_or_else(|error| ToolResult {
-                    content: json!({"error":error.to_string()}),
-                    is_error: true,
-                });
+                .unwrap_or_else(|error| error_result(&error));
             history.push(json!({"type":"function_call_output", "call_id":call.id, "output":serde_json::to_string(&result).map_err(|_| INVALID)?}));
         }
+    }
+}
+
+fn error_result(error: &ToolError) -> ToolResult {
+    ToolResult {
+        content: json!({"error":error.to_string()}),
+        is_error: true,
     }
 }
 
@@ -170,5 +175,68 @@ mod tests {
             json!({"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"two"}]}),
         ];
         assert_eq!(final_text(&items), Ok("onetwo".into()));
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn every_tool_error_becomes_an_exact_honest_output() {
+        for (error, message) in [
+            (ToolError::Transport, "transport error"),
+            (ToolError::Unauthorized, "unauthorized"),
+            (ToolError::Denied, "denied"),
+            (ToolError::Timeout, "timeout"),
+            (ToolError::Server("synthetic".into()), "server error: synthetic"),
+        ] {
+            assert_eq!(
+                error_result(&error),
+                ToolResult {
+                    content: json!({"error":message}),
+                    is_error: true
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_calls_are_rejected_before_any_dispatch() {
+        let valid = json!({"type":"function_call","call_id":"call","name":"tool_0","arguments":"{}"});
+        let catalog = vec![ToolSpec {
+            name: "test.echo".into(),
+            description: String::new(),
+            input_schema: json!({}),
+        }];
+        for field in ["type", "call_id", "name", "arguments"] {
+            for value in [Value::Null, json!(3), json!("")] {
+                let mut invalid = valid.clone();
+                invalid[field] = value;
+                assert!(matches!(calls(&[invalid], &catalog, &HashSet::new()), Err(INVALID)));
+            }
+        }
+        for args in ["[]", "null", "3", "{malformed"] {
+            let mut invalid = valid.clone();
+            invalid["arguments"] = json!(args);
+            assert!(matches!(calls(&[invalid], &catalog, &HashSet::new()), Err(INVALID)));
+        }
+        assert!(matches!(
+            calls(&[valid.clone(), valid.clone()], &catalog, &HashSet::new()),
+            Err(INVALID)
+        ));
+        assert!(matches!(
+            calls(&[valid], &catalog, &HashSet::from(["call".into()])),
+            Err(INVALID)
+        ));
+        for item in [
+            json!({"type":"unknown"}),
+            json!({"type":"message","role":"user","content":[]}),
+            json!({"type":"message","role":"assistant"}),
+            json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":3}]}),
+        ] {
+            assert_eq!(final_text(&[item]), Err(INVALID));
+        }
+        assert_eq!(final_text(&[]), Err(INVALID));
     }
 }

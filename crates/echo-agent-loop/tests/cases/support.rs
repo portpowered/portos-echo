@@ -128,7 +128,7 @@ impl Drop for Server {
     }
 }
 
-async fn read(socket: &mut TcpStream) -> Request {
+pub async fn read(socket: &mut TcpStream) -> Request {
     let mut bytes = Vec::new();
     let end = loop {
         let mut buffer = [0; 1024];

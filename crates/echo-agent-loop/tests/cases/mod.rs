@@ -124,3 +124,6 @@ async fn f03_empty_catalog_direct_unicode_text() {
         journey("F03", mode, 0).await;
     }
 }
+mod matrix;
+mod model;
+mod stops;

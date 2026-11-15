@@ -50,12 +50,14 @@ impl Transport {
         &self,
         credential: &C,
         body: &Value,
+        budget: &crate::budget::Budget,
     ) -> Result<Vec<Value>, &'static str> {
         let secret = credential
             .headers(self.mode)
             .await
             .map_err(|_| "model credential unavailable")?;
         let headers = validated_headers(secret.expose(), self.mode)?;
+        budget.reserve()?;
         let mut response = self
             .client
             .post(self.url.clone())

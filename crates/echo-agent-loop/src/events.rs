@@ -30,7 +30,35 @@ impl Events {
     }
 
     pub(crate) fn set_worker(&self, worker: JoinHandle<()>) {
-        lock(&self.state).worker = Some(worker);
+        let mut state = lock(&self.state);
+        if state.terminal {
+            worker.abort();
+        } else {
+            state.worker = Some(worker);
+        }
+    }
+
+    pub(crate) async fn drive(
+        &self,
+        run: impl std::future::Future<Output = Result<String, &'static str>>,
+        deadline: tokio::time::Instant,
+    ) -> Result<String, &'static str> {
+        tokio::pin!(run);
+        let timer = tokio::time::sleep_until(deadline);
+        tokio::pin!(timer);
+        std::future::poll_fn(|cx| {
+            // Serialize each poll with cancellation: once terminal is committed,
+            // even a ready continuation cannot start another side effect.
+            let state = lock(&self.state);
+            if state.terminal {
+                return std::task::Poll::Ready(Err("task cancelled"));
+            }
+            if timer.as_mut().poll(cx).is_ready() {
+                return std::task::Poll::Ready(Err("task timed out"));
+            }
+            run.as_mut().poll(cx)
+        })
+        .await
     }
 
     pub(crate) fn finish(&self, id: &TaskId, result: Result<String, &'static str>) {
@@ -39,6 +67,7 @@ impl Events {
             return;
         }
         state.terminal = true;
+        state.worker.take();
         state.queue.push_back(match result {
             Ok(summary) => TaskEvent::Completed {
                 task_id: id.clone(),
@@ -71,9 +100,13 @@ impl Events {
         }
     }
 
-    pub(crate) fn cancel(&self, id: &TaskId) {
-        self.stop();
+    pub(crate) async fn cancel(&self, id: &TaskId) {
+        let worker = lock(&self.state).worker.take();
         self.finish(id, Err("task cancelled"));
+        if let Some(worker) = worker {
+            worker.abort();
+            let _ = worker.await;
+        }
     }
 
     pub(crate) fn stop(&self) {
@@ -82,3 +115,6 @@ impl Events {
         }
     }
 }
+#[cfg(test)]
+#[path = "events_tests.rs"]
+mod tests;

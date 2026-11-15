@@ -13,7 +13,13 @@ Implement the existing generic `AgentBackend` and `ToolHost` traits in
 `echo-agent-loop`, using one reused reqwest 0.12 client with native-root rustls.
 Disable default features, ambient proxies, redirects and automatic retries.
 Use `Response::chunk` directly for SSE; no model SDK, OAuth library or SSE framework.
-Tokio owns task workers, bounded two-event storage and notification. Serde JSON
+Tokio owns task workers, bounded two-event storage and notification. Per-task polling
+is serialized with terminal transitions; cancellation aborts and joins the worker
+before returning. Deadlines cover catalog, credentials, HTTP and tools from submit,
+using the minimum of caller and configured limits (including zero caller limits).
+One mutex-protected UTC-day counter reserves each POST after credential validation;
+failed and cancelled dispatched attempts remain charged. Accounting is per backend
+instance, not durable across restarts. Drained tasks retain only issued IDs. Serde JSON
 preserves opaque completed response items without projecting away reasoning fields.
 Credentials arrive locally through `ModelCredential` for each POST, wrapped in
 `Secret<HeaderMap>`. Required headers are validated and marked sensitive. Errors
@@ -62,9 +68,10 @@ cargo test --locked -p echo-agent-loop --test t3_agent_loop -- --nocapture
 make ci
 ~~~
 
-Story 002 in this same lane/PR owns daily accounting, deadlines, cancellation
-arbitration and the complete F04-F24 failure matrix. This first slice does not
-claim those criteria. Later gates W2-BRIDGE and W2-M4-SIM own actual MCP and bridge
+Story 002 extends this same lane/PR with daily accounting, deadlines, cancellation
+arbitration and F04-F24. Readiness and disconnect/drop signals prove cleanup of
+stalled operations; an injected day source and paused Tokio time cover rollover
+and deadlines without real services or fixed sleeps. Later gates W2-BRIDGE and W2-M4-SIM own actual MCP and bridge
 integration; M2-REAL and M4-M5-REAL own separately authorized real-service/device
 validation. No paid calls, real credentials or hardware runs are authorized.
 R-FOCUSED, R-CI, R-MERGE and V-LOOP remain owned by review.
