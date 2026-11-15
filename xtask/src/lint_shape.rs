@@ -9,10 +9,7 @@ const VENDORED_ROOTS: [&str; 1] = ["factory/"];
 type Members = BTreeMap<String, String>;
 
 pub fn header() -> String {
-    format!(
-        "lint-shape: vendored roots excluded: {}",
-        VENDORED_ROOTS.join(", ")
-    )
+    format!("lint-shape: vendored roots excluded: {}", VENDORED_ROOTS.join(", "))
 }
 
 fn first_party(path: &str) -> bool {
@@ -38,10 +35,7 @@ fn diagnostic(path: &str, rule: &str, detail: &str) -> String {
 pub fn outcome(result: Result<Vec<String>, String>) -> (u8, Vec<String>) {
     match result {
         Ok(lines) => (u8::from(!lines.is_empty()), lines),
-        Err(message) => (
-            1,
-            vec![format!("lint-shape: input: {}", single_line(&message))],
-        ),
+        Err(message) => (1, vec![format!("lint-shape: input: {}", single_line(&message))]),
     }
 }
 
@@ -68,8 +62,8 @@ fn read_result(path: &str, result: Result<Vec<u8>, String>) -> Result<Vec<u8>, S
 
 fn read(path: &str) -> Result<Vec<u8>, String> {
     let root = std::fs::canonicalize(".").map_err(|_| "cannot resolve repository root")?;
-    let resolved = std::fs::canonicalize(path)
-        .map_err(|_| format!("cannot resolve required file {}", single_line(path)))?;
+    let resolved =
+        std::fs::canonicalize(path).map_err(|_| format!("cannot resolve required file {}", single_line(path)))?;
     if !resolved.starts_with(root) {
         return Err(format!(
             "required file {} resolves outside repository",
@@ -162,9 +156,7 @@ fn check_members(actual: &Members, declared: &Members) -> Vec<String> {
             Some(expected) if expected != path => lines.push(diagnostic(
                 &manifest,
                 "crate-set",
-                &format!(
-                    "workspace member {name} directory {path} differs from lanes.toml {expected}"
-                ),
+                &format!("workspace member {name} directory {path} differs from lanes.toml {expected}"),
             )),
             _ => {}
         }
@@ -176,10 +168,7 @@ fn check_members(actual: &Members, declared: &Members) -> Vec<String> {
             ));
         }
     }
-    for (name, path) in declared
-        .iter()
-        .filter(|(_, p)| first_party(&format!("{p}/")))
-    {
+    for (name, path) in declared.iter().filter(|(_, p)| first_party(&format!("{p}/"))) {
         if !actual.contains_key(name) {
             lines.push(diagnostic(
                 "lanes.toml",
@@ -200,23 +189,15 @@ where
     for path in paths.iter().filter(|p| first_party(p)) {
         if source(path) {
             let bytes = read(path)?;
-            let count = bytes.iter().filter(|&&b| b == b'\n').count()
-                + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n"));
+            let count = bytes.split_inclusive(|&byte| byte == b'\n').count();
             if count > 500 {
-                lines.push(diagnostic(
-                    path,
-                    "file-lines",
-                    &format!("{count} lines exceeds 500"),
-                ));
+                lines.push(diagnostic(path, "file-lines", &format!("{count} lines exceeds 500")));
             }
         }
-        if let Some((parent, _)) = path.rsplit_once('/') {
-            if ["crates/", "xtask/", "web/"]
-                .iter()
-                .any(|root| path.starts_with(root))
-            {
-                *directories.entry(parent).or_default() += 1;
-            }
+        if let Some((parent, _)) = path.rsplit_once('/')
+            && ["crates/", "xtask/", "web/"].iter().any(|root| path.starts_with(root))
+        {
+            *directories.entry(parent).or_default() += 1;
         }
     }
     for (directory, count) in directories {
@@ -235,13 +216,7 @@ pub fn run() -> Result<Vec<String>, String> {
     let paths = tracked(&command("git", &["ls-files", "-z"])?)?;
     let metadata = command(
         "cargo",
-        &[
-            "metadata",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--offline",
-        ],
+        &["metadata", "--no-deps", "--format-version", "1", "--offline"],
     )?;
     let actual = shape_json::members(&metadata)?;
     let bytes = read("lanes.toml")?;
@@ -258,10 +233,7 @@ mod tests {
     use super::*;
 
     fn members(entries: &[(&str, &str)]) -> Members {
-        entries
-            .iter()
-            .map(|(n, p)| (n.to_string(), p.to_string()))
-            .collect()
+        entries.iter().map(|(n, p)| (n.to_string(), p.to_string())).collect()
     }
 
     #[test]
@@ -270,24 +242,15 @@ mod tests {
         assert_eq!(check_members(&actual, &actual), Vec::<String>::new());
         assert_eq!(
             check_members(&actual, &members(&[("xtask", "xtask")])),
-            [
-                "crates/new/Cargo.toml: crate-set: workspace member echo-new is not declared in lanes.toml"
-            ]
+            ["crates/new/Cargo.toml: crate-set: workspace member echo-new is not declared in lanes.toml"]
         );
         assert_eq!(
             check_members(&members(&[("xtask", "xtask")]), &actual),
-            [
-                "lanes.toml: crate-set: declared crate echo-new at crates/new is not a workspace member"
-            ]
+            ["lanes.toml: crate-set: declared crate echo-new at crates/new is not a workspace member"]
         );
         assert_eq!(
-            check_members(
-                &actual,
-                &members(&[("xtask", "tools"), ("echo-new", "crates/new")])
-            ),
-            [
-                "xtask/Cargo.toml: crate-set: workspace member xtask directory xtask differs from lanes.toml tools"
-            ]
+            check_members(&actual, &members(&[("xtask", "tools"), ("echo-new", "crates/new")])),
+            ["xtask/Cargo.toml: crate-set: workspace member xtask directory xtask differs from lanes.toml tools"]
         );
     }
 
@@ -311,8 +274,7 @@ mod tests {
             for separator in ["\n", "\r\n"] {
                 for count in [0, 500, 501] {
                     let bytes = separator.repeat(count).into_bytes();
-                    let got =
-                        check_files(std::slice::from_ref(&path), |_| Ok(bytes.clone())).unwrap();
+                    let got = check_files(std::slice::from_ref(&path), |_| Ok(bytes.clone())).unwrap();
                     let expected = if count == 501 {
                         vec![format!("{path}: file-lines: 501 lines exceeds 500")]
                     } else {
@@ -334,10 +296,7 @@ mod tests {
         for root in ["crates/example", "xtask", "web/screen"] {
             let mut paths: Vec<_> = (0..10).map(|i| format!("{root}/test{i}.txt")).collect();
             paths.push(format!("{root}/nested/one.txt"));
-            assert_eq!(
-                check_files(&paths, |_| unreachable!()).unwrap(),
-                Vec::<String>::new()
-            );
+            assert_eq!(check_files(&paths, |_| unreachable!()).unwrap(), Vec::<String>::new());
             paths.push(format!("{root}/tests.rs"));
             assert_eq!(
                 check_files(&paths, |_| Ok(vec![])).unwrap(),
@@ -345,17 +304,13 @@ mod tests {
             );
         }
         let paths: Vec<_> = (0..11).map(|i| format!("docs/{i}.txt")).collect();
-        assert_eq!(
-            check_files(&paths, |_| unreachable!()).unwrap(),
-            Vec::<String>::new()
-        );
+        assert_eq!(check_files(&paths, |_| unreachable!()).unwrap(), Vec::<String>::new());
     }
 
     #[test]
     fn vendored_boundary_is_visible_and_exact() {
         assert_eq!(header(), "lint-shape: vendored roots excluded: factory/");
-        let paths =
-            tracked("factory/example.py\0scripts/example.py\0factory-extra/example.py\0").unwrap();
+        let paths = tracked("factory/example.py\0scripts/example.py\0factory-extra/example.py\0").unwrap();
         let got = check_files(&paths, |p| {
             assert_ne!(p, "factory/example.py");
             Ok(b"\n".repeat(501))
@@ -369,14 +324,8 @@ mod tests {
             ]
         );
         let vendor = members(&[("vendor", "factory/vendor")]);
-        assert_eq!(
-            check_members(&vendor, &Members::new()),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            check_members(&Members::new(), &vendor),
-            Vec::<String>::new()
-        );
+        assert_eq!(check_members(&vendor, &Members::new()), Vec::<String>::new());
+        assert_eq!(check_members(&Members::new(), &vendor), Vec::<String>::new());
     }
 
     #[test]
@@ -404,8 +353,7 @@ mod tests {
 
     #[test]
     fn lanes_parse_normalize_and_reject_invalid_declarations() {
-        let parsed =
-            lanes("[[crate]]\nname='xtask'\npath='./tools/../xtask'\nkind='tool'").unwrap();
+        let parsed = lanes("[[crate]]\nname='xtask'\npath='./tools/../xtask'\nkind='tool'").unwrap();
         assert_eq!(parsed, members(&[("xtask", "xtask")]));
         assert_eq!(normalize("C:\\repo\\.\\xtask"), Ok("C:/repo/xtask".into()));
         for input in [
@@ -423,10 +371,7 @@ mod tests {
     #[test]
     fn required_input_failures_are_actionable_and_status_one() {
         assert_eq!(outcome(Ok(vec![])), (0, vec![]));
-        assert_eq!(
-            outcome(Ok(vec!["violation".into()])),
-            (1, vec!["violation".into()])
-        );
+        assert_eq!(outcome(Ok(vec!["violation".into()])), (1, vec!["violation".into()]));
         assert_eq!(
             outcome(command_result("git ls-files", Ok((false, vec![]))).map(|_| vec![])),
             (
@@ -442,15 +387,10 @@ mod tests {
             command_result("git", Ok((true, vec![255]))),
             Err("git returned non-UTF-8 output".into())
         );
-        let got = check_files(&["missing.rs".into()], |p| {
-            read_result(p, Err("denied".into()))
-        });
+        let got = check_files(&["missing.rs".into()], |p| read_result(p, Err("denied".into())));
         assert_eq!(
             outcome(got),
-            (
-                1,
-                vec!["lint-shape: input: cannot read missing.rs: denied".into()]
-            )
+            (1, vec!["lint-shape: input: cannot read missing.rs: denied".into()])
         );
         assert_eq!(
             outcome(Err("bad\ninput".into())),

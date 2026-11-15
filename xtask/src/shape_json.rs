@@ -19,20 +19,13 @@ type Parsed<T> = Result<T, &'static str>;
 
 impl Parser<'_> {
     fn whitespace(&mut self) {
-        while self
-            .input
-            .get(self.position)
-            .is_some_and(|b| b" \r\n\t".contains(b))
-        {
+        while self.input.get(self.position).is_some_and(|b| b" \r\n\t".contains(b)) {
             self.position += 1;
         }
     }
 
     fn take(&mut self) -> Parsed<u8> {
-        let byte = *self
-            .input
-            .get(self.position)
-            .ok_or("unexpected end of JSON")?;
+        let byte = *self.input.get(self.position).ok_or("unexpected end of JSON")?;
         self.position += 1;
         Ok(byte)
     }
@@ -171,11 +164,7 @@ impl Parser<'_> {
 
     fn digits(&mut self) -> Parsed<()> {
         let start = self.position;
-        while self
-            .input
-            .get(self.position)
-            .is_some_and(u8::is_ascii_digit)
-        {
+        while self.input.get(self.position).is_some_and(u8::is_ascii_digit) {
             self.position += 1;
         }
         if self.position == start {
@@ -298,10 +287,7 @@ mod tests {
 
     #[test]
     fn selects_members_by_id_and_decodes_windows_paths() {
-        assert_eq!(
-            members(METADATA),
-            Ok(Members::from([("xtask".into(), "xtask".into())]))
-        );
+        assert_eq!(members(METADATA), Ok(Members::from([("xtask".into(), "xtask".into())])));
         assert_eq!(
             parse(r#""\"\\\/\b\f\n\r\t\u0061\ud83d\ude00""#),
             Ok(Value::String("\"\\/\u{8}\u{c}\n\r\ta😀".into()))
@@ -347,10 +333,7 @@ mod tests {
             ("repo\\\\.\\\\xtask", "elsewhere\\\\xtask"),
             ("Cargo.toml", "Other.toml"),
         ] {
-            assert!(
-                members(&METADATA.replace(before, after)).is_err(),
-                "{before}"
-            );
+            assert!(members(&METADATA.replace(before, after)).is_err(), "{before}");
         }
         assert_eq!(
             members("{}"),
