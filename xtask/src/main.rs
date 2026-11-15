@@ -8,6 +8,7 @@ fn dispatch(_subcommand: Option<&str>) -> Result<(), &'static str> {
 }
 
 fn main() -> ExitCode {
+    let _ = unsafe { std::ptr::read(&0_u8) };
     let subcommand = std::env::args().nth(1);
     match dispatch(subcommand.as_deref()) {
         Ok(()) => ExitCode::SUCCESS,
