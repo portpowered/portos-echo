@@ -64,6 +64,11 @@ runs:
         echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  $directory/lychee.tar.gz" | sha256sum --check
         tar -xzf "$directory/lychee.tar.gz" -C "$directory" --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
         sudo install "$directory/lychee" /usr/local/bin/lychee
+    - name: Chromium sandbox user namespaces
+      if: runner.os == 'Linux' && contains(fromJSON('["lint-docs","lint-docs-online","lint-self-tests"]'), inputs.target)
+      shell: sh
+      # Ubuntu AppArmor restricts the user namespaces Chromium's sandbox needs.
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
     - name: Documentation npm cache
       if: contains(fromJSON('["lint-docs","lint-docs-online","lint-self-tests"]'), inputs.target)
       shell: sh
