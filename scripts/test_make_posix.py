@@ -101,9 +101,11 @@ class MakeTests(unittest.TestCase):
         self.assertIsNotNone(MAKE, "preinstalled GNU Make is required")
         self.assertIsNotNone(GIT, "preinstalled Git is required")
         self.before = snapshot()
+        self.environment_before = dict(os.environ)
         self.temp = tempfile.TemporaryDirectory(prefix="make space é ")
         self.addCleanup(self.temp.cleanup)
         self.addCleanup(lambda: self.assertEqual(self.before, snapshot()))
+        self.addCleanup(lambda: self.assertEqual(self.environment_before, dict(os.environ)))
         self.root = Path(self.temp.name)
         (self.root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/make-posix.py", self.root / "scripts")
@@ -115,9 +117,28 @@ class MakeTests(unittest.TestCase):
                        "fail:\n\t@exit 23\n\t@printf 'must-not-run\\n'\n")
 
     def run_make(self, target, env=None):
+        child = dict(os.environ if env is None else env)
+        # Fixture output and failures must not depend on the invoking Make's flags.
+        child.pop("MAKEFLAGS", None)
+        child.pop("MFLAGS", None)
         return subprocess.run([MAKE, "--no-print-directory", target], cwd=self.root,
-                              env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              env=child, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               encoding="utf-8", errors="replace", timeout=120)
+
+    def test_helper_copies_selected_environment(self):
+        supplied = {"PATH": "fixture-only", "MAKEFLAGS": "--trace", "MFLAGS": "-s"}
+        for env in (None, supplied):
+            with self.subTest(explicit=env is not None):
+                before = dict(os.environ if env is None else env)
+                expected = before.copy()
+                expected.pop("MAKEFLAGS", None)
+                expected.pop("MFLAGS", None)
+                with patch.object(subprocess, "run") as run:
+                    self.run_make("probe", env)
+                child = run.call_args.kwargs["env"]
+                self.assertEqual(child, expected)
+                self.assertIsNot(child, os.environ if env is None else env)
+                self.assertEqual(dict(os.environ if env is None else env), before)
 
     def test_real_shell_nested_tools_and_recipe_failure(self):
         env = os.environ.copy()
@@ -128,13 +149,23 @@ class MakeTests(unittest.TestCase):
                 if os.path.normcase(os.path.normpath(part)) != tools)
             self.assertIsNone(shutil.which("xargs", path=env["PATH"]))
             self.assertIsNone(shutil.which("sh", path=env["PATH"]))
-        result = self.run_make("probe", env)
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(result.stdout.splitlines(), ["<a>", "<b>", "nested-ok", "complete"])
-        result = self.run_make("fail", env)
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("23", result.stdout)
-        self.assertNotIn("must-not-run", result.stdout)
+        absent = env.copy()
+        absent.pop("MAKEFLAGS", None)
+        absent.pop("MFLAGS", None)
+        traced = env.copy()
+        traced.update(MAKEFLAGS="--trace", MFLAGS="--trace")
+        for name, selected in (("implicit", None), ("absent", absent), ("trace", traced)):
+            with self.subTest(environment=name):
+                before = dict(os.environ if selected is None else selected)
+                result = self.run_make("probe", selected)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(result.stdout.splitlines(), ["<a>", "<b>", "nested-ok", "complete"])
+                self.assertEqual(dict(os.environ if selected is None else selected), before)
+                result = self.run_make("fail", selected)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("Error 23", result.stdout)
+                self.assertNotIn("must-not-run", result.stdout)
+                self.assertEqual(dict(os.environ if selected is None else selected), before)
 
     def test_real_format_seed_then_repair(self):
         subprocess.run([GIT, "init", "-q"], cwd=self.root, check=True, timeout=30)
