@@ -48,6 +48,7 @@ for tool in eslint tsc prettier; do
 done
 # All tools must be installed locally; npx must never fetch a replacement.
 export npm_config_offline=true npm_config_yes=false
+npm run check:schema
 npx eslint .
 npx tsc --noEmit
 npx prettier --check .
