@@ -58,7 +58,8 @@ test-unit:
 	if [ -f web/screen/package.json ]; then cd web/screen && npm ci && npm test; fi
 
 test-contract:
-	printf '%s\n' 'no contract tests yet'
+	cargo test --offline --locked -p echo-contracts --lib --test contracts_wyoming --test contracts_events -- --nocapture
+	cargo test --offline --locked -p echo-screen-contract --test screen_wire -- --nocapture
 
 test-sim:
 	cargo run --locked -p echo-lab -- validate

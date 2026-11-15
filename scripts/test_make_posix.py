@@ -188,6 +188,56 @@ class MakeTests(unittest.TestCase):
         self.assertIn("cargo fmt --all --check", result.stdout)
         self.assertIn("shfmt -d", result.stdout)
 
+    def contract_gate(self, fail_package, expected_packages):
+        tools = self.root / "tools"
+        tools.mkdir()
+        cargo = tools / "cargo"
+        cargo.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$*" >> cargo-invocations.txt\n'
+            'printf "cargo-stub:%s\\n" "$5"\n'
+            'if [ "$5" = "$FAIL_PACKAGE" ]; then exit 23; fi\n',
+            encoding="utf-8", newline="\n")
+        cargo.chmod(0o755)
+        if WINDOWS:
+            (tools / "cargo.cmd").write_text(
+                '@"' + BOOT.discover(os.environ["PATH"]) + '/sh.exe" "%~dp0cargo" %*\n',
+                encoding="utf-8")
+        env = {key: value for key, value in os.environ.items() if key.upper() != "PATH"}
+        inherited = [part for part in os.environ["PATH"].split(os.pathsep)
+                     if not any((Path(part) / name).is_file() for name in ("cargo", "cargo.exe"))]
+        env["PATH"] = os.pathsep.join([str(tools), *inherited])
+        env["FAIL_PACKAGE"] = fail_package
+        result = self.run_make("test-contract", env)
+        self.assertTrue((self.root / "cargo-invocations.txt").is_file(), result.stdout)
+        commands = {
+            "echo-contracts": "test --offline --locked -p echo-contracts --lib "
+                              "--test contracts_wyoming --test contracts_events -- --nocapture",
+            "echo-screen-contract": "test --offline --locked -p echo-screen-contract "
+                                    "--test screen_wire -- --nocapture",
+        }
+        self.assertEqual(
+            (self.root / "cargo-invocations.txt").read_text(encoding="utf-8").splitlines(),
+            [commands[package] for package in expected_packages])
+        for package in expected_packages:
+            self.assertIn("cargo-stub:" + package, result.stdout)
+        self.assertNotIn("no contract tests yet", result.stdout)
+        return result
+
+    def test_contract_gate_runs_both_locked_offline_suites(self):
+        result = self.contract_gate("", ["echo-contracts", "echo-screen-contract"])
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_contract_gate_stops_after_first_suite_failure(self):
+        result = self.contract_gate("echo-contracts", ["echo-contracts"])
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Error 23", result.stdout)
+        self.assertNotIn("cargo-stub:echo-screen-contract", result.stdout)
+
+    def test_contract_gate_propagates_screen_suite_failure(self):
+        result = self.contract_gate("echo-screen-contract", ["echo-contracts", "echo-screen-contract"])
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Error 23", result.stdout)
+
     @unittest.skipUnless(WINDOWS, "Windows-only process coverage unavailable on native Unix")
     def test_missing_git_or_selected_installation_tools_fail_before_recipe(self):
         env = os.environ.copy()
