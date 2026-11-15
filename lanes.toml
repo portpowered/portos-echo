@@ -24,3 +24,8 @@ kind = "lib"
 name = "echo-screen-contract"
 path = "crates/echo-screen-contract"
 kind = "lib"
+
+[[crate]]
+name = "echo-contracts"
+path = "crates/echo-contracts"
+kind = "lib"

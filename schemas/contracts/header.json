@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Header",
+  "type": "object",
+  "properties": {
+    "data": true,
+    "data_length": {
+      "type": "integer",
+      "format": "uint",
+      "default": 0,
+      "minimum": 0
+    },
+    "payload_length": {
+      "type": "integer",
+      "format": "uint",
+      "default": 0,
+      "minimum": 0
+    },
+    "type": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "type"
+  ]
+}
