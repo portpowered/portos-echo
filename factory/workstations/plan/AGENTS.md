@@ -331,8 +331,7 @@ defects. A lane without a project tag keeps the current operator route.
    the existing project-report path; do not create a second request or move Work.
 3. Temporary (AM-T0 stopgap, removed by AM-T11): do not poll in the visit.
    End the visit with `CONTINUE` whose `feedback` STARTS with
-   `AWAITING_OPERATOR_ANSWER`, followed by the request path and your stated
-   no-answer path. That parks the idea in `awaiting-answer`, where the
+   `AWAITING_OPERATOR_ANSWER`, followed by the lane name only (the request file holds the path and your no-answer path). That parks the idea in `awaiting-answer`, where the
    `mailbox-wait-idea` script waits up to 60 minutes (from the request file's
    last write) without an executor slot, then returns the idea to `init` for a
    new planning visit. A `CONTINUE` without that prefix keeps its old meaning
@@ -354,6 +353,8 @@ defects. A lane without a project tag keeps the current operator route.
 Return one raw JSON object, never a bare marker or a Markdown fence:
 
 `{"decision":"ACCEPTED","feedback":"Evidence and handoff summary","output":"Artifact or PR reference"}`
+
+**`CONTINUE` feedback is at most 120 characters, ASCII only.** The factory copies it into a worker-session label capped at 200 characters, and a longer value stops the whole factory run, every lane at once (measured 2026-11-15: a 529-character park message did this). When parking, the feedback is exactly `AWAITING_OPERATOR_ANSWER <lane-name>`: the request file carries the path, the question and the no-answer path. Any other `CONTINUE` gets one short sentence, with the detail in `progress.txt`.
 
 Use the standard decision envelope without classificationRoutes. ACCEPTED means
 this workstation's own delivery gate is satisfied, never that all Project
