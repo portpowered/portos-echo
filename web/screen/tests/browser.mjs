@@ -1,0 +1,171 @@
+import { chromium } from "playwright";
+import { after } from "node:test";
+import { readFile, mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import assert from "node:assert/strict";
+
+const browser = await chromium.launch({
+    headless: true,
+    args: [
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-domain-reliability",
+        "--no-proxy-server",
+    ],
+});
+after(() => browser.close());
+const html = await readFile(
+    new URL("../dist/index.html", import.meta.url),
+    "utf8",
+);
+const css = await readFile(
+    new URL("../dist/screen.css", import.meta.url),
+    "utf8",
+);
+const js = await readFile(
+    new URL("../dist/screen.js", import.meta.url),
+    "utf8",
+);
+export async function pageFor(
+    t,
+    query = "?events=%2Fevents&actions=%2Factions",
+) {
+    const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    const requests = [];
+    await context.route("**/*", (route) => {
+        requests.push(route.request().url());
+        return route.abort();
+    });
+    await page.coverage.startJSCoverage({ resetOnNavigation: false });
+    t.after(async () => {
+        try {
+            assert.deepEqual(
+                requests,
+                [],
+                "component must not request any network resource",
+            );
+            const coverage = await page.coverage.stopJSCoverage();
+            await mkdir("test-results/coverage", { recursive: true });
+            await writeFile(
+                `test-results/coverage/${randomUUID()}.json`,
+                JSON.stringify(
+                    coverage.filter((item) => item.url === "screen.js"),
+                ),
+            );
+        } finally {
+            await context.close();
+        }
+    });
+    await page.clock.install({ time: 0 });
+    await page.setContent(
+        html
+            .replace('<link rel="stylesheet" href="screen.css" />', "")
+            .replace('<script src="screen.js"></script>', "")
+            .replace(
+                "<head>",
+                `<head><base href="http://127.0.0.1:4173/${query.replaceAll("&", "&amp;")}">`,
+            ),
+    );
+    await page.addStyleTag({ content: css });
+    await page.evaluate(() => {
+        window.calls = [];
+        window.streams = [];
+        window.postStatus = 204;
+        window.EventSource = class {
+            constructor(url) {
+                this.url = url;
+                this.closed = false;
+                window.streams.push(this);
+            }
+            close() {
+                this.closed = true;
+            }
+        };
+        window.fetch = (url, options) => {
+            window.calls.push({
+                url,
+                method: options.method,
+                headers: options.headers,
+                body: options.body,
+            });
+            if (window.postStatus === "reject")
+                return Promise.reject(new Error("controlled"));
+            if (window.postStatus === "pending")
+                return new Promise((resolve) => {
+                    window.resolvePost = resolve;
+                });
+            return Promise.resolve({ status: window.postStatus });
+        };
+    });
+    await page.addScriptTag({ content: `${js}\n//# sourceURL=screen.js` });
+    await page.evaluate(() => document.fonts.ready);
+    return page;
+}
+export const emit = (page, wire) =>
+    page.evaluate((data) => window.streams[0].onmessage({ data }), wire);
+export const calls = (page) => page.evaluate(() => window.calls);
+export async function bounds(page) {
+    const contrasts = await page.evaluate(() => {
+        function luminance(color) {
+            const rgb = color
+                .match(/\d+/g)
+                .slice(0, 3)
+                .map(Number)
+                .map((n) => n / 255)
+                .map((v) =>
+                    v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4,
+                );
+            return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+        }
+        return [...document.querySelectorAll("h1,p,button")]
+            .filter((node) => node.textContent)
+            .map((node) => {
+                let background = node;
+                while (
+                    getComputedStyle(background).backgroundColor ===
+                        "rgba(0, 0, 0, 0)" &&
+                    background.parentElement
+                )
+                    background = background.parentElement;
+                const a = luminance(getComputedStyle(node).color);
+                const b = luminance(
+                    getComputedStyle(background).backgroundColor,
+                );
+                return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+            });
+    });
+    for (const ratio of contrasts)
+        assert.ok(ratio >= 4.5, `text contrast ${ratio}`);
+    const measurements = await page.evaluate(() =>
+        [...document.querySelectorAll("h1, p, button")]
+            .filter((node) => node.textContent)
+            .map((node) => {
+                const box = node.getBoundingClientRect();
+                return {
+                    tag: node.tagName,
+                    x: box.x,
+                    y: box.y,
+                    width: box.width,
+                    height: box.height,
+                    scroll: node.scrollWidth,
+                    client: node.clientWidth,
+                };
+            }),
+    );
+    for (const box of measurements) {
+        assert.ok(
+            box.x >= 0 &&
+                box.y >= 0 &&
+                box.x + box.width <= 1280 &&
+                box.y + box.height <= 800,
+            JSON.stringify(box),
+        );
+        assert.ok(box.scroll <= box.client, JSON.stringify(box));
+        if (box.tag === "BUTTON")
+            assert.ok(box.width >= 64 && box.height >= 64);
+    }
+}

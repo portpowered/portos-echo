@@ -27,6 +27,16 @@ fn job(name: &str, target: &str) -> String {
     let mut block = format!(
         "  {name}:\n    name: {name}\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n      - uses: ./.github/actions/setup\n        with:\n          target: {target}\n      - name: {name}\n        run: make {target}\n"
     );
+    if matches!(name, "format" | "lint-scripts-web" | "test-unit") {
+        let step = format!("      - name: {name}\n");
+        let mut provision = String::from(
+            "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: |\n            ~/.npm\n            ~/.cache/ms-playwright\n          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}\n      - name: Provision locked screen npm cache\n        run: npm --prefix web/screen ci --offline=false\n",
+        );
+        if name == "test-unit" {
+            provision.push_str("      - name: Provision pinned screen Chromium\n        run: cd web/screen && npx --offline playwright install --with-deps chromium\n");
+        }
+        block = block.replace(&step, &format!("{provision}{step}"));
+    }
     if name == "test-sim" {
         let step = "      - name: test-sim\n";
         let host = "      - name: Host build dependencies\n        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/hassmic-host\n          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n      - name: Build pinned hassmic-host\n        run: make hassmic-host\n";
@@ -36,6 +46,9 @@ fn job(name: &str, target: &str) -> String {
         block.push_str(
             "        env:\n          COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}\n",
         );
+    }
+    if name == "test-unit" {
+        block.push_str("      - name: Publish screen screenshot evidence\n        if: always()\n        id: screen-evidence\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: screen-evidence-${{ github.sha }}\n          path: |\n            web/screen/test-results/screenshots/**\n            web/screen/test-results/summary.txt\n          if-no-files-found: error\n");
     }
     block
 }
@@ -213,8 +226,49 @@ mod tests {
     }
 
     #[test]
+    fn screen_provisioning_requires_exact_steps_and_unconditional_gates() {
+        let (makefile, workflow) = fixture();
+        for fragment in [
+            "            ~/.npm\n",
+            "            ~/.cache/ms-playwright\n",
+            "          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}\n",
+            "      - name: Provision locked screen npm cache\n",
+            "        run: npm --prefix web/screen ci --offline=false\n",
+            "      - name: Provision pinned screen Chromium\n",
+            "        run: cd web/screen && npx --offline playwright install --with-deps chromium\n",
+            "        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n",
+            "          name: screen-evidence-${{ github.sha }}\n",
+            "            web/screen/test-results/screenshots/**\n",
+            "            web/screen/test-results/summary.txt\n",
+            "          if-no-files-found: error\n",
+        ] {
+            for replacement in [String::new(), format!("{fragment}        if: false\n")] {
+                assert!(evaluate(&makefile, &workflow.replace(fragment, &replacement)).is_err());
+            }
+        }
+        for (from, to) in [
+            (
+                "hashFiles('web/screen/package-lock.json')",
+                "hashFiles('web/screen/package.json')",
+            ),
+            (
+                "npm --prefix web/screen ci --offline=false",
+                "npm --prefix web/screen install",
+            ),
+            (
+                "playwright install --with-deps chromium",
+                "playwright install --with-deps firefox",
+            ),
+            ("run: make test-unit\n", "run: make test-unit || true\n"),
+        ] {
+            assert!(evaluate(&makefile, &workflow.replace(from, to)).is_err());
+        }
+    }
+
+    #[test]
     fn test_sim_requires_each_exact_host_step() {
         let (makefile, workflow) = fixture();
+        let host_job = job("test-sim", "test-sim");
         let fragments = [
             "      - name: Host build dependencies\n",
             "        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n",
@@ -228,9 +282,12 @@ mod tests {
         for fragment in fragments {
             for replacement in [String::new(), format!("{fragment}        if: false\n")] {
                 assert!(
-                    evaluate(&makefile, &workflow.replace(fragment, &replacement))
-                        .unwrap_err()
-                        .contains("unsupported job test-sim")
+                    evaluate(
+                        &makefile,
+                        &workflow.replace(&host_job, &host_job.replace(fragment, &replacement))
+                    )
+                    .unwrap_err()
+                    .contains("unsupported job test-sim")
                 );
             }
         }
@@ -243,7 +300,7 @@ mod tests {
             ("run: make hassmic-host\n", "run: make hassmic-host || true\n"),
             ("run: make test-sim\n", "run: make test-sim || true\n"),
         ] {
-            assert!(evaluate(&makefile, &workflow.replace(from, to)).is_err());
+            assert!(evaluate(&makefile, &workflow.replace(&host_job, &host_job.replace(from, to))).is_err());
         }
     }
 }
