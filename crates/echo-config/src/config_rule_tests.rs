@@ -197,12 +197,20 @@ fn missing_fields_unknown_fields_and_invalid_types_name_the_context() {
 
 #[test]
 fn socket_addresses_are_parsed_without_binding() {
-    for value in ["127.0.0.1:1", "[::1]:16900", "0.0.0.0:0"] {
+    for value in [
+        "127.0.0.1:1",
+        "[::1]:16900",
+        "0.0.0.0:0", // lint-rules: allow-literal configuration socket parser fixture; no binding
+    ] {
         let config =
             BridgeConfig::from_toml_str(&change("listen", "\"0.0.0.0:16900\"", &format!("'{value}'"))).unwrap(); // lint-rules: allow-literal configuration parser acceptance/rejection fixture
         assert_eq!(config.screen.listen.to_string(), value);
     }
-    for value in ["'SYNTHETIC_VALUE'", "false", "'host.invalid:16900'"] {
+    for value in [
+        "'SYNTHETIC_VALUE'",
+        "false",
+        "'host.invalid:16900'", // lint-rules: allow-literal configuration socket parser rejection fixture
+    ] {
         error(&change("listen", "\"0.0.0.0:16900\"", value), "screen.listen"); // lint-rules: allow-literal configuration parser acceptance/rejection fixture
     }
 }
