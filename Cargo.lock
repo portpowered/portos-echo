@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "echo-shape-seed"
+version = "0.1.0"
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -143,5 +147,6 @@ checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "echo-shape-seed",
  "toml",
 ]
