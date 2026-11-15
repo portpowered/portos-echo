@@ -685,6 +685,7 @@ name = "echo-wyoming"
 version = "0.1.0"
 dependencies = [
  "echo-contracts",
+ "loom",
  "serde_json",
  "thiserror",
  "tokio",

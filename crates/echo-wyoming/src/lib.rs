@@ -66,7 +66,7 @@ pub struct ReceivedEvent {
     pub run: Option<Run>,
 }
 
-/// Playback acknowledgment. `Cut` is reserved for the cancellation extension.
+/// Playback acknowledgment after hassmic drains the transmitted audio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlayOutcome {
     Played,

@@ -3,6 +3,68 @@ use crate::wyoming_test_support as wyoming_peer;
 use crate::{ClientOptions, Error, WyomingClient, wyoming_wire};
 use tokio::io::{AsyncWriteExt, duplex};
 
+#[path = "wyoming_session/wyoming_control_support.rs"]
+mod wyoming_control;
+
+#[tokio::test]
+async fn cut_discards_unsent_audio_and_keeps_duplex_run_until_played() {
+    let (io, peer) = duplex(4096);
+    let opts = ClientOptions {
+        mic_capacity: 2,
+        reply_capacity: 2,
+        ..ClientOptions::default()
+    };
+    wyoming_control::cut_duplex(WyomingClient::from_io(io, opts), peer).await;
+}
+
+#[tokio::test]
+async fn pause_is_idempotent_and_explicit_registration_resumes_capture() {
+    let (io, peer) = duplex(4096);
+    wyoming_control::pause_resume(WyomingClient::from_io(io, ClientOptions::default()), peer).await;
+}
+
+#[tokio::test]
+async fn cancelled_play_invalidates_ownership_before_next_reply() {
+    let (io, peer) = duplex(4096);
+    wyoming_control::cancel_play(WyomingClient::from_io(io, ClientOptions::default()), peer).await;
+}
+
+#[tokio::test]
+async fn blocked_reply_writer_retains_only_newest_two_frames() {
+    use serde_json::json;
+    use tokio::sync::{mpsc, oneshot};
+    let (io, mut peer) = duplex(1);
+    let opts = ClientOptions {
+        reply_capacity: 2,
+        ..ClientOptions::default()
+    };
+    let client = WyomingClient::from_io(io, opts);
+    let (tx, rx) = mpsc::channel(1);
+    let (ready, barrier) = oneshot::channel();
+    let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+    let producer = async {
+        for frame in 1..=5 {
+            tx.send(vec![frame]).await.unwrap();
+        }
+        // Acquiring the slot proves frame 5 was consumed by the pump. It pushes
+        // synchronously before polling recv again. The writer is held at start.
+        drop(tx.reserve().await.unwrap());
+        drop(tx);
+        ready.send(()).unwrap();
+    };
+    let server = async {
+        barrier.await.unwrap();
+        assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "audio-start");
+        for frame in [4, 5] {
+            assert_eq!(wyoming_peer::receive(&mut peer).await.payload, [frame]);
+        }
+        assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "audio-stop");
+        wyoming_peer::send(&mut peer, "played", json!(null), vec![]).await;
+    };
+    let (result, (), ()) = tokio::join!(client.play(format, rx), producer, server);
+    assert_eq!(result, Ok(crate::PlayOutcome::Played));
+}
+
 #[tokio::test]
 async fn playback_is_exclusive_and_stray_played_does_not_complete_it() {
     use echo_contracts::wyoming::{AudioFormat, WyomingEvent};

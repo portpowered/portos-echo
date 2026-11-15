@@ -9,18 +9,16 @@ use tokio::{
 };
 
 type Reply<T> = oneshot::Sender<Result<T, Error>>;
+mod wyoming_playback;
+use wyoming_playback::Playback;
+
 pub(crate) enum Command {
     Describe(Reply<WyomingEvent>),
     Register(Reply<()>),
     Play(AudioFormat, mpsc::Receiver<Vec<u8>>, Reply<PlayOutcome>),
+    Cut(Reply<()>),
+    Pause(Reply<()>),
     Close(Reply<()>),
-}
-
-struct Playback {
-    format: AudioFormat,
-    frames: mpsc::Receiver<Vec<u8>>,
-    reply: Reply<PlayOutcome>,
-    stopped: bool,
 }
 
 struct Session<W> {
@@ -30,6 +28,7 @@ struct Session<W> {
     describe: Option<Reply<WyomingEvent>>,
     play: Option<Playback>,
     registered: bool,
+    paused: bool,
 }
 
 struct ReaderTask(JoinHandle<()>);
@@ -70,6 +69,7 @@ pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         describe: None,
         play: None,
         registered: false,
+        paused: false,
     };
     let result = session.run(&mut commands, &mut incoming).await;
     session
@@ -79,7 +79,7 @@ pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         let _ = reply.send(Err(result));
     }
     if let Some(play) = session.play.take() {
-        let _ = play.reply.send(Err(result));
+        play.finish(Err(result));
     }
     end.send_replace(Some(result));
     reader_task.0.abort();
@@ -102,10 +102,20 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         incoming: &mut mpsc::Receiver<Result<echo_contracts::wyoming::Event, Error>>,
     ) -> Error {
         loop {
+            let frames = self
+                .play
+                .as_ref()
+                .filter(|play| !play.stopped)
+                .map(|play| play.frames.clone());
             let result = tokio::select! {
-                frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))),
+                biased;
                 command = commands.recv() => self.command(command).await,
-                frame = next_frame(&mut self.play) => self.audio(frame).await,
+                frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))),
+                () = cancelled(&mut self.play) => Err(Error::Closed),
+                frame = async { match frames { Some(queue) => queue.recv().await, None => std::future::pending().await } } => match frame {
+                    Ok(frame) => self.audio(frame).await,
+                    Err(error) => Err(error),
+                },
             };
             if let Err(error) = result {
                 return error;
@@ -114,7 +124,17 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     }
 
     fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
-        match self.router.route(frame?)? {
+        let frame = frame?;
+        if self.paused
+            && matches!(
+                frame.header.r#type.as_str(),
+                "run-pipeline" | "audio-chunk" | "audio-start" | "audio-stop"
+            )
+        {
+            frame.typed().map_err(|_| Error::Protocol)?;
+            return Ok(());
+        }
+        match self.router.route(frame)? {
             event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
                     let _ = reply.send(Ok(event));
@@ -122,7 +142,12 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             }
             WyomingEvent::Played(_) if self.play.as_ref().is_some_and(|p| p.stopped) => {
                 if let Some(play) = self.play.take() {
-                    let _ = play.reply.send(Ok(PlayOutcome::Played));
+                    let outcome = if play.cut {
+                        PlayOutcome::Cut
+                    } else {
+                        PlayOutcome::Played
+                    };
+                    play.finish(Ok(outcome));
                 }
                 self.router.end(Ok(()));
             }
@@ -145,6 +170,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 if !self.registered {
                     self.send(WyomingEvent::RunSatellite(Value::Null), vec![]).await?;
                     self.registered = true;
+                    self.paused = false;
                 }
                 let _ = reply.send(Ok(()));
             }
@@ -152,14 +178,29 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 if self.play.is_some() {
                     let _ = reply.send(Err(Error::Busy));
                 } else {
-                    self.play = Some(Playback {
-                        format: format.clone(),
-                        frames,
-                        reply,
-                        stopped: false,
-                    });
+                    self.play = Some(Playback::new(format.clone(), frames, reply, &self.opts));
                     self.send(WyomingEvent::AudioStart(format), vec![]).await?;
                 }
+            }
+            Some(Command::Cut(reply)) => {
+                if let Some(play) = &mut self.play {
+                    play.cut = true;
+                    play.discard();
+                    if !play.stopped {
+                        play.stopped = true;
+                        self.send(WyomingEvent::AudioStop(Value::Null), vec![]).await?;
+                    }
+                }
+                let _ = reply.send(Ok(()));
+            }
+            Some(Command::Pause(reply)) => {
+                if !self.paused {
+                    self.send(WyomingEvent::PauseSatellite(Value::Null), vec![]).await?;
+                    self.paused = true;
+                    self.registered = false;
+                    self.router.end(Ok(()));
+                }
+                let _ = reply.send(Ok(()));
             }
             Some(Command::Close(reply)) => {
                 let _ = reply.send(Ok(()));
@@ -193,9 +234,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     }
 }
 
-async fn next_frame(play: &mut Option<Playback>) -> Option<Vec<u8>> {
+async fn cancelled(play: &mut Option<Playback>) {
     match play {
-        Some(play) if !play.stopped => play.frames.recv().await,
-        _ => std::future::pending().await,
+        Some(play) => play.reply.closed().await,
+        None => std::future::pending().await,
     }
 }

@@ -92,12 +92,31 @@ impl WyomingClient {
     }
 
     /// Send a reply, waiting for `played` even for an empty source.
-    /// The source must be bounded; callers retain ownership of unsent input.
+    /// The source must be bounded. Internal reply overflow evicts oldest unsent
+    /// frames. Cancelling this future closes the connection before another reply.
     /// # Errors
     /// Busy, oversized frame, connection failure or operation timeout.
     pub async fn play(&self, format: AudioFormat, frames: mpsc::Receiver<Vec<u8>>) -> Result<PlayOutcome, Error> {
         let (tx, rx) = oneshot::channel();
         self.request(Command::Play(format, frames, tx), rx).await
+    }
+
+    /// Discard unsent reply audio and send one early stop. Playback still waits
+    /// for `played`; audio already sent to hassmic drains normally.
+    /// # Errors
+    /// Connection failure or operation timeout.
+    pub async fn cut(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Cut(tx), rx).await
+    }
+
+    /// Pause microphone capture and end the local run. Repeated calls are
+    /// idempotent; `run_satellite` explicitly resumes capture.
+    /// # Errors
+    /// Connection failure or operation timeout.
+    pub async fn pause(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Pause(tx), rx).await
     }
 
     /// Close and reap this connection's tasks.
