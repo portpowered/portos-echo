@@ -9,8 +9,7 @@ publish = false
 workspace = true
 
 [dependencies]
-echo-contracts = { path = "../echo-contracts" }
+echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
 opus = "=0.4.0"
 rubato = { version = "=0.16.2", default-features = false }
 thiserror = "2"
-
