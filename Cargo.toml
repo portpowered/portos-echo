@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["xtask", "crates/echo-lab"]
+members = ["xtask", "crates/echo-lab", "crates/echo-screen-contract"]
 
 [workspace.package]
 edition = "2024"

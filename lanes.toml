@@ -14,3 +14,8 @@ kind = "tool"
 name = "echo-lab"
 path = "crates/echo-lab"
 kind = "bin"
+
+[[crate]]
+name = "echo-screen-contract"
+path = "crates/echo-screen-contract"
+kind = "lib"
