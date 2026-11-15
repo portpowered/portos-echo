@@ -130,7 +130,7 @@ fn forbidden_keys_are_rejected_recursively_before_unknown_fields() {
             for (prefix, field) in [
                 ("", key.to_string()),
                 ("[live]\n", format!("live.{key}")),
-                ("[[unknown.items]]\n", format!("unknown.items[0].{key}")),
+                ("[[unknown.items]]\n", key.to_string()),
             ] {
                 let text = error(&format!("{prefix}{key} = {value}"), &field);
                 assert!(text.ends_with("secrets go in files, not config"));

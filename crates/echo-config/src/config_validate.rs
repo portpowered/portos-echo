@@ -15,17 +15,63 @@ pub(super) fn reject_secrets(value: &toml::de::DeValue<'_>, path: &str) -> Resul
                 if ["token", "secret", "password", "api_key"].contains(&key.as_ref()) {
                     return Err(ConfigError::new(field, "secrets go in files, not config"));
                 }
-                reject_secrets(child.get_ref(), &field)?;
+                if schema_field(path, key) {
+                    reject_secrets(child.get_ref(), &field)?;
+                } else if let Some(secret) = forbidden_key(child.get_ref()) {
+                    let field = if path.is_empty() {
+                        secret.into()
+                    } else {
+                        format!("{path}.{secret}")
+                    };
+                    return Err(ConfigError::new(field, "secrets go in files, not config"));
+                }
             }
         }
-        toml::de::DeValue::Array(array) => {
+        toml::de::DeValue::Array(array) if path == "mcp.server" => {
             for (index, child) in array.iter().enumerate() {
                 reject_secrets(child.get_ref(), &format!("{path}[{index}]"))?;
             }
         }
-        _ => {}
+        _ => {
+            if let Some(secret) = forbidden_key(value) {
+                return Err(ConfigError::new(
+                    format!("{path}.{secret}"),
+                    "secrets go in files, not config",
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+// Only schema-defined ancestors may enter a diagnostic. Unknown subtrees are
+// still scanned, but their keys and array positions are rejected input values.
+fn schema_field(path: &str, key: &str) -> bool {
+    let fields: &[&str] = match path {
+        "" => &["echo", "live", "agent", "mcp", "screen", "audit"],
+        "echo" => &["host", "wyoming_port"],
+        "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
+        "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap"],
+        "mcp" => &["server"],
+        "screen" => &["listen", "pairing_token_file"],
+        "audit" => &["log_dir"],
+        p if p.starts_with("mcp.server[") && p.ends_with(']') => &["name", "url", "auth", "bearer_file", "allow_tools"],
+        _ => &[],
+    };
+    fields.contains(&key)
+}
+
+fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
+    match value {
+        toml::de::DeValue::Table(table) => table.iter().find_map(|(key, child)| {
+            ["token", "secret", "password", "api_key"]
+                .into_iter()
+                .find(|secret| key.get_ref() == secret)
+                .or_else(|| forbidden_key(child.get_ref()))
+        }),
+        toml::de::DeValue::Array(array) => array.iter().find_map(|child| forbidden_key(child.get_ref())),
+        _ => None,
+    }
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {

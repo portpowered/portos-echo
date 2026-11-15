@@ -194,3 +194,49 @@ fn repeated_and_parallel_loads_retain_literal_paths_without_writes() {
     );
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
 }
+
+#[test]
+fn nested_secret_diagnostics_use_only_trusted_schema_context() {
+    let directory = Directory::new().unwrap();
+    for key in ["SYNTHETIC_VALUE", r#""SYNTHETIC_VALUE\nFORGED_LINE""#] {
+        for secret in ["token", "secret", "password", "api_key"] {
+            let nested = format!("{{ {key} = [{{ {secret} = 'DISCARDED_VALUE' }}] }}");
+            for (input, field) in [
+                (
+                    EXAMPLE.replace("\"credentials/live.json\"", &nested),
+                    "live.credential_file",
+                ),
+                (EXAMPLE.replace("[live]", &format!("[live]\n{key} = {nested}")), "live"),
+                (format!("{key} = {nested}\n{EXAMPLE}"), ""),
+                (
+                    EXAMPLE.replace("allow_tools = [\"test.echo\"]", &format!("allow_tools = [{nested}]")),
+                    "mcp.server[0].allow_tools",
+                ),
+                (
+                    EXAMPLE.replace("[[mcp.server]]", &format!("[[mcp.server]]\n{key} = {nested}")),
+                    "mcp.server[0]",
+                ),
+            ] {
+                let path = directory.write(&input).unwrap();
+                for result in [BridgeConfig::from_toml_str(&input), BridgeConfig::load(&path)] {
+                    let err = result.unwrap_err();
+                    let expected_field = if field.is_empty() {
+                        secret.into()
+                    } else {
+                        format!("{field}.{secret}")
+                    };
+                    assert_eq!(
+                        err.to_string(),
+                        format!("{expected_field}: secrets go in files, not config")
+                    );
+                    for rendered in [err.to_string(), format!("{err:?}")] {
+                        for untrusted in ["SYNTHETIC_VALUE", "FORGED_LINE", "DISCARDED_VALUE", "\n"] {
+                            assert!(!rendered.contains(untrusted), "{rendered}");
+                        }
+                    }
+                    assert!(err.source().is_none());
+                }
+            }
+        }
+    }
+}
