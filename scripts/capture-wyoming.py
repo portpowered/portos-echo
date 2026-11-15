@@ -209,6 +209,8 @@ class Session:
         while True:
             self.sock.settimeout(self.remaining())
             event, payload = read_event(self.stream)
+            if event["type"] == "audio-start":
+                raise AssertionError("pinned host must not send microphone audio-start")
             if event["type"] in forbid:
                 raise AssertionError(f"unexpected {event['type']} while awaiting {kind}")
             if event["type"] == kind:
@@ -227,9 +229,11 @@ class Session:
         self.proc.send_signal(signal.SIGUSR1)
         self.until("run-pipeline")
         # This pin sends audio-chunk directly, without microphone audio-start.
-        chunk = self.until("audio-chunk")
-        if chunk["payload_length"] <= 0:
-            raise AssertionError("empty microphone payload")
+        self.sock.settimeout(self.remaining())
+        event, payload = read_event(self.stream)
+        if event["type"] != "audio-chunk" or not payload:
+            raise AssertionError("run-pipeline must be followed directly by a nonempty audio-chunk")
+        self.rows.append(record("echo->bridge", event, payload))
 
     def reply(self, wake_during=False):
         self.send("audio-start", FORMAT)
@@ -300,8 +304,9 @@ def validate(rows, kind):
         assert incoming == ["info"]
         assert rows[-1]["data"]["satellite"]["name"] == "Capture Echo"
     else:
+        assert "audio-start" not in incoming
         assert incoming.count("run-pipeline") == 1
-        assert incoming.index("run-pipeline") < incoming.index("audio-chunk")
+        assert incoming.index("run-pipeline") + 1 == incoming.index("audio-chunk")
         chunks = [r for r in rows if r["type"] == "audio-chunk" and r["dir"] == "echo->bridge"]
         assert all(r["data"]["rate"] == 16000 and r["payload_length"] > 0 for r in chunks)
         if kind in ("duplex-reply", "wake-while-speaking"):
@@ -405,6 +410,16 @@ class WireTests(unittest.TestCase):
         for kind in SCENARIOS:
             rows = [json.loads(line) for line in (output / (kind + ".jsonl")).read_bytes().splitlines()]
             validate(rows, kind)
+
+    def test_microphone_start_and_interrupted_wake_sequence_fail(self):
+        output = ROOT / "tests/fixtures/wyoming"
+        for kind in SCENARIOS[1:]:
+            rows = [json.loads(line) for line in (output / (kind + ".jsonl")).read_bytes().splitlines()]
+            pipeline = next(i for i, row in enumerate(rows) if row["type"] == "run-pipeline")
+            for kind_added in ("audio-start", "pong"):
+                changed = rows[:pipeline + 1] + [record("echo->bridge", {"type": kind_added, "data": {}})] + rows[pipeline + 1:]
+                with self.subTest(scenario=kind, inserted=kind_added), self.assertRaises(AssertionError):
+                    validate(changed, kind)
 
 
 def main():
