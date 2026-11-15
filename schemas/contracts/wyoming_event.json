@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WyomingEvent",
+  "$ref": "#/$defs/Envelope",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "run-pipeline"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/RunPipelineData"
+          }
+        },
+        "required": [
+          "data"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "audio-start"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/AudioFormat"
+          }
+        },
+        "required": [
+          "data"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "audio-chunk"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/AudioChunkData"
+          }
+        },
+        "required": [
+          "data"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "AudioChunkData": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "rate": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "timestamp": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "rate",
+        "width",
+        "channels"
+      ]
+    },
+    "AudioFormat": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "rate": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "rate",
+        "width",
+        "channels"
+      ]
+    },
+    "Envelope": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "default": null
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "RunPipelineData": {
+      "type": "object",
+      "properties": {
+        "end_stage": {
+          "type": "string"
+        },
+        "restart_on_end": {
+          "type": "boolean"
+        },
+        "start_stage": {
+          "type": "string"
+        },
+        "wake_word_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "start_stage",
+        "end_stage",
+        "restart_on_end",
+        "wake_word_name"
+      ]
+    }
+  }
+}

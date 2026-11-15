@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunPipelineData",
+  "type": "object",
+  "properties": {
+    "end_stage": {
+      "type": "string"
+    },
+    "restart_on_end": {
+      "type": "boolean"
+    },
+    "start_stage": {
+      "type": "string"
+    },
+    "wake_word_name": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "start_stage",
+    "end_stage",
+    "restart_on_end",
+    "wake_word_name"
+  ]
+}

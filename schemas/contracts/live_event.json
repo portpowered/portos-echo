@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LiveEvent",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/Known"
+    },
+    {
+      "not": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "session.delegation.created",
+              "session.commentary.append",
+              "session.created",
+              "error"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "Delegation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/DelegationId"
+        },
+        "target": {
+          "$ref": "#/$defs/DelegationTarget"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "target"
+      ]
+    },
+    "DelegationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "DelegationTarget": {
+      "type": "string",
+      "enum": [
+        "client",
+        "responses"
+      ]
+    },
+    "Known": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "delegation": {
+              "$ref": "#/$defs/Delegation"
+            },
+            "type": {
+              "type": "string",
+              "const": "session.delegation.created"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "type",
+            "delegation"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "$ref": "#/$defs/DelegationId"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "session.commentary.append"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "type",
+            "delegation_id",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "session.created"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "error"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    }
+  }
+}

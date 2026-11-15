@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TaskEvent",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "type": {
+          "type": "string",
+          "const": "progress"
+        }
+      },
+      "required": [
+        "type",
+        "task_id",
+        "message"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "type": {
+          "type": "string",
+          "const": "completed"
+        }
+      },
+      "required": [
+        "type",
+        "task_id",
+        "summary"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "type": {
+          "type": "string",
+          "const": "failed"
+        }
+      },
+      "required": [
+        "type",
+        "task_id",
+        "retryable",
+        "message"
+      ]
+    }
+  ],
+  "$defs": {
+    "TaskId": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

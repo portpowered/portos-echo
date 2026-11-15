@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Delegation",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "#/$defs/DelegationId"
+    },
+    "target": {
+      "$ref": "#/$defs/DelegationTarget"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "target"
+  ],
+  "$defs": {
+    "DelegationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "DelegationTarget": {
+      "type": "string",
+      "enum": [
+        "client",
+        "responses"
+      ]
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AudioChunkData",
+  "type": "object",
+  "properties": {
+    "channels": {
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "rate": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "timestamp": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "width": {
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "rate",
+    "width",
+    "channels"
+  ]
+}
