@@ -11,10 +11,14 @@ fmt-check:
 lint-shape:
 	cargo xtask lint-shape
 
-lint: fmt-check lint-rust lint-rules lint-shape lint-scripts-web
+lint: fmt-check lint-rust lint-deps lint-rules lint-shape lint-scripts-web
 
 lint-rust:
 	cargo clippy --workspace --all-targets --locked -- -D warnings
+
+.PHONY: lint-deps
+lint-deps:
+	cargo xtask lint-deps && cargo deny --offline check
 
 lint-rules:
 	cargo xtask lint-rules && gitleaks dir . --no-banner --redact
