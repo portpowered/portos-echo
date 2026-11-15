@@ -16,6 +16,11 @@ path = "crates/echo-lab"
 kind = "bin"
 
 [[crate]]
+name = "echo-config"
+path = "crates/echo-config"
+kind = "lib"
+
+[[crate]]
 name = "echo-screen-contract"
 path = "crates/echo-screen-contract"
 kind = "lib"

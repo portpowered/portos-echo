@@ -1,0 +1,29 @@
+# All credential values are paths; this example contacts no services when loaded.
+[echo]
+host = "echo.example.invalid"
+wyoming_port = 16700
+
+[live]
+mode = "chatgpt"
+credential_file = "credentials/live.json"
+voice = "default"
+session_idle_seconds = 120
+
+[agent]
+max_tool_calls = 8
+task_deadline_seconds = 60
+daily_request_cap = 500
+
+[[mcp.server]]
+name = "local-test"
+url = "http://127.0.0.1:18080/mcp"
+auth = "none"
+allow_tools = ["test.echo"]
+# auth = "bearer_file" requires a bearer_file path.
+
+[screen]
+listen = "0.0.0.0:16900"
+pairing_token_file = "credentials/screen-pairing.txt"
+
+[audit]
+log_dir = "logs/audit"
