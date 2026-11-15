@@ -1,5 +1,16 @@
 .DEFAULT_GOAL := ci
+ifeq ($(OS),Windows_NT)
+SHELL := cmd.exe
+.SHELLFLAGS := /d /s /c
+POSIX_BIN := $(shell python scripts/make-posix.py)
+ifneq ($(.SHELLSTATUS),0)
+$(error POSIX bootstrap failed; see tool and path diagnostics above)
+endif
+export PATH := $(POSIX_BIN);$(PATH)
+SHELL := $(POSIX_BIN)/sh.exe
+else
 SHELL := sh
+endif
 .SHELLFLAGS := -ec
 COVERAGE_BASE ?= origin/main
 
@@ -40,6 +51,7 @@ lint-ci-parity:
 lint-self-tests:
 	sh scripts/test-lint-scripts-web.sh
 	python scripts/test_lint_docs.py
+	python scripts/test_make_posix.py
 
 test-unit:
 	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci
