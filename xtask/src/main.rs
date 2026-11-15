@@ -3,17 +3,20 @@
 
 use std::process::ExitCode;
 
+mod lint_deps;
 mod lint_rules;
 mod lint_shape;
 
 #[derive(Debug, PartialEq)]
 enum Subcommand {
+    Deps,
     Rules,
     Shape,
 }
 
 fn dispatch(subcommand: Option<&str>) -> Result<Subcommand, &'static str> {
     match subcommand {
+        Some("lint-deps") => Ok(Subcommand::Deps),
         Some("lint-rules") => Ok(Subcommand::Rules),
         Some("lint-shape") => Ok(Subcommand::Shape),
         _ => Err("Usage: cargo xtask <subcommand>"),
@@ -31,6 +34,10 @@ fn main() -> ExitCode {
             }
             return ExitCode::from(status);
         }
+        Ok(Subcommand::Deps) => lint_deps::run().map_err(|error| {
+            eprintln!("{error}");
+            "lint-deps failed"
+        }),
         Ok(Subcommand::Rules) => lint_rules::run().map_err(|error| {
             eprintln!("{error}");
             "lint-rules failed"
@@ -41,7 +48,11 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("{message}");
-            ExitCode::from(2)
+            ExitCode::from(if message == "Usage: cargo xtask <subcommand>" {
+                2
+            } else {
+                1
+            })
         }
     }
 }
@@ -52,24 +63,22 @@ mod tests {
 
     #[test]
     fn missing_subcommand_returns_usage() {
-        let error = dispatch(None).err();
-        assert_eq!(
-            error.expect("missing command must fail"),
-            "Usage: cargo xtask <subcommand>"
-        );
+        assert_eq!(dispatch(None), Err("Usage: cargo xtask <subcommand>"));
     }
 
     #[test]
     fn unknown_subcommand_returns_usage() {
-        assert_eq!(
-            dispatch(Some("unknown")).err().unwrap(),
-            "Usage: cargo xtask <subcommand>"
-        );
+        assert_eq!(dispatch(Some("unknown")), Err("Usage: cargo xtask <subcommand>"));
     }
 
     #[test]
     fn shape_subcommand_is_recognized() {
         assert_eq!(dispatch(Some("lint-shape")), Ok(Subcommand::Shape));
+    }
+
+    #[test]
+    fn deps_subcommand_is_recognized() {
+        assert_eq!(dispatch(Some("lint-deps")), Ok(Subcommand::Deps));
     }
 
     #[test]
