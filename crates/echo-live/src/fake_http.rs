@@ -104,3 +104,38 @@ pub(crate) async fn respond(
         .map_err(|_| CallError::Signaling)?;
     stream.shutdown().await.map_err(|_| CallError::Signaling)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    // T3: exercise the fake's bounded parser through a real, isolated loopback socket.
+    #[tokio::test(start_paused = true)]
+    async fn t3_call_fake_rejects_invalid_http_without_recording_a_request() {
+        for (request, expected) in [
+            ("GET / HTTP/1.1\r\n\r\n", CallError::Signaling),
+            ("POST / HTTP/1.1\r\n\r\n", CallError::Signaling),
+            ("POST / HTTP/1.1\r\nContent-Length: bad\r\n\r\n", CallError::Signaling),
+            (
+                "POST / HTTP/1.1\r\nContent-Length: 131073\r\n\r\n",
+                CallError::Signaling,
+            ),
+            ("POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\n{", CallError::Signaling),
+            ("POST / HTTP/1.1\r\nContent-Length: 1\r\n\r\nx", CallError::Decode),
+            ("POST / HTTP/1.1\r\n", CallError::Signaling),
+        ] {
+            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let client = async {
+                let mut stream = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+                stream.write_all(request.as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            };
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                assert_eq!(super::request(&mut stream).await.err(), Some(expected));
+            };
+            tokio::join!(client, server);
+        }
+    }
+}

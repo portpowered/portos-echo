@@ -441,3 +441,36 @@ async fn t3_call_responses_target_is_observed_but_not_selected() {
     call.close();
     fake.shutdown().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn t3_call_preflight_failures_release_peer_without_http() {
+    struct Unavailable(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    impl CredentialProvider for Unavailable {
+        fn credential(&self) -> impl Future<Output = Result<LiveCredential, CallError>> + Send {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(Err(CallError::Authorization))
+        }
+    }
+    let fake = FakeLive::bind(script()).await.unwrap();
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider = Unavailable(count.clone());
+    let factory = LiveCallFactory::new(&fake.base_url(), LiveAuthMode::ApiKey, provider).unwrap();
+    for (expired, invalid, expected) in [
+        (true, false, CallError::Deadline),
+        (false, true, CallError::Configuration),
+        (false, false, CallError::Authorization),
+    ] {
+        let peer = peer().await;
+        let address = peer.local_addr();
+        let mut opts = options(LiveAuthMode::ApiKey);
+        if invalid {
+            opts.model = "wrong".into();
+        }
+        let deadline = if expired { now() } else { now() + Duration::from_secs(1) };
+        assert_eq!(factory.create(peer, opts, deadline).await.err(), Some(expected));
+        drop(tokio::net::UdpSocket::bind(address).await.unwrap());
+    }
+    assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(fake.observer().calls().unwrap().len(), 0);
+    fake.shutdown().await;
+}

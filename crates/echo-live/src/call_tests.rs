@@ -169,6 +169,22 @@ fn call_wire_session_body_is_client_only() {
 }
 
 #[test]
+fn call_wire_fake_script_rejects_unmarked_or_malformed_documents() {
+    for text in [
+        "invalid json",
+        r#"{"events":[]}"#,
+        r#"{"synthetic":false,"events":[]}"#,
+        r#"{"synthetic":true}"#,
+        r#"{"synthetic":true,"events":{}}"#,
+    ] {
+        assert_eq!(crate::fake::FakeScript::from_json(text).err(), Some(CallError::Decode));
+    }
+    let script = crate::fake::FakeScript::from_json(r#"{"synthetic":true,"events":[]}"#).unwrap();
+    assert_eq!(script.events, Vec::<String>::new());
+    assert!(matches!(script.response, crate::fake::FakeResponse::Answer));
+}
+
+#[test]
 fn call_wire_synthetic_script_preserves_exact_values() {
     let script: serde_json::Value =
         serde_json::from_str(include_str!("../../../tests/fixtures/live/session.synthetic.json")).unwrap();
