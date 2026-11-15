@@ -1,8 +1,20 @@
 # Factory Overview
 
-This Factory coordinates autonomous work for you-agent-factory, the Go,
-OpenAPI, and React system for scheduling and orchestrating concurrent AI
-workers through the you CLI, backend runtime, and dashboard.
+This Factory coordinates autonomous work for portos-echo, which turns a rooted
+Echo Show 8 into a voice front end for GPT-Live that acts on the home through
+Port OS MCP. The repository is a Rust workspace. Its centre is `echo-bridge` on
+the operator's PC: it talks Wyoming to echo-dot-assist's `hassmic` (run with
+`-D`) on the Echo, carries audio to and from a GPT-Live session, runs the
+delegated agent loop and executes every MCP tool call. A small screen client
+on the Echo shows what the bridge is doing, and `echo-lab` runs the same
+scenario files against the simulator, the cloud and the device.
+
+What to build, and in what order, is `docs/program/plan.md` (Phase F, the
+repository harness, comes first). How the factory is run for this repository
+(port 7447, batches, the coordinator's role) is `docs/program/coordinator.md`,
+and the standing rules are `docs/program/rules.md`. Where this overview and
+those documents disagree, they win. In this repository the coordinator, one
+Claude Code session, fills the Portfolio Supervisor role described below.
 
 The Factory has four operating roles:
 
