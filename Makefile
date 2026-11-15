@@ -65,6 +65,7 @@ test-sim:
 	cargo run --locked -p echo-lab -- validate
 	$(MAKE) hassmic-host
 	sh tests/hassmic_host_smoke.sh
+	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
 
 .PHONY: hassmic-host capture-wyoming measure-barge-in
 hassmic-host:
@@ -78,17 +79,21 @@ measure-barge-in: hassmic-host
 
 test-concurrency:
 	cargo test -p echo-audio --lib --locked loom -- --nocapture
+	cargo test -p echo-wyoming --lib --locked loom_queue -- --nocapture
 
 # Sources outside the workspace that LLVM still attributes lines to: dependency macro expansions (tokio's
 # join!/select!) from the cargo registry or git checkouts, and the toolchain's own library. The default
 # ignore regex stays off so that every workspace path, tests/ included, is counted. Any other outside path
 # still fails coverage-check.
 COVERAGE_DEPENDENCY_SOURCES := \.cargo.(registry|git).|\.rustup.toolchains.|.rustc.[0-9a-f]{40}.
+COVERAGE_HOST_T3 := -p echo-wyoming --test wyoming_t3
 
-coverage:
+coverage: hassmic-host
 	cargo +nightly-2026-11-05 llvm-cov clean --workspace
 	mkdir -p target/llvm-cov
-	cargo +nightly-2026-11-05 llvm-cov --workspace --all-targets --locked --branch --no-default-ignore-filename-regex --ignore-filename-regex '$(COVERAGE_DEPENDENCY_SOURCES)' --fail-under-lines 80 --lcov --output-path target/llvm-cov/coverage.lcov
+	cargo +nightly-2026-11-05 llvm-cov --workspace --all-targets --locked --branch --no-report
+	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_HOST_T3) --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov report --branch --no-default-ignore-filename-regex --ignore-filename-regex '$(COVERAGE_DEPENDENCY_SOURCES)' --fail-under-lines 80 --lcov --output-path target/llvm-cov/coverage.lcov
 	cargo xtask coverage-check target/llvm-cov/coverage.lcov "$(COVERAGE_BASE)"
 
 deps-fresh:

@@ -50,7 +50,7 @@ runs:
         tar -xzf "$directory/gitleaks.tar.gz" -C "$directory" gitleaks
         sudo install "$directory/gitleaks" /usr/local/bin/gitleaks
     - name: Test runner
-      if: inputs.target == 'test-unit'
+      if: contains(fromJSON('["test-unit","test-sim"]'), inputs.target)
       uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
       with:
         tool: cargo-nextest@0.9.152

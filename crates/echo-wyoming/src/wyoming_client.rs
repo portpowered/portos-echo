@@ -1,0 +1,181 @@
+use crate::{
+    ClientOptions, Error, EventStream, PlayOutcome,
+    wyoming_session::{self, Command},
+};
+use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
+use std::{future::Future, net::SocketAddr, time::Duration};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    sync::{mpsc, oneshot, watch},
+    task::JoinHandle,
+    time::timeout,
+};
+
+/// Owns the reconnect supervisor. Drop aborts its current connection and reader.
+pub struct WyomingClient {
+    commands: mpsc::Sender<Command>,
+    events: Option<EventStream>,
+    terminal: watch::Receiver<Option<Error>>,
+    task: JoinHandle<()>,
+    deadline: Duration,
+    reset: Option<watch::Sender<u64>>,
+}
+
+impl WyomingClient {
+    /// Connect without registering yet. Cancelling this future stops initial retries.
+    /// # Errors
+    /// Invalid options. Refusal/timeouts retry with capped backoff until cancelled.
+    pub async fn connect(addr: SocketAddr, opts: ClientOptions) -> Result<Self, Error> {
+        opts.validate()?;
+        let mut connector = move || tokio::net::TcpStream::connect(addr);
+        let socket = wyoming_session::wyoming_reconnect::connect(&opts, &mut connector, false).await;
+        Ok(Self::reconnecting(socket, opts, connector))
+    }
+
+    pub(crate) fn reconnecting<T, F, Fut>(socket: T, opts: ClientOptions, connector: F) -> Self
+    where
+        T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = std::io::Result<T>> + Send + 'static,
+    {
+        let (commands, receiver) = mpsc::channel(opts.command_capacity);
+        let (events, event_receiver) = mpsc::channel(opts.event_capacity);
+        let (end, terminal) = watch::channel(None);
+        let (reset, resets) = watch::channel(0_u64);
+        let deadline = opts.operation_timeout;
+        let supervisor = wyoming_session::wyoming_reconnect::Supervisor {
+            opts,
+            commands: receiver,
+            events,
+            end,
+            reset: resets,
+        };
+        let task = tokio::spawn(supervisor.serve(socket, connector));
+        Self {
+            commands,
+            events: Some(EventStream {
+                receiver: event_receiver,
+                terminal: terminal.clone(),
+            }),
+            terminal,
+            task,
+            deadline,
+            reset: Some(reset),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_io<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(io: T, opts: ClientOptions) -> Self {
+        let (commands, receiver) = mpsc::channel(opts.command_capacity);
+        let (events, event_receiver) = mpsc::channel(opts.event_capacity);
+        let (end, terminal) = watch::channel(None);
+        let deadline = opts.operation_timeout;
+        let task = tokio::spawn(wyoming_session::serve(io, opts, receiver, events, end));
+        Self {
+            commands,
+            events: Some(EventStream {
+                receiver: event_receiver,
+                terminal: terminal.clone(),
+            }),
+            terminal,
+            task,
+            deadline,
+            reset: None,
+        }
+    }
+
+    async fn request<T>(&self, command: Command, reply: oneshot::Receiver<Result<T, Error>>) -> Result<T, Error> {
+        let work = async {
+            self.commands.send(command).await.map_err(|_| self.failure())?;
+            reply.await.map_err(|_| self.failure())?
+        };
+        if let Ok(result) = timeout(self.deadline, work).await {
+            result
+        } else {
+            if let Some(reset) = &self.reset {
+                reset.send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+            } else {
+                self.task.abort();
+            }
+            Err(Error::Timeout)
+        }
+    }
+    fn failure(&self) -> Error {
+        self.terminal.borrow().unwrap_or(Error::Closed)
+    }
+
+    /// Request the satellite's advertised info.
+    /// # Errors
+    /// Busy, connection failure or operation timeout.
+    pub async fn describe(&self) -> Result<WyomingEvent, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Describe(tx), rx).await
+    }
+
+    /// Enable microphone pipelines; repeated calls are idempotent.
+    /// # Errors
+    /// Connection failure or operation timeout.
+    pub async fn run_satellite(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Register(tx), rx).await
+    }
+
+    /// Take the sole event receiver.
+    /// # Errors
+    /// Busy if the receiver has already been taken.
+    pub fn events(&mut self) -> Result<EventStream, Error> {
+        self.events.take().ok_or(Error::Busy)
+    }
+
+    /// Send a reply, waiting for `played` even for an empty source.
+    /// The source must be bounded. Internal reply overflow evicts oldest unsent
+    /// frames. Cancelling this future closes the connection before another reply.
+    /// # Errors
+    /// Busy, oversized frame, connection failure or operation timeout.
+    pub async fn play(&self, format: AudioFormat, frames: mpsc::Receiver<Vec<u8>>) -> Result<PlayOutcome, Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Play(format, frames, tx), rx).await
+    }
+
+    /// Discard unsent reply audio and send one early stop. Playback still waits
+    /// for `played`; audio already sent to hassmic drains normally.
+    /// # Errors
+    /// Connection failure or operation timeout.
+    pub async fn cut(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Cut(tx), rx).await
+    }
+
+    /// Pause microphone capture and end the local run. Repeated calls are
+    /// idempotent; `run_satellite` explicitly resumes capture.
+    /// # Errors
+    /// Connection failure or operation timeout.
+    pub async fn pause(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Pause(tx), rx).await
+    }
+
+    /// Close and reap this connection's tasks.
+    /// # Errors
+    /// Returns Closed if the connection task already stopped.
+    pub async fn close(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Close(tx), rx).await?;
+        let mut terminal = self.terminal.clone();
+        timeout(self.deadline, async {
+            while terminal.borrow_and_update().is_none() {
+                if terminal.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await
+        .map_err(|_| Error::Timeout)
+    }
+}
+
+impl Drop for WyomingClient {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
