@@ -1,4 +1,9 @@
 # A crate joins this list in the change that creates it.
+[[crate]]
+name = "echo-mcp-auth"
+path = "crates/echo-mcp-auth"
+kind = "lib"
+
 # ffi is the only kind allowed unsafe.
 # Non-ffi crates use [lints] workspace = true in Cargo.toml.
 # Cargo cannot combine workspace lint inheritance with local overrides.

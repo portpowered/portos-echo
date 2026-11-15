@@ -20,6 +20,7 @@ status: active; documentation index
 
 ## Architecture decisions
 
+- [Port OS OAuth client dependencies](adr/0005-mcp-auth.md)
 - [S1 WebRTC transport](adr/0005-live-transport.md)
 
 - [Runtime-free delegated-task seam](adr/0005-echo-agent-api.md)
