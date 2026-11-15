@@ -73,6 +73,7 @@ PR_LOOKUP_INFRASTRUCTURE_ATTEMPTS = 3
 PR_LOOKUP_INFRASTRUCTURE_BACKOFF_SECONDS = 5
 PR_LOOKUP_INFRASTRUCTURE_MAX_BACKOFF_SECONDS = 60
 NO_CHECKS_GRACE_SECONDS = 10 * 60
+NO_CHECKS_REPORTED_MARKER = "no checks reported on the"
 PR_VIEW_JSON_FIELDS = "number,state,headRefOid,statusCheckRollup"
 PR_IDENTITY_JSON_FIELDS = "number,state,url"
 REPOSITORY_JSON_FIELDS = "nameWithOwner,url"
@@ -817,6 +818,12 @@ def read_gh_json(label, *args, deadline=None, require_success=False):
     stdout = (result.stdout or "").strip()
     if not stdout:
         status = JSONReadStatus.UNAVAILABLE if result.returncode else JSONReadStatus.EMPTY
+        # A repository without CI workflows makes `gh pr checks` exit 1 with
+        # "no checks reported on the '<branch>' branch" and no stdout. That is
+        # an empty check set (released after NO_CHECKS_GRACE_SECONDS), not an
+        # unavailable observation retried until the deadline.
+        if result.returncode and NO_CHECKS_REPORTED_MARKER in (result.stderr or ""):
+            status = JSONReadStatus.EMPTY
         log(
             f"{label} returned no JSON (exit {result.returncode}); "
             f"treating the observation as {status.value}"
