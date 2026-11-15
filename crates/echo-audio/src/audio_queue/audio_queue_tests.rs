@@ -37,29 +37,42 @@ fn capacity_one_and_saturated_count() {
     assert_eq!(one.drop_count(), u64::MAX);
 }
 
-proptest! {
-    #[test]
-    fn operation_sequences_match_fifo_model(capacity in 1usize..=64, operations in prop::collection::vec(prop::option::of(any::<u16>()), 0..=256)) {
-        let mut queue = FrameQueue::new(NonZeroUsize::new(capacity).unwrap());
-        let mut model = VecDeque::new();
-        let mut drops = 0;
-        for operation in operations {
-            if let Some(value) = operation {
-                let evicted = if model.len() == capacity { drops += 1; model.pop_front() } else { None };
-                model.push_back(value);
-                prop_assert_eq!(queue.push(value), evicted);
-            } else {
-                prop_assert_eq!(queue.pop(), model.pop_front());
+#[test]
+fn operation_sequences_match_fifo_model() {
+    let strategy = (
+        1usize..=64,
+        prop::collection::vec(prop::option::of(any::<u16>()), 0..=256),
+    );
+    proptest::test_runner::TestRunner::default()
+        .run(&strategy, |(capacity, operations)| {
+            let mut queue = FrameQueue::new(NonZeroUsize::new(capacity).unwrap());
+            let mut model = VecDeque::new();
+            let mut drops = 0;
+            for operation in operations {
+                if let Some(value) = operation {
+                    let evicted = if model.len() == capacity {
+                        drops += 1;
+                        model.pop_front()
+                    } else {
+                        None
+                    };
+                    model.push_back(value);
+                    assert_eq!(queue.push(value), evicted);
+                } else {
+                    assert_eq!(queue.pop(), model.pop_front());
+                }
+                assert_eq!(queue.len(), model.len());
+                assert!(queue.len() <= capacity);
+                assert_eq!(queue.drop_count(), drops);
             }
-            prop_assert_eq!(queue.len(), model.len());
-            prop_assert!(queue.len() <= capacity);
-            prop_assert_eq!(queue.drop_count(), drops);
-        }
-        while let Some(value) = model.pop_front() { prop_assert_eq!(queue.pop(), Some(value)); }
-        prop_assert_eq!(queue.pop(), None);
-    }
+            while let Some(value) = model.pop_front() {
+                assert_eq!(queue.pop(), Some(value));
+            }
+            assert_eq!(queue.pop(), None);
+            Ok(())
+        })
+        .unwrap();
 }
-
 #[test]
 fn loom_synchronized_producers_consumer_preserve_actual_queue_order() {
     use loom::{
