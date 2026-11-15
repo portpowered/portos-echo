@@ -76,7 +76,7 @@ measure-barge-in: hassmic-host
 	sh tests/hassmic_host_smoke.sh --measure-barge-in
 
 test-concurrency:
-	printf '%s\n' 'no concurrency tests yet'
+	cargo test -p echo-audio --lib --locked loom -- --nocapture
 
 # Sources outside the workspace that LLVM still attributes lines to: dependency macro expansions (tokio's
 # join!/select!) from the cargo registry or git checkouts, and the toolchain's own library. The default
