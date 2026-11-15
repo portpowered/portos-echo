@@ -35,6 +35,16 @@ fn read(path: &str) -> Result<Value, String> {
     serde_norway::from_str(&text).map_err(|error| error.to_string())
 }
 
+/// The execution path uses the same embedded schema as `validate`.
+pub fn load(path: &str) -> Result<Value, String> {
+    let value = read(path).map_err(|_| "scenario: cannot read or parse YAML")?;
+    let validator = schema().map_err(|_| "scenario: invalid embedded schema")?;
+    if !validator.is_valid(&value) {
+        return Err("scenario: schema validation failed".into());
+    }
+    Ok(value)
+}
+
 pub fn validate(paths: &[String], output: &mut impl Write) -> io::Result<bool> {
     let validator = schema()?;
     let selected = if paths.is_empty() {

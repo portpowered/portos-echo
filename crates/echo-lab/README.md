@@ -22,6 +22,64 @@ root, read and parse errors use the empty pointer. It continues after failures a
 returns 1 for any failure or empty discovery. Schemas are embedded; validation
 uses no network. `--help` prints the command grammar.
 
+## Device runner
+
+The initial device runner supports batches of `say` steps, firmware admission,
+quiet hours, held-session cleanup, post-playback reply capture and reports:
+
+```sh
+echo-lab run scenario.yaml --driver device --bench ring --port /explicit/port --adb /explicit/adb --stt stt-wrapper --ring fixture-ring --out /external/new-directory
+```
+
+`say: utterance.wav` selects a WAV relative to the scenario directory. Missing
+files fail before tools or artifacts are created. This lane commits no utterance
+audio. Optional `say: "text:synthetic utterance"` requires both
+`--speech-endpoint` and `--speech-model`; there are no speech defaults.
+`--ring` overrides `ECHO_LAB_RING`. Port and adb paths must name existing files
+explicitly; bare executable names are refused. Arguments go directly to child
+processes, without shell interpretation. STT configuration is reserved for the
+next oracle increment; this increment does not transcribe replies.
+
+Every step first reads the firmware incremental using explicit adb. Only builds
+in `data/probed-builds.txt` are admitted. The initial entry is the measured 7809
+incremental from `docs/program/baselines.md`. The local clock is checked before
+opening the hold and immediately before each audio command. Before 09:00 the
+run refuses audio. There is no quiet-hours override. `--python` selects the host
+Python 3 interpreter, default `python`, for local clock, hashing and WAV work.
+Production time has no environment override.
+
+One hold and one alignment chirp serve a batch. All commands are pinned in
+`src/lab_run/run_command.rs` to the coordinator-approved CLI source. Listening
+chirps need `--output` as well as `--listen 3`, as required by that source.
+Reply WAVs contain only samples after playback ends, using the returned capture
+timestamps. Child output is bounded and discarded on failure; commands have
+30-second deadlines. Pending lifecycle work adds 11-minute rotation and one
+preemption retry. Until then a batch refuses further work at 450 seconds to
+leave time for cleanup. Unsupported steps and setup/budget/injection semantics
+fail explicitly. Speech, screen and JPEG frame oracles remain retained work.
+
+Artifacts require a fresh directory with an existing parent, outside every git
+worktree; the default is a unique host temporary directory. `events.jsonl`
+records ordered, sanitized lifecycle events. `report.json` is schema-validated
+and published last by rename. A reportable failure uses `result: fail` and exit
+1; success uses `pass` and exit 0. The tier is the highest tier declared by the
+batch scenarios; a declared tier alone does not prove that environment.
+Leases, Ring identifiers, transcripts and raw child output are never written to
+reports or events. Passing audio is deleted unless `--keep-audio`; failed audio
+is retained outside git for triage. An interrupted or unwritable publication
+may leave an incomplete external directory without a report.
+
+Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
+`echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child
+`ECHO_LAB_RUN_FIXTURE` / `ECHO_LAB_RUN_LEDGER`. The latter executable implements
+only synthetic port, adb and host-helper responses; it never forwards commands.
+Its JSON fixture can select `hour`, per-call `hours`, `build`, a failed operation
+with `fail`, malformed JSON with `malformed`, or a response object by operation
+name. The fixture helper is selected explicitly with `--python`; these variables
+are consumed only by fakes. Tests also exercise the real host Python helper for
+exact WAV samples and SHA-256. Run `cargo test -p echo-lab --all-targets --locked`.
+No test accesses hardware, an account, STT service or a remote endpoint.
+
 `check --milestone M0` probes all twelve Phase F targets with real `make -n`, then
 checks for `.github/workflows/ci.yml`. It prints every result and returns 1 if any
 check fails. The missing workflow is expected until el-f10. This inventory does
