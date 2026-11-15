@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UiAction",
+  "description": "A touch intent. Consumers validate correlation and execute any action.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "tap"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "target"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "approve"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "deny"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "relink"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "dismiss"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    }
+  ]
+}

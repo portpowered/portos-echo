@@ -26,6 +26,8 @@ status: active; documentation index
 - [Local milestone schema validation](adr/0002-echo-lab-schema-validation.md)
 - [Private Cargo metadata parsing](adr/el-f4-xtask-parsing-deps.md)
 
+- [Checked screen messages](adr/0003-screen-contract.md)
+
 ## Original drafts
 
 - [Execution plan](design/echo-live-execution-plan.md)

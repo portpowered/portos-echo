@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ScreenFrame",
+  "description": "An ordered presentation. Sequence lifecycle is owned by the screen server.\nConsumers must preserve the full unsigned integer range, including in JS.",
+  "type": "object",
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "state": {
+      "$ref": "#/$defs/UiState"
+    }
+  },
+  "required": [
+    "seq",
+    "state"
+  ],
+  "$defs": {
+    "UiState": {
+      "description": "A complete screen presentation, serialized with a `snake_case` `state` tag.",
+      "oneOf": [
+        {
+          "description": "Initial message before a session starts.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "ready"
+            }
+          },
+          "required": [
+            "state",
+            "message"
+          ]
+        },
+        {
+          "description": "Establishing the bridge session.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "connecting"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "Session established.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "connected"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "Capturing the user's turn.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "listening"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "Preparing a response.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "thinking"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "Playing a response.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "speaking"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "Microphone muted.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "muted"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "Device authorization instructions; expiry is nonnegative Unix seconds.",
+          "type": "object",
+          "properties": {
+            "expires_at_unix": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "state": {
+              "type": "string",
+              "const": "link_code"
+            },
+            "user_code": {
+              "type": "string"
+            },
+            "verification_uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "user_code",
+            "verification_uri",
+            "expires_at_unix"
+          ]
+        },
+        {
+          "description": "Confirmation prompt correlated by its opaque identifier.",
+          "type": "object",
+          "properties": {
+            "accept_label": {
+              "type": "string"
+            },
+            "deny_label": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "approval"
+            }
+          },
+          "required": [
+            "state",
+            "id",
+            "prompt",
+            "accept_label",
+            "deny_label"
+          ]
+        },
+        {
+          "description": "Ordered animation frames; duration is milliseconds per frame.",
+          "type": "object",
+          "properties": {
+            "frame_ms": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "frames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "name": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "emotion"
+            }
+          },
+          "required": [
+            "state",
+            "name",
+            "frame_ms",
+            "frames"
+          ]
+        },
+        {
+          "description": "Failure presentation, optionally offering relinking.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "relink": {
+              "type": "boolean"
+            },
+            "state": {
+              "type": "string",
+              "const": "error"
+            }
+          },
+          "required": [
+            "state",
+            "message",
+            "relink"
+          ]
+        }
+      ]
+    }
+  }
+}
