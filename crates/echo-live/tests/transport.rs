@@ -172,6 +172,12 @@ async fn t3_close_preserves_delivery_and_releases_socket() -> Result<(), Error> 
             text = b.pop_text();
         }
     }
+    while a.receive(now()).await? {}
+    {
+        let pending = a.readable();
+        tokio::pin!(pending);
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pending.as_mut().poll(cx).is_pending())).await);
+    }
     a.close();
     a.close();
     b.close();
@@ -180,6 +186,7 @@ async fn t3_close_preserves_delivery_and_releases_socket() -> Result<(), Error> 
     assert_eq!(a.send_audio(frame(1, 42), now()).await, Err(Error::Closed));
     assert_eq!(a.send_text("closed").await, Err(Error::Closed));
     assert_eq!(a.receive(now()).await, Err(Error::Closed));
+    assert_eq!(a.readable().await, Err(Error::Closed));
     assert_eq!(a.timeout(now()).await, Err(Error::Closed));
     assert_eq!((b.pop_audio(), b.pop_text()), (None, None));
     let rebound = tokio::net::UdpSocket::bind(address).await.map_err(|_| Error::Io)?;
