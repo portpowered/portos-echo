@@ -23,6 +23,7 @@ status: active; documentation index
 - [Port OS OAuth client dependencies](adr/0005-mcp-auth.md)
 - [Provisional Live call adapter](adr/0006-live-call.md)
 - [Provisional Responses agent loop](adr/0006-echo-agent-loop.md)
+- [Independent ChatGPT credential source](adr/0006-chatgpt-auth.md)
 - [S1 WebRTC transport](adr/0005-live-transport.md)
 
 - [Runtime-free delegated-task seam](adr/0005-echo-agent-api.md)

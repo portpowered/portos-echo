@@ -69,3 +69,8 @@ kind = "lib"
 name = "echo-spoof-mcp"
 path = "crates/echo-spoof-mcp"
 kind = "bin"
+
+[[crate]]
+name = "echo-chatgpt-auth"
+path = "crates/echo-chatgpt-auth"
+kind = "lib"

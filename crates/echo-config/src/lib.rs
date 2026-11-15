@@ -1,8 +1,10 @@
 //! Synchronous bridge configuration. Loaders read only the nominated TOML file;
 //! credential paths remain literal and are never opened or expanded.
 
+mod config_auth;
 mod config_decode;
 mod config_validate;
+pub use config_auth::ChatGptAuthConfig;
 
 #[cfg(test)]
 mod config_rule_tests;
@@ -61,6 +63,7 @@ impl BridgeConfig {
 /// A fully validated result from a loader. Public fields may subsequently be mutated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeConfig {
+    pub chatgpt_auth: ChatGptAuthConfig,
     pub echo: EchoConfig,
     pub live: LiveConfig,
     pub agent: AgentConfig,

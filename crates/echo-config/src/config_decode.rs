@@ -9,13 +9,13 @@ use crate::{AgentConfig, AuditConfig, BridgeConfig, ConfigError, EchoConfig, Liv
 use crate::{McpConfig, McpServer, ScreenConfig};
 
 // Decode one field at a time so serde's input-bearing diagnostics never escape.
-struct Fields<'a> {
+pub(super) struct Fields<'a> {
     table: BTreeMap<String, Spanned<Value<'a>>>,
     path: String,
 }
 
 impl<'a> Fields<'a> {
-    fn new(value: Value<'a>, path: &str) -> Result<Self, ConfigError> {
+    pub(super) fn new(value: Value<'a>, path: &str) -> Result<Self, ConfigError> {
         match value {
             Value::Table(table) => Ok(Self {
                 table: table
@@ -36,7 +36,7 @@ impl<'a> Fields<'a> {
         }
     }
 
-    fn optional<T: DeserializeOwned>(&mut self, key: &str) -> Result<Option<T>, ConfigError> {
+    pub(super) fn optional<T: DeserializeOwned>(&mut self, key: &str) -> Result<Option<T>, ConfigError> {
         self.table
             .remove(key)
             .map(|value| {
@@ -58,7 +58,7 @@ impl<'a> Fields<'a> {
             .ok_or_else(|| ConfigError::new(self.field(key), "missing required field"))
     }
 
-    fn finish(self) -> Result<(), ConfigError> {
+    pub(super) fn finish(self) -> Result<(), ConfigError> {
         if self.table.is_empty() {
             Ok(())
         } else {
@@ -71,6 +71,12 @@ impl<'a> Fields<'a> {
 pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
     let mut root = Fields::new(value, "config")?;
     let result = BridgeConfig {
+        chatgpt_auth: root
+            .table
+            .remove("chatgpt_auth")
+            .map(|v| crate::config_auth::decode(v.into_inner()))
+            .transpose()?
+            .unwrap_or_default(),
         echo: echo(root.node("echo")?)?,
         live: live(root.node("live")?)?,
         agent: agent(root.node("agent")?)?,
