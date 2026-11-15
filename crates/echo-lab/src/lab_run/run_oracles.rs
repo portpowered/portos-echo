@@ -197,7 +197,10 @@ mod tests {
         );
         assert_eq!(std::fs::read(run.join("frame.jpg")).unwrap(), b"existing");
         assert!(!outside.join("frame.jpg").exists());
+        #[cfg(windows)]
         std::fs::remove_dir(&link).unwrap();
+        #[cfg(unix)]
+        std::fs::remove_file(&link).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 }
