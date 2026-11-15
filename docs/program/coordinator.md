@@ -5,81 +5,116 @@ last modified: 2026, november, 15
 status: active; how work runs in this repository
 ---
 
-# The coordinator and its runtime
+# The coordinator and the factory
 
-One coordinator agent builds this repository. It plans each piece, writes the code itself or hands a bounded piece
-to a `you` dispatch, checks the result, opens the pull request and merges it once CI is green. There are no
-project leads, no integration lead and no per-lane owner agents. The original execution plan's roles (integration
+Owner decision (2026-11-15): work runs on the you-agent-factory, adapted from its baseline into `factory/`. One
+coordinator agent is the single operator and integrator. It writes the work items, submits them to the factory,
+watches them, checks every result itself and owns everything shared. The factory's workers plan, implement in their
+own git worktrees, open pull requests, review and merge them. The original execution plan's roles (integration
 lead, R1–R8 lane owners, `docs/design/echo-live-execution-plan.md` section 1) are replaced by this document. Its
 lanes survive only as names for areas of the code.
 
-## Why one coordinator
+## Who does what
 
-- **One owner for everything shared.** Contracts, `Cargo.lock`, the C ABI, CI and the crate list change in one
-  place, by one agent, so nothing has to be arbitrated between leads.
-- **The gates do the policing.** Shape, layering, rules and coverage checks run in CI (plan section 6.6). A rule
-  that lives only in a prompt is not enforced, so the coordinator does not rely on reviewers remembering rules.
-- **Parallelism is a tool, not a structure.** When pieces are independent, the coordinator fans them out for
-  minutes, then integrates. No agent lives across tasks or owns a part of the tree.
-
-## The runtime
-
-The coordinator is a Claude Code session working in a git worktree of this repository. It uses the `you` CLI's
-packaged one-shot factories for bounded work. It does not run a long-lived factory daemon, batches or lanes.
-
-| Need | Command | Notes |
+| Role | Who | Model |
 |---|---|---|
-| Implement one bounded change in a worktree, iterating until it passes its check | `you run --named @you/goal "<brief>" --executor-provider codex --executor-model <model>` | Run from inside the worktree; codex refuses a directory that is not a git repository |
-| Independent review of a diff or document | `you run --named @you/review "<brief>" --writer-provider codex --reviewer-provider claude` | The reviewer must not be the writer |
-| Several independent pieces at once | `you --json run --named @you/spawn "<brief>" --count <n> --model-provider codex --worker-model <model>` | Give each piece its own paths; merge one at a time |
-| Read-only research or a quick answer | `you run --named @you/subagent "<question>" --worker-provider codex --working-root <dir>` | Use `--no-record` when the prompt names credentials or private data |
+| Coordinator: plan, contracts, `Cargo.lock`, the crate list, CI, batches, hardware runs, evidence | One Claude Code session | — |
+| Planner (`plan` workstation) | Codex | `gpt-6.1-sol`; `gpt-6-astra` allowed for planning only |
+| Processor, reviewer, validator and every other agent workstation | Codex | `gpt-6.1-sol` |
+| Workspace setup, CI wait, routing | Scripts in `factory/scripts/` | — |
 
-Add `--no-record` whenever a brief or output may hold something sensitive. Model names come from
-`you workers list`.
+The worker list is `factory/factory.json`. A change to a worker's provider or model is a change to that file, and
+it needs an owner decision unless it stays on Codex `gpt-6.1-sol`.
 
-### A dispatch brief
+## Why one coordinator over a factory
 
-Every dispatch gets a brief with these parts, because the worker sees nothing else:
+- **One owner for everything shared.** Contracts, `Cargo.lock`, the crate list and CI change in one place, by one
+  agent. Factory items never change them as a side effect.
+- **The gates do the policing.** Shape, layering, rules and coverage checks run in CI (plan section 11). A rule
+  that lives only in a prompt is not enforced, so nobody relies on reviewers remembering rules.
+- **The factory gives parallel lanes without lane owners.** Independent items run at once in their own worktrees;
+  dependent items wait on `DEPENDS_ON` edges until the upstream pull request has merged.
 
-1. **Goal**, in one sentence.
-2. **Paths** it may change, and paths it must not touch.
-3. **Acceptance**: the `echo-lab` scenario and test tier that must pass, or the exact command and its expected
-   output. "Compiles" is never acceptance.
-4. **Rules**: "follow `docs/program/rules.md`", which every worktree has because it is committed.
-5. **Stop condition**: what to report instead of guessing (a contract change, a new dependency, a hardware
-   question).
+## Running the factory
 
-### The loop for one change
+The factory server for this repository listens on `http://127.0.0.1:7447`. Port OS's own factory uses 7437; never
+point a command for this repository at it. Run every command from the repository root, on `main`, with a clean
+tree: `setup-workspace` branches each item's worktree (`.claude/worktrees/<name>`) from current `main`.
 
-1. Pick the next item from the current phase in `docs/program/plan.md`.
-2. Write the brief, or decide to build it directly when it touches shared contracts or is small.
-3. Build or dispatch. For a dispatch, read the diff and run the acceptance yourself; never trust a report alone.
-4. Push a branch, open a pull request that names the item, and let CI run.
-5. Merge with `gh pr merge --squash` only when every required check is green. Never merge with `--admin`, and
-   never weaken a gate or add a baseline to get a change through.
-6. Record evidence: each milestone has `docs/program/milestones/<id>.md` with the scenario, the run's report
-   directory and the result.
+| Need | Command |
+|---|---|
+| Check the configuration | `you factory config validate factory/factory.json` |
+| Start the daemon | `you run --continuously --with-server --listen 127.0.0.1:7447` |
+| Stop it gracefully | `curl -X POST http://127.0.0.1:7447/shutdown` |
+| Submit a batch | `you submit batch <file.json> --server http://127.0.0.1:7447` |
+| See all work | `you work list --server http://127.0.0.1:7447` |
+| One item, its sessions | `you work show <workId>`; `you worker-sessions list --work-id <workId>` |
+| Watch for finished or failed items | `curl -N -H "Accept: text/event-stream" http://127.0.0.1:7447/factory-sessions/~default/events`, filtered on `"stateType":"(TERMINAL\|FAILED)"` only |
+
+Batch shape, payload templates and the loopback are in `factory/docs/batch-inputs.md`,
+`factory/docs/idea-payload-template.md` and `factory/docs/standards/validation-loopback-template.md`.
+
+### Batches
+
+1. **Fresh work is always an `idea`.** A `task` is only for restoring an item whose worktree and `prd.json`
+   already exist; a fresh `task` dies at once and fails everything that depends on it.
+2. **One batch per phase**, with `DEPENDS_ON` edges (`requiredState: complete`) between its items. A dependent
+   item waits until its upstream pull request has merged, then branches from the new `main`.
+3. **Every batch ends with a `thoughts` loopback** that depends on every idea in the batch. Its payload asks for
+   the behavior the phase promised, by command and expected values, and requires any gap to be filed as
+   corrective work with its own loopback. A merged pull request is not evidence that anything works.
+4. **Item name = branch = pull request title = worktree directory**, kebab-case with the plan item's prefix
+   (`el-f2-rust-strict`).
+
+### A payload
+
+Workers see nothing but the payload and the committed repository, so every payload carries:
+
+1. **Mission**: the problem with its evidence, the solution as ordered steps with non-goals, and the acceptance.
+2. **Acceptance**: the `echo-lab` scenario and tier that must pass, or the exact command and the values it must
+   print. "Compiles" is never acceptance. The processor's finish line is a pushed head, an open pull request and
+   CI started; merging belongs to review.
+3. **Contention**: the paths the item owns and the paths it must not touch.
+4. **Rules**: `docs/program/rules.md` and `docs/program/baselines.md`, which every worktree has because they are
+   committed.
+5. **Stop condition**: report instead of guessing on a contract change, a new dependency, a hardware question or a
+   rule it cannot meet.
+
+### The coordinator's loop
+
+1. Take the next phase from `docs/program/plan.md` (Phase F, section 10, before anything else).
+2. Make any contract or shared-file change itself first, as its own pull request.
+3. Write and submit the phase's batch with its loopback.
+4. Watch the event stream. A failed attempt is often retried by the factory; act only on an item that stays
+   failed with no live session.
+5. For each merged item, read the diff and rerun its acceptance; never trust a report alone.
+6. Record evidence: each milestone has `docs/program/milestones/<id>.md` with the scenario, the report directory and
+   the result.
+
+Merges follow `docs/program/rules.md`: `gh pr merge --squash` only when every required check is green, never
+`--admin`, never a weakened gate or a baseline file to get a change through.
 
 ## Hardware and real accounts
 
 Only the coordinator touches the Echo Show, the Ring camera or real accounts, and only for T5 runs (plan section
-4.1) that the operator has started.
+8.1) that the operator has started. Factory workers run tiers T0–T4 only, and no payload names the device, the Ring
+or a real account.
 
 - Check the clock first. No audio on household devices before 09:00 local time.
 - Runs are serialized: one Echo, one Ring, and Ring locks out after repeated sessions.
-- Never change partitions, the bootloader or firmware. Never flash without the operator's explicit go-ahead.
-- Workers from `you` dispatches never run against hardware or real accounts. They run tiers T0–T4 only.
+- Installing or removing hassmic writes `/system` and needs the owner's go-ahead each time.
+- Never change partitions, the bootloader or firmware without the owner's explicit go-ahead.
+
+## Port OS
+
+portos-backend owns plan section 9. The coordinator asks the portos-backend coordinator for anything this
+repository needs from Port OS and never works around it here.
 
 ## When the coordinator asks the owner
 
 - A decision listed as open in `docs/program/decisions.md`.
 - Anything that spends money, publishes, or acts on an account beyond the test principal.
 - A plan change that drops a milestone or a gate.
+- A factory worker that would leave Codex `gpt-6.1-sol` (other than `gpt-6-astra` for planning).
 
 Everything else, the coordinator decides and records in `docs/program/decisions.md`.
-
-## Scaling up later
-
-If one coordinator becomes the bottleneck, the next step is the full you-agent-factory (plan → process → review
-lanes on a long-running daemon). That needs a `factory/` directory adapted for Rust, and a daemon port other than
-7437 so that it can run beside the Port OS factory. Do not add it before the gates in plan section 6.6 exist.

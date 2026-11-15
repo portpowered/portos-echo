@@ -8,7 +8,7 @@ status: active; measured facts, each with its date and source
 # Measured baselines
 
 Facts measured on the real device, bench and services. Each row has its date and how it was measured. Plans and
-dispatch briefs cite these instead of rediscovering them. Add a row whenever a measurement changes a decision.
+factory payloads cite these instead of rediscovering them. Add a row whenever a measurement changes a decision.
 
 ## The device
 
@@ -20,11 +20,42 @@ dispatch briefs cite these instead of rediscovering them. Add a row whenever a m
 | Memory | about 1.9 GB (`MemTotal` 1973744 kB) | 2026-11-15, `/proc/meminfo` |
 | Access | rooted; `adb shell` runs as `uid=0` | 2026-11-15, `adb shell id` |
 | Assistant software | stock: `hassmic` (echo-dot-assist) is not installed | 2026-11-15, no `/data/local/hassmic` |
-| Wake word | Pryon "Alexa" from the firmware's `libpryon`; echo-dot-assist's default and the only keyword the firmware carries | echo-dot-assist `src/hassmic/main.c`, wake word models comment |
+| Wake word models | Pryon models for "Alexa", "Amazon", "Computer" and "Echo" in `/system/local/models/keyword/<locale>/` (21 locales); hassmic supports all four. "Alexa" is the decided wake word | 2026-11-15, `ls /system/local/models/keyword/en-US/` |
+| Free memory with stock Alexa running | `MemAvailable` about 670 MB | 2026-11-15, `/proc/meminfo` |
+| SELinux | `Enforcing` (the unlock's policy; hassmic's install extends it) | 2026-11-15, `getenforce` |
 
-**Firmware probe status.** echo-dot-assist's `devices/athena` profile was verified on builds 7077–7082 and on
-7806. This device runs 7809, which nobody has probed. A fresh probe (`getevent -il`, `getevent -lp`,
-`/proc/bus/input/devices`, `tinymix`, `dumpsys input`) must be recorded here before a hardware adapter runs on it.
+## Firmware probe of build 7809
+
+Probed 2026-11-15, read only: the same reads as echo-dot-assist's `scripts/device/probe.sh`, run over `adb shell`
+without pushing a file, plus `getevent -lp`, `getevent -il`, `/proc/bus/input/devices`, `tinymix`, `dumpsys input`,
+`/proc/asound` and `wm size`. Raw output stays in the operator's artifact directory; it holds the device serial.
+
+echo-dot-assist's `devices/athena` profile is pinned to 7080 (`probe.md5`), verified on 7077 and 7082, and was
+installed and self-tested on 7806 (2026-11-01), whose `libpryon.so` and `libaudioflinger.so` differ from 7080's.
+
+| File (under `/system`) | 7809 md5 | Same as 7080 |
+|---|---|---|
+| `lib/libpryon.so` | `5f213d89d39114c6b5d58fd6489b5598` | No |
+| `vendor/lib/libasp.so` | `ac5e8985aa9d67461d3b054bde179363` | Yes |
+| `lib/libaspclient.so` | `aeb4f3dc3d9ace3157d5c36bf9739836` | Yes |
+| `lib/libaudioflinger.so` | `9318b38640edfdba31c3663e202df0d4` | No |
+| `vendor/lib/hw/audio.primary.mt8183.so` | `cc54a24e1499090ac648adccae2033dd` | Yes |
+| `lib/libwakewordserver_jni.so` | `0926fadcaefc0b8723a6d7d5988cae54` | Yes |
+
+The two that differ are the two that differed on 7806. echo-dot-assist does not record 7806's hashes, so whether
+7809's are byte-identical to 7806's is unknown; hassmic's setup will ask before installing (`HASSMIC_FIRMWARE_OK`).
+Kernel `4.4.146+`, SDK 28, incremental `0036811211140`.
+
+| Signal | 7809 value | Matches the athena profile |
+|---|---|---|
+| Volume keys | `gpio-keys`: `KEY_VOLUMEDOWN`, `KEY_VOLUMEUP` | Yes |
+| Mute latch | `gpio-privacy-state`: `SW_MUTE_DEVICE`; `/sys/devices/platform/gpio-privacy/state` read `0` (unmuted) | Yes |
+| Mute button | `gpio-privacy-button`: `KEY_POWER` | Yes |
+| Touch | two devices: `fts_ts` (`ABS_MT_POSITION_X` 0–1280, `Y` 0–800) and `amazon_touch` (0–1279, 0–799). Which one carries the glass is not yet known (plan section 8.6, layer 4) | New fact |
+| Light sensor | `tcs3400_als` | Yes |
+| Display | 1280 × 800, density 213 | Yes |
+| Speaker amplifier | card 0 `mt-snd-card`; control 83 in tinymix's list `Master TAS5805m Playback Volume` = 100 | Yes |
+| Event node numbers | `event0`–`event5` this boot; never a stable id, devices are found by name | — |
 
 ## The test bench
 
@@ -49,5 +80,6 @@ threshold for repeated sessions.
 | Fact | Value | Source |
 |---|---|---|
 | Port OS MCP transport | stateless streamable HTTP: POST only, no `Mcp-Session-Id`, `GET /mcp` answers 405, no elicitation | Port OS plan review, 2026-11-13 |
-| Port OS MCP auth | Bearer access tokens from authorization code + PKCE only; the device grant does not reach MCP yet | Port OS plan review, 2026-11-13 |
+| Port OS MCP auth | Bearer access tokens from authorization code + PKCE, with discovery through protected-resource metadata and DCR or CIMD, work today. Device-code tokens reach `/mcp` once the portos-backend change of plan section 9 is deployed to the pilot | Port OS plan review, 2026-11-13; portos-backend coordinator, 2026-11-15 |
+| Port OS device-code clients | Need a client created by hand with the `device_code` grant (`upsertOAuthClient`); DCR and CIMD clients cannot use the device flow. Every device-flow request carries a DPoP proof (ES256 and others; `iat` within 60 s; `jti` single use); code lifetime 1800 s, poll interval 5 s | portos-backend `docs/user-guides/oauth/oauth-device-auth.md`, `oauth-client-registration.md`, 2026-11-15 |
 | Port OS pilot access token lifetime | 300 s, so a 30-minute run refreshes about six times | Port OS pilot runbook |
