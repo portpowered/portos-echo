@@ -105,7 +105,7 @@ mod tests {
             ("ci-parity", "Makefile:"),
             ("lint-shape", "lint-shape: input:"),
             ("lint-deps", "cargo metadata failed"),
-            ("lint-rules", "git merge-base"),
+            ("lint-rules", "Cargo.lock:"),
         ] {
             let (code, text) = session.run(&[command]);
             assert_eq!(code, 1, "{text}");
@@ -171,11 +171,94 @@ mod tests {
             "lanes.toml",
             "[[crate]]\nname = 'echo-fixture'\npath = 'echo-fixture'\nkind = 'bin'\n",
         );
-        session.write("docs/adr/README.md", "Fixture ADR directory\n");
+        session.write("docs/adr/README.md", "Approved `echo-fixture`\n");
         session.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
         for command in ["lint-deps", "lint-rules", "lint-shape"] {
             let (code, text) = session.run(&[command]);
             assert_eq!(code, 0, "{command}: {text}");
         }
+    }
+
+    #[test]
+    fn retained_package_requires_current_approval_and_recovers() {
+        let session = Session::new();
+        session.write(
+            "Cargo.lock",
+            "version = 4\n[[package]]\nname = \"itoa\"\nversion = \"1.0.19\"\n",
+        );
+        session.write("docs/adr/deps.md", "Approved `itoa`\n");
+        session.git(&["init", "--quiet"]);
+        session.git(&["add", "."]);
+        session.git(&[
+            "-c",
+            "user.name=CI",
+            "-c",
+            "user.email=ci@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ]);
+        session.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+        session.write("docs/adr/deps.md", "Approval removed\n");
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (
+                1,
+                "Cargo.lock: itoa: no ADR in docs/adr/ names it\nlint-rules failed\n".into()
+            )
+        );
+        session.write("docs/adr/deps.md", "Approved `itoa`\n");
+        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+    }
+
+    #[test]
+    fn new_package_requires_exact_approval() {
+        let session = Session::new();
+        session.write(
+            "Cargo.lock",
+            "[[package]]\nname = \"echo-m0-no-adr\"\nversion = \"0.1.0\"\n",
+        );
+        for approval in ["", "echo-m0-no-adr-extra", "ECHO-M0-NO-ADR", "echo-m0-no-adr_suffix"] {
+            session.write("docs/adr/deps.md", approval);
+            assert_eq!(
+                session.run(&["lint-rules"]),
+                (
+                    1,
+                    "Cargo.lock: echo-m0-no-adr: no ADR in docs/adr/ names it\nlint-rules failed\n".into()
+                )
+            );
+        }
+        session.write("docs/adr/deps.md", "Approved `echo-m0-no-adr`.");
+        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+    }
+
+    #[test]
+    fn missing_names_are_sorted_deduplicated_and_only_current() {
+        let session = Session::new();
+        session.write("Cargo.lock", "[[package]]\nname = \"zeta\"\nversion = \"1\"\n[[package]]\nname = \"alpha\"\nversion = \"1\"\n[[package]]\nname = \"zeta\"\nversion = \"2\"\n");
+        session.write("docs/adr/deps.md", "Approved `removed`.");
+        assert_eq!(session.run(&["lint-rules"]), (1, "Cargo.lock: alpha: no ADR in docs/adr/ names it\nCargo.lock: zeta: no ADR in docs/adr/ names it\nlint-rules failed\n".into()));
+        session.write("Cargo.lock", "version = 4\n");
+        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+    }
+
+    #[test]
+    fn missing_current_inputs_fail_closed() {
+        let session = Session::new();
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1);
+        assert!(text.starts_with("Cargo.lock:"), "{text}");
+        session.write("Cargo.lock", "version = 4\n");
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1);
+        assert!(text.starts_with("docs/adr/:"), "{text}");
+        session.write("docs/adr/deps.md", "Approved `alpha`.");
+        session.write("Cargo.lock", "[[package]]\nversion = \"1\"\n");
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (1, "Cargo.lock: package record missing name\nlint-rules failed\n".into())
+        );
     }
 }
