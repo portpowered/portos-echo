@@ -208,11 +208,23 @@ fn f16_f26_stt_absent_failure_empty_and_no_reply_fail_without_raw_output() {
 }
 
 #[test]
-fn f21_frame_and_pending_record_failures_are_never_silently_passed() {
+fn f21_frame_failures_are_never_silently_passed() {
     for (fixture, diagnostic) in [
         (json!({"fail":"snapshot"}), "frame capture:"),
         (json!({"missing_image":true}), "missing image"),
         (json!({"snapshot":{"success":false}}), "capture confirmation"),
+    ] {
+        let session = Session::new(&fixture);
+        failed(&b0(&session, false), diagnostic);
+        assert_eq!(session.report()["result"], "fail");
+        assert_eq!(session.operations().last().unwrap(), "release");
+        assert!(!session.operations().contains(&"stt".into()));
+    }
+}
+
+#[test]
+fn f21_pending_record_failures_are_checked_by_oracle_and_finalization() {
+    for (fixture, diagnostic) in [
         (json!({"fail":"record"}), "record:"),
         (json!({"record":{"success":true,"hasAudio":false}}), "no audio"),
         (json!({"fail":"wav"}), "invalid reply WAV"),

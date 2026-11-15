@@ -142,11 +142,13 @@ fn ledger(op: &str, args: &[String]) -> Result<usize, Box<dyn std::error::Error>
             }
         })
         .collect();
-    writeln!(
-        OpenOptions::new().create(true).append(true).open(path)?,
-        "{}",
-        json!({"operation":op, "args":ledger_args})
-    )?;
+    // One append write keeps concurrent recording/snapshot JSON lines intact.
+    let entry = format!("{}\n", json!({"operation":op, "args":ledger_args}));
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(entry.as_bytes())?;
     Ok(count)
 }
 
