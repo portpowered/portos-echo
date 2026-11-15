@@ -64,12 +64,15 @@ test-sim:
 	$(MAKE) hassmic-host
 	sh tests/hassmic_host_smoke.sh
 
-.PHONY: hassmic-host capture-wyoming
+.PHONY: hassmic-host capture-wyoming measure-barge-in
 hassmic-host:
 	sh scripts/hassmic-host.sh build
 
 capture-wyoming: hassmic-host
 	sh tests/hassmic_host_smoke.sh --capture
+
+measure-barge-in: hassmic-host
+	sh tests/hassmic_host_smoke.sh --measure-barge-in
 
 test-concurrency:
 	printf '%s\n' 'no concurrency tests yet'
