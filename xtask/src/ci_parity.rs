@@ -37,10 +37,10 @@ fn job(name: &str, target: &str) -> String {
         }
         block = block.replace(&step, &format!("{provision}{step}"));
     }
-    if name == "test-sim" {
-        let step = "      - name: test-sim\n";
+    if matches!(name, "test-sim" | "coverage") {
+        let step = format!("      - name: {name}\n");
         let host = "      - name: Host build dependencies\n        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/hassmic-host\n          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n      - name: Build pinned hassmic-host\n        run: make hassmic-host\n";
-        block = block.replace(step, &format!("{host}{step}"));
+        block = block.replace(&step, &format!("{host}{step}"));
     }
     if name == "coverage" {
         block.push_str(
@@ -266,41 +266,51 @@ mod tests {
     }
 
     #[test]
-    fn test_sim_requires_each_exact_host_step() {
+    fn host_jobs_require_each_exact_host_step() {
         let (makefile, workflow) = fixture();
-        let host_job = job("test-sim", "test-sim");
-        let fragments = [
-            "      - name: Host build dependencies\n",
-            "        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n",
-            "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
-            "          path: .cache/hassmic-host\n",
-            "          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n",
-            "      - name: Build pinned hassmic-host\n",
-            "        run: make hassmic-host\n",
-            "        run: make test-sim\n",
-        ];
-        for fragment in fragments {
-            for replacement in [String::new(), format!("{fragment}        if: false\n")] {
-                assert!(
-                    evaluate(
-                        &makefile,
-                        &workflow.replace(&host_job, &host_job.replace(fragment, &replacement))
-                    )
-                    .unwrap_err()
-                    .contains("unsupported job test-sim")
-                );
+        for name in ["test-sim", "coverage"] {
+            let host_job = job(name, name);
+            let gate = format!("        run: make {name}\n");
+            let fragments = [
+                "      - name: Host build dependencies\n",
+                "        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n",
+                "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
+                "          path: .cache/hassmic-host\n",
+                "          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n",
+                "      - name: Build pinned hassmic-host\n",
+                "        run: make hassmic-host\n",
+                &gate,
+            ];
+            for fragment in fragments {
+                for replacement in [String::new(), format!("{fragment}        if: false\n")] {
+                    assert!(
+                        evaluate(
+                            &makefile,
+                            &workflow.replace(&host_job, &host_job.replace(fragment, &replacement))
+                        )
+                        .unwrap_err()
+                        .contains(&format!("unsupported job {name}"))
+                    );
+                }
             }
-        }
-        for (from, to) in [
-            ("libopus-dev", "libopus0"),
-            ("zlib1g-dev", "zlib1g"),
-            ("0057852bfaa89a56745cba8c7296529d2fc39830", "v4"),
-            ("path: .cache/hassmic-host", "path: .cache"),
-            ("hashFiles('hassmic.pin')", "hashFiles('Cargo.lock')"),
-            ("run: make hassmic-host\n", "run: make hassmic-host || true\n"),
-            ("run: make test-sim\n", "run: make test-sim || true\n"),
-        ] {
-            assert!(evaluate(&makefile, &workflow.replace(&host_job, &host_job.replace(from, to))).is_err());
+            for (from, to) in [
+                ("libopus-dev", "libopus0"),
+                ("zlib1g-dev", "zlib1g"),
+                ("0057852bfaa89a56745cba8c7296529d2fc39830", "v4"),
+                ("path: .cache/hassmic-host", "path: .cache"),
+                ("hashFiles('hassmic.pin')", "hashFiles('Cargo.lock')"),
+                ("run: make hassmic-host\n", "run: make hassmic-host || true\n"),
+            ] {
+                assert!(evaluate(&makefile, &workflow.replace(&host_job, &host_job.replace(from, to))).is_err());
+            }
+            let conditional = format!("        run: make {name} || true\n");
+            assert!(
+                evaluate(
+                    &makefile,
+                    &workflow.replace(&host_job, &host_job.replace(&gate, &conditional))
+                )
+                .is_err()
+            );
         }
     }
 }
