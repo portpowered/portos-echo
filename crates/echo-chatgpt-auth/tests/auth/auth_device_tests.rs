@@ -91,6 +91,12 @@ fn assert_requests(requests: &[Request], base: &str) {
 #[tokio::test]
 async fn t3_device_failures_leave_old_bytes_and_stop_requests() {
     let cases = [
+        (vec![(200, "{}".into())], AuthError::InvalidCredential, 0),
+        (
+            vec![(200, r#"{"device_auth_id":"","user_code":"TEST-CODE"}"#.into())],
+            AuthError::InvalidCredential,
+            0,
+        ),
         (vec![(404, "INJECTED_VALUE".into())], AuthError::AuthorizationDenied, 0),
         (
             vec![device(), (500, "INJECTED_VALUE".into())],
@@ -98,6 +104,15 @@ async fn t3_device_failures_leave_old_bytes_and_stop_requests() {
             1,
         ),
         (vec![device(), (200, "{}".into())], AuthError::InvalidCredential, 1),
+        (
+            vec![
+                device(),
+                (200, r#"{"authorization_code":"test","code_verifier":""}"#.into()),
+            ],
+            AuthError::InvalidCredential,
+            1,
+        ),
+        (vec![(200, "x".repeat(262_145))], AuthError::InvalidCredential, 0),
         (
             vec![device(), approval(), (400, "INJECTED_VALUE".into())],
             AuthError::RelinkRequired,
@@ -125,6 +140,34 @@ async fn t3_device_failures_leave_old_bytes_and_stop_requests() {
         assert_eq!(std::fs::read(&source.file).unwrap(), before);
         mock.stop().await;
     }
+}
+
+#[tokio::test]
+async fn t3_device_transport_failure_preserves_existing_credential() {
+    // A reserved loopback listener supplies a deterministic connection close,
+    // rather than depending on a supposedly unused port remaining unused.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock = Mock::start(vec![]).await;
+    let directory = directory();
+    let mut source = mock.source(&directory);
+    let mut endpoint = reqwest::Url::parse("http://127.0.0.1/user").unwrap();
+    endpoint.set_port(Some(listener.local_addr().unwrap().port())).unwrap();
+    source.config.usercode_endpoint = endpoint.into();
+    auth_store::save(&source.file, &record()).unwrap();
+    let before = std::fs::read(&source.file).unwrap();
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        drop(stream);
+    });
+    assert_eq!(
+        source.device_sign_in(|_| unreachable!()).await.err(),
+        Some(AuthError::Transport)
+    );
+    peer.await.unwrap();
+    assert_eq!(std::fs::read(&source.file).unwrap(), before);
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    assert_eq!(mock.requests.lock().unwrap().len(), 0);
+    mock.stop().await;
 }
 
 #[tokio::test]
