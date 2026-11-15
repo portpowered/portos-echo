@@ -29,6 +29,10 @@ status: active; documentation index
 
 - [Checked screen messages](adr/0003-screen-contract.md)
 
+## Spikes
+
+- [S2 Wyoming reply cancellation](spikes/s2-barge-in.md)
+
 ## Original drafts
 
 - [Execution plan](design/echo-live-execution-plan.md)
