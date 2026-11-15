@@ -192,7 +192,7 @@ mod tests {
     use super::*;
 
     fn report() -> lcov::Report {
-        lcov::parse("SF:xtask/src/main.rs\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,1\nDA:5,0\nBRDA:1,0,0,1\nBRDA:1,0,1,1\nBRDA:2,0,0,1\nBRDA:2,0,1,0\nend_of_record", "/repo").unwrap()
+        lcov::parse("SF:xtask/src/main.rs\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,1\nDA:5,0\nBRDA:1,0,0,1\nBRDA:1,0,1,1\nBRDA:2,0,0,1\nBRDA:2,0,1,0\nend_of_record", "/repo").unwrap() // lint-rules: allow-literal LCOV parser coverage assertion fixture
     }
 
     #[test]

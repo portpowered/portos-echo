@@ -4,9 +4,26 @@
 pub(super) struct Token<'a> {
     pub text: &'a str,
     pub line: usize,
+    pub kind: Kind,
+    pub offset: usize,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(super) enum Kind {
+    Syntax,
+    String,
+    Comment,
+    Other,
 }
 
 pub(super) fn lex(source: &str) -> Vec<Token<'_>> {
+    all(source)
+        .into_iter()
+        .filter(|token| token.kind == Kind::Syntax)
+        .collect()
+}
+
+pub(super) fn all(source: &str) -> Vec<Token<'_>> {
     let bytes = source.as_bytes();
     let mut tokens = Vec::new();
     let mut cursor = 0;
@@ -16,6 +33,20 @@ pub(super) fn lex(source: &str) -> Vec<Token<'_>> {
         let skipped = opaque_end(bytes, cursor);
         if let Some(end) = skipped {
             cursor = end;
+            let text = &source[start..cursor];
+            let kind = if text.starts_with("//") || text.starts_with("/*") {
+                Kind::Comment
+            } else if text.contains('"') {
+                Kind::String
+            } else {
+                Kind::Other
+            };
+            tokens.push(Token {
+                text,
+                line,
+                kind,
+                offset: start,
+            });
         } else if bytes[cursor].is_ascii_alphabetic() || bytes[cursor] == b'_' {
             cursor += 1;
             while cursor < bytes.len() && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_') {
@@ -24,6 +55,8 @@ pub(super) fn lex(source: &str) -> Vec<Token<'_>> {
             tokens.push(Token {
                 text: &source[start..cursor],
                 line,
+                kind: Kind::Syntax,
+                offset: start,
             });
         } else {
             let width = source[cursor..].chars().next().map_or(1, char::len_utf8);
@@ -32,6 +65,8 @@ pub(super) fn lex(source: &str) -> Vec<Token<'_>> {
                 tokens.push(Token {
                     text: &source[start..cursor],
                     line,
+                    kind: Kind::Syntax,
+                    offset: start,
                 });
             }
         }

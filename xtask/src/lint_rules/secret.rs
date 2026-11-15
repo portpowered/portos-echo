@@ -1,7 +1,6 @@
 use std::{fs, process::Command};
 
-#[path = "tokens.rs"]
-mod tokens;
+use super::tokens;
 use tokens::Token;
 
 pub(super) fn run() -> Result<(), String> {
