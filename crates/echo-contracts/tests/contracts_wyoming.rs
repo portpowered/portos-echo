@@ -91,7 +91,7 @@ fn fixture_round_trip() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(stdout, "{}: lines={count}", path.file_name().unwrap().display())?;
         total += count;
     }
-    assert_eq!((paths.len(), total), (5, 47));
+    assert_eq!((paths.len(), total), (9, 214));
     writeln!(
         stdout,
         "fixture_round_trip: files={} lines={total} typed={total} other=0",
