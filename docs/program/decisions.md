@@ -16,6 +16,7 @@ one place.
 
 | Date | Decision | By | Where it applies |
 | --- | --- | --- | --- |
+| 2026-11-15 | `deny.toml` allows `MIT-0`, for `borrow-or-share` in jsonschema 0.33's closure (via referencing and fluent-uri); MIT-0 is OSI-approved and more permissive than MIT | Coordinator | `deny.toml`, `echo-lab` |
 | 2026-11-15 | **The hassmic `-D` route.** The Echo runs echo-dot-assist's `hassmic` in Wyoming mode with `-D` (duplex for a realtime client, echo-dot-assist #173): Pryon wake word, Amazon's echo canceller, microphone and speaker, mute latch. Everything else moves to `echo-bridge` on the operator's PC: the Wyoming client, the GPT-Live session, the delegated agent loop and every MCP call. A small screen client stays on the Echo for status, prompts and M6. No Rust, C shim or WebRTC peer of ours on the Echo | Owner | Plan sections 1–3, 6, 8.3, 10 |
 | 2026-11-15 | **MCP runs on the bridge**, on the owner's side and never at OpenAI (client delegation only, never `responses` delegation). The Port OS credential lives only on the bridge host. Supersedes the 2026-11-13 decision that every MCP invocation runs on the Echo | Owner | Plan section 3 |
 | 2026-11-15 | **The work is split by repository.** portos-echo owns the plan, the bridge, hassmic integration, the screen, `echo-lab` and the bench, CI, Muse and milestones M0, B0, M1–M7. portos-backend owns plan section 9: `/mcp` accepts any valid Port OS access token for the MCP resource the same way whatever grant minted it, with nothing specific to device login | Owner | Plan section 9 |

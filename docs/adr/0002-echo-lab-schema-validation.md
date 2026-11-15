@@ -23,7 +23,10 @@ Use serde and serde_json for JSON values, serde_norway for YAML, and jsonschema
 0.33 with default features disabled. The validator embeds authored schemas and
 uses only internal references; HTTP and file resolvers are disabled. Keep the
 small command parser in the binary instead of adding clap. Inherit workspace
-lints and the unchanged dependency license/advisory policy.
+lints and the dependency license/advisory policy. The coordinator authorized
+MIT-0 for borrow-or-share through jsonschema 0.33, referencing and fluent-uri;
+see the 2026-11-15 MIT-0 row in [Decided](../program/decisions.md#decided).
+MIT-0 is OSI-approved and more permissive than the already allowed MIT license.
 
 The transitive closure supports schema references, regular expressions, numeric
 validation, Unicode/URI formats, serialization and platform abstractions. Some
