@@ -482,8 +482,9 @@ What PR 2731 gives the bridge, once it is deployed:
 
 PR 2731 is on the pilot (2026-11-15; `docs/program/baselines.md` has the live check). `echo-mcp-auth` is built and
 tested against a mock authorization server that implements exactly this (T1–T3), and M5's device-code run on T4
-uses the pilot. PB-4 is not on the pilot yet: until it is, the pilot also accepts a proof whose `htu` names another
-endpoint, so only the mock's tests prove that the bridge signs the exact URL.
+uses the pilot. PB-4 is on the pilot too (PR 2735, 2026-11-15): a proof whose `htu` names another endpoint is
+refused, so the T4 run proves on the real server that the bridge signs the exact URL. The `htu` is the exact
+endpoint URL on the auth or api origin; the server ignores query strings and never trusts the `Host` header.
 
 **DPoP is sent at exactly two places** (owner, 2026-11-15): device authorization (key registration) and the token
 endpoint (`device_code` redemption and every refresh). `/mcp`, endpoint enumeration and every other API take the
