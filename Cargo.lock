@@ -648,6 +648,10 @@ dependencies = [
 name = "echo-live"
 version = "0.1.0"
 dependencies = [
+ "echo-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
  "str0m",
  "thiserror",
  "tokio",

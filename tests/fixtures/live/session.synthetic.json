@@ -1,0 +1,9 @@
+{
+  "synthetic": true,
+  "events": [
+    {"type": "session.created", "session": {"id": "synthetic-session", "future_field": true}},
+    {"type": "session.delegation.created", "delegation": {"id": "synthetic-delegation-1", "target": "client", "future_field": 17}},
+    {"type": "future.event", "payload": {"value": 17}},
+    {"type": "error", "error": {"code": "synthetic_error"}}
+  ]
+}

@@ -1,10 +1,21 @@
 //! Encoded Opus and opaque event text over one WebRTC connection.
-//! The caller owns signaling and protocol time. No provider requests or credentials.
+//! The transport keeps caller-owned time; the provisional call adapter owns HTTP signaling.
+pub mod call;
+mod call_http;
+#[cfg(any(test, feature = "fake"))]
+pub mod fake;
+#[cfg(any(test, feature = "fake"))]
+mod fake_http;
 mod negotiation;
 mod peer;
 mod queue;
 
 pub use peer::{AudioFrame, LivePeer};
+
+#[cfg(test)]
+mod call_runtime_tests;
+#[cfg(test)]
+mod call_tests;
 
 impl LivePeer {
     /// Bind one explicit host candidate; no interface discovery, STUN or TURN.
