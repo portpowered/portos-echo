@@ -33,6 +33,13 @@ place until a newer frame. Controls are disabled during a request. Rejection,
 non-204 responses and the 10-second timeout show “Action could not be sent”.
 There is no automatic action retry. Ready sends tap target primary; approval
 buttons send their exact id; errors offer Dismiss and optionally Relink.
+Emotion also offers Dismiss; sending it does not stop playback until the bridge
+replaces the presentation. Frames are inert strings advanced at the exact
+`frame_ms` duration. Empty animations say “No animation frames”; single-frame
+and zero-duration animations stay on their first frame. Large durations use
+bounded timer chunks without rounding the u64. Replacement and page unload
+cancel animation and pending actions. Long text scrolls within its content area
+while controls remain in the viewport; long labels can scroll within a button.
 
 `npm run generate:schema` derives model types and validation metadata from the
 read-only schemas; `npm run check:schema` rejects drift. The decoder preserves
@@ -41,11 +48,19 @@ coordinator-owned change.
 
 Tests load the compiled page in Chromium through pipes and in-memory content,
 with controlled EventSource/fetch, fake time and denied browser requests. No
-test server is opened. Semantic snapshots and screenshots cover the task-001
-presentations. Generated screenshots and coverage stay in ignored test-results.
-To intentionally regenerate semantic snapshots use
-`UPDATE_SCREEN_SNAPSHOTS=1 npm test` in a POSIX shell. Review changes before
-committing. Emotion playback, full pixel regression and complete CI artifact
-handoff remain task el-w1-screen-page-002. This is isolated page proof; real
+test server is opened. The suite covers all 11 states, both Error variants,
+exact corner/edge and keyboard actions, scrolling, reconnect ordering and
+animation cleanup. Semantic snapshots and platform-specific SHA-256 goldens of
+the complete 1280x800 PNG capture detect pixel changes with zero tolerance.
+Generated screenshots and the complete test/measurement/coverage transcript
+stay in ignored `test-results`; CI uploads them as `screen-evidence-<head>`.
+Review inspects Ready, Approval and Emotion in that archive and posts its link.
+To intentionally regenerate goldens, run `npm run build`, then
+`UPDATE_SCREEN_SNAPSHOTS=1 node --test --test-concurrency=1 tests/*.test.mjs`
+in a POSIX shell (PowerShell: set `$env:UPDATE_SCREEN_SNAPSHOTS='1'` before the
+Node command, then `Remove-Item Env:UPDATE_SCREEN_SNAPSHOTS`). Inspect every
+changed PNG and semantic snapshot before committing its golden hash; run normal
+`npm test` afterward. Windows and Linux retain separate pixel baselines because
+system font rendering differs. This is isolated page proof; real
 authenticated bridge transport (W2-SCREEN), assembled W1 (W1-INTEGRATION),
 Android compatibility/density (S3-WEBVIEW), and device milestones remain unproved.

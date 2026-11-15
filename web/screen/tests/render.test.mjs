@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { snapshot as pixelSnapshot } from "./support/snapshot.mjs";
 import { pageFor, emit, calls, bounds } from "./browser.mjs";
 import { states, frame } from "./fixtures.mjs";
 
@@ -9,7 +10,6 @@ test("F01 F02 F11: exact supplied status/link/error values, semantic snapshots a
     const golden = new URL("goldens/states.json", import.meta.url);
     const snapshots = JSON.parse(await readFile(golden, "utf8"));
     for (const [index, wire] of states.entries()) {
-        if (JSON.parse(wire).state === "emotion") continue;
         await emit(page, frame(index + 1, wire));
         const state = JSON.parse(wire);
         assert.equal(
@@ -26,6 +26,7 @@ test("F01 F02 F11: exact supplied status/link/error values, semantic snapshots a
             "verification_uri",
             "expires_at_unix",
             "prompt",
+            "name",
         ])
             if (key in state)
                 assert.equal(
@@ -43,8 +44,7 @@ test("F01 F02 F11: exact supplied status/link/error values, semantic snapshots a
             await writeFile(golden, JSON.stringify(snapshots, null, 2) + "\n");
         }
         assert.equal(snapshot + "\n", snapshots[name]);
-        await mkdir("test-results/screenshots", { recursive: true });
-        await page.screenshot({ path: `test-results/screenshots/${name}.png` });
+        await pixelSnapshot(page, name);
     }
     assert.equal(await page.locator("a").count(), 0);
     assert.equal((await calls(page)).length, 0);

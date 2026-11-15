@@ -1,6 +1,7 @@
 import type { ScreenFrame, UiAction } from "./model";
 import { Presentation } from "./state";
 import { endpoints, postAction } from "./transport";
+import { animate } from "./emotion";
 
 function text(tag: string, value: string): HTMLElement {
     const node = document.createElement(tag);
@@ -20,6 +21,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     let pending: AbortController | undefined;
     let disposed = false;
     let cancelPending: (() => void) | undefined;
+    let stopAnimation: (() => void) | undefined;
     async function send(action: UiAction, frame: ScreenFrame): Promise<void> {
         if (disposed || pending || presentation.current !== frame) return;
         const controller = new AbortController();
@@ -78,14 +80,21 @@ export function startPage(root: HTMLElement, href: string): () => void {
         return node;
     }
     function render(frame: ScreenFrame): void {
+        stopAnimation?.();
+        cancelPending?.();
         const state = frame.state;
         content.replaceChildren(text("h1", state.state.replace(/_/g, " ")));
+        const details = document.createElement("div");
+        details.className = "details";
+        const controls = document.createElement("div");
+        controls.className = "controls";
+        content.append(details, controls);
         content.dataset.seq = frame.seq.toString();
         diagnostic.textContent = "";
         switch (state.state) {
             case "ready":
-                content.append(
-                    text("p", state.message),
+                details.append(text("p", state.message));
+                controls.append(
                     button(
                         "Start",
                         { action: "tap", target: "primary" },
@@ -94,15 +103,15 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 );
                 break;
             case "link_code":
-                content.append(
+                details.append(
                     text("p", state.user_code),
                     text("p", state.verification_uri),
                     text("p", state.expires_at_unix.toString()),
                 );
                 break;
             case "approval":
-                content.append(
-                    text("p", state.prompt),
+                details.append(text("p", state.prompt));
+                controls.append(
                     button(
                         state.accept_label,
                         { action: "approve", id: state.id },
@@ -116,17 +125,31 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 );
                 break;
             case "error":
-                content.append(text("p", state.message));
+                details.append(text("p", state.message));
                 if (state.relink)
-                    content.append(
+                    controls.append(
                         button("Relink", { action: "relink" }, frame),
                     );
-                content.append(button("Dismiss", { action: "dismiss" }, frame));
+                controls.append(
+                    button("Dismiss", { action: "dismiss" }, frame),
+                );
                 break;
             case "emotion":
-                content.append(
-                    text("p", state.name),
-                    text("p", state.frames[0] ?? ""),
+                details.append(text("p", state.name));
+                {
+                    const animation = text("p", "");
+                    animation.setAttribute("aria-label", "Animation frame");
+                    details.append(animation);
+                    stopAnimation = animate(
+                        state.frames,
+                        state.frame_ms,
+                        (value) => {
+                            animation.textContent = value;
+                        },
+                    );
+                }
+                controls.append(
+                    button("Dismiss", { action: "dismiss" }, frame),
                 );
                 break;
         }
@@ -139,6 +162,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         return () => {};
     }
     stream.onmessage = (event) => {
+        if (disposed) return;
         try {
             if (presentation.receive(event.data) && presentation.current)
                 render(presentation.current);
@@ -147,10 +171,13 @@ export function startPage(root: HTMLElement, href: string): () => void {
         }
     };
     stream.onerror = () => {
+        if (disposed) return;
         diagnostic.textContent = "Screen connection interrupted";
     };
     function dispose(): void {
+        if (disposed) return;
         disposed = true;
+        stopAnimation?.();
         stream.close();
         cancelPending?.();
         window.removeEventListener("pagehide", dispose);

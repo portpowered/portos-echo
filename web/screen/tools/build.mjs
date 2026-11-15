@@ -15,7 +15,12 @@ await build({
     outfile: "dist/screen.js",
 });
 await build({
-    entryPoints: ["src/decoder.ts", "src/state.ts", "src/transport.ts"],
+    entryPoints: [
+        "src/decoder.ts",
+        "src/state.ts",
+        "src/transport.ts",
+        "src/emotion.ts",
+    ],
     outdir: "dist/lib",
     platform: "neutral",
     format: "esm",

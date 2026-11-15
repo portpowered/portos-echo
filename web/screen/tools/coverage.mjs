@@ -1,4 +1,4 @@
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readFile, readdir, appendFile } from "node:fs/promises";
 import v8ToIstanbul from "v8-to-istanbul";
 import coverage from "istanbul-lib-coverage";
 
@@ -16,6 +16,6 @@ for (const file of await readdir("test-results/coverage")) {
 const lines = map.getCoverageSummary().lines;
 const summary = `Screen TypeScript lines: ${lines.covered}/${lines.total} (${lines.pct}%), required >=85%\n`;
 console.log(summary);
-await writeFile("test-results/summary.txt", summary);
+await appendFile("test-results/summary.txt", summary);
 if (lines.total === 0 || lines.pct < 85)
     throw new Error("Screen changed-line coverage below 85%");

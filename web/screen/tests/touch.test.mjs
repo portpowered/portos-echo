@@ -10,8 +10,9 @@ const controls = [
     [states[10], "Relink", { action: "relink" }],
     [states[10], "Dismiss", { action: "dismiss" }],
     [states[11], "Dismiss", { action: "dismiss" }],
+    [states[9], "Dismiss", { action: "dismiss" }],
 ];
-test("F03 F04 F05: exact POST at all inside corners/edges; outside edges emit none", async (t) => {
+test("F03 F04 F05 F18: exact POST at all inside corners/edges; outside edges emit none", async (t) => {
     const page = await pageFor(t);
     let seq = 0;
     for (const [wire, label, expected] of controls) {

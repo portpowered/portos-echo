@@ -61,6 +61,7 @@ export async function pageFor(
         }
     });
     await page.clock.install({ time: 0 });
+    await page.clock.pauseAt(0);
     await page.setContent(
         html
             .replace('<link rel="stylesheet" href="screen.css" />', "")
@@ -75,6 +76,22 @@ export async function pageFor(
         window.calls = [];
         window.streams = [];
         window.postStatus = 204;
+        window.timers = new Set();
+        const schedule = window.setTimeout.bind(window);
+        const cancel = window.clearTimeout.bind(window);
+        window.setTimeout = (callback, delay) => {
+            const id = schedule(() => {
+                window.timers.delete(id);
+                callback();
+            }, delay);
+            window.timers.add(id);
+            return id;
+        };
+        window.clearTimeout = (id) => {
+            window.timers.delete(id);
+            cancel(id);
+        };
+        window.aborted = 0;
         window.EventSource = class {
             constructor(url) {
                 this.url = url;
@@ -86,6 +103,7 @@ export async function pageFor(
             }
         };
         window.fetch = (url, options) => {
+            options.signal.addEventListener("abort", () => window.aborted++);
             window.calls.push({
                 url,
                 method: options.method,
@@ -108,7 +126,7 @@ export async function pageFor(
 export const emit = (page, wire) =>
     page.evaluate((data) => window.streams[0].onmessage({ data }), wire);
 export const calls = (page) => page.evaluate(() => window.calls);
-export async function bounds(page) {
+export async function bounds(page, scrollText = false) {
     const contrasts = await page.evaluate(() => {
         function luminance(color) {
             const rgb = color
@@ -145,6 +163,18 @@ export async function bounds(page) {
             .filter((node) => node.textContent)
             .map((node) => {
                 const box = node.getBoundingClientRect();
+                let clipped = false;
+                for (
+                    let parent = node.parentElement;
+                    parent;
+                    parent = parent.parentElement
+                ) {
+                    if (getComputedStyle(parent).overflowY !== "visible") {
+                        const area = parent.getBoundingClientRect();
+                        clipped ||=
+                            box.top < area.top || box.bottom > area.bottom;
+                    }
+                }
                 return {
                     tag: node.tagName,
                     x: box.x,
@@ -153,19 +183,59 @@ export async function bounds(page) {
                     height: box.height,
                     scroll: node.scrollWidth,
                     client: node.clientWidth,
+                    clipped,
                 };
             }),
     );
     for (const box of measurements) {
-        assert.ok(
-            box.x >= 0 &&
-                box.y >= 0 &&
-                box.x + box.width <= 1280 &&
-                box.y + box.height <= 800,
-            JSON.stringify(box),
-        );
+        if (!scrollText || box.tag !== "P")
+            assert.equal(box.clipped, false, JSON.stringify(box));
+        if (!scrollText || box.tag !== "P")
+            assert.ok(
+                box.x >= 0 &&
+                    box.y >= 0 &&
+                    box.x + box.width <= 1280 &&
+                    box.y + box.height <= 800,
+                JSON.stringify(box),
+            );
         assert.ok(box.scroll <= box.client, JSON.stringify(box));
         if (box.tag === "BUTTON")
             assert.ok(box.width >= 64 && box.height >= 64);
     }
+    if (scrollText) {
+        const area = await page.locator(".details").boundingBox();
+        assert.ok(
+            area.x >= 0 &&
+                area.y >= 0 &&
+                area.x + area.width <= 1280 &&
+                area.y + area.height <= 800,
+        );
+        assert.equal(
+            await page
+                .locator(".details")
+                .evaluate((node) => getComputedStyle(node).overflowY),
+            "auto",
+        );
+    }
+    const buttons = measurements.filter((box) => box.tag === "BUTTON");
+    for (const [index, a] of buttons.entries())
+        for (const b of buttons.slice(index + 1))
+            assert.ok(
+                a.x + a.width <= b.x ||
+                    b.x + b.width <= a.x ||
+                    a.y + a.height <= b.y ||
+                    b.y + b.height <= a.y,
+                "touch targets must not overlap",
+            );
+    assert.equal(
+        await page.evaluate(() => document.documentElement.scrollHeight),
+        800,
+    );
+    assert.equal(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+        1280,
+    );
+    console.log(
+        `geometry: ${measurements.length} text/control boxes; ${buttons.length} targets >=64px; min contrast ${Math.min(...contrasts).toFixed(2)}:1; viewport 1280x800`,
+    );
 }

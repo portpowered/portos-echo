@@ -10,7 +10,7 @@
     "check:schema": "node tools/screen-schema.mjs --check",
     "generate:schema": "node tools/screen-schema.mjs --write",
     "build": "npm run check:schema && node tools/build.mjs",
-    "test": "npm run build && node --test --test-concurrency=2 tests/*.test.mjs && node tools/coverage.mjs",
+    "test": "npm run build && node tools/test.mjs",
     "dev": "npm run build && node dev/server.mjs",
     "lint": "eslint . && tsc --noEmit && prettier --check ."
   },

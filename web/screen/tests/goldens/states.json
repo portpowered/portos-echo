@@ -9,5 +9,6 @@
   "muted": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"muted\" [level=1]\n  - status\n",
   "ready": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"ready\" [level=1]\n    - paragraph: Echo Live ready\n    - button \"Start\"\n  - status\n",
   "speaking": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"speaking\" [level=1]\n  - status\n",
-  "thinking": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"thinking\" [level=1]\n  - status\n"
+  "thinking": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"thinking\" [level=1]\n  - status\n",
+  "emotion": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"emotion\" [level=1]\n    - paragraph: happy\n    - paragraph: frame-a\n    - button \"Dismiss\"\n  - status\n"
 }
