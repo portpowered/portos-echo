@@ -1,9 +1,10 @@
+// docs/program/rules.md exempts the xtask tool's command-line output.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::process::ExitCode;
 
-fn dispatch(subcommand: Option<&str>) -> Result<(), &'static str> {
-    match subcommand {
-        _ => Err("Usage: cargo xtask <subcommand>"),
-    }
+fn dispatch(_subcommand: Option<&str>) -> Result<(), &'static str> {
+    Err("Usage: cargo xtask <subcommand>")
 }
 
 fn main() -> ExitCode {
@@ -23,14 +24,18 @@ mod tests {
 
     #[test]
     fn missing_subcommand_returns_usage() {
-        assert_eq!(dispatch(None), Err("Usage: cargo xtask <subcommand>"));
+        let error = dispatch(None).err();
+        assert_eq!(
+            error.expect("missing command must fail"),
+            "Usage: cargo xtask <subcommand>"
+        );
     }
 
     #[test]
     fn unknown_subcommand_returns_usage() {
         assert_eq!(
-            dispatch(Some("unknown")),
-            Err("Usage: cargo xtask <subcommand>")
+            dispatch(Some("unknown")).err().unwrap(),
+            "Usage: cargo xtask <subcommand>"
         );
     }
 }
