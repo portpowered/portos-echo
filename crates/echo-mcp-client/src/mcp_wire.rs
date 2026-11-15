@@ -30,6 +30,7 @@ pub(crate) fn envelope(bytes: &[u8], id: u64) -> Result<Value, McpError> {
 #[serde(rename_all = "camelCase")]
 struct WireTool {
     name: String,
+    #[serde(default)]
     description: String,
     input_schema: Value,
 }
@@ -71,10 +72,10 @@ pub(crate) fn result(value: &Value) -> Result<ToolResult, McpError> {
     {
         return Err(McpError::Protocol);
     }
-    let is_error = value
-        .get("isError")
-        .and_then(Value::as_bool)
-        .ok_or(McpError::Protocol)?;
+    let is_error = match value.get("isError") {
+        None => false,
+        Some(value) => value.as_bool().ok_or(McpError::Protocol)?,
+    };
     Ok(ToolResult {
         content: content.clone(),
         is_error,

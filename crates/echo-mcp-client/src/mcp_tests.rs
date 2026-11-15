@@ -154,11 +154,33 @@ fn t2_catalog_and_result_preserve_exact_wire_mapping() {
         json!({}),
         json!({"content":{},"isError":false}),
         json!({"content":[1],"isError":false}),
-        json!({"content":[]}),
+        json!({"content":[],"isError":null}),
         json!({"content":[],"isError":0}),
     ] {
         assert_eq!(result(&value), Err(McpError::Protocol));
     }
+}
+
+#[test]
+fn t2_omitted_optional_fields_use_internal_defaults() {
+    assert_eq!(
+        page(json!({"tools":[{"name":"x","inputSchema":{}}]})),
+        Ok((
+            vec![ToolSpec {
+                name: "x".into(),
+                description: String::new(),
+                input_schema: json!({})
+            }],
+            None
+        ))
+    );
+    assert_eq!(
+        result(&json!({"content":[]})),
+        Ok(ToolResult {
+            content: json!([]),
+            is_error: false
+        })
+    );
 }
 
 #[test]

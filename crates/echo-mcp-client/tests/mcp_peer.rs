@@ -22,6 +22,87 @@ fn tool(name: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn t3_optional_fields_default_over_json_and_sse_http() {
+    for sse in [false, true] {
+        let reply = |value| if sse { Reply::Sse(value) } else { Reply::Result(value) };
+        let schema = json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]});
+        let content = json!([{"type":"text","text":"hello"}]);
+        let token = token();
+        let peer = Peer::start(
+            vec![
+                reply(json!({"tools":[{"name":"test.echo","inputSchema":schema}]})),
+                reply(json!({"content":content})),
+            ],
+            token.clone(),
+        )
+        .await;
+        let host = host(&peer.url, token);
+        assert_eq!(
+            host.list_tools().await.unwrap(),
+            vec![echo_agent_api::ToolSpec {
+                name: "test.echo".into(),
+                description: String::new(),
+                input_schema: schema,
+            }]
+        );
+        assert_eq!(
+            host.call_tool("test.echo", json!({"text":"hello"}), "key")
+                .await
+                .unwrap(),
+            echo_agent_api::ToolResult {
+                content,
+                is_error: false
+            }
+        );
+        let records = peer.observations.lock().unwrap().clone();
+        assert_eq!(records.len(), 4);
+        assert!(
+            records
+                .iter()
+                .all(|r| r.post && r.bearer_equal && r.forbidden_headers == [false; 2])
+        );
+        assert_eq!(
+            records[2].request,
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
+        );
+        assert_eq!(
+            records[3].request,
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test.echo","arguments":{"text":"hello"}}})
+        );
+        peer.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn t3_wrong_optional_field_types_fail_over_http() {
+    for (description, is_error) in [
+        (json!(null), json!(null)),
+        (json!(0), json!(0)),
+        (json!(false), json!("false")),
+        (json!([]), json!([])),
+        (json!({}), json!({})),
+    ] {
+        let token = token();
+        let peer = Peer::start(
+            vec![
+                Reply::Result(json!({"tools":[{"name":"test.echo","description":description,"inputSchema":{}}]})),
+                Reply::Result(json!({"content":[],"isError":is_error})),
+            ],
+            token.clone(),
+        )
+        .await;
+        let host = host(&peer.url, token);
+        assert_eq!(host.list_tools().await, Err(ToolError::Transport));
+        assert_eq!(
+            host.call_tool("test.echo", json!({}), "key").await,
+            Err(ToolError::Transport)
+        );
+        assert_eq!(peer.observations.lock().unwrap().len(), 4);
+        peer.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn t3_f16_segmented_post_sse_matches_rpc_id_without_get() {
     let token = token();
     let peer = Peer::start(
