@@ -46,6 +46,10 @@ The two that differ are the two that differed on 7806. echo-dot-assist does not 
 7809's are byte-identical to 7806's is unknown; hassmic's setup will ask before installing (`HASSMIC_FIRMWARE_OK`).
 Kernel `4.4.146+`, SDK 28, incremental `0036811211140`.
 
+Re-probed 2026-11-15 19:32 UTC with `echo-lab probe` (PR 38) by the coordinator under T5: the build, kernel, SDK, all six
+hashes, the display and the amplifier value above reproduce exactly, and 21 keyword-model directories are listed.
+The device serial appears in none of the 41 saved artifacts.
+
 | Signal | 7809 value | Matches the athena profile |
 | --- | --- | --- |
 | Volume keys | `gpio-keys`: `KEY_VOLUMEDOWN`, `KEY_VOLUMEUP` | Yes |
