@@ -19,3 +19,8 @@ jsonschema = { version = "0.33", default-features = false }
 name = "echo-lab-fake-adb"
 path = "tests/fixtures/lab_fake_adb.rs"
 bench = false
+
+[[bin]]
+name = "echo-lab-fake-run"
+path = "tests/fixtures/lab_fake_run.rs"
+bench = false

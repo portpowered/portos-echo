@@ -22,6 +22,155 @@ root, read and parse errors use the empty pointer. It continues after failures a
 returns 1 for any failure or empty discovery. Schemas are embedded; validation
 uses no network. `--help` prints the command grammar.
 
+## Device runner
+
+The device runner supports batches of speech, screen and frame steps, firmware
+admission, quiet hours, held-session cleanup, reply capture and reports:
+
+```sh
+echo-lab run scenario.yaml --driver device --bench ring --port /explicit/port --adb /explicit/adb --stt stt-wrapper --ring fixture-ring --out /external/new-directory
+```
+
+`say: utterance.wav` selects a WAV relative to the scenario directory. Missing
+files fail before tools or artifacts are created. This lane commits no utterance
+audio. Optional `say: "text:synthetic utterance"` requires both
+`--speech-endpoint` and `--speech-model`; there are no speech defaults.
+`--ring` overrides `ECHO_LAB_RING`. Port and adb paths must name existing files
+explicitly; bare executable names are refused. Arguments go directly to child
+processes, without shell interpretation. `--stt` is one executable (or a wrapper
+for additional options), invoked with the reply WAV path as exactly one argument.
+Its stdout is a UTF-8 transcript; transcripts and raw tool diagnostics are never
+persisted. `expect_speech_contains` checks literal, case-insensitive substrings.
+An explicit `regex:` prefix selects a pattern; invalid/empty expectations fail
+before effects. Pattern matching uses the existing schema validator's regex
+engine, with no extra package dependency.
+
+`expect_screen: {golden: tests/goldens/example.png, tolerance: 0}` captures
+`adb exec-out screencap -p`, preserves the raw PNG, and compares decoded RGBA
+pixels to the golden. Goldens must resolve inside the repository's
+`tests/goldens/`. Tolerance is exactly zero differing pixels. The bounded Python
+standard-library decoder handles non-interlaced 8-bit gray, gray-alpha, palette,
+RGB and RGBA PNGs; unsupported formats and corrupt inputs fail explicitly.
+
+`expect_frame: frames/ring.jpg` saves a snapshot from the same held lease.
+The approved CLI source returns JPEG bytes and a capture timestamp, rather
+than PNG. Paths must be portable relative paths without traversal; existing
+destinations and symlink parents are refused. The runner checks the capture
+confirmation and JPEG structure, retaining exact bytes as report evidence.
+The file must start with SOI and end with EOI; segment lengths must fit, with
+exactly one SOF0/SOF1/SOF2 before SOS, positive dimensions, one or three
+components, DQT and DHT tables, and at least one entropy byte after SOS.
+This is capture evidence only; it never asserts the Ring image's contents.
+Entropy is not decoded: structurally intact files with garbage entropy pass.
+The coordinator reads what the light ring shows from the frame at T5.
+
+When a frame immediately follows `say`, playback completes without `--listen`,
+then a bounded `message record --audio-only --duration 10` child starts.
+The next step takes the held snapshot while that child is pending; the speech
+oracle joins/checks the child before STT. Other utterances use the CLI's combined
+play/listen timestamps and trim the WAV at playback end. Finalization and the
+next utterance also join/check any pending recording before releasing/reusing
+the session. Every pending child has the same cancellation and lease deadlines.
+
+Every step first reads the firmware incremental using explicit adb. Only builds
+in `data/probed-builds.txt` are admitted. The initial entry is the measured 7809
+incremental from `docs/program/baselines.md`. The local clock is checked before
+opening the hold and immediately before each audio command. Before 09:00 the
+run refuses audio. There is no quiet-hours override. `--python` selects the host
+Python 3 interpreter, default `python`, for local clock, hashing and WAV work.
+Production time has no environment override.
+
+One hold and one alignment chirp serve a batch. All commands are pinned in
+`src/lab_run/run_command.rs` to the coordinator-approved CLI source. Listening
+chirps need `--output` as well as `--listen 3`, as required by that source.
+Reply WAVs contain only samples after playback ends, using the returned capture
+timestamps. Child output is bounded and discarded on failure; commands have
+30-second ceilings shortened by the remaining monotonic lease budget. A hold
+lasts at most 11 minutes; the runner reserves 90 seconds for playback, local
+WAV processing and release, rotating early when pending work cannot fit. Rotation
+releases, waits 25 seconds and reopens without repeating the batch chirp. The
+host helper uses a monotonic clock; the fixture clock advances without sleeping.
+After failed playback, `session status <hold> --json` must confirm the same
+hold ended with reason `preempted` before the interrupted step is reopened and
+retried once. A second preemption fails. Status/release JSON and argv follow
+the same pinned CLI source, including `cli/internal/host/server.go`.
+Unsupported steps and setup/budget/injection semantics
+fail explicitly.
+
+For cooperative cancellation, supply `--cancel-file /external/cancel.signal`.
+Creating that file cancels the current child, kills and reaps it, stops later
+steps and attempts one release independently of the cancellation signal. The
+runner does not remove the signal file. Use a fresh path per run; an existing
+signal refuses work. Both primary and cleanup failures appear in the diagnostic
+and failed report. Abrupt OS termination and a remote hold that outlives a failed
+release require coordinator recovery; local deadlines do not prove remote teardown.
+
+Artifacts require a fresh directory with an existing parent, outside every git
+worktree; the default is a unique host temporary directory. `events.jsonl`
+records ordered, sanitized lifecycle events. `report.json` is schema-validated
+and published last by rename. A reportable failure uses `result: fail` and exit
+1; success uses `pass` and exit 0. The tier is the highest tier declared by the
+batch scenarios; a declared tier alone does not prove that environment.
+Leases, Ring identifiers, transcripts and raw child output are never written to
+reports or events. `bench_session_ids` contains ordered local aliases
+(`batch-hold-1`, etc.), never external hold ids or leases. Passing audio is deleted unless `--keep-audio`; failed audio
+is retained outside git for triage. An interrupted or unwritable publication
+may leave an incomplete external directory without a report.
+
+Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
+`echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child
+`ECHO_LAB_RUN_FIXTURE` / `ECHO_LAB_RUN_LEDGER`. The latter executable implements
+only synthetic port, adb and host-helper responses; it never forwards device commands.
+Its JSON fixture can select `hour`, per-call `hours`, `build`, a failed operation
+with `fail`, malformed JSON with `malformed`, or a response object by operation
+name. Lifecycle fixtures also select per-clock-call `times` (monotonic
+milliseconds, retaining the final value), per-open `holds`, a `preemptions`
+count, and `cancel_on` to publish `cancel.signal` and block until killed.
+`wait` acknowledges exactly 25000 virtual milliseconds; no fixture sleeps.
+The fixture helper is selected explicitly with `--python`; these variables
+are consumed only by fakes. Tests also exercise the real host Python helper for
+PNG decoding; `real_pixels: true` forwards only the pure local pixel operation
+from the fake helper to Python. The remaining operations stay synthetic.
+`transcript` configures fake STT stdout (default `The time is 7:49 p.m.`).
+`record_waits_for_frame: true` makes the fake recording await an explicit
+snapshot notification; it proves frame-before-record-join ordering without a
+fixed sleep. The 221-byte black JPEG and 2-by-2 PNG in `tests/goldens/` are
+generated synthetic images, never device captures.
+
+To reproduce B0 safely in PowerShell, build the tools once in this worktree,
+then run in a fresh external directory. The synthetic speech endpoint/model
+are explicit because the source-pinned CLI has no text-to-speech defaults:
+
+```powershell
+$repo = (Get-Location).Path
+cargo build -p echo-lab --bins --locked
+$fake = Join-Path $repo 'target/debug/echo-lab-fake-run.exe'
+$run = Join-Path $env:TEMP ('lab-b0-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory $run | Out-Null
+Push-Location $run
+$env:ECHO_LAB_RING = 'fixture-ring'
+$env:ECHO_LAB_RUN_FIXTURE = Join-Path $run 'fixture.json'
+$env:ECHO_LAB_RUN_LEDGER = Join-Path $run 'ledger.jsonl'
+'{"transcript":"The time is 7:49 p.m.","record_waits_for_frame":true}' |
+  Set-Content $env:ECHO_LAB_RUN_FIXTURE
+cargo run --manifest-path "$repo/Cargo.toml" -p echo-lab -- run `
+  "$repo/tests/scenarios/b0-stock-time.yaml" --driver device --bench ring `
+  --port $fake --adb $fake --stt $fake --python $fake `
+  --speech-endpoint fixture-speech --speech-model fixture-model --out artifacts
+Get-Content ledger.jsonl
+Get-Content artifacts/report.json
+Pop-Location
+```
+
+Expected exit is 0 with `result: pass`. Repeat in another fresh external
+directory with `transcript: "No clock information"` for exit 1, `result: fail`
+and `checks.step_2: false`. The scenario declares its intended T5 milestone;
+these fake executions are T3 harness evidence and never a physical B0 pass.
+
+The real host helper is also exercised for
+exact WAV samples and SHA-256. Run `cargo test -p echo-lab --all-targets --locked`.
+No test accesses hardware, an account, STT service or a remote endpoint.
+
 `check --milestone M0` probes all twelve Phase F targets with real `make -n`, then
 checks for `.github/workflows/ci.yml`. It prints every result and returns 1 if any
 check fails. The missing workflow is expected until el-f10. This inventory does

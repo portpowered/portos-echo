@@ -1,0 +1,162 @@
+const ALLOWED: &[&str] = &[
+    "--driver",
+    "--bench",
+    "--port",
+    "--adb",
+    "--stt",
+    "--ring",
+    "--out",
+    "--python",
+    "--keep-audio",
+    "--speech-endpoint",
+    "--speech-model",
+    "--cancel-file",
+];
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+pub struct Options {
+    pub scenarios: Vec<String>,
+    pub port: PathBuf,
+    pub adb: PathBuf,
+    pub stt: PathBuf,
+    pub python: String,
+    pub ring: String,
+    pub out: PathBuf,
+    pub keep_audio: bool,
+    pub speech: Option<(String, String)>,
+    pub cancel: Option<PathBuf>,
+}
+
+fn required<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str, String> {
+    flags
+        .get(name)
+        .map(String::as_str)
+        .ok_or_else(|| format!("run requires {name}"))
+}
+
+fn explicit(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if path.components().count() < 2 || !path.is_file() {
+        return Err("run: --port and --adb require explicit executable paths".into());
+    }
+    path.canonicalize()
+        .map_err(|_| "run: cannot resolve explicit executable".into())
+}
+
+fn collect(args: &[String]) -> Result<(Vec<String>, BTreeMap<String, String>), String> {
+    let mut paths = Vec::new();
+    let mut flags = BTreeMap::new();
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        if arg.starts_with("--") {
+            let value = if arg == "--keep-audio" {
+                "true".to_owned()
+            } else {
+                index += 1;
+                args.get(index)
+                    .filter(|s| !s.is_empty() && !s.starts_with("--"))
+                    .ok_or("run: missing flag value")?
+                    .clone()
+            };
+            if flags.insert(arg.clone(), value).is_some() {
+                return Err("run: duplicate flag".into());
+            }
+        } else {
+            paths.push(arg.clone());
+        }
+        index += 1;
+    }
+    Ok((paths, flags))
+}
+
+pub fn parse(args: &[String]) -> Result<Options, String> {
+    let (scenarios, flags) = collect(args)?;
+    if flags.keys().any(|key| !ALLOWED.contains(&key.as_str())) || scenarios.is_empty() {
+        return Err("run: unknown option or missing scenario".into());
+    }
+    if required(&flags, "--driver")? != "device" || required(&flags, "--bench")? != "ring" {
+        return Err("run: only --driver device --bench ring is implemented".into());
+    }
+    required(&flags, "--stt")?;
+    let speech = match (flags.get("--speech-endpoint"), flags.get("--speech-model")) {
+        (None, None) => None,
+        (Some(endpoint), Some(model)) => Some((endpoint.clone(), model.clone())),
+        _ => return Err("run: text speech needs both --speech-endpoint and --speech-model".into()),
+    };
+    let ring = flags
+        .get("--ring")
+        .cloned()
+        .or_else(|| std::env::var("ECHO_LAB_RING").ok())
+        .filter(|s| !s.is_empty())
+        .ok_or("run requires --ring or ECHO_LAB_RING")?;
+    let out = flags.get("--out").map_or_else(
+        || {
+            std::env::temp_dir().join(format!(
+                "echo-lab-run-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ))
+        },
+        PathBuf::from,
+    );
+    Ok(Options {
+        scenarios,
+        port: explicit(required(&flags, "--port")?)?,
+        adb: explicit(required(&flags, "--adb")?)?,
+        stt: PathBuf::from(required(&flags, "--stt")?),
+        python: flags.get("--python").cloned().unwrap_or_else(|| "python".into()),
+        ring,
+        out,
+        keep_audio: flags.contains_key("--keep-audio"),
+        speech,
+        cancel: flags.get("--cancel-file").map(PathBuf::from),
+    })
+}
+
+pub fn destination(path: &Path) -> Result<PathBuf, String> {
+    let name = path
+        .file_name()
+        .filter(|name| *name != "." && *name != "..")
+        .ok_or("run output: expected a fresh directory name")?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let target = parent
+        .canonicalize()
+        .map_err(|_| "run output: parent must exist")?
+        .join(name);
+    if target.exists() {
+        return Err("run output: destination already exists".into());
+    }
+    let output = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .map_err(|_| "run output: cannot inspect worktrees")?;
+    if !output.status.success() {
+        return Err("run output: cannot inspect worktrees".into());
+    }
+    for field in output.stdout.split(|byte| *byte == 0) {
+        if let Some(root) = std::str::from_utf8(field)
+            .ok()
+            .and_then(|s| s.strip_prefix("worktree "))
+        {
+            let root = Path::new(root)
+                .canonicalize()
+                .map_err(|_| "run output: cannot resolve worktree")?;
+            if target.starts_with(root) {
+                return Err("run output: artifacts must be outside all repository worktrees".into());
+            }
+        }
+    }
+    if target.ancestors().any(|ancestor| ancestor.join(".git").exists()) {
+        return Err("run output: artifacts must be outside git".into());
+    }
+    Ok(target)
+}

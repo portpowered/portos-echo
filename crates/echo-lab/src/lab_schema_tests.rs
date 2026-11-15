@@ -48,6 +48,7 @@ fn all_step_forms_and_negative_assertions_validate() {
         {"expect_trace": ["session.delegation.created", "tools/call {name: test.echo, count: 1}", "session.commentary.append"]},
         {"expect_speech_contains": ["test", "echo"]},
         {"expect_screen": {"state": "speaking"}},
+        {"expect_frame": "frames/ring.jpg"},
         {"press": "mute"}, {"press": {"key": "mute"}}, {"touch": {"x": 1, "y": 2}}
     ]);
     value["setup"] = json!({"mcp": "spoof", "backend": "client"});
@@ -59,6 +60,37 @@ fn all_step_forms_and_negative_assertions_validate() {
     assert!(schema().unwrap().is_valid(&value));
     let encoded = serde_json::to_string(&value).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&encoded).unwrap(), value);
+}
+
+#[test]
+fn frame_contract_and_semantic_paths() {
+    let source: Value = serde_json::from_str(SCHEMA).unwrap();
+    assert_eq!(
+        source["$defs"]["step"]["properties"]["expect_frame"],
+        json!({"type":"string","minLength":1})
+    );
+    let mut value = scenario();
+    value["steps"] = json!([{"expect_frame":"frames/ring.jpg"}]);
+    assert!(schema().unwrap().is_valid(&value));
+    assert_eq!(frame_paths(&value), Ok(()));
+    for path in [
+        "",
+        "../escape.jpg",
+        "/tmp/frame.jpg",
+        "C:/frame.jpg",
+        "a/../../escape.jpg",
+        "a\\frame.jpg",
+    ] {
+        value["steps"] = json!([{"expect_frame":path}]);
+        assert_eq!(
+            frame_paths(&value).unwrap_err(),
+            "/steps/0/expect_frame: expect_frame: expected a relative artifact path without traversal"
+        );
+    }
+    value["steps"] = json!([{"expect_frame":""}]);
+    assert!(!schema().unwrap().is_valid(&value));
+    value["steps"] = json!([{"expect_frame":"frame.jpg", "say":"hello"}]);
+    assert!(!schema().unwrap().is_valid(&value));
 }
 
 #[test]
