@@ -21,3 +21,21 @@
 # Factory lane worktrees and local factory state (factory/docs/operating-policy.md)
 /.claude/worktrees/
 /docs/temp/
+
+# Factory lane working files: setup-workspace writes these into every lane
+# worktree, and they must never be committed
+/prd.json
+/prd.md
+/progress.md
+/progress.txt
+/problems.md
+
+# Factory runtime state written into the checkout the daemon runs from
+/.you-agent-factory/
+/tasks/todo/
+/tasks/done/
+/factory/logs/
+/factory/inputs/**
+!/factory/inputs/**/
+!/factory/inputs/**/.gitkeep
+__pycache__/
