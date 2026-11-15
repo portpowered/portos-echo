@@ -390,8 +390,8 @@ Milestones accumulate: the installed image still demonstrates every earlier one.
 | **M6** MCP drives an animation | "Show me a happy face": the spoof MCP's `ui.show_emotion` makes the screen play an animated face (frames, not a still), then clear; audio stays usable. Spoof MCP only: Port OS does not grow an equivalent | T3, T5 | M4, `echo-screen` |
 | **M7** Muse delegation | "Ask Muse to run the test job": correlated `delegation_id → task_id → Muse session → result`, spoken; a timeout gives a safe voice response | T4, T5 | Muse bridge (section 7) |
 
-Access tokens on the Port OS pilot live 300 s, so a 30-minute M5 run refreshes about six times. Every refresh is a
-DPoP proof, which makes the run a free soak of the bound refresh path.
+Device-code access tokens live 24 h by default, so an ordinary M5 run never refreshes on its own. The scenario forces
+at least two refreshes (the bridge's `--refresh-now` operator command) and one replay, which must revoke the grant.
 
 ### 8.4 The bench
 
@@ -451,20 +451,37 @@ consumes them. The rule they follow: **`/mcp` accepts any valid Port OS access t
 way, whatever grant minted it** (authorization code + PKCE, device code, refresh). Nothing on `/mcp` is specific to
 device login.
 
-| ID | Change (portos-backend) | Gates |
-|---|---|---|
-| PB-1 | `/mcp` accepts every valid access token for the MCP resource, independent of the grant that minted it | M5 |
-| PB-2 | The device authorization request takes `resource`, so a device-code token gets the MCP audience; discovery advertises `device_authorization_endpoint` | M5 |
-| PB-3 | An `echo` client that allows the `device_code` and `refresh_token` grants (DCR and CIMD clients cannot use the device flow) | M5 |
-| PB-4 | DPoP hardening on the token endpoint, for the refresh token only | M5 |
-| PB-5 | Refresh rotation and revoke for device grants | M5 revoke step |
-| PB-6 | The "Echo test light" simulator on the test account, so M5 never touches a real lamp | M5 |
+| ID | Change (portos-backend) | Status (2026-11-15) | Gates |
+|---|---|---|---|
+| PB-1 | `/mcp` accepts every valid access token for the MCP resource, independent of the grant that minted it | Merged (portos-monolith PR 2731); not on the pilot yet | M5 |
+| PB-2 | The device authorization request takes `resource`, so a device-code token gets the MCP audience; discovery advertises `device_authorization_endpoint` | Merged (PR 2731); not on the pilot yet | M5 |
+| PB-3 | A client that allows the `device_code` and `refresh_token` grants | Nothing to build: the built-in public CLI client `port1/systems/zero/oauth-clients/command-line-interface` already allows both. A dedicated `echo` client is optional, a management registration (public, auth method `none`) with no code change | M5 |
+| PB-4 | DPoP hardening on the token endpoint (`htu`, `htm`, `iat`, `jti` and the registration proof's signature), for the refresh token only | Not started; a later portos-backend PR | M5 hardening, not the first M5 run |
+| PB-5 | Refresh rotation and revoke for device grants | Merged (PR 2731); not on the pilot yet | M5 revoke step |
+| PB-6 | The "Echo test light" simulator on the test account, so M5 never touches a real lamp | Not started | M5 |
 
-What the bridge can rely on today: authorization code + PKCE against Port OS MCP, with discovery through the
-protected-resource metadata, DCR or CIMD, and Bearer on `/mcp`. So `echo-mcp-auth` builds the device-code + DPoP
-client against a mock authorization server, and T4 runs against the pilot with an authorization code + PKCE token
-until PB-1/2/3 are deployed. The portos-backend coordinator messages this repository's coordinator with the pull
-request and the exact discovery fields when they are; this plan's M5 row is updated then.
+What PR 2731 gives the bridge, once it is deployed:
+
+- **Discovery.** `GET /.well-known/oauth-authorization-server` carries `device_authorization_endpoint`
+  (`<base>/auth/device-authorization`) and `dpop_signing_alg_values_supported` (ES256, ES384, ES512, RS256, RS384,
+  RS512, EdDSA). The bridge reads both from discovery and never hard-codes a path.
+- **Device authorization.** `POST /auth/device-authorization` (form) with `resource` set to the `resource` of
+  `/.well-known/oauth-protected-resource` (the server's `/mcp` URL). Any other value answers 400 `invalid_target`.
+  Without `resource` the grant mints an old first-party token, which `/mcp` refuses with 401, so `echo-mcp-auth`
+  always sends it and a T1 test asserts so.
+- **Token.** The `device_code` grant at `/auth/token` returns the same resource-bound pair as the browser code
+  grant: an access token (`aud` = the resource, `token_use=access`, a `grant_id`, the scopes the owner granted;
+  24 h by default) and a refresh token (30 days, `cnf.jkt` = the bridge's DPoP key thumbprint).
+- **`/mcp` admission** is unchanged and grant-agnostic: `token_use=access`, the issuer, the MCP audience, a subject
+  and an active `grant_id`. Access tokens are plain Bearer.
+- **Refresh** is `grant_type=refresh_token` with a DPoP proof from the same key. Refresh tokens rotate; a replayed
+  one revokes the whole grant, so the next `/mcp` call answers 401. The bridge must persist the rotated refresh
+  token before it uses the new access token, or a crash between the two forces a relink.
+- **Revoke** is `POST /auth/revoke` with `token=<refresh token>` and `client_id`; it ends MCP access.
+
+Until PR 2731 is on the pilot, `echo-mcp-auth` builds against a mock authorization server that implements exactly
+this, and T4 runs against the pilot with an authorization code + PKCE token. Deploying it is the owner's call. When
+it is deployed, the portos-backend coordinator says so and M5's device-code run on T4 starts.
 
 DPoP binds the refresh token only (owner, 2026-11-13); MCP requests use Bearer, with no DPoP nonce or `ath`.
 Server-sent elicitation is deferred: Port OS MCP is stateless (POST only, no session ids, `GET /mcp` answers 405),
@@ -566,7 +583,7 @@ loopback (`docs/program/coordinator.md`), and fans out inside a phase only where
 4. **B0 bench** runs in parallel from W0: the `echo-lab` device driver over the Port OS CLI, the STT oracle,
    `echo-lab calibrate`, and the Ring frame of the light ring.
 5. **W3 device.** hassmic installed on the Echo (the owner's go-ahead), then M1, M3, M5 and M6 as operator-started
-   T5 runs. M5's device-code run waits for portos-backend's PB-1/2/3.
+   T5 runs. M5's device-code run waits for PR 2731 on the pilot and the PB-6 simulator.
 6. **Muse** (`el-w3-muse-bridge`), gating M7.
 
 Contract changes after W0 are their own pull request, made by the coordinator, never a side effect of a feature.
