@@ -1309,6 +1309,29 @@ def validate_nested_packet_freshness(repo_root, candidate, prd_name):
         )
 
 
+def coalesce_planner_copies(candidates, prd_name):
+    """Drop byte-identical packet copies left in the planner's own worktree.
+
+    A planner may run in a `.claude/worktrees/<lane>-plan` worktree and leave
+    a copy of the packet it published to the main checkout. When the main
+    checkout's packet exists and every other candidate is such a copy with
+    identical bytes, the main checkout's packet is the only real candidate.
+    Any differing copy, or any copy elsewhere, stays ambiguous.
+    """
+    if len(candidates) < 2:
+        return candidates
+    roots = [c for c in candidates if c["is_root"]]
+    if len(roots) != 1:
+        return candidates
+    copies = [c for c in candidates if not c["is_root"]]
+    if not all(Path(c["worktree_path"]).name == f"{prd_name}-plan" for c in copies):
+        return candidates
+    root_bytes = roots[0]["prd_json_path"].read_bytes()
+    if all(c["prd_json_path"].read_bytes() == root_bytes for c in copies):
+        return roots
+    return candidates
+
+
 def select_prd_candidate(repo_root, prd_name, records, recovery_worktree=""):
     """Select and validate one exact packet before any setup mutation."""
     candidates = packet_candidates(repo_root, prd_name, records)
@@ -1327,6 +1350,7 @@ def select_prd_candidate(repo_root, prd_name, records, recovery_worktree=""):
                 # Only the exact adopted destination may coalesce with its
                 # byte-identical source. Other duplicates remain ambiguous.
                 candidates = source
+    candidates = coalesce_planner_copies(candidates, prd_name)
     if len(candidates) > 1:
         raise RuntimeError(
             "ambiguous PRD: multiple exact candidates were found: "
