@@ -79,6 +79,7 @@ measure-barge-in: hassmic-host
 
 test-concurrency:
 	cargo test -p echo-audio --lib --locked loom -- --nocapture
+	cargo test -p echo-wyoming --lib --locked loom_queue -- --nocapture
 
 # Sources outside the workspace that LLVM still attributes lines to: dependency macro expansions (tokio's
 # join!/select!) from the cargo registry or git checkouts, and the toolchain's own library. The default
