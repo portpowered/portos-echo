@@ -1,0 +1,2 @@
+{"dir":"bridge->echo","header":{"type":"describe","data":{},"data_length":0,"payload_length":0}}
+{"dir":"echo->bridge","header":{"type":"info","data":{"asr":[],"tts":[],"handle":[],"intent":[],"wake":[],"mic":[],"snd":[],"satellite":{"name":"Capture Echo","attribution":{"name":"hassmic","url":""},"installed":true,"description":"Echo Show 8 2nd gen (athena) with Amazon audio front end","version":"<version>","area":null,"has_vad":false,"active_wake_words":["alexa"],"max_active_wake_words":1,"supports_trigger":true}},"data_length":369,"payload_length":0}}

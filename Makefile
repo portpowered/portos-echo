@@ -61,6 +61,15 @@ test-contract:
 
 test-sim:
 	cargo run --locked -p echo-lab -- validate
+	$(MAKE) hassmic-host
+	sh tests/hassmic_host_smoke.sh
+
+.PHONY: hassmic-host capture-wyoming
+hassmic-host:
+	sh scripts/hassmic-host.sh build
+
+capture-wyoming: hassmic-host
+	sh tests/hassmic_host_smoke.sh --capture
 
 test-concurrency:
 	printf '%s\n' 'no concurrency tests yet'
