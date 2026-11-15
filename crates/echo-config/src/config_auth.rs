@@ -115,8 +115,7 @@ impl ChatGptAuthConfig {
         if !http_url(redirect)
             || !redirect.starts_with("http://")
             || !["localhost", "127.0.0.1"].contains(&host)
-            || !redirect.ends_with("/auth/callback")
-            || redirect.contains(['?', '#'])
+            || redirect.splitn(4, '/').nth(3) != Some("auth/callback")
         {
             return Err(ConfigError::new(
                 "chatgpt_auth.browser_redirect_uri",

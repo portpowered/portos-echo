@@ -18,6 +18,37 @@ fn source(mock: &Mock, directory: &crate::auth_private::Directory) -> AuthSource
 fn fields(url: &str) -> BTreeMap<String, String> {
     reqwest::Url::parse(url).unwrap().query_pairs().into_owned().collect()
 }
+#[test]
+fn browser_constructor_rejects_unservable_callback_paths_before_storage() {
+    let directory = directory();
+    let file = directory.0.join("unopened.json");
+    let endpoint = "http://127.0.0.1/unused";
+    let mut config = echo_config::ChatGptAuthConfig {
+        issuer: endpoint.into(),
+        client_id: "mock-client".into(),
+        scopes: "mock scopes".into(),
+        usercode_endpoint: endpoint.into(),
+        device_token_endpoint: endpoint.into(),
+        token_endpoint: endpoint.into(),
+        authorization_endpoint: endpoint.into(),
+        verification_url: endpoint.into(),
+        device_redirect_uri: endpoint.into(),
+        browser_redirect_uri: String::new(),
+    };
+    for host in ["localhost", "127.0.0.1"] {
+        for path in ["prefix/auth/callback", "/auth/callback", "auth/callback/"] {
+            config.browser_redirect_uri = format!("http://{host}:0/{path}"); // lint-rules: allow-literal inert rejected callback configuration, never requested
+            assert_eq!(
+                AuthSource::new(config.clone(), file.clone()).err(),
+                Some(AuthError::InvalidConfig)
+            );
+            assert!(!file.exists());
+        }
+        config.browser_redirect_uri = format!("http://{host}:0/auth/callback"); // lint-rules: allow-literal inert loopback constructor configuration, no I/O
+        assert_eq!(AuthSource::new(config.clone(), file.clone()).err(), None);
+        assert!(!file.exists());
+    }
+}
 async fn send(redirect: &str, query: &str) -> u16 {
     let mut url = reqwest::Url::parse(redirect).unwrap();
     url.set_query(Some(query));

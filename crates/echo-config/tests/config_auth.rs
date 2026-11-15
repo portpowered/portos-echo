@@ -123,6 +123,17 @@ fn auth_rejects_unsafe_values_with_field_only_errors() {
 }
 
 #[test]
+fn auth_loader_rejects_prefixed_callback_paths() {
+    for host in ["localhost", "127.0.0.1"] {
+        let input = format!("{MINIMAL}\n[chatgpt_auth]\nbrowser_redirect_uri='http://{host}:0/prefix/auth/callback'\n"); // lint-rules: allow-literal inert rejected callback configuration, never requested
+        assert_eq!(
+            BridgeConfig::from_toml_str(&input).unwrap_err().to_string(),
+            "chatgpt_auth.browser_redirect_uri: expected loopback HTTP /auth/callback"
+        );
+    }
+}
+
+#[test]
 fn auth_endpoint_and_redirect_boundaries_keep_safe_diagnostics() {
     let mut config = ChatGptAuthConfig {
         token_endpoint: "http://127.0.0.1/token".into(),
