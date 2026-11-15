@@ -245,3 +245,26 @@ fn unsigned_idle_and_daily_values_have_no_invented_semantic_range() {
         error(&change(key, old, "18446744073709551616"), field);
     }
 }
+
+#[test]
+fn model_is_optional_exact_and_has_safe_diagnostics() {
+    assert_eq!(BridgeConfig::from_toml_str(EXAMPLE).unwrap().agent.model, None);
+    for value in ["fixture-model", " fixture-model ", "模型"] {
+        let input = EXAMPLE.replace("[agent]", &format!("[agent]\nmodel = '{value}'"));
+        assert_eq!(
+            BridgeConfig::from_toml_str(&input).unwrap().agent.model.as_deref(),
+            Some(value)
+        );
+    }
+    for value in ["''", "'   '", "false", "12", "['SYNTHETIC_VALUE']"] {
+        let input = EXAMPLE.replace("[agent]", &format!("[agent]\nmodel = {value}"));
+        assert_eq!(
+            error(&input, "agent.model"),
+            if value.starts_with('\'') {
+                "agent.model: must be nonblank"
+            } else {
+                "agent.model: invalid type or value"
+            }
+        );
+    }
+}

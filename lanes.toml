@@ -56,6 +56,11 @@ path = "crates/echo-live"
 kind = "lib"
 
 [[crate]]
+name = "echo-agent-loop"
+path = "crates/echo-agent-loop"
+kind = "lib"
+
+[[crate]]
 name = "echo-mcp-client"
 path = "crates/echo-mcp-client"
 kind = "lib"

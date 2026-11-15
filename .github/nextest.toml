@@ -1,3 +1,10 @@
+[test-groups.echo-lab-process-heavy]
+max-threads = 2
+
 [profile.ci]
 retries = 0
 slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
+
+[[profile.ci.overrides]]
+filter = 'package(=echo-lab) & (binary(=probe_cli) | binary(=run_cli))'
+test-group = 'echo-lab-process-heavy'

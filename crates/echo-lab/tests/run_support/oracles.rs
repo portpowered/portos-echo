@@ -360,10 +360,8 @@ fn f25_parallel_runs_are_isolated_and_shared_destination_has_one_owner() {
         success(&b0(&b, false));
         success(&first.join().unwrap());
     });
-    assert_eq!(a.report()["result"], "pass");
-    assert_eq!(b.report()["result"], "pass");
-    assert_eq!(a.operations().iter().filter(|v| *v == "hold").count(), 1);
-    assert_eq!(b.operations().iter().filter(|v| *v == "hold").count(), 1);
+    assert_isolated_b0(&a, &b);
+    assert_isolated_b0(&b, &a);
     let session = Session::new(&json!({}));
     let outputs = std::thread::scope(|scope| {
         let first = scope.spawn(|| session.run(&[]));
@@ -373,4 +371,50 @@ fn f25_parallel_runs_are_isolated_and_shared_destination_has_one_owner() {
     codes.sort_unstable();
     assert_eq!(codes, [0, 1]);
     assert_eq!(session.operations().iter().filter(|v| *v == "hold").count(), 1);
+}
+
+fn assert_isolated_b0(session: &Session, other: &Session) {
+    let report = session.report();
+    assert_eq!(report["result"], "pass");
+    assert_eq!(
+        report["checks"],
+        json!({"step_0":true,"step_1":true,"step_2":true,"session_released":true})
+    );
+    assert_eq!(report["evidence"], json!(["events.jsonl", "light-ring.jpg"]));
+    let operations = session.operations();
+    for op in ["hold", "chirp", "play", "record", "snapshot", "stt", "release"] {
+        assert_eq!(operations.iter().filter(|v| v.as_str() == op).count(), 1, "{op}");
+    }
+    assert_capture_argv(session);
+    let ledger = session.ledger();
+    let stt = ledger.iter().find(|v| v["operation"] == "stt").unwrap();
+    assert_eq!(stt["args"], json!([session.0.join("artifacts/reply-0.wav")]));
+    assert_isolated_paths(session, other);
+    assert_eq!(
+        fs::read(session.0.join("artifacts/light-ring.jpg")).unwrap(),
+        include_bytes!("../../../../tests/goldens/lab-frame.jpg")
+    );
+    for file in ["report.json", "events.jsonl"] {
+        let bytes = fs::read(session.0.join("artifacts").join(file)).unwrap();
+        assert!(!String::from_utf8(bytes).unwrap().contains(other.0.to_str().unwrap()));
+    }
+}
+
+fn assert_isolated_paths(session: &Session, other: &Session) {
+    for entry in session.ledger() {
+        let args = entry["args"].as_array().unwrap();
+        for arg in args {
+            let path = Path::new(arg.as_str().unwrap());
+            assert!(!path.starts_with(&other.0), "cross-session argument: {path:?}");
+        }
+        for pair in args.windows(2) {
+            if pair[0] == "--output" {
+                let path = Path::new(pair[1].as_str().unwrap());
+                assert!(
+                    path.starts_with(session.0.join("artifacts")),
+                    "foreign output: {path:?}"
+                );
+            }
+        }
+    }
 }

@@ -653,6 +653,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-agent-loop"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-api",
+ "echo-config",
+ "echo-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "echo-audio"
 version = "0.1.0"
 dependencies = [

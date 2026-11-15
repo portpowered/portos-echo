@@ -55,6 +55,7 @@ fn committed_example_loads_with_all_expected_values() {
             max_tool_calls: 8,
             task_deadline_seconds: 60,
             daily_request_cap: 500,
+            model: None,
         },
         mcp: McpConfig {
             server: vec![McpServer {
@@ -92,7 +93,8 @@ fn minimal_config_defaults_match_both_loaders() {
         AgentConfig {
             max_tool_calls: 8,
             task_deadline_seconds: 60,
-            daily_request_cap: 500
+            daily_request_cap: 500,
+            model: None,
         }
     );
     assert_eq!(config.mcp.server, vec![]);
