@@ -46,6 +46,10 @@ The two that differ are the two that differed on 7806. echo-dot-assist does not 
 7809's are byte-identical to 7806's is unknown; hassmic's setup will ask before installing (`HASSMIC_FIRMWARE_OK`).
 Kernel `4.4.146+`, SDK 28, incremental `0036811211140`.
 
+Re-probed 2026-11-15 19:32 UTC with `echo-lab probe` (PR 38) by the coordinator under T5: the build, kernel, SDK, all six
+hashes, the display and the amplifier value above reproduce exactly, and 21 keyword-model directories are listed.
+The device serial appears in none of the 41 saved artifacts.
+
 | Signal | 7809 value | Matches the athena profile |
 | --- | --- | --- |
 | Volume keys | `gpio-keys`: `KEY_VOLUMEDOWN`, `KEY_VOLUMEUP` | Yes |
@@ -84,6 +88,12 @@ threshold for repeated sessions.
 | Port OS device-code grant | `POST /auth/device-authorization` needs `resource` = the protected resource's `/mcp` URL (anything else: 400 `invalid_target`; none: a first-party token `/mcp` refuses with 401). Access token 24 h, refresh token 30 days bound by `cnf.jkt`; refresh tokens rotate and a replay revokes the grant. The built-in public CLI client already allows `device_code` and `refresh_token`; DCR and CIMD clients cannot use the device flow. Code lifetime 1800 s, poll interval 5 s | portos-backend coordinator, 2026-11-15 (PR 2731); `docs/user-guides/oauth/oauth-device-auth.md` |
 | Port OS pilot device grant, live | 2026-11-15, from a fresh client: `POST /auth/device-authorization` (built-in CLI client, `endpoint:read`, `resource` = `https://api.portoperatingsystem.com/mcp`, ES256 DPoP proof), approved in a browser, then the `device_code` grant returns `token_type` Bearer, `endpoint:read` and a refresh token. `/mcp` `initialize` 200 and `tools/list` 200 with 10 tools (`control`, `endpoint_*`, `group_*`, `subscription_*`) on plain Bearer with no proof; `refresh_token` with the same key 200. Discovery on the auth and api origins advertises `device_authorization_endpoint` `https://auth.portoperatingsystem.com/auth/device-authorization`. PB-4 is deployed (portos-monolith PR 2735): a proof whose `htu` names `https://auth.portoperatingsystem.com/auth/token`, sent to `/auth/device-authorization`, now answers 400 (200 before PB-4), and the whole flow above still passes with a proof signed for each exact endpoint URL. Query strings in `htu` are ignored and the `Host` header is never trusted | portos-backend coordinator; first run on the pilot image from main `8b7b405`, PB-4 rerun on main `35aa60d` |
 | Port OS pilot access token lifetime | 300 s, so a 30-minute run refreshes about six times | Port OS pilot runbook |
+
+## The hassmic wire
+
+| Fact | Value | Source |
+| --- | --- | --- |
+| Microphone stream from hassmic at pin `8646a4f` | The host sends `run-pipeline`, then `audio-chunk` events with positive payloads. It never sends a microphone `audio-start`: `start()` in `src/hassmic/proto_wyoming.c` emits `run-pipeline` and `audio()` emits `audio-chunk`. The reply direction is different, because there the client sends `audio-start` (`tests/fixtures/wyoming/duplex-reply.jsonl`). `echo-contracts` and S2 must accept a microphone stream with no `audio-start` | 2026-11-15, el-w0-hassmic-host captures `tests/fixtures/wyoming/wake-word.jsonl` and `duplex-reply.jsonl`, PR 39 |
 
 ## Milestones
 
