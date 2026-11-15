@@ -17,7 +17,9 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&path).unwrap();
-            Self(path)
+            let session = Self(path);
+            session.git(&["init", "--quiet"]);
+            session
         }
 
         fn write(&self, path: &str, content: &str) {
@@ -242,6 +244,32 @@ mod tests {
         assert_eq!(session.run(&["lint-rules"]), (1, "Cargo.lock: alpha: no ADR in docs/adr/ names it\nCargo.lock: zeta: no ADR in docs/adr/ names it\nlint-rules failed\n".into()));
         session.write("Cargo.lock", "version = 4\n");
         assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+    }
+
+    #[test]
+    fn orphan_schema_and_missing_witness_fail_through_public_cli() {
+        let session = Session::new();
+        session.workspace();
+        session.write("docs/adr/deps.md", "Approved `echo-fixture`.\n");
+        session.write("schemas/contracts/event.json", "{}\n");
+        session.git(&["add", "schemas"]);
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1, "{text}");
+        assert!(
+            text.starts_with("crates/echo-contracts/Cargo.toml:1: schema witness input:"),
+            "{text}"
+        );
+        session.write(
+            "crates/echo-contracts/Cargo.toml",
+            "[package]\nname = 'echo-contracts'\n",
+        );
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1, "{text}");
+        assert!(
+            text.starts_with("crates/echo-contracts/tests/contracts_schema.rs:1: schema witness input:"),
+            "{text}"
+        );
+        assert!(text.ends_with("lint-rules failed\n"));
     }
 
     #[test]

@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::fs;
 
+mod schema;
+
 type Names = BTreeSet<String>;
 
 pub fn run() -> Result<(), String> {
@@ -9,7 +11,7 @@ pub fn run() -> Result<(), String> {
     let adrs = read_adrs()?;
     let missing = missing_names(&current, &adrs);
     if missing.is_empty() {
-        Ok(())
+        schema::run(&current)
     } else {
         Err(missing
             .iter()
