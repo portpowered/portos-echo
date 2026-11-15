@@ -4,20 +4,40 @@
 use std::process::ExitCode;
 
 mod lint_rules;
+mod lint_shape;
 
-fn dispatch(subcommand: Option<&str>) -> Result<(), &'static str> {
+#[derive(Debug, PartialEq)]
+enum Subcommand {
+    Rules,
+    Shape,
+}
+
+fn dispatch(subcommand: Option<&str>) -> Result<Subcommand, &'static str> {
     match subcommand {
-        Some("lint-rules") => lint_rules::run().map_err(|error| {
-            eprintln!("{error}");
-            "lint-rules failed"
-        }),
+        Some("lint-rules") => Ok(Subcommand::Rules),
+        Some("lint-shape") => Ok(Subcommand::Shape),
         _ => Err("Usage: cargo xtask <subcommand>"),
     }
 }
 
 fn main() -> ExitCode {
     let subcommand = std::env::args().nth(1);
-    match dispatch(subcommand.as_deref()) {
+    let result = match dispatch(subcommand.as_deref()) {
+        Ok(Subcommand::Shape) => {
+            println!("{}", lint_shape::header());
+            let (status, lines) = lint_shape::outcome(lint_shape::run());
+            for line in lines {
+                println!("{line}");
+            }
+            return ExitCode::from(status);
+        }
+        Ok(Subcommand::Rules) => lint_rules::run().map_err(|error| {
+            eprintln!("{error}");
+            "lint-rules failed"
+        }),
+        Err(message) => Err(message),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("{message}");
@@ -28,7 +48,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::dispatch;
+    use super::{Subcommand, dispatch};
 
     #[test]
     fn missing_subcommand_returns_usage() {
@@ -45,5 +65,15 @@ mod tests {
             dispatch(Some("unknown")).err().unwrap(),
             "Usage: cargo xtask <subcommand>"
         );
+    }
+
+    #[test]
+    fn shape_subcommand_is_recognized() {
+        assert_eq!(dispatch(Some("lint-shape")), Ok(Subcommand::Shape));
+    }
+
+    #[test]
+    fn rules_subcommand_selects_rules_instead_of_shape() {
+        assert_eq!(dispatch(Some("lint-rules")), Ok(Subcommand::Rules));
     }
 }
