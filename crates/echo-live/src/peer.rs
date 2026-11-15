@@ -35,12 +35,7 @@ pub struct LivePeer {
 }
 
 impl LivePeer {
-    /// Bind one explicit host candidate; no interface discovery, STUN or TURN.
-    ///
-    /// # Errors
-    /// Returns `Io` if binding fails or `Protocol` if candidate setup fails.
-    pub async fn bind(address: SocketAddr, now: Instant) -> Result<Self, Error> {
-        let socket = UdpSocket::bind(address).await.map_err(|_| Error::Io)?;
+    pub(crate) async fn from_socket(socket: UdpSocket, now: Instant) -> Result<Self, Error> {
         let address = socket.local_addr().map_err(|_| Error::Io)?;
         let mut rtc = Rtc::builder()
             .set_crypto_provider(Arc::new(str0m::crypto::from_feature_flags()))

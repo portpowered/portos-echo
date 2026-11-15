@@ -6,6 +6,17 @@ mod queue;
 
 pub use peer::{AudioFrame, LivePeer};
 
+impl LivePeer {
+    /// Bind one explicit host candidate; no interface discovery, STUN or TURN.
+    ///
+    /// # Errors
+    /// Returns `Io` if binding fails or `Protocol` if candidate setup fails.
+    pub async fn bind(address: std::net::SocketAddr, now: std::time::Instant) -> Result<Self, Error> {
+        let socket = tokio::net::UdpSocket::bind(address).await.map_err(|_| Error::Io)?;
+        Box::pin(Self::from_socket(socket, now)).await
+    }
+}
+
 /// Errors deliberately omit remote SDP and payloads.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
