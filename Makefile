@@ -23,7 +23,7 @@ lint-deps:
 	cargo xtask lint-deps && cargo deny --offline check
 
 lint-rules:
-	cargo xtask lint-rules && gitleaks dir . --no-banner --redact=100 --verbose
+	cargo xtask lint-rules && python scripts/lint_secrets.py
 
 lint-scripts-web:
 	sh scripts/lint-scripts-web.sh
