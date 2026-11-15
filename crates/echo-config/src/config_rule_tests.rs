@@ -210,7 +210,7 @@ fn socket_addresses_are_parsed_without_binding() {
 #[test]
 fn syntax_and_value_errors_never_render_input() {
     for input in ["host = 'SYNTHETIC_VALUE", "[SYNTHETIC_VALUE"] {
-        error(input, "config");
+        assert!(error(input, "config").contains("invalid TOML syntax at byte "));
     }
     error(&change("host", "\"echo.example.invalid\"", "false"), "echo.host");
 }
