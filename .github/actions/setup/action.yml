@@ -42,10 +42,13 @@ runs:
       run: cargo deny fetch
     - name: Secret scanner
       if: inputs.target == 'lint-rules'
-      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
-      with:
-        tool: gitleaks@8.30.0
-        fallback: none
+      shell: sh
+      run: |
+        directory=$(mktemp -d)
+        curl --fail --location --retry 3 https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz -o "$directory/gitleaks.tar.gz"
+        echo "79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e  $directory/gitleaks.tar.gz" | sha256sum --check
+        tar -xzf "$directory/gitleaks.tar.gz" -C "$directory" gitleaks
+        sudo install "$directory/gitleaks" /usr/local/bin/gitleaks
     - name: Test runner
       if: inputs.target == 'test-unit'
       uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
@@ -54,10 +57,13 @@ runs:
         fallback: none
     - name: Documentation link checker
       if: contains(fromJSON('["lint-docs","lint-docs-online","lint-self-tests"]'), inputs.target)
-      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
-      with:
-        tool: lychee@0.24.2
-        fallback: none
+      shell: sh
+      run: |
+        directory=$(mktemp -d)
+        curl --fail --location --retry 3 https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz -o "$directory/lychee.tar.gz"
+        echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  $directory/lychee.tar.gz" | sha256sum --check
+        tar -xzf "$directory/lychee.tar.gz" -C "$directory" --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
+        sudo install "$directory/lychee" /usr/local/bin/lychee
     - name: Documentation npm cache
       if: contains(fromJSON('["lint-docs","lint-docs-online","lint-self-tests"]'), inputs.target)
       shell: sh

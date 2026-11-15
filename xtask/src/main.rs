@@ -30,7 +30,7 @@ fn dispatch(subcommand: Option<&str>) -> Result<Subcommand, &'static str> {
 }
 
 fn main() -> ExitCode {
-    let args:Vec<_>=std::env::args().skip(1).collect();
+    let args: Vec<_> = std::env::args().skip(1).collect();
     let subcommand = args.first().map(String::as_str);
     let expected = if subcommand == Some("coverage-check") { 3 } else { 1 };
     if args.len() != expected {
