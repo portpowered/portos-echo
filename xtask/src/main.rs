@@ -8,7 +8,6 @@ fn dispatch(_subcommand: Option<&str>) -> Result<(), &'static str> {
 }
 
 fn main() -> ExitCode {
-    seed_lines();
     let subcommand = std::env::args().nth(1);
     match dispatch(subcommand.as_deref()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -39,77 +38,4 @@ mod tests {
             "Usage: cargo xtask <subcommand>"
         );
     }
-}
-
-fn seed_lines() {
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
-    std::hint::black_box(0_u8);
 }
