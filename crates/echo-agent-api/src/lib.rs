@@ -28,8 +28,51 @@ pub trait AgentBackend {
     fn cancel<'a>(&'a self, id: &'a TaskId) -> impl Future<Output = Result<(), AgentError>> + Send + 'a;
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub content: Value,
+    pub is_error: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ToolError {
+    #[error("transport error")]
+    Transport,
+    #[error("unauthorized")]
+    Unauthorized,
+    #[error("denied")]
+    Denied,
+    #[error("timeout")]
+    Timeout,
+    #[error("server error: {0}")]
+    Server(String),
+}
+
+pub trait ToolHost {
+    fn list_tools(&self) -> impl Future<Output = Result<Vec<ToolSpec>, ToolError>> + Send + '_;
+    fn call_tool<'a>(
+        &'a self,
+        name: &'a str,
+        args: Value,
+        idempotency_key: &'a str,
+    ) -> impl Future<Output = Result<ToolResult, ToolError>> + Send + 'a;
+}
+
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
+
+#[cfg(test)]
+mod tool_tests;
+
+#[cfg(test)]
+mod contract_tests;
 
 #[cfg(test)]
 mod tests {

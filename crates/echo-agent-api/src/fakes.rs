@@ -6,7 +6,8 @@ use std::sync::{Mutex, MutexGuard};
 use echo_contracts::ids::TaskId;
 use echo_contracts::task::TaskEvent;
 
-use crate::{AgentBackend, AgentError, Task};
+use crate::{AgentBackend, AgentError, Task, ToolError, ToolHost, ToolResult, ToolSpec};
+use serde_json::Value;
 
 /// One expected submission and the events to return for its assigned id.
 #[derive(Clone, Debug)]
@@ -89,5 +90,76 @@ impl AgentBackend for FakeBackend {
                 .ok_or(AgentError::UnknownTask)
                 .map(VecDeque::clear),
         )
+    }
+}
+
+/// Exact input triple, also used to snapshot unsuccessful call attempts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolCall {
+    pub name: String,
+    pub args: Value,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolScript {
+    pub call: ToolCall,
+    pub result: Result<ToolResult, ToolError>,
+}
+
+struct ToolState {
+    scripts: Vec<ToolScript>,
+    calls: Vec<ToolCall>,
+}
+
+/// No transport, retries, authorization policy or idempotency ledger.
+pub struct FakeToolHost {
+    catalog: Result<Vec<ToolSpec>, ToolError>,
+    state: Mutex<ToolState>,
+}
+
+impl FakeToolHost {
+    #[must_use]
+    pub fn new(catalog: Result<Vec<ToolSpec>, ToolError>, scripts: Vec<ToolScript>) -> Self {
+        Self {
+            catalog,
+            state: Mutex::new(ToolState { scripts, calls: vec![] }),
+        }
+    }
+
+    /// Snapshot every call attempt in invocation order.
+    #[must_use]
+    pub fn calls(&self) -> Vec<ToolCall> {
+        self.state().calls.clone()
+    }
+
+    fn state(&self) -> MutexGuard<'_, ToolState> {
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl ToolHost for FakeToolHost {
+    fn list_tools(&self) -> impl Future<Output = Result<Vec<ToolSpec>, ToolError>> + Send {
+        ready(self.catalog.clone())
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        args: Value,
+        idempotency_key: &str,
+    ) -> impl Future<Output = Result<ToolResult, ToolError>> + Send {
+        let call = ToolCall {
+            name: name.into(),
+            args,
+            idempotency_key: idempotency_key.into(),
+        };
+        let mut state = self.state();
+        state.calls.push(call.clone());
+        let index = state.scripts.iter().position(|script| script.call == call);
+        ready(index.map_or_else(
+            || Err(ToolError::Server("unscripted tool call".into())),
+            |index| state.scripts.remove(index).result,
+        ))
     }
 }

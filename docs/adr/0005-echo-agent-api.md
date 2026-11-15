@@ -30,3 +30,13 @@ and its registration together before downstream consumers land.
 
 - `echo-agent-api`
 - `pollster`
+
+The tool seam preserves opaque JSON and separates a successful tool error result
+(`is_error = true`) from a boundary `ToolError`. FakeToolHost matches the full
+name/arguments/idempotency-key triple, records unsuccessful attempts too, and
+consumes the first matching script only. Repeated keys consume successive
+scripts; the fake is not a durable idempotency or authorization mechanism.
+Generic tests exercise all five methods with Send futures under pollster.
+The assembled witness uses explicitly scripted task events, rather than
+inferring completion from a tool call. Real MCP and executor behavior belong
+to the downstream W1/W2 lanes.
