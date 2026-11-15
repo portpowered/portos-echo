@@ -1,4 +1,3 @@
-#![cfg(test)]
 use echo_contracts::wyoming::{AudioFormat, Decoder, Event, Header, WyomingEvent, encode};
 use echo_wyoming::{PlayOutcome, WyomingClient};
 use serde_json::{Value, json};
@@ -85,7 +84,7 @@ async fn microphone_server<T: AsyncRead + AsyncWrite + Unpin>(peer: &mut T) {
 }
 
 async fn microphone_frames<T: AsyncRead + AsyncWrite + Unpin>(peer: &mut T) {
-    let fixture = include_str!("../../../../tests/fixtures/wyoming/wake-word.jsonl");
+    let fixture = include_str!("../../../tests/fixtures/wyoming/wake-word.jsonl");
     let row: Value = serde_json::from_str(fixture.lines().nth(1).unwrap()).unwrap();
     let pipeline = row["header"]["data"].clone();
     let bytes = encode(&frame("run-pipeline", pipeline.clone(), vec![]));

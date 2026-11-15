@@ -1,5 +1,4 @@
-#[path = "../tests/support/wyoming_peer.rs"]
-mod wyoming_peer;
+use crate::wyoming_test_support as wyoming_peer;
 
 use crate::{ClientOptions, Error, WyomingClient, wyoming_wire};
 use tokio::io::{AsyncWriteExt, duplex};

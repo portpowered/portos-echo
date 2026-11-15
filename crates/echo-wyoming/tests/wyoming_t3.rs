@@ -1,7 +1,9 @@
 #![cfg(test)]
 //! T3 component tests: controlled peers on 127.0.0.1 only, no external services.
-#[path = "support/wyoming_peer.rs"]
-mod wyoming_peer;
+#[cfg(test)]
+mod wyoming_peer {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/wyoming_test_support.rs"));
+}
 
 use echo_wyoming::{ClientOptions, WyomingClient};
 use tokio::net::{TcpListener, TcpStream};

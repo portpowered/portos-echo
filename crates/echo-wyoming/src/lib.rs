@@ -14,6 +14,8 @@ mod wyoming_session;
 mod wyoming_wire;
 
 #[cfg(test)]
+mod wyoming_test_support;
+#[cfg(test)]
 mod wyoming_tests;
 
 pub use wyoming_client::WyomingClient;
