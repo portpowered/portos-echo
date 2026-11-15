@@ -15,5 +15,6 @@ python3 scripts/capture-wyoming.py --self-test
 if [ "${1:-}" = --capture ]; then
   exec python3 scripts/capture-wyoming.py
 fi
+python3 scripts/capture-wyoming.py --smoke
 python3 scripts/measure-barge-in.py --unit-test
 exec python3 scripts/measure-barge-in.py --self-test

@@ -1,39 +1,19 @@
 #!/usr/bin/env python3
 """Capture selected real Wyoming event windows, never whole audio payloads.
-
 Each phase retains its first microphone chunk; intervening identical streaming
 chunks are consumed and checked, not stored. Timestamps become zero and versions
 become <version>; data_length describes the normalized compact JSON data.
-SIGUSR1 is a host test control, not a fabricated Wyoming event.
 """
-import argparse
-import base64
-import contextlib
-import hashlib
-import io
-import json
-import os
+import argparse, base64, contextlib, hashlib, io, json, os, select, shutil, signal
+import socket, subprocess, sys, tempfile, threading, time, unittest
 from pathlib import Path
-import select
-import signal
-import socket
-import subprocess
-import sys
-import tempfile
-import threading
-import time
-import unittest
-
+from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ("describe", "wake-word", "duplex-reply", "pause", "wake-while-speaking")
 FORMAT = {"rate": 24000, "width": 2, "channels": 1}
 TIMEOUT = 15
-
-
 def encoded(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
-
-
 def exact(stream, length):
     parts = bytearray()
     while len(parts) < length:
@@ -42,8 +22,6 @@ def exact(stream, length):
             raise EOFError("truncated Wyoming event")
         parts.extend(part)
     return bytes(parts)
-
-
 def read_event(stream):
     line = stream.readline(65537)
     if not line.endswith(b"\n") or len(line) > 65536:
@@ -59,8 +37,6 @@ def read_event(stream):
         data.update(json.loads(exact(stream, lengths[0])))
     payload = exact(stream, lengths[1])
     return {"type": head["type"], "data": data}, payload
-
-
 def normalize(value):
     if isinstance(value, dict):
         return {k: (0 if k == "timestamp" else "<version>" if k == "version"
@@ -68,8 +44,6 @@ def normalize(value):
     if isinstance(value, list):
         return [normalize(v) for v in value]
     return value
-
-
 def record(direction, event, payload=b""):
     event = normalize(event)
     result = {"dir": direction, "header": {**event,
@@ -79,8 +53,6 @@ def record(direction, event, payload=b""):
         result.update(payload_sha256=hashlib.sha256(payload).hexdigest(),
                       payload_prefix_b64=base64.b64encode(payload[:32]).decode())
     return result
-
-
 class Session:
     """One prebuilt host, one loopback connection and an owned process group."""
     def __init__(self, folder):
@@ -94,7 +66,6 @@ class Session:
         self.feed_condition = threading.Condition()
         self.stop_feed = threading.Event()
         self.feeder = None
-
     def feed(self):
         import fcntl  # Capture runs on Linux/WSL; offline wire tests are portable.
         try:
@@ -109,7 +80,6 @@ class Session:
                         self.feed_condition.notify_all()
         except BrokenPipeError:
             pass
-
     def capture_barrier(self):
         # More than pipe capacity + stdio buffering + two capture blocks consumed
         # proves the capture thread has handled its pending SIGUSR1. No sleep oracle.
@@ -117,7 +87,6 @@ class Session:
             target = self.fed + self.pipe_capacity + 8192
             if not self.feed_condition.wait_for(lambda: self.fed >= target, self.remaining()):
                 raise TimeoutError("capture input consumption stalled")
-
     def remaining(self):
         if self.proc is not None and self.proc.poll() is not None:
             raise RuntimeError(f"hassmic-host exited {self.proc.returncode}")
@@ -125,7 +94,6 @@ class Session:
         if remaining <= 0:
             raise TimeoutError("hassmic-host scenario deadline exceeded")
         return remaining
-
     def __enter__(self):
         try:
             state = self.folder / "state"
@@ -168,7 +136,6 @@ class Session:
         except BaseException:
             self.__exit__(None, None, None)
             raise
-
     def __exit__(self, *_):
         self.stop_feed.set()
         if self.stream:
@@ -189,15 +156,12 @@ class Session:
             self.feeder.join(timeout=1)
         if hasattr(self, "feed_fd"):
             os.close(self.feed_fd)
-
     def logs(self, ceiling=0):
         if select.select([self.proc.stderr], [], [], min(ceiling, self.remaining()))[0]:
             self.log.extend(os.read(self.proc.stderr.fileno(), 65536))
-
     def logged(self, text, offset=0):
         while text.encode() not in self.log[offset:]:
             self.logs(self.remaining())
-
     def send(self, kind, data=None, payload=b"", keep=True):
         event = {"type": kind, "data": data or {}}
         raw = encoded(data) if data else b""
@@ -205,7 +169,6 @@ class Session:
         self.sock.sendall(encoded(head) + b"\n" + raw + payload)
         if keep:
             self.rows.append(record("bridge->echo", event, payload))
-
     def until(self, kind, keep=True, forbid=()):
         while True:
             self.sock.settimeout(self.remaining())
@@ -219,11 +182,9 @@ class Session:
                 if keep:
                     self.rows.append(row)
                 return row
-
     def barrier(self, forbid=()):
         self.send("ping", keep=False)
         self.until("pong", keep=False, forbid=forbid)
-
     def wake(self):
         self.send("run-satellite")
         self.barrier()
@@ -235,7 +196,6 @@ class Session:
         if event["type"] != "audio-chunk" or not payload:
             raise AssertionError("run-pipeline must be followed directly by a nonempty audio-chunk")
         self.rows.append(record("echo->bridge", event, payload))
-
     def reply(self, wake_during=False):
         self.send("audio-start", FORMAT)
         for _ in range(10):
@@ -258,8 +218,6 @@ class Session:
                 self.until("audio-chunk", keep=False, forbid=("played", "run-pipeline"))
         self.send("audio-stop")
         self.until("played", forbid=("run-pipeline",))
-
-
 def capture(kind, folder):
     with Session(folder) as session:
         if kind == "describe":
@@ -280,8 +238,6 @@ def capture(kind, folder):
             if kind != "wake-word":
                 session.reply(kind == "wake-while-speaking")
         return session.rows
-
-
 def validate(rows, kind):
     for row in rows:
         keys = {"dir", "header"}
@@ -319,8 +275,6 @@ def validate(rows, kind):
             assert len(sent) == 10 and all(r["header"]["data"] == FORMAT and r["header"]["payload_length"] == 4800 for r in sent)
         if kind == "pause":
             assert incoming[0] == "pong"
-
-
 @contextlib.contextmanager
 def publication(output):
     """Serialize same-output writers; roll back a failed directory replacement."""
@@ -331,13 +285,14 @@ def publication(output):
         yield lock
     finally:
         lock.rmdir()
-
-
 def publish(output, producer=capture):
     with publication(output):
         with tempfile.TemporaryDirectory(dir=output.parent, prefix=".wyoming-") as temp:
             stage = Path(temp) / "fixtures"
-            stage.mkdir()
+            if output.exists():
+                shutil.copytree(output, stage)
+            else:
+                stage.mkdir()
             for kind in SCENARIOS:
                 print(f"capture-wyoming: capturing {kind}", flush=True)
                 with tempfile.TemporaryDirectory() as session_dir:
@@ -348,19 +303,22 @@ def publish(output, producer=capture):
             # Block handled cancellation during the two-rename transaction.
             previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
             try:
-                if output.exists():
-                    output.rename(backup)
                 try:
+                    if output.exists():
+                        output.rename(backup)
                     stage.rename(output)
-                except BaseException:
-                    if backup.exists():
-                        backup.rename(output)
-                    raise
-            finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+                finally:
+                    # Pending handled signals may raise here: retain rollback until return.
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+            except BaseException:
+                if backup.exists():
+                    if output.exists():
+                        shutil.rmtree(output)
+                    backup.rename(output)
+                elif not stage.exists() and output.exists():
+                    shutil.rmtree(output)
+                raise
     print("capture-wyoming: five real-wire fixtures published")
-
-
 class WireTests(unittest.TestCase):
     def test_fragmented_utf8_and_payload(self):
         class Fragmented(io.BytesIO):
@@ -375,7 +333,6 @@ class WireTests(unittest.TestCase):
         row = record("echo->bridge", event, actual)
         self.assertEqual(row["payload_sha256"], hashlib.sha256(payload).hexdigest())
         self.assertEqual(base64.b64decode(row["payload_prefix_b64"]), payload[:32])
-
     def test_header_only_inline_and_invalid_lengths(self):
         self.assertEqual(read_event(io.BytesIO(b'{"type":"pong"}\n')), ({"type": "pong", "data": {}}, b""))
         self.assertEqual(read_event(io.BytesIO(b'{"type":"x","data":{"a":1}}\n'))[0]["data"], {"a": 1})
@@ -385,36 +342,66 @@ class WireTests(unittest.TestCase):
         for raw in (b"", b'{"type":"x","data_length":2}\n{', b'{"type":"x","payload_length":2}\nx'):
             with self.assertRaises(EOFError):
                 read_event(io.BytesIO(raw))
-
     def test_normalization_and_zero_payload(self):
         value = {"timestamp": 123, "satellite": {"version": "volatile"}}
         self.assertEqual(normalize(value), {"timestamp": 0, "satellite": {"version": "<version>"}})
         self.assertEqual(normalize(normalize(value)), normalize(value))
         self.assertEqual(record("echo->bridge", {"type": "pong", "data": {}}),
                          {"dir": "echo->bridge", "header": {"type": "pong", "data": {}, "data_length": 0, "payload_length": 0}})
-
-    def test_failed_and_competing_capture_preserves_output(self):
+    def test_publication_byte_maps(self):
+        rows = {k: [json.loads(line) for line in raw.splitlines()]
+                for k, raw in fixture_bytes().items() if k[:-6] in SCENARIOS}
+        fresh = {k + ".jsonl": b"".join(encoded(r) + b"\n" for r in rows[k + ".jsonl"]) for k in SCENARIOS}
+        def producer(kind, _):
+            return rows[kind + ".jsonl"]
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "fixtures"
-            output.mkdir()
-            (output / "prior").write_bytes(b"complete")
-            for error in (EOFError, TimeoutError, KeyboardInterrupt):
-                def failed(*_, failure=error):
-                    raise failure("capture interrupted")
-                with self.assertRaises(error):
+            publish(output, producer)
+            self.assertEqual(fixture_bytes(output), fresh)
+            publish(output, producer)
+            self.assertEqual(fixture_bytes(output), fresh)
+            (output / "nested").mkdir()
+            (output / "nested/unrelated").write_bytes(b"sibling")
+            for name, raw in fixture_bytes().items():
+                (output / name).write_bytes(b"stale" if name in fresh else raw)
+            old = fixture_bytes(output)
+            for failure in (EOFError, TimeoutError, InterruptedError, KeyboardInterrupt):
+                def failed(kind, folder):
+                    if kind == SCENARIOS[1]:
+                        raise failure("capture interrupted")
+                    return producer(kind, folder)
+                with self.assertRaises(failure):
                     publish(output, failed)
-            with publication(output):
+                self.assertEqual(fixture_bytes(output), old)
+                self.assertEqual(list(Path(temp).iterdir()), [output])
+            with publication(output) as lock:
+                (lock / "owner").write_bytes(b"owner")
                 with self.assertRaises(FileExistsError):
-                    publish(output, failed)
-            self.assertEqual((output / "prior").read_bytes(), b"complete")
-            self.assertEqual(sorted(p.name for p in Path(temp).iterdir()), ["fixtures"])
-
-    def test_committed_envelopes(self):
-        output = ROOT / "tests/fixtures/wyoming"
-        for kind in SCENARIOS:
-            rows = [json.loads(line) for line in (output / (kind + ".jsonl")).read_bytes().splitlines()]
-            validate(rows, kind)
-
+                    publish(output, lambda *_: self.fail("contender called producer"))
+                self.assertEqual((lock / "owner").read_bytes(), b"owner")
+                self.assertEqual(fixture_bytes(output), old)
+                (lock / "owner").unlink()
+            rename, mask = Path.rename, signal.pthread_sigmask
+            def fail_rename(path, target):
+                if path.name == "fixtures" and path.parent != output.parent:
+                    raise OSError("stage rename failed")
+                return rename(path, target)
+            def cancel(how, signals):
+                result = mask(how, signals)
+                if how == signal.SIG_SETMASK:
+                    raise InterruptedError("pending cancellation")
+                return result
+            for target, effect in (("shutil.copytree", OSError("copy failed")),
+                                   ("pathlib.Path.write_bytes", OSError("write failed")),
+                                   ("pathlib.Path.rename", fail_rename),
+                                   ("signal.pthread_sigmask", cancel)):
+                with mock.patch(target, side_effect=effect, autospec=True), self.assertRaises(OSError):
+                    publish(output, producer)
+                self.assertEqual(fixture_bytes(output), old)
+                self.assertEqual(list(Path(temp).iterdir()), [output])
+            publish(output, producer)
+            self.assertEqual(fixture_bytes(output), {**old, **fresh})
+            self.assertEqual(list(Path(temp).iterdir()), [output])
     def test_flattened_or_extra_header_fields_fail(self):
         row = record("echo->bridge", {"type": "info", "data": {}})
         for changed in ({"dir": row["dir"], **row["header"]},
@@ -422,7 +409,6 @@ class WireTests(unittest.TestCase):
                         {**row, "header": {**row["header"], "payload": "forbidden"}}):
             with self.assertRaises(ValueError):
                 validate([changed], "describe")
-
     def test_microphone_start_and_interrupted_wake_sequence_fail(self):
         output = ROOT / "tests/fixtures/wyoming"
         for kind in SCENARIOS[1:]:
@@ -432,23 +418,61 @@ class WireTests(unittest.TestCase):
                 changed = rows[:pipeline + 1] + [record("echo->bridge", {"type": kind_added, "data": {}})] + rows[pipeline + 1:]
                 with self.subTest(scenario=kind, inserted=kind_added), self.assertRaises(AssertionError):
                     validate(changed, kind)
-
-
+def fixture_bytes(output=ROOT / "tests/fixtures/wyoming"):
+    return {str(p.relative_to(output)): p.read_bytes() for p in output.rglob("*") if p.is_file()}
 def verify_output_cli():
-    """T3: exercise the delivered CLI against the prebuilt host in isolation."""
-    default = ROOT / "tests/fixtures/wyoming"
-    before = {p.name: p.read_bytes() for p in default.iterdir()}
+    """T3: real CLI success, contention, transport failure and handled cancellation."""
+    before = fixture_bytes()
+    script = str(Path(__file__).resolve())
+    # Inject only at the socket/host boundary; execute the delivered entry point.
+    probe = """import os, runpy, signal, socket, subprocess, sys
+from unittest import mock
+mode, sys.argv = sys.argv[1], sys.argv[2:]
+children = []
+original = subprocess.Popen
+def start(*a, **kw):
+    child = original(*a, **kw)
+    children.append(child)
+    return child
+def fail(*a, **kw):
+    if mode == 'cancel':
+        os.kill(os.getpid(), signal.SIGTERM)
+    raise TimeoutError('controlled transport timeout')
+try:
+    with mock.patch('subprocess.Popen', side_effect=start), mock.patch('socket.SocketIO.readinto', side_effect=fail):
+        runpy.run_path(sys.argv[0], run_name='__main__')
+finally:
+    assert len(children) == 1 and all(c.poll() is not None for c in children), 'host leaked'
+    print('owned host reaped', flush=True)
+"""
     with tempfile.TemporaryDirectory() as temp:
         destination = Path(temp) / "independent captures" / "wyoming"
-        subprocess.run([sys.executable, str(Path(__file__).resolve()),
-                        "--output-dir", str(destination.relative_to(temp))],
-                       cwd=temp, check=True, timeout=TIMEOUT * len(SCENARIOS) + 5)
-        actual = {p.name: p.read_bytes() for p in destination.iterdir()}
-        assert actual == before, "isolated CLI capture differs from committed fixtures"
-    assert {p.name: p.read_bytes() for p in default.iterdir()} == before
-    print("capture-wyoming CLI: five isolated fixtures match; default unchanged")
-
-
+        destination.mkdir(parents=True)
+        for name, raw in before.items():
+            (destination / name).write_bytes(b"stale" if name[:-6] in SCENARIOS else raw)
+        old = fixture_bytes(destination)
+        args = [script, "--output-dir", str(destination.relative_to(temp))]
+        def run(extra):
+            return subprocess.run([sys.executable, *extra, *args], cwd=temp, text=True,
+                                  capture_output=True, timeout=TIMEOUT * len(SCENARIOS) + 5)
+        for mode in ("timeout", "cancel", "lock"):
+            with publication(destination) if mode == "lock" else contextlib.nullcontext():
+                result = run([] if mode == "lock" else ["-c", probe, mode])
+                assert result.returncode != 0, result.stdout
+                assert ("File exists" if mode == "lock" else "capture cancelled by signal" if mode == "cancel"
+                        else "controlled transport timeout") in result.stderr, result.stderr
+                if mode != "lock":
+                    assert "owned host reaped" in result.stdout, result.stdout
+                else:
+                    assert destination.with_name("wyoming.lock").is_dir()
+                assert fixture_bytes(destination) == old
+            assert sorted(p.name for p in destination.parent.iterdir()) == ["wyoming"]
+            print(f"capture-wyoming CLI: {mode} nonzero; previous bytes and child cleanup verified")
+        result = run([])
+        assert result.returncode == 0, result.stderr
+        assert fixture_bytes(destination) == before, "isolated CLI capture differs"
+    assert fixture_bytes() == before
+    print("capture-wyoming CLI: five refreshed; siblings retained; default unchanged")
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
@@ -466,8 +490,6 @@ def main():
     else:
         publish(args.output_dir)
     return 0
-
-
 if __name__ == "__main__":
     def cancelled(signum, _frame):
         raise InterruptedError(f"capture cancelled by signal {signum}")
