@@ -65,6 +65,7 @@ test-sim:
 	cargo run --locked -p echo-lab -- validate
 	$(MAKE) hassmic-host
 	sh tests/hassmic_host_smoke.sh
+	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
 
 .PHONY: hassmic-host capture-wyoming measure-barge-in
 hassmic-host:

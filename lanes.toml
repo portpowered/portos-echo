@@ -16,6 +16,11 @@ path = "xtask"
 kind = "tool"
 
 [[crate]]
+name = "echo-wyoming"
+path = "crates/echo-wyoming"
+kind = "lib"
+
+[[crate]]
 name = "echo-lab"
 path = "crates/echo-lab"
 kind = "bin"
