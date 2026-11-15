@@ -35,11 +35,32 @@ a gateway is needed in every topology.
 
 The crate layout, `Makefile` and CI arrive with Phase F.
 
-## Build, test, lint, deploy
+## Building
 
-Not available yet. Phase F lane `el-f1-readme-makefile` adds `make lint`, `make test-unit`, `make test-contract`,
-`make test-sim`, `make build-host` and `make build-armv7`, and updates this section. Deploying to a device is
-operator-run only (`docs/program/rules.md`).
+Install Rust through rustup. `rust-toolchain.toml` pins Rust 1.100.0 with the minimal profile, clippy and rustfmt.
+GNU Make and POSIX shell utilities must be on PATH. On Windows, use ezwinports GNU Make 4.4 and Git for Windows:
+add Git's `bin` and `usr/bin` directories to PATH for `sh` and utilities such as `printf`, then invoke make from
+PowerShell. The same recipes support GNU Make and `sh` on Ubuntu.
+
+From the repository root, run:
+
+```sh
+make ci
+```
+
+| Target | What it runs |
+|---|---|
+| `fmt-check` | `cargo fmt --all --check` |
+| `lint` | `fmt-check`; later Phase F lanes add their gates |
+| `test-unit` | `cargo test --workspace --all-targets` |
+| `test-contract` | Prints `no contract tests yet` and succeeds; W0 adds the suite |
+| `test-sim` | Prints `no scenarios yet` and succeeds; el-f9 adds the harness |
+| `build-host` | `cargo build --workspace --locked` |
+| `ci` | Runs `lint`, `test-unit`, `test-contract`, `test-sim`, then `build-host`, stopping on failure |
+
+The workspace currently contains only the unpublished `xtask` tool. `cargo xtask` prints usage and exits 2:
+no subcommands exist yet. A crate joins `lanes.toml` in the change that creates it.
+Deploying to a device is operator-run only (`docs/program/rules.md`).
 
 ## Related projects
 
