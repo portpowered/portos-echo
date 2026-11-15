@@ -162,6 +162,65 @@ async fn t3_stalled_refresh_times_out_without_hidden_replay() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn t3_discovery_and_revoke_deadlines_bound_requests_without_retry() {
+    let mock = Mock::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    mock.state.lock().unwrap().hold = Some("/.well-known/oauth-protected-resource".into());
+    let task = tokio::spawn(AuthClient::open(options(&mock, dir.path())));
+    until(|| mock.state.lock().unwrap().held).await;
+    advance(Duration::from_secs(3)).await;
+    error(drive(task).await.unwrap(), AuthError::Transport);
+    assert_eq!(mock.count("/.well-known/oauth-protected-resource"), 1);
+    assert_eq!(mock.count("/.well-known/oauth-authorization-server"), 0);
+    assert!(!dir.path().join("grant.json").exists());
+
+    let h = Harness::linked().await;
+    h.mock.state.lock().unwrap().hold = Some("/custom/end".into());
+    let task = tokio::spawn({
+        let c = h.client.clone();
+        async move { c.revoke().await }
+    });
+    until(|| h.mock.state.lock().unwrap().held).await;
+    advance(Duration::from_secs(3)).await;
+    error(drive(task).await.unwrap(), AuthError::Transport);
+    error(drive(h.client.access_token()).await, AuthError::RelinkRequired);
+    assert_eq!(h.record()["grant"]["refresh_token"], "refresh-1");
+    assert_eq!(h.mock.count("/custom/end"), 1);
+    assert_eq!(h.mock.refreshes(), 0);
+    h.mock.state.lock().unwrap().hold = None;
+    h.mock.release.notify_one();
+    drive(h.client.revoke()).await.unwrap();
+    assert_eq!(h.mock.count("/custom/end"), 2);
+    assert_eq!(h.record()["grant"], Value::Null);
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_discovery_and_refresh_server_failures_are_redacted_without_retry() {
+    let mock = Mock::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let sentinel = "synthetic-private-proof-and-credential-sentinel";
+    mock.fault(
+        "/.well-known/oauth-authorization-server",
+        503,
+        json!({"error":sentinel}),
+    );
+    let failure = drive(AuthClient::open(options(&mock, dir.path()))).await.err().unwrap();
+    assert_eq!(failure, AuthError::Transport);
+    assert!(!format!("{failure:?} {failure}").contains(sentinel));
+    assert_eq!(mock.count("/.well-known/oauth-authorization-server"), 1);
+    assert_eq!(mock.count("/custom/link"), 0);
+
+    let h = Harness::linked().await;
+    h.mock.fault("/custom/token", 503, json!({"error":sentinel}));
+    let failure = drive(h.client.force_refresh()).await.err().unwrap();
+    assert_eq!(failure, AuthError::Transport);
+    assert!(!format!("{failure:?} {failure}").contains(sentinel));
+    error(drive(h.client.access_token()).await, AuthError::RelinkRequired);
+    assert_eq!(h.mock.refreshes(), 1);
+    assert_eq!(h.record()["grant"]["access_token"], "access-1");
+}
+
+#[tokio::test(start_paused = true)]
 async fn t3_discovery_rejects_missing_unsupported_unsafe_or_redirected_metadata() {
     let mock = Mock::start().await;
     let dir = tempfile::tempdir().unwrap();

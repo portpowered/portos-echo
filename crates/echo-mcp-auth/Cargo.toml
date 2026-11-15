@@ -14,10 +14,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-p256 = { version = "0.13", features = ["ecdsa"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
-sha2 = "0.10"
 base64 = "0.22"
 url = "2"
 tempfile = "3"

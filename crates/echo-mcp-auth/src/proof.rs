@@ -2,6 +2,7 @@ use crate::AuthError;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use echo_contracts::secret::Secret;
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
+use p256::elliptic_curve::Generate;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,8 +18,8 @@ pub(crate) struct PrivateJwk {
 }
 
 pub(crate) fn generate() -> Secret<PrivateJwk> {
-    let key = SigningKey::random(&mut OsRng);
-    let point = key.verifying_key().to_encoded_point(false);
+    let key = SigningKey::generate();
+    let point = key.verifying_key().to_sec1_point(false);
     let bytes = point.as_bytes();
     Secret::new(PrivateJwk {
         kty: "EC".into(),
@@ -32,7 +33,7 @@ pub(crate) fn generate() -> Secret<PrivateJwk> {
 pub(crate) fn signing_key(jwk: &PrivateJwk) -> Result<Secret<SigningKey>, AuthError> {
     let bytes = B64.decode(&jwk.d).map_err(|_| AuthError::Storage)?;
     let key = SigningKey::from_slice(&bytes).map_err(|_| AuthError::Storage)?;
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     if jwk.kty != "EC"
         || jwk.crv != "P-256"
         || jwk.x != B64.encode(&point.as_bytes()[1..33])
