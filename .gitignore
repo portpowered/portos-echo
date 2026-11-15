@@ -17,3 +17,7 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Factory lane worktrees and local factory state (factory/docs/operating-policy.md)
+/.claude/worktrees/
+/docs/temp/
