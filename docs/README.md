@@ -20,6 +20,7 @@ status: active; documentation index
 
 ## Architecture decisions
 
+- [Port OS OAuth client dependencies](adr/0005-mcp-auth.md)
 - [Shared bridge contracts](adr/0004-echo-contracts.md)
 - [ADR guide](adr/README.md)
 - [Workspace harness dependencies](adr/0000-workspace-baseline.md)

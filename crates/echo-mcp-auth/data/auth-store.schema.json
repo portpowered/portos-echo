@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "echo-mcp-auth private grant store v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "issuer",
+    "resource",
+    "client_id",
+    "private_key_jwk",
+    "grant"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "issuer": {
+      "type": "string",
+      "format": "uri"
+    },
+    "resource": {
+      "type": "string",
+      "format": "uri"
+    },
+    "client_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "private_key_jwk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kty",
+        "crv",
+        "x",
+        "y",
+        "d"
+      ],
+      "properties": {
+        "kty": {
+          "const": "EC"
+        },
+        "crv": {
+          "const": "P-256"
+        },
+        "x": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "y": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "d": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    },
+    "grant": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "access_token",
+            "refresh_token",
+            "expires_at_unix",
+            "scope"
+          ],
+          "properties": {
+            "access_token": {
+              "type": "string",
+              "minLength": 1
+            },
+            "refresh_token": {
+              "type": "string",
+              "minLength": 1
+            },
+            "expires_at_unix": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "scope": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
