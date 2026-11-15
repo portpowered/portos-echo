@@ -121,3 +121,44 @@ fn auth_rejects_unsafe_values_with_field_only_errors() {
         "chatgpt_auth: expected table"
     );
 }
+
+#[test]
+fn auth_endpoint_and_redirect_boundaries_keep_safe_diagnostics() {
+    let mut config = ChatGptAuthConfig {
+        token_endpoint: "http://127.0.0.1/token".into(),
+        ..ChatGptAuthConfig::default()
+    };
+    assert_eq!(config.validate().map_err(|error| error.to_string()), Ok(()));
+    for endpoint in [
+        "invalid",
+        "ftp://127.0.0.1/token",
+        "https://127.0.0.1/token?secret=hidden",
+    ] {
+        // lint-rules: allow-literal rejected endpoint inputs, never requested
+        config.token_endpoint = endpoint.into();
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "chatgpt_auth.token_endpoint: expected HTTPS or literal loopback HTTP URL"
+        );
+    }
+    config = ChatGptAuthConfig::default();
+    config.client_id = "mock\u{7f}client".into();
+    assert_eq!(
+        config.validate().unwrap_err().to_string(),
+        "chatgpt_auth.client_id: expected nonempty text"
+    );
+    config = ChatGptAuthConfig::default();
+    for redirect in [
+        "invalid",
+        "https://127.0.0.1/auth/callback",
+        "http://127.0.0.1/auth/callback?next=/auth/callback",
+        "http://127.0.0.1/auth/callback#fragment/auth/callback",
+    ] {
+        // lint-rules: allow-literal rejected redirect inputs, never requested
+        config.browser_redirect_uri = redirect.into();
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "chatgpt_auth.browser_redirect_uri: expected loopback HTTP /auth/callback"
+        );
+    }
+}
