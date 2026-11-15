@@ -136,9 +136,12 @@ async fn t3_faults_are_bounded_redacted_and_revoke_can_be_retried() {
     assert!(!format!("{failure:?} {failure}").contains(sentinel));
     assert_eq!(h.record()["grant"]["refresh_token"], "refresh-1");
     error(drive(h.client.access_token()).await, AuthError::RelinkRequired);
+    h.mock.fault("/custom/end", 302, json!({}));
+    error(drive(h.client.revoke()).await, AuthError::Transport);
+    assert_eq!(h.record()["grant"]["refresh_token"], "refresh-1");
     h.mock.state.lock().unwrap().fault = None;
     drive(h.client.revoke()).await.unwrap();
-    assert_eq!(h.mock.count("/custom/end"), 2);
+    assert_eq!(h.mock.count("/custom/end"), 3);
     assert_eq!(h.record()["grant"], json!(null));
 }
 

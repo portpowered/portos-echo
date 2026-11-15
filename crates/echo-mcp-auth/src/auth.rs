@@ -235,12 +235,10 @@ impl AuthClient {
         ];
         let request = self.http.post(&self.metadata.revocation_endpoint).form(&form);
         state.uncertain = true;
-        request
-            .send()
-            .await
-            .map_err(|_| AuthError::Transport)?
-            .error_for_status()
-            .map_err(|_| AuthError::Transport)?;
+        let response = request.send().await.map_err(|_| AuthError::Transport)?;
+        if !response.status().is_success() {
+            return Err(AuthError::Transport);
+        }
         self.publish(&mut state, None)
     }
 }
