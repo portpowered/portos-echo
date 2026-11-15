@@ -12,7 +12,7 @@ use std::io::Write;
 use std::sync::{Arc, atomic::Ordering};
 use support::*;
 
-async fn journey(case: &str, mode: LiveMode, turns: usize) {
+pub(super) async fn journey(case: &str, mode: LiveMode, turns: usize) {
     let summary = if turns == 0 { "hello 世界" } else { "hello" };
     let final_item = json!({"type":"message", "id":"msg-1", "role":"assistant", "content":[
         {"type":"output_text", "text":"hello"}, {"type":"output_text", "text": if turns == 0 { " 世界" } else { "" }}]});
@@ -106,12 +106,6 @@ fn assert_requests(requests: &[Request], mode: LiveMode, calls: &[Value], reason
     }
 }
 
-#[tokio::test]
-async fn f01_one_tool_each_mode() {
-    for mode in [LiveMode::Chatgpt, LiveMode::ApiKey] {
-        journey("F01", mode, 1).await;
-    }
-}
 #[tokio::test]
 async fn f02_two_tool_turns_each_mode() {
     for mode in [LiveMode::Chatgpt, LiveMode::ApiKey] {
