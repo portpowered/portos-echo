@@ -55,6 +55,7 @@ lint-self-tests:
 
 test-unit:
 	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci
+	if [ -f web/screen/package.json ]; then cd web/screen && npm ci && npm test; fi
 
 test-contract:
 	printf '%s\n' 'no contract tests yet'
@@ -77,10 +78,16 @@ measure-barge-in: hassmic-host
 test-concurrency:
 	printf '%s\n' 'no concurrency tests yet'
 
+# Sources outside the workspace that LLVM still attributes lines to: dependency macro expansions (tokio's
+# join!/select!) from the cargo registry or git checkouts, and the toolchain's own library. The default
+# ignore regex stays off so that every workspace path, tests/ included, is counted. Any other outside path
+# still fails coverage-check.
+COVERAGE_DEPENDENCY_SOURCES := \.cargo.(registry|git).|\.rustup.toolchains.|.rustc.[0-9a-f]{40}.
+
 coverage:
 	cargo +nightly-2026-11-05 llvm-cov clean --workspace
 	mkdir -p target/llvm-cov
-	cargo +nightly-2026-11-05 llvm-cov --workspace --all-targets --locked --branch --no-default-ignore-filename-regex --fail-under-lines 80 --lcov --output-path target/llvm-cov/coverage.lcov
+	cargo +nightly-2026-11-05 llvm-cov --workspace --all-targets --locked --branch --no-default-ignore-filename-regex --ignore-filename-regex '$(COVERAGE_DEPENDENCY_SOURCES)' --fail-under-lines 80 --lcov --output-path target/llvm-cov/coverage.lcov
 	cargo xtask coverage-check target/llvm-cov/coverage.lcov "$(COVERAGE_BASE)"
 
 deps-fresh:

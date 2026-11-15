@@ -1,0 +1,27 @@
+{
+  "name": "@portos/echo-screen",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "check:schema": "node tools/screen-schema.mjs --check",
+    "generate:schema": "node tools/screen-schema.mjs --write",
+    "build": "npm run check:schema && node tools/build.mjs",
+    "test": "npm run build && node tools/test.mjs",
+    "dev": "npm run build && node dev/server.mjs",
+    "lint": "eslint . && tsc --noEmit && prettier --check ."
+  },
+  "devDependencies": {
+    "esbuild": "0.27.7",
+    "eslint": "10.0.1",
+    "istanbul-lib-coverage": "3.2.2",
+    "playwright": "1.62.1",
+    "prettier": "3.9.10",
+    "typescript": "6.0.2",
+    "typescript-eslint": "8.72.1",
+    "v8-to-istanbul": "9.3.0"
+  }
+}
