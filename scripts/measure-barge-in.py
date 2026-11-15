@@ -6,6 +6,7 @@ Playback FIFO EOF is an independent close endpoint. An open sink at the bounded
 observation deadline is censored, never a fabricated playback-end timestamp.
 """
 import argparse
+import difflib
 import importlib.util
 import os
 from pathlib import Path
@@ -189,6 +190,16 @@ def run_trial(strategy, folder):
         playback.close()
 
 
+def assert_same(raw, want, message):
+    """Fail with the differing wire lines, so a CI-only mismatch names its cause."""
+    if raw == want:
+        return
+    diff = difflib.unified_diff(want.decode(errors="replace").splitlines(), raw.decode(errors="replace").splitlines(),
+                                "expected", "observed", lineterm="", n=1)
+    shown = [line[:400] for line in list(diff)[:60]]
+    raise AssertionError(message + "\n" + "\n".join(shown))
+
+
 def rows_bytes(rows):
     return b"".join(C.encoded(row) + b"\n" for row in rows)
 
@@ -229,9 +240,9 @@ def measure(stage=None, repetitions=10):
             raw = rows_bytes(rows)
             if expected is None:
                 expected = raw
-            assert raw == expected, f"{strategy}: normalized windows changed between trials"
+            assert_same(raw, expected, f"{strategy}: normalized windows changed between trials")
             if stage is None:
-                assert raw == (OUTPUT / f"barge-in-{strategy}.jsonl").read_bytes(), f"{strategy}: fixture mismatch"
+                assert_same(raw, (OUTPUT / f"barge-in-{strategy}.jsonl").read_bytes(), f"{strategy}: fixture mismatch")
             print(C.encoded({"repetition": index + 1, **result}).decode(), flush=True)
             samples.append(result["end_ms"])
             if stage is not None and index == 0:
@@ -244,6 +255,15 @@ def measure(stage=None, repetitions=10):
 
 
 class LogicTests(unittest.TestCase):
+    def test_mismatch_names_the_differing_lines(self):
+        assert_same(b"a\nb\n", b"a\nb\n", "same")
+        with self.assertRaises(AssertionError) as caught:
+            assert_same(b"a\nX\n", b"a\nb\n", "pause-satellite: fixture mismatch")
+        text = str(caught.exception)
+        self.assertTrue(text.startswith("pause-satellite: fixture mismatch\n"), text)
+        self.assertIn("-b", text.splitlines())
+        self.assertIn("+X", text.splitlines())
+
     def test_measurement_arithmetic(self):
         self.assertEqual(elapsed(2, 5), 3000)
         self.assertEqual(elapsed(2, None, lambda: 3.5), 1500)
