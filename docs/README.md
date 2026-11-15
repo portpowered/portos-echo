@@ -27,6 +27,8 @@ status: active; documentation index
 - [Bridge TOML configuration](adr/0003-echo-config.md)
 - [Private Cargo metadata parsing](adr/el-f4-xtask-parsing-deps.md)
 
+- [Checked screen messages](adr/0003-screen-contract.md)
+
 ## Original drafts
 
 - [Execution plan](design/echo-live-execution-plan.md)
