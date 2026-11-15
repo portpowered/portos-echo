@@ -50,7 +50,7 @@ pub struct Mock {
 impl Mock {
     pub async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
+        let base = format!("{}:{}", "http://127.0.0.1", listener.local_addr().unwrap().port());
         let state = Arc::new(Mutex::new(State {
             lifetime: 3600,
             ..State::default()

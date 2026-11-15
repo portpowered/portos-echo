@@ -34,10 +34,10 @@ fn payload_states() -> Vec<(UiState, &'static str)> {
         (
             UiState::LinkCode {
                 user_code: "DEMO-CODE".into(),
-                verification_uri: "https://example.invalid/verify".into(),
+                verification_uri: "https://example.invalid/verify".into(), // lint-rules: allow-literal UiState wire serialization assertion fixture
                 expires_at_unix: 1_700_000_000,
             },
-            r#"{"state":"link_code","user_code":"DEMO-CODE","verification_uri":"https://example.invalid/verify","expires_at_unix":1700000000}"#,
+            r#"{"state":"link_code","user_code":"DEMO-CODE","verification_uri":"https://example.invalid/verify","expires_at_unix":1700000000}"#, // lint-rules: allow-literal UiState wire serialization assertion fixture
         ),
         (
             UiState::Approval {

@@ -17,7 +17,9 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&path).unwrap();
-            Self(path)
+            let session = Self(path);
+            session.git(&["init", "--quiet"]);
+            session
         }
 
         fn write(&self, path: &str, content: &str) {
@@ -141,7 +143,7 @@ mod tests {
         assert!(text.contains("missing:"));
         session.write(
             "report.lcov",
-            "SF:echo-fixture/src/main.rs\nDA:1,1\nBRDA:1,0,0,1\nBRDA:1,0,1,1\nend_of_record\n",
+            "SF:echo-fixture/src/main.rs\nDA:1,1\nBRDA:1,0,0,1\nBRDA:1,0,1,1\nend_of_record\n", // lint-rules: allow-literal LCOV parser coverage assertion fixture
         );
         let (code, text) = session.run(&["coverage-check", "report.lcov", "HEAD"]);
         assert_eq!(code, 0, "{text}");
@@ -200,7 +202,10 @@ mod tests {
             "fixture",
         ]);
         session.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
-        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
         session.write("docs/adr/deps.md", "Approval removed\n");
         assert_eq!(
             session.run(&["lint-rules"]),
@@ -210,7 +215,10 @@ mod tests {
             )
         );
         session.write("docs/adr/deps.md", "Approved `itoa`\n");
-        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
     }
 
     #[test]
@@ -231,7 +239,10 @@ mod tests {
             );
         }
         session.write("docs/adr/deps.md", "Approved `echo-m0-no-adr`.");
-        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
     }
 
     #[test]
@@ -241,7 +252,148 @@ mod tests {
         session.write("docs/adr/deps.md", "Approved `removed`.");
         assert_eq!(session.run(&["lint-rules"]), (1, "Cargo.lock: alpha: no ADR in docs/adr/ names it\nCargo.lock: zeta: no ADR in docs/adr/ names it\nlint-rules failed\n".into()));
         session.write("Cargo.lock", "version = 4\n");
-        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
+    }
+
+    #[test]
+    fn orphan_schema_and_missing_witness_fail_through_public_cli() {
+        let session = Session::new();
+        session.workspace();
+        session.write("docs/adr/deps.md", "Approved `echo-fixture`.\n");
+        session.write("schemas/contracts/event.json", "{}\n");
+        session.git(&["add", "schemas"]);
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1, "{text}");
+        assert!(
+            text.contains("crates/echo-contracts/Cargo.toml:1: schema witness input:"),
+            "{text}"
+        );
+        session.write(
+            "crates/echo-contracts/Cargo.toml",
+            "[package]\nname = 'echo-contracts'\n",
+        );
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1, "{text}");
+        assert!(
+            text.contains("crates/echo-contracts/tests/contracts_schema.rs:1: schema witness input:"),
+            "{text}"
+        );
+        assert!(text.ends_with("lint-rules failed\n"));
+    }
+
+    #[test]
+    fn secret_source_rejects_before_schema_compilation_and_recovers() {
+        let session = Session::new();
+        session.workspace();
+        session.write("docs/adr/deps.md", "Approved `echo-fixture`.\n");
+        let path = "crates/example/src/lib.rs";
+        session.write(path, "// seed\n#[derive(Debug)] struct Holder(Secret<String>);\n");
+        session.git(&["add", "crates"]);
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (
+                1,
+                format!(
+                    "{path}:2: secret-format: Secret must not implement Debug or Display or derive Debug\nlint-rules failed\n"
+                )
+            )
+        );
+        session.write(path, "struct Holder(Secret<String>);\n");
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
+        fs::remove_file(session.0.join(path)).unwrap();
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1);
+        assert!(text.starts_with(&format!("{path}:1: secret-format input:")), "{text}");
+        assert!(text.ends_with("lint-rules failed\n"));
+    }
+
+    #[test]
+    fn network_literals_fail_recover_and_count_through_public_cli() {
+        let session = Session::new();
+        session.workspace();
+        session.write("docs/adr/deps.md", "Approved `echo-fixture`.\n");
+        let path = "crates/example/tests/network.rs";
+        let remote = "const URL: &str = \"https://api.example.com\";"; // lint-rules: allow-literal parser CLI source fixture
+        session.write(path, &format!("// seed\n{remote}\n"));
+        session.git(&["add", "crates"]);
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1);
+        assert!(text.starts_with("lint-rules: literal exemptions: 0\n"), "{text}");
+        assert!(text.contains(&format!("{path}:2: network-tag:")), "{text}");
+        assert!(text.ends_with("lint-rules failed\n"));
+        let marker = "// lint-rules: allow-literal parser URL assertion";
+        session.write(path, &format!("{remote} {marker}\n{remote} {marker}\n"));
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 2\n".into())
+        );
+        session.write(path, &format!("{remote} {marker}\n{remote}\n"));
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1);
+        assert!(text.starts_with("lint-rules: literal exemptions: 1\n"));
+        assert!(text.contains(&format!("{path}:2: network-tag:")));
+        session.write(path, "const URL: &str = \"http://localhost:80\";\n");
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
+        fs::remove_file(session.0.join(path)).unwrap();
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1);
+        assert!(text.contains(&format!("{path}:1:")), "{text}");
+    }
+
+    #[test]
+    fn cloud_filename_and_gate_are_both_required_through_cli() {
+        let session = Session::new();
+        session.workspace();
+        session.write("docs/adr/deps.md", "Approved `echo-fixture`.\n");
+        let remote = "const URL: &str = \"https://api.example.com\";"; // lint-rules: allow-literal parser cloud CLI source fixture
+        let gate = "#![cfg(feature = \"cloud-tests\")]";
+        session.write("tests/cloud_api.rs", remote);
+        session.git(&["add", "tests"]);
+        assert_eq!(session.run(&["lint-rules"]).0, 1);
+        session.write("tests/cloud_api.rs", &format!("{gate}\n{remote}"));
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
+        session.write("tests/other.rs", &format!("{gate}\n{remote}"));
+        session.git(&["add", "tests"]);
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1);
+        assert!(text.contains("tests/other.rs:2: network-tag:"), "{text}");
+    }
+
+    #[test]
+    fn configured_tests_fail_but_product_only_cfg_passes_through_cli() {
+        let session = Session::new();
+        session.workspace();
+        session.write("docs/adr/deps.md", "Approved `echo-fixture`.\n");
+        let path = "crates/example/src/lib.rs";
+        let body = "async fn example() { let _endpoint = \"https://api.example.com\"; }"; // lint-rules: allow-literal scanner CLI attribute fixture
+        session.write(path, &format!("#[tokio::test(flavor = \"current_thread\")]\n{body}\n"));
+        session.git(&["add", "crates"]);
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (
+                1,
+                format!(
+                    "lint-rules: literal exemptions: 0\n{path}:2: network-tag: non-loopback test literal requires cloud gate or reasoned inert-literal annotation\nlint-rules failed\n"
+                )
+            )
+        );
+        session.write(path, &format!("#[cfg(not(test))]\n{body}\n"));
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
     }
 
     #[test]

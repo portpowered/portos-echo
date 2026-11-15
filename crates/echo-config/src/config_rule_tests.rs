@@ -54,7 +54,7 @@ fn deadline_inclusive_limits_and_types() {
 
 fn extra_server(name: &str, auth: &str, extra: &str) -> String {
     format!(
-        "{EXAMPLE}\n[[mcp.server]]\nname = '{name}'\nurl = 'https://mcp.example.invalid/mcp'\nauth = '{auth}'\n{extra}"
+        "{EXAMPLE}\n[[mcp.server]]\nname = '{name}'\nurl = 'https://mcp.example.invalid/mcp'\nauth = '{auth}'\n{extra}" // lint-rules: allow-literal configuration parser acceptance/rejection fixture
     )
 }
 
@@ -73,31 +73,31 @@ fn server_names_are_unique_and_ordered() {
 fn http_urls_validate_authority_and_disallow_inline_credentials() {
     for url in [
         "http://127.0.0.1:18080/mcp",
-        "https://mcp.example.invalid/mcp",
-        "HTTP://host",
+        "https://mcp.example.invalid/mcp", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "HTTP://host", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
         "https://[::1]:443/mcp",
         "http://[::1]",
-        "http://host?x=1#part",
+        "http://host?x=1#part", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
     ] {
         let input = change("url", "\"http://127.0.0.1:18080/mcp\"", &format!("'{url}'"));
         assert_eq!(BridgeConfig::from_toml_str(&input).unwrap().mcp.server[0].url, url);
     }
     for url in [
-        "ftp://host",
+        "ftp://host", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
         "/mcp",
         "https:///mcp",
         "http://",
-        "http://bad host",
-        "http://host\\path",
-        "http://user:pass@host",
-        "https://[bad]",
-        "http://[::1",
-        "http://host:bad",
-        "http://host:",
-        "http://host:65536",
-        "http://[::1]junk",
-        "http://ho%st",
-        "http://host:80:90",
+        "http://bad host", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://host\\path", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://user:pass@host", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "https://[bad]",   // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://[::1",     // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://host:bad", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://host:",    // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://host:65536", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://[::1]junk", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://ho%st",    // lint-rules: allow-literal configuration parser acceptance/rejection fixture
+        "http://host:80:90", // lint-rules: allow-literal configuration parser acceptance/rejection fixture
     ] {
         error(
             &change("url", "\"http://127.0.0.1:18080/mcp\"", &format!("'{url}'")),
@@ -197,13 +197,21 @@ fn missing_fields_unknown_fields_and_invalid_types_name_the_context() {
 
 #[test]
 fn socket_addresses_are_parsed_without_binding() {
-    for value in ["127.0.0.1:1", "[::1]:16900", "0.0.0.0:0"] {
+    for value in [
+        "127.0.0.1:1",
+        "[::1]:16900",
+        "0.0.0.0:0", // lint-rules: allow-literal configuration socket parser fixture; no binding
+    ] {
         let config =
-            BridgeConfig::from_toml_str(&change("listen", "\"0.0.0.0:16900\"", &format!("'{value}'"))).unwrap();
+            BridgeConfig::from_toml_str(&change("listen", "\"0.0.0.0:16900\"", &format!("'{value}'"))).unwrap(); // lint-rules: allow-literal configuration parser acceptance/rejection fixture
         assert_eq!(config.screen.listen.to_string(), value);
     }
-    for value in ["'SYNTHETIC_VALUE'", "false", "'host.invalid:16900'"] {
-        error(&change("listen", "\"0.0.0.0:16900\"", value), "screen.listen");
+    for value in [
+        "'SYNTHETIC_VALUE'",
+        "false",
+        "'host.invalid:16900'", // lint-rules: allow-literal configuration socket parser rejection fixture
+    ] {
+        error(&change("listen", "\"0.0.0.0:16900\"", value), "screen.listen"); // lint-rules: allow-literal configuration parser acceptance/rejection fixture
     }
 }
 

@@ -66,7 +66,7 @@ fn committed_example_loads_with_all_expected_values() {
             }],
         },
         screen: ScreenConfig {
-            listen: "0.0.0.0:16900".parse().unwrap(),
+            listen: "0.0.0.0:16900".parse().unwrap(), // lint-rules: allow-literal configuration loader expected value fixture
             pairing_token_file: "credentials/screen-pairing.txt".into(),
         },
         audit: AuditConfig {
@@ -96,13 +96,13 @@ fn minimal_config_defaults_match_both_loaders() {
         }
     );
     assert_eq!(config.mcp.server, vec![]);
-    assert_eq!(config.screen.listen.to_string(), "0.0.0.0:16900");
+    assert_eq!(config.screen.listen.to_string(), "0.0.0.0:16900"); // lint-rules: allow-literal configuration loader expected value fixture
 }
 
 #[test]
 fn all_auth_modes_and_ordered_tools_load_with_untouched_paths() {
     let input = format!(
-        "{}\n[[mcp.server]]\nname='device'\nurl='https://mcp.example.invalid/mcp'\nauth='portos_device_code'\n[[mcp.server]]\nname='bearer'\nurl='http://127.0.0.1:1/mcp'\nauth='bearer_file'\nbearer_file='absent/bearer'\nallow_tools=['test.wait','test.echo']",
+        "{}\n[[mcp.server]]\nname='device'\nurl='https://mcp.example.invalid/mcp'\nauth='portos_device_code'\n[[mcp.server]]\nname='bearer'\nurl='http://127.0.0.1:1/mcp'\nauth='bearer_file'\nbearer_file='absent/bearer'\nallow_tools=['test.wait','test.echo']", // lint-rules: allow-literal configuration loader expected value fixture
         MINIMAL.replace("[live]", "[live]\nmode='api_key'")
     );
     let directory = Directory::new().unwrap();

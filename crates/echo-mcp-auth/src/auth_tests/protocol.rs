@@ -105,7 +105,7 @@ async fn t3_empty_options_and_invalid_resource_discovery_stop_before_posts() {
     empty.request_timeout = Duration::ZERO;
     error(drive(AuthClient::open(empty)).await, AuthError::Discovery);
     for resource in [
-        json!({"resource":"https://example.invalid/mcp","authorization_servers":[mock.base]}),
+        json!({"resource":"https://example.invalid/mcp","authorization_servers":[mock.base]}), // lint-rules: allow-literal discovery mismatch fixture rejected before resource access
         json!({"resource":format!("{}/mcp",mock.base),"authorization_servers":[]}),
     ] {
         mock.fault("/.well-known/oauth-protected-resource", 200, resource);

@@ -57,13 +57,13 @@ fn t2_private_store_schema_roundtrip_and_invalid_versions_or_keys() {
     let validator = jsonschema::validator_for(&schema).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mock_options = AuthOptions {
-        resource_url: "https://example.invalid/mcp".into(),
+        resource_url: "https://example.invalid/mcp".into(), // lint-rules: allow-literal store identity fixture serialized locally without network access
         client_id: "synthetic-cli".into(),
         scopes: vec![],
         storage_dir: dir.path().into(),
         request_timeout: Duration::from_secs(1),
     };
-    let (store, mut record) = Store::open(&mock_options, "https://example.invalid").unwrap();
+    let (store, mut record) = Store::open(&mock_options, "https://example.invalid").unwrap(); // lint-rules: allow-literal store identity fixture serialized locally without network access
     let load = || -> Value { serde_json::from_slice(&std::fs::read(dir.path().join("grant.json")).unwrap()).unwrap() };
     let unlinked = load();
     assert!(validator.is_valid(&unlinked));
@@ -79,7 +79,7 @@ fn t2_private_store_schema_roundtrip_and_invalid_versions_or_keys() {
     store.save(&record).unwrap();
     let linked = load();
     assert!(validator.is_valid(&linked));
-    let (_, reloaded) = Store::open(&mock_options, "https://example.invalid").unwrap();
+    let (_, reloaded) = Store::open(&mock_options, "https://example.invalid").unwrap(); // lint-rules: allow-literal store identity fixture serialized locally without network access
     assert_eq!(reloaded.grant.unwrap().expose().refresh_token, "synthetic-refresh");
     assert_eq!(linked["private_key_jwk"], unlinked["private_key_jwk"]);
     assert_eq!(
@@ -95,7 +95,7 @@ fn t2_private_store_schema_roundtrip_and_invalid_versions_or_keys() {
         let bytes = serde_json::to_vec(&value).unwrap();
         std::fs::write(dir.path().join("grant.json"), &bytes).unwrap();
         error(
-            Store::open(&mock_options, "https://example.invalid"),
+            Store::open(&mock_options, "https://example.invalid"), // lint-rules: allow-literal store identity fixture serialized locally without network access
             AuthError::Storage,
         );
         assert_eq!(std::fs::read(dir.path().join("grant.json")).unwrap(), bytes);
@@ -106,23 +106,23 @@ fn t2_private_store_schema_roundtrip_and_invalid_versions_or_keys() {
 fn corrupt_and_mismatched_records_are_never_replaced() {
     let dir = tempfile::tempdir().unwrap();
     let mut options = AuthOptions {
-        resource_url: "https://example.invalid/mcp".into(),
+        resource_url: "https://example.invalid/mcp".into(), // lint-rules: allow-literal store identity fixture serialized locally without network access
         client_id: "synthetic-cli".into(),
         scopes: vec![],
         storage_dir: dir.path().into(),
         request_timeout: Duration::from_secs(1),
     };
-    Store::open(&options, "https://example.invalid").unwrap();
+    Store::open(&options, "https://example.invalid").unwrap(); // lint-rules: allow-literal store identity fixture serialized locally without network access
     let path = dir.path().join("grant.json");
     let before = std::fs::read(&path).unwrap();
     options.client_id = "another-client".into();
     error(
-        Store::open(&options, "https://example.invalid"),
+        Store::open(&options, "https://example.invalid"), // lint-rules: allow-literal store identity fixture serialized locally without network access
         AuthError::RelinkRequired,
     );
     assert_eq!(std::fs::read(&path).unwrap(), before);
     std::fs::write(&path, b"corrupt json").unwrap();
-    error(Store::open(&options, "https://example.invalid"), AuthError::Storage);
+    error(Store::open(&options, "https://example.invalid"), AuthError::Storage); // lint-rules: allow-literal store identity fixture serialized locally without network access
     assert_eq!(std::fs::read(&path).unwrap(), b"corrupt json");
 }
 
@@ -132,13 +132,13 @@ fn private_replacement_files_are_owner_only() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let options = AuthOptions {
-        resource_url: "https://example.invalid/mcp".into(),
+        resource_url: "https://example.invalid/mcp".into(), // lint-rules: allow-literal store identity fixture serialized locally without network access
         client_id: "synthetic-cli".into(),
         scopes: vec![],
         storage_dir: dir.path().into(),
         request_timeout: Duration::from_secs(1),
     };
-    let (store, record) = Store::open(&options, "https://example.invalid").unwrap();
+    let (store, record) = Store::open(&options, "https://example.invalid").unwrap(); // lint-rules: allow-literal store identity fixture serialized locally without network access
     store.save(&record).unwrap();
     assert_eq!(
         std::fs::metadata(dir.path().join("grant.json"))

@@ -293,7 +293,7 @@ What follows from it:
 - **It talks to Port OS directly.** The bridge is the Port OS OAuth client and the only MCP client. Section 9 says
   what it can use today and what waits for portos-backend.
 - **Crates** (declared in `lanes.toml`, section 10): `echo-contracts`, `echo-config`, `echo-wyoming`, `echo-audio`,
-  `echo-live`, `echo-agent-api`, `echo-agent-loop`, `echo-agent-muse`, `echo-mcp-auth`, `echo-mcp-client`,
+  `echo-live`, `echo-chatgpt-auth`, `echo-agent-api`, `echo-agent-loop`, `echo-agent-muse`, `echo-mcp-auth`, `echo-mcp-client`,
   `echo-screen-contract`, `echo-bridge`, `echo-lab`, `echo-spoof-mcp`, `echo-muse-bridge` and `xtask`. The screen
   page lives in `web/screen/`; the `echo-screen` app's shape waits for spike S3.
 

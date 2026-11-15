@@ -4,7 +4,7 @@ use p256::ecdsa::signature::Verifier;
 #[test]
 fn proofs_verify_and_keep_private_material_out_of_public_jwk() {
     let jwk = generate();
-    let proof = sign(jwk.expose(), "https://example.invalid/token", 123).unwrap();
+    let proof = sign(jwk.expose(), "https://example.invalid/token", 123).unwrap(); // lint-rules: allow-literal DPoP signing fixture encoded and verified locally without network access
     let parts: Vec<_> = proof.expose().split('.').collect();
     assert_eq!(parts.len(), 3);
     let header: serde_json::Value = serde_json::from_slice(&B64.decode(parts[0]).unwrap()).unwrap();
@@ -12,7 +12,7 @@ fn proofs_verify_and_keep_private_material_out_of_public_jwk() {
     assert_eq!(header["typ"], "dpop+jwt");
     assert_eq!(header["alg"], "ES256");
     assert_eq!(header["jwk"].as_object().unwrap().len(), 4);
-    assert_eq!(claims["htu"], "https://example.invalid/token");
+    assert_eq!(claims["htu"], "https://example.invalid/token"); // lint-rules: allow-literal DPoP signing fixture encoded and verified locally without network access
     assert_eq!(claims["htm"], "POST");
     assert_eq!(claims["iat"], 123);
     assert_eq!(claims.as_object().unwrap().len(), 4);
@@ -22,7 +22,7 @@ fn proofs_verify_and_keep_private_material_out_of_public_jwk() {
         .verifying_key()
         .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
         .unwrap();
-    let second = sign(jwk.expose(), "https://example.invalid/token", 123).unwrap();
+    let second = sign(jwk.expose(), "https://example.invalid/token", 123).unwrap(); // lint-rules: allow-literal DPoP signing fixture encoded and verified locally without network access
     let second_claims: serde_json::Value =
         serde_json::from_slice(&B64.decode(second.expose().split('.').nth(1).unwrap()).unwrap()).unwrap();
     assert_ne!(claims["jti"], second_claims["jti"]);

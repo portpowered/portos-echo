@@ -231,8 +231,8 @@ async fn t3_discovery_rejects_missing_unsupported_unsafe_or_redirected_metadata(
                 metadata.as_object_mut().unwrap().remove("token_endpoint");
             }
             "algorithm" => metadata["dpop_signing_alg_values_supported"] = json!(["RS256"]),
-            "unsafe" => metadata["token_endpoint"] = json!("http://example.invalid/token"),
-            _ => metadata["token_endpoint"] = json!("https://example.invalid/token"),
+            "unsafe" => metadata["token_endpoint"] = json!("http://example.invalid/token"), // lint-rules: allow-literal URL validation fixture rejected or parsed before any request
+            _ => metadata["token_endpoint"] = json!("https://example.invalid/token"), // lint-rules: allow-literal URL validation fixture rejected or parsed before any request
         }
         mock.state.lock().unwrap().metadata = Some(metadata);
         error(
@@ -254,13 +254,16 @@ fn unsafe_urls_and_safe_error_categories() {
     for bad in [
         "bad",
         "file:///tmp/grant",
-        "http://example.invalid",
-        "https://user:password@example.invalid",
-        "https://example.invalid/#fragment",
+        "http://example.invalid", // lint-rules: allow-literal URL validation fixture rejected or parsed before any request
+        "https://user:password@example.invalid", // lint-rules: allow-literal URL validation fixture rejected or parsed before any request
+        "https://example.invalid/#fragment", // lint-rules: allow-literal URL validation fixture rejected or parsed before any request
     ] {
         error(crate::discovery::safe_url(bad), AuthError::Discovery);
     }
-    for good in ["https://example.invalid/token", "http://127.0.0.1:1234/custom"] {
+    for good in [
+        "https://example.invalid/token", // lint-rules: allow-literal URL parser acceptance fixture without network access
+        "http://127.0.0.1:1234/custom",
+    ] {
         assert_eq!(crate::discovery::safe_url(good).unwrap().as_str(), good);
     }
     for failure in [
