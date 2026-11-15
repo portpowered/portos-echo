@@ -48,6 +48,11 @@ check exists, the coordinator checks it by hand.
   simulator devices and a test principal. T5 is the operator-run hardware bench (plan section 8.1).
 - **One scenario, many drivers.** A milestone's scenario file is the same for `sim`, `cloud` and `device`; only the
   driver changes.
+- **Component T3 tests may run without echo-lab.** A crate's own socket or process tests (a fake peer, a mock
+  OAuth server, the pinned `hassmic-host`) live in the crate and run under `make test-unit` or `make test-sim`. Each
+  is named or documented as T3, uses only 127.0.0.1 and local processes, waits on readiness rather than fixed sleeps,
+  and stays inside nextest's 30 s timeout with no retries. They prove a piece; they never stand in for a milestone
+  scenario, which always runs through `echo-lab run` with one file for every driver. Network-free tests stay T1/T2.
 - **Coverage floors hold.** A change that drops a crate below its floor (plan section 11) fails `coverage`.
 
 ## Secrets and privacy
