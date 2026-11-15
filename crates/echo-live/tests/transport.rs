@@ -18,15 +18,50 @@ async fn step(a: &mut LivePeer, b: &mut LivePeer, deadline: Instant) -> Result<(
         return Err(Error::Deadline);
     }
     let next = a.flush().await?.min(b.flush().await?).min(deadline);
-    tokio::select! {
-        result = a.readable() => { result?; a.receive(now()).await?; }
-        result = b.readable() => { result?; b.receive(now()).await?; }
-        () = tokio::time::sleep_until(next.into()) => {
+    let event = {
+        let left = a.readable();
+        let right = b.readable();
+        let timer = tokio::time::sleep_until(next.into());
+        // Pin explicitly below so readiness futures are dropped before mutation.
+        tokio_readiness(left, right, timer).await?
+    };
+    match event {
+        0 => {
+            a.receive(now()).await?;
+        }
+        1 => {
+            b.receive(now()).await?;
+        }
+        _ => {
             a.timeout(now()).await?;
             b.timeout(now()).await?;
         }
     }
     Ok(())
+}
+
+async fn tokio_readiness(
+    left: impl Future<Output = Result<(), Error>>,
+    right: impl Future<Output = Result<(), Error>>,
+    timer: impl Future<Output = ()>,
+) -> Result<u8, Error> {
+    use std::task::Poll;
+    let mut left = std::pin::pin!(left);
+    let mut right = std::pin::pin!(right);
+    let mut timer = std::pin::pin!(timer);
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(result) = left.as_mut().poll(cx) {
+            return Poll::Ready(result.map(|()| 0));
+        }
+        if let Poll::Ready(result) = right.as_mut().poll(cx) {
+            return Poll::Ready(result.map(|()| 1));
+        }
+        if timer.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Ok(2));
+        }
+        Poll::Pending
+    })
+    .await
 }
 
 async fn pair() -> Result<(LivePeer, LivePeer), Error> {
@@ -204,8 +239,9 @@ async fn journey(marker: u32) -> Result<(), Error> {
 
 #[tokio::test(start_paused = true)]
 async fn t3_two_pairs_are_isolated() -> Result<(), Error> {
-    let (left, right) = tokio::join!(journey(1000), journey(2000));
-    left?;
-    right?;
+    let left = tokio::spawn(Box::pin(journey(1000)));
+    let right = tokio::spawn(Box::pin(journey(2000)));
+    left.await.map_err(|_| Error::Protocol)??;
+    right.await.map_err(|_| Error::Protocol)??;
     Ok(())
 }
