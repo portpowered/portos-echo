@@ -1,0 +1,20 @@
+id: m4-spoof-tool
+milestone: M4
+tiers: [T3, T4, T5]
+setup:
+  mcp: spoof            # spoof | portos-pilot
+  backend: client       # client | muse
+steps:
+  - say: "Alexa, call the test tool and tell me its result"   # sim: fixture PCM + SIGUSR1; device: Ring talkback
+  - expect_trace:
+      - session.delegation.created
+      - "tools/call {name: test.echo, count: 1}"
+      - session.commentary.append
+  - expect_speech_contains: ["test", "echo"]                  # sim: transcript; device: STT of the Ring mic
+  - expect_screen: {state: speaking}                          # sim: UiState; device: screencap + Ring frame
+budgets:
+  first_audio_after_endpoint_ms_p95: 1500
+negative:
+  - inject: {mcp: http_500}
+    expect_speech_contains: ["couldn't"]
+    expect_trace_absent: ["tools/call {count: 2}"]

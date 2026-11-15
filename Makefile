@@ -39,7 +39,7 @@ test-contract:
 	printf '%s\n' 'no contract tests yet'
 
 test-sim:
-	printf '%s\n' 'no scenarios yet'
+	cargo run -p echo-lab -- validate
 
 build-host:
 	cargo build --workspace --locked

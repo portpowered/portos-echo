@@ -9,3 +9,8 @@
 name = "xtask"
 path = "xtask"
 kind = "tool"
+
+[[crate]]
+name = "echo-lab"
+path = "crates/echo-lab"
+kind = "bin"
