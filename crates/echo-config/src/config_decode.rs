@@ -110,6 +110,7 @@ fn agent(value: Value<'_>) -> Result<AgentConfig, ConfigError> {
         max_tool_calls: f.optional("max_tool_calls")?.unwrap_or(8),
         task_deadline_seconds: f.optional("task_deadline_seconds")?.unwrap_or(60),
         daily_request_cap: f.optional("daily_request_cap")?.unwrap_or(500),
+        model: f.optional("model")?,
     };
     f.finish()?;
     Ok(result)
