@@ -47,6 +47,13 @@ possibly consumed token. A fresh committed record or successful sign-in clears i
 Use the existing time package for RFC3339 import timestamps and loom for the
 bounded rotation/publication model. Import never discovers a home path.
 
+Browser sign-in uses sha2 for the S256 challenge and getrandom for independent
+32-byte OS-random verifier and state values. A loopback listener is held before
+reporting the URL; an explicit redirect port of zero selects an OS-assigned port
+and uses that same resolved redirect in authorization and exchange. The listener,
+bounded callback reads and exchange are owned by the future, with no background
+tasks. This library does not launch or automate a browser or consent UI.
+
 ## Packages covered
 
 - atomic-waker
@@ -55,6 +62,7 @@ bounded rotation/publication model. Import never discovers a home path.
 - core-foundation-sys
 - echo-chatgpt-auth
 - form_urlencoded
+- getrandom
 - futures-channel
 - http
 - http-body
@@ -80,6 +88,7 @@ bounded rotation/publication model. Import never discovers a home path.
 - security-framework
 - security-framework-sys
 - serde_urlencoded
+- sha2
 - sync_wrapper
 - tinyvec
 - time

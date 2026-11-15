@@ -1,5 +1,7 @@
+mod auth_browser_tests;
 mod auth_device_tests;
 mod auth_import_tests;
+mod auth_journey_tests;
 mod auth_lock_tests;
 mod auth_refresh_tests;
 mod auth_store_tests;

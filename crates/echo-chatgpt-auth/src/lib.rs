@@ -3,6 +3,7 @@
 //! display; this library never launches a browser or discovers a home auth file.
 //! Store permissions: Unix 0600; Windows a protected current-user-only DACL,
 //! installed on an empty temporary directory before credential bytes are written.
+mod auth_browser;
 mod auth_clock;
 mod auth_device;
 mod auth_http;
@@ -140,8 +141,21 @@ impl AuthSource {
         let _file_guard = auth_session::lock(&self.file)?;
         auth_session::import(self, path)
     }
+
+    /// Listen on IPv4 loopback before reporting the authorization URL.
+    /// Dropping this future releases the listener and pending requests.
+    ///
+    /// # Errors
+    /// Reports callback validation, timeout, transport or storage failures safely.
+    pub async fn browser_sign_in(&self, callback: impl FnOnce(String)) -> Result<ChatGptCredential, AuthError> {
+        let _guard = self.operation.lock().await;
+        let file_guard = auth_session::lock(&self.file)?;
+        let record = auth_browser::sign_in(self, callback).await?;
+        auth_store::save(&self.file, &record)?;
+        auth_session::mark(&file_guard, false)?;
+        Ok(record.credential())
+    }
 }
 
 #[cfg(test)]
-#[path = "../tests/auth/mod.rs"]
 mod auth_tests;
