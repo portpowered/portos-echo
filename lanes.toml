@@ -39,3 +39,8 @@ kind = "lib"
 name = "echo-audio"
 path = "crates/echo-audio"
 kind = "lib"
+
+[[crate]]
+name = "echo-live"
+path = "crates/echo-live"
+kind = "lib"
