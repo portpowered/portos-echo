@@ -241,6 +241,8 @@ AM-T0 stays temporary; AM-T11 owns wholesale removal.
 
 **`CONTINUE` feedback is at most 120 characters, ASCII only.** The factory copies it into a worker-session label capped at 200 characters, and a longer value stops the whole factory run, every lane at once (measured 2026-11-15: a 529-character park message did this). When parking, the feedback is exactly `AWAITING_OPERATOR_ANSWER <lane-name>`: the request file carries the path, the question and the no-answer path. Any other `CONTINUE` gets one short sentence, with the detail in `progress.txt`.
 
+**`REJECTED` feedback is at most 120 characters, ASCII only, for the same reason.** The factory keeps it on the work as `_rejection_feedback` and copies it into the next dispatch's labels, so a longer value stops the whole run at the next dispatch (measured 2026-11-15: a 461-character review rejection on `el-f7-scripts-web-lint` did this). Write one short sentence naming the blocker; the full findings go in a PR conversation comment, and the processor reads them there.
+
 On every initial, wake and check-in visit, reconcile outstanding forwarded
 requests and operator responses for this Project. A forwarded request name is
 stable for its lane Work ID and request version; record both paths in progress.md
