@@ -44,15 +44,31 @@ tree: `setup-workspace` branches each item's worktree (`.claude/worktrees/<name>
 | Need | Command |
 |---|---|
 | Check the configuration | `you factory config validate factory/factory.json` |
-| Start the daemon | `you run --continuously --with-server --listen 127.0.0.1:7447` |
+| Start the daemon | `you run --continuously --with-server --listen 127.0.0.1:7447 --record ~/.you-agent-factory/recordings/<yyyy-mm>/<name>.json` |
 | Stop it gracefully | `curl -X POST http://127.0.0.1:7447/shutdown` |
-| Submit a batch | `you submit batch <file.json> --server http://127.0.0.1:7447` |
+| Submit a batch | `you submit batch <file.json> --server http://127.0.0.1:7447`, after the same command with `--dry-run` |
 | See all work | `you work list --server http://127.0.0.1:7447` |
 | One item, its sessions | `you work show <workId>`; `you worker-sessions list --work-id <workId>` |
-| Watch for finished or failed items | `curl -N -H "Accept: text/event-stream" http://127.0.0.1:7447/factory-sessions/~default/events`, filtered on `"stateType":"(TERMINAL\|FAILED)"` only |
+| Watch progress | `curl -N -s -H "Accept: text/event-stream" http://127.0.0.1:7447/factory-sessions/~default/events`, filtered on `"type":"WORK_STATE_CHANGE"`; read `payload.workId`, `payload.fromState` and `payload.toState`. The events carry no `stateType` field. Skip events older than the watch: the stream replays its history first |
 
 Batch shape, payload templates and the loopback are in `factory/docs/batch-inputs.md`,
 `factory/docs/idea-payload-template.md` and `factory/docs/standards/validation-loopback-template.md`.
+
+### What to expect (smoke test, 2026-11-15)
+
+The factory was proven on two sample items and a loopback before any program work: both pull requests merged
+(#3, #9), the loopback re-ran their acceptance on `main` and accepted, and every agent session ran Codex
+`gpt-6.1-sol`. What that run taught:
+
+- **Until `el-f10-ci` adds checks, every item waits about 10 minutes in `task:awaiting-ci`** (the no-checks grace)
+  before review. Until then the reviewer runs the acceptance command itself before it merges.
+- **A worker loads its script when it is dispatched.** A fix to `factory/` reaches new dispatches only; restart the
+  daemon after merging one. `you work move` is refused while an item has an active dispatch.
+- **Lane worktrees keep untracked `prd.json`, `prd.md` and `progress.txt`,** and the daemon writes
+  `.you-agent-factory/`, `tasks/` and `__pycache__/` where it runs. `.gitignore` covers them. Remove a merged lane's
+  worktree with `git worktree remove`.
+- **`factory.json` names a model for every worker,** so the default model in `~/.you-agent-factory/config.json`
+  never applies.
 
 ### Batches
 
