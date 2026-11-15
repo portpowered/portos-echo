@@ -20,6 +20,8 @@ status: active; documentation index
 
 ## Architecture decisions
 
+- [S1 WebRTC transport](adr/0005-live-transport.md)
+
 - [Runtime-free delegated-task seam](adr/0005-echo-agent-api.md)
 - [PCM resampling and native Opus](adr/0005-echo-audio.md)
 - [Shared bridge contracts](adr/0004-echo-contracts.md)
