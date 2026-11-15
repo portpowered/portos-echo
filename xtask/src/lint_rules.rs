@@ -13,8 +13,7 @@ pub fn run() -> Result<(), String> {
     } else {
         package_names(&git(&["show", &format!("{base}:Cargo.lock")])?)?
     };
-    let current =
-        fs::read_to_string("Cargo.lock").map_err(|error| format!("Cargo.lock: {error}"))?;
+    let current = fs::read_to_string("Cargo.lock").map_err(|error| format!("Cargo.lock: {error}"))?;
     let current = package_names(&current)?;
     let adrs = read_adrs()?;
     let missing = missing_names(&old, &current, &adrs);
@@ -50,10 +49,7 @@ fn read_adrs() -> Result<Vec<String>, String> {
     for entry in entries {
         let path = entry.map_err(|error| format!("docs/adr/: {error}"))?.path();
         if path.extension().is_some_and(|extension| extension == "md") {
-            contents.push(
-                fs::read_to_string(&path)
-                    .map_err(|error| format!("{}: {error}", path.display()))?,
-            );
+            contents.push(fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?);
         }
     }
     Ok(contents)
@@ -76,24 +72,11 @@ fn package_names(lock: &str) -> Result<Names, String> {
             }
             in_package = line == "[[package]]";
             if line.contains("package") && !in_package {
-                return Err(format!(
-                    "Cargo.lock:{}: malformed package header",
-                    index + 1
-                ));
+                return Err(format!("Cargo.lock:{}: malformed package header", index + 1));
             }
-        } else if in_package
-            && line
-                .split('=')
-                .next()
-                .is_some_and(|key| key.trim() == "name")
-        {
-            let value = line
-                .split_once('=')
-                .map(|(_, value)| value.trim())
-                .unwrap_or_default();
-            let parsed = value
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'));
+        } else if in_package && line.split('=').next().is_some_and(|key| key.trim() == "name") {
+            let value = line.split_once('=').map_or_default(|(_, value)| value.trim());
+            let parsed = value.strip_prefix('"').and_then(|value| value.strip_suffix('"'));
             let parsed = parsed
                 .filter(|value| !value.is_empty() && value.chars().all(package_char))
                 .ok_or_else(|| format!("Cargo.lock:{}: invalid package name", index + 1))?;
@@ -121,10 +104,9 @@ fn missing_names(old: &Names, current: &Names, adrs: &[String]) -> Vec<String> {
     current
         .difference(old)
         .filter(|name| {
-            !adrs.iter().any(|adr| {
-                adr.split(package_char_inverse)
-                    .any(|token| token == name.as_str())
-            })
+            !adrs
+                .iter()
+                .any(|adr| adr.split(package_char_inverse).any(|token| token == name.as_str()))
         })
         .cloned()
         .collect()
@@ -159,13 +141,13 @@ mod tests {
     #[test]
     fn versions_duplicates_and_removals_do_not_add_names() {
         let old = package_names("[[package]]\nname = \"alpha\"\nversion = \"1\"\n").unwrap();
-        let current = package_names("[[package]]\nname = \"alpha\"\nversion = \"2\"\n[[package]]\nname = \"alpha\"\nversion = \"3\"\n").unwrap();
+        let current = package_names(
+            "[[package]]\nname = \"alpha\"\nversion = \"2\"\n[[package]]\nname = \"alpha\"\nversion = \"3\"\n",
+        )
+        .unwrap();
         assert_eq!(current, names(&["alpha"]));
         assert_eq!(missing_names(&old, &current, &[]), Vec::<String>::new());
-        assert_eq!(
-            missing_names(&old, &Names::new(), &[]),
-            Vec::<String>::new()
-        );
+        assert_eq!(missing_names(&old, &Names::new(), &[]), Vec::<String>::new());
     }
 
     #[test]
@@ -174,10 +156,7 @@ mod tests {
             missing_names(&Names::new(), &names(&["beta", "alpha"]), &[]),
             ["alpha", "beta"]
         );
-        assert_eq!(
-            package_names("# empty\nversion = 4\n").unwrap(),
-            Names::new()
-        );
+        assert_eq!(package_names("# empty\nversion = 4\n").unwrap(), Names::new());
     }
 
     #[test]
@@ -212,19 +191,15 @@ mod tests {
     #[test]
     fn substring_case_and_longer_names_do_not_cover_package() {
         for adr in ["alphabetabeta", "beta-extra", "BETA", "beta_suffix", ""] {
-            assert_eq!(
-                missing_names(&Names::new(), &names(&["beta"]), &[adr.into()]),
-                ["beta"]
-            );
+            assert_eq!(missing_names(&Names::new(), &names(&["beta"]), &[adr.into()]), ["beta"]);
         }
     }
 
     #[test]
     fn missing_names_are_distinct_and_sorted() {
-        let current = package_names("[[package]]\nname = \"zeta\"\n[[package]]\nname = \"beta\"\n[[package]]\nname = \"zeta\"").unwrap();
-        assert_eq!(
-            missing_names(&Names::new(), &current, &[]),
-            ["beta", "zeta"]
-        );
+        let current =
+            package_names("[[package]]\nname = \"zeta\"\n[[package]]\nname = \"beta\"\n[[package]]\nname = \"zeta\"")
+                .unwrap();
+        assert_eq!(missing_names(&Names::new(), &current, &[]), ["beta", "zeta"]);
     }
 }
