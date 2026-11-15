@@ -1,0 +1,11 @@
+id: b0-stock-time
+milestone: B0
+tiers: [T5]
+setup: {}
+steps:
+  - say: "text:Alexa, what time is it?"
+  - expect_frame: light-ring.jpg
+  - expect_speech_contains:
+      - 'regex:(?i)\b(?:[01]?[0-9]|2[0-3]):[0-5][0-9]\b'
+budgets: {}
+negative: []

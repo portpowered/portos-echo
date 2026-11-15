@@ -24,8 +24,8 @@ uses no network. `--help` prints the command grammar.
 
 ## Device runner
 
-The initial device runner supports batches of `say` steps, firmware admission,
-quiet hours, held-session cleanup, post-playback reply capture and reports:
+The device runner supports batches of speech, screen and frame steps, firmware
+admission, quiet hours, held-session cleanup, reply capture and reports:
 
 ```sh
 echo-lab run scenario.yaml --driver device --bench ring --port /explicit/port --adb /explicit/adb --stt stt-wrapper --ring fixture-ring --out /external/new-directory
@@ -37,8 +37,36 @@ audio. Optional `say: "text:synthetic utterance"` requires both
 `--speech-endpoint` and `--speech-model`; there are no speech defaults.
 `--ring` overrides `ECHO_LAB_RING`. Port and adb paths must name existing files
 explicitly; bare executable names are refused. Arguments go directly to child
-processes, without shell interpretation. STT configuration is reserved for the
-next oracle increment; this increment does not transcribe replies.
+processes, without shell interpretation. `--stt` is one executable (or a wrapper
+for additional options), invoked with the reply WAV path as exactly one argument.
+Its stdout is a UTF-8 transcript; transcripts and raw tool diagnostics are never
+persisted. `expect_speech_contains` checks literal, case-insensitive substrings.
+An explicit `regex:` prefix selects a pattern; invalid/empty expectations fail
+before effects. Pattern matching uses the existing schema validator's regex
+engine, with no extra package dependency.
+
+`expect_screen: {golden: tests/goldens/example.png, tolerance: 0}` captures
+`adb exec-out screencap -p`, preserves the raw PNG, and compares decoded RGBA
+pixels to the golden. Goldens must resolve inside the repository's
+`tests/goldens/`. Tolerance is exactly zero differing pixels. The bounded Python
+standard-library decoder handles non-interlaced 8-bit gray, gray-alpha, palette,
+RGB and RGBA PNGs; unsupported formats and corrupt inputs fail explicitly.
+
+`expect_frame: frames/ring.jpg` saves a snapshot from the same held lease.
+The approved CLI source returns JPEG bytes and a capture timestamp, rather
+than PNG. Paths must be portable relative paths without traversal; existing
+destinations and symlink parents are refused. The runner checks the capture
+confirmation and JPEG envelope, retaining exact bytes as report evidence.
+This is capture evidence only; it never asserts the Ring image's contents.
+Full JPEG decoding is not performed by the harness.
+
+When a frame immediately follows `say`, playback completes without `--listen`,
+then a bounded `message record --audio-only --duration 10` child starts.
+The next step takes the held snapshot while that child is pending; the speech
+oracle joins/checks the child before STT. Other utterances use the CLI's combined
+play/listen timestamps and trim the WAV at playback end. Finalization and the
+next utterance also join/check any pending recording before releasing/reusing
+the session. Every pending child has the same cancellation and lease deadlines.
 
 Every step first reads the firmware incremental using explicit adb. Only builds
 in `data/probed-builds.txt` are admitted. The initial entry is the measured 7809
@@ -63,7 +91,7 @@ hold ended with reason `preempted` before the interrupted step is reopened and
 retried once. A second preemption fails. Status/release JSON and argv follow
 the same pinned CLI source, including `cli/internal/host/server.go`.
 Unsupported steps and setup/budget/injection semantics
-fail explicitly. Speech, screen and JPEG frame oracles remain retained work.
+fail explicitly.
 
 For cooperative cancellation, supply `--cancel-file /external/cancel.signal`.
 Creating that file cancels the current child, kills and reaps it, stops later
@@ -88,7 +116,7 @@ may leave an incomplete external directory without a report.
 Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
 `echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child
 `ECHO_LAB_RUN_FIXTURE` / `ECHO_LAB_RUN_LEDGER`. The latter executable implements
-only synthetic port, adb and host-helper responses; it never forwards commands.
+only synthetic port, adb and host-helper responses; it never forwards device commands.
 Its JSON fixture can select `hour`, per-call `hours`, `build`, a failed operation
 with `fail`, malformed JSON with `malformed`, or a response object by operation
 name. Lifecycle fixtures also select per-clock-call `times` (monotonic
@@ -97,6 +125,45 @@ count, and `cancel_on` to publish `cancel.signal` and block until killed.
 `wait` acknowledges exactly 25000 virtual milliseconds; no fixture sleeps.
 The fixture helper is selected explicitly with `--python`; these variables
 are consumed only by fakes. Tests also exercise the real host Python helper for
+PNG decoding; `real_pixels: true` forwards only the pure local pixel operation
+from the fake helper to Python. The remaining operations stay synthetic.
+`transcript` configures fake STT stdout (default `The time is 7:49 p.m.`).
+`record_waits_for_frame: true` makes the fake recording await an explicit
+snapshot notification; it proves frame-before-record-join ordering without a
+fixed sleep. The 221-byte black JPEG and 2-by-2 PNG in `tests/goldens/` are
+generated synthetic images, never device captures.
+
+To reproduce B0 safely in PowerShell, build the tools once in this worktree,
+then run in a fresh external directory. The synthetic speech endpoint/model
+are explicit because the source-pinned CLI has no text-to-speech defaults:
+
+```powershell
+$repo = (Get-Location).Path
+cargo build -p echo-lab --bins --locked
+$fake = Join-Path $repo 'target/debug/echo-lab-fake-run.exe'
+$run = Join-Path $env:TEMP ('lab-b0-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory $run | Out-Null
+Push-Location $run
+$env:ECHO_LAB_RING = 'fixture-ring'
+$env:ECHO_LAB_RUN_FIXTURE = Join-Path $run 'fixture.json'
+$env:ECHO_LAB_RUN_LEDGER = Join-Path $run 'ledger.jsonl'
+'{"transcript":"The time is 7:49 p.m.","record_waits_for_frame":true}' |
+  Set-Content $env:ECHO_LAB_RUN_FIXTURE
+cargo run --manifest-path "$repo/Cargo.toml" -p echo-lab -- run `
+  "$repo/tests/scenarios/b0-stock-time.yaml" --driver device --bench ring `
+  --port $fake --adb $fake --stt $fake --python $fake `
+  --speech-endpoint fixture-speech --speech-model fixture-model --out artifacts
+Get-Content ledger.jsonl
+Get-Content artifacts/report.json
+Pop-Location
+```
+
+Expected exit is 0 with `result: pass`. Repeat in another fresh external
+directory with `transcript: "No clock information"` for exit 1, `result: fail`
+and `checks.step_2: false`. The scenario declares its intended T5 milestone;
+these fake executions are T3 harness evidence and never a physical B0 pass.
+
+The real host helper is also exercised for
 exact WAV samples and SHA-256. Run `cargo test -p echo-lab --all-targets --locked`.
 No test accesses hardware, an account, STT service or a remote endpoint.
 

@@ -15,6 +15,28 @@ const TABLE: &[(&str, &[&str])] = &[
     ("release", &["session", "release", "{hold}", "--json"]),
     ("status", &["session", "status", "{hold}", "--json"]),
     (
+        "snapshot",
+        &[
+            "message", "snapshot", "{ring}", "--lease", "{lease}", "--output", "{output}", "--json",
+        ],
+    ),
+    (
+        "record",
+        &[
+            "message",
+            "record",
+            "{ring}",
+            "--lease",
+            "{lease}",
+            "--audio-only",
+            "--duration",
+            "10",
+            "--output",
+            "{output}",
+            "--json",
+        ],
+    ),
+    (
         "chirp",
         &[
             "message",
@@ -71,6 +93,13 @@ const TABLE: &[(&str, &[&str])] = &[
 ];
 
 pub fn argv(operation: &str, values: &[(&str, &str)]) -> Result<Vec<String>, String> {
+    if let Some(base) = operation.strip_suffix("_only") {
+        let mut args = argv(base, values)?;
+        if let Some(index) = args.iter().position(|arg| arg == "--listen") {
+            args.drain(index..index + 4);
+        }
+        return Ok(args);
+    }
     let (_, template) = TABLE
         .iter()
         .find(|(name, _)| *name == operation)
@@ -129,37 +158,72 @@ pub fn controlled(
     deadline: Instant,
     cancel: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
-    if cancelled(cancel) {
-        return Err("run cancelled".into());
+    Pending::start(executable, args, deadline, cancel)?.finish()
+}
+
+pub struct Pending {
+    child: Child,
+    reader: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>,
+    deadline: Instant,
+    cancel: Option<std::path::PathBuf>,
+}
+
+impl Pending {
+    pub fn start(executable: &Path, args: &[String], deadline: Instant, cancel: Option<&Path>) -> Result<Self, String> {
+        if cancelled(cancel) {
+            return Err("run cancelled".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("child deadline exceeded before launch".into());
+        }
+        let mut child = Command::new(executable)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| "cannot launch selected tool; child output discarded")?;
+        let stdout = child.stdout.take().ok_or("cannot capture child stdout")?;
+        let reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            // Continue draining after the cap to avoid deadlocking the child.
+            let mut stream = stdout;
+            stream.by_ref().take(LIMIT + 1).read_to_end(&mut bytes)?;
+            std::io::copy(&mut stream, &mut std::io::sink())?;
+            Ok::<_, std::io::Error>(bytes)
+        });
+        Ok(Self {
+            child,
+            reader: Some(reader),
+            deadline,
+            cancel: cancel.map(Path::to_path_buf),
+        })
     }
-    if Instant::now() >= deadline {
-        return Err("child deadline exceeded before launch".into());
+
+    pub fn finish(mut self) -> Result<Vec<u8>, String> {
+        let status = reap(&mut self.child, self.deadline, self.cancel.as_deref());
+        let output = self
+            .reader
+            .take()
+            .ok_or("child reader missing")?
+            .join()
+            .map_err(|_| "child reader failed")?
+            .map_err(|_| "child stdout read failed")?;
+        if !status? || u64::try_from(output.len()).unwrap_or(u64::MAX) > LIMIT {
+            return Err("selected tool failed or exceeded output limit; child output discarded".into());
+        }
+        Ok(output)
     }
-    let mut child = Command::new(executable)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| "cannot launch selected tool; child output discarded")?;
-    let stdout = child.stdout.take().ok_or("cannot capture child stdout")?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        // Continue draining after the cap to avoid deadlocking the child.
-        let mut stream = stdout;
-        stream.by_ref().take(LIMIT + 1).read_to_end(&mut bytes)?;
-        std::io::copy(&mut stream, &mut std::io::sink())?;
-        Ok::<_, std::io::Error>(bytes)
-    });
-    let status = reap(&mut child, deadline, cancel);
-    let output = reader
-        .join()
-        .map_err(|_| "child reader failed")?
-        .map_err(|_| "child stdout read failed")?;
-    if !status? || u64::try_from(output.len()).unwrap_or(u64::MAX) > LIMIT {
-        return Err("selected tool failed or exceeded output limit; child output discarded".into());
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
-    Ok(output)
 }
 
 pub fn json(executable: &Path, args: &[String]) -> Result<Value, String> {
@@ -168,10 +232,12 @@ pub fn json(executable: &Path, args: &[String]) -> Result<Value, String> {
 }
 
 pub fn helper(python: &str, operation: &str, args: &[String]) -> Result<Value, String> {
-    let mut command_args = vec!["-c".into(), include_str!("run_host.py").into(), operation.into()];
+    let mut command_args = vec!["-c".into(), HOST.into(), operation.into()];
     command_args.extend_from_slice(args);
     json(Path::new(python), &command_args)
 }
+
+pub const HOST: &str = concat!(include_str!("run_pixels.py"), "\n", include_str!("run_host.py"));
 
 #[cfg(test)]
 mod tests {

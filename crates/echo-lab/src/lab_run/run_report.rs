@@ -10,6 +10,7 @@ pub struct Artifacts {
     pub root: PathBuf,
     pub checks: BTreeMap<String, bool>,
     pub sessions: Vec<String>,
+    pub evidence: Vec<String>,
     events: File,
     started: Instant,
 }
@@ -22,6 +23,7 @@ impl Artifacts {
             root,
             checks: BTreeMap::new(),
             sessions: Vec::new(),
+            evidence: vec!["events.jsonl".into()],
             events,
             started: Instant::now(),
         })
@@ -53,7 +55,7 @@ impl Artifacts {
         let report = json!({
             "milestone":milestone, "result":if error.is_none() { "pass" } else { "fail" },
             "placement":"bridge_pc", "build_commit":build_commit(), "device":null,
-            "evidence":["events.jsonl"], "checks":self.checks,
+            "evidence":self.evidence, "checks":self.checks,
             "limitations":error.into_iter().chain(["Device edges require independent operator verification; no physical milestone is proved."]).collect::<Vec<_>>(),
             "tier":tier, "driver":"device", "scenario_digest":digest,
             "hassmic_commit":null, "bench_session_ids":self.sessions

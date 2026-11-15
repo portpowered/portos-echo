@@ -6,11 +6,14 @@ use std::io::{self, Write};
 fn operation(args: &[String]) -> &str {
     match args.first().map(String::as_str) {
         Some("shell") => "firmware",
+        Some("exec-out") => "screencap",
         Some("-c") => args.get(2).map_or("unknown", String::as_str),
         Some("session") => args.get(1).map_or("unknown", String::as_str),
         Some("message") if args.iter().any(|a| a == "--chirp") => "chirp",
+        Some("message") if args.get(1).is_some_and(|v| v == "snapshot") => "snapshot",
+        Some("message") if args.get(1).is_some_and(|v| v == "record") => "record",
         Some("message") => "play",
-        _ => "unknown",
+        _ => "stt",
     }
 }
 
@@ -43,8 +46,34 @@ fn response(op: &str, args: &[String], fixture: &Value) -> Result<Value, Box<dyn
         "clock" => json!({"hour":fixture.get("hour").unwrap_or(&json!(9)),"monotonic_ms":0}),
         "digest" => json!({"sha256":"a".repeat(64)}),
         "reply" => json!({"reply_frames":2}),
-        "chirp" | "play" => {
+        "wav" => json!({"reply_frames":4}),
+        "pixels" => json!({"different_pixels":0}),
+        "snapshot" => {
             let index = args.iter().position(|a| a == "--output").ok_or("missing --output")?;
+            if fixture["missing_image"] != true {
+                fs::write(
+                    &args[index + 1],
+                    include_bytes!("../../../../tests/goldens/lab-frame.jpg"),
+                )?;
+            }
+            json!({"success":true,"captured_at":"2026-11-15T09:00:00.600Z"})
+        }
+        "record" => {
+            fs::write("record-ready", b"ready")?;
+            let index = args.iter().position(|a| a == "--output").ok_or("missing --output")?;
+            recording(&args[index + 1])?;
+            if fixture["record_waits_for_frame"] == true {
+                // Readiness signal, no elapsed-time synchronization.
+                while !std::path::Path::new("frame-ready").exists() {
+                    std::thread::yield_now();
+                }
+            }
+            json!({"success":true,"hasAudio":true})
+        }
+        "chirp" | "play" => {
+            let Some(index) = args.iter().position(|a| a == "--output") else {
+                return Ok(json!({"held":true,"playEndedAt":"2026-11-15T09:00:00.500Z"}));
+            };
             let output = args.get(index + 1).ok_or("missing output path")?;
             recording(output)?;
             if op == "play" && fixture["block_report"] == true {
@@ -94,10 +123,7 @@ fn overrides(op: &str, count: usize, fixture: &Value, mut result: Value) -> Valu
     result
 }
 
-fn run() -> Result<u8, Box<dyn std::error::Error>> {
-    let fixture: Value = serde_json::from_slice(&fs::read(std::env::var("ECHO_LAB_RUN_FIXTURE")?)?)?;
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let op = operation(&args);
+fn ledger(op: &str, args: &[String]) -> Result<usize, Box<dyn std::error::Error>> {
     let path = std::env::var("ECHO_LAB_RUN_LEDGER")?;
     let prior = fs::read_to_string(&path).unwrap_or_default();
     let count = prior
@@ -121,6 +147,14 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
         "{}",
         json!({"operation":op, "args":ledger_args})
     )?;
+    Ok(count)
+}
+
+fn run() -> Result<u8, Box<dyn std::error::Error>> {
+    let fixture: Value = serde_json::from_slice(&fs::read(std::env::var("ECHO_LAB_RUN_FIXTURE")?)?)?;
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let op = operation(&args);
+    let count = ledger(op, &args)?;
     if fixture["cancel_on"] == op {
         fs::write("cancel.signal", b"cancel")?;
         // Explicit fixture notification, then remain blocked until killed.
@@ -135,7 +169,29 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
         io::stderr().write_all(b"fixture-private-child-output")?;
         return Ok(1);
     }
-    if op == "firmware" {
+    if op == "snapshot" {
+        if fixture["record_waits_for_frame"] == true {
+            while !std::path::Path::new("record-ready").exists() {
+                std::thread::yield_now();
+            }
+        }
+        fs::write("frame-ready", b"ready")?;
+    }
+    if fixture["real_pixels"] == true && op == "pixels" {
+        let output = std::process::Command::new("python").args(&args).output()?;
+        io::stdout().write_all(&output.stdout)?;
+        return Ok(u8::from(!output.status.success()));
+    } else if op == "stt" {
+        io::stdout().write_all(
+            fixture["transcript"]
+                .as_str()
+                .unwrap_or("The time is 7:49 p.m.")
+                .as_bytes(),
+        )?;
+    } else if op == "screencap" {
+        let file = fixture["screencap_file"].as_str().ok_or("missing screencap fixture")?;
+        io::stdout().write_all(&fs::read(file)?)?;
+    } else if op == "firmware" {
         writeln!(io::stdout(), "{}", fixture["build"].as_str().unwrap_or("0036811211140"))?;
     } else if fixture["malformed"] == op {
         io::stdout().write_all(b"not JSON fixture-private-child-output")?;

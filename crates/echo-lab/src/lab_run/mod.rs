@@ -2,6 +2,7 @@ mod run_command;
 mod run_device;
 mod run_lease;
 mod run_options;
+mod run_oracles;
 mod run_report;
 
 use std::io::Write;
@@ -14,11 +15,20 @@ use run_report::Artifacts;
 pub enum Step {
     SayFile(PathBuf),
     SayText(String),
+    Speech(Vec<String>),
+    Screen(PathBuf),
+    Frame(String),
     Unsupported,
 }
 
 pub trait Driver {
-    fn execute(&mut self, step: &Step, index: usize, artifacts: &mut Artifacts) -> Result<(), String>;
+    fn execute(
+        &mut self,
+        step: &Step,
+        index: usize,
+        next: Option<&Step>,
+        artifacts: &mut Artifacts,
+    ) -> Result<(), String>;
     fn close(&mut self, artifacts: &mut Artifacts) -> Result<(), String>;
 }
 
@@ -74,7 +84,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
         for step in scenario["steps"].as_array().ok_or("scenario: missing steps")? {
             steps.push(match step["say"].as_str() {
                 Some(value) => say(value, path, options)?,
-                None => Step::Unsupported,
+                None => run_oracles::parse(step)?,
             });
         }
     }
@@ -88,7 +98,7 @@ fn dispatch(driver: &mut impl Driver, steps: &[Step], artifacts: &mut Artifacts)
     artifacts.event("run_started", None, None)?;
     for (index, step) in steps.iter().enumerate() {
         artifacts.event("step_started", Some(index), None)?;
-        let result = driver.execute(step, index, artifacts);
+        let result = driver.execute(step, index, steps.get(index + 1), artifacts);
         artifacts.checks.insert(format!("step_{index}"), result.is_ok());
         if let Err(message) = result {
             artifacts.event("step_failed", Some(index), Some(&message))?;

@@ -10,6 +10,14 @@ import time
 
 def main():
     operation, *args = sys.argv[1:]
+    if operation == "pixels":
+        return compare_pixels(*args)
+    if operation == "wav":
+        with wave.open(args[0], "rb") as source:
+            frames = source.getnframes()
+            if frames <= 0 or len(source.readframes(frames)) != frames * source.getnchannels() * source.getsampwidth():
+                raise ValueError("empty or truncated WAV")
+        return {"reply_frames": frames}
     if operation == "clock":
         return {"hour": datetime.datetime.now().hour, "monotonic_ms": int(time.monotonic() * 1000)}
     if operation == "wait":

@@ -12,7 +12,7 @@ pub struct Session(pub PathBuf);
 impl Session {
     pub fn new(fixture: &Value) -> Self {
         let root = std::env::temp_dir().join(format!(
-            "lab-run-test-{}-{}",
+            "lab run test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));

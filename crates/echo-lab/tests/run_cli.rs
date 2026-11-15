@@ -2,6 +2,9 @@
 #[path = "run_support/lease.rs"]
 mod lease;
 #[cfg(test)]
+#[path = "run_support/oracles.rs"]
+mod oracles;
+#[cfg(test)]
 mod run_support;
 #[cfg(test)]
 mod tests {

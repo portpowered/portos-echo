@@ -102,6 +102,10 @@
         "expect_screen": {
           "type": "object"
         },
+        "expect_frame": {
+          "type": "string",
+          "minLength": 1
+        },
         "press": {
           "type": [
             "string",

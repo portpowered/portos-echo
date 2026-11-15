@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::run_command::{argv, cancelled, controlled};
 use super::run_lease::LeaseClock;
@@ -12,6 +12,9 @@ pub struct Device<'a> {
     clock: LeaseClock,
     aligned: bool,
     release_failed: bool,
+    reply: Option<PathBuf>,
+    pending: Option<super::run_command::Pending>,
+    capture_window: bool,
 }
 
 impl<'a> Device<'a> {
@@ -22,6 +25,9 @@ impl<'a> Device<'a> {
             clock: LeaseClock::new(),
             aligned: false,
             release_failed: false,
+            reply: None,
+            pending: None,
+            capture_window: false,
         }
     }
 
@@ -47,7 +53,7 @@ impl<'a> Device<'a> {
     }
 
     fn host(&self, operation: &str, args: &[String]) -> Result<serde_json::Value, String> {
-        let mut values = vec!["-c".into(), include_str!("run_host.py").into(), operation.into()];
+        let mut values = vec!["-c".into(), super::run_command::HOST.into(), operation.into()];
         values.extend_from_slice(args);
         let data = controlled(
             Path::new(&self.options.python),
@@ -138,13 +144,17 @@ impl<'a> Device<'a> {
             self.audio_allowed()?;
         }
         let (_, lease) = self.hold.as_ref().ok_or("play: no held session")?;
+        let lease = lease.clone();
         let output = path.to_str().ok_or("play: output path is not UTF-8")?;
         let mut values = vec![
             ("{ring}", self.options.ring.as_str()),
-            ("{lease}", lease),
+            ("{lease}", lease.as_str()),
             ("{output}", output),
         ];
         values.extend_from_slice(extra);
+        if operation != "chirp" && self.capture_window {
+            return self.play_then_record(operation, &values, path);
+        }
         let result = self
             .port(operation, &values, false)
             .map_err(|error| self.play_error(&error))?;
@@ -166,6 +176,9 @@ impl<'a> Device<'a> {
         if reply["reply_frames"].as_u64().is_none_or(|frames| frames == 0) {
             return Err("play: no post-playback reply audio".into());
         }
+        if operation != "chirp" {
+            self.reply = Some(path.to_path_buf());
+        }
         Ok(())
     }
 
@@ -186,8 +199,112 @@ impl<'a> Device<'a> {
 }
 
 impl Device<'_> {
+    fn play_then_record(&mut self, operation: &str, values: &[(&str, &str)], path: &Path) -> Result<(), String> {
+        let result = self
+            .port(&format!("{operation}_only"), values, false)
+            .map_err(|e| self.play_error(&e))?;
+        if result["held"] != true || result["playEndedAt"].as_str().is_none() {
+            return Err("play: missing held playback completion".into());
+        }
+        self.audio_allowed()?;
+        self.pending = Some(
+            super::run_command::Pending::start(
+                &self.options.port,
+                &argv("record", values)?,
+                self.clock.deadline(false),
+                self.options.cancel.as_deref(),
+            )
+            .map_err(|_| "record: cannot start held reply capture")?,
+        );
+        self.reply = Some(path.to_path_buf());
+        Ok(())
+    }
+
+    fn finish_reply(&mut self) -> Result<(), String> {
+        if let Some(child) = self.pending.take() {
+            let output = child
+                .finish()
+                .map_err(|_| "record: held reply capture failed; child reaped")?;
+            let value: serde_json::Value =
+                serde_json::from_slice(&output).map_err(|_| "record: malformed capture result")?;
+            if value["success"] != true || value["hasAudio"] != true {
+                return Err("record: held capture has no audio".into());
+            }
+            let path = self.reply.as_ref().ok_or("record: missing reply path")?;
+            let result = self
+                .host("wav", &[path.to_string_lossy().into_owned()])
+                .map_err(|_| "record: invalid reply WAV")?;
+            if result["reply_frames"].as_u64().is_none_or(|n| n == 0) {
+                return Err("record: empty reply WAV".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn speech(&mut self, phrases: &[String]) -> Result<(), String> {
+        self.finish_reply()?;
+        let path = self.reply.as_ref().ok_or("speech expectation: no recorded reply")?;
+        let transcript = controlled(
+            &self.options.stt,
+            &[path.to_string_lossy().into_owned()],
+            self.clock.deadline(false),
+            self.options.cancel.as_deref(),
+        )
+        .map_err(|_| "speech expectation: STT command failed")?;
+        super::run_oracles::speech(&transcript, phrases)
+    }
+
+    fn screen(&self, golden: &Path, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+        let bytes = controlled(
+            &self.options.adb,
+            &["exec-out".into(), "screencap".into(), "-p".into()],
+            self.clock.deadline(false),
+            self.options.cancel.as_deref(),
+        )
+        .map_err(|_| "screen expectation: capture failed")?;
+        let name = format!("screen-{index}.png");
+        let path = artifacts.root.join(&name);
+        std::fs::write(&path, bytes).map_err(|_| "screen expectation: cannot save screencap")?;
+        artifacts.evidence.push(name);
+        super::run_oracles::screen(&self.options.python, &path, golden)
+    }
+
+    fn frame(&mut self, name: &str, artifacts: &mut Artifacts) -> Result<(), String> {
+        let (_, lease) = self.hold.as_ref().ok_or("frame capture: no held session")?;
+        let path = super::run_oracles::frame_destination(&artifacts.root, name)?;
+        let result = self
+            .port(
+                "snapshot",
+                &[
+                    ("{ring}", &self.options.ring),
+                    ("{lease}", lease),
+                    ("{output}", path.to_str().ok_or("frame capture: invalid path")?),
+                ],
+                false,
+            )
+            .map_err(|_| "frame capture: held snapshot failed")?;
+        if result["success"] != true || result["captured_at"].as_str().is_none() {
+            return Err("frame capture: missing held capture confirmation".into());
+        }
+        let size = std::fs::metadata(&path)
+            .map_err(|_| "frame capture: missing image")?
+            .len();
+        if size > 16 * 1024 * 1024 {
+            return Err("frame capture: image exceeds size limit".into());
+        }
+        let bytes = std::fs::read(path).map_err(|_| "frame capture: missing image")?;
+        if !bytes.starts_with(&[255, 216, 255]) || !bytes.ends_with(&[255, 217]) || bytes.len() < 32 {
+            return Err("frame capture: invalid JPEG image".into());
+        }
+        artifacts.evidence.push(name.to_owned());
+        Ok(())
+    }
+
     fn attempt(&mut self, step: &Step, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
         self.firmware()?;
+        if matches!(step, Step::SayFile(_) | Step::SayText(_)) {
+            self.finish_reply()?;
+        }
         match step {
             Step::SayFile(path) => {
                 self.open(artifacts)?;
@@ -214,12 +331,22 @@ impl Device<'_> {
                 )
             }
             Step::Unsupported => Err("step: capability is not implemented by device driver".into()),
+            Step::Speech(phrases) => self.speech(phrases),
+            Step::Screen(golden) => self.screen(golden, index, artifacts),
+            Step::Frame(name) => self.frame(name, artifacts),
         }
     }
 }
 
 impl Driver for Device<'_> {
-    fn execute(&mut self, step: &Step, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+    fn execute(
+        &mut self,
+        step: &Step,
+        index: usize,
+        next: Option<&Step>,
+        artifacts: &mut Artifacts,
+    ) -> Result<(), String> {
+        self.capture_window = matches!(next, Some(Step::Frame(_)));
         let result = self.attempt(step, index, artifacts);
         if result.as_ref().err().is_some_and(|error| error == "play: preempted") {
             artifacts.event("preempted", Some(index), None)?;
@@ -231,6 +358,17 @@ impl Driver for Device<'_> {
     }
 
     fn close(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
+        let recording = self.finish_reply();
+        let release = self.release(artifacts);
+        match (recording, release) {
+            (Err(a), Err(b)) => Err(format!("{a}; {b}")),
+            (a, b) => a.and(b),
+        }
+    }
+}
+
+impl Device<'_> {
+    fn release(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
         let Some((hold, _)) = self.hold.take() else {
             self.clock.clear();
             if self.release_failed {
