@@ -42,7 +42,7 @@ async fn t3_device_exact_requests_callback_and_reload() {
         stored,
         serde_json::json!({"access":token(Some("synthetic-account")),"refresh":"synthetic-refresh","expires":NOW+3600,"account_id":"synthetic-account","last_refresh":NOW})
     );
-    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 2);
     mock.stop().await;
 }
 
@@ -165,7 +165,7 @@ async fn t3_device_transport_failure_preserves_existing_credential() {
     );
     peer.await.unwrap();
     assert_eq!(std::fs::read(&source.file).unwrap(), before);
-    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 2);
     assert_eq!(mock.requests.lock().unwrap().len(), 0);
     mock.stop().await;
 }

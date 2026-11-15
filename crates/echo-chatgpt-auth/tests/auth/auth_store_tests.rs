@@ -60,19 +60,30 @@ fn store_invalid_missing_oversized_and_write_failure_are_safe() {
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 2);
 }
 #[tokio::test]
-async fn store_current_refuses_due_and_account_mismatch() {
+async fn store_current_refuses_account_mismatch_before_network() {
     let directory = directory();
     let path = directory.0.join("auth");
     let mut source = AuthSource::new(echo_config::ChatGptAuthConfig::default(), path.clone()).unwrap();
     source.clock = std::sync::Arc::new(FakeClock(std::sync::atomic::AtomicU64::new(0)));
-    let mut r = record();
-    r.expires = NOW + 300;
-    auth_store::save(&path, &r).unwrap();
-    assert_eq!(source.current().await.err(), Some(AuthError::RelinkRequired));
     let mut json = serde_json::to_value(record()).unwrap();
     json["account_id"] = "wrong".into();
     std::fs::write(&path, json.to_string()).unwrap();
     assert_eq!(source.current().await.err(), Some(AuthError::AccountMismatch));
+}
+#[test]
+fn store_permission_write_and_rename_faults_preserve_old_bytes() {
+    let directory = directory();
+    let path = directory.0.join("credential");
+    auth_store::save(&path, &record()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    for stage in 0..3 {
+        let result = auth_store::save_with(&path, &record(), |at| {
+            if at == stage { Err(AuthError::Storage) } else { Ok(()) }
+        });
+        assert_eq!(result, Err(AuthError::Storage));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    }
 }
 #[test]
 fn store_refresh_predicates_at_each_boundary() {

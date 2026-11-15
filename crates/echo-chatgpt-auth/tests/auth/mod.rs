@@ -1,4 +1,7 @@
 mod auth_device_tests;
+mod auth_import_tests;
+mod auth_lock_tests;
+mod auth_refresh_tests;
 mod auth_store_tests;
 mod auth_support;
 mod auth_token_tests;

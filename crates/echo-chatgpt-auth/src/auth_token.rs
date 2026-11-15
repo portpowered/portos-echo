@@ -54,6 +54,30 @@ struct Response {
 }
 pub(crate) fn response(bytes: &[u8], now: u64) -> Result<Record, AuthError> {
     let response: Response = super::auth_http::decode(bytes)?;
+    record(response, now)
+}
+pub(crate) fn refresh_response(bytes: &[u8], now: u64, old: Secret<String>) -> Result<Record, AuthError> {
+    #[derive(Deserialize)]
+    struct Rotation {
+        access_token: Secret<String>,
+        refresh_token: Option<Secret<String>>,
+        expires_in: Option<u64>,
+    }
+    let value: serde_json::Value = super::auth_http::decode(bytes)?;
+    if value.get("refresh_token").is_some_and(serde_json::Value::is_null) {
+        return Err(AuthError::InvalidCredential);
+    }
+    let response: Rotation = serde_json::from_value(value).map_err(|_| AuthError::InvalidCredential)?;
+    record(
+        Response {
+            access_token: response.access_token,
+            refresh_token: response.refresh_token.unwrap_or(old),
+            expires_in: response.expires_in,
+        },
+        now,
+    )
+}
+fn record(response: Response, now: u64) -> Result<Record, AuthError> {
     nonempty(response.refresh_token.expose())?;
     let (account_id, jwt_expiry) = claims(response.access_token.expose())?;
     let expires = response.expires_in.map_or(Ok(jwt_expiry), |seconds| {

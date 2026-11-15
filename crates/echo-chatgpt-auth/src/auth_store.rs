@@ -29,7 +29,9 @@ impl Serialize for Record {
 }
 impl Record {
     pub(crate) fn due(&self, now: u64) -> bool {
-        self.expires.saturating_sub(now) <= 300 || now.saturating_sub(self.last_refresh) > 691_200
+        self.last_refresh == 0
+            || self.expires.saturating_sub(now) <= 300
+            || now.saturating_sub(self.last_refresh) > 691_200
     }
     pub(crate) fn credential(self) -> ChatGptCredential {
         ChatGptCredential {
@@ -69,12 +71,20 @@ pub(crate) fn load(path: &Path) -> Result<Record, AuthError> {
     Ok(record)
 }
 pub(crate) fn save(path: &Path, record: &Record) -> Result<(), AuthError> {
+    save_with(path, record, |_| Ok(()))
+}
+pub(crate) fn save_with(
+    path: &Path,
+    record: &Record,
+    checkpoint: impl Fn(u8) -> Result<(), AuthError>,
+) -> Result<(), AuthError> {
     record.validate()?;
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let directory = auth_private::Directory::new(parent)?;
+    checkpoint(0)?;
     let temporary = directory.0.join("credential");
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -84,11 +94,13 @@ pub(crate) fn save(path: &Path, record: &Record) -> Result<(), AuthError> {
         options.mode(0o600);
     }
     let mut file = options.open(&temporary).map_err(|_| AuthError::Storage)?;
+    checkpoint(1)?;
     serde_json::to_writer(&mut file, record).map_err(|_| AuthError::Storage)?;
     file.flush()
         .and_then(|()| file.sync_all())
         .map_err(|_| AuthError::Storage)?;
     drop(file);
+    checkpoint(2)?;
     fs::rename(temporary, path).map_err(|_| AuthError::Storage)?;
     Ok(())
 }

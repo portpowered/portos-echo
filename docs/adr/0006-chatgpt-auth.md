@@ -37,6 +37,16 @@ the renamed file retains this DACL. This does not prevent administrator takeover
 or promise power-loss durability on every filesystem. Rejected HTTP bodies,
 paths and operating-system diagnostics never appear in AuthError.
 
+Serialize same-source operations with tokio and independent sources with an OS
+file lock beside the credential. The empty lock file persists to preserve inode
+identity; the OS releases its lock on process exit. A contender returns Busy.
+Before posting a refresh, sync a non-secret pending byte in the lock file.
+Clear it after durable commit. A lost response, failed commit or cancellation
+leaves it pending, so the next due call requires sign-in instead of replaying a
+possibly consumed token. A fresh committed record or successful sign-in clears it.
+Use the existing time package for RFC3339 import timestamps and loom for the
+bounded rotation/publication model. Import never discovers a home path.
+
 ## Packages covered
 
 - atomic-waker
@@ -55,6 +65,7 @@ paths and operating-system diagnostics never appear in AuthError.
 - hyper-util
 - ipnet
 - lru-slab
+- loom
 - openssl-probe
 - quinn
 - quinn-proto
@@ -71,6 +82,7 @@ paths and operating-system diagnostics never appear in AuthError.
 - serde_urlencoded
 - sync_wrapper
 - tinyvec
+- time
 - tokio-rustls
 - tower
 - tower-http

@@ -7,6 +7,7 @@ mod auth_clock;
 mod auth_device;
 mod auth_http;
 mod auth_private;
+mod auth_session;
 mod auth_store;
 mod auth_token;
 
@@ -89,17 +90,26 @@ impl AuthSource {
         })
     }
 
-    /// Return a fresh persisted credential. Due credentials require relinking
-    /// until the refresh story supplies the serialized refresh transaction.
+    /// Return a fresh credential, persisting refresh rotation before publication.
     ///
     /// # Errors
     /// Reports missing, invalid, expired or unreadable storage safely.
     pub async fn current(&self) -> Result<ChatGptCredential, AuthError> {
         let _guard = self.operation.lock().await;
+        let file_guard = auth_session::lock(&self.file)?;
         let record = auth_store::load(&self.file)?;
         if record.due(self.clock.unix()?) {
-            return Err(AuthError::RelinkRequired);
+            if auth_session::pending(&file_guard)? {
+                return Err(AuthError::RelinkRequired);
+            }
+            // A lost response, cancellation or failed commit may have consumed
+            // this refresh token. Persist intent before sending; never replay it.
+            auth_session::mark(&file_guard, true)?;
+            let credential = auth_session::refresh(self, record).await?;
+            auth_session::mark(&file_guard, false)?;
+            return Ok(credential);
         }
+        auth_session::mark(&file_guard, false)?;
         Ok(record.credential())
     }
 
@@ -113,9 +123,22 @@ impl AuthSource {
         callback: impl FnOnce(DeviceCodePrompt),
     ) -> Result<ChatGptCredential, AuthError> {
         let _guard = self.operation.lock().await;
+        let file_guard = auth_session::lock(&self.file)?;
         let record = auth_device::sign_in(self, callback).await?;
         auth_store::save(&self.file, &record)?;
+        auth_session::mark(&file_guard, false)?;
         Ok(record.credential())
+    }
+
+    /// Copy an explicitly selected Codex JSON file into independent storage once.
+    /// This never discovers or modifies the source, and never contacts a server.
+    ///
+    /// # Errors
+    /// Refuses an existing destination, invalid source or unavailable storage.
+    pub async fn import_codex(&self, path: &std::path::Path) -> Result<ChatGptCredential, AuthError> {
+        let _guard = self.operation.lock().await;
+        let _file_guard = auth_session::lock(&self.file)?;
+        auth_session::import(self, path)
     }
 }
 
