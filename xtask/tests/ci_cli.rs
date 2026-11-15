@@ -372,6 +372,31 @@ mod tests {
     }
 
     #[test]
+    fn configured_tests_fail_but_product_only_cfg_passes_through_cli() {
+        let session = Session::new();
+        session.workspace();
+        session.write("docs/adr/deps.md", "Approved `echo-fixture`.\n");
+        let path = "crates/example/src/lib.rs";
+        let body = "async fn example() { let _endpoint = \"https://api.example.com\"; }"; // lint-rules: allow-literal scanner CLI attribute fixture
+        session.write(path, &format!("#[tokio::test(flavor = \"current_thread\")]\n{body}\n"));
+        session.git(&["add", "crates"]);
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (
+                1,
+                format!(
+                    "lint-rules: literal exemptions: 0\n{path}:2: network-tag: non-loopback test literal requires cloud gate or reasoned inert-literal annotation\nlint-rules failed\n"
+                )
+            )
+        );
+        session.write(path, &format!("#[cfg(not(test))]\n{body}\n"));
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (0, "lint-rules: literal exemptions: 0\n".into())
+        );
+    }
+
+    #[test]
     fn missing_current_inputs_fail_closed() {
         let session = Session::new();
         let (code, text) = session.run(&["lint-rules"]);

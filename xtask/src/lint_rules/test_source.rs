@@ -156,8 +156,12 @@ fn attributes(tokens: &[Token<'_>], mut cursor: usize) -> (usize, bool, Option<S
         }
         let end = closing(tokens, open);
         let attr = &tokens[open + 1..end];
-        test |= attr.last().is_some_and(|t| t.text == "test")
-            || (attr.first().is_some_and(|t| t.text == "cfg") && attr.iter().any(|t| t.text == "test"));
+        let name_end = attr.iter().position(|t| t.text == "(").unwrap_or(attr.len());
+        test |= attr.get(name_end.wrapping_sub(1)).is_some_and(|t| t.text == "test");
+        if attr.first().is_some_and(|t| t.text == "cfg") && attr.len() >= 3 {
+            let predicate = &attr[2..attr.len() - 1];
+            test |= predicate.iter().any(|t| t.text == "test") && cfg_values(predicate).1;
+        }
         if attr.first().is_some_and(|t| t.text == "path") {
             path = attr
                 .iter()
@@ -167,6 +171,38 @@ fn attributes(tokens: &[Token<'_>], mut cursor: usize) -> (usize, bool, Option<S
         cursor = end + 1;
     }
     (cursor, test, path)
+}
+
+// Possible (false, true) results in test mode; other cfg atoms are unknown.
+fn cfg_values(tokens: &[Token<'_>]) -> (bool, bool) {
+    if tokens.len() == 1 && tokens[0].text == "test" {
+        return (false, true);
+    }
+    if tokens.get(1).is_none_or(|t| t.text != "(") {
+        return (true, true);
+    }
+    let mut values = Vec::new();
+    let mut start = 2;
+    let end = closing(tokens, 1);
+    let mut cursor = start;
+    while cursor < end {
+        if tokens[cursor].text == "(" {
+            cursor = closing(tokens, cursor);
+        } else if tokens[cursor].text == "," {
+            values.push(cfg_values(&tokens[start..cursor]));
+            start = cursor + 1;
+        }
+        cursor += 1;
+    }
+    if start < end {
+        values.push(cfg_values(&tokens[start..end]));
+    }
+    match tokens[0].text {
+        "all" => (values.iter().any(|v| v.0), values.iter().all(|v| v.1)),
+        "any" => (values.iter().all(|v| v.0), values.iter().any(|v| v.1)),
+        "not" if values.len() == 1 => (values[0].1, values[0].0),
+        _ => (true, true),
+    }
 }
 
 fn item_end(tokens: &[Token<'_>], start: usize) -> usize {

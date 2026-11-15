@@ -192,3 +192,28 @@ fn include_helpers_visibility_and_same_line_product_regions_are_precise() {
     let source = format!("#[tokio::test] async fn unit() {{ let _ = {remote}; }}");
     assert_eq!(lines(&scan("src/lib.rs", &source).0), [1]);
 }
+
+#[test]
+fn configured_test_attributes_select_bodies_without_selecting_product_cfg() {
+    let remote = "\"https://api.example.com\""; // lint-rules: allow-literal scanner attribute source fixture
+    for attribute in [
+        "#[tokio::test(flavor = \"current_thread\")]",
+        "#[tokio::test(start_paused = true)]",
+        "#[test]",
+        "#[cfg(test)]",
+        "#[cfg(all(test, feature = \"checks\"))]",
+        "#[cfg(not(not(test)))]",
+        "#[cfg(any(test, feature = \"checks\"))]",
+    ] {
+        let source = format!("{attribute}\nasync fn check() {{ let _ = {remote}; }}");
+        let (errors, count) = scan("src/lib.rs", &source);
+        assert_eq!(lines(&errors), [2], "{attribute}");
+        assert_eq!(count, 0);
+    }
+    for gate in ["not(test)", "all(not(test), unix)", "not(any(test, unix))"] {
+        let source = format!("#[cfg({gate})]\nfn product() {{ let _ = {remote}; }}");
+        assert_eq!(scan("src/lib.rs", &source), (vec![], 0), "{gate}");
+        let source = format!("#![cfg({gate})]\nconst URL: &str = {remote};");
+        assert_eq!(scan("src/lib.rs", &source), (vec![], 0), "{gate}");
+    }
+}
