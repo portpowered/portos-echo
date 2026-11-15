@@ -9,18 +9,23 @@ mod storage;
 
 use super::*;
 use mock::Mock;
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, task::Poll, time::Duration};
 use tokio::time::advance;
 
 async fn drive<F: Future>(future: F) -> F::Output {
     tokio::pin!(future);
-    loop {
-        tokio::select! {
-            biased;
-            result = &mut future => return result,
-            () = tokio::task::yield_now() => {},
+    std::future::poll_fn(|cx| {
+        match future.as_mut().poll(cx) {
+            Poll::Ready(value) => Poll::Ready(value),
+            Poll::Pending => {
+                // Keep fake time manual while giving the runtime other turns
+                // to deliver socket readiness and run the reusable mock.
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
         }
-    }
+    })
+    .await
 }
 
 async fn until(mut predicate: impl FnMut() -> bool) {
