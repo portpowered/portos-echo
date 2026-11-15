@@ -1,0 +1,3 @@
+{"dir":"bridge->echo","type":"run-satellite","data":{},"data_length":0,"payload_length":0}
+{"dir":"echo->bridge","type":"run-pipeline","data":{"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"alexa"},"data_length":87,"payload_length":0}
+{"dir":"echo->bridge","type":"audio-chunk","data":{"rate":16000,"width":2,"channels":1,"timestamp":0},"data_length":51,"payload_length":2048,"payload_sha256":"e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad","payload_prefix_b64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}

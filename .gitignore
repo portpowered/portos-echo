@@ -2,6 +2,7 @@
 /target/
 /out/
 /dist/
+/.cache/
 
 # Bench and run artifacts stay outside git (docs/program/rules.md)
 /artifacts/
