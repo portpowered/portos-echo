@@ -407,16 +407,18 @@ at least two refreshes (the bridge's `--refresh-now` operator command) and one r
 ### 8.4 The bench
 
 A Ring pan-tilt indoor camera next to the Echo, driven by the Port OS CLI (`port`, v0.1.27 or later). `echo-lab`
-shells out to `port --output json`; it never carries its own Ring peer.
+shells out to `port ... --json` with an explicit `--port <path>`; it never carries its own Ring peer. The forms below
+are pinned to the CLI's source (`cli/internal/cli/session_commands.go`, `message_commands.go`), and echo-lab keeps
+them in one table-driven module.
 
 | Need | CLI surface |
 | --- | --- |
-| Hold one session that talks and listens | `port session hold <ring> --camera --listen` |
-| Mouth | `port message play-audio --lease <l> <file>`, or `--text "..."` for TTS |
-| Mouth and ear in one step | `port message play-audio --lease <l> --listen <s> --output reply.wav` (JSON reports `playStartedAt`, `playEndedAt`, `recordStartedAt`, `recordEndedAt`) |
-| Clock alignment | `port message play-audio --lease <l> --chirp --listen 3` at the start of each batch |
-| Ear only | `port message record --lease <l> --audio-only` |
-| Eye | held snapshots or the session's video track; PTZ to aim |
+| Hold one session that talks and listens | `port session hold <ring> --camera --listen --json` (JSON gives `holdId` and `lease`); release with `port session release <holdId> --json` |
+| Mouth | `port message play-audio <ring> --lease <l> --file <wav> --json`. Text needs both `--text "..." --speech-endpoint <e> --speech-model <m>`; echo-lab has no defaults for them |
+| Mouth and ear in one step | the same with `--listen <s> --output reply.wav` (JSON reports `playStartedAt`, `playEndedAt`, `recordStartedAt`, `recordEndedAt`) |
+| Clock alignment | the same with `--chirp --listen 3`, at the start of each batch |
+| Ear only | `port message record --lease <l> --audio-only` (to be pinned against the source before echo-lab uses it) |
+| Eye | `port message snapshot <ring> --lease <l> --output <frame.jpg> --json`, from the held camera with no new session. Frames are JPEG and stay JPEG; PTZ to aim |
 | Quiet hours | audio commands refuse before 09:00 local unless `--allow-quiet-hours` (never passed by `echo-lab`) |
 
 Harness rules:

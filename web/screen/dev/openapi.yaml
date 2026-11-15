@@ -1,0 +1,42 @@
+openapi: 3.1.0
+info:
+  title: Loopback screen development fixture
+  version: 0.1.0
+servers:
+  - url: http://127.0.0.1:4173
+paths:
+  /:
+    get:
+      responses:
+        "200":
+          description: Screen page and its documented bootstrap URLs
+          content:
+            text/html:
+              schema: { type: string }
+  /events:
+    get:
+      responses:
+        "200":
+          description: Scripted unnamed SSE messages; data is ScreenFrame JSON with exact integer tokens
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: "data: {\"seq\":1,\"state\":{\"state\":\"ready\",\"message\":\"Echo Live ready\"}}\n\n"
+  /actions:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../../schemas/screen/ui_action.json
+      responses:
+        "204":
+          {
+            description: Recorded once by the fixture; no product action executed,
+          }
+        "400": { description: Malformed or unknown action; nothing recorded }
+        "413":
+          {
+            description: Request exceeds the fixture body limit; nothing recorded,
+          }

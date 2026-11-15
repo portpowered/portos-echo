@@ -1,0 +1,14 @@
+{
+  "approval": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"approval\" [level=1]\n    - paragraph: Continue?\n    - button \"Allow\"\n    - button \"Deny\"\n  - status\n",
+  "connected": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"connected\" [level=1]\n  - status\n",
+  "connecting": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"connecting\" [level=1]\n  - status\n",
+  "error-false": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"error\" [level=1]\n    - paragraph: Please relink\n    - button \"Dismiss\"\n  - status\n",
+  "error-true": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"error\" [level=1]\n    - paragraph: Please relink\n    - button \"Relink\"\n    - button \"Dismiss\"\n  - status\n",
+  "link_code": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"link code\" [level=1]\n    - paragraph: DEMO-CODE\n    - paragraph: https://example.invalid/verify\n    - paragraph: \"1700000000\"\n  - status\n",
+  "listening": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"listening\" [level=1]\n  - status\n",
+  "muted": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"muted\" [level=1]\n  - status\n",
+  "ready": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"ready\" [level=1]\n    - paragraph: Echo Live ready\n    - button \"Start\"\n  - status\n",
+  "speaking": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"speaking\" [level=1]\n  - status\n",
+  "thinking": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"thinking\" [level=1]\n  - status\n",
+  "emotion": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"emotion\" [level=1]\n    - paragraph: happy\n    - paragraph: frame-a\n    - button \"Dismiss\"\n  - status\n"
+}

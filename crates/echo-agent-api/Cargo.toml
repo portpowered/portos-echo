@@ -1,0 +1,22 @@
+[package]
+name = "echo-agent-api"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+fakes = []
+
+[dependencies]
+echo-contracts = { path = "../echo-contracts", version = "0.1.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+pollster = "0.4"

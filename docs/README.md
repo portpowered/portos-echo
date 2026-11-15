@@ -20,6 +20,7 @@ status: active; documentation index
 
 ## Architecture decisions
 
+- [Runtime-free delegated-task seam](adr/0005-echo-agent-api.md)
 - [PCM resampling and native Opus](adr/0005-echo-audio.md)
 - [Shared bridge contracts](adr/0004-echo-contracts.md)
 - [ADR guide](adr/README.md)

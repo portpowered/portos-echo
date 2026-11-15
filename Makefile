@@ -55,6 +55,7 @@ lint-self-tests:
 
 test-unit:
 	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci
+	if [ -f web/screen/package.json ]; then cd web/screen && npm ci && npm test; fi
 
 test-contract:
 	printf '%s\n' 'no contract tests yet'
