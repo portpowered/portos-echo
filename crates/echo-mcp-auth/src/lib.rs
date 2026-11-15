@@ -31,6 +31,15 @@ pub struct AuthOptions {
     pub request_timeout: Duration,
 }
 
+impl AuthOptions {
+    pub(crate) fn validate(&self) -> Result<(), AuthError> {
+        if self.client_id.is_empty() || self.request_timeout.is_zero() {
+            return Err(AuthError::Discovery);
+        }
+        Ok(())
+    }
+}
+
 /// Fixed diagnostic categories deliberately omit response bodies and URLs.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AuthError {

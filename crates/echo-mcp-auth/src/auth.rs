@@ -56,9 +56,7 @@ impl AuthClient {
     /// # Errors
     /// Returns safe discovery, transport, binding or storage categories.
     pub async fn open(options: AuthOptions) -> Result<Self, AuthError> {
-        if options.client_id.is_empty() || options.request_timeout.is_zero() {
-            return Err(AuthError::Discovery);
-        }
+        options.validate()?;
         let http = Client::builder()
             .redirect(Policy::none())
             .timeout(options.request_timeout)
