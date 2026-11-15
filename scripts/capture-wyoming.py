@@ -18,6 +18,7 @@ import select
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -71,9 +72,9 @@ def normalize(value):
 
 def record(direction, event, payload=b""):
     event = normalize(event)
-    result = {"dir": direction, **event,
+    result = {"dir": direction, "header": {**event,
               "data_length": len(encoded(event["data"])) if event["data"] else 0,
-              "payload_length": len(payload)}
+              "payload_length": len(payload)}}
     if payload:
         result.update(payload_sha256=hashlib.sha256(payload).hexdigest(),
                       payload_prefix_b64=base64.b64encode(payload[:32]).decode())
@@ -161,7 +162,7 @@ class Session:
             # A response proves this is our freshly named satellite, not another listener.
             self.send("describe", keep=False)
             info = self.until("info", keep=False)
-            if info["data"]["satellite"]["name"] != "Capture Echo":
+            if info["header"]["data"]["satellite"]["name"] != "Capture Echo":
                 raise RuntimeError("unexpected satellite identity")
             return self
         except BaseException:
@@ -283,36 +284,39 @@ def capture(kind, folder):
 
 def validate(rows, kind):
     for row in rows:
-        keys = {"dir", "type", "data", "data_length", "payload_length"}
-        if row["payload_length"]:
+        keys = {"dir", "header"}
+        head = row.get("header", {})
+        if set(head) != {"type", "data", "data_length", "payload_length"}:
+            raise ValueError("invalid fixture header")
+        if head["payload_length"]:
             keys |= {"payload_sha256", "payload_prefix_b64"}
         if set(row) != keys:
             raise ValueError("invalid fixture envelope; full payloads are forbidden")
         if row["dir"] not in ("echo->bridge", "bridge->echo"):
             raise ValueError("invalid direction")
-        if row["data_length"] != (len(encoded(row["data"])) if row["data"] else 0):
+        if head["data_length"] != (len(encoded(head["data"])) if head["data"] else 0):
             raise ValueError("invalid normalized data_length")
-        if row["payload_length"]:
+        if head["payload_length"]:
             prefix = base64.b64decode(row["payload_prefix_b64"], validate=True)
-            if len(prefix) != min(32, row["payload_length"]):
+            if len(prefix) != min(32, head["payload_length"]):
                 raise ValueError("invalid payload prefix")
             if len(row["payload_sha256"]) != 64:
                 raise ValueError("invalid digest")
             bytes.fromhex(row["payload_sha256"])
-    incoming = [r["type"] for r in rows if r["dir"] == "echo->bridge"]
+    incoming = [r["header"]["type"] for r in rows if r["dir"] == "echo->bridge"]
     if kind == "describe":
         assert incoming == ["info"]
-        assert rows[-1]["data"]["satellite"]["name"] == "Capture Echo"
+        assert rows[-1]["header"]["data"]["satellite"]["name"] == "Capture Echo"
     else:
         assert "audio-start" not in incoming
         assert incoming.count("run-pipeline") == 1
         assert incoming.index("run-pipeline") + 1 == incoming.index("audio-chunk")
-        chunks = [r for r in rows if r["type"] == "audio-chunk" and r["dir"] == "echo->bridge"]
-        assert all(r["data"]["rate"] == 16000 and r["payload_length"] > 0 for r in chunks)
+        chunks = [r for r in rows if r["header"]["type"] == "audio-chunk" and r["dir"] == "echo->bridge"]
+        assert all(r["header"]["data"]["rate"] == 16000 and r["header"]["payload_length"] > 0 for r in chunks)
         if kind in ("duplex-reply", "wake-while-speaking"):
             assert incoming[-1] == "played"
-            sent = [r for r in rows if r["dir"] == "bridge->echo" and r["type"] == "audio-chunk"]
-            assert len(sent) == 10 and all(r["data"] == FORMAT and r["payload_length"] == 4800 for r in sent)
+            sent = [r for r in rows if r["dir"] == "bridge->echo" and r["header"]["type"] == "audio-chunk"]
+            assert len(sent) == 10 and all(r["header"]["data"] == FORMAT and r["header"]["payload_length"] == 4800 for r in sent)
         if kind == "pause":
             assert incoming[0] == "pong"
 
@@ -387,7 +391,7 @@ class WireTests(unittest.TestCase):
         self.assertEqual(normalize(value), {"timestamp": 0, "satellite": {"version": "<version>"}})
         self.assertEqual(normalize(normalize(value)), normalize(value))
         self.assertEqual(record("echo->bridge", {"type": "pong", "data": {}}),
-                         {"dir": "echo->bridge", "type": "pong", "data": {}, "data_length": 0, "payload_length": 0})
+                         {"dir": "echo->bridge", "header": {"type": "pong", "data": {}, "data_length": 0, "payload_length": 0}})
 
     def test_failed_and_competing_capture_preserves_output(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -411,21 +415,45 @@ class WireTests(unittest.TestCase):
             rows = [json.loads(line) for line in (output / (kind + ".jsonl")).read_bytes().splitlines()]
             validate(rows, kind)
 
+    def test_flattened_or_extra_header_fields_fail(self):
+        row = record("echo->bridge", {"type": "info", "data": {}})
+        for changed in ({"dir": row["dir"], **row["header"]},
+                        {**row, "type": "info"},
+                        {**row, "header": {**row["header"], "payload": "forbidden"}}):
+            with self.assertRaises(ValueError):
+                validate([changed], "describe")
+
     def test_microphone_start_and_interrupted_wake_sequence_fail(self):
         output = ROOT / "tests/fixtures/wyoming"
         for kind in SCENARIOS[1:]:
             rows = [json.loads(line) for line in (output / (kind + ".jsonl")).read_bytes().splitlines()]
-            pipeline = next(i for i, row in enumerate(rows) if row["type"] == "run-pipeline")
+            pipeline = next(i for i, row in enumerate(rows) if row["header"]["type"] == "run-pipeline")
             for kind_added in ("audio-start", "pong"):
                 changed = rows[:pipeline + 1] + [record("echo->bridge", {"type": kind_added, "data": {}})] + rows[pipeline + 1:]
                 with self.subTest(scenario=kind, inserted=kind_added), self.assertRaises(AssertionError):
                     validate(changed, kind)
 
 
+def verify_output_cli():
+    """T3: exercise the delivered CLI against the prebuilt host in isolation."""
+    default = ROOT / "tests/fixtures/wyoming"
+    before = {p.name: p.read_bytes() for p in default.iterdir()}
+    with tempfile.TemporaryDirectory() as temp:
+        destination = Path(temp) / "independent captures" / "wyoming"
+        subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                        "--output-dir", str(destination.relative_to(temp))],
+                       cwd=temp, check=True, timeout=TIMEOUT * len(SCENARIOS) + 5)
+        actual = {p.name: p.read_bytes() for p in destination.iterdir()}
+        assert actual == before, "isolated CLI capture differs from committed fixtures"
+    assert {p.name: p.read_bytes() for p in default.iterdir()} == before
+    print("capture-wyoming CLI: five isolated fixtures match; default unchanged")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "tests/fixtures/wyoming")
     args = parser.parse_args()
     if args.self_test:
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(WireTests)
@@ -434,8 +462,9 @@ def main():
         with tempfile.TemporaryDirectory() as temp:
             with Session(temp):
                 print("hassmic-host smoke: info satellite=Capture Echo")
+        verify_output_cli()
     else:
-        publish(ROOT / "tests/fixtures/wyoming")
+        publish(args.output_dir)
     return 0
 
 
