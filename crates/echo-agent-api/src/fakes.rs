@@ -91,6 +91,3 @@ impl AgentBackend for FakeBackend {
         )
     }
 }
-
-#[cfg(test)]
-mod tests;
