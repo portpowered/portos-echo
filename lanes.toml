@@ -14,3 +14,8 @@ kind = "tool"
 name = "echo-lab"
 path = "crates/echo-lab"
 kind = "bin"
+
+[[crate]]
+name = "echo-config"
+path = "crates/echo-config"
+kind = "lib"

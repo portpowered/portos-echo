@@ -24,6 +24,7 @@ status: active; documentation index
 - [Workspace harness dependencies](adr/0000-workspace-baseline.md)
 - [TOML lanes declarations](adr/0001-xtask-toml.md)
 - [Local milestone schema validation](adr/0002-echo-lab-schema-validation.md)
+- [Bridge TOML configuration](adr/0003-echo-config.md)
 - [Private Cargo metadata parsing](adr/el-f4-xtask-parsing-deps.md)
 
 ## Original drafts
