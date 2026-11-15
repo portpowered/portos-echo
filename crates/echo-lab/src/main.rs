@@ -1,10 +1,11 @@
 mod lab_check;
+mod lab_probe;
 mod lab_validate;
 
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "echo-lab validate [paths...]\necho-lab check --milestone M0\necho-lab --help";
+const USAGE: &str = "echo-lab validate [paths...]\necho-lab check --milestone M0\necho-lab probe --adb <path-to-adb> --out <dir>\necho-lab --help";
 
 fn dispatch(args: &[String], output: &mut impl Write) -> io::Result<bool> {
     match args {
@@ -25,6 +26,13 @@ fn dispatch(args: &[String], output: &mut impl Write) -> io::Result<bool> {
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "probe") {
+        return ExitCode::from(lab_probe::run(
+            &args[1..],
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        ));
+    }
     match dispatch(&args, &mut io::stdout().lock()) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,

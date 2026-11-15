@@ -1,0 +1,82 @@
+{
+  "shell getprop ro.serialno": {
+    "stdout": "FAKESERIAL123\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell getprop ro.boot.serialno": {
+    "stdout": "FAKESERIAL456\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell getprop ro.product.device": {
+    "stdout": "athena\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell getprop ro.build.version.incremental": {
+    "stdout": "fixture-incremental\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell getprop ro.build.version.sdk": {
+    "stdout": "28\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell getprop ro.build.fingerprint": {
+    "stdout": "fixture/athena/FAKESERIAL123:userdebug/test\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell uname -r": {
+    "stdout": "fixture-kernel\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell md5sum /system/lib/libpryon.so": {
+    "stdout": "11111111111111111111111111111111  /system/lib/libpryon.so\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell md5sum /system/vendor/lib/libasp.so": {
+    "stdout": "ac5e8985aa9d67461d3b054bde179363  /system/vendor/lib/libasp.so\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell md5sum /system/lib/libaspclient.so": {
+    "stdout": "aeb4f3dc3d9ace3157d5c36bf9739836  /system/lib/libaspclient.so\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell md5sum /system/lib/libaudioflinger.so": {
+    "stdout": "22222222222222222222222222222222  /system/lib/libaudioflinger.so\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell md5sum /system/vendor/lib/hw/audio.primary.mt8183.so": {
+    "stdout": "cc54a24e1499090ac648adccae2033dd  /system/vendor/lib/hw/audio.primary.mt8183.so\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell md5sum /system/lib/libwakewordserver_jni.so": {
+    "stdout": "0926fadcaefc0b8723a6d7d5988cae54  /system/lib/libwakewordserver_jni.so\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell getevent -lp": {
+    "stdout": "add device 1: /dev/input/event1\n  name: \"fts_ts\"\n  events:\n    EV_ABS (0003): ABS_MT_POSITION_X : value 0, min 0, max 1280, fuzz 0\n                  ABS_MT_POSITION_Y : value 0, min 0, max 800, fuzz 0\nadd device 2: /dev/input/event2\n  name: \"amazon_touch\"\n  events:\n    EV_ABS (0003): ABS_MT_POSITION_X : value 0, min 0, max 1279, fuzz 0\n                  ABS_MT_POSITION_Y : value 0, min 0, max 799, fuzz 0\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell cat /proc/bus/input/devices": {
+    "stdout": "I: Bus=0018 Vendor=0000 Product=0000 Version=0000\nN: Name=\"fts_ts\"\nB: EV=b\nB: ABS=260800000000000\n\nI: Bus=0018 Vendor=0000 Product=0000 Version=0000\nN: Name=\"amazon_touch\"\nB: EV=b\nB: ABS=260800000000000\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell tinymix": {
+    "stdout": "ctl\ttype\tnum\tname\tvalue\n7 INT 1 Master TAS5805m Playback Volume 100\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell dumpsys input": {
+    "stdout": "Synthetic input corroboration FAKESERIAL456 / FAKESERIAL123FAKESERIAL456\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell wm size": {
+    "stdout": "Physical size: 1280x800\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell wm density": {
+    "stdout": "Physical density: 213\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  },
+  "shell ls /system/local/models/keyword": {
+    "stdout": "test-locale\nen-US\n",
+    "stderr": "fixture FAKESERIAL123 FAKESERIAL456 FAKESERIAL123\n"
+  }
+}
