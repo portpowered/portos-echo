@@ -1,0 +1,4 @@
+max_retries = 0
+timeout = 20
+include_fragments = "full"
+cache = false

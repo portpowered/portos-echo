@@ -1,0 +1,202 @@
+"""T0 regressions for the documentation checker's public checks and launchers."""
+
+from contextlib import redirect_stdout
+import io
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import lint_docs as lint
+
+
+HEADER = "---\nauthor: Team\nowner: Team\nlast modified: today\nstatus: active\n---\n"
+
+
+class MetadataTests(unittest.TestCase):
+    def test_required_scalars(self):
+        lint.frontmatter("docs/a.md", HEADER)
+        lint.frontmatter("docs/a.md", HEADER.replace("Team", "'Team'"))
+        cases = [
+            ("# No header", "frontmatter requires"),
+            (HEADER.replace("status: active\n", ""), "missing frontmatter fields status"),
+            (HEADER.replace("status: active", "status: ''"), "empty frontmatter field status"),
+            (HEADER.replace("status: active", "status: # empty"), "empty frontmatter field status"),
+            (HEADER[:-4], "unterminated"),
+            (HEADER.replace("status: active", "status: active\nstatus: other"), "duplicate"),
+            (HEADER.replace("status: active", "status: [active]"), "must be a scalar"),
+            (HEADER.replace("status: active", "status: 'active"), "malformed quoted"),
+            (HEADER.replace("status: active", " status: active"), "malformed top-level"),
+        ]
+        for text, diagnostic in cases:
+            with self.subTest(diagnostic=diagnostic), self.assertRaisesRegex(ValueError, diagnostic):
+                lint.frontmatter("docs/a.md", text)
+
+    def test_index_resolves_escaped_paths_and_references(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            index = root / "docs/README.md"
+            index.write_text("[Self](./README.md)\n[Page][p]\n[p]: a%20b.md#heading\n", encoding="utf-8")
+            lint.check_index(root, ["docs/README.md", "docs/a b.md"])
+            with self.assertRaisesRegex(ValueError, "docs/missing.md"):
+                lint.check_index(root, ["docs/missing.md"])
+
+    def test_manifest_only_uses_git_tracked_paths(self):
+        result = subprocess.CompletedProcess([], 0, b"docs/a b.md\0docs/other.txt\0README.md\0")
+        with patch.object(lint, "run", return_value=result) as launch:
+            self.assertEqual(lint.manifest(Path(".")), ["docs/a b.md", "README.md"])
+            self.assertEqual(launch.call_args.args[0], ["git", "ls-files", "-z"])
+        self.assertEqual(lint.scoped(["factory/a.md", "docs/a.md", "AGENTS.md", "CLAUDE.md"]),
+                         ["docs/a.md", "AGENTS.md"])
+
+
+class FenceTests(unittest.TestCase):
+    def test_nested_example_and_real_fence(self):
+        text = "````markdown\n```mermaid\nexample\n```\n````\n~~~mermaid\nreal\n~~~\n"
+        self.assertEqual(lint.fences("a.md", text), [(6, "real\n")])
+
+    def test_short_or_different_closing_fence_is_body(self):
+        self.assertEqual(lint.fences("a.md", "````mermaid\n```\n~~~\n````\n"),
+                         [(1, "```\n~~~\n")])
+
+    def test_empty_and_unterminated(self):
+        self.assertEqual(lint.fences("a.md", "# No diagrams\n"), [])
+        with self.assertRaisesRegex(ValueError, "a.md:2: unclosed"):
+            lint.fences("a.md", "hello\n```mermaid\na --> b\n")
+
+
+class StyleTests(unittest.TestCase):
+    def test_real_pinned_style_boundaries(self):
+        config = Path(__file__).resolve().parent.parent / ".markdownlint-cli2.jsonc"
+        table = "# Table\n\n| Column |\n| --- |\n| " + "x" * 130 + " |\n"
+        cases = [(table, None), ("# Long\n\n" + "word " * 30 + "\n", "MD013"),
+                 (table.replace("| --- |", "|---|"), "MD060")]
+        with tempfile.TemporaryDirectory() as directory:
+            page = Path(directory) / "style.md"
+            for body, expected in cases:
+                page.write_text(body, encoding="utf-8")
+                with patch.dict(lint.os.environ, {"npm_config_offline": "true"}):
+                    result = subprocess.run(
+                        [lint.shutil.which("npx"), "--yes", lint.MARKDOWNLINT,
+                         "--config", str(config), str(page)],
+                        capture_output=True, text=True, check=False)
+                if expected:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(expected, result.stdout + result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class LauncherTests(unittest.TestCase):
+    def test_missing_tool_is_actionable(self):
+        with patch.object(lint.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(ValueError, "required tool lychee is missing"):
+                lint.run(["lychee"])
+
+    def test_nonzero_tool_failure(self):
+        with patch.object(lint.shutil, "which", return_value="tool"), \
+                patch.object(lint.subprocess, "run", return_value=subprocess.CompletedProcess([], 7)):
+            with self.assertRaisesRegex(ValueError, "exit 7"):
+                lint.run(["tool"])
+
+    def check_fixture(self, online=False, failure=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "docs/README.md").write_text(HEADER + "\n# Docs\n\n[Self](README.md)\n", encoding="utf-8")
+            launches = []
+            def record(args, **kwargs):
+                launches.append(args)
+                if failure and args[0] == failure:
+                    raise ValueError("controlled tool failure")
+                return subprocess.CompletedProcess(args, 0)
+            with patch.object(lint, "manifest", return_value=["docs/README.md"]), \
+                    patch.object(lint, "run", side_effect=record), redirect_stdout(io.StringIO()):
+                lint.check(root, online=online)
+            return launches
+
+    def test_offline_and_explicit_online_arguments(self):
+        for online in [False, True]:
+            calls = self.check_fixture(online)
+            lychee = next(call for call in calls if call[0] == "lychee")
+            self.assertEqual("--offline" in lychee, not online)
+            self.assertEqual(lychee[1:3], ["--config", "lychee.toml"])
+            self.assertEqual(calls[0], ["npx", "--yes", lint.MARKDOWNLINT, "docs/README.md"])
+
+    def test_root_links_are_checked_and_vendored_links_excluded(self):
+        # Real offline lychee, isolated files; style/browser launchers are controlled.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "factory").mkdir()
+            (root / "docs/README.md").write_text(
+                HEADER + "\n# Docs\n\n[Self](README.md)\n", encoding="utf-8")
+            page = root / "NOTES with spaces.md"
+            page.write_text("# Notes\n\n[Target](missing.md)\n", encoding="utf-8")
+            (root / "factory/vendor.md").write_text(
+                "# Vendor\n\n[Broken](absent.md)\n", encoding="utf-8")
+            (root / "lychee.toml").write_text('include_fragments = "full"\n', encoding="utf-8")
+            paths = ["docs/README.md", "NOTES with spaces.md", "factory/vendor.md"]
+            launch = lint.run
+            results = []
+            def local_run(args, **kwargs):
+                if args[0] != "lychee":
+                    return subprocess.CompletedProcess(args, 0)
+                self.assertEqual(args[-2:], paths[:2])
+                self.assertIn("--offline", args)
+                try:
+                    return launch(args, capture_output=True, **kwargs)
+                except ValueError as error:
+                    results.append(str(error))
+                    raise
+            with patch.object(lint, "manifest", return_value=paths), \
+                    patch.object(lint, "run", side_effect=local_run), redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(ValueError, "lychee failed"):
+                    lint.check(root)
+                page.write_text("# Notes\n\n[Target](docs/README.md#docs)\n", encoding="utf-8")
+                lint.check(root)
+            self.assertEqual(len(results), 1)
+
+    def test_unknown_mode_fails_before_checks(self):
+        with patch.object(lint.sys, "argv", ["lint_docs.py", "--unknown"]):
+            self.assertEqual(lint.main(), 2)
+
+    def test_unreadable_input_and_temp_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(lint, "manifest", return_value=["docs/missing.md"]):
+                with self.assertRaises(FileNotFoundError):
+                    lint.check(Path(directory))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "docs/README.md").write_text(HEADER + "\n[Self](README.md)\n", encoding="utf-8")
+            with patch.object(lint, "manifest", return_value=["docs/README.md"]), \
+                    patch.object(lint, "run"), \
+                    patch.object(lint.tempfile, "TemporaryDirectory", side_effect=OSError("temp unavailable")):
+                with self.assertRaisesRegex(OSError, "temp unavailable"):
+                    lint.check(root)
+
+    def test_render_failure_names_source_and_cleans_temp(self):
+        parents = []
+        def render(args, **kwargs):
+            source = Path(args[args.index("-i") + 1])
+            parents.append(source.parent)
+            raise ValueError("browser cannot start")
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as directory:
+                with patch.object(lint, "run", side_effect=render):
+                    with self.assertRaisesRegex(ValueError, "docs/a.md:12: Mermaid compile failed"):
+                        lint.compile_mermaid([("docs/a.md", 12, "a --> b")], Path(directory))
+            self.assertFalse(parents[-1].exists())
+        self.assertNotEqual(parents[0], parents[1])
+
+    def test_render_requires_fresh_nonempty_svg(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(lint, "run"):
+            with self.assertRaisesRegex(ValueError, "produced no SVG"):
+                lint.compile_mermaid([("a.md", 1, "graph LR\na --> b")], Path(directory))
+
+
+if __name__ == "__main__":
+    unittest.main()

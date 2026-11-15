@@ -23,7 +23,7 @@ a gateway is needed in every topology.
 ## Layout
 
 | Path | What it holds |
-|---|---|
+| --- | --- |
 | `docs/program/plan.md` | The program plan: architecture, decisions, milestones, test tiers, bench, CI gates, Phase F |
 | `docs/program/coordinator.md` | How work runs: one coordinator agent builds the repository, using bounded `you` dispatches |
 | `docs/program/rules.md` | Standing rules every change follows |
@@ -49,7 +49,7 @@ make ci
 ```
 
 | Target | What it runs |
-|---|---|
+| --- | --- |
 | `fmt-check` | `cargo fmt --all --check` |
 | `lint` | `fmt-check`; later Phase F lanes add their gates |
 | `test-unit` | `cargo test --workspace --all-targets` |
