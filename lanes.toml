@@ -59,3 +59,13 @@ kind = "lib"
 name = "echo-agent-loop"
 path = "crates/echo-agent-loop"
 kind = "lib"
+
+[[crate]]
+name = "echo-mcp-client"
+path = "crates/echo-mcp-client"
+kind = "lib"
+
+[[crate]]
+name = "echo-spoof-mcp"
+path = "crates/echo-spoof-mcp"
+kind = "bin"
