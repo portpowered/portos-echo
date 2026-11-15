@@ -79,6 +79,9 @@ check exists, the coordinator checks it by hand.
 ## Documents
 
 - Documents in `docs/` start with frontmatter: `author`, `owner`, `last modified`, `status`.
+- A change that adds a page under `docs/` (an ADR, a spike report) also adds that page's own link to `docs/README.md`
+  in the same change, since the docs index gate requires it. A factory lane may make that one-line index edit even
+  though `docs/README.md` is not in its payload's paths; nothing else outside its paths.
 - `docs/program/plan.md` wins over the drafts in `docs/design/`. Update the plan in the same change that departs
   from it.
 - Every owner request and decision goes into `docs/program/decisions.md` in the change that acts on it.

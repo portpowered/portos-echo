@@ -598,9 +598,10 @@ loopback (`docs/program/coordinator.md`), and fans out inside a phase only where
 2. **W1 parallel pieces.** `echo-wyoming` (client against `hassmic-host`), `echo-audio`, `echo-live` (spike S1
    first), `echo-mcp-client` (Bearer) and `echo-spoof-mcp`, `echo-mcp-auth` against a mock authorization server,
    the screen page and `echo-screen` (spike S3 first), `el-w1-wyoming-lockdown`, the `echo-lab` sim driver, spike
-   S2. Done when `m4-spoof-tool` passes with `--driver sim`.
+   S2. Done when `w1-wake-stream` passes with `--driver sim` and each piece passes against `hassmic-host` or its
+   fake. `el-w1-wyoming-lockdown` and spike S3 need the device, so they run in W3 (`docs/program/decisions.md`).
 3. **W2 integration.** The agent loop, `echo-bridge`, the golden trace. Done when `m4-spoof-tool` passes with
-   `--driver cloud`, and M5's scenario with an authorization code token.
+   `--driver sim`, then with `--driver cloud`, and M5's scenario with an authorization code token.
 4. **B0 bench** runs in parallel from W0: the `echo-lab` device driver over the Port OS CLI, the STT oracle,
    `echo-lab calibrate`, and the Ring frame of the light ring.
 5. **W3 device.** hassmic installed on the Echo (the owner's go-ahead), then M1, M3, M5 and M6 as operator-started
