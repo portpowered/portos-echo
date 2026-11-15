@@ -1,9 +1,2 @@
 [extend]
 useDefault = true
-
-[[allowlists]]
-description = "Build output and local agent worktrees"
-paths = [
-  '''^(?:\./)?target[/\\]''',
-  '''^(?:\./)?\.claude[/\\]''',
-]
