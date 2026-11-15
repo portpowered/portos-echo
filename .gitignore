@@ -1,0 +1,19 @@
+# Build output
+/target/
+/out/
+/dist/
+
+# Bench and run artifacts stay outside git (docs/program/rules.md)
+/artifacts/
+*.wav
+*.ogg
+*.opus
+*.mp4
+
+# Local secrets and editor files
+.env
+.env.*
+*.pem
+.DS_Store
+.idea/
+.vscode/
