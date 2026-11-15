@@ -1,0 +1,109 @@
+# Batch Inputs
+
+## Mission loopbacks
+
+A thoughts payload with a non-blank string `mission` runs `verify-mission`
+and its output checker. Blank, absent, or whitespace missions retain `ideafy`
+supervision, including ordinary cron thoughts. A non-string mission fails.
+Mission output contains native measurements with name, value, and source, or
+a named unmet precondition with any available values. The checker requests
+one correction for malformed output, then fails if it remains invalid.
+
+For an untagged mission gap, dry-run and submit a narrow corrective batch
+using a stable request ID. Verify its receipt and admitted Work. Include a
+new thoughts loopback whose mission checks the fixes and whose `DEPENDS_ON`
+relations wait for those fixes. Inspect by request ID before repeating an
+uncertain submission; retain values and receipt in the original output.
+
+For a tagged mission gap, save the raw corrective proposal at
+`docs/temp/projects/<project>/proposals/<loopback-name>.json` in the main
+checkout and dry-run it in the bound Factory Session. Include stable request
+ID, origin Work ID, findings, and dependent loopback. Submit no Project
+children. Existing reporting wakes the owning lead, who owns admission and
+follow-up validation. Retain measurements and the saved path; filing alone
+does not prove a correction. Write or required dry-run failures report FAILED.
+
+Use `python factory/scripts/mission-read.py [--required] -- <read-command> [args...]`
+only for authorized reads. Each attempt has a 30-second timeout and failures
+retry once. Optional exhaustion exits zero with attempt records; a read marked
+required by the mission exits one on exhaustion. Keep available output and
+gaps. Never use this helper to retry mutations or add another read retry loop.
+
+## Ordinary batches
+
+This directory records a human-readable example for ideafy/meta-planner batch
+submission. These files are documentation, not live factory inputs.
+
+Related factory-local docs and planner state:
+
+* `factory/docs/overview.md` — planner loop, session inspection, and quality
+  gates
+* `docs/temp/progress.md`, `docs/temp/checklist.md`, and `docs/temp/meta.md` —
+  live planner state files (local, not checked in)
+* `factory/docs/batch-input-example.json` — checked-in canonical batch example
+
+The source of truth for the live file-listener schema is:
+
+```sh
+you docs batch-inputs
+```
+
+The example JSON uses the canonical `FACTORY_REQUEST_BATCH` shape from
+`you docs batch-inputs`:
+
+* the batch file passed to `you submit batch` is the raw request object; it is
+  not wrapped in `request`
+* Project Leads and the Portfolio Supervisor submit that file through the CLI,
+  check the accepted Work IDs, and return only a decision envelope from their
+  workstation; their final response does not submit Work
+
+* submit 3-5 `idea` work items per batch
+* for non-Project (ideafy/supervisor) batches, submit one loopback `thoughts`
+  work item and make it depend on the ideas through `DEPENDS_ON` relations
+* Project Lead batches contain no loopback item; instead every idea and
+  validation carries `"tags": {"project": "<project tag>"}` and each one wakes
+  its lead when it reaches `complete` or `failed`
+* use `workTypeName`, not `workType`
+* use `works[]`, not `items[]`
+* prefer `you submit batch <path> --session <session_id>` for autonomous
+  meta-planner submission when the factory is already running
+
+Before submitting a real batch, dry-run against a live session:
+
+```sh
+you submit batch --dry-run factory/docs/batch-input-example.json --session <session_id>
+```
+
+Replace `<session_id>` with a live id from `you session list` (for example
+`c803e7f7-1361-4ba6-bb2b-b5c9cfeb2754` on a long-running host).
+
+## Loopback proposals
+
+A project-tagged thoughts loopback that finds gaps saves its raw corrective
+batch in the main checkout at
+`docs/temp/projects/<project>/proposals/<loopback-name>.json`, dry-runs it in
+the bound Session and returns ACCEPTED naming the path. It submits no Project
+children. Write/dry-run failures remain truthful FAILED results, retaining any
+saved reference. Both outcomes pass through thoughts reporting states to their
+original terminal state and one origin-preserving project-report. The existing
+tag match wakes only the waiting owning lead; reports wait while it is busy.
+The lead reviews/edits the draft against immutable authority and live ownership,
+then submits with a verified receipt or records a reason and release event in
+progress.md. Request/origin deduplication and recovery lineage still apply;
+attempts are positive integers with no ceiling. Untagged loopbacks retain dry-run/submission/receipt
+or accepted hold and cannot wake a tagged peer Project.
+
+Activate config and prompts together after independent validation and merge.
+There is no report backfill. On rollback preserve drafts, Work and event history;
+drain or operator-hold reporting Work before restoring config/prompts together.
+Leads never perform Work controls to drain or acknowledge reports.
+
+## Verification
+
+When changing these factory-local docs or the checked-in example, validate the
+factory and dry-run the example batch from the repository root:
+
+```sh
+you factory config validate factory/factory.json
+you --server http://127.0.0.1:7447 submit batch --dry-run factory/docs/batch-input-example.json
+```
