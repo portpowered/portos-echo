@@ -1,0 +1,76 @@
+name: Gate tool setup
+description: Provision tools before invoking the unchanged local make entry point
+inputs:
+  target:
+    description: Make target being provisioned
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: '24'
+    - name: Pinned workspace compiler
+      shell: sh
+      run: |
+        channel=$(python -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+        rustup toolchain install "$channel" --profile minimal --component clippy --component rustfmt
+    - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a
+      with:
+        key: ${{ inputs.target }}
+    - name: Locked dependency cache
+      shell: sh
+      run: cargo fetch --locked
+    - name: Shell tools
+      if: contains(fromJSON('["fmt-check","lint-scripts-web","lint-self-tests"]'), inputs.target)
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+      with:
+        tool: shellcheck@0.11.0,shfmt@3.14.0
+        fallback: none
+    - name: Dependency checker
+      if: contains(fromJSON('["lint-deps","deps-fresh"]'), inputs.target)
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+      with:
+        tool: cargo-deny@0.20.2
+        fallback: none
+    - name: Advisory database for offline gate
+      if: inputs.target == 'lint-deps'
+      shell: sh
+      run: cargo deny fetch
+    - name: Secret scanner
+      if: inputs.target == 'lint-rules'
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+      with:
+        tool: gitleaks@8.30.0
+        fallback: none
+    - name: Test runner
+      if: inputs.target == 'test-unit'
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+      with:
+        tool: cargo-nextest@0.9.152
+        fallback: none
+    - name: Documentation link checker
+      if: contains(fromJSON('["lint-docs","lint-docs-online","lint-self-tests"]'), inputs.target)
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+      with:
+        tool: lychee@0.24.2
+        fallback: none
+    - name: Documentation npm cache
+      if: contains(fromJSON('["lint-docs","lint-docs-online","lint-self-tests"]'), inputs.target)
+      shell: sh
+      run: |
+        npx --yes markdownlint-cli2@0.20.0 --version
+        npx --yes @mermaid-js/mermaid-cli@11.12.0 --version
+    - name: Coverage compiler
+      if: inputs.target == 'coverage'
+      shell: sh
+      run: rustup toolchain install nightly-2026-11-05 --profile minimal --component llvm-tools-preview
+    - name: Coverage tool
+      if: inputs.target == 'coverage'
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+      with:
+        tool: cargo-llvm-cov@0.9.1
+        fallback: none

@@ -216,7 +216,14 @@ pub fn run() -> Result<Vec<String>, String> {
     let paths = tracked(&command("git", &["ls-files", "-z"])?)?;
     let metadata = command(
         "cargo",
-        &["metadata", "--no-deps", "--format-version", "1", "--offline"],
+        &[
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--offline",
+            "--locked",
+        ],
     )?;
     let actual = shape_json::members(&metadata)?;
     let bytes = read("lanes.toml")?;
