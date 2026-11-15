@@ -122,9 +122,8 @@ Required planning behavior:
   cannot replace either canonical shape;
 - classify evidence by scope, dependency fidelity, cadence, and cost;
 - classify every changed test using the factory testing standard and specify
-  its behavior/observer, boundary, Factory Session and shared-process strategy,
-  parallel isolation, prebuilt-artifact owner, or dedicated load/lint lane as
-  applicable;
+  its behavior/observer, tier (T0-T4), boundary, `echo-lab` scenario and
+  driver for T3, parallel isolation, or dedicated lint lane as applicable;
 - give every task a behavioral witness (a test shipped in that task's own PR),
   executable-spine effect, exact evidence, highest feasible level, and remaining unproven edges with owning gates;
 - budget paid or real-remote validation and schedule it as soon as the minimal

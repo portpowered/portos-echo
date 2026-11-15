@@ -104,11 +104,10 @@ a substitute for runtime, contract, CLI, API, UI, or event behavior unless the
 topology itself is the public contract.
 
 Reviewers **MUST** verify test classification and execution topology: unit
-tests remain component-isolated; functional tests assert customer-observable
-behavior through public boundaries, use Factory Sessions and a shared root
-process where possible, never build a binary, and run in parallel; integration
-tests consume a prebuilt artifact and stay small; load/stress and repository
-shape checks live in their dedicated suites. Exceptions are blocking unless
+tests remain component-isolated; T3 scenarios assert customer-observable
+behavior through `echo-lab` on loopback with a fake clock and run in parallel;
+T4 cloud runs happen only when the PRD authorizes them and stay small; and
+repository shape checks live in lint, not in runtime tests. Exceptions are blocking unless
 the testing standard explicitly permits them and the plan records the required
 justification.
 
