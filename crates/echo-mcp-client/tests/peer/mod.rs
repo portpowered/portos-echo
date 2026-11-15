@@ -57,7 +57,9 @@ impl Peer {
         mut notification: Option<Reply>,
     ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let mut url = reqwest::Url::parse("http://127.0.0.1/mcp").unwrap();
+        url.set_port(Some(listener.local_addr().unwrap().port())).unwrap();
+        let url = url.to_string();
         let observations = Arc::new(Mutex::new(Vec::new()));
         let records = observations.clone();
         let task = tokio::spawn(async move {

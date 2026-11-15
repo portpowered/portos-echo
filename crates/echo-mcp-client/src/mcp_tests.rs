@@ -30,7 +30,7 @@ fn t1_fixed_error_mapping_does_not_retain_remote_diagnostics() {
         (McpError::HttpStatus(401), ToolError::Unauthorized),
         (McpError::HttpStatus(403), ToolError::Unauthorized),
         (McpError::Timeout, ToolError::Timeout),
-        (McpError::HttpStatus(500), ToolError::Server("http_status:500".into())),
+        (McpError::HttpStatus(500), ToolError::Server("http_status:500".into())), // lint-rules: allow-literal fixed HTTP error assertion, never a network address
         (McpError::JsonRpc(-32602), ToolError::Server("json_rpc:-32602".into())),
         (McpError::Protocol, ToolError::Transport),
         (McpError::Transport, ToolError::Transport),

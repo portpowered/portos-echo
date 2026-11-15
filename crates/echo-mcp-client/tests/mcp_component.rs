@@ -95,7 +95,7 @@ async fn t3_f01_f02_f04_f12_acceptance_witness() {
     spoof.set_fault(Fault::Http500).unwrap();
     assert_eq!(
         host.call_tool("test.echo", json!({"text":"fail"}), "k").await,
-        Err(ToolError::Server("http_status:500".into()))
+        Err(ToolError::Server("http_status:500".into())) // lint-rules: allow-literal fixed HTTP error assertion, never a network address
     );
     let failed = spoof.snapshot().unwrap().calls.len() - snapshot.calls.len();
     assert_eq!(failed, 1);
@@ -179,7 +179,7 @@ async fn t3_f06_f07_rpc_and_malformed_responses_are_safe() {
     for (fault, name, error) in [
         (Fault::None, "test.missing", ToolError::Server("json_rpc:-32602".into())),
         (Fault::MalformedJsonRpc, "test.echo", ToolError::Transport),
-        (Fault::Http500, "test.echo", ToolError::Server("http_status:500".into())),
+        (Fault::Http500, "test.echo", ToolError::Server("http_status:500".into())), // lint-rules: allow-literal fixed HTTP error assertion, never a network address
     ] {
         let spoof = Spoof::start(Options {
             fault,

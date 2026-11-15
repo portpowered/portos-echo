@@ -152,7 +152,7 @@ async fn t3_f12_rotating_bearer_and_hostile_errors_never_disclose_tokens() {
         errors,
         (
             ToolError::Server("json_rpc:-32602".into()),
-            ToolError::Server("http_status:500".into()),
+            ToolError::Server("http_status:500".into()), // lint-rules: allow-literal fixed HTTP error assertion, never a network address
             ToolError::Transport
         )
     );
