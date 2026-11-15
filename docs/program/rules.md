@@ -32,7 +32,8 @@ check exists, the coordinator checks it by hand.
   equals the list in `lanes.toml`.
 - **Layering:** `echo-contracts`, `echo-config` and `echo-screen-contract` have no network, hardware or
   async-runtime dependencies. `echo-wyoming`, `echo-audio` and `echo-live` never depend on `agent-*` or `mcp-*`.
-  OAuth types live only in `echo-mcp-auth`.
+  Port OS OAuth types live only in `echo-mcp-auth`; the ChatGPT sign-in lives only in `echo-chatgpt-auth`.
+  Only `echo-mcp-auth` may depend on OAuth packages (`oauth2`, `openidconnect`).
 - **No C of ours.** The Echo runs echo-dot-assist's `hassmic` at a pinned commit. A change it needs goes upstream
   as a pull request, never as a patch carried here.
 - **Scripts and the screen page:** `shellcheck` and `shfmt` for `scripts/`; `prettier`, `eslint` and
