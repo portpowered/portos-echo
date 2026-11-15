@@ -8,14 +8,36 @@
 //! Configuration allows at most 4096 arrivals and 64 handlers; all requests have
 //! a 60-second resource deadline (503). Unsigned wire waits are not narrowed.
 mod spoof_http;
-mod spoof_record;
 mod spoof_wire;
 use echo_contracts::secret::Secret;
-pub use spoof_record::{CallRecord, RequestRecord, Snapshot};
 pub use spoof_wire::catalog;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
+
+use serde_json::Value;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallRecord {
+    pub name: String,
+    pub args: Value,
+    pub count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RequestRecord {
+    pub method: String,
+    pub id: Option<u64>,
+    pub authorization_matches: Option<bool>,
+    pub session_header: bool,
+    pub dpop_header: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Snapshot {
+    pub requests: Vec<RequestRecord>,
+    pub calls: Vec<CallRecord>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {

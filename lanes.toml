@@ -64,4 +64,3 @@ kind = "lib"
 name = "echo-spoof-mcp"
 path = "crates/echo-spoof-mcp"
 kind = "bin"
-
