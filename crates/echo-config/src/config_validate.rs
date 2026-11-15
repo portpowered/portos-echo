@@ -51,7 +51,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         "" => &["echo", "live", "agent", "mcp", "screen", "audit"],
         "echo" => &["host", "wyoming_port"],
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
-        "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap"],
+        "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap", "model"],
         "mcp" => &["server"],
         "screen" => &["listen", "pairing_token_file"],
         "audit" => &["log_dir"],
@@ -86,6 +86,9 @@ pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
             "agent.task_deadline_seconds",
             "must be within 5..=600",
         ));
+    }
+    if config.agent.model.as_ref().is_some_and(|model| model.trim().is_empty()) {
+        return Err(ConfigError::new("agent.model", "must be nonblank"));
     }
     let mut names = BTreeSet::new();
     for (index, server) in config.mcp.server.iter().enumerate() {

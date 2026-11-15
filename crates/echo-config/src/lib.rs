@@ -95,6 +95,7 @@ pub struct AgentConfig {
     pub max_tool_calls: u32,
     pub task_deadline_seconds: u64,
     pub daily_request_cap: u64,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
