@@ -68,3 +68,5 @@ The default gate checks local links and anchors without external requests after 
 `make lint-docs-online` also checks external links and is reserved for explicit scheduled validation.
 Both modes compile every actual Mermaid block in tracked Markdown.
 Add each new tracked documentation page to this index in the same change.
+
+- [Stateless MCP HTTP transport](adr/0006-mcp-http.md)

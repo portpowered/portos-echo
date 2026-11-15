@@ -54,3 +54,14 @@ kind = "lib"
 name = "echo-live"
 path = "crates/echo-live"
 kind = "lib"
+
+[[crate]]
+name = "echo-mcp-client"
+path = "crates/echo-mcp-client"
+kind = "lib"
+
+[[crate]]
+name = "echo-spoof-mcp"
+path = "crates/echo-spoof-mcp"
+kind = "bin"
+
