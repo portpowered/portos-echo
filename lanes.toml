@@ -1,0 +1,6 @@
+# A crate joins this list in the change that creates it.
+# ffi is the only kind allowed unsafe.
+[[crate]]
+name = "xtask"
+path = "xtask"
+kind = "tool"
