@@ -13,6 +13,7 @@ const LIMIT: u64 = 1024 * 1024;
 const TABLE: &[(&str, &[&str])] = &[
     ("hold", &["session", "hold", "{ring}", "--camera", "--listen", "--json"]),
     ("release", &["session", "release", "{hold}", "--json"]),
+    ("status", &["session", "status", "{hold}", "--json"]),
     (
         "chirp",
         &[
@@ -90,8 +91,18 @@ pub fn argv(operation: &str, values: &[(&str, &str)]) -> Result<Vec<String>, Str
         .collect()
 }
 
-fn reap(child: &mut Child, deadline: Instant) -> Result<bool, String> {
+fn reap(child: &mut Child, deadline: Instant, cancel: Option<&Path>) -> Result<bool, String> {
     loop {
+        if cancelled(cancel) || Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(if cancelled(cancel) {
+                "run cancelled; child reaped"
+            } else {
+                "child deadline exceeded; child reaped"
+            }
+            .into());
+        }
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status.success()),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
@@ -105,6 +116,25 @@ fn reap(child: &mut Child, deadline: Instant) -> Result<bool, String> {
 }
 
 pub fn bytes(executable: &Path, args: &[String]) -> Result<Vec<u8>, String> {
+    controlled(executable, args, Instant::now() + Duration::from_secs(30), None)
+}
+
+pub fn cancelled(cancel: Option<&Path>) -> bool {
+    cancel.is_some_and(Path::exists)
+}
+
+pub fn controlled(
+    executable: &Path,
+    args: &[String],
+    deadline: Instant,
+    cancel: Option<&Path>,
+) -> Result<Vec<u8>, String> {
+    if cancelled(cancel) {
+        return Err("run cancelled".into());
+    }
+    if Instant::now() >= deadline {
+        return Err("child deadline exceeded before launch".into());
+    }
     let mut child = Command::new(executable)
         .args(args)
         .stdin(Stdio::null())
@@ -121,7 +151,7 @@ pub fn bytes(executable: &Path, args: &[String]) -> Result<Vec<u8>, String> {
         std::io::copy(&mut stream, &mut std::io::sink())?;
         Ok::<_, std::io::Error>(bytes)
     });
-    let status = reap(&mut child, Instant::now() + Duration::from_secs(30));
+    let status = reap(&mut child, deadline, cancel);
     let output = reader
         .join()
         .map_err(|_| "child reader failed")?
@@ -141,4 +171,29 @@ pub fn helper(python: &str, operation: &str, args: &[String]) -> Result<Value, S
     let mut command_args = vec!["-c".into(), include_str!("run_host.py").into(), operation.into()];
     command_args.extend_from_slice(args);
     json(Path::new(python), &command_args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An expired budget must refuse launching even an otherwise successful tool.
+    #[test]
+    fn expired_budget_fails_even_for_an_otherwise_successful_tool() {
+        let result = controlled(Path::new("python"), &["-c".into(), "pass".into()], Instant::now(), None);
+        assert_eq!(result, Err("child deadline exceeded before launch".into()));
+    }
+
+    // T3 real local child. The event never fires; the timeout is a ceiling,
+    // not a synchronization delay. Returning proves kill/wait/pipe reaping.
+    #[test]
+    fn stalled_child_is_reaped_at_its_operation_deadline() {
+        let result = controlled(
+            Path::new("python"),
+            &["-c".into(), "import threading; threading.Event().wait()".into()],
+            Instant::now() + Duration::from_millis(100),
+            None,
+        );
+        assert_eq!(result, Err("child deadline exceeded; child reaped".into()));
+    }
 }

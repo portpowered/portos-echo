@@ -37,8 +37,10 @@ fn recording(path: &str) -> io::Result<()> {
 fn response(op: &str, args: &[String], fixture: &Value) -> Result<Value, Box<dyn std::error::Error>> {
     Ok(match op {
         "hold" => json!({"holdId":"fixture-hold", "lease":"fixture-lease", "listening":true, "talking":true}),
-        "release" => json!({"holds":[{"id":"fixture-hold"}]}),
-        "clock" => json!({"hour":fixture.get("hour").unwrap_or(&json!(9))}),
+        "release" => json!({"holds":[{"id":args.get(2),"state":"ended"}]}),
+        "status" => json!({"holds":[{"id":"fixture-hold","state":"live"}]}),
+        "wait" => json!({"waited_ms":25000}),
+        "clock" => json!({"hour":fixture.get("hour").unwrap_or(&json!(9)),"monotonic_ms":0}),
         "digest" => json!({"sha256":"a".repeat(64)}),
         "reply" => json!({"reply_frames":2}),
         "chirp" | "play" => {
@@ -59,6 +61,37 @@ fn response(op: &str, args: &[String], fixture: &Value) -> Result<Value, Box<dyn
         }
         _ => return Err("unsupported fake operation".into()),
     })
+}
+
+fn overrides(op: &str, count: usize, fixture: &Value, mut result: Value) -> Value {
+    if op == "clock"
+        && let Some(hour) = fixture["hours"].get(count)
+    {
+        result["hour"] = hour.clone();
+    }
+    if op == "clock"
+        && let Some(time) = fixture["times"]
+            .get(count)
+            .or_else(|| fixture["times"].as_array().and_then(|v| v.last()))
+    {
+        result["monotonic_ms"] = time.clone();
+    }
+    if op == "hold"
+        && let Some(value) = fixture["holds"].get(count)
+    {
+        result = value.clone();
+    }
+    if op == "status" && fixture["preemptions"].as_u64().is_some_and(|n| n > 0) {
+        let hold = fixture["holds"]
+            .get(count)
+            .and_then(|h| h["holdId"].as_str())
+            .unwrap_or("fixture-hold");
+        result = json!({"holds":[{"id":hold,"state":"ended","ending":{"reason":"preempted"}}]});
+    }
+    if let Some(value) = fixture.get(op) {
+        result = value.clone();
+    }
+    result
 }
 
 fn run() -> Result<u8, Box<dyn std::error::Error>> {
@@ -88,6 +121,16 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
         "{}",
         json!({"operation":op, "args":ledger_args})
     )?;
+    if fixture["cancel_on"] == op {
+        fs::write("cancel.signal", b"cancel")?;
+        // Explicit fixture notification, then remain blocked until killed.
+        loop {
+            std::thread::park();
+        }
+    }
+    if op == "play" && u64::try_from(count).unwrap_or(u64::MAX) < fixture["preemptions"].as_u64().unwrap_or(0) {
+        return Ok(1);
+    }
     if fixture["fail"] == op {
         io::stderr().write_all(b"fixture-private-child-output")?;
         return Ok(1);
@@ -97,15 +140,8 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
     } else if fixture["malformed"] == op {
         io::stdout().write_all(b"not JSON fixture-private-child-output")?;
     } else {
-        let mut result = response(op, &args, &fixture)?;
-        if op == "clock"
-            && let Some(hour) = fixture["hours"].get(count)
-        {
-            result["hour"] = hour.clone();
-        }
-        if let Some(value) = fixture.get(op) {
-            result = value.clone();
-        }
+        let result = response(op, &args, &fixture)?;
+        let result = overrides(op, count, &fixture, result);
         writeln!(io::stdout(), "{result}")?;
     }
     Ok(0)

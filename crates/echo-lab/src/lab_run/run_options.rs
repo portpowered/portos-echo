@@ -10,6 +10,7 @@ const ALLOWED: &[&str] = &[
     "--keep-audio",
     "--speech-endpoint",
     "--speech-model",
+    "--cancel-file",
 ];
 
 use std::collections::BTreeMap;
@@ -24,6 +25,7 @@ pub struct Options {
     pub out: PathBuf,
     pub keep_audio: bool,
     pub speech: Option<(String, String)>,
+    pub cancel: Option<PathBuf>,
 }
 
 fn required<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str, String> {
@@ -110,6 +112,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         out,
         keep_audio: flags.contains_key("--keep-audio"),
         speech,
+        cancel: flags.get("--cancel-file").map(PathBuf::from),
     })
 }
 

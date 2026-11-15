@@ -5,12 +5,16 @@ import hashlib
 import json
 import sys
 import wave
+import time
 
 
 def main():
     operation, *args = sys.argv[1:]
     if operation == "clock":
-        return {"hour": datetime.datetime.now().hour}
+        return {"hour": datetime.datetime.now().hour, "monotonic_ms": int(time.monotonic() * 1000)}
+    if operation == "wait":
+        time.sleep(int(args[0]) / 1000)
+        return {"waited_ms": int(args[0])}
     if operation == "digest":
         digest = hashlib.sha256()
         for path in args:

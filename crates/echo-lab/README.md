@@ -53,10 +53,25 @@ One hold and one alignment chirp serve a batch. All commands are pinned in
 chirps need `--output` as well as `--listen 3`, as required by that source.
 Reply WAVs contain only samples after playback ends, using the returned capture
 timestamps. Child output is bounded and discarded on failure; commands have
-30-second deadlines. Pending lifecycle work adds 11-minute rotation and one
-preemption retry. Until then a batch refuses further work at 450 seconds to
-leave time for cleanup. Unsupported steps and setup/budget/injection semantics
+30-second ceilings shortened by the remaining monotonic lease budget. A hold
+lasts at most 11 minutes; the runner reserves 90 seconds for playback, local
+WAV processing and release, rotating early when pending work cannot fit. Rotation
+releases, waits 25 seconds and reopens without repeating the batch chirp. The
+host helper uses a monotonic clock; the fixture clock advances without sleeping.
+After failed playback, `session status <hold> --json` must confirm the same
+hold ended with reason `preempted` before the interrupted step is reopened and
+retried once. A second preemption fails. Status/release JSON and argv follow
+the same pinned CLI source, including `cli/internal/host/server.go`.
+Unsupported steps and setup/budget/injection semantics
 fail explicitly. Speech, screen and JPEG frame oracles remain retained work.
+
+For cooperative cancellation, supply `--cancel-file /external/cancel.signal`.
+Creating that file cancels the current child, kills and reaps it, stops later
+steps and attempts one release independently of the cancellation signal. The
+runner does not remove the signal file. Use a fresh path per run; an existing
+signal refuses work. Both primary and cleanup failures appear in the diagnostic
+and failed report. Abrupt OS termination and a remote hold that outlives a failed
+release require coordinator recovery; local deadlines do not prove remote teardown.
 
 Artifacts require a fresh directory with an existing parent, outside every git
 worktree; the default is a unique host temporary directory. `events.jsonl`
@@ -65,7 +80,8 @@ and published last by rename. A reportable failure uses `result: fail` and exit
 1; success uses `pass` and exit 0. The tier is the highest tier declared by the
 batch scenarios; a declared tier alone does not prove that environment.
 Leases, Ring identifiers, transcripts and raw child output are never written to
-reports or events. Passing audio is deleted unless `--keep-audio`; failed audio
+reports or events. `bench_session_ids` contains ordered local aliases
+(`batch-hold-1`, etc.), never external hold ids or leases. Passing audio is deleted unless `--keep-audio`; failed audio
 is retained outside git for triage. An interrupted or unwritable publication
 may leave an incomplete external directory without a report.
 
@@ -75,7 +91,11 @@ Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
 only synthetic port, adb and host-helper responses; it never forwards commands.
 Its JSON fixture can select `hour`, per-call `hours`, `build`, a failed operation
 with `fail`, malformed JSON with `malformed`, or a response object by operation
-name. The fixture helper is selected explicitly with `--python`; these variables
+name. Lifecycle fixtures also select per-clock-call `times` (monotonic
+milliseconds, retaining the final value), per-open `holds`, a `preemptions`
+count, and `cancel_on` to publish `cancel.signal` and block until killed.
+`wait` acknowledges exactly 25000 virtual milliseconds; no fixture sleeps.
+The fixture helper is selected explicitly with `--python`; these variables
 are consumed only by fakes. Tests also exercise the real host Python helper for
 exact WAV samples and SHA-256. Run `cargo test -p echo-lab --all-targets --locked`.
 No test accesses hardware, an account, STT service or a remote endpoint.

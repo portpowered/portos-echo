@@ -1,5 +1,6 @@
 mod run_command;
 mod run_device;
+mod run_lease;
 mod run_options;
 mod run_report;
 
@@ -113,7 +114,10 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
     let result = dispatch(&mut driver, &steps, &mut artifacts);
     let cleanup = driver.close(&mut artifacts);
     artifacts.checks.insert("session_released".into(), cleanup.is_ok());
-    let result = result.and(cleanup);
+    let result = match (result, cleanup) {
+        (Err(primary), Err(cleanup)) => Err(format!("{primary}; {cleanup}")),
+        (primary, cleanup) => primary.and(cleanup),
+    };
     artifacts.event(
         if result.is_ok() { "run_completed" } else { "run_failed" },
         None,

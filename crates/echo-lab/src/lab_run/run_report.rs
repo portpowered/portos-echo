@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 pub struct Artifacts {
     pub root: PathBuf,
     pub checks: BTreeMap<String, bool>,
+    pub sessions: Vec<String>,
     events: File,
     started: Instant,
 }
@@ -20,6 +21,7 @@ impl Artifacts {
         Ok(Self {
             root,
             checks: BTreeMap::new(),
+            sessions: Vec::new(),
             events,
             started: Instant::now(),
         })
@@ -54,7 +56,7 @@ impl Artifacts {
             "evidence":["events.jsonl"], "checks":self.checks,
             "limitations":error.into_iter().chain(["Device edges require independent operator verification; no physical milestone is proved."]).collect::<Vec<_>>(),
             "tier":tier, "driver":"device", "scenario_digest":digest,
-            "hassmic_commit":null, "bench_session_ids":[]
+            "hassmic_commit":null, "bench_session_ids":self.sessions
         });
         validate(&report)?;
         let text = serde_json::to_vec_pretty(&report).map_err(|_| "run output: cannot encode report")?;

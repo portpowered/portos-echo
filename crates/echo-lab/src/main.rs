@@ -6,7 +6,7 @@ mod lab_validate;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "echo-lab validate [paths...]\necho-lab check --milestone M0\necho-lab probe --adb <path-to-adb> --out <dir>\necho-lab run <scenario>... --driver device --bench ring --port <path> --adb <path> --stt <command> [--ring <id>] [--out <fresh-dir>] [--python <path>] [--keep-audio] [--speech-endpoint <id> --speech-model <model>]\necho-lab --help";
+const USAGE: &str = "echo-lab validate [paths...]\necho-lab check --milestone M0\necho-lab probe --adb <path-to-adb> --out <dir>\necho-lab run <scenario>... --driver device --bench ring --port <path> --adb <path> --stt <command> [--ring <id>] [--out <fresh-dir>] [--python <path>] [--keep-audio] [--cancel-file <path>] [--speech-endpoint <id> --speech-model <model>]\necho-lab --help";
 
 fn dispatch(args: &[String], output: &mut impl Write) -> io::Result<bool> {
     match args {
