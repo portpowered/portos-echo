@@ -10,6 +10,7 @@ use tokio::{
 
 type Reply<T> = oneshot::Sender<Result<T, Error>>;
 mod wyoming_playback;
+pub(crate) mod wyoming_reconnect;
 use wyoming_playback::Playback;
 
 pub(crate) enum Command {
@@ -29,6 +30,7 @@ struct Session<W> {
     play: Option<Playback>,
     registered: bool,
     paused: bool,
+    closing: bool,
 }
 
 struct ReaderTask(JoinHandle<()>);
@@ -38,6 +40,7 @@ impl Drop for ReaderTask {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: T,
     opts: ClientOptions,
@@ -45,6 +48,20 @@ pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     events: mpsc::Sender<ReceivedEvent>,
     end: watch::Sender<Option<Error>>,
 ) {
+    let (_reset, mut reset) = watch::channel(0_u64);
+    let mut enabled = false;
+    let (result, _) = generation(io, opts, &mut commands, events, &mut reset, &mut enabled).await;
+    end.send_replace(Some(result));
+}
+
+async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: T,
+    opts: ClientOptions,
+    commands: &mut mpsc::Receiver<Command>,
+    events: mpsc::Sender<ReceivedEvent>,
+    reset: &mut watch::Receiver<u64>,
+    enabled: &mut bool,
+) -> (Error, bool) {
     let (reader, writer) = tokio::io::split(io);
     let (tx, mut incoming) = mpsc::channel(1);
     let limit = opts.max_frame_bytes;
@@ -68,22 +85,36 @@ pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         opts,
         describe: None,
         play: None,
-        registered: false,
+        registered: *enabled,
         paused: false,
+        closing: false,
     };
-    let result = session.run(&mut commands, &mut incoming).await;
-    session
-        .router
-        .end(if result == Error::Closed { Ok(()) } else { Err(result) });
+    reset.borrow_and_update();
+    let work = async {
+        if *enabled {
+            if let Err(error) = session.send(WyomingEvent::RunSatellite(Value::Null), vec![]).await {
+                return error;
+            }
+            session.registered = true;
+        }
+        session.run(commands, &mut incoming).await
+    };
+    let result = tokio::select! {
+        biased;
+        _ = reset.changed() => Error::Timeout,
+        result = work => result,
+    };
+    *enabled = session.registered;
+    session.router.end(if session.closing { Ok(()) } else { Err(result) });
     if let Some(reply) = session.describe.take() {
         let _ = reply.send(Err(result));
     }
     if let Some(play) = session.play.take() {
         play.finish(Err(result));
     }
-    end.send_replace(Some(result));
     reader_task.0.abort();
     let _ = (&mut reader_task.0).await;
+    (result, session.closing)
 }
 
 impl<W: AsyncWrite + Unpin> Session<W> {
@@ -204,9 +235,13 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             }
             Some(Command::Close(reply)) => {
                 let _ = reply.send(Ok(()));
+                self.closing = true;
                 return Err(Error::Closed);
             }
-            None => return Err(Error::Closed),
+            None => {
+                self.closing = true;
+                return Err(Error::Closed);
+            }
         }
         Ok(())
     }

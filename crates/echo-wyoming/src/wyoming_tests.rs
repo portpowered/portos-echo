@@ -25,8 +25,37 @@ async fn pause_is_idempotent_and_explicit_registration_resumes_capture() {
 
 #[tokio::test]
 async fn cancelled_play_invalidates_ownership_before_next_reply() {
-    let (io, peer) = duplex(4096);
-    wyoming_control::cancel_play(WyomingClient::from_io(io, ClientOptions::default()), peer).await;
+    use serde_json::json;
+    let (io, mut peer) = duplex(4096);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = client.events().unwrap();
+    let (_source, rx) = tokio::sync::mpsc::channel(1);
+    let format: echo_contracts::wyoming::AudioFormat =
+        serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+    let caller = async {
+        let mut play = Box::pin(client.play(format.clone(), rx));
+        let mut next = Box::pin(events.recv());
+        assert!(
+            std::future::poll_fn(|cx| {
+                assert!(play.as_mut().poll(cx).is_pending());
+                next.as_mut().poll(cx)
+            })
+            .await
+            .unwrap()
+            .is_some()
+        );
+        drop(next);
+        drop(play);
+        assert!(events.recv().await.unwrap().is_none());
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        assert_eq!(client.play(format, rx).await, Err(Error::Closed));
+    };
+    let server = async {
+        assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "audio-start");
+        wyoming_peer::send(&mut peer, "ping", json!(null), vec![]).await;
+        assert_eq!(tokio::io::AsyncReadExt::read(&mut peer, &mut [0]).await.unwrap(), 0);
+    };
+    tokio::join!(caller, server);
 }
 
 #[tokio::test]
@@ -301,8 +330,11 @@ async fn empty_minimum_and_ten_chunk_replies_require_played() {
 
 #[tokio::test]
 async fn malformed_known_event_fails_before_delivery() {
-    let (client, peer) = duplex(4096);
-    wyoming_peer::malformed(WyomingClient::from_io(client, ClientOptions::default()), peer).await;
+    let (io, mut peer) = duplex(4096);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = client.events().unwrap();
+    wyoming_peer::send(&mut peer, "audio-chunk", serde_json::json!({"rate":"bad"}), vec![1]).await;
+    assert!(matches!(events.recv().await, Err(Error::Protocol)));
 }
 
 #[tokio::test]

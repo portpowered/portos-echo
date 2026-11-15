@@ -185,17 +185,6 @@ async fn playback_server<T: AsyncRead + AsyncWrite + Unpin>(peer: &mut T) {
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
 }
 
-pub async fn malformed<T: AsyncRead + AsyncWrite + Unpin>(mut client: WyomingClient, mut peer: T) {
-    let mut events = client.events().unwrap();
-    let caller = async {
-        assert!(matches!(events.recv().await, Err(echo_wyoming::Error::Protocol)));
-    };
-    let server = async {
-        send(&mut peer, "audio-chunk", json!({"rate":"bad"}), vec![1]).await;
-    };
-    tokio::join!(caller, server);
-}
-
 async fn next(events: &mut echo_wyoming::EventStream) -> echo_wyoming::ReceivedEvent {
     events.recv().await.unwrap().unwrap()
 }

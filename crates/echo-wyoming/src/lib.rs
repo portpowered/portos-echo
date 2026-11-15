@@ -2,7 +2,10 @@
 //!
 //! All queues are bounded. Microphone overflow evicts the oldest frame;
 //! lifecycle overflow closes the connection. Audio is never logged or persisted.
-//! This initial connection spine does not reconnect automatically.
+//! EOF, protocol failures and operation timeouts invalidate the connection and
+//! reconnect with capped backoff. A registered satellite is registered once per
+//! new connection; paused capture stays paused. Audio is never replayed.
+//! Operations during recovery return Disconnected; the event receiver stays open.
 #[cfg(test)]
 extern crate self as echo_wyoming;
 

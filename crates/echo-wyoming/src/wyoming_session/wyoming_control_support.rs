@@ -152,25 +152,6 @@ pub async fn pause_resume<T: AsyncRead + AsyncWrite + Unpin>(mut client: Wyoming
     tokio::join!(caller, server);
 }
 
-pub async fn cancel_play<T: AsyncRead + AsyncWrite + Unpin>(mut client: WyomingClient, mut peer: T) {
-    let mut events = client.events().unwrap();
-    let (_source, rx) = mpsc::channel(1);
-    let caller = async {
-        let mut play = Box::pin(client.play(format(), rx));
-        assert!(pending_until_ping(&mut play, &mut events).await.is_none());
-        drop(play);
-        assert!(events.recv().await.unwrap().is_none());
-        let (_tx, rx) = mpsc::channel(1);
-        assert_eq!(client.play(format(), rx).await, Err(Error::Closed));
-    };
-    let server = async {
-        assert_eq!(receive(&mut peer).await.header.r#type, "audio-start");
-        send(&mut peer, "ping", Value::Null, vec![]).await;
-        assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
-    };
-    tokio::join!(caller, server);
-}
-
 async fn reply_prefix<T: AsyncRead + Unpin>(peer: &mut T) {
     assert_eq!(receive(peer).await.header.r#type, "audio-start");
     assert_eq!(receive(peer).await.payload, [1, 0]);
