@@ -159,18 +159,29 @@ mod tests {
         let winner = if first.status.success() { first } else { second };
         assert_eq!(fs::read(destination.join("manifest.json")).unwrap(), winner.stdout);
         assert_eq!(probe_support::scan(&destination), 42);
-        let a = session
-            .command(&session.0.join("a"))
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        let b = session
-            .command(&session.0.join("b"))
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        assert_eq!(a.wait_with_output().unwrap().status.code(), Some(0));
-        assert_eq!(b.wait_with_output().unwrap().status.code(), Some(0));
+        independent_probes_keep_their_own_observations();
+    }
+
+    fn independent_probes_keep_their_own_observations() {
+        let sessions = ["incremental-a", "incremental-b"]
+            .map(|marker| Session::new(&json!({"shell getprop ro.build.version.incremental":response(marker)})));
+        let children = sessions.each_ref().map(|session| {
+            session
+                .command(&session.0.join("out"))
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        });
+        let outputs = children.map(|child| child.wait_with_output().unwrap());
+        for ((session, output), marker) in sessions.iter().zip(&outputs).zip(["incremental-a", "incremental-b"]) {
+            let value = manifest(session, output);
+            assert_eq!(value["build"]["incremental"], marker);
+            check_reads(session);
+            probe_support::clean(&output.stdout);
+            probe_support::clean(&output.stderr);
+            assert_eq!(probe_support::scan(&session.0.join("out")), 42);
+        }
     }
 
     #[test]
