@@ -239,6 +239,8 @@ admit the dependent criterion as a successor with DEPENDS_ON on the
 prerequisite's idea Work ID.
 AM-T0 stays temporary; AM-T11 owns wholesale removal.
 
+**`CONTINUE` feedback is at most 120 characters, ASCII only.** The factory copies it into a worker-session label capped at 200 characters, and a longer value stops the whole factory run, every lane at once (measured 2026-11-15: a 529-character park message did this). When parking, the feedback is exactly `AWAITING_OPERATOR_ANSWER <lane-name>`: the request file carries the path, the question and the no-answer path. Any other `CONTINUE` gets one short sentence, with the detail in `progress.txt`.
+
 On every initial, wake and check-in visit, reconcile outstanding forwarded
 requests and operator responses for this Project. A forwarded request name is
 stable for its lane Work ID and request version; record both paths in progress.md
