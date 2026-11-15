@@ -16,6 +16,7 @@ status: active; documentation index
 - [Coordinator and factory](program/coordinator.md)
 - [Measured baselines](program/baselines.md)
 - [Decisions](program/decisions.md)
+- [Required checks and branch protection](program/branch-protection.md)
 
 ## Architecture decisions
 

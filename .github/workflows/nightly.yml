@@ -1,0 +1,42 @@
+name: Scheduled gates
+on:
+  schedule:
+    - cron: '23 4 * * *'
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: sh
+jobs:
+  deps-fresh:
+    name: deps-fresh
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '41 4 * * 1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: deps-fresh
+      - run: make deps-fresh
+  lint-docs-online:
+    name: lint-docs-online
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: lint-docs-online
+      - run: make lint-docs-online
+# Deferred until their prerequisites merge:
+# test-cloud (nightly or cloud label): W2 services and authorized test credentials
+# mutants (nightly): echo-mcp-auth and echo-agent-loop; minimum score 70%
+# hassmic-upstream (weekly): W0 hassmic-host cache plus W1 sim driver

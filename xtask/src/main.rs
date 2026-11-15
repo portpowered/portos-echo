@@ -3,6 +3,8 @@
 
 use std::process::ExitCode;
 
+mod ci_parity;
+mod coverage;
 mod lint_deps;
 mod lint_rules;
 mod lint_shape;
@@ -12,6 +14,8 @@ enum Subcommand {
     Deps,
     Rules,
     Shape,
+    Parity,
+    Coverage,
 }
 
 fn dispatch(subcommand: Option<&str>) -> Result<Subcommand, &'static str> {
@@ -19,13 +23,21 @@ fn dispatch(subcommand: Option<&str>) -> Result<Subcommand, &'static str> {
         Some("lint-deps") => Ok(Subcommand::Deps),
         Some("lint-rules") => Ok(Subcommand::Rules),
         Some("lint-shape") => Ok(Subcommand::Shape),
+        Some("ci-parity") => Ok(Subcommand::Parity),
+        Some("coverage-check") => Ok(Subcommand::Coverage),
         _ => Err("Usage: cargo xtask <subcommand>"),
     }
 }
 
 fn main() -> ExitCode {
-    let subcommand = std::env::args().nth(1);
-    let result = match dispatch(subcommand.as_deref()) {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let subcommand = args.first().map(String::as_str);
+    let expected = if subcommand == Some("coverage-check") { 3 } else { 1 };
+    if args.len() != expected {
+        eprintln!("Usage: cargo xtask <subcommand>; coverage-check <lcov-path> <base-ref>");
+        return ExitCode::from(2);
+    }
+    let result = match dispatch(subcommand) {
         Ok(Subcommand::Shape) => {
             println!("{}", lint_shape::header());
             let (status, lines) = lint_shape::outcome(lint_shape::run());
@@ -41,6 +53,14 @@ fn main() -> ExitCode {
         Ok(Subcommand::Rules) => lint_rules::run().map_err(|error| {
             eprintln!("{error}");
             "lint-rules failed"
+        }),
+        Ok(Subcommand::Parity) => ci_parity::run().map_err(|error| {
+            eprintln!("{error}");
+            "ci-parity failed"
+        }),
+        Ok(Subcommand::Coverage) => coverage::run(&args[1], &args[2]).map_err(|error| {
+            eprintln!("{error}");
+            "coverage-check failed"
         }),
         Err(message) => Err(message),
     };
