@@ -95,6 +95,16 @@ threshold for repeated sessions.
 | --- | --- | --- |
 | Microphone stream from hassmic at pin `8646a4f` | The host sends `run-pipeline`, then `audio-chunk` events with positive payloads. It never sends a microphone `audio-start`: `start()` in `src/hassmic/proto_wyoming.c` emits `run-pipeline` and `audio()` emits `audio-chunk`. The reply direction is different, because there the client sends `audio-start` (`tests/fixtures/wyoming/duplex-reply.jsonl`). `echo-contracts` and S2 must accept a microphone stream with no `audio-start` | 2026-11-15, el-w0-hassmic-host captures `tests/fixtures/wyoming/wake-word.jsonl` and `duplex-reply.jsonl`, PR 39 |
 
+## Reply cancellation (S2)
+
+Measured by spike S2 (PR 44, `docs/spikes/s2-barge-in.md`) against `hassmic-host` at pin `8646a4f` with `-D`. The
+reply was 3 s of 24 kHz s16 mono, sent whole up front and cut at 1 s, with ten trials per strategy. **No Wyoming action
+discards audio hassmic has already received.** An early `audio-stop` drains the queue: the sink closes after a median
+of 2004.3 ms (max 2005.4 ms), which matches the 2004.1 ms of doing nothing. `pause-satellite` and closing the
+connection never closed the sink within 4 s. A wake (SIGUSR1) while speaking emits no new `run-pipeline`: under
+`-D` the existing microphone stream continues. So the time to cut a reply is bounded by the reply audio the bridge
+has already sent and not yet played.
+
 ## Milestones
 
 | Fact | Value | Measured |
