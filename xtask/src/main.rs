@@ -8,6 +8,7 @@ fn dispatch(_subcommand: Option<&str>) -> Result<(), &'static str> {
 }
 
 fn main() -> ExitCode {
+    let _ = std::env::args().next().unwrap();
     let subcommand = std::env::args().nth(1);
     match dispatch(subcommand.as_deref()) {
         Ok(()) => ExitCode::SUCCESS,
