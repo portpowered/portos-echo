@@ -34,6 +34,22 @@ before downstream consumers land. Dependency FFI remains outside this lib's
 unsafe-forbidden boundary. Native bundled compilation must be proven on the
 Windows host; hosted Linux build and independent replay remain review gates.
 
+## Queue and pacing
+
+Use Tokio time for a single-owner 20 ms pacer with its first deadline one
+period after construction. Await before removing a complete queue entry;
+cancellation preserves the entry and deadline. A late call emits once and
+schedules the next deadline after now, avoiding catch-up bursts. The caller
+sets the send lead by choosing the fixed positive FrameQueue entry capacity
+(10 entries represents 200 ms for 20 ms frames). Clear the queue and recreate
+the pacer between streams. No task, channel or transport is introduced.
+
+Use the existing proptest dependency for bounded FIFO operation sequences and
+loom for a small model around the actual queue under external synchronization.
+Tokio runtime/macros/test-util features are test-only, for deterministic paused
+clock proof. The dependency declarations are explicitly authorized by the audio
+packet. All added transitive packages below belong to this dependency closure.
+
 ## Packages covered
 
 - echo-audio
@@ -44,3 +60,25 @@ Windows host; hosted Linux build and independent replay remain review gates.
 - cmake
 - find-msvc-tools
 - shlex
+- generator
+- log
+- loom
+- matchers
+- nu-ansi-term
+- scoped-tls
+- sharded-slab
+- thread_local
+- tokio
+- tokio-macros
+- tracing
+- tracing-core
+- tracing-log
+- tracing-subscriber
+- valuable
+- windows-core
+- windows-implement
+- windows-interface
+- windows-link
+- windows-result
+- windows-strings
+- proptest
