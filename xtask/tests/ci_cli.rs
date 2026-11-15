@@ -273,6 +273,32 @@ mod tests {
     }
 
     #[test]
+    fn secret_source_rejects_before_schema_compilation_and_recovers() {
+        let session = Session::new();
+        session.workspace();
+        session.write("docs/adr/deps.md", "Approved `echo-fixture`.\n");
+        let path = "crates/example/src/lib.rs";
+        session.write(path, "// seed\n#[derive(Debug)] struct Holder(Secret<String>);\n");
+        session.git(&["add", "crates"]);
+        assert_eq!(
+            session.run(&["lint-rules"]),
+            (
+                1,
+                format!(
+                    "{path}:2: secret-format: Secret must not implement Debug or Display or derive Debug\nlint-rules failed\n"
+                )
+            )
+        );
+        session.write(path, "struct Holder(Secret<String>);\n");
+        assert_eq!(session.run(&["lint-rules"]), (0, String::new()));
+        fs::remove_file(session.0.join(path)).unwrap();
+        let (code, text) = session.run(&["lint-rules"]);
+        assert_eq!(code, 1);
+        assert!(text.starts_with(&format!("{path}:1: secret-format input:")), "{text}");
+        assert!(text.ends_with("lint-rules failed\n"));
+    }
+
+    #[test]
     fn missing_current_inputs_fail_closed() {
         let session = Session::new();
         let (code, text) = session.run(&["lint-rules"]);
