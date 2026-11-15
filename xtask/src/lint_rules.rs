@@ -1,22 +1,13 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::process::Command;
 
 type Names = BTreeSet<String>;
 
 pub fn run() -> Result<(), String> {
-    let base = git(&["merge-base", "origin/main", "HEAD"])?;
-    let base = base.trim();
-    let tree = git(&["ls-tree", "--name-only", base, "--", "Cargo.lock"])?;
-    let old = if tree.trim().is_empty() {
-        Names::new()
-    } else {
-        package_names(&git(&["show", &format!("{base}:Cargo.lock")])?)?
-    };
     let current = fs::read_to_string("Cargo.lock").map_err(|error| format!("Cargo.lock: {error}"))?;
     let current = package_names(&current)?;
     let adrs = read_adrs()?;
-    let missing = missing_names(&old, &current, &adrs);
+    let missing = missing_names(&current, &adrs);
     if missing.is_empty() {
         Ok(())
     } else {
@@ -26,21 +17,6 @@ pub fn run() -> Result<(), String> {
             .collect::<Vec<_>>()
             .join("\n"))
     }
-}
-
-fn git(args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(args)
-        .output()
-        .map_err(|error| format!("git {}: {error}", args.join(" ")))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    String::from_utf8(output.stdout).map_err(|error| format!("git output: {error}"))
 }
 
 fn read_adrs() -> Result<Vec<String>, String> {
@@ -100,9 +76,9 @@ fn package_char(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '-' || character == '_'
 }
 
-fn missing_names(old: &Names, current: &Names, adrs: &[String]) -> Vec<String> {
+fn missing_names(current: &Names, adrs: &[String]) -> Vec<String> {
     current
-        .difference(old)
+        .iter()
         .filter(|name| {
             !adrs
                 .iter()
@@ -129,8 +105,8 @@ mod tests {
     }
 
     #[test]
-    fn added_name_requires_exact_diagnostic() {
-        let missing = missing_names(&names(&["alpha"]), &names(&["alpha", "beta"]), &[]);
+    fn every_current_name_requires_exact_diagnostic() {
+        let missing = missing_names(&names(&["alpha", "beta"]), &["alpha".into()]);
         assert_eq!(missing, ["beta"]);
         assert_eq!(
             diagnostic(&missing[0]),
@@ -139,23 +115,20 @@ mod tests {
     }
 
     #[test]
-    fn versions_duplicates_and_removals_do_not_add_names() {
-        let old = package_names("[[package]]\nname = \"alpha\"\nversion = \"1\"\n").unwrap();
+    fn duplicate_versions_still_require_current_approval() {
         let current = package_names(
             "[[package]]\nname = \"alpha\"\nversion = \"2\"\n[[package]]\nname = \"alpha\"\nversion = \"3\"\n",
         )
         .unwrap();
         assert_eq!(current, names(&["alpha"]));
-        assert_eq!(missing_names(&old, &current, &[]), Vec::<String>::new());
-        assert_eq!(missing_names(&old, &Names::new(), &[]), Vec::<String>::new());
+        assert_eq!(missing_names(&current, &[]), ["alpha"]);
+        assert_eq!(missing_names(&current, &["alpha".into()]), Vec::<String>::new());
+        assert_eq!(missing_names(&Names::new(), &["alpha".into()]), Vec::<String>::new());
     }
 
     #[test]
-    fn absent_base_and_empty_current() {
-        assert_eq!(
-            missing_names(&Names::new(), &names(&["beta", "alpha"]), &[]),
-            ["alpha", "beta"]
-        );
+    fn current_names_and_empty_lockfile() {
+        assert_eq!(missing_names(&names(&["beta", "alpha"]), &[]), ["alpha", "beta"]);
         assert_eq!(package_names("# empty\nversion = 4\n").unwrap(), Names::new());
     }
 
@@ -182,16 +155,13 @@ mod tests {
     #[test]
     fn exact_tokens_across_adrs_cover_added_names() {
         let adrs = vec!["Use `alpha`.".into(), "Packages:\n- beta; chosen.".into()];
-        assert_eq!(
-            missing_names(&Names::new(), &names(&["alpha", "beta"]), &adrs),
-            Vec::<String>::new()
-        );
+        assert_eq!(missing_names(&names(&["alpha", "beta"]), &adrs), Vec::<String>::new());
     }
 
     #[test]
     fn substring_case_and_longer_names_do_not_cover_package() {
         for adr in ["alphabetabeta", "beta-extra", "BETA", "beta_suffix", ""] {
-            assert_eq!(missing_names(&Names::new(), &names(&["beta"]), &[adr.into()]), ["beta"]);
+            assert_eq!(missing_names(&names(&["beta"]), &[adr.into()]), ["beta"]);
         }
     }
 
@@ -200,6 +170,6 @@ mod tests {
         let current =
             package_names("[[package]]\nname = \"zeta\"\n[[package]]\nname = \"beta\"\n[[package]]\nname = \"zeta\"")
                 .unwrap();
-        assert_eq!(missing_names(&Names::new(), &current, &[]), ["beta", "zeta"]);
+        assert_eq!(missing_names(&current, &[]), ["beta", "zeta"]);
     }
 }
