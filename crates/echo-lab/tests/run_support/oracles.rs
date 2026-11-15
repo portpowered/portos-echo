@@ -389,7 +389,19 @@ fn assert_isolated_b0(session: &Session, other: &Session) {
     let ledger = session.ledger();
     let stt = ledger.iter().find(|v| v["operation"] == "stt").unwrap();
     assert_eq!(stt["args"], json!([session.0.join("artifacts/reply-0.wav")]));
-    for entry in &ledger {
+    assert_isolated_paths(session, other);
+    assert_eq!(
+        fs::read(session.0.join("artifacts/light-ring.jpg")).unwrap(),
+        include_bytes!("../../../../tests/goldens/lab-frame.jpg")
+    );
+    for file in ["report.json", "events.jsonl"] {
+        let bytes = fs::read(session.0.join("artifacts").join(file)).unwrap();
+        assert!(!String::from_utf8(bytes).unwrap().contains(other.0.to_str().unwrap()));
+    }
+}
+
+fn assert_isolated_paths(session: &Session, other: &Session) {
+    for entry in session.ledger() {
         let args = entry["args"].as_array().unwrap();
         for arg in args {
             let path = Path::new(arg.as_str().unwrap());
@@ -404,13 +416,5 @@ fn assert_isolated_b0(session: &Session, other: &Session) {
                 );
             }
         }
-    }
-    assert_eq!(
-        fs::read(session.0.join("artifacts/light-ring.jpg")).unwrap(),
-        include_bytes!("../../../../tests/goldens/lab-frame.jpg")
-    );
-    for file in ["report.json", "events.jsonl"] {
-        let bytes = fs::read(session.0.join("artifacts").join(file)).unwrap();
-        assert!(!String::from_utf8(bytes).unwrap().contains(other.0.to_str().unwrap()));
     }
 }
