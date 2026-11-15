@@ -186,7 +186,7 @@ fn renewal_and_retry_recheck_quiet_hours_without_repeating_chirp() {
         json!({"preemptions":1,"hours":[9,9,9,8]}),
     ] {
         let session = Session::new(&fixture);
-        failed(&session.run(&[]), "before 09:00");
+        failed(&session.run(&[]), "before 09:00"); // lint-rules: allow-literal expected renewal/retry quiet-hours diagnostic
         assert_eq!(session.operations().iter().filter(|s| *s == "hold").count(), 1);
         assert_eq!(session.operations().iter().filter(|s| *s == "chirp").count(), 1);
         assert_eq!(session.operations().iter().filter(|s| *s == "release").count(), 1);

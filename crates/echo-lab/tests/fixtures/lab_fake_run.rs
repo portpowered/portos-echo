@@ -189,7 +189,7 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
         io::stdout().write_all(
             fixture["transcript"]
                 .as_str()
-                .unwrap_or("The time is 7:49 p.m.")
+                .unwrap_or("The time is 7:49 p.m.") // lint-rules: allow-literal synthetic STT stdout, never a network target
                 .as_bytes(),
         )?;
     } else if op == "screencap" {

@@ -141,7 +141,7 @@ mod tests {
         );
         assert_eq!(
             speech(
-                b"The time is 7:49 p.m.",
+                b"The time is 7:49 p.m.", // lint-rules: allow-literal inert transcript for time-pattern parsing
                 &[r"regex:(?i)\b[0-9]{1,2}:[0-5][0-9]\b".into()]
             ),
             Ok(())

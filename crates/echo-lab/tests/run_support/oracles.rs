@@ -47,8 +47,8 @@ fn success(output: &Output) {
 #[test]
 fn f13_f14_f20_f23_f29_b0_pass_fail_frame_and_audio_privacy() {
     for (transcript, pass, keep) in [
-        ("The time is 7:49 p.m.", true, false),
-        ("The time is 7:49 p.m.", true, true),
+        ("The time is 7:49 p.m.", true, false), // lint-rules: allow-literal synthetic STT transcript for passing B0 without retained audio
+        ("The time is 7:49 p.m.", true, true), // lint-rules: allow-literal synthetic STT transcript for passing B0 with retained audio
         ("No clock information", false, false),
     ] {
         let session = Session::new(&json!({"transcript":transcript,"record_waits_for_frame":true}));

@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn f03_quiet_0859_refuses_and_0900_allows_audio() {
         let session = Session::new(&json!({"hour":8}));
-        failed(&session.run(&[]), "before 09:00");
+        failed(&session.run(&[]), "before 09:00"); // lint-rules: allow-literal expected quiet-hours stderr, never a socket address
         assert_eq!(session.operations(), ["digest", "firmware", "clock"]);
         assert_eq!(session.report()["result"], "fail");
         let session = Session::new(&json!({"hour":9}));
@@ -204,7 +204,7 @@ mod tests {
             ),
         ] {
             let session = Session::new(&json!({"hours":hours}));
-            failed(&session.run(&[]), "before 09:00");
+            failed(&session.run(&[]), "before 09:00"); // lint-rules: allow-literal expected pre-audio quiet-hours diagnostic
             assert_eq!(session.operations(), expected);
         }
     }
