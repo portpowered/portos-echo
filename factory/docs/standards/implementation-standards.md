@@ -22,9 +22,9 @@ define the quality floor. Any test work **MUST** follow
   to a later test-only task or to loopback.
 - Use production wiring for integration evidence and place controlled
   substitutes at external boundaries.
-- Keep unit tests inside one component, run functional customer scenarios as
-  parallel Factory Sessions without building a binary, and keep compiled
-  integration and load evidence in their dedicated lanes.
+- Keep unit tests inside one component, run customer scenarios as `echo-lab`
+  scenario files on loopback with a fake clock (tier T3), and keep cloud (T4)
+  and device evidence for the runs the PRD explicitly authorizes.
 - Do not overclaim evidence. Record what remains unproven and its owning gate.
 - Do not silently broaden scope. Return a structured blocker or delta request.
 - Never commit transient planning state, CI transcripts, audit notes, secrets,

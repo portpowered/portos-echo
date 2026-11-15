@@ -281,8 +281,7 @@ and gives it the verification instructions. The nested session reads the
 unmodified user config, so it has the Playwright and Chrome DevTools MCP
 servers. The browser processes then exist only while that step runs. A PRD or
 payload that needs live browser evidence names this step. Repository browser
-scripts such as `ui/` `storybook:*-check` and Playwright-backed `vitest` runs
-need no opt-in. To give a whole worker the tooling back, delete its `args`.
+checks (for the screen client, once it exists) need no opt-in. To give a whole worker the tooling back, delete its `args`.
 
 ## Failure classification and escalation
 

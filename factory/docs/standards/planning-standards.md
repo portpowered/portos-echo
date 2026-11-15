@@ -347,8 +347,8 @@ intended case matrix in the plan, not delegate case discovery to the
 implementer:
 
 The matrix contains distinct customer behaviors, not every internal branch or
-inventory entry. The plan **MUST** also name the Factory Session strategy,
-shared `root.BuildProcess` ownership, testable external boundaries, parallel
+inventory entry. The plan **MUST** also name the tier, the `echo-lab`
+scenario file and driver for any T3 proof, testable external boundaries, parallel
 isolation model, and the customer-visible invariant behind any required
 serialization, as required by
 [testing-standards.md](./testing-standards.md).

@@ -165,7 +165,7 @@ every changed shape.>
 - Selected layer and why a lower layer cannot prove it:
 - Public or testable boundary:
 - Real and controlled dependencies:
-- Factory Session and shared `root.BuildProcess` strategy, if functional:
+- `echo-lab` scenario file and driver(s), if a T3 simulated-system proof:
 - Parallel-isolation model and customer-visible reason for any serialization:
 - Prebuilt artifact owner and deliberately limited case set, if integration:
 - Dedicated package and resource budget, if load/stress:
