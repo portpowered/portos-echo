@@ -51,10 +51,12 @@ fn response(op: &str, args: &[String], fixture: &Value) -> Result<Value, Box<dyn
         "snapshot" => {
             let index = args.iter().position(|a| a == "--output").ok_or("missing --output")?;
             if fixture["missing_image"] != true {
-                fs::write(
-                    &args[index + 1],
-                    include_bytes!("../../../../tests/goldens/lab-frame.jpg"),
-                )?;
+                let bytes = if let Some(path) = fixture["snapshot_file"].as_str() {
+                    fs::read(path)?
+                } else {
+                    include_bytes!("../../../../tests/goldens/lab-frame.jpg").to_vec()
+                };
+                fs::write(&args[index + 1], bytes)?;
             }
             json!({"success":true,"captured_at":"2026-11-15T09:00:00.600Z"})
         }

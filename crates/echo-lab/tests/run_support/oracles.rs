@@ -223,6 +223,24 @@ fn f21_frame_failures_are_never_silently_passed() {
 }
 
 #[test]
+fn f21_structurally_corrupt_jpeg_fails_frame_step_and_releases_hold() {
+    let session = Session::new(&json!({"snapshot_file":"broken.jpg"}));
+    // Intact SOI/EOI envelope with an out-of-bounds table segment.
+    fs::write(
+        session.0.join("broken.jpg"),
+        [0xff, 0xd8, 0xff, 0xdb, 0, 40, 0xff, 0xd9],
+    )
+    .unwrap();
+    failed(&b0(&session, false), "frame capture: JPEG truncated segment");
+    assert_eq!(session.report()["checks"]["step_1"], false);
+    assert_eq!(session.report()["checks"]["session_released"], true);
+    assert_eq!(session.report()["result"], "fail");
+    assert_eq!(session.report()["evidence"], json!(["events.jsonl"]));
+    assert_eq!(session.operations().last().unwrap(), "release");
+    assert!(!session.operations().contains(&"stt".into()));
+}
+
+#[test]
 fn f21_pending_record_failures_are_checked_by_oracle_and_finalization() {
     for (fixture, diagnostic) in [
         (json!({"fail":"record"}), "record:"),

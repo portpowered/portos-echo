@@ -1,5 +1,6 @@
 mod run_command;
 mod run_device;
+mod run_jpeg;
 mod run_lease;
 mod run_options;
 mod run_oracles;

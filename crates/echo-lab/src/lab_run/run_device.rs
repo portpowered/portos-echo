@@ -293,9 +293,7 @@ impl Device<'_> {
             return Err("frame capture: image exceeds size limit".into());
         }
         let bytes = std::fs::read(path).map_err(|_| "frame capture: missing image")?;
-        if !bytes.starts_with(&[255, 216, 255]) || !bytes.ends_with(&[255, 217]) || bytes.len() < 32 {
-            return Err("frame capture: invalid JPEG image".into());
-        }
+        super::run_jpeg::validate(&bytes).map_err(|reason| format!("frame capture: {reason}"))?;
         artifacts.evidence.push(name.to_owned());
         Ok(())
     }

@@ -56,9 +56,13 @@ RGB and RGBA PNGs; unsupported formats and corrupt inputs fail explicitly.
 The approved CLI source returns JPEG bytes and a capture timestamp, rather
 than PNG. Paths must be portable relative paths without traversal; existing
 destinations and symlink parents are refused. The runner checks the capture
-confirmation and JPEG envelope, retaining exact bytes as report evidence.
+confirmation and JPEG structure, retaining exact bytes as report evidence.
+The file must start with SOI and end with EOI; segment lengths must fit, with
+exactly one SOF0/SOF1/SOF2 before SOS, positive dimensions, one or three
+components, DQT and DHT tables, and at least one entropy byte after SOS.
 This is capture evidence only; it never asserts the Ring image's contents.
-Full JPEG decoding is not performed by the harness.
+Entropy is not decoded: structurally intact files with garbage entropy pass.
+The coordinator reads what the light ring shows from the frame at T5.
 
 When a frame immediately follows `say`, playback completes without `--listen`,
 then a bounded `message record --audio-only --duration 10` child starts.
