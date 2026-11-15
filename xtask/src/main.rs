@@ -3,8 +3,16 @@
 
 use std::process::ExitCode;
 
-fn dispatch(_subcommand: Option<&str>) -> Result<(), &'static str> {
-    Err("Usage: cargo xtask <subcommand>")
+mod lint_rules;
+
+fn dispatch(subcommand: Option<&str>) -> Result<(), &'static str> {
+    match subcommand {
+        Some("lint-rules") => lint_rules::run().map_err(|error| {
+            eprintln!("{error}");
+            "lint-rules failed"
+        }),
+        _ => Err("Usage: cargo xtask <subcommand>"),
+    }
 }
 
 fn main() -> ExitCode {

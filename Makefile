@@ -2,16 +2,19 @@
 SHELL := sh
 .SHELLFLAGS := -ec
 
-.PHONY: fmt-check lint lint-rust test-unit test-contract test-sim build-host ci
+.PHONY: fmt-check lint lint-rust test-unit test-contract test-sim build-host ci lint-rules
 .NOTPARALLEL: lint ci
 
 fmt-check:
 	cargo fmt --all --check
 
-lint: fmt-check lint-rust
+lint: fmt-check lint-rust lint-rules
 
 lint-rust:
 	cargo clippy --workspace --all-targets --locked -- -D warnings
+
+lint-rules:
+	cargo xtask lint-rules && gitleaks dir . --no-banner --redact
 
 test-unit:
 	cargo test --workspace --all-targets
