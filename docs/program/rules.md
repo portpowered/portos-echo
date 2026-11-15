@@ -15,7 +15,8 @@ check exists, the coordinator checks it by hand.
 
 1. **Gates before code.** No crate and no product code until milestone M0 passes: every Phase F gate
    runs in CI and has been seen to fail on a seeded violation.
-2. **Contracts before implementations.** `echo-contracts`, `echo-screen-contract` and `echo-agent-api` change only in a change of their
+2. **Contracts before implementations.** `echo-contracts`, `echo-screen-contract` and `echo-agent-api` change only in a
+   change of their
    own, made by the coordinator, never as a side effect of a feature.
 3. **Simulated before physical.** A milestone is attempted on the Echo only after its scenario passes with
    `--driver sim` against `hassmic-host` (and `--driver cloud` where it involves a service).
@@ -24,7 +25,8 @@ check exists, the coordinator checks it by hand.
 
 - **Strict from the first commit.** There is no baseline file. Adding one, an `#[allow]`, a `// NOLINT` or a
   lowered threshold is a rule violation unless `docs/program/decisions.md` records why.
-- **Rust:** `unsafe` only in crates `lanes.toml` marks `ffi`, each block with a `// SAFETY:` comment. No `unwrap`, `expect`,
+- **Rust:** `unsafe` only in crates `lanes.toml` marks `ffi`, each block with a `// SAFETY:` comment. No `unwrap`,
+  `expect`,
   `panic!`, `todo!`, `dbg!` or `println!` outside tests and `xtask`. Functions of at most 60 lines.
 - **Shape:** files of at most 500 lines; at most 10 files per module directory, tests included; the crate set
   equals the list in `lanes.toml`.

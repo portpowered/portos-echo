@@ -67,7 +67,7 @@ Echo Show (stock firmware + hassmic)            echo-bridge (Rust, operator's PC
 ```
 
 | Component | Runs on | Holds | Does |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `hassmic` (echo-dot-assist, pinned) | The Echo | Nothing of ours | Wake word, echo canceller, capture and playback, mute latch, keys, light band. `PROTO=wyoming`, `ARGS` with `-D`. Installed by echo-dot-assist's `scripts/install-system.sh` |
 | `echo-screen` | The Echo, as hassmic's home app | A pairing token for the bridge's screen page | Shows the bridge's screen page full screen; touches go back to the bridge as `UiAction`s |
 | `echo-bridge` and its crates | The operator's PC first (section 6) | The GPT-Live credential; the Port OS grant (DPoP key, refresh token, access token) | Wyoming client; the GPT-Live session; the delegated agent loop; every MCP call; `session.commentary.append`; the screen server; caps, audit log, kill switch |
@@ -101,7 +101,7 @@ sequenceDiagram
     L->>B: session.delegation.created (target client)
     loop agent turn
         B->>B: model call with the MCP tools as function tools
-        B->>P: tools/call (Bearer; refreshed with the DPoP-bound refresh token)
+        B->>P: tools/call (Bearer#59; refreshed with the DPoP-bound refresh token)
         P-->>B: tool result
     end
     B->>L: session.commentary.append (delegation.id, result)
@@ -110,7 +110,7 @@ sequenceDiagram
 ```
 
 | `echo-bridge` | hassmic on the Echo |
-|---|---|
+| --- | --- |
 | The GPT-Live credential; creating and closing Live calls; session config (model, voice, instructions, `client` delegation) | Wake word, the echo canceller, the mute latch: hardware authority stays here |
 | WebRTC peer and the `oai-events` data channel; optional sideband for observability and the kill switch | Streams the microphone of a run over Wyoming; with `-D` it keeps streaming while the reply plays |
 | Agent loop: `tools/list` → function schemas → each `function_call` executed as MCP `tools/call` → output returned; at most 8 tool calls and a deadline per task | Plays the reply audio the bridge sends; reports `played` |
@@ -129,7 +129,7 @@ Consequences:
 ### 3.1 Spikes (W1)
 
 | Spike | Question | Decides |
-|---|---|---|
+| --- | --- | --- |
 | S1 Live transport | Which Rust WebRTC stack carries GPT-Live's audio track and `oai-events` data channel from the PC (`str0m`, `webrtc-rs`, or `libdatachannel` through FFI)? Do `session.delegation.created` and `session.commentary.append` flow on the data channel, or only on the sideband WebSocket? | `echo-live`'s dependency (ADR); whether the bridge attaches the sideband for delegation |
 | S2 Wyoming barge-in | With `-D`, how does the bridge cut a reply hassmic is already playing when GPT-Live cancels its response: an early `audio-stop`, `pause-satellite`, or nothing yet? What does hassmic send when the wake word is heard while it speaks? Measured against `hassmic-host` | Whether we need an upstream hassmic change; the barge-in budget |
 | S3 Screen client | A minimal WebView app as hassmic's home app showing the bridge's page: memory with hassmic running, coexistence with the light band and hassmic's face and words layers, touch focus, start on boot | `echo-screen`'s shape (ADR); the fallback is Kiosk Satellite pointed at the page |
@@ -157,7 +157,7 @@ file comes with it.
 (never the secret itself):
 
 | Mode | Credential | Live session | Agent model calls | Status |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `chatgpt` (default, the OpenClaw path) | The operator's ChatGPT sign-in: OAuth access token plus the `chatgpt-account-id` | `POST https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas`, model `gpt-live-1-codex` | `https://chatgpt.com/backend-api/codex/responses` | What OpenClaw ships; preview interface (section 4.5) |
 | `api-key` | An OpenAI Platform API key | `POST /v1/live/sessions`, model `gpt-live-1` (the documented GPT-Live path) | `https://api.openai.com/v1/responses` | Documented; billed per use |
 
@@ -171,27 +171,31 @@ bridge does the same.
 
 - **Client and endpoints.** Client id `app_EMoamEEZ73f0CkXaXp7hrann` (Codex's), issuer `https://auth.openai.com`,
   scopes `openid profile email offline_access`, PKCE S256 with a `state` value
-  ([OpenClaw authorization](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/openai-chatgpt-oauth-authorization.runtime.ts#L3-L48),
-  [Codex login server](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/server.rs#L597-L616)).
+([OpenClaw authorization](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/openai-chatgpt-oauth-authorization.runtime.ts#L3-L48),
+[Codex login server](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/server.rs#L597-L616)).
 - **Device-code sign-in, the bridge's default.** `POST /api/accounts/deviceauth/usercode`; the operator approves
   at `https://auth.openai.com/codex/device`; the bridge polls `/api/accounts/deviceauth/token`, which returns an
   `authorization_code` and `code_verifier`; those go to `POST /oauth/token` with redirect
   `https://auth.openai.com/deviceauth/callback`
-  ([OpenClaw device code](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/openai-chatgpt-device-code.ts#L25-L43)). It needs no browser on
+([OpenClaw device code](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/openai-chatgpt-device-code.ts#L25-L43)).
+  It needs no browser on
   the bridge host.
 - **Browser sign-in, as an alternative.** Authorization code with PKCE and a loopback redirect
   `http://localhost:1455/auth/callback`; the code goes to `POST https://auth.openai.com/oauth/token` as a form post
-  ([OpenClaw token request](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/openai-chatgpt-oauth-token.runtime.ts#L22-L23)).
+([OpenClaw token request](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/openai-chatgpt-oauth-token.runtime.ts#L22-L23)).
 - **Account id.** From the access token's claim `https://api.openai.com/auth` → `chatgpt_account_id`
-  ([OpenClaw JWT](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/packages/ai/src/utils/oauth/openai-chatgpt-jwt.ts#L2-L31)).
+([OpenClaw JWT](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/packages/ai/src/utils/oauth/openai-chatgpt-jwt.ts#L2-L31)).
 - **Refresh.** Form post `grant_type=refresh_token`, `refresh_token`, `client_id` to `/oauth/token`
-  ([OpenClaw refresh](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/openai-chatgpt-oauth-token.runtime.ts#L305-L319)). Codex refreshes
+([OpenClaw refresh](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/openai-chatgpt-oauth-token.runtime.ts#L305-L319)).
+  Codex refreshes
   when the access token is within 5 minutes of expiry or the last refresh is older than 8 days
-  ([Codex refresh policy](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/auth/manager.rs#L232-L241)); the bridge uses the same policy.
+([Codex refresh policy](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/auth/manager.rs#L232-L241));
+  the bridge uses the same policy.
 - **Importing an existing Codex sign-in** (`~/.codex/auth.json`: `tokens.access_token`, `refresh_token`,
   `account_id`, `id_token`, `last_refresh`) is allowed once, as OpenClaw does
-  ([OpenClaw import](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/codex/src/migration/cli-credentials.ts#L209-L235),
-  [Codex auth.json](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/auth/storage.rs#L53-L77)). After the import the bridge owns its own
+([OpenClaw import](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/codex/src/migration/cli-credentials.ts#L209-L235),
+[Codex auth.json](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/auth/storage.rs#L53-L77)).
+  After the import the bridge owns its own
   copy. It never refreshes Codex CLI's file in place, so two programs never rotate the same refresh token.
 - **Storage.** The bridge keeps `{access, refresh, expires, account_id}` in its own file, readable only by the
   bridge's user, outside the repository, and wrapped in `Secret<T>` in memory.
@@ -207,13 +211,15 @@ OpenClaw's wire format for `gpt-live-1-codex`
   `{sdp, session}`.
 - Headers: `Authorization: Bearer <access token>`, `chatgpt-account-id`, `OpenAI-Alpha: quicksilver=v2`,
   `session-id`, `thread-id`, `x-session-id`, an `originator` and a User-Agent naming this project
-  ([OpenClaw headers](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/packages/ai/src/providers/openai-chatgpt-request-headers.ts#L24-L30)).
-- The response carries the SDP answer for the bridge's own WebRTC peer. The control channel is `wss://api.openai.com/v1/live/{callId}`.
+([OpenClaw headers](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/packages/ai/src/providers/openai-chatgpt-request-headers.ts#L24-L30)).
+- The response carries the SDP answer for the bridge's own WebRTC peer. The control channel is
+  `wss://api.openai.com/v1/live/{callId}`.
 - Codex CLI has the same route against the same backend
-  ([Codex realtime call](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/codex-api/src/endpoint/realtime_call.rs#L130-L229)).
+([Codex realtime call](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/codex-api/src/endpoint/realtime_call.rs#L130-L229)).
 
 The public `gpt-live-1` model needs a Platform API key; the subscription path uses `gpt-live-1-codex`
-([OpenClaw model check](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/realtime-quicksilver-wire.ts#L389-L392)). Ephemeral client secrets
+([OpenClaw model check](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/realtime-quicksilver-wire.ts#L389-L392)).
+Ephemeral client secrets
 (`/v1/realtime/client_secrets`) are minted only with a Platform API key, so they are no way to hand the
 subscription credential to another device either
 ([OpenClaw provider factory](https://github.com/openclaw/openclaw/blob/032227a96023233f4c66aa8d172e5823a857a43a/extensions/openai/realtime-voice-provider-factory.ts#L400-L430)).
@@ -223,8 +229,11 @@ subscription credential to another device either
 Codex can also trade its sign-in for a Platform API key: `POST https://auth.openai.com/oauth/token` with
 `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, `client_id`, `requested_token=openai-api-key`,
 `subject_token=<id_token>` and `subject_token_type=urn:ietf:params:oauth:token-type:id_token`, then reads
-`access_token` as the key ([Codex obtain_api_key](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/server.rs#L1036-L1068)). Codex calls it
-only after browser sign-in and ignores a failure ([call site](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/server.rs#L446-L451));
+`access_token` as the key
+([Codex obtain_api_key](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/server.rs#L1036-L1068)).
+Codex calls it
+only after browser sign-in and ignores a failure
+([call site](https://github.com/openai/codex/blob/ee344ca9458351a6ea102795fa73110ad3ede5dc/codex-rs/login/src/server.rs#L446-L451));
 device-code sign-in stores no key. OpenClaw does not use the exchange at all: it sends the ChatGPT access token
 itself.
 
@@ -247,7 +256,8 @@ either credential, only Wyoming audio.
 ## 5. Wake word
 
 Owner decision (2026-11-15): the wake word is the one echo-dot-assist uses, the Pryon "Alexa" model from the
-firmware's `libpryon`. It needs no model of our own and no training. `hassmic` loads it on the Echo; nothing of ours touches Pryon.
+firmware's `libpryon`. It needs no model of our own and no training. `hassmic` loads it on the Echo; nothing of ours
+touches Pryon.
 
 What follows from it:
 
@@ -298,13 +308,14 @@ channels, and the wrapper uses both:
   one, `echo.report_result {task_id, status, summary}`. That is the correlation channel the RFC said was missing.
 
 | Operation | Implementation |
-|---|---|
+| --- | --- |
 | `submit(task)` | Create `task_id` and a deadline. Send a message carrying the task, the `task_id`, and the instruction to finish by calling `echo.report_result` with that id. Persist the task |
 | `events(task)` | `Progress` from interim replies; `Completed` or `Failed` only from an `echo.report_result` call whose `task_id` matches a live task. Reject unknown or expired ids |
 | `cancel(task)` | Mark cancelled, send a cancel message, ignore later results for that id |
 | Timeout | No `report_result` by the deadline: `Failed {retryable: false}` with an honest voice message. Never infer success from chat text |
 
-Rules: Muse acts on Port OS through its own connector, never with the bridge's credentials. The Muse bridge never installs
+Rules: Muse acts on Port OS through its own connector, never with the bridge's credentials. The Muse bridge never
+installs
 `system.run`, `file.write` or other host commands. `echo-bridge` talks to the Muse bridge over an
 authenticated LAN connection. A `report_result` never counts as user consent. The first proof (M7) is a
 harmless Port OS read that Muse performs and reports, with correlated ids end to end.
@@ -316,7 +327,7 @@ harmless Port OS read that Muse performs and reports, with correlated ids end to
 Every change names its tier and its oracle. Every milestone names the tiers it requires.
 
 | Tier | Runs where | Network | Command | Oracle | Required for |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | T0 static | Every PR | None | `make lint` | Shape lint, rule lint, fmt, clippy, deny, schema snapshots | Every PR |
 | T1 unit and property | Every PR | None | `make test-unit` | Assertions, proptest, loom on the refresh and queue paths | Every PR |
 | T2 contract | Every PR | None | `make test-contract` | JSON fixtures, captured GPT-Live traces, captured `hassmic-host` Wyoming exchanges | Every PR touching contracts |
@@ -363,7 +374,7 @@ negative:
 ```
 
 | Step | Sim driver | Cloud driver | Device driver |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `say` | Fixture PCM into `hassmic-host`, `SIGUSR1` for the wake word | The same, against real GPT-Live | Play through the Ring speaker (section 8.4) |
 | GPT-Live | A fake Live peer replaying captured traces | Real GPT-Live | Real GPT-Live |
 | `expect_trace` | Bridge trace | Bridge trace plus sideband events | Bridge trace plus hassmic's log over `adb` |
@@ -379,7 +390,7 @@ The report schema of the execution plan (its section 0.2) stands, plus `tier`, `
 Milestones accumulate: the installed image still demonstrates every earlier one.
 
 | Milestone | Demonstration | Tiers | Needs |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **M0** repository harness | Every T0 gate runs in CI and has been seen to fail on a seeded violation. `echo-lab check --milestone M0` passes. Nothing else starts before M0 | T0 | Phase F (section 10) |
 | **B0** bench on a stock Echo | The Ring plays "Alexa, what time is it?" to a stock Echo; the bench records the reply; STT finds a time; a Ring frame shows the light ring. Mouth, ear and STT are proven (`docs/program/baselines.md`); the eye is not yet | T5 (stock device) | The Port OS CLI (done, v0.1.27) |
 | **M1** hassmic and the bridge | hassmic is installed on the probed firmware with `PROTO=wyoming` and `-D` (owner's go-ahead first); after a reboot the bridge connects over Wyoming; a wake word reaches the bridge as a run with microphone audio; the screen client shows "Echo Live ready"; the mute switch shows on the screen and the bridge receives zero frames while latched; 10 restarts of the bridge and of hassmic each recover without a reboot; a second LAN host is refused on 16700 | T3, T5 | W0, W1 |
@@ -399,7 +410,7 @@ A Ring pan-tilt indoor camera next to the Echo, driven by the Port OS CLI (`port
 shells out to `port --output json`; it never carries its own Ring peer.
 
 | Need | CLI surface |
-|---|---|
+| --- | --- |
 | Hold one session that talks and listens | `port session hold <ring> --camera --listen` |
 | Mouth | `port message play-audio --lease <l> <file>`, or `--text "..."` for TTS |
 | Mouth and ear in one step | `port message play-audio --lease <l> --listen <s> --output reply.wav` (JSON reports `playStartedAt`, `playEndedAt`, `recordStartedAt`, `recordEndedAt`) |
@@ -438,7 +449,7 @@ holds the device serial. The `device` driver refuses an unprobed build.
 hassmic owns the keys and the mute latch; Android owns touch, so the screen client sees ordinary touch events.
 
 | Layer | Proves | How | Tier |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1. Hit testing | Page coordinates map to the right `UiAction` | The screen page at 1280 × 800 in a headless browser; synthetic pointer events at edges and corners; targets at least 48 dp; contrast checked in the snapshot test | T1/T3 |
 | 2. Rendering | Every `UiState` renders without clipping | Snapshot of every state at 1280 × 800 in the headless browser | T1/T3 |
 | 3. Injected touch on the device | Android → WebView → bridge → `UiAction` works on the Echo | `adb shell input tap` scaled to the panel; oracle: the bridge trace shows the `UiAction`, screencap shows the new state, a Ring frame confirms | T5 |
@@ -452,7 +463,7 @@ way, whatever grant minted it** (authorization code + PKCE, device code, refresh
 device login.
 
 | ID | Change (portos-backend) | Status (2026-11-15) | Gates |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | PB-1 | `/mcp` accepts every valid access token for the MCP resource, independent of the grant that minted it | Merged (portos-monolith PR 2731); on the pilot since 2026-11-15 | M5 |
 | PB-2 | The device authorization request takes `resource`, so a device-code token gets the MCP audience; discovery advertises `device_authorization_endpoint` | Merged (PR 2731); on the pilot since 2026-11-15 | M5 |
 | PB-3 | A client that allows the `device_code` and `refresh_token` grants | Nothing to build: the built-in public CLI client `port1/systems/zero/oauth-clients/command-line-interface` already allows both. A dedicated `echo` client is optional, a management registration (public, auth method `none`) with no code change | M5 |
@@ -470,7 +481,8 @@ What PR 2731 gives the bridge, once it is deployed:
   Without `resource` the grant mints an old first-party token, which `/mcp` refuses with 401, so `echo-mcp-auth`
   always sends it and a T1 test asserts so. The request carries a DPoP proof: this is where the bridge's key is
   registered.
-- **Token.** The `device_code` grant at `/auth/token`, with a DPoP proof from the same key, returns the same resource-bound pair as the browser code
+- **Token.** The `device_code` grant at `/auth/token`, with a DPoP proof from the same key, returns the same
+  resource-bound pair as the browser code
   grant: an access token (`aud` = the resource, `token_use=access`, a `grant_id`, the scopes the owner granted;
   24 h by default) and a refresh token (30 days, `cnf.jkt` = the bridge's DPoP key thumbprint).
 - **`/mcp` admission** is unchanged and grant-agnostic: `token_use=access`, the issuer, the MCP audience, a subject
@@ -505,7 +517,7 @@ evidence. There is no baseline file, so every rule is strict from the first comm
 once its smoke test has passed (`docs/program/coordinator.md`).
 
 | Item | Delivers | Seeded-violation proof |
-|---|---|---|
+| --- | --- | --- |
 | `el-f1-readme-makefile` | README build section; `Makefile` with `lint`, `test-unit`, `test-contract`, `test-sim`, `build-host`, `ci`; `rust-toolchain.toml` pinned to 1.100.0; a Cargo workspace whose only member is `xtask`; `lanes.toml` listing exactly the workspace's crates, each with a `kind` (`lib`, `bin`, `ffi` or `tool`). A crate joins `lanes.toml` in the change that creates it | `make lint` exits non-zero on an unformatted file |
 | `el-f2-rust-strict` | Workspace `[lints]`: `unsafe_code = "forbid"` except in crates `lanes.toml` marks `ffi`; clippy `pedantic` plus `unwrap_used`, `expect_used`, `panic`, `print_stdout`, `dbg_macro`, `todo`, `undocumented_unsafe_blocks`, `too_many_lines` (60), `cognitive_complexity` (15); `-D warnings`; rustfmt config | An `unwrap()`, an undocumented `unsafe` block and a 70-line function each fail |
 | `el-f3-shape-lint` | `cargo xtask lint-shape`: the crate set equals `lanes.toml`; files at most 500 lines; at most 10 files per module directory, tests included; names carry their area prefix | An undeclared crate and a 501-line file both fail |
@@ -531,10 +543,10 @@ Nobody merges this repository with `--admin`: a red required check means the pul
 Every job calls a make target, and the make target is what an agent runs locally. `make ci` runs the same list in
 the same order. `xtask ci-parity` fails when `.github/workflows/ci.yml` and the `ci` target name different jobs.
 
-**Required on every pull request:**
+Required on every pull request:
 
 | Check | Make target | What fails it |
-|---|---|---|
+| --- | --- | --- |
 | `format` | `make fmt-check` | `cargo fmt --check`, `shfmt -d`, `prettier --check` |
 | `lint-rust` | `make lint-rust` | clippy with the `el-f2` lint set and `-D warnings` |
 | `lint-shape` | `make lint-shape` | Undeclared crate, file over 500 lines, module directory over 10 files |
@@ -551,7 +563,7 @@ the same order. `xtask ci-parity` fails when `.github/workflows/ci.yml` and the 
 **Coverage floors** are fixed numbers, not a ratchet file:
 
 | Scope | Line | Branch |
-|---|---|---|
+| --- | --- | --- |
 | Whole workspace | 80% | 70% |
 | `echo-mcp-auth`, `echo-mcp-client`, `echo-agent-loop`, `echo-wyoming`, `echo-bridge` | 90% | 85% |
 | `echo-contracts`, `echo-config`, `echo-screen-contract` | 95% | 90% |
@@ -563,10 +575,10 @@ Generated code is excluded through one list in `.config/coverage.toml`; adding t
 cached by its pinned commit). Each T1 test has a 30 s timeout and each T3 scenario 120 s, on the fake clock. A
 check that outgrows its budget becomes its own plan item; it is never made optional.
 
-**Nightly and on label, never on the pull request path:**
+Nightly and on label, never on the pull request path:
 
 | Job | Trigger | What fails it |
-|---|---|---|
+| --- | --- | --- |
 | `test-cloud` (T4) | Nightly, or the `cloud` label | A scenario under `--driver cloud` against GPT-Live and the Port OS pilot |
 | `mutants` | Nightly | `cargo-mutants` score below 70% on `echo-mcp-auth` and `echo-agent-loop` |
 | `deps-fresh` | Weekly | `cargo-deny` against the latest advisory database |

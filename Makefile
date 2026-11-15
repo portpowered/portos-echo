@@ -2,7 +2,7 @@
 SHELL := sh
 .SHELLFLAGS := -ec
 
-.PHONY: fmt-check lint-shape lint lint-rust test-unit test-contract test-sim build-host ci lint-rules lint-scripts-web
+.PHONY: fmt-check lint-shape lint lint-rust test-unit test-contract test-sim build-host ci lint-rules lint-scripts-web lint-docs lint-docs-online
 .NOTPARALLEL: lint ci
 
 fmt-check:
@@ -11,7 +11,7 @@ fmt-check:
 lint-shape:
 	cargo xtask lint-shape
 
-lint: fmt-check lint-rust lint-deps lint-rules lint-shape lint-scripts-web
+lint: fmt-check lint-rust lint-deps lint-rules lint-shape lint-scripts-web lint-docs
 
 lint-rust:
 	cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -25,6 +25,12 @@ lint-rules:
 
 lint-scripts-web:
 	sh scripts/lint-scripts-web.sh
+
+lint-docs:
+	sh scripts/lint-docs.sh
+
+lint-docs-online:
+	sh scripts/lint-docs.sh --online
 
 test-unit:
 	cargo test --workspace --all-targets

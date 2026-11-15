@@ -17,7 +17,7 @@ lanes survive only as names for areas of the code.
 ## Who does what
 
 | Role | Who | Model |
-|---|---|---|
+| --- | --- | --- |
 | Coordinator: plan, contracts, `Cargo.lock`, the crate list, CI, batches, hardware runs, evidence | One Claude Code session | — |
 | Planner (`plan` workstation) | Codex | `gpt-6.1-sol`; `gpt-6-astra` allowed for planning only |
 | Processor, reviewer, validator and every other agent workstation | Codex | `gpt-6.1-sol` |
@@ -42,7 +42,7 @@ point a command for this repository at it. Run every command from the repository
 tree: `setup-workspace` branches each item's worktree (`.claude/worktrees/<name>`) from current `main`.
 
 | Need | Command |
-|---|---|
+| --- | --- |
 | Check the configuration | `you factory config validate factory/factory.json` |
 | Start the daemon | `you run --continuously --with-server --listen 127.0.0.1:7447 --record ~/.you-agent-factory/recordings/<yyyy-mm>/<name>.json` |
 | Stop it gracefully | `curl -X POST http://127.0.0.1:7447/shutdown` |

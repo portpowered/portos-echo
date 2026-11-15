@@ -13,7 +13,7 @@ factory payloads cite these instead of rediscovering them. Add a row whenever a 
 ## The device
 
 | Fact | Value | Measured |
-|---|---|---|
+| --- | --- | --- |
 | Model | Echo Show 8 (2nd gen), `ro.product.model` `AEOAT`, device `athena` | 2026-11-15, `adb shell getprop` |
 | OS | Fire OS 7.0 (Android 9), build `PS75751.7809N` | 2026-11-15, `getprop ro.build.display.id` |
 | ABI | `armeabi-v7a`, 32-bit userland | 2026-11-15, `getprop ro.product.cpu.abi` |
@@ -34,7 +34,7 @@ echo-dot-assist's `devices/athena` profile is pinned to 7080 (`probe.md5`), veri
 installed and self-tested on 7806 (2026-11-01), whose `libpryon.so` and `libaudioflinger.so` differ from 7080's.
 
 | File (under `/system`) | 7809 md5 | Same as 7080 |
-|---|---|---|
+| --- | --- | --- |
 | `lib/libpryon.so` | `5f213d89d39114c6b5d58fd6489b5598` | No |
 | `vendor/lib/libasp.so` | `ac5e8985aa9d67461d3b054bde179363` | Yes |
 | `lib/libaspclient.so` | `aeb4f3dc3d9ace3157d5c36bf9739836` | Yes |
@@ -47,7 +47,7 @@ The two that differ are the two that differed on 7806. echo-dot-assist does not 
 Kernel `4.4.146+`, SDK 28, incremental `0036811211140`.
 
 | Signal | 7809 value | Matches the athena profile |
-|---|---|---|
+| --- | --- | --- |
 | Volume keys | `gpio-keys`: `KEY_VOLUMEDOWN`, `KEY_VOLUMEUP` | Yes |
 | Mute latch | `gpio-privacy-state`: `SW_MUTE_DEVICE`; `/sys/devices/platform/gpio-privacy/state` read `0` (unmuted) | Yes |
 | Mute button | `gpio-privacy-button`: `KEY_POWER` | Yes |
@@ -63,7 +63,7 @@ The bench is a Ring pan-tilt indoor camera next to the Echo, driven by the Port 
 under one held camera session.
 
 | Fact | Value | Measured |
-|---|---|---|
+| --- | --- | --- |
 | Held session listens and talks | `port session hold <ring> --camera --listen` reports `listening: true`, `talking: true` | 2026-11-13 |
 | Ambient room level | about −70 dBFS mean over 3 s (`port message record --audio-only`) | 2026-11-13 |
 | Speaker to microphone delay | 320 ms from send to first heard, for the full 0.5 s chirp (`play-audio --chirp --listen 3`) | 2026-11-13 |
@@ -78,7 +78,7 @@ threshold for repeated sessions.
 ## Services
 
 | Fact | Value | Source |
-|---|---|---|
+| --- | --- | --- |
 | Port OS MCP transport | stateless streamable HTTP: POST only, no `Mcp-Session-Id`, `GET /mcp` answers 405, no elicitation | Port OS plan review, 2026-11-13 |
 | Port OS MCP auth | `/mcp` admits any access token with `token_use=access`, the issuer, the MCP audience, a subject and an active `grant_id`, whatever grant minted it. Authorization code + PKCE (DCR or CIMD) works on the pilot today; device-code tokens work once portos-monolith PR 2731 (merged 2026-11-15) is deployed | Port OS plan review, 2026-11-13; portos-backend coordinator, 2026-11-15 |
 | Port OS device-code grant | `POST /auth/device-authorization` needs `resource` = the protected resource's `/mcp` URL (anything else: 400 `invalid_target`; none: a first-party token `/mcp` refuses with 401). Access token 24 h, refresh token 30 days bound by `cnf.jkt`; refresh tokens rotate and a replay revokes the grant. The built-in public CLI client already allows `device_code` and `refresh_token`; DCR and CIMD clients cannot use the device flow. Code lifetime 1800 s, poll interval 5 s | portos-backend coordinator, 2026-11-15 (PR 2731); `docs/user-guides/oauth/oauth-device-auth.md` |

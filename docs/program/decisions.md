@@ -15,7 +15,7 @@ one place.
 ## Decided
 
 | Date | Decision | By | Where it applies |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 2026-11-15 | **The hassmic `-D` route.** The Echo runs echo-dot-assist's `hassmic` in Wyoming mode with `-D` (duplex for a realtime client, echo-dot-assist #173): Pryon wake word, Amazon's echo canceller, microphone and speaker, mute latch. Everything else moves to `echo-bridge` on the operator's PC: the Wyoming client, the GPT-Live session, the delegated agent loop and every MCP call. A small screen client stays on the Echo for status, prompts and M6. No Rust, C shim or WebRTC peer of ours on the Echo | Owner | Plan sections 1–3, 6, 8.3, 10 |
 | 2026-11-15 | **MCP runs on the bridge**, on the owner's side and never at OpenAI (client delegation only, never `responses` delegation). The Port OS credential lives only on the bridge host. Supersedes the 2026-11-13 decision that every MCP invocation runs on the Echo | Owner | Plan section 3 |
 | 2026-11-15 | **The work is split by repository.** portos-echo owns the plan, the bridge, hassmic integration, the screen, `echo-lab` and the bench, CI, Muse and milestones M0, B0, M1–M7. portos-backend owns plan section 9: `/mcp` accepts any valid Port OS access token for the MCP resource the same way whatever grant minted it, with nothing specific to device login | Owner | Plan section 9 |
@@ -41,7 +41,7 @@ one place.
 ## Open
 
 | Question | Recommendation | Decides |
-|---|---|---|
+| --- | --- | --- |
 | May hassmic be installed on the Echo (build 7809)? `install-system.sh` writes `/system`, takes Amazon's apps off the partition and extends the SELinux policy; `--uninstall` and the firmware `.bin` in TWRP undo it. 7809 differs from the pinned 7080 in the same two libraries as the tested 7806 (`docs/program/baselines.md`) | Yes, once the bridge's T3 run against `hassmic-host` passes, so the device is changed only when there is something to connect | Owner |
 | Which wake word? The firmware carries Pryon models for "Alexa", "Amazon", "Computer" and "Echo" (2026-11-15 probe), and hassmic supports all of them | Keep "Alexa" (decided). Consider "Computer" for the bench only, so stock Echos in the house don't answer the bench's utterances | Owner |
 | Where does the bridge run? | The operator's Windows PC on the LAN first (in WSL, beside the CI-identical toolchain); a Raspberry Pi (which can also host the Muse bridge) once it must be always on. Moving it means moving the operator's ChatGPT credential and the Port OS grant | Owner |
