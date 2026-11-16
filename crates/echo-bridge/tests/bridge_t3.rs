@@ -2,6 +2,7 @@
 //! T3: prebuilt binary, pinned hassmic-host and synthetic Live on IPv4 loopback.
 use echo_live::fake::{FakeLive, FakeResponse, FakeScript};
 use serde_json::{Value, json};
+use std::io::Write;
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -11,7 +12,6 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines},
     process::{Child, ChildStdin, ChildStdout, Command},
 };
-
 #[path = "bridge_support/bridge_cut.rs"]
 mod bridge_cut;
 #[path = "bridge_support/bridge_latency.rs"]
@@ -32,13 +32,11 @@ mod bridge_wire_auth_failure;
 mod bridge_wire_delegation;
 #[path = "bridge_support/bridge_wire_screen.rs"]
 mod bridge_wire_screen;
-
 // Observation ceiling for slow instrumented loopback runs; product deadlines stay unchanged.
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Gap between re-reads of a trace file or health endpoint while waiting for the bridge.  A bare `yield_now` loop
 /// re-read the whole file thousands of times a second and starved the coverage-instrumented bridge it was waiting on.
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
-
 struct Process {
     name: &'static str,
     expected: String,
@@ -46,7 +44,6 @@ struct Process {
     input: Option<ChildStdin>,
     lines: Lines<BufReader<ChildStdout>>,
 }
-
 impl Process {
     fn spawn(command: &mut Command) -> Self {
         let name = if Path::new(command.as_std().get_program())
@@ -134,11 +131,9 @@ impl Process {
         assert_eq!(status.code(), Some(code), "{error}");
     }
 }
-
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
-
 fn host() -> Command {
     let shell = if cfg!(windows) {
         let result = std::process::Command::new("python")
@@ -159,7 +154,6 @@ fn host() -> Command {
     command.arg("tests/bridge_host.sh").current_dir(root());
     command
 }
-
 fn bridge(port: &str, url: &str, trace: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_echo-bridge"));
     command
@@ -168,7 +162,6 @@ fn bridge(port: &str, url: &str, trace: &Path) -> Command {
         .env("ECHO_LAB_TRACE_PATH", trace);
     command
 }
-
 fn trace(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap()
@@ -176,7 +169,6 @@ fn trace(path: &Path) -> Vec<Value> {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
 }
-
 async fn health(address: &str, method: &str, path: &str) -> String {
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
     stream
@@ -187,7 +179,6 @@ async fn health(address: &str, method: &str, path: &str) -> String {
     stream.read_to_string(&mut response).await.unwrap();
     response
 }
-
 async fn assert_health(address: &str) {
     let response = health(address, "GET", "/healthz").await;
     assert_eq!(
@@ -205,7 +196,6 @@ async fn assert_health(address: &str) {
             .ends_with("Content-Length: 0\r\nConnection: close\r\n\r\n")
     );
 }
-
 #[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_spine_host_echo_health_and_eof() {
@@ -231,15 +221,34 @@ async fn bridge_spine_host_echo_health_and_eof() {
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
     let entries = trace(&path);
+    let calls = observer.calls().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].frames.len(), 32);
+    assert_host_microphone(&entries, calls[0].frames.len());
+    assert_eq!(host.command("pcm").await, "30720 0");
+    bridge.finish(0).await;
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    host.finish(0).await;
+    fake.shutdown().await;
+}
+fn assert_host_microphone(entries: &[Value], receipt: usize) {
     let mic = entries.iter().find(|e| e["event"] == "mic.completed").unwrap();
     assert_eq!(mic["count"], 32);
     assert_eq!(mic["input_samples"], 10240);
     assert_eq!(mic["tail_samples"], 0);
     assert_eq!(mic["dropped_chunks"], 0);
-    let calls = observer.calls().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].frames.len(), 32);
-    assert_eq!(host.command("pcm").await, "30720 0");
+    let snapshots: Vec<_> = entries.iter().filter(|e| e["event"] == "mic.frames").collect();
+    assert_eq!(snapshots.len(), 2);
+    assert_eq!(snapshots[0]["phase"], "first");
+    assert_eq!(snapshots[0]["count"], 2);
+    assert_eq!(snapshots[1]["phase"], "completed");
+    assert_eq!(snapshots[1]["run_id"], "run-1");
+    assert_eq!(snapshots[1]["count"].as_u64(), Some(receipt as u64));
+    assert_eq!(snapshots[1]["count"], mic["count"]);
+    writeln!(std::io::stdout(),
+        "run-1 mic.frames.completed={} fake.received={} mic.completed={} dropped_chunks={} input_samples={} tail_samples={} PCM=30720 0",
+        snapshots[1]["count"], receipt, mic["count"], mic["dropped_chunks"], mic["input_samples"], mic["tail_samples"]
+    ).unwrap();
     let ordered: Vec<_> = entries
         .iter()
         .filter(|e| e["run_id"] == "run-1")
@@ -255,17 +264,13 @@ async fn bridge_spine_host_echo_health_and_eof() {
             "reply.played",
             "wyoming.mic_frames",
             "mic.completed",
+            "mic.frames",
             "wyoming.run_ended"
         ]
     );
     let wire = entries.iter().find(|e| e["event"] == "wyoming.mic_frames").unwrap();
     assert_eq!(wire["count"], mic["received_chunks"]);
-    bridge.finish(0).await;
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
-    host.finish(0).await;
-    fake.shutdown().await;
 }
-
 #[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_spine_authorization_is_safe_and_never_played() {
@@ -280,7 +285,6 @@ async fn bridge_spine_authorization_is_safe_and_never_played() {
     )
     .await;
 }
-
 async fn failed_call(response: FakeResponse, events: Vec<String>, reason: &str) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace");
@@ -305,7 +309,6 @@ async fn failed_call(response: FakeResponse, events: Vec<String>, reason: &str) 
     );
     fake.shutdown().await;
 }
-
 #[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_spine_provider_outage_is_safe_and_never_played() {
@@ -320,19 +323,16 @@ async fn bridge_spine_provider_outage_is_safe_and_never_played() {
     )
     .await;
 }
-
 #[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_spine_provider_stall_has_a_deadline() {
     failed_call(FakeResponse::StallHttp, vec![], "deadline").await;
 }
-
 #[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_spine_malformed_event_is_safe_and_never_played() {
     failed_call(FakeResponse::Answer, vec!["synthetic private body".into()], "decode").await;
 }
-
 #[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_spine_empty_explicit_completion_waits_for_host_played() {
@@ -360,7 +360,6 @@ async fn bridge_spine_empty_explicit_completion_waits_for_host_played() {
     host.finish(0).await;
     fake.shutdown().await;
 }
-
 #[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
@@ -422,9 +421,12 @@ async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
     assert!(live.commentary.try_recv().is_err());
     spoof.shutdown().await.unwrap();
 }
-
 fn check_wire_journey_trace(path: &Path) {
     let entries = trace(path);
+    assert_eq!(
+        entries.iter().find(|e| e["event"] == "mic.frames").unwrap()["phase"],
+        "first"
+    );
     let expected = [
         "run.started",
         "mic.frames",
@@ -433,6 +435,7 @@ fn check_wire_journey_trace(path: &Path) {
         "session.commentary.append",
         "reply.started",
         "reply.played",
+        "mic.frames",
     ];
     let edges: Vec<_> = entries
         .iter()
@@ -456,7 +459,6 @@ fn check_wire_journey_trace(path: &Path) {
         assert!(!text.contains(private), "trace disclosure");
     }
 }
-
 async fn wire_journey_screen(directory: &Path) -> Lines<BufReader<tokio::net::TcpStream>> {
     let address = trace(&directory.join("trace"))
         .iter()
@@ -479,7 +481,6 @@ async fn wire_journey_screen(directory: &Path) -> Lines<BufReader<tokio::net::Tc
     .await;
     screen
 }
-
 async fn wire_journey_commentary(live: &mut bridge_peer::Live) {
     let commentary = tokio::time::timeout(Duration::from_secs(5), live.commentary.recv())
         .await

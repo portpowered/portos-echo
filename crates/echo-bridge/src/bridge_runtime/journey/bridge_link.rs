@@ -12,6 +12,7 @@ use echo_link::{
     LinkConnector, LinkEvents, MicrophoneRun,
     fake::{Command, FakeConnector, Observer},
 };
+use std::io::Write;
 use std::{collections::VecDeque, future::Future, pin::Pin, task::Poll};
 
 #[derive(Default)]
@@ -20,6 +21,7 @@ struct Live {
     audio: VecDeque<AudioFrame>,
     events: VecDeque<LiveEvent>,
     echo: bool,
+    reject_at: Option<usize>,
     cancel_at: Option<Instant>,
 }
 impl LivePort for Live {
@@ -28,6 +30,9 @@ impl LivePort for Live {
         frame: AudioFrame,
         _: std::time::Instant,
     ) -> impl Future<Output = Result<(), CallError>> + Send {
+        if self.reject_at == Some(self.sent.len()) {
+            return std::future::ready(Err(CallError::Unavailable));
+        }
         if self.echo {
             self.audio.push_back(frame.clone());
         }
@@ -170,7 +175,7 @@ fn assert_happy(live: &Live, observer: &Observer, base: usize, path: &std::path:
     assert_eq!(
         trace(path),
         vec![
-            row("mic.frames", 0, json!({"count":2})),
+            row("mic.frames", 0, json!({"phase":"first","count":2})),
             row("reply.started", 0, json!({})),
             row("reply.played", 440, json!({"outcome":"played"})),
             row("wyoming.mic_frames", 440, json!({"count":10})),
@@ -180,6 +185,7 @@ fn assert_happy(live: &Live, observer: &Observer, base: usize, path: &std::path:
                 json!({"count":32,"received_chunks":10,"dropped_chunks":0,
             "input_samples":10240,"tail_samples":0})
             ),
+            row("mic.frames", 440, json!({"phase":"completed","count":32})),
             row("wyoming.run_ended", 440, json!({})),
         ]
     );
@@ -197,7 +203,7 @@ fn row(event: &str, elapsed: u64, fields: serde_json::Value) -> serde_json::Valu
 mod cases;
 
 #[tokio::test(start_paused = true)]
-async fn bridge_guard_rejects_microphone_even_when_a_neutral_source_yields_while_muted() {
+async fn bridge_link_guard_rejects_microphone_even_when_a_neutral_source_yields_while_muted() {
     let screen = Screen::bind(None).await.unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut trace = Trace::open(&dir.path().join("trace"), "api_key").unwrap();
@@ -231,4 +237,170 @@ async fn bridge_guard_rejects_microphone_even_when_a_neutral_source_yields_while
         serde_json::from_str(&std::fs::read_to_string(dir.path().join("trace")).unwrap()).unwrap();
     assert_eq!(row["received_frames"], 2);
     assert_eq!(row["forwarded_frames"], 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_partial_batch_failure_retains_only_accepted_sends() {
+    let screen = Screen::bind(None).await.unwrap();
+    let mut source = Source::new().unwrap();
+    let mut live = Live {
+        reject_at: Some(1),
+        ..Live::default()
+    };
+    assert_eq!(
+        source
+            .microphone(
+                MicFrame {
+                    format: bridge_audio::format(16_000),
+                    payload: vec![0; 2048],
+                },
+                &mut live,
+                false,
+                &screen
+            )
+            .await,
+        Err(Error::Unavailable)
+    );
+    assert_eq!(source.sent, 1);
+    assert_eq!(live.sent.len(), 1);
+    assert!(!source.finished);
+}
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_flush_short_tail_and_repeated_finish_count_actual_sends() {
+    let screen = Screen::bind(None).await.unwrap();
+    for samples in [0, 1, 320, 640, 1024] {
+        let mut source = Source::new().unwrap();
+        let mut live = Live::default();
+        source
+            .microphone(
+                MicFrame {
+                    format: bridge_audio::format(16_000),
+                    payload: vec![0; samples * 2],
+                },
+                &mut live,
+                false,
+                &screen,
+            )
+            .await
+            .unwrap();
+        let before = source.sent;
+        source.finish_mic(&mut live, &screen).await.unwrap();
+        let expected = (samples * 3 / 960) as u64;
+        assert_eq!(source.sent, expected);
+        assert_eq!(source.sent, live.sent.len() as u64);
+        assert_eq!(source.mic.as_ref().unwrap().tail_samples(), samples * 3 % 960);
+        source.finish_mic(&mut live, &screen).await.unwrap();
+        assert_eq!(source.sent, expected);
+        assert_eq!(source.sent, live.sent.len() as u64);
+        writeln!(
+            std::io::stdout(),
+            "samples={samples} before_flush={before} accepted={} tail={}",
+            source.sent,
+            samples * 3 % 960
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_flush_failure_excludes_rejected_packet_and_bad_pcm() {
+    let screen = Screen::bind(None).await.unwrap();
+    let mut source = Source::new().unwrap();
+    let mut live = Live::default();
+    source
+        .microphone(
+            MicFrame {
+                format: bridge_audio::format(16_000),
+                payload: vec![0; 2048],
+            },
+            &mut live,
+            false,
+            &screen,
+        )
+        .await
+        .unwrap();
+    assert_eq!(source.sent, 2);
+    live.reject_at = Some(2);
+    assert_eq!(source.finish_mic(&mut live, &screen).await, Err(Error::Unavailable));
+    assert_eq!(source.sent, 2);
+    assert_eq!(live.sent.len(), 2);
+    assert!(!source.finished);
+    assert_eq!(
+        source
+            .microphone(
+                MicFrame {
+                    format: bridge_audio::format(16_000),
+                    payload: vec![0; 3],
+                },
+                &mut live,
+                false,
+                &screen
+            )
+            .await,
+        Err(Error::Audio)
+    );
+    assert_eq!(source.sent, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_mute_between_batches_resumes_with_only_accepted_total() {
+    let screen = Screen::bind(None).await.unwrap();
+    let mut source = Source::new().unwrap();
+    let mut live = Live::default();
+    let directory = tempfile::tempdir().unwrap();
+    let mut writer = Trace::open(&directory.path().join("trace"), "api_key").unwrap();
+    for muted in [false, true, false] {
+        screen
+            .observe(&echo_link::LinkEvent::<()>::Mute(muted), &mut writer)
+            .unwrap();
+        let before = live.sent.len();
+        source
+            .microphone(
+                MicFrame {
+                    format: bridge_audio::format(16_000),
+                    payload: vec![0; 2048],
+                },
+                &mut live,
+                false,
+                &screen,
+            )
+            .await
+            .unwrap();
+        assert_eq!(source.sent, live.sent.len() as u64);
+        if muted {
+            assert_eq!(live.sent.len(), before);
+        }
+    }
+    source.finish_mic(&mut live, &screen).await.unwrap();
+    assert_eq!(source.sent, 6);
+    assert_eq!(live.sent.len(), 6);
+}
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_invalid_or_rejected_first_input_keeps_zero() {
+    let screen = Screen::bind(None).await.unwrap();
+    for bytes in [3, 2048] {
+        let mut source = Source::new().unwrap();
+        let mut live = Live {
+            reject_at: Some(0),
+            ..Live::default()
+        };
+        assert_eq!(
+            source
+                .microphone(
+                    MicFrame {
+                        format: bridge_audio::format(16_000),
+                        payload: vec![0; bytes]
+                    },
+                    &mut live,
+                    false,
+                    &screen
+                )
+                .await,
+            Err(if bytes == 3 { Error::Audio } else { Error::Unavailable })
+        );
+        assert_eq!(source.sent, 0);
+        assert_eq!(live.sent.len(), 0);
+    }
 }

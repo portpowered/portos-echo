@@ -14,7 +14,6 @@ use echo_live::{AudioFrame, call::CallError};
 use serde_json::json;
 use std::{num::NonZeroUsize, time::Duration};
 use tokio::time::Instant;
-
 struct Source {
     mic: Option<Microphone>,
     chunks: u64,
@@ -30,7 +29,6 @@ struct Source {
     queue: FrameQueue<Vec<u8>>,
     partial: Vec<u8>,
 }
-
 impl Source {
     fn new() -> Result<Self, Error> {
         Ok(Self {
@@ -49,7 +47,6 @@ impl Source {
             partial: Vec::with_capacity(960),
         })
     }
-
     async fn microphone(
         &mut self,
         frame: MicFrame,
@@ -73,13 +70,12 @@ impl Source {
         }
         let mic = self.mic.as_mut().ok_or(Error::Audio)?;
         let packets = mic.process(&format, &frame.payload)?;
-        self.sent += send(call, packets, screen).await?;
+        send(call, packets, screen, &mut self.sent).await?;
         if lab && self.chunks == 10 {
             self.finish_mic(call, screen).await?;
         }
         Ok(())
     }
-
     async fn finish_mic(
         &mut self,
         call: &mut impl LivePort,
@@ -87,14 +83,13 @@ impl Source {
     ) -> Result<(), Error> {
         if !self.finished {
             if let Some(mic) = &mut self.mic {
-                self.sent += send(call, mic.finish()?, screen).await?;
+                send(call, mic.finish()?, screen, &mut self.sent).await?;
             }
             self.finished = true;
         }
         Ok(())
     }
-
-    fn record(&self, trace: &mut Trace, id: &str, stats: echo_link::RunStats) -> Result<(), Error> {
+    fn record(&self, trace: &mut Trace, id: &str, stats: echo_link::RunStats, completed: bool) -> Result<(), Error> {
         trace.record("wyoming.mic_frames", Some(id), json!({"count":stats.received}))?;
         let (samples, tail) = self
             .mic
@@ -106,10 +101,12 @@ impl Source {
             json!({"count":self.sent,"received_chunks":stats.received,
         "dropped_chunks":stats.dropped,"input_samples":samples,"tail_samples":tail}),
         )?;
+        if completed {
+            trace.record("mic.frames", Some(id), json!({"phase":"completed","count":self.sent}))?;
+        }
         trace.record("wyoming.run_ended", Some(id), json!({}))?;
         Ok(())
     }
-
     async fn completion(
         &mut self,
         completed: bool,
@@ -126,11 +123,9 @@ impl Source {
         self.enqueue(&bytes);
         Ok(true)
     }
-
     fn echo_done(&self, lab: (bool, u64)) -> bool {
         lab.0 && self.finished && self.sent > 0 && self.received == self.sent && self.acknowledged == self.sent + lab.1
     }
-
     fn enqueue(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             self.partial.push(byte);
@@ -141,14 +136,12 @@ impl Source {
             }
         }
     }
-
     fn discard_reply(&mut self) -> u64 {
         let retained = self.queue.len() as u64;
         self.queue.clear();
         self.partial.clear();
         retained
     }
-
     async fn receive(&mut self, call: &mut impl LivePort) -> Result<bool, Error> {
         // Leave time for the playback and Wyoming event futures in try_join!.
         // A provider burst must not monopolize the owner with synchronous
@@ -164,7 +157,6 @@ impl Source {
         tokio::task::yield_now().await;
         Ok(false)
     }
-
     fn event(&mut self, event: LiveEvent, lab: bool) -> Result<(), Error> {
         match event {
             LiveEvent::Error { .. } => Err(Error::Unavailable),
@@ -188,7 +180,6 @@ impl Source {
         }
     }
 }
-
 pub(super) async fn run<L: EchoLink>(
     client: &L,
     events: &mut L::Events,
@@ -252,10 +243,9 @@ pub(super) async fn run<L: EchoLink>(
     })
     .await
     .map_err(|_| Error::Deadline)??;
-    source.record(trace, id, run.stats())?;
+    source.record(trace, id, run.stats(), !source.cancelled && !abandoned)?;
     Ok((source.sent, !source.cancelled && !abandoned))
 }
-
 async fn stop_failed_producer<L: EchoLink>(
     result: Result<(), Error>,
     client: &L,
@@ -272,7 +262,6 @@ async fn stop_failed_producer<L: EchoLink>(
         }
     }
 }
-
 struct PlaybackContext<'a, L: EchoLink> {
     client: &'a L,
     trace: &'a mut Trace,
@@ -286,7 +275,6 @@ struct PlaybackContext<'a, L: EchoLink> {
     delegation: &'a mut super::bridge_delegation::Host,
     kill: &'a super::bridge_kill::Kill<'a>,
 }
-
 impl<L: EchoLink> PlaybackContext<'_, L> {
     fn pressure(&mut self, source: &Source, reported: &mut bool) -> Result<(), Error> {
         if !*reported && source.queue.drop_count() > 0 {
@@ -331,7 +319,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             }
         }
     }
-
     async fn cancelled(&mut self, source: &mut Source, call: &mut impl LivePort) -> Result<bool, Error> {
         if self.kill.sync(self.trace).await? {
             source.cancelled = true;
@@ -343,7 +330,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         }
         Ok(source.cancelled)
     }
-
     async fn microphone(
         &mut self,
         source: &mut Source,
@@ -351,15 +337,21 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         call: &mut impl LivePort,
         lab: bool,
     ) -> Result<(), Error> {
-        source.microphone(frame, call, lab, self.screen).await?;
+        let result = source.microphone(frame, call, lab, self.screen).await;
+        self.microphone_activity(source)?;
+        result
+    }
+    fn microphone_activity(&mut self, source: &Source) -> Result<(), Error> {
         if !self.microphone && source.sent > 0 {
-            self.trace
-                .record("mic.frames", Some(self.id), json!({"count":source.sent}))?;
+            self.trace.record(
+                "mic.frames",
+                Some(self.id),
+                json!({"phase":"first","count":source.sent}),
+            )?;
             self.microphone = true;
         }
         Ok(())
     }
-
     async fn capture(
         &mut self,
         source: &mut Source,
@@ -375,7 +367,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             Ok(true)
         }
     }
-
     fn device(&mut self, source: &mut Source, event: &LinkEvent<<L::Events as LinkEvents>::Run>) -> Result<(), Error> {
         self.screen.observe(event, self.trace)?;
         match event {
@@ -386,7 +377,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         }
         Ok(())
     }
-
     fn event(&mut self, event: LiveEvent, source: &mut Source, lab: bool) -> Result<(), Error> {
         if matches!(event, LiveEvent::DelegationCreated { .. }) {
             if self.delegation.dispatch(event, self.id, self.trace)? {
@@ -397,7 +387,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             source.event(event, lab)
         }
     }
-
     async fn forward(&mut self, tx: &L::ReplySink, frame: Vec<u8>) -> Result<(), Error> {
         tx.send(frame).await.map_err(|_| Error::Wyoming)?;
         if !self.speaking {
@@ -407,7 +396,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         }
         Ok(())
     }
-
     async fn cut(&mut self, source: &mut Source) -> Result<(), Error> {
         let bridge_evicted = source.queue.drop_count();
         let bridge_dropped = source.discard_reply();
@@ -425,7 +413,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         )
     }
 }
-
 async fn produce<L: EchoLink>(
     source: &mut Source,
     run: &mut <L::Events as LinkEvents>::Run,
@@ -450,6 +437,7 @@ async fn produce<L: EchoLink>(
         completed = source
             .completion(completed, drained, echo_done, call, context.screen)
             .await?;
+        context.microphone_activity(source)?;
         if completed && source.queue.is_empty() {
             return Ok(());
         }
@@ -475,26 +463,23 @@ async fn produce<L: EchoLink>(
         }
     }
 }
-
 async fn send(
     call: &mut impl LivePort,
     packets: Vec<AudioFrame>,
     screen: &super::bridge_screen::Screen,
-) -> Result<u64, Error> {
-    let mut count = 0;
+    sent: &mut u64,
+) -> Result<(), Error> {
     for packet in packets {
         if screen.muted()? {
             break;
         }
         call.send_audio(packet, Instant::now().into_std()).await?;
+        *sent += 1;
         screen.sent()?;
-        count += 1;
     }
-    Ok(count)
+    Ok(())
 }
-
-#[cfg(test)]
-mod tests;
-
 #[cfg(test)]
 mod bridge_link;
+#[cfg(test)]
+mod tests;

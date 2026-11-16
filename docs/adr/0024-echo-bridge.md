@@ -52,8 +52,14 @@ retain independent five-second control limits. Once production ends, Played has
 its own five-second limit rather than inheriting the longer task window. Kill
 and shutdown remain selectable throughout the task and cleanup.
 
-`mic.frames` records the first successfully sent microphone batch. Exact final
-packet/sample/drop totals are in `mic.completed`; `wyoming.mic_frames` stays
+`mic.frames` records cumulative successful Live packet sends: `phase=first`
+marks early microphone activity before reply processing; `phase=completed` is
+emitted exactly once after successful playback acknowledgment and run drain.
+Select the completed phase and run ID for a final total; never sum snapshots.
+Empty successful runs report completed count 0, with no first snapshot; cancelled,
+abandoned or failed runs have no completed snapshot. Missing phase in older traces
+means legacy first activity, not a final total. The completed count equals
+`mic.completed`, which retains sample/drop totals; `wyoming.mic_frames` stays
 compatible. `reply.started` follows the first forwarded PCM payload, so arming
 an empty reply no longer claims audible activity. A Played acknowledgment is
 still required for terminal playback evidence.
