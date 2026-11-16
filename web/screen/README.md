@@ -1,5 +1,31 @@
 # Echo screen page
 
+The production loopback transport is the `echo-screen-server` library. It uses
+the same page and endpoint grammar, with `?token=` on each protected endpoint.
+For example, percent-encode `/events?token=synthetic-screen-pair` as the `events`
+parameter, and `/actions?token=synthetic-screen-pair` as `actions`. Product tokens
+are supplied by the bridge; never put them in logs or committed URLs.
+
+Build this page before serving it. The library serves the current bundle from
+`web/screen/dist/screen.js`; an absent bundle returns 503, with no fallback.
+`serve(loopback_address, Secret<String>, bounded_state_receiver)` returns the
+bound address and a bounded action receiver. Frames start at sequence 1; late
+clients receive the current frame then new updates. Missing, empty, duplicate,
+wrong and revoked tokens receive empty 401 responses. Revocation closes active
+streams. Explicit shutdown, owner drop and state input closure close the server.
+Backlogs, action queues and active streams have capacity 32; excess requests
+receive 503 and lagging streams disconnect. POST accepts JSON up to 65536 bytes
+and refuses a supplied foreign Origin. No action is executed or retried here.
+LAN access must wait for pinned TLS in W3.
+
+`npm test` builds the Rust `screen_fixture` example once before running tests.
+The integration file consumes that prebuilt artifact, drives synthetic states
+through stdin and observes exact returned actions through stdout, using native
+EventSource/fetch in locked Chromium on loopback. Run the focused integration
+from any working directory using its absolute path after building the page and
+fixture. No bridge trace mapping, product pairing persistence or Android behavior
+is claimed by this component proof.
+
 Run with Node 24. Provision the locked developer tools separately from tests:
 
 ```sh

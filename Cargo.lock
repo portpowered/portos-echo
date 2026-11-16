@@ -786,6 +786,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-screen-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "echo-contracts",
+ "echo-screen-contract",
+ "futures-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "echo-spoof-mcp"
 version = "0.1.0"
 dependencies = [
