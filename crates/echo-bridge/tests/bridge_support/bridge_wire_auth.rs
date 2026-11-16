@@ -278,6 +278,7 @@ async fn bridge_wire_auth_configured_live_uses_selected_provider() {
         let mut bridge = Process::spawn(&mut cmd);
         let mut stream = listener.accept().await.unwrap().0;
         bridge_short::register(&mut stream, &mut bridge).await;
+        let stream = bridge_short::Satellite::new(stream);
         tokio::time::timeout(OBSERVATION_TIMEOUT, observer.wait_for_calls(1))
             .await
             .unwrap()

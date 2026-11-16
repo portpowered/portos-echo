@@ -20,7 +20,7 @@ pub(super) async fn wait_event(path: &Path, event: &str) {
     .unwrap();
 }
 
-async fn wake(stream: &mut tokio::net::TcpStream) {
+async fn wake(stream: &mut bridge_short::Satellite) {
     bridge_short::send(
         stream,
         "run-pipeline",
@@ -51,6 +51,7 @@ async fn retained_failure(credential: Option<&str>, status: u16) {
     let mut bridge = Process::spawn(&mut bridge_wire_screen::run_command(directory.path(), &origin));
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
+    let mut satellite = bridge_short::Satellite::new(satellite);
     let path = directory.path().join("trace");
     let relink = status == 401;
     wait_event(&path, if relink { "auth.relink_required" } else { "run.failed" }).await;
@@ -66,7 +67,7 @@ async fn retained_failure(credential: Option<&str>, status: u16) {
 
 async fn assert_refused(
     directory: &Path,
-    satellite: &mut tokio::net::TcpStream,
+    satellite: &mut bridge_short::Satellite,
     path: &Path,
     observer: &echo_live::fake::FakeObserver,
     credential: Option<&str>,
@@ -194,6 +195,7 @@ async fn recovered_run(directory: &Path, listener: &TcpListener, token: &str) {
     let mut bridge = Process::spawn(&mut bridge_wire_screen::run_command(directory, &origin));
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
+    let mut satellite = bridge_short::Satellite::new(satellite);
     complete_recovered(&mut satellite, &mut bridge).await;
     assert_recovered(directory, &observer, token).await;
     bridge.finish(0).await;
@@ -206,7 +208,7 @@ async fn recovered_run(directory: &Path, listener: &TcpListener, token: &str) {
     live.shutdown().await;
 }
 
-async fn complete_recovered(satellite: &mut tokio::net::TcpStream, bridge: &mut Process) {
+async fn complete_recovered(satellite: &mut bridge_short::Satellite, bridge: &mut Process) {
     assert_eq!(bridge_short::read_reply(satellite).await.0["type"], "audio-start");
     assert_eq!(bridge_short::read_reply(satellite).await.0["type"], "audio-stop");
     bridge_short::send(satellite, "played", json!({})).await;
@@ -263,6 +265,7 @@ async fn bridge_wire_auth_failure_revoked_refresh_latches_and_explicit_signin_re
     let mut bridge = Process::spawn(&mut bridge_wire_screen::run_command(directory.path(), &origin));
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
+    let mut satellite = bridge_short::Satellite::new(satellite);
     let trace_path = directory.path().join("trace");
     wait_event(&trace_path, "auth.relink_required").await;
     assert_surfaces(&trace_path, true).await;

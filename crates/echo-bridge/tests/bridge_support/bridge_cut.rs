@@ -199,7 +199,7 @@ async fn cut_reply(offered: u16, initial: u16) {
     assert_closed(&mut stream).await;
 }
 
-async fn receive_initial(stream: &mut tokio::net::TcpStream, initial: u16) {
+async fn receive_initial(stream: &mut bridge_short::Satellite, initial: u16) {
     for _ in 0..initial {
         let (header, payload) = read(stream).await;
         assert_eq!(header["type"], "audio-chunk");
@@ -207,7 +207,7 @@ async fn receive_initial(stream: &mut tokio::net::TcpStream, initial: u16) {
     }
 }
 
-async fn drain_to_stop(stream: &mut tokio::net::TcpStream) -> u16 {
+async fn drain_to_stop(stream: &mut bridge_short::Satellite) -> u16 {
     let mut sent = 0;
     loop {
         let (header, payload) = read(stream).await;
@@ -238,7 +238,7 @@ fn assert_cut_trace(path: &Path, offered: u16, sent: u16) {
     assert_eq!(played[0]["run_id"], "run-1");
 }
 
-async fn assert_closed(stream: &mut tokio::net::TcpStream) {
+async fn assert_closed(stream: &mut bridge_short::Satellite) {
     // After a completed run the bridge's idle loop probes the link with
     // `describe` at once; one can reach the wire before stdin EOF stops the
     // bridge. Allow only those empty control probes before EOF, never audio.
@@ -264,7 +264,7 @@ async fn assert_closed(stream: &mut tokio::net::TcpStream) {
 }
 
 async fn overload_until_observed(
-    stream: &mut tokio::net::TcpStream,
+    stream: &mut bridge_short::Satellite,
     live: &bridge_peer::Live,
     path: &Path,
 ) -> Option<u16> {

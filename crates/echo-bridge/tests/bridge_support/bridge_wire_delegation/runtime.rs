@@ -9,7 +9,7 @@ struct Application {
     directory: tempfile::TempDir,
     stop: oneshot::Sender<bool>,
     worker: tokio::task::JoinHandle<Result<(), echo_bridge::Error>>,
-    satellite: TcpStream,
+    satellite: bridge_short::Satellite,
     day: Arc<AtomicU64>,
     spoof: Spoof,
     model: TcpListener,
@@ -18,6 +18,12 @@ struct Application {
 
 impl Application {
     async fn start(cap: u64, deadline: u64) -> Self {
+        let mut application = Self::idle(cap, deadline).await;
+        application.wake().await;
+        application
+    }
+
+    async fn idle(cap: u64, deadline: u64) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let model = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -51,7 +57,8 @@ impl Application {
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
         bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
-        let mut application = Self {
+        let satellite = bridge_short::Satellite::new(satellite);
+        Self {
             directory,
             stop,
             worker,
@@ -60,9 +67,7 @@ impl Application {
             spoof,
             model,
             live,
-        };
-        application.wake().await;
-        application
+        }
     }
 
     fn path(&self) -> PathBuf {
@@ -391,4 +396,59 @@ async fn bridge_wire_runtime_long_delegation_kill_abandons_and_shutdown_remains_
     tokio::time::timeout(Duration::from_secs(1), app.finish())
         .await
         .unwrap();
+}
+
+// T3 controlled: the real connector and application observe unchanged probe deadlines.
+#[tokio::test]
+async fn bridge_satellite_probe_idle_stays_connected_then_suppression_reconnects() {
+    let clock = bridge_short::ReadyClock::new();
+    let mut app = Application::idle(8, 60).await;
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    let address = trace(&app.path())[0]["health_addr"].as_str().unwrap().to_owned();
+    for _ in 0..170 {
+        next_probe(&mut app.satellite, &address).await;
+    }
+    assert_health(&address).await;
+    let deadline = echo_wyoming::ClientOptions::default().operation_timeout;
+    assert!(started.elapsed() > 3 * deadline);
+    let entries = trace(&app.path());
+    assert_eq!(
+        entries.iter().filter(|e| e["event"] == "wyoming.reconnecting").count(),
+        0
+    );
+    assert_eq!(entries.iter().filter(|e| e["event"] == "run.started").count(), 0);
+    app.satellite.responding(false).await;
+    next_probe(&mut app.satellite, &address).await;
+    assert_eq!(bridge_short::read(&mut app.satellite).await.0["type"], "describe");
+    tokio::time::advance(deadline + Duration::from_secs(1)).await;
+    loop {
+        let response = health(&address, "GET", "/healthz").await;
+        let body: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        if body["wyoming"] == "reconnecting" {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        trace(&app.path())
+            .iter()
+            .filter(|e| e["event"] == "wyoming.reconnecting")
+            .count(),
+        1
+    );
+    app.finish().await;
+    drop(clock);
+}
+
+async fn next_probe(satellite: &mut bridge_short::Satellite, address: &str) {
+    let start = tokio::time::Instant::now();
+    while !satellite.pending_probe() {
+        // A real health response lets loopback readiness progress between small
+        // steps; a serviced probe is the barrier, not a number of yields.
+        health(address, "GET", "/healthz").await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        assert!(start.elapsed() < Duration::from_secs(5), "probe service stalled");
+    }
+    satellite.probe().await;
 }
