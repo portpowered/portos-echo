@@ -224,6 +224,11 @@ async fn bridge_mute_snapshot_idle_stray_frames_and_unmute_are_measured() {
     }
 }
 
+pub(super) async fn listening_then_connected(events: &mut Lines<BufReader<TcpStream>>) {
+    assert_eq!(state(events).await, json!({"state":"listening"}));
+    assert_eq!(state(events).await, json!({"state":"connected"}));
+}
+
 pub(super) async fn microphone_chunk(satellite: &mut TcpStream) {
     use echo_contracts::wyoming::{Event, Header, encode};
     satellite
