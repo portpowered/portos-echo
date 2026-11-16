@@ -3,6 +3,9 @@ mod screen_assets;
 mod screen_core;
 mod screen_http;
 mod screen_listener;
+mod screen_url;
+
+pub use screen_url::page_url;
 
 use echo_contracts::secret::Secret;
 use echo_screen_contract::{UiAction, UiState};
@@ -21,6 +24,8 @@ pub enum ScreenServerError {
     InvalidBind,
     #[error("screen pairing token must not be empty")]
     InvalidToken,
+    #[error("screen page URL is invalid")]
+    InvalidPageUrl,
     #[error("screen listener could not bind")]
     Bind,
     #[error("screen task failed")]

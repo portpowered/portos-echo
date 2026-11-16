@@ -117,4 +117,14 @@ build-host:
 	cargo build --workspace --locked
 	git diff --exit-code HEAD -- Cargo.lock
 
+.PHONY: build-echo-screen test-echo-screen-jvm test-echo-screen-url
+build-echo-screen:
+	sh scripts/build-echo-screen.sh
+
+test-echo-screen-jvm:
+	sh tests/echo_screen_jvm.sh
+
+test-echo-screen-url:
+	cargo test --offline --locked -p echo-screen-server --lib page_url -- --nocapture
+
 ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-docs lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency coverage build-host
