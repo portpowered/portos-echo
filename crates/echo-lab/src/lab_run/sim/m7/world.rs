@@ -61,7 +61,7 @@ impl World {
                 .await
                 .map_err(|_| "m7: spoof startup failed")?,
         );
-        self.model = Some(Model::bind_after(false, async { Ok(()) }).await?);
+        self.model = Some(Model::bind_controlled(false, async { Ok(()) }, None).await?);
         let text = if negative { DEADLINE } else { SUCCESS };
         self.live = Some(
             FakeLive::bind_dialogue(DialogueScript {

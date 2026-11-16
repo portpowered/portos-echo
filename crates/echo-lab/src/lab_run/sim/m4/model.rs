@@ -28,7 +28,9 @@ pub struct Model {
 
 impl Model {
     pub fn requests(&self) -> usize {
-        self.observed.borrow().requests
+        let observed = self.observed.borrow();
+        // Even an incomplete/rejected accepted request violates Muse isolation.
+        observed.requests.max(observed.accepted_connections)
     }
 
     #[cfg(test)]

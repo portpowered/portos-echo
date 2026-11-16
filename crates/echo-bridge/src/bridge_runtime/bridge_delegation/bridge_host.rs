@@ -50,9 +50,14 @@ impl Host {
         }
     }
 
-    pub async fn service(&mut self, call: &mut impl LivePort, trace: &mut Trace) -> Result<(), Error> {
+    pub async fn service(
+        &mut self,
+        call: &mut impl LivePort,
+        trace: &mut Trace,
+        screen: &crate::bridge_runtime::bridge_screen::Screen,
+    ) -> Result<(), Error> {
         match self {
-            Self::Client(client) => client.service(call, trace).await,
+            Self::Client(client) => client.service(call, trace, screen).await,
             Self::Muse(muse) => muse.service(call, trace).await,
         }
     }
