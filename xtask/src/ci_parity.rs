@@ -17,6 +17,7 @@ pub const GATES: &[(&str, &str)] = &[
     ("test-concurrency", "test-concurrency"),
     ("coverage", "coverage"),
     ("build-host", "build-host"),
+    ("build-echo", "build-echo"),
 ];
 
 const PREFIX: &str = "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\npermissions:\n  contents: read\ndefaults:\n  run:\n    shell: sh\njobs:\n";
@@ -49,6 +50,11 @@ fn job(name: &str, target: &str) -> String {
     }
     if name == "test-unit" {
         block.push_str("      - name: Publish screen screenshot evidence\n        if: always()\n        id: screen-evidence\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: screen-evidence-${{ github.sha }}\n          path: |\n            web/screen/test-results/screenshots/**\n            web/screen/test-results/summary.txt\n          if-no-files-found: error\n");
+    }
+    if name == "build-echo" {
+        let step = "      - name: build-echo\n";
+        block = block.replace(step, &format!("      - name: Provision pinned Android Rust target\n        run: |\n          channel=$(python -c 'import tomllib; print(tomllib.load(open(\"rust-toolchain.toml\", \"rb\"))[\"toolchain\"][\"channel\"])')\n          rustup target add --toolchain \"$channel\" armv7-linux-androideabi\n{step}"));
+        block.push_str("      - name: Publish Echo bridge\n        if: hashFiles('crates/echo-bridge/Cargo.toml') != ''\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: echo-bridge-armv7-android-${{ github.sha }}\n          path: target/armv7-linux-androideabi/release/echo-bridge\n          if-no-files-found: error\n");
     }
     block
 }
@@ -133,7 +139,7 @@ pub fn run() -> Result<(), String> {
     let makefile = fs::read_to_string("Makefile").map_err(|error| format!("Makefile: {error}"))?;
     let workflow = fs::read_to_string(".github/workflows/ci.yml").map_err(|error| format!("ci.yml: {error}"))?;
     evaluate(&makefile.replace("\r\n", "\n"), &workflow.replace("\r\n", "\n"))?;
-    println!("ci-parity: ok (15 checks)");
+    println!("ci-parity: ok (16 checks)");
     for (name, target) in GATES {
         println!("{name}: make {target}");
     }
@@ -155,6 +161,31 @@ mod tests {
     fn matching_ordered_gates_pass() {
         let (makefile, workflow) = fixture();
         assert_eq!(evaluate(&makefile, &workflow), Ok(()));
+    }
+
+    #[test]
+    fn echo_gate_requires_exact_provisioning_build_and_publication() {
+        let (makefile, workflow) = fixture();
+        let echo = job("build-echo", "build-echo");
+        for changed in [
+            String::new(),
+            format!("{echo}{echo}"),
+            echo.replace("    name: build-echo", "    if: false\n    name: build-echo"),
+            echo.replace("run: make build-echo", "run: make build-echo || true"),
+            echo.replace("armv7-linux-androideabi", "aarch64-linux-android"),
+            echo.replace("rustup target add --toolchain", "rustup target add"),
+            echo.replace("          if-no-files-found: error\n", ""),
+            echo.replace("crates/echo-bridge/Cargo.toml", "crates/other/Cargo.toml"),
+            echo.replace("target/armv7-linux-androideabi/release/echo-bridge", "target/stale"),
+        ] {
+            assert!(evaluate(&makefile, &workflow.replace(&echo, &changed)).is_err());
+        }
+        assert!(evaluate(&makefile.replace(" build-echo", ""), &workflow).is_err());
+        let reordered = workflow.replace(
+            &(job("build-host", "build-host") + &echo),
+            &(echo + &job("build-host", "build-host")),
+        );
+        assert!(evaluate(&makefile, &reordered).is_err());
     }
 
     #[test]

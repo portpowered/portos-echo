@@ -126,8 +126,8 @@ mod tests {
         session.write(".github/workflows/ci.yml", workflow);
         let (code, text) = session.run(&["ci-parity"]);
         assert_eq!(code, 0, "{text}");
-        assert!(text.starts_with("ci-parity: ok (15 checks)\nformat: make fmt-check\n"));
-        assert!(text.ends_with("build-host: make build-host\n"));
+        assert!(text.starts_with("ci-parity: ok (16 checks)\nformat: make fmt-check\n"));
+        assert!(text.ends_with("build-echo: make build-echo\n"));
         session.write("Makefile", "ci: fmt-check\n");
         let (code, text) = session.run(&["ci-parity"]);
         assert_eq!(code, 1);
