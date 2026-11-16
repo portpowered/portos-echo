@@ -80,6 +80,14 @@ impl Observer {
             waker.wake();
         }
     }
+    /// Script suppressed idle chunks without retaining their audio.
+    pub fn microphone_dropped(&self, count: u64) {
+        let mut state = lock(&self.0);
+        state.events.push_back(LinkEvent::MicrophoneDropped(count));
+        if let Some(waker) = state.event_waker.take() {
+            waker.wake();
+        }
+    }
     /// Script a mute between frame positions; later frames are counted and dropped.
     pub fn wake_with_mute(&self, phrase: &str, mut frames: Vec<MicFrame>, after: usize) {
         let received = frames.len() as u64;
@@ -97,6 +105,7 @@ impl Observer {
             mute_end: Some(ended),
         }));
         state.events.push_back(LinkEvent::Mute(true));
+        state.events.push_back(LinkEvent::MicrophoneDropped(dropped));
         if let Some(waker) = state.event_waker.take() {
             waker.wake();
         }

@@ -14,6 +14,11 @@ pub(super) struct Mute {
 
 impl Mute {
     pub fn event<R>(&mut self, event: &LinkEvent<R>, trace: &mut Trace) -> Result<bool, Error> {
+        if let LinkEvent::MicrophoneDropped(count) = event
+            && self.muted
+        {
+            self.received += count;
+        }
         if let LinkEvent::Mute(muted) = event
             && *muted != self.muted
         {
@@ -86,6 +91,26 @@ mod tests {
             assert_eq!(row["received_frames"], 0);
             assert_eq!(row["forwarded_frames"], 0);
         }
+    }
+    #[test]
+    fn ordered_drop_counts_are_counted_once_only_inside_the_mute_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace");
+        let mut trace = Trace::open(&path, "api_key").unwrap();
+        let mut mute = Mute::default();
+        for event in [
+            LinkEvent::<()>::MicrophoneDropped(7),
+            LinkEvent::Mute(true),
+            LinkEvent::MicrophoneDropped(3),
+            LinkEvent::MicrophoneDropped(2),
+            LinkEvent::Mute(false),
+            LinkEvent::MicrophoneDropped(9),
+        ] {
+            mute.event(&event, &mut trace).unwrap();
+        }
+        let row: serde_json::Value = serde_json::from_str(std::fs::read_to_string(path).unwrap().trim()).unwrap();
+        assert_eq!(row["received_frames"], 5);
+        assert_eq!(row["forwarded_frames"], 0);
     }
     #[test]
     fn send_accounting_still_exposes_a_broken_guard() {

@@ -206,8 +206,8 @@ async fn bridge_mute_snapshot_idle_stray_frames_and_unmute_are_measured() {
             .collect();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0]["window_id"], "mute-1");
-        // Post-mute wire frames are suppressed inside the neutral adapter.
-        assert_eq!(windows[0]["received_frames"], 0);
+        // Suppressed wire chunks are measured without exposing their audio.
+        assert_eq!(windows[0]["received_frames"], 1);
         assert_eq!(windows[0]["forwarded_frames"], 0);
         assert_eq!(trace(&path).iter().filter(|e| e["event"] == "run.started").count(), 0);
         bridge.finish(0).await;
@@ -363,7 +363,7 @@ async fn reconnect_handshake(satellite: &mut TcpStream, muted: bool) {
 fn assert_muted_run(path: &Path, live: &bridge_peer::Live) {
     let entries = trace(path);
     let window = entries.iter().find(|e| e["event"] == "mic.mute_window").unwrap();
-    assert_eq!(window["received_frames"], 0);
+    assert_eq!(window["received_frames"], 2);
     assert_eq!(
         entries.iter().find(|e| e["event"] == "mic.completed").unwrap()["dropped_chunks"],
         2

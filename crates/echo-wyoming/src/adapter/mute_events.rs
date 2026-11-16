@@ -2,12 +2,19 @@
 use super::{Error, EventStream, LinkEvent, LinkEvents, Run, WyomingEvent, error};
 use std::sync::Arc;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Capture {
+    Ended,
+    Open,
+}
+
 pub struct Events {
     raw: EventStream,
     current: Option<Arc<crate::wyoming_queue::MicQueue>>,
     pending: Option<crate::ReceivedEvent>,
     generation: Option<Arc<()>>,
     muted: bool,
+    capture: Capture,
     handshake: bool,
     barrier: bool,
 }
@@ -19,6 +26,7 @@ impl Events {
             pending: None,
             generation: None,
             muted: false,
+            capture: Capture::Ended,
             handshake,
             barrier: handshake,
         }
@@ -36,6 +44,7 @@ impl Events {
         }
         self.generation = Some(event.generation.clone());
         self.current = None;
+        self.capture = Capture::Ended;
         self.barrier = self.handshake;
         let reset = self.muted
             && !matches!(&event.event,
@@ -67,11 +76,21 @@ impl Events {
         let event = self.pending.take().ok_or(Error::Closed)?;
         if let Some(muted) = mute {
             self.muted = muted;
+            if muted {
+                self.capture = Capture::Ended;
+            }
             return Ok(Some(LinkEvent::Mute(muted)));
         }
         if let Some(run) = event.run {
             self.current = Some(run.queue.clone());
+            self.capture = if self.muted { Capture::Ended } else { Capture::Open };
             return Ok(Some(LinkEvent::Wake(run)));
+        }
+        if matches!(event.event, WyomingEvent::AudioChunk(_)) && self.capture == Capture::Ended {
+            return Ok(Some(LinkEvent::MicrophoneDropped(1)));
+        }
+        if matches!(event.event, WyomingEvent::AudioStop(_) | WyomingEvent::Played(_)) {
+            self.capture = Capture::Ended;
         }
         if matches!(event.event, WyomingEvent::Info(_)) {
             self.barrier = false;
@@ -96,8 +115,10 @@ impl LinkEvents for Events {
             }
             if self.barrier
                 && self.pending.as_ref().is_some_and(|event| {
-                    !matches!(&event.event, WyomingEvent::Info(_) | WyomingEvent::RunPipeline(_))
-                        && !matches!(&event.event, WyomingEvent::Other(name, _) if name == "hassmic-mute")
+                    !matches!(
+                        &event.event,
+                        WyomingEvent::Info(_) | WyomingEvent::RunPipeline(_) | WyomingEvent::AudioChunk(_)
+                    ) && !matches!(&event.event, WyomingEvent::Other(name, _) if name == "hassmic-mute")
                 })
             {
                 self.pending = None;

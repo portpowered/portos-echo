@@ -56,6 +56,18 @@ The coordinator authorized this additive contract on 2026-11-16 for M1:
    and increment `RunStats::dropped`.
 4. `Other` stays payload-free, with no Info identity. The adapter retains the
    connection-time Info barrier; the bridge consumes only neutral events.
+5. `LinkEvent::MicrophoneDropped(u64)` reports suppressed microphone chunks in
+   wire order without PCM or format data. It includes idle strays and chunks
+   after mute terminates a run. Counts may be coalesced only without crossing
+   another event; their sum is the exact suppressed chunk count per connection.
+
+The bridge counts yielded `MicFrame`s once as received and counts suppressed
+chunks once through `MicrophoneDropped`. While muted these contribute to the
+mute window's received total; neither path forwards audio while muted.
+`RunStats::received` and `RunStats::dropped` remain run-scoped transport
+statistics (including active-run post-mute discards). They are diagnostic
+fields in `mic.completed`, never added to the bridge's received total, so a
+suppressed active-run chunk is not counted twice.
 
 The in-memory fake scripts a muted connection snapshot or a mute at a specified
 frame position. This amendment adds no dependency, provider access or device run.

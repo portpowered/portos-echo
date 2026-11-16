@@ -116,6 +116,10 @@ fn mute_snapshot_and_scripted_boundary_preserve_exact_frames_and_counts() {
         }
     );
     assert!(matches!(ready(mute).unwrap(), Some(LinkEvent::Mute(true))));
+    assert!(matches!(
+        ready(events.recv()).unwrap(),
+        Some(LinkEvent::MicrophoneDropped(3))
+    ));
     ready(link.close()).unwrap();
     observer.muted_at_connect(false);
     let mut fresh = ready(FakeConnector::new(observer).connect()).unwrap();
@@ -125,4 +129,25 @@ fn mute_snapshot_and_scripted_boundary_preserve_exact_frames_and_counts() {
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_pending()
     );
+}
+
+#[test]
+fn suppressed_idle_counts_are_payload_free_and_ordered() {
+    let observer = Observer::default();
+    let mut link = ready(FakeConnector::new(observer.clone()).connect()).unwrap();
+    let mut events = link.events().unwrap();
+    observer.mute(true);
+    observer.microphone_dropped(1);
+    observer.microphone_dropped(3);
+    observer.mute(false);
+    assert!(matches!(ready(events.recv()).unwrap(), Some(LinkEvent::Mute(true))));
+    assert!(matches!(
+        ready(events.recv()).unwrap(),
+        Some(LinkEvent::MicrophoneDropped(1))
+    ));
+    assert!(matches!(
+        ready(events.recv()).unwrap(),
+        Some(LinkEvent::MicrophoneDropped(3))
+    ));
+    assert!(matches!(ready(events.recv()).unwrap(), Some(LinkEvent::Mute(false))));
 }

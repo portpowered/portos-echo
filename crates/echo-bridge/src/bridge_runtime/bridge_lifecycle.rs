@@ -143,7 +143,7 @@ fn observe_link(connected: bool, health: &Health, trace: &mut Trace) -> Result<(
 pub(super) fn select_wake<R>(event: Option<LinkEvent<R>>) -> Result<Option<R>, Error> {
     match event.ok_or(Error::Wyoming)? {
         LinkEvent::Wake(run) => Ok(Some(run)),
-        LinkEvent::Played | LinkEvent::Other | LinkEvent::Mute(_) => Ok(None),
+        LinkEvent::Played | LinkEvent::Other | LinkEvent::Mute(_) | LinkEvent::MicrophoneDropped(_) => Ok(None),
     }
 }
 

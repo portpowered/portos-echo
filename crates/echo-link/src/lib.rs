@@ -41,6 +41,8 @@ pub enum LinkEvent<R> {
     Played,
     /// Effective device mute, ordered with wake and playback events.
     Mute(bool),
+    /// Ordered count of suppressed microphone chunks, with no audio payload.
+    MicrophoneDropped(u64),
     Other,
 }
 /// Queued chunks drain before EOF or a terminal error.
