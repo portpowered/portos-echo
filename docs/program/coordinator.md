@@ -79,6 +79,9 @@ The factory was proven on two sample items and a loopback before any program wor
 3. **Every batch ends with a `thoughts` loopback** that depends on every idea in the batch. Its payload asks for
    the behavior the phase promised, by command and expected values, and requires any gap to be filed as
    corrective work with its own loopback. A merged pull request is not evidence that anything works.
+   The loopback runs focused commands: the scenario, the crate's tests, a seeded failure. It cites the hosted CI
+   run for `main` instead of running a full local `make ci`. A Codex session doing that from a fresh clone died
+   at about 18 minutes, twice, on the W1 loopback (2026-11-15).
 4. **Item name = branch = pull request title = worktree directory**, kebab-case with the plan item's prefix
    (`el-f2-rust-strict`).
 
@@ -90,7 +93,10 @@ Workers see nothing but the payload and the committed repository, so every paylo
 2. **Acceptance**: the `echo-lab` scenario and tier that must pass, or the exact command and the values it must
    print. "Compiles" is never acceptance. The processor's finish line is a pushed head, an open pull request and
    CI started; merging belongs to review.
-3. **Contention**: the paths the item owns and the paths it must not touch.
+3. **Contention**: the paths the item owns and the paths it must not touch. A lane that creates a crate also
+   owns that crate's one line in `lanes.toml` and the generated `Cargo.lock` change. A lane that adds an ADR also
+   owns its one `docs/README.md` index line. Leaving these out pauses the lane at planning (el-w3-muse-core,
+   2026-11-15).
 4. **Rules**: `docs/program/rules.md` and `docs/program/baselines.md`, which every worktree has because they are
    committed.
 5. **Stop condition**: report instead of guessing on a contract change, a new dependency, a hardware question or a
