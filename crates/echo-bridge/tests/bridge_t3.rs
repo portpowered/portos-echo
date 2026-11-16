@@ -411,7 +411,7 @@ async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
     );
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
-        json!({"state":"ready","message":"Ready"})
+        json!({"state":"ready","message":"Echo Live ready"})
     );
     assert_eq!(host.command("pcm").await, "30720 0");
     bridge.finish(0).await;
@@ -468,7 +468,7 @@ async fn wire_journey_screen(directory: &Path) -> Lines<BufReader<tokio::net::Tc
     let mut screen = bridge_wire_screen::stream(&address).await;
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
-        json!({"state":"ready","message":"Ready"})
+        json!({"state":"ready","message":"Echo Live ready"})
     );
     bridge_wire_auth::invoke(
         directory,

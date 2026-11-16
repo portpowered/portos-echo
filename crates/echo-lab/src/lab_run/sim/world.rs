@@ -21,6 +21,7 @@ pub struct World {
     pub trace: Trace,
     trace_path: PathBuf,
     pub ui_path: PathBuf,
+    pub screen: Option<super::production::Screen>,
     offset: u64,
     pub run: Option<String>,
     pub endpoints: Vec<std::net::SocketAddr>,
@@ -33,7 +34,11 @@ impl World {
             bridge,
             root,
             FakeLive::bind(FakeScript {
-                events: vec![],
+                events: if super::production::selected(bridge) {
+                    vec![json!({"type":"response.audio.done"}).to_string()]
+                } else {
+                    vec![]
+                },
                 response: FakeResponse::Answer,
             }),
         )
@@ -85,6 +90,10 @@ impl World {
             process::connect,
         )
         .await?;
+        self.start_bridge(bridge, root, address).await
+    }
+
+    async fn start_bridge(&mut self, bridge: &Path, root: &Path, address: std::net::SocketAddr) -> Result<(), String> {
         let mut command = Command::new(bridge);
         command
             .env("ECHO_LAB_WYOMING_ADDR", address.to_string())
@@ -98,13 +107,46 @@ impl World {
             )
             .env("ECHO_LAB_TRACE_PATH", &self.trace_path)
             .env("ECHO_LAB_UI_STATE_PATH", &self.ui_path);
+        if super::production::selected(bridge) {
+            super::production::configure(
+                &mut command,
+                root,
+                address,
+                &self.live.as_ref().ok_or("launch: missing fake Live")?.base_url(),
+                self.spoof.as_ref().ok_or("launch: missing spoof")?.url(),
+            )?;
+        }
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
             .as_mut()
             .ok_or("launch: missing bridge")?
             .expect("bridge.ready")
             .await?;
-        self.control(&json!({"action":"registered"})).await
+        self.control(&json!({"action":"registered"})).await?;
+        if super::production::selected(bridge) {
+            self.observe().await?;
+            for event in ["bridge.started", "screen.listening"] {
+                let field = if event == "bridge.started" {
+                    "health_addr"
+                } else {
+                    "address"
+                };
+                let address = self
+                    .trace
+                    .records
+                    .iter()
+                    .find(|r| r["event"] == event)
+                    .and_then(|r| r[field].as_str())
+                    .ok_or("launch: missing production endpoint")?
+                    .parse()
+                    .map_err(|_| "launch: invalid production endpoint")?;
+                self.endpoints.push(address);
+            }
+            self.screen = Some(
+                super::production::Screen::connect(*self.endpoints.last().ok_or("launch: missing screen")?).await?,
+            );
+        }
+        Ok(())
     }
 
     fn endpoint(url: &str) -> Result<std::net::SocketAddr, String> {
@@ -186,6 +228,7 @@ impl World {
     }
 
     pub async fn close(&mut self) -> Result<(), String> {
+        self.screen.take();
         let mut failures = self.close_bridge().await;
         if let Some(live) = self.live.take() {
             live.shutdown().await;
@@ -229,6 +272,10 @@ impl World {
 
     async fn remove_private(&self) -> Result<(), String> {
         let mut failed = false;
+        let private = self.trace_path.parent().map(|root| root.join("configured.private"));
+        if let Some(private) = private.filter(|path| path.is_dir()) {
+            failed |= tokio::fs::remove_dir_all(private).await.is_err();
+        }
         for path in [&self.trace_path, &self.ui_path] {
             if path.is_file() && tokio::fs::remove_file(path).await.is_err() {
                 failed = true;

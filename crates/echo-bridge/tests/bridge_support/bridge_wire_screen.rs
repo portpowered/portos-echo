@@ -47,11 +47,15 @@ pub(super) async fn stream(address: &str) -> Lines<BufReader<TcpStream>> {
 }
 
 pub(super) async fn state(lines: &mut Lines<BufReader<TcpStream>>) -> Value {
+    presentation(lines).await["state"].clone()
+}
+
+async fn presentation(lines: &mut Lines<BufReader<TcpStream>>) -> Value {
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
             let line = lines.next_line().await.unwrap().unwrap();
             if let Some(data) = line.strip_prefix("data: ") {
-                return serde_json::from_str::<Value>(data).unwrap()["state"].clone();
+                return serde_json::from_str::<Value>(data).unwrap();
             }
         }
     })
@@ -81,7 +85,10 @@ async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
         .unwrap()
         .to_owned();
     let mut events = stream(&address).await;
-    assert_eq!(state(&mut events).await, json!({"state":"ready","message":"Ready"}));
+    assert_eq!(
+        presentation(&mut events).await,
+        json!({"seq":1,"state":{"state":"ready","message":"Echo Live ready"}})
+    );
     let page = health(&address, "GET", "/").await;
     assert!(page.starts_with("HTTP/1.1 200 OK\r\n") && page.contains("<title>Echo screen</title>"));
     for url in ["/events", "/events?token=wrong"] {
@@ -106,7 +113,10 @@ async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
-    assert_eq!(state(&mut events).await, json!({"state":"ready","message":"Ready"}));
+    assert_eq!(
+        state(&mut events).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
     bridge.finish(0).await;
     assert!(TcpStream::connect(&address).await.is_err());
     let text = std::fs::read_to_string(path).unwrap();

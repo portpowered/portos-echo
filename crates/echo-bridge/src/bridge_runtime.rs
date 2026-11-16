@@ -128,6 +128,7 @@ async fn connected<L: EchoLink>(
     client.probe().await?;
     health.state.send_modify(|state| state.wyoming = "connected");
     trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
+    screen.ready()?;
     publish("bridge.ready", None)?;
     let credential = settings.credential.clone();
     let factory = LiveCallFactory::new(&settings.live_url, settings.mode, credential)?;

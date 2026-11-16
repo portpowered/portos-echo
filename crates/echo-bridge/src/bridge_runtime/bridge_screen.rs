@@ -50,7 +50,6 @@ impl Screen {
             states: Some(states),
             actions: None,
         };
-        screen.ready()?;
         Ok(screen)
     }
 
@@ -63,7 +62,7 @@ impl Screen {
 
     pub fn ready(&self) -> Result<(), Error> {
         self.publish(UiState::Ready {
-            message: "Ready".into(),
+            message: "Echo Live ready".into(),
         })
     }
 

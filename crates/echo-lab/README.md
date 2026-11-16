@@ -349,6 +349,21 @@ milestone behavior.
 
 ### Sim bridge contract
 
+M1 scenarios select the prebuilt production `echo-bridge` beside `echo-lab`;
+build both with `cargo build -p echo-lab -p echo-bridge --bins --locked`.
+W1 retains the bundled bridge, and an explicit `--bridge` still takes precedence.
+An executable named `echo-bridge` runs with an isolated configuration, synthetic
+credential files, and explicit loopback Live/model overrides. Its screen is
+observed through authenticated `/events` SSE. The first presentation must have
+sequence 1 and message exactly `Echo Live ready`; private configuration and
+pairing files are removed after the child is stopped and reaped.
+
+The committed `sim_host` M1 prefix test currently proves Ready and one wake only.
+It does not claim the complete M1 scenario, mute latch or restart counts.
+Its existing FakeLive boundary sends a synthetic `response.audio.done`; this
+proves Wyoming capture at the bridge, not provider behavior or a spoken reply.
+Mute and restart steps remain implementation work in this lane.
+
 The runner replaces these variables for each child:
 
 | Variable | Value |

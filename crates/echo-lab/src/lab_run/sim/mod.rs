@@ -1,5 +1,6 @@
 mod observers;
 mod process;
+mod production;
 mod selectors;
 pub mod suite;
 mod trace;
@@ -78,6 +79,9 @@ impl<'a> Sim<'a> {
                         )
                     }
                     Step::Ui(expected) => {
+                        if let Some(screen) = &mut self.world.screen {
+                            return screen.expect(expected).await;
+                        }
                         let bytes = observers::bytes(&self.world.ui_path, 65536, "screen expectation")?;
                         observers::screen(&bytes, expected)
                     }
