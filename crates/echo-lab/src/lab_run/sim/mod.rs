@@ -2,12 +2,12 @@ pub mod m2;
 pub mod m4;
 pub mod m7;
 pub(super) mod mcp;
-mod observers;
-mod process;
-mod production;
-mod selectors;
+pub(super) mod observers;
+pub(super) mod process;
+pub(super) mod production;
+pub(super) mod selectors;
 pub mod suite;
-mod trace;
+pub(super) mod trace;
 mod world;
 
 use std::path::PathBuf;
