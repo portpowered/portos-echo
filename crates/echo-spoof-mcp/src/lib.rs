@@ -68,6 +68,16 @@ pub struct Options {
     pub max_in_flight: usize,
 }
 
+/// Scenario-owned admission policy. Implementations must never retain or log
+/// the presented credential; snapshots record only the admission decision.
+pub trait BearerValidator: Send + Sync {
+    fn accepts(&self, bearer: &str) -> bool;
+
+    fn protected_resource(&self) -> Option<Value> {
+        None
+    }
+}
+
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -95,6 +105,7 @@ pub enum SpoofError {
 
 struct State {
     options: Options,
+    validator: Option<Arc<dyn BearerValidator>>,
     fault: Mutex<Fault>,
     records: Mutex<Snapshot>,
     arrivals: watch::Sender<usize>,
@@ -113,6 +124,16 @@ impl Spoof {
     /// # Errors
     /// Invalid limits or bind failure return fixed diagnostics without configuration text.
     pub async fn start(options: Options) -> Result<Self, SpoofError> {
+        Self::start_authorized(options, None).await
+    }
+
+    /// Start with an optional scenario-owned dynamic Bearer policy.
+    /// # Errors
+    /// Invalid limits or bind failure return the same fixed startup categories.
+    pub async fn start_authorized(
+        options: Options,
+        validator: Option<Arc<dyn BearerValidator>>,
+    ) -> Result<Self, SpoofError> {
         if options.max_records == 0
             || options.max_records > 4096
             || options.max_in_flight == 0
@@ -127,6 +148,7 @@ impl Spoof {
         let (stop, stopped) = watch::channel(false);
         let (arrivals, _) = watch::channel(0);
         let state = Arc::new(State {
+            validator,
             fault: Mutex::new(options.fault),
             slots: Semaphore::new(options.max_in_flight),
             options,

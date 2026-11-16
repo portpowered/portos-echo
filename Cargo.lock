@@ -765,16 +765,23 @@ dependencies = [
 name = "echo-lab"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.22.1",
  "echo-contracts",
  "echo-live",
+ "echo-mcp-auth",
  "echo-screen-contract",
  "echo-spoof-mcp",
  "echo-wyoming",
  "jsonschema",
+ "p256",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_norway",
+ "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]

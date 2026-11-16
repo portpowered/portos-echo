@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 16
 status: active
 ---
 
@@ -62,6 +62,33 @@ steps or publish a sim report. The scenario driver, fixture feeding, fake
 servers, observation oracles and discovery remain implementation work in this
 lane. The upstream host's wildcard listeners remain an accepted limitation:
 `pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)`.
+
+## M5 authorization counterpart
+
+`echo_lab::lab_mcp::Fixture` owns one loopback authorization listener and one
+synthetic grant. Bind it with the scenario's UTC epoch, pass `validator()` to
+`Spoof::start_authorized`, then call `set_resource(spoof.url())` before linking.
+Discovery on the spoof supplies the resource and authorization-server origin;
+the authorization endpoints come from that server's metadata. The public
+client id is `echo-lab`, with scope `endpoint:read`.
+
+The owner selects pending, approved or denied through `approve`, and advances
+fixture UTC explicitly with `advance`. Advance the bridge's paused clock by
+the same amount; socket readiness must never automatically advance either
+clock. `counts` reports successful links, polls, successful rotations, rejected
+refresh replays and revokes without exposing credentials. Close the spoof and
+then `shutdown` the fixture to join both listeners.
+
+The counterpart checks ES256 proofs, endpoint/method/time, unique proof IDs and
+the registered key. It issues signed access JWTs; the spoof validates their
+issuer, audience, use, subject, scope, expiry and active grant before dispatch.
+Refresh replay revokes that grant. An omitted resource deliberately produces
+a first-party access token which MCP rejects; a wrong resource returns
+`400 invalid_target`. MCP and revoke accept no DPoP proof.
+
+`cargo test --locked -p echo-lab --lib` exercises this boundary with the real
+auth client and private store. These component witnesses do not replace the
+real bridge's M5 scenario or prove cloud/device compatibility.
 
 ## Device runner
 

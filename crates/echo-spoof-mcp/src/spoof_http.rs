@@ -6,14 +6,31 @@ use axum::{
     extract::{Request, State as AxumState},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) fn router(state: Arc<State>) -> Router {
-    Router::new().route("/mcp", post(handle)).with_state(state)
+    Router::new()
+        .route("/mcp", post(handle))
+        .route("/.well-known/oauth-protected-resource", get(metadata))
+        .with_state(state)
+}
+
+async fn metadata(AxumState(state): AxumState<Arc<State>>, request: Request) -> Response {
+    if request.headers().contains_key("origin") || request.headers().contains_key("dpop") {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    state
+        .validator
+        .as_ref()
+        .and_then(|validator| validator.protected_resource())
+        .map_or_else(
+            || StatusCode::NOT_FOUND.into_response(),
+            |value| Json(value).into_response(),
+        )
 }
 
 async fn handle(AxumState(state): AxumState<Arc<State>>, request: Request) -> Response {
@@ -32,13 +49,7 @@ async fn handle_request(state: &State, request: Request) -> Response {
     if request.headers().contains_key("origin") {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let equality = state.options.expected_bearer.as_ref().map(|secret| {
-        request
-            .headers()
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v == format!("Bearer {}", secret.expose()))
-    });
+    let equality = admission(state, &request);
     let session_header = request.headers().contains_key("mcp-session-id");
     let dpop_header = request.headers().contains_key("dpop");
     let fault = match select_fault(state, &request) {
@@ -62,6 +73,24 @@ async fn handle_request(state: &State, request: Request) -> Response {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     dispatch(state, &value, fault).await
+}
+
+fn admission(state: &State, request: &Request<Body>) -> Option<bool> {
+    let header = request.headers().get("authorization").and_then(|v| v.to_str().ok());
+    let fixed = state
+        .options
+        .expected_bearer
+        .as_ref()
+        .map(|secret| header.is_some_and(|value| value == format!("Bearer {}", secret.expose())));
+    state.validator.as_ref().map_or(fixed, |validator| {
+        Some(
+            fixed != Some(false)
+                && !request.headers().contains_key("dpop")
+                && header
+                    .and_then(|value| value.strip_prefix("Bearer "))
+                    .is_some_and(|value| validator.accepts(value)),
+        )
+    })
 }
 
 fn select_fault(state: &State, request: &Request<Body>) -> Result<Fault, StatusCode> {
