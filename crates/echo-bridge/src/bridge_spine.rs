@@ -6,6 +6,29 @@ use echo_live::call::{CallError, CredentialProvider, LiveCredential};
 use serde_json::json;
 
 #[test]
+fn muse_selection_cannot_silently_execute_the_unselected_client_backend() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bridge.toml");
+    let input = include_str!("../../../examples/bridge.example.toml").replace("[agent]", "[agent]\nbackend='muse'");
+    std::fs::write(
+        &path,
+        format!(
+            "{input}\n[muse]\nurl='https://127.0.0.1:7448'\nca_file='absent/ca.der'\ncredential_file='absent/muse'\n"
+        ),
+    )
+    .unwrap();
+    let args = vec![
+        "--config".into(),
+        path.to_string_lossy().into_owned(),
+        "--trace".into(),
+        directory.path().join("trace").to_string_lossy().into_owned(),
+    ];
+    assert_eq!(parse(&args, [None, None, None]).err(), Some(Error::Input));
+    assert!(!directory.path().join("trace").exists());
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[test]
 fn bridge_lifecycle_lab_idle_is_explicit_validated_and_never_changes_configured_mode() {
     let mut settings = parse(
         &[],

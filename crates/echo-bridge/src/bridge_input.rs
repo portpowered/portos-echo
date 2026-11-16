@@ -198,6 +198,10 @@ fn configured(
     origins: Option<(&str, &str)>,
 ) -> Result<Option<Settings>, Error> {
     let config = echo_config::BridgeConfig::load(config).map_err(|_| Error::Input)?;
+    // Until the Muse host is wired, an explicit selection must never execute client tools.
+    if config.agent_backend == echo_config::AgentBackend::Muse {
+        return Err(Error::Input);
+    }
     let mode = match config.live.mode {
         echo_config::LiveMode::Chatgpt => LiveAuthMode::Chatgpt,
         echo_config::LiveMode::ApiKey => LiveAuthMode::ApiKey,

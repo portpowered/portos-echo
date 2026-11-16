@@ -46,7 +46,7 @@ impl<'a> Fields<'a> {
             .transpose()
     }
 
-    fn required<T: DeserializeOwned>(&mut self, key: &str) -> Result<T, ConfigError> {
+    pub(super) fn required<T: DeserializeOwned>(&mut self, key: &str) -> Result<T, ConfigError> {
         self.optional(key)?
             .ok_or_else(|| ConfigError::new(self.field(key), "missing required field"))
     }
@@ -70,6 +70,7 @@ impl<'a> Fields<'a> {
 
 pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
     let mut root = Fields::new(value, "config")?;
+    let agent_backend;
     let result = BridgeConfig {
         chatgpt_auth: root
             .table
@@ -85,7 +86,17 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .map(|v| audio(v.into_inner()))
             .transpose()?
             .unwrap_or_default(),
-        agent: agent(root.node("agent")?)?,
+        agent: {
+            let (agent, backend) = agent(root.node("agent")?)?;
+            agent_backend = backend;
+            agent
+        },
+        agent_backend,
+        muse: root
+            .table
+            .remove("muse")
+            .map(|v| crate::config_muse::decode(v.into_inner()))
+            .transpose()?,
         mcp: mcp(root.node("mcp")?)?,
         screen: screen(root.node("screen")?)?,
         audit: audit(root.node("audit")?)?,
@@ -125,8 +136,9 @@ fn audio(value: Value<'_>) -> Result<crate::AudioConfig, ConfigError> {
     Ok(result)
 }
 
-fn agent(value: Value<'_>) -> Result<AgentConfig, ConfigError> {
+fn agent(value: Value<'_>) -> Result<(AgentConfig, crate::AgentBackend), ConfigError> {
     let mut f = Fields::new(value, "agent")?;
+    let backend = f.optional("backend")?.unwrap_or_default();
     let result = AgentConfig {
         max_tool_calls: f.optional("max_tool_calls")?.unwrap_or(8),
         task_deadline_seconds: f.optional("task_deadline_seconds")?.unwrap_or(60),
@@ -134,7 +146,7 @@ fn agent(value: Value<'_>) -> Result<AgentConfig, ConfigError> {
         model: f.optional("model")?,
     };
     f.finish()?;
-    Ok(result)
+    Ok((result, backend))
 }
 
 fn mcp(value: Value<'_>) -> Result<McpConfig, ConfigError> {
