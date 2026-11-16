@@ -5,6 +5,47 @@ use bridge_input::{Provider, parse};
 use echo_live::call::{CallError, CredentialProvider, LiveCredential};
 use serde_json::json;
 
+#[tokio::test]
+async fn muse_selection_cannot_silently_execute_the_unselected_client_backend() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bridge.toml");
+    let input = include_str!("../../../examples/bridge.example.toml")
+        .replace("echo.example.invalid", "127.0.0.1")
+        .replace("[agent]", "[agent]\nbackend='muse'");
+    std::fs::write(
+        &path,
+        format!(
+            "{input}\n[muse]\nurl='https://127.0.0.1:7448'\nca_file='absent/ca.der'\ncredential_file='absent/muse'\n"
+        ),
+    )
+    .unwrap();
+    let args = vec![
+        "--config".into(),
+        path.to_string_lossy().into_owned(),
+        "--trace".into(),
+        directory.path().join("trace").to_string_lossy().into_owned(),
+    ];
+    let settings = parse(&args, [None, None, None]).unwrap().unwrap();
+    assert!(settings.delegation.is_none());
+    assert!(settings.mcp.is_none());
+    assert_eq!(settings.muse.as_ref().unwrap().0.task_deadline_seconds, 60);
+    let observer = echo_link::fake::Observer::default();
+    let (_stop, shutdown) = tokio::sync::oneshot::channel();
+    let result = bridge_runtime::execute_controlled(
+        settings,
+        bridge_runtime::Control {
+            utc_day: std::sync::Arc::new(|| 0),
+            shutdown,
+        },
+        echo_link::fake::FakeConnector::new(observer.clone()),
+    )
+    .await;
+    assert_eq!(result, Err(Error::Input));
+    assert_eq!(observer.commands(), vec![]);
+    assert!(!directory.path().join("trace").exists());
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
 #[test]
 fn bridge_lifecycle_lab_idle_is_explicit_validated_and_never_changes_configured_mode() {
     let mut settings = parse(

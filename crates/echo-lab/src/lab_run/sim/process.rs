@@ -171,6 +171,10 @@ pub fn host(python: &str) -> Command {
 // An announcement proves child-side readiness, not caller-side reachability
 // (notably across WSL forwarding). Share one budget with host observation.
 const READINESS: std::time::Duration = std::time::Duration::from_secs(20);
+// A stale Windows/WSL forwarding route can leave one TCP SYN pending for the
+// whole admission budget. Bound each attempt so a fresh connection can observe
+// forwarding becoming ready, while retaining the same overall deadline.
+const PROBE: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub(super) fn readiness_deadline() -> tokio::time::Instant {
     tokio::time::Instant::now() + READINESS
@@ -215,7 +219,7 @@ where
 {
     let ready = async {
         while tokio::time::Instant::now() < deadline {
-            if probe(address).await && tokio::time::Instant::now() < deadline {
+            if tokio::time::timeout(PROBE, probe(address)).await == Ok(true) && tokio::time::Instant::now() < deadline {
                 return true;
             }
             // Retry only after a completed failed probe, yielding to the child
@@ -310,6 +314,36 @@ mod readiness_tests {
         assert_eq!(startup.await, Ok(()));
         assert_eq!(endpoints, vec![address()]);
         assert_eq!(next.get(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readiness_stalled_attempt_yields_to_fresh_probe_within_original_budget() {
+        let mut endpoints = vec![];
+        let probes = Cell::new(0);
+        let next = Cell::new(0);
+        let deadline = readiness_deadline();
+        let mut startup = Box::pin(async {
+            admit_host(&mut endpoints, ready(Ok(observation())), deadline, |_| {
+                probes.set(probes.get() + 1);
+                let stalled = probes.get() == 1;
+                async move {
+                    if stalled {
+                        pending::<()>().await;
+                    }
+                    true
+                }
+            })
+            .await?;
+            next.set(next.get() + 1);
+            Ok::<(), String>(())
+        });
+        pending_once(startup.as_mut()).await;
+        assert_eq!((probes.get(), next.get()), (1, 0));
+        advance(PROBE).await;
+        assert_eq!(startup.await, Ok(()));
+        assert_eq!((probes.get(), next.get()), (2, 1));
+        assert_eq!(endpoints, vec![address()]);
+        assert!(Instant::now() < deadline);
     }
 
     #[tokio::test(start_paused = true)]

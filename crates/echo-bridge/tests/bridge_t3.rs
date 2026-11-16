@@ -68,7 +68,7 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(name == "echo-bridge")
             .spawn()
             .unwrap();
         let input = child.stdin.take();

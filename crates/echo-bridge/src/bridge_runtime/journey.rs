@@ -231,7 +231,7 @@ pub(super) async fn run<L: EchoLink>(
     };
     let (outcome, ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer)?;
     failure.map_or(Ok(()), Err)?;
-    let abandoned = context.delegation.abandon();
+    let abandoned = context.delegation.abandon().await;
     context.screen.presentation.clear_emotion()?;
     trace.record(
         "reply.played",
@@ -314,7 +314,7 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
                 () = self.kill.wait(), if !source.cancelled => {
                     self.kill.sync(self.trace).await?;
                     source.cancelled = true;
-                    self.delegation.abandon();
+                    self.delegation.abandon().await;
                     call.close();
                 }
             }
@@ -326,9 +326,9 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             call.close();
         }
         if source.cancelled {
-            self.delegation.abandon();
             self.screen.presentation.clear_emotion()?;
             self.cut(source).await?;
+            self.delegation.abandon().await;
         }
         Ok(source.cancelled)
     }

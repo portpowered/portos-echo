@@ -215,6 +215,103 @@
                 "minimum": 0
               }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "event",
+              "case",
+              "run_id",
+              "delegation_id",
+              "task_id",
+              "gadget_session_id",
+              "report_task_id",
+              "transcript",
+              "delegation_count",
+              "muse_submit_count",
+              "progress_count",
+              "terminal_count",
+              "completed_count",
+              "failed_count",
+              "spoken_reply_count",
+              "commentary_count",
+              "gadget_submit_count",
+              "report_accepted_count",
+              "report_attempt_count",
+              "reply_pcm_bytes",
+              "client_tool_call_count",
+              "responses_request_count",
+              "retryable",
+              "deadline_seconds"
+            ],
+            "properties": {
+              "event": {"const": "m7.case"},
+              "case": {
+                "enum": [
+                  "success",
+                  "no_report"
+                ]
+              },
+              "run_id": {"type": "string", "minLength": 1},
+              "delegation_id": {"type": "string", "minLength": 1},
+              "task_id": {"type": "string", "minLength": 1},
+              "gadget_session_id": {"type": "string", "minLength": 1},
+              "report_task_id": {"type": "string"},
+              "transcript": {"type": "string", "minLength": 1},
+              "delegation_count": {"const": 1},
+              "muse_submit_count": {"const": 1},
+              "progress_count": {"type": "integer", "minimum": 1},
+              "terminal_count": {"const": 1},
+              "completed_count": {"type": "integer", "minimum": 0, "maximum": 1},
+              "failed_count": {"type": "integer", "minimum": 0, "maximum": 1},
+              "spoken_reply_count": {"const": 1},
+              "commentary_count": {"const": 1},
+              "gadget_submit_count": {"const": 1},
+              "report_accepted_count": {"type": "integer", "minimum": 0, "maximum": 1},
+              "report_attempt_count": {"type": "integer", "minimum": 0, "maximum": 1},
+              "reply_pcm_bytes": {"const": 9600},
+              "client_tool_call_count": {"const": 0},
+              "responses_request_count": {"const": 0},
+              "retryable": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "deadline_seconds": {"type": "integer", "minimum": 5, "maximum": 600}
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "case": {"const": "success"}
+                  },
+                  "required": [
+                    "case"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "completed_count": {"const": 1},
+                    "failed_count": {"const": 0},
+                    "report_accepted_count": {"const": 1},
+                    "report_attempt_count": {"const": 1},
+                    "retryable": {"type": "null"}
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "completed_count": {"const": 0},
+                    "failed_count": {"const": 1},
+                    "report_accepted_count": {"const": 0},
+                    "report_attempt_count": {"const": 0},
+                    "retryable": {"const": false},
+                    "report_task_id": {"const": ""}
+                  }
+                }
+              }
+            ]
           }
         ]
       }

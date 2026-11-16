@@ -3,8 +3,10 @@
 
 mod config_auth;
 mod config_decode;
+mod config_muse;
 mod config_validate;
 pub use config_auth::ChatGptAuthConfig;
+pub use config_muse::{AgentBackend, MuseConfig};
 
 #[cfg(test)]
 mod config_rule_tests;
@@ -68,6 +70,8 @@ pub struct BridgeConfig {
     pub live: LiveConfig,
     pub audio: AudioConfig,
     pub agent: AgentConfig,
+    pub agent_backend: AgentBackend,
+    pub muse: Option<MuseConfig>,
     pub mcp: McpConfig,
     pub screen: ScreenConfig,
     pub audit: AuditConfig,

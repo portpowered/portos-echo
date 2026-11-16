@@ -73,7 +73,7 @@ test-sim:
 	cargo run --locked -p echo-lab -- validate
 	$(MAKE) hassmic-host
 	sh tests/hassmic_host_smoke.sh
-	cargo build --locked -p echo-bridge --bins
+	cargo build --locked -p echo-bridge -p echo-muse-bridge --bins
 	cargo nextest run -p echo-bridge --test bridge_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
 	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
 	cargo nextest run -p echo-lab --test sim_bridge_cli --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture

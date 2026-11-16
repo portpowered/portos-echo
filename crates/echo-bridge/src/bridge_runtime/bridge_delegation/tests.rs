@@ -46,7 +46,7 @@ async fn m6_result_wakes_owner_before_terminal_and_abandon_discards_observation(
         send,
         overflow: AtomicBool::new(false),
     });
-    let mut host = Host {
+    let mut host = Client {
         grant: None,
         config: None,
         model_url: None,

@@ -7,9 +7,12 @@ pub(super) const CONTROL: Duration = Duration::from_secs(5);
 pub(super) const RESPONSE: Duration = Duration::from_secs(10);
 
 pub(super) fn task(settings: &Settings) -> Duration {
-    settings.delegation.as_ref().map_or(Duration::ZERO, |(agent, _)| {
-        Duration::from_secs(agent.task_deadline_seconds)
-    })
+    let agent = settings
+        .muse
+        .as_ref()
+        .map(|(agent, _)| agent)
+        .or_else(|| settings.delegation.as_ref().map(|(agent, _)| agent));
+    agent.map_or(Duration::ZERO, |agent| Duration::from_secs(agent.task_deadline_seconds))
 }
 
 pub(super) fn playback(settings: &Settings) -> Duration {

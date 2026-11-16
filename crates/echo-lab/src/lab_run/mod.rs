@@ -83,6 +83,7 @@ fn say(value: &str, scenario: &str, options: &Options) -> Result<Step, String> {
         match crate::lab_validate::load(scenario)?["id"].as_str() {
             Some("m4-spoof-tool") => return sim::m4::utterance(value),
             Some("m6-emotion") => return sim::m4::emotion_utterance(value),
+            Some("m7-muse") => return sim::m7::utterance(value),
             _ => {}
         }
         return Ok(Step::SayFile(sim::fixture(value, scenario)?));
@@ -150,6 +151,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
         if options.sim {
             steps.extend(sim::m4::negative(&scenario)?);
             steps.extend(sim::m2::negative(&scenario)?);
+            steps.extend(sim::m7::negative(&scenario)?);
             for (name, value) in scenario["budgets"].as_object().ok_or("sim: missing budgets")? {
                 steps.push(Step::Budget(
                     name.clone(),
@@ -170,6 +172,10 @@ fn sim_setup(scenario: &serde_json::Value) -> Result<(), String> {
         .is_some_and(|v| v.iter().any(|t| t == "T3"))
     {
         return Err("sim: scenario does not admit T3".into());
+    }
+    if scenario["id"] == "m7-muse" {
+        sim::m7::negative(scenario)?;
+        return Ok(());
     }
     if scenario["setup"].as_object().is_none_or(|m| {
         m.iter().any(|(k, v)| {
@@ -321,6 +327,9 @@ fn driver(options: &Options) -> Result<Box<dyn Driver + '_>, String> {
     }
     if scenario["milestone"] == "M5" {
         return Ok(Box::new(sim::mcp::M5::new(options)?));
+    }
+    if scenario["id"] == "m7-muse" {
+        return Ok(Box::new(sim::m7::M7::new(options)?));
     }
     if matches!(scenario["id"].as_str(), Some("m4-spoof-tool" | "m6-emotion")) {
         Ok(Box::new(sim::m4::M4::new(options)?))

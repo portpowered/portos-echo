@@ -3,6 +3,9 @@
 mod sim_support;
 use serde_json::{Value, json};
 use sim_support::{Session, records};
+#[cfg(unix)]
+#[path = "sim_support/muse.rs"]
+mod muse;
 
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host"]
@@ -43,7 +46,8 @@ fn native_mute_roundtrip_uses_the_sim_control_path_and_next_wake_streams() {
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host"]
 fn w1_fixture_pass_seeded_failure_and_action_use_the_same_runner() {
-    for (steps, expected) in [
+    // Pair private worlds so repeated Windows/WSL startup is not serial under one deadline.
+    for cases in [
         (
             json!([{"say":"fixture.pcm"},{"expect_trace":["wyoming.run_started","wyoming.mic_frames {count_gte: 10}","wyoming.run_ended"]}]),
             0,
@@ -56,28 +60,36 @@ fn w1_fixture_pass_seeded_failure_and_action_use_the_same_runner() {
             json!([{"press":"action"},{"expect_trace":["wyoming.run_started","wyoming.mic_frames {count_gte: 10}","wyoming.run_ended"]}]),
             0,
         ),
-    ] {
-        let session = Session::new();
-        session.scenario(steps, json!({}));
-        let output = session
-            .command(env!("CARGO_BIN_EXE_echo-lab-sim-bridge"))
-            .output()
-            .unwrap();
-        assert_eq!(
-            output.status.code(),
-            Some(expected),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let report = session.report();
-        assert_eq!(report["observations"], observed_frames(&session).unwrap());
-        assert_eq!(report["result"], if expected == 0 { "pass" } else { "fail" });
-        assert_eq!(report["checks"]["step_1"], expected == 0);
-        assert_eq!(report["checks"]["world_closed"], true);
-        if expected == 1 {
-            assert!(!report["checks"].as_object().unwrap().contains_key("step_2"));
-            assert!(String::from_utf8_lossy(&output.stderr).contains("wyoming.never_happened"));
-        }
+    ]
+    .chunks(2)
+    {
+        std::thread::scope(|scope| {
+            for (steps, expected) in cases.iter().cloned() {
+                scope.spawn(move || {
+                    let session = Session::new();
+                    session.scenario(steps, json!({}));
+                    let output = session
+                        .command(env!("CARGO_BIN_EXE_echo-lab-sim-bridge"))
+                        .output()
+                        .unwrap();
+                    assert_eq!(
+                        output.status.code(),
+                        Some(expected),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    let report = session.report();
+                    assert_eq!(report["observations"], observed_frames(&session).unwrap());
+                    assert_eq!(report["result"], if expected == 0 { "pass" } else { "fail" });
+                    assert_eq!(report["checks"]["step_1"], expected == 0);
+                    assert_eq!(report["checks"]["world_closed"], true);
+                    if expected == 1 {
+                        assert!(!report["checks"].as_object().unwrap().contains_key("step_2"));
+                        assert!(String::from_utf8_lossy(&output.stderr).contains("wyoming.never_happened"));
+                    }
+                });
+            }
+        });
     }
 }
 

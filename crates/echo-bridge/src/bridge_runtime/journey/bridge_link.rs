@@ -120,7 +120,7 @@ async fn bridge_link_wake_mic_paced_echo_acknowledgment_and_fresh_run() {
         health: &health,
         screen: &screen,
     };
-    let mut host = Host::new(&settings, std::sync::Arc::new(|| 0));
+    let mut host = Host::new(&settings, std::sync::Arc::new(|| 0)).unwrap();
     let dir = tempfile::tempdir().unwrap();
     for phrase in ["Computer", "a fresh phrase"] {
         observer.wake(
