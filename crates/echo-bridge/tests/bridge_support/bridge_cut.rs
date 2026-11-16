@@ -132,15 +132,7 @@ async fn assert_cut_process_failure(bridge: &mut Process, disconnect: bool) {
         .unwrap();
     assert_eq!(status.code(), Some(1));
     assert_eq!(bridge.lines.next_line().await.unwrap(), None);
-    let mut error = String::new();
-    bridge
-        .child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut error)
-        .await
-        .unwrap();
+    let error = bridge.stderr().await;
     assert_eq!(
         error.trim(),
         if disconnect {
