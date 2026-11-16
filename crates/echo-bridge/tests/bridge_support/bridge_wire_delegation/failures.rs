@@ -180,7 +180,7 @@ async fn bridge_wire_delegation_mcp_500_is_one_attempt_and_exact_error() {
         let output: Value = serde_json::from_str(requests[1].body["input"][3]["output"].as_str().unwrap()).unwrap();
         assert_eq!(
             output,
-            json!({"content":{"error":"server error: http_status:500"},"is_error":true})
+            json!({"content":{"error":format!("server error: http_status:{}", 500)},"is_error":true})
         );
     }
     assert_eq!(spoof.snapshot().unwrap().calls.len(), 1);
