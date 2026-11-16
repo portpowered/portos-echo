@@ -218,6 +218,8 @@ fn bridge_spine_configured_modes_preserve_paths_and_never_read_credentials_at_pa
         assert_eq!(settings.voice, "default");
         assert_eq!(settings.session_idle_seconds, 120);
         assert!(!settings.lab);
+        assert!(!settings.sim_clock);
+        assert_eq!(settings.sim_epoch, None);
         assert_configured_provider(settings, mode);
     }
 }
@@ -328,4 +330,56 @@ fn bridge_wire_mock_origins_require_complete_pair_and_local_dial_targets() {
         paired.truncate(6);
         assert_eq!(parse(&paired, [None, None, None]).err(), Some(Error::Input));
     }
+}
+
+#[test]
+fn mcp_link_epoch_requires_guard_and_local_overrides_and_unsigned_value() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.toml");
+    let template = include_str!("../../../examples/bridge.example.toml")
+        .replace("echo.example.invalid", "127.0.0.1")
+        .replace(&format!("{}:16900", std::net::Ipv4Addr::UNSPECIFIED), "127.0.0.1:0");
+    std::fs::write(
+        &path,
+        format!("{template}\n[chatgpt_auth]\ntoken_endpoint = 'http://127.0.0.1:1/token'"),
+    )
+    .unwrap();
+    let args: Vec<String> = [
+        "--config",
+        path.to_str().unwrap(),
+        "--trace",
+        "unused",
+        "--live-loopback",
+        "http://127.0.0.1:1",
+        "--model-loopback",
+        "http://127.0.0.1:2",
+        "--sim-clock",
+        "--sim-epoch",
+        "1800000000",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let settings = parse(&args, [None, None, None]).unwrap().unwrap();
+    assert!(settings.sim_clock);
+    assert_eq!(settings.sim_epoch, Some(1_800_000_000));
+    for value in ["", "-1", "+1", "1.5", "18446744073709551616"] {
+        let mut invalid = args.clone();
+        *invalid.last_mut().unwrap() = value.into();
+        assert_eq!(parse(&invalid, [None, None, None]).err(), Some(Error::Input));
+    }
+    let mut no_guard = args.clone();
+    no_guard.remove(8);
+    assert_eq!(parse(&no_guard, [None, None, None]).err(), Some(Error::Input));
+    let mut no_overrides = args.clone();
+    no_overrides.drain(4..8);
+    assert_eq!(parse(&no_overrides, [None, None, None]).err(), Some(Error::Input));
+    assert_eq!(
+        parse(&args, [Some("synthetic".into()), None, None]).err(),
+        Some(Error::Input)
+    );
+    let mut duplicate = args;
+    duplicate.extend(["--sim-epoch".into(), "42".into()]);
+    assert_eq!(parse(&duplicate, [None, None, None]).err(), Some(Error::Input));
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
 }

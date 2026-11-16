@@ -14,6 +14,7 @@ use tokio::{
 };
 
 #[path = "mock_proofs.rs"]
+#[cfg(test)]
 mod tests;
 
 #[derive(Clone)]
@@ -48,24 +49,33 @@ pub struct Mock {
 }
 
 impl Mock {
-    pub async fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("{}:{}", "http://127.0.0.1", listener.local_addr().unwrap().port());
+    #[cfg(test)]
+    pub(crate) async fn start() -> Self {
+        Self::bind().await.unwrap()
+    }
+
+    /// Bind one reusable loopback server with the original fixture policy.
+    /// # Errors
+    /// Returns a local bind failure without creating a server task.
+    pub async fn bind() -> std::io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("{}:{}", "http://127.0.0.1", listener.local_addr()?.port());
         let state = Arc::new(Mutex::new(State {
             lifetime: 3600,
             ..State::default()
         }));
         let release = Arc::new(Notify::new());
         let task = tokio::spawn(serve(listener, base.clone(), state.clone(), release.clone()));
-        Self {
+        Ok(Self {
             base,
             state,
             release,
             task,
-        }
+        })
     }
 
-    pub fn count(&self, path: &str) -> usize {
+    #[cfg(test)]
+    pub(crate) fn count(&self, path: &str) -> usize {
         self.state
             .lock()
             .unwrap()
@@ -75,7 +85,8 @@ impl Mock {
             .count()
     }
 
-    pub fn refreshes(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn refreshes(&self) -> usize {
         self.state
             .lock()
             .unwrap()
@@ -85,11 +96,13 @@ impl Mock {
             .count()
     }
 
-    pub fn fault(&self, path: &str, status: u16, body: Value) {
+    #[cfg(test)]
+    pub(crate) fn fault(&self, path: &str, status: u16, body: Value) {
         self.state.lock().unwrap().fault = Some((path.into(), status, body));
     }
 
-    pub async fn resource(&self, access: &str) -> u16 {
+    #[cfg(test)]
+    pub(crate) async fn resource(&self, access: &str) -> u16 {
         reqwest::Client::new()
             .post(format!("{}/mcp", self.base))
             .bearer_auth(access)
@@ -112,43 +125,67 @@ async fn serve(listener: TcpListener, base: String, state: Arc<Mutex<State>>, re
     while let Ok((stream, _)) = listener.accept().await {
         // Each request is handled by this reusable root task; no process or
         // server per exchange, and no detached per-request workers.
-        handle(stream, &base, &state, &release, start).await;
+        let _ = handle(stream, &base, &state, &release, start).await;
     }
 }
 
-async fn read(stream: &mut TcpStream, start: Instant) -> Request {
+fn invalid() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid mock request")
+}
+
+async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Result<Request> {
     let mut bytes = Vec::new();
     let end = loop {
         let mut byte = [0];
-        stream.read_exact(&mut byte).await.unwrap();
+        stream.read_exact(&mut byte).await?;
         bytes.push(byte[0]);
         if bytes.ends_with(b"\r\n\r\n") {
             break bytes.len();
         }
+        if bytes.len() >= 16384 {
+            return Err(invalid());
+        }
     };
-    let text = String::from_utf8(bytes).unwrap();
+    let text = String::from_utf8(bytes).map_err(|_| invalid())?;
     let mut lines = text.split("\r\n");
-    let path = lines.next().unwrap().split_whitespace().nth(1).unwrap().into();
+    let path = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .ok_or_else(invalid)?
+        .into();
     let headers: BTreeMap<String, String> = lines
         .filter_map(|line| line.split_once(':'))
         .map(|(k, v)| (k.to_lowercase(), v.trim().into()))
         .collect();
-    let length = headers.get("content-length").map_or(0, |v| v.parse::<usize>().unwrap());
+    let length = headers
+        .get("content-length")
+        .map_or(Ok(0), |v| v.parse::<usize>().map_err(|_| invalid()))?;
+    if length > 65536 {
+        return Err(invalid());
+    }
     let mut body = vec![0; length];
-    stream.read_exact(&mut body).await.unwrap();
-    assert!(end < 16384);
-    Request {
+    stream.read_exact(&mut body).await?;
+    if end >= 16384 {
+        return Err(invalid());
+    }
+    Ok(Request {
         path,
         headers,
         form: url::form_urlencoded::parse(&body).into_owned().collect(),
         time: start.elapsed().as_secs(),
-    }
+    })
 }
 
-async fn handle(mut stream: TcpStream, base: &str, shared: &Mutex<State>, release: &Notify, start: Instant) {
-    let request = read(&mut stream, start).await;
+async fn handle(
+    mut stream: TcpStream,
+    base: &str,
+    shared: &Mutex<State>,
+    release: &Notify,
+    start: Instant,
+) -> std::io::Result<()> {
+    let request = read(&mut stream, start).await?;
     let (status, body, hold) = {
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.lock().map_err(|_| invalid())?;
         state.requests.push(request.clone());
         let hold = state.hold.as_ref() == Some(&request.path);
         if hold {
@@ -165,7 +202,7 @@ async fn handle(mut stream: TcpStream, base: &str, shared: &Mutex<State>, releas
         "HTTP/1.1 {status} mock\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    let _ = stream.write_all(response.as_bytes()).await;
+    stream.write_all(response.as_bytes()).await
 }
 
 fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
@@ -206,6 +243,7 @@ fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
     }
 }
 
+#[must_use]
 pub fn metadata(base: &str) -> Value {
     json!({"issuer":base,"device_authorization_endpoint":format!("{base}/custom/link"),
         "token_endpoint":format!("{base}/custom/token"),"revocation_endpoint":format!("{base}/custom/end"),
@@ -271,7 +309,7 @@ fn verify(request: &Request, base: &str, state: &mut State) -> bool {
         || claims["ath"] != Value::Null
         || claims["iat"]
             .as_u64()
-            .is_none_or(|iat| iat.abs_diff(crate::wire::unix_now().unwrap() + request.time) > 2)
+            .is_none_or(|iat| !crate::wire::unix_now().is_ok_and(|now| iat.abs_diff(now + request.time) <= 2))
     {
         return false;
     }

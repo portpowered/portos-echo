@@ -2,6 +2,8 @@
 pub mod bridge_audio;
 pub mod bridge_health;
 pub mod bridge_input;
+#[path = "bridge_mcp/bridge_mcp.rs"]
+pub mod bridge_mcp;
 pub mod bridge_operator;
 pub mod bridge_runtime;
 pub mod bridge_trace;
@@ -31,6 +33,8 @@ pub enum Error {
     Screen,
     #[error("control")]
     Control,
+    #[error("{0}")]
+    Mcp(echo_mcp_auth::AuthError),
 }
 
 impl From<echo_audio::AudioError> for Error {

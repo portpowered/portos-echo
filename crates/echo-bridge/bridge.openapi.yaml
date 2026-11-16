@@ -25,5 +25,59 @@ paths:
           description: Unknown path; empty body.
         '405':
           description: Method other than GET; empty body, Allow GET.
+  /operator/mcp:
+    post:
+      description: On mcp.operator_listen only; one active operation; link waits for approval.
+      security: [{operatorToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation]
+              properties:
+                operation: {enum: [link, refresh, unlink]}
+      responses:
+        '200':
+          description: Durable operation completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [outcome]
+                properties:
+                  outcome: {enum: [linked, refreshed, unlinked]}
+        '400':
+          description: Invalid payload or request over 4096 bytes; no mutation.
+        '401':
+          description: Missing or incorrect owner pairing credential; no mutation.
+        '403':
+          description: Origin header present; no browser-origin control.
+        '409':
+          description: Another operation is active; no queued duplicate mutation.
+        '422':
+          description: Fixed OAuth category, never remote response text.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error]
+                properties:
+                  error: {enum: [discovery, transport, protocol, access_denied, expired, relink_required, storage]}
+        '404':
+          description: Unknown path; empty body.
+        '405':
+          description: Wrong method; empty body, Allow POST.
+components:
+  securitySchemes:
+    operatorToken:
+      type: http
+      scheme: bearer
 # Bind literal 127.0.0.1 only; no authentication required on this local read-only endpoint.
 # Bounded request/header storage and request deadline; no credential or audio data.
+# Operator control uses a separate loopback listener and screen.pairing_token_file.
+# It never sends DPoP. Dropping a pending control request cancels approval polling.

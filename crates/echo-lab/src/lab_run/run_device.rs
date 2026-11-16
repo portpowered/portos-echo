@@ -358,6 +358,7 @@ impl Device<'_> {
             self.finish_reply()?;
         }
         match step {
+            Step::LinkCounts(expected) => artifacts.expect_link_counts(index, expected),
             Step::SayFile(path) => {
                 self.open(artifacts)?;
                 let file = path.to_str().ok_or("say: file path is not UTF-8")?;
@@ -387,7 +388,8 @@ impl Device<'_> {
             | Step::Trace(_)
             | Step::Ui(_)
             | Step::Press(_)
-            | Step::Budget(_, _) => Err("step: capability is not implemented by device driver".into()),
+            | Step::Budget(_, _)
+            | Step::Mcp(_) => Err("step: capability is not implemented by device driver".into()),
             Step::Speech(phrases) => self.speech(phrases),
             Step::Screen(golden) => self.screen(golden, index, artifacts),
             Step::Frame(name) => self.frame(name, artifacts),
@@ -403,6 +405,9 @@ impl Driver for Device<'_> {
         next: Option<&Step>,
         artifacts: &mut Artifacts,
     ) -> Result<(), String> {
+        if let Step::Mcp(action) = step {
+            return Err(format!("device: MCP {} control unavailable", action.name()));
+        }
         self.capture_window = matches!(next, Some(Step::Frame(_)));
         let result = self.attempt(step, index, artifacts);
         if result.as_ref().err().is_some_and(|error| error == "play: preempted") {

@@ -140,6 +140,75 @@
               "minLength": 1
             }
           }
+        },
+        "expect_link_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "link",
+            "tools_list",
+            "tool_call",
+            "forced_refresh",
+            "replay_rejected",
+            "relink_error",
+            "restart_grant_kept",
+            "unlink"
+          ],
+          "properties": {
+            "link": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tools_list": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tool_call": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forced_refresh": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "replay_rejected": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "relink_error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "restart_grant_kept": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unlink": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action"
+          ],
+          "properties": {
+            "action": {
+              "enum": [
+                "link",
+                "approve",
+                "refresh",
+                "restart",
+                "call",
+                "replay",
+                "probe",
+                "unlink"
+              ]
+            }
+          }
         }
       }
     },

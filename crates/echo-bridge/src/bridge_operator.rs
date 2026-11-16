@@ -4,11 +4,14 @@ use echo_config::BridgeConfig;
 use echo_signin::{OperatorCommand, Providers};
 use std::{io::Write, path::PathBuf};
 
-pub const HELP: &str = "echo-bridge --config PATH --trace PATH [--health-listen 127.0.0.1:PORT] [--live-loopback ORIGIN --model-loopback ORIGIN]\n\
+pub const HELP: &str = "echo-bridge --config PATH --trace PATH [--health-listen 127.0.0.1:PORT] [--live-loopback ORIGIN --model-loopback ORIGIN] [--sim-clock [--sim-epoch UNIX_SECONDS]]\n\
 echo-bridge signin --config PATH [--browser]\n\
 echo-bridge import-codex --config PATH --path PATH\n\
 echo-bridge status --config PATH\n\
-echo-bridge kill --config PATH [--clear]";
+echo-bridge kill --config PATH [--clear]\n\
+echo-bridge link --config PATH\n\
+echo-bridge --refresh-now --config PATH\n\
+echo-bridge unlink --config PATH";
 
 pub struct Command {
     config: PathBuf,

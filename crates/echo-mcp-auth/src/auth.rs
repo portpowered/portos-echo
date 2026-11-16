@@ -56,6 +56,18 @@ impl AuthClient {
     /// # Errors
     /// Returns safe discovery, transport, binding or storage categories.
     pub async fn open(options: AuthOptions) -> Result<Self, AuthError> {
+        Self::open_with_epoch(options, None).await
+    }
+
+    /// Use an independently chosen UTC epoch for guarded simulated runs.
+    /// Only the initial wall sample changes; elapsed Tokio time still drives expiry.
+    /// # Errors
+    /// Returns the same categories as `open`.
+    pub async fn open_at_epoch(options: AuthOptions, epoch_unix: u64) -> Result<Self, AuthError> {
+        Self::open_with_epoch(options, Some(epoch_unix)).await
+    }
+
+    async fn open_with_epoch(options: AuthOptions, epoch: Option<u64>) -> Result<Self, AuthError> {
         options.validate()?;
         let http = Client::builder()
             .redirect(Policy::none())
@@ -74,7 +86,10 @@ impl AuthClient {
                 uncertain: false,
             }),
             generation: AtomicU64::new(0),
-            epoch: wire::unix_now()?,
+            epoch: match epoch {
+                Some(epoch) => epoch,
+                None => wire::unix_now()?,
+            },
             started: Instant::now(),
         })
     }

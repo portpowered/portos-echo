@@ -8,6 +8,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+mock = []
+
 [dependencies]
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
 serde = { version = "1", features = ["derive"] }

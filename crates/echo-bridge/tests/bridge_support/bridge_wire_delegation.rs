@@ -13,6 +13,8 @@ use tokio::net::{TcpListener, TcpStream};
 mod failures;
 #[path = "bridge_wire_delegation/kill.rs"]
 mod kill;
+#[path = "bridge_wire_delegation/mcp.rs"]
+mod mcp;
 #[path = "bridge_wire_delegation/runtime.rs"]
 mod runtime;
 

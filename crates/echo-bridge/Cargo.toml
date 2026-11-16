@@ -13,6 +13,7 @@ echo-link = { version = "0.1.0", path = "../echo-link" }
 echo-agent-loop = { version = "0.1.0", path = "../echo-agent-loop" }
 echo-delegation = { version = "0.1.0", path = "../echo-delegation" }
 echo-mcp-client = { version = "0.1.0", path = "../echo-mcp-client" }
+echo-mcp-auth = { version = "0.1.0", path = "../echo-mcp-auth" }
 echo-audio = { version = "0.1.0", path = "../echo-audio" }
 echo-config = { version = "0.1.0", path = "../echo-config" }
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
@@ -24,10 +25,13 @@ echo-wyoming = { version = "0.1.0", path = "../echo-wyoming" }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 thiserror = "2"
-tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros", "io-util"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros", "io-util", "test-util"] }
 
 [dev-dependencies]
+echo-lab = { version = "0.1.0", path = "../echo-lab" }
+p256 = { version = "0.14", features = ["ecdsa"] }
 echo-link = { version = "0.1.0", path = "../echo-link", features = ["fake"] }
+echo-mcp-auth = { version = "0.1.0", path = "../echo-mcp-auth", features = ["mock"] }
 echo-spoof-mcp = { version = "0.1.0", path = "../echo-spoof-mcp" }
 base64 = "0.23"
 echo-live = { version = "0.1.0", path = "../echo-live", features = ["fake"] }

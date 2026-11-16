@@ -24,6 +24,9 @@ pub fn bundled_bridge() -> Result<PathBuf, String> {
 }
 
 pub fn default_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
+    if scenario["milestone"] == "M5" {
+        return production_bridge();
+    }
     prebuilt(if scenario["milestone"] == "M1" {
         "echo-bridge"
     } else {
@@ -49,6 +52,20 @@ fn prebuilt(name: &str) -> Result<PathBuf, String> {
             "sim: prebuilt bridge missing at {}; run cargo build {packages} --bins --locked",
             bridge.display()
         ));
+    }
+    Ok(bridge)
+}
+
+pub fn production_bridge() -> Result<PathBuf, String> {
+    let bridge = std::env::current_exe()
+        .map_err(|_| "M5: cannot locate production bridge")?
+        .with_file_name(if cfg!(windows) {
+            "echo-bridge.exe"
+        } else {
+            "echo-bridge"
+        });
+    if !bridge.is_file() {
+        return Err("M5: prebuilt echo-bridge missing; run cargo build --locked -p echo-bridge --bins".into());
     }
     Ok(bridge)
 }
@@ -81,12 +98,7 @@ fn run_suite(
             unavailable += 1;
             continue;
         }
-        let selected = if scenario["milestone"] == "M1" {
-            default_bridge(&scenario)?
-        } else {
-            bridge.to_path_buf()
-        };
-        let mut command = scenario_command(name, &selected);
+        let mut command = scenario_command(bridge, name, &scenario)?;
         command.extend_from_slice(extras);
         if let Some(root) = &root {
             let milestone = scenario["milestone"].as_str().ok_or("sim suite: missing milestone")?;
@@ -120,14 +132,21 @@ fn run_suite(
     Ok(())
 }
 
-fn scenario_command(name: &str, bridge: &Path) -> Vec<String> {
-    vec![
+fn scenario_command(bridge: &Path, name: &str, scenario: &serde_json::Value) -> Result<Vec<String>, String> {
+    let production;
+    let selected = if matches!(scenario["milestone"].as_str(), Some("M1" | "M5")) {
+        production = default_bridge(scenario)?;
+        production.as_path()
+    } else {
+        bridge
+    };
+    Ok(vec![
         name.into(),
         "--driver".into(),
         "sim".into(),
         "--bridge".into(),
-        bridge.to_string_lossy().into_owned(),
-    ]
+        selected.to_string_lossy().into_owned(),
+    ])
 }
 
 fn options(args: &[String]) -> Result<(Vec<String>, Option<PathBuf>), String> {

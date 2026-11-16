@@ -1,4 +1,5 @@
 //! The bridge owns screen lifetime and publishes bounded activity updates.
+use crate::bridge_mcp::bridge_presentation::Presentation;
 use crate::{Error, bridge_input::loopback};
 use echo_config::ScreenConfig;
 use echo_contracts::secret::Secret;
@@ -12,8 +13,8 @@ mod mute;
 pub(super) struct Screen {
     mute: Arc<Mutex<mute::Mute>>,
     server: Option<ScreenServer>,
-    states: Option<mpsc::Sender<UiState>>,
     actions: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) presentation: Presentation,
 }
 
 impl Screen {
@@ -26,8 +27,8 @@ impl Screen {
             return Ok(Self {
                 mute: Arc::default(),
                 server: None,
-                states: None,
                 actions: None,
+                presentation: Presentation::new(None),
             });
         };
         let bind = loopback(&config.listen.to_string(), true)?;
@@ -52,7 +53,7 @@ impl Screen {
         let screen = Self {
             mute: Arc::default(),
             server: Some(server),
-            states: Some(states),
+            presentation: Presentation::new(Some(states.clone())),
             actions: None,
         };
         Ok(screen)
@@ -62,12 +63,8 @@ impl Screen {
         if self.muted()? && state != UiState::Muted {
             return Ok(());
         }
-        if let Some(states) = &self.states {
-            states
-                .try_send(self.mute.lock().map_err(|_| Error::Screen)?.project(state))
-                .map_err(|_| Error::Screen)?;
-        }
-        Ok(())
+        self.presentation
+            .publish(self.mute.lock().map_err(|_| Error::Screen)?.project(state))
     }
 
     pub fn muted(&self) -> Result<bool, Error> {
@@ -91,11 +88,7 @@ impl Screen {
     ) -> Result<bool, Error> {
         let changed = self.mute.lock().map_err(|_| Error::Screen)?.event(event, trace)?;
         if changed {
-            if self.muted()? {
-                self.publish(UiState::Muted)?;
-            } else {
-                self.ready()?;
-            }
+            self.presentation.muted(self.muted()?)?;
         }
         self.muted()
     }
@@ -107,20 +100,23 @@ impl Screen {
     }
 
     pub fn supervise_actions(&mut self, health: tokio::sync::watch::Receiver<crate::bridge_health::Links>) {
-        let (Some(server), Some(states)) = (&mut self.server, &self.states) else {
+        let Some(server) = &mut self.server else {
             return;
         };
         let mut actions = std::mem::replace(&mut server.actions, mpsc::channel(1).1);
-        let states = states.clone();
         let mute = self.mute.clone();
+        let presentation = self.presentation.clone();
         self.actions = Some(tokio::spawn(async move {
             while let Some(action) = actions.recv().await {
-                if action == echo_screen_contract::UiAction::Relink && health.borrow().relink_required {
+                if action == echo_screen_contract::UiAction::Relink {
                     // This is an instruction, never an implicit sign-in request.
-                    let result = match mute.lock() {
-                        Ok(mute) if mute.muted => continue,
-                        Ok(mute) => states.try_send(mute.project(failure_state(true))),
-                        Err(_) => break,
+                    if mute.lock().map_or(true, |mute| mute.muted) {
+                        continue;
+                    }
+                    let result = if health.borrow().relink_required {
+                        presentation.publish(failure_state(true))
+                    } else {
+                        presentation.refresh()
                     };
                     if result.is_err() {
                         break;

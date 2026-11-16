@@ -14,6 +14,16 @@ fn pattern(value: &str) -> Result<jsonschema::Validator, String> {
 }
 
 pub fn parse(value: &Value) -> Result<Step, String> {
+    if let Some(control) = value.get("mcp") {
+        return serde_json::from_value::<super::McpControl>(control.clone())
+            .map(|control| Step::Mcp(control.action))
+            .map_err(|_| "mcp: expected one supported action without extra fields".into());
+    }
+    if let Some(counts) = value.get("expect_link_counts") {
+        return serde_json::from_value(counts.clone())
+            .map(Step::LinkCounts)
+            .map_err(|_| "link counts: expected all eight unsigned integer counts".into());
+    }
     if let Some(phrases) = value["expect_speech_contains"].as_array() {
         let phrases = phrases
             .iter()
@@ -132,6 +142,70 @@ pub fn frame_destination(root: &Path, name: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_control_parser_preserves_actions_and_refuses_malformed_controls() {
+        use super::super::McpAction;
+        for (name, expected) in [
+            ("link", McpAction::Link),
+            ("approve", McpAction::Approve),
+            ("refresh", McpAction::Refresh),
+            ("restart", McpAction::Restart),
+            ("call", McpAction::Call),
+            ("replay", McpAction::Replay),
+            ("probe", McpAction::Probe),
+            ("unlink", McpAction::Unlink),
+        ] {
+            for parsed in [
+                parse(&json!({"mcp":{"action":name}})),
+                super::super::sim::parse(&json!({"mcp":{"action":name}})),
+            ] {
+                assert!(matches!(parsed.unwrap(), Step::Mcp(actual) if actual == expected));
+            }
+            assert_eq!(expected.name(), name);
+        }
+        for invalid in [
+            Value::Null,
+            json!([]),
+            json!("link"),
+            json!({}),
+            json!({"action":null}),
+            json!({"action":1}),
+            json!({"action":"unknown"}),
+            json!({"action":"Link"}),
+            json!({"action":"link","extra":true}),
+        ] {
+            assert_eq!(
+                parse(&json!({"mcp":invalid})).err().unwrap(),
+                "mcp: expected one supported action without extra fields"
+            );
+        }
+    }
+
+    #[test]
+    fn link_count_parser_rejects_incomplete_or_non_integer_measurements() {
+        let complete = json!({"link":0,"tools_list":0,"tool_call":0,"forced_refresh":0,
+            "replay_rejected":0,"relink_error":0,"restart_grant_kept":0,"unlink":0});
+        assert!(matches!(
+            parse(&json!({"expect_link_counts":complete})).unwrap(),
+            Step::LinkCounts(_)
+        ));
+        for field in complete.as_object().unwrap().keys() {
+            let mut missing = complete.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(parse(&json!({"expect_link_counts":missing})).is_err());
+            for value in [json!(-1), json!(1.5), json!(true), json!("0"), Value::Null] {
+                let mut invalid = complete.clone();
+                invalid[field] = value;
+                assert!(parse(&json!({"expect_link_counts":invalid})).is_err());
+            }
+        }
+        let mut extra = complete;
+        extra["unknown"] = json!(0);
+        for invalid in [extra, Value::Null, json!([])] {
+            assert!(parse(&json!({"expect_link_counts":invalid})).is_err());
+        }
+    }
 
     #[test]
     fn literal_and_opt_in_patterns_have_distinct_semantics() {

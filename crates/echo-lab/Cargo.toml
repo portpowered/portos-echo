@@ -10,6 +10,10 @@ default-run = "echo-lab"
 workspace = true
 
 [dependencies]
+axum = "0.8"
+base64 = "0.22"
+p256 = { version = "0.14", features = ["ecdsa"] }
+url = "2"
 serde = "1"
 serde_json = "1"
 serde_norway = "0.9.42"
@@ -20,6 +24,11 @@ echo-screen-contract = { version = "0.1.0", path = "../echo-screen-contract" }
 echo-spoof-mcp = { version = "0.1.0", path = "../echo-spoof-mcp" }
 echo-live = { version = "0.1.0", path = "../echo-live", features = ["fake"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "io-util", "sync", "time", "test-util", "fs"] }
+
+[dev-dependencies]
+tempfile = "3"
+echo-mcp-auth = { version = "0.1.0", path = "../echo-mcp-auth" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 [[bin]]
 name = "echo-lab-sim-script"

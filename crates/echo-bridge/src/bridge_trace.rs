@@ -10,11 +10,13 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::Path,
+    sync::{Arc, Mutex},
 };
 use tokio::time::Instant;
 
+#[derive(Clone)]
 pub struct Trace {
-    writer: File,
+    writer: Arc<Mutex<File>>,
     started: Instant,
     mode: &'static str,
 }
@@ -29,7 +31,7 @@ impl Trace {
             .open(path)
             .map_err(|_| Error::Trace)?;
         Ok(Self {
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             started: Instant::now(),
             mode,
         })
@@ -39,6 +41,7 @@ impl Trace {
     /// # Errors
     /// A serialization/write/flush failure prevents claiming completion.
     pub fn record(&mut self, event: &str, run: Option<&str>, fields: Value) -> Result<(), Error> {
+        let mut writer = self.writer.lock().map_err(|_| Error::Trace)?;
         let mut entry = Map::new();
         entry.insert("event".into(), event.into());
         entry.insert(
@@ -58,10 +61,10 @@ impl Trace {
         if bytes.len() > 4096 {
             return Err(Error::Trace);
         }
-        self.writer
+        writer
             .write_all(&bytes)
-            .and_then(|()| self.writer.write_all(b"\n"))
-            .and_then(|()| self.writer.flush())
+            .and_then(|()| writer.write_all(b"\n"))
+            .and_then(|()| writer.flush())
             .map_err(|_| Error::Trace)
     }
 }
@@ -77,7 +80,7 @@ mod bridge_spine_tests {
         let path = dir.path().join("trace");
         std::fs::write(&path, b"prior record\n").unwrap();
         let mut trace = Trace {
-            writer: File::open(&path).unwrap(), // Read-only sink injects an actual write error.
+            writer: Arc::new(Mutex::new(File::open(&path).unwrap())), // Read-only sink injects an actual write error.
             started: Instant::now(),
             mode: "chatgpt",
         };
@@ -102,5 +105,56 @@ mod bridge_spine_tests {
         assert_eq!(line["provider_auth_mode"], "api_key");
         assert_eq!(line["event"], "run.started");
         assert_eq!(line["run_id"], "run-1");
+    }
+
+    #[test]
+    fn bridge_spine_cloned_trace_writers_keep_complete_records_and_one_timeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        std::thread::scope(|scope| {
+            let mut workers = vec![];
+            for writer in 0..4 {
+                let mut trace = trace.clone();
+                workers.push(scope.spawn(move || {
+                    for sequence in 0..64 {
+                        trace
+                            .record(
+                                "mcp.refresh.committed",
+                                None,
+                                json!({"writer":writer,"sequence":sequence}),
+                            )
+                            .unwrap();
+                    }
+                }));
+            }
+            for worker in workers {
+                worker.join().unwrap();
+            }
+        });
+        let entries: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(entries.len(), 256);
+        for writer in 0..4 {
+            let sequences: Vec<_> = entries
+                .iter()
+                .filter(|e| e["writer"] == writer)
+                .map(|e| e["sequence"].as_u64().unwrap())
+                .collect();
+            assert_eq!(sequences, (0..64).collect::<Vec<_>>());
+        }
+        assert!(
+            entries
+                .iter()
+                .all(|e| e["event"] == "mcp.refresh.committed" && e["provider_auth_mode"] == "api_key")
+        );
+        assert!(
+            entries
+                .windows(2)
+                .all(|e| e[0]["elapsed_ms"].as_u64() <= e[1]["elapsed_ms"].as_u64())
+        );
     }
 }

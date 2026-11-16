@@ -117,6 +117,22 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpConfig {
     pub server: Vec<McpServer>,
+    pub state_dir: Option<PathBuf>,
+    pub client_id: String,
+    pub scopes: Vec<String>,
+    pub operator_listen: SocketAddr,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            server: Vec::new(),
+            state_dir: None,
+            client_id: "port1/systems/zero/oauth-clients/command-line-interface".into(),
+            scopes: vec!["endpoint:read".into()],
+            operator_listen: (std::net::Ipv4Addr::LOCALHOST, 16902).into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

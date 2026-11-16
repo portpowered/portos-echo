@@ -25,6 +25,9 @@ impl<P: TokenProvider> McpClient<P> {
             .await
             .map_err(|_| McpError::Transport)?;
         let status = response.status().as_u16();
+        if status == 401 {
+            self.provider.unauthorized();
+        }
         tracing::trace!(status, "MCP response");
         if let Some(id) = id {
             if status != 200 {

@@ -1,7 +1,6 @@
 //! A controlled synthetic Live boundary, using the shipped public peer.
 use super::*;
 use echo_live::LivePeer;
-use std::time::Instant;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
@@ -77,9 +76,12 @@ async fn serve(
         ready.send(()).unwrap();
         release.await.unwrap();
     }
-    let mut peer = Box::pin(LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now()))
-        .await
-        .unwrap();
+    let mut peer = Box::pin(LivePeer::bind(
+        ([127, 0, 0, 1], 0).into(),
+        tokio::time::Instant::now().into_std(),
+    ))
+    .await
+    .unwrap();
     let answer = peer.answer(body["sdp"].as_str().unwrap()).await.unwrap();
     stream
         .write_all(
@@ -138,7 +140,7 @@ async fn short_audio(peer: &mut LivePeer, frames: u16, sequence: &mut u16) {
                 timestamp: u32::from(*sequence) * 960,
                 payload: bytes[..size].to_vec(),
             },
-            Instant::now(),
+            tokio::time::Instant::now().into_std(),
         )
         .await
         .unwrap();
@@ -149,8 +151,8 @@ async fn short_audio(peer: &mut LivePeer, frames: u16, sequence: &mut u16) {
 async fn drive(peer: &mut LivePeer) -> Result<(), echo_live::Error> {
     let deadline = peer.flush().await?;
     tokio::select! {
-        result = peer.readable() => { result?; peer.receive(Instant::now()).await?; },
-        () = tokio::time::sleep_until(deadline.into()) => peer.timeout(Instant::now()).await?,
+        result = peer.readable() => { result?; peer.receive(tokio::time::Instant::now().into_std()).await?; },
+        () = tokio::time::sleep_until(deadline.into()) => peer.timeout(tokio::time::Instant::now().into_std()).await?,
     }
     Ok(())
 }

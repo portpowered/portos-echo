@@ -423,3 +423,28 @@ pub(super) fn callback_query(callback: &mut reqwest::Url, state: &str, outcome: 
         ("state", if outcome == "wrong-state" { "wrong" } else { state }),
     ]);
 }
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn mcp_link_epoch_without_guard_is_refused_before_configuration_or_dial() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = "http://127.0.0.1";
+    let origin = format!("{base}:{}", listener.local_addr().unwrap().port());
+    let args = [
+        "--config",
+        "absent",
+        "--trace",
+        "absent-trace",
+        "--live-loopback",
+        &origin,
+        "--model-loopback",
+        &origin,
+        "--sim-epoch",
+        "1800000000",
+    ];
+    invoke(directory.path(), &args, 2, "").await;
+    assert!(!directory.path().join("absent-trace").exists());
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    assert!(tokio::time::timeout(Duration::ZERO, listener.accept()).await.is_err());
+}

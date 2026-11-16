@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 16
 status: active
 ---
 
@@ -62,6 +62,75 @@ steps or publish a sim report. The scenario driver, fixture feeding, fake
 servers, observation oracles and discovery remain implementation work in this
 lane. The upstream host's wildcard listeners remain an accepted limitation:
 `pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)`.
+
+## M5 authorization counterpart
+
+`echo_lab::lab_mcp::Fixture` owns one loopback authorization listener and one
+synthetic grant. Bind it with the scenario's UTC epoch, pass `validator()` to
+`Spoof::start_authorized`, then call `set_resource(spoof.url())` before linking.
+Discovery on the spoof supplies the resource and authorization-server origin;
+the authorization endpoints come from that server's metadata. The public
+client id is `echo-lab`, with scope `endpoint:read`.
+
+The owner selects pending, approved or denied through `approve`, and advances
+fixture UTC explicitly with `advance`. Advance the bridge's paused clock by
+the same amount; socket readiness must never automatically advance either
+clock. `counts` reports device authorizations, polls, successful rotations, rejected
+refresh replays and revokes without exposing credentials. Close the spoof and
+then `shutdown` the fixture to join both listeners.
+
+The counterpart checks ES256 proofs, endpoint/method/time, unique proof IDs and
+the registered key. It issues signed access JWTs; the spoof validates their
+issuer, audience, use, subject, scope, expiry and active grant before dispatch.
+Refresh replay revokes that grant. An omitted resource deliberately produces
+a first-party access token which MCP rejects; a wrong resource returns
+`400 invalid_target`. MCP and revoke accept no DPoP proof.
+
+`cargo test --locked -p echo-lab --lib` exercises this boundary with the real
+auth client and private store. These component witnesses do not replace the
+real bridge's M5 scenario or prove cloud/device compatibility.
+
+Build the delivered bridge once, then run its grant integration witnesses:
+
+```sh
+cargo build --locked -p echo-bridge --bin echo-bridge
+cargo test --locked -p echo-bridge --test bridge_t3 mcp_link -- --ignored --nocapture
+```
+
+The strict cases use this authorization counterpart, the signed-token spoof,
+the prebuilt configured bridge, its public operator commands, paired screen,
+and controlled Live/model/Wyoming peers. They prove a crash after rotation,
+restart and a second refresh followed by authenticated `test.echo` returning
+`m5-linked`, replay rejection and the MCP relink latch, and healthy repeated
+unlink. Resource admission independently reads the configured durable store
+before accepting each Bearer, so premature access publication fails the test.
+Additional cases inject failed storage replacement, failed auth transport and
+cancellation after remote rotation; the owner must block further refresh and
+never publish an uncertain completion. All state is in isolated temporary
+directories outside the repository. These tests do not use `hassmic-host` or
+produce the M5 scenario report; those remain separate acceptance evidence.
+
+`echo_lab::lab_mcp::Observations` binds M5 measurements to those independent
+boundaries. Feed complete bridge trace records once and call `restarted` only
+after collecting an actual prior bridge process. Operation IDs are scoped to
+each process. Feed paired screen states and the delegated model's actual
+requests through `screen` and `model`; model call IDs are scoped to delegation,
+and repeated conversation history does not duplicate a result. `measure`
+reconciles lifecycle completions with authorization counts and the signed-spoof
+snapshot, returning the same `LinkCounts` type used by the report oracle.
+
+A spoof arrival is not a successful tool result: injected failures also record
+arrivals. Only the exact returned `m5-linked` tool output counts as a success,
+and it must have a corresponding admitted spoof dispatch. Restart evidence
+requires both a reload observation and successful use in the new process.
+Repeated identical relink screen states count as one transition. Malformed or
+contradictory trace/model observations latch a fixed diagnostic across restarts.
+Pending/denied authorizations and uncertain rotations never infer completions.
+The strict delivered-bridge witness exercises this binding. The M5 pinned-host
+runner also consumes lifecycle and paired-screen observations for its mounted
+operator controls, external refresh replay and delivered model outputs. The authored
+`m5-port-os-link` scenario uses the same binding. Restart alone never counts as
+live grant reuse.
 
 ## Device runner
 
@@ -167,6 +236,61 @@ reports or events. `bench_session_ids` contains ordered local aliases
 (`batch-hold-1`, etc.), never external hold ids or leases. Passing audio is deleted unless `--keep-audio`; failed audio
 is retained outside git for triage. An interrupted or unwritable publication
 may leave an incomplete external directory without a report.
+
+`expect_link_counts` compares all eight MCP lifecycle counters: `link`,
+`tools_list`, `tool_call`, `forced_refresh`, `replay_rejected`, `relink_error`,
+`restart_grant_kept` and `unlink`. Each is a nonnegative integer; omitted or
+unknown counters are invalid. Counts must come from driver observations.
+An expected object never supplies missing measurements, even when every
+expected count is zero. A mismatch prints the full expected and actual objects
+and fails the step. Finalization checks the counts again after driver cleanup
+so late duplicate outcomes fail the earlier assertion. Reports include optional
+`link_counts` only when measurements exist, preserving actual counts on failure.
+The generic drivers do not produce these measurements. The M5 runner reports
+observed operator outcomes; its full eight-outcome scenario remains pending.
+
+The schema and shared parser accept `mcp: {action: link}` with actions `link`,
+`approve`, `refresh`, `restart`, `call`, `replay`, `probe` and `unlink`.
+Missing, unknown or extra control fields are invalid. Both generic drivers
+explicitly refuse these controls before starting a host, bridge or device
+operation. Sim scenarios with milestone `M5` select the production bridge
+beside `echo-lab` by default, including in `--all`; `--bridge` can override it.
+Prebuild both with `cargo build --locked -p echo-lab -p echo-bridge --bins`,
+and prepare the pinned host with `make hassmic-host`.
+
+The M5 runner mounts all eight MCP controls. It owns one
+private state directory outside git, the real bridge, pinned host, strict
+authorization fixture, signed-token spoof and local Live fixture. Link invokes
+the bridge CLI and independently checks the paired screen's code/URI/exact
+expiry. Approval advances the fixture and guarded bridge clock by five seconds;
+refresh and unlink use the CLI too. Restart collects only the bridge, preserves
+the stored grant and key exactly, restores elapsed simulated time from the same
+epoch, and checks that authorization counters did not change. The host and
+external peers stay alive. Pending links and absent grants refuse restart.
+Replay retains the approved grant in private memory, discovers the token endpoint,
+and sends the consumed refresh with a fresh same-key DPoP proof at fixture UTC.
+It requires exactly `400 {"error":"invalid_grant"}`, one new replay rejection,
+resource admission changing from allowed to revoked, and an unchanged stored
+grant. It refuses before rotation, while linking, after unlink or after replay;
+no automatic refresh or replay retry runs. No replay credential reaches reports.
+Lifecycle trace and screen transitions
+supply counts, rechecked after shutdown. EOF collects the owned processes and
+removes private state. Resource controls require a running linked bridge before
+lazy startup. `call` wakes the pinned host and dispatches a controlled Live
+client delegation through the production bridge. The local model requests one
+`test.echo({"text":"m5-linked"})` and returns its result; the runner observes
+both exact function output and delivered Live commentary. `probe` sends a
+second delegation after replay, requiring one rejected resource request and
+the exact MCP relink screen, with no extra tool dispatch. The independently
+known verification URI and expiry bind the scenario's `mcp_field` operands;
+the complete expected link screen is compared exactly.
+
+After prebuilding, run `echo-lab run tests/scenarios/m5-port-os-link.yaml --driver sim`.
+The report requires exactly one link, list, successful call, rejected replay,
+relink transition, proven live restart and unlink, plus two forced refreshes.
+Parallel isolated journeys protect the healthy outcome while a seeded count
+mismatch produces a failed report. T4/T5 and physical screen proof remain
+operator-owned; this T3 scenario does not declare M5 complete.
 
 Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
 `echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child
