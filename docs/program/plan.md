@@ -419,7 +419,8 @@ them in one table-driven module.
 | Hold one session that talks and listens | `port session hold <ring> --camera --listen --json` (JSON gives `holdId` and `lease`); release with `port session release <holdId> --json` |
 | Mouth | `port message play-audio <ring> --lease <l> --file <wav> --json`. Text needs both `--text "..." --speech-endpoint <e> --speech-model <m>`; echo-lab has no defaults for them |
 | Mouth and ear in one step | the same with `--listen <s> --output reply.wav` (JSON reports `playStartedAt`, `playEndedAt`, `recordStartedAt`, `recordEndedAt`) |
-| Clock alignment | the same with `--chirp --listen 3`, at the start of each batch |
+| Clock alignment | the play's own timestamps (`playStartedAt`, `playEndedAt`, `recordStartedAt`, `recordEndedAt`); no chirp is played (owner, 2026-11-15) |
+| Hold ordering | after a play without `--listen`, no other command on the hold until `playEndedAt` passes: a snapshot during playback cuts the clip |
 | Ear only | `port message record --lease <l> --audio-only` (to be pinned against the source before echo-lab uses it) |
 | Eye | `port message snapshot <ring> --lease <l> --output <frame.jpg> --json`, from the held camera with no new session. Frames are JPEG and stay JPEG; PTZ to aim |
 | Quiet hours | audio commands refuse before 09:00 local unless `--allow-quiet-hours` (never passed by `echo-lab`) |
