@@ -1,4 +1,4 @@
-use crate::{ClientOptions, Error, PlayOutcome, ReceivedEvent, wyoming_route::Router, wyoming_wire};
+use crate::{ClientOptions, CutStats, Error, PlayOutcome, ReceivedEvent, wyoming_route::Router, wyoming_wire};
 use echo_contracts::wyoming::{AudioChunkData, AudioFormat, WyomingEvent};
 use serde_json::Value;
 use tokio::{
@@ -13,11 +13,17 @@ mod wyoming_playback;
 pub(crate) mod wyoming_reconnect;
 use wyoming_playback::Playback;
 
+#[cfg(test)]
+mod wyoming_cut_tests;
+
 pub(crate) enum Command {
     Describe(Reply<WyomingEvent>),
     Register(Reply<()>),
     Play(AudioFormat, mpsc::Receiver<Vec<u8>>, Reply<PlayOutcome>),
+    // Retain the legacy internal command exercised by the unchanged W1 tests.
+    #[cfg(test)]
     Cut(Reply<()>),
+    CutWithStats(Reply<CutStats>),
     Pause(Reply<()>),
     Close(Reply<()>),
 }
@@ -213,16 +219,14 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                     self.send(WyomingEvent::AudioStart(format), vec![]).await?;
                 }
             }
+            #[cfg(test)]
             Some(Command::Cut(reply)) => {
-                if let Some(play) = &mut self.play {
-                    play.cut = true;
-                    play.discard();
-                    if !play.stopped {
-                        play.stopped = true;
-                        self.send(WyomingEvent::AudioStop(Value::Null), vec![]).await?;
-                    }
-                }
+                self.cut().await?;
                 let _ = reply.send(Ok(()));
+            }
+            Some(Command::CutWithStats(reply)) => {
+                let stats = self.cut().await?;
+                let _ = reply.send(Ok(stats));
             }
             Some(Command::Pause(reply)) => {
                 if !self.paused {
@@ -244,6 +248,19 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             }
         }
         Ok(())
+    }
+
+    async fn cut(&mut self) -> Result<CutStats, Error> {
+        let mut stats = CutStats::default();
+        if let Some(play) = &mut self.play {
+            play.cut = true;
+            stats.dropped_frames = play.quiesce().await?;
+            if !play.stopped {
+                play.stopped = true;
+                self.send(WyomingEvent::AudioStop(Value::Null), vec![]).await?;
+            }
+        }
+        Ok(stats)
     }
 
     async fn audio(&mut self, payload: Option<Vec<u8>>) -> Result<(), Error> {

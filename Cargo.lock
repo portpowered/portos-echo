@@ -680,6 +680,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-bridge"
+version = "0.1.0"
+dependencies = [
+ "echo-audio",
+ "echo-config",
+ "echo-contracts",
+ "echo-live",
+ "echo-wyoming",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "echo-chatgpt-auth"
 version = "0.1.0"
 dependencies = [

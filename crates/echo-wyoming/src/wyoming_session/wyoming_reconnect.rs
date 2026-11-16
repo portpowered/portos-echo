@@ -105,7 +105,14 @@ fn reject(command: Option<Command>) -> bool {
         Some(Command::Play(_, _, reply)) => {
             let _ = reply.send(Err(Error::Disconnected));
         }
-        Some(Command::Register(reply) | Command::Cut(reply) | Command::Pause(reply)) => {
+        Some(Command::CutWithStats(reply)) => {
+            let _ = reply.send(Err(Error::Disconnected));
+        }
+        #[cfg(test)]
+        Some(Command::Cut(reply)) => {
+            let _ = reply.send(Err(Error::Disconnected));
+        }
+        Some(Command::Register(reply) | Command::Pause(reply)) => {
             let _ = reply.send(Err(Error::Disconnected));
         }
         None => return true,

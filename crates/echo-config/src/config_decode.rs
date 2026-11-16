@@ -79,6 +79,12 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .unwrap_or_default(),
         echo: echo(root.node("echo")?)?,
         live: live(root.node("live")?)?,
+        audio: root
+            .table
+            .remove("audio")
+            .map(|v| audio(v.into_inner()))
+            .transpose()?
+            .unwrap_or_default(),
         agent: agent(root.node("agent")?)?,
         mcp: mcp(root.node("mcp")?)?,
         screen: screen(root.node("screen")?)?,
@@ -105,6 +111,15 @@ fn live(value: Value<'_>) -> Result<LiveConfig, ConfigError> {
         credential_file: f.required("credential_file")?,
         voice: f.optional("voice")?,
         session_idle_seconds: f.optional("session_idle_seconds")?.unwrap_or(120),
+    };
+    f.finish()?;
+    Ok(result)
+}
+
+fn audio(value: Value<'_>) -> Result<crate::AudioConfig, ConfigError> {
+    let mut f = Fields::new(value, "audio")?;
+    let result = crate::AudioConfig {
+        reply_lead_ms: f.optional("reply_lead_ms")?.unwrap_or(200),
     };
     f.finish()?;
     Ok(result)

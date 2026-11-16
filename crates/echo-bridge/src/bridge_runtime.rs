@@ -1,0 +1,182 @@
+//! One Live call owner drives WebRTC while Wyoming owns its bounded wire queues.
+mod bridge_lifecycle;
+mod bridge_pacing;
+mod journey;
+
+use crate::{
+    Error,
+    bridge_health::Health,
+    bridge_input::{Provider, Settings},
+    bridge_trace::Trace,
+};
+use echo_contracts::{ids::SessionId, wyoming::WyomingEvent};
+use echo_live::{
+    LivePeer,
+    call::{LiveAuthMode, LiveCall, LiveCallFactory, SessionOptions},
+};
+use echo_wyoming::{ClientOptions, EventStream, WyomingClient};
+use serde_json::json;
+use std::{
+    io::{Read, Write},
+    time::{Duration, Instant},
+};
+use tokio::sync::oneshot;
+
+/// # Errors
+/// All failures use fixed categories. EOF closes owned tasks and sockets.
+pub async fn execute(settings: Settings) -> Result<(), Error> {
+    let mut trace = Trace::open(
+        &settings.trace,
+        match settings.mode {
+            LiveAuthMode::Chatgpt => "chatgpt",
+            LiveAuthMode::ApiKey => "api_key",
+        },
+    )?;
+    let health = Health::bind(settings.health).await?;
+    trace.record(
+        "bridge.started",
+        None,
+        json!({"health_addr":health.address.to_string()}),
+    )?;
+    let mut shutdown = control()?;
+    let work = async {
+        let mut client = tokio::select! {
+            result = WyomingClient::connect(settings.wyoming, ClientOptions::default()) => result?,
+            eof = &mut shutdown => return match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
+        };
+        // Keep the receiver alive until the supervisor has closed. Cancelling
+        // connected drops its pending probe, but a final info/mic event can
+        // still arrive before Close; dropping the receiver turns that into a
+        // terminal capacity failure and races otherwise successful EOF cleanup.
+        let mut events = client.events()?;
+        let result = tokio::select! {
+            result = connected(&client, &mut events, settings, &health, &mut trace) => result,
+            eof = &mut shutdown => match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
+        };
+        let cleanup = client.close().await.map_err(Error::from);
+        result.and(cleanup)
+    };
+    let result = work.await;
+    let report = result.as_ref().err().map_or(Ok(()), |error| {
+        trace.record("bridge.error", None, json!({"reason":error.to_string()}))
+    });
+    health.close().await;
+    result.and(report)
+}
+
+async fn connected(
+    client: &WyomingClient,
+    events: &mut EventStream,
+    mut settings: Settings,
+    health: &Health,
+    trace: &mut Trace,
+) -> Result<(), Error> {
+    client.run_satellite().await?;
+    client.describe().await?;
+    health.state.send_modify(|state| state.wyoming = "connected");
+    trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
+    publish("bridge.ready", None)?;
+    let credential = std::mem::replace(&mut settings.credential, Provider::Unavailable);
+    let factory = LiveCallFactory::new(&settings.live_url, settings.mode, credential)?;
+    observe(client, events, &factory, health, trace, &settings).await
+}
+
+async fn observe(
+    client: &WyomingClient,
+    events: &mut EventStream,
+    factory: &LiveCallFactory<Provider>,
+    health: &Health,
+    trace: &mut Trace,
+    options: &Settings,
+) -> Result<(), Error> {
+    let mut conversation = bridge_lifecycle::Conversation::new(options.session_idle_seconds);
+    let mut sequence = 0_u64;
+    loop {
+        let run = conversation.wake(client, events, health, trace).await?;
+        sequence += 1;
+        let id = format!("run-{sequence}");
+        trace.record("wyoming.run_started", Some(&id), json!({}))?;
+        trace.record("run.started", Some(&id), json!({}))?;
+        if conversation.call.is_none() {
+            health.state.send_modify(|state| state.live = "connecting");
+            conversation.call = Some(create(factory, options, &id).await?);
+        }
+        health.state.send_modify(|state| state.live = "connected");
+        let call = conversation.call.as_mut().ok_or(Error::Unavailable)?;
+        let result = journey::run(
+            client,
+            events,
+            run,
+            call,
+            trace,
+            &id,
+            (options.lab, options.reply_lead_ms, conversation.sent),
+        )
+        .await;
+        health
+            .state
+            .send_modify(|state| state.live = if result.is_ok() { "idle" } else { "error" });
+        let (sent, reusable) = result?;
+        if reusable {
+            conversation.completed(sent);
+        } else {
+            conversation.close("cut", trace)?;
+        }
+        publish("bridge.run_completed", Some(&id))?;
+    }
+}
+
+async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &str) -> Result<LiveCall, Error> {
+    let peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now())
+        .await
+        .map_err(|_| Error::Unavailable)?;
+    let options = SessionOptions {
+        model: match settings.mode {
+            LiveAuthMode::Chatgpt => "gpt-live-1-codex",
+            LiveAuthMode::ApiKey => "gpt-live-1",
+        }
+        .into(),
+        voice: settings.voice.clone(),
+        instructions: "Client audio bridge".into(),
+        session_id: SessionId::new(id.to_owned()).map_err(|_| Error::Input)?,
+        thread_id: id.to_owned(),
+    };
+    factory
+        .create(peer, options, Instant::now() + Duration::from_secs(5))
+        .await
+        .map_err(Error::from)
+}
+
+fn control() -> Result<oneshot::Receiver<bool>, Error> {
+    let (send, receive) = oneshot::channel();
+    // Tokio's blocking stdin cannot be cancelled on an operational failure.
+    // An OS thread owns no async resource and cannot delay process exit.
+    std::thread::Builder::new()
+        .name("bridge-control".into())
+        .spawn(move || {
+            let _ = send.send(matches!(std::io::stdin().read(&mut [0]), Ok(0)));
+        })
+        .map_err(|_| Error::Control)?;
+    Ok(receive)
+}
+
+fn publish(event: &str, run: Option<&str>) -> Result<(), Error> {
+    let mut value = json!({"event":event});
+    if let Some(id) = run {
+        value["run_id"] = id.into();
+    }
+    writeln!(std::io::stdout(), "{value}")
+        .and_then(|()| std::io::stdout().flush())
+        .map_err(|_| Error::Control)
+}
+
+async fn played(events: &mut EventStream) -> Result<(), Error> {
+    loop {
+        let event = events.recv().await?.ok_or(Error::Wyoming)?;
+        match event.event {
+            WyomingEvent::Played(_) => return Ok(()),
+            WyomingEvent::RunPipeline(_) => return Err(Error::Wyoming),
+            _ => (),
+        }
+    }
+}

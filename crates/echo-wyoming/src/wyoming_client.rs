@@ -1,5 +1,5 @@
 use crate::{
-    ClientOptions, Error, EventStream, PlayOutcome,
+    ClientOptions, CutStats, Error, EventStream, PlayOutcome,
     wyoming_session::{self, Command},
 };
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
@@ -142,8 +142,17 @@ impl WyomingClient {
     /// # Errors
     /// Connection failure or operation timeout.
     pub async fn cut(&self) -> Result<(), Error> {
+        self.cut_with_stats().await.map(|_| ())
+    }
+
+    /// Discard unsent reply frames and report their exact retained count.
+    /// Already written frames drain normally; `play` still waits for `played`.
+    /// Repeated cuts and cuts without an active reply report zero.
+    /// # Errors
+    /// Connection failure or operation timeout.
+    pub async fn cut_with_stats(&self) -> Result<CutStats, Error> {
         let (tx, rx) = oneshot::channel();
-        self.request(Command::Cut(tx), rx).await
+        self.request(Command::CutWithStats(tx), rx).await
     }
 
     /// Pause microphone capture and end the local run. Repeated calls are

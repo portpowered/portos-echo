@@ -76,6 +76,12 @@ pub enum PlayOutcome {
     Cut,
 }
 
+/// Complete accepted reply frames discarded by this cut, excluding earlier evictions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CutStats {
+    pub dropped_frames: u64,
+}
+
 /// The sole receiver for this client's bounded event queue.
 pub struct EventStream {
     receiver: mpsc::Receiver<ReceivedEvent>,

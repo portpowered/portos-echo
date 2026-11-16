@@ -52,12 +52,18 @@ impl<T> FrameQueue<T> {
         self.lock().stats
     }
 
-    pub(crate) fn discard(&self) {
+    pub(crate) fn failure(&self) -> Option<Error> {
+        self.lock().end.and_then(Result::err)
+    }
+
+    pub(crate) fn discard(&self) -> u64 {
         let mut state = self.lock();
+        let count = state.frames.len() as u64;
         state.frames.clear();
         state.end = Some(Ok(()));
         drop(state);
         self.ready.notify_one();
+        count
     }
 
     pub(crate) async fn recv(&self) -> Result<Option<T>, Error> {
