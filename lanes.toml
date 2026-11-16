@@ -84,3 +84,8 @@ kind = "lib"
 name = "echo-screen-server"
 path = "crates/echo-screen-server"
 kind = "lib"
+
+[[crate]]
+name = "echo-signin"
+path = "crates/echo-signin"
+kind = "lib"
