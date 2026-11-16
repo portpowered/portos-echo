@@ -80,8 +80,9 @@ under one held camera session.
 | Snapshot during playback, before the fix | port main 5ef4727: a snapshot about 1.5 s into the 2.8 s question → the Echo answered with the time 13 of 22 times (3 no answer, 6 wrong reply); controls with no snapshot 15 of 15. Late talkback packets (worst 34 ms) and a keyframe request (never sent) ruled out; the Ring-side mechanism is unknown | 2026-11-15 |
 | Snapshot during playback, with the fix | port main 179c4ab (portos-monolith PR 2741): a snapshot sent mid-clip waits until the clip stops, returns 2.3–3.4 s after it was sent, frame 0.38–0.49 s after `playEndedAt`; the Echo answered with the time 8 of 8, controls 2 of 2 (Fisher one-sided against before, p ≈ 0.035). Whisper `large-v3-turbo` on 8 s after the clip | 2026-11-15 |
 
-Not measured yet: a Ring frame of the Echo's light ring (the "eye" half of milestone B0), and the Ring's lockout
-threshold for repeated sessions.
+Not measured yet: the Echo's listening bar in a Ring frame (the bar runs along the bottom edge of the screen,
+which the current camera angle cuts off; see the B0 row under Milestones), and the Ring's lockout threshold for
+repeated sessions.
 
 ## Services
 
@@ -114,3 +115,4 @@ has already sent and not yet played.
 | Fact | Value | Measured |
 | --- | --- | --- |
 | M0 repository harness | Admitted at main `c9a044e`. All 15 T0 gates run in CI and are green on main (run 43748406902). Each gate was seen to fail on a seeded violation in its own lane's PR: F1 15, F2 18, F6 19, F7 20, F4 21, F8 22, F3 23, F9 27, F10 30 (hosted seeds for format, shape and coverage). `echo-lab check --milestone M0` exits 0. The Phase F loopback re-ran every seed from a fresh clone; four narrower gaps it found run as batch `m0-gaps-c9a044e-20261115-v1` alongside W0 (see `decisions.md`) | 2026-11-15, coordinator, from the PRs' seeded-proof comments and the Phase F loopback |
+| B0 bench, stock Echo | `echo-lab run` with the device driver passed at T5 on main `7a78937` with port main `179c4ab`: hold, play "Computer, what time is it?", wait for `playEndedAt`, snapshot, record 10 s, release. Whisper `small.en` heard "The time is 6.03 pm." and the time oracle matched. Mouth, ear and STT are proven by the tool, not by hand. Whisper writes the time with a dot (`6.01`), so the scenario's time pattern accepts `[:.]`. Eye: partly. Frames 1–3 s after the question show the Echo's screen wake and show the clock; the frame taken just after `playEndedAt` shows it still dark. The listening bar at the screen's bottom edge is out of frame, and the camera does not tilt lower (`step-ptz DOWN` reported −15° with an unchanged view). Proving the bar needs the camera or the Echo moved by hand | 2026-11-15, coordinator, runs at 18:01 (failed only on the dot) and 18:02 (passed) |
