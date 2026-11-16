@@ -158,3 +158,6 @@ impl Drop for Process {
 
 #[path = "observer_tests.rs"]
 mod observer_tests;
+
+#[path = "startup_tests.rs"]
+mod startup_tests;
