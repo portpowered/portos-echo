@@ -227,7 +227,7 @@ async fn request(stream: &mut tokio::net::TcpStream) -> String {
 }
 
 #[tokio::test]
-#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+#[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_wire_auth_configured_live_uses_selected_provider() {
     for mode in ["chatgpt", "api_key"] {
         let directory = tempfile::tempdir().unwrap();
@@ -246,8 +246,8 @@ async fn bridge_wire_auth_configured_live_uses_selected_provider() {
         .await
         .unwrap();
         let observer = fake.observer();
-        let mut host = Process::spawn(&mut host());
-        let port = host.line().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
         let content = std::fs::read_to_string(&path)
             .unwrap()
             .replace("wyoming_port = 16700", &format!("wyoming_port = {port}"));
@@ -269,15 +269,15 @@ async fn bridge_wire_auth_configured_live_uses_selected_provider() {
             ],
         );
         let mut bridge = Process::spawn(&mut cmd);
-        assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
-        assert_eq!(host.command("wake").await, "wake");
+        let mut stream = listener.accept().await.unwrap().0;
+        bridge_short::register(&mut stream, &mut bridge).await;
         tokio::time::timeout(Duration::from_secs(10), observer.wait_for_calls(1))
             .await
             .unwrap()
             .unwrap();
         bridge.finish(1).await;
         assert_configured_headers(&observer, mode, directory.path());
-        host.finish(0).await;
+        drop(stream);
         fake.shutdown().await;
     }
 }
