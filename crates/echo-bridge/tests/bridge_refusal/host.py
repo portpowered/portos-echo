@@ -76,6 +76,12 @@ def main():
             print(host.port, flush=True)
             for command in sys.stdin:
                 command = command.strip()
+                if command == "failing":
+                    # Acknowledge before the caller injects the Live error. Keep
+                    # dispatch/transport delay in this conservative upper bound.
+                    observed.injected = time.monotonic()
+                    print("armed", flush=True)
+                    continue
                 if command in ("wake", "start"):
                     observed.wake()
                 if command in ("wake", "result", "idle"):

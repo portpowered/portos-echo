@@ -28,6 +28,7 @@ async fn bridge_refusal_live_error_before_pcm_then_same_connection_recovers() {
     let path = directory.path().join("trace");
     assert_eq!(host.command("start").await, "listening");
     wait_run(&path, "run-1", "mic.frames").await;
+    assert_eq!(host.command("failing").await, "armed");
     live.events.send(json!({"type":"error"}).to_string()).await.unwrap();
     let result: Value = serde_json::from_str(&host.command("result").await).unwrap();
     assert_refusal(&result, "unavailable", 1);
