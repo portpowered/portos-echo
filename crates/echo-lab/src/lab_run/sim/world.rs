@@ -243,11 +243,7 @@ impl World {
 }
 
 async fn close_process(mut process: Process) -> bool {
-    if tokio::time::timeout(Duration::from_secs(5), process.close()).await == Ok(Ok(())) {
-        return true;
-    }
-    process.terminate().await;
-    false
+    process.close().await.is_ok()
 }
 
 #[cfg(test)]
