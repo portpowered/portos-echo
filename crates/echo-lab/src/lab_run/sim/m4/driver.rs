@@ -91,18 +91,20 @@ impl<'a> M4<'a> {
                     .wait_for(0, |call| call.reply_completed)
                     .await
                     .map_err(|_| "m4: reply incomplete")?;
-                Ok((completion, timing, observer))
+                // Freeze the completed observation before deliberate bridge EOF;
+                // the fake may otherwise record that expected peer close as failure.
+                let text = transcript(&observer)?;
+                Ok((completion, timing, text))
             },
             self.options.cancel.as_deref(),
             tokio::time::Instant::now() + Duration::from_secs(30),
         ));
         let cleanup = self.runtime.block_on(self.world.close());
-        let (completion, timing, observer) = match (work, cleanup) {
+        let (completion, timing, text) = match (work, cleanup) {
             (Err(primary), Err(cleanup)) => return Err(format!("{primary}; {cleanup}")),
             (Err(error), _) | (_, Err(error)) => return Err(error),
             (Ok(value), Ok(())) => value,
         };
-        let text = transcript(&observer)?;
         let run = completion["run_id"]
             .as_str()
             .filter(|s| !s.is_empty())

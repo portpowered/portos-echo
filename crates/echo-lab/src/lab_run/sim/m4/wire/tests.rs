@@ -221,3 +221,35 @@ async fn t3_relay_shutdown_during_accept_closes_listener_without_observation() {
         );
     }
 }
+
+struct ResetAfter(std::collections::VecDeque<u8>);
+impl tokio::io::AsyncRead for ResetAfter {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if let Some(byte) = self.0.pop_front() {
+            buffer.put_slice(&[byte]);
+            std::task::Poll::Ready(Ok(()))
+        } else {
+            std::task::Poll::Ready(Err(std::io::ErrorKind::ConnectionReset.into()))
+        }
+    }
+}
+
+#[tokio::test]
+async fn reset_is_eof_only_at_a_complete_frame_boundary() {
+    assert_eq!(
+        frame(&mut ResetAfter(std::collections::VecDeque::new())).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        frame(&mut ResetAfter(b"{\"type\":".to_vec().into())).await,
+        Err("wire: incomplete header".into())
+    );
+    let bytes = b"{\"type\":\"played\"}\n".to_vec();
+    let mut input = ResetAfter(bytes.clone().into());
+    assert_eq!(frame(&mut input).await.unwrap().unwrap().0, bytes);
+    assert_eq!(frame(&mut input).await.unwrap(), None);
+}

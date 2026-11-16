@@ -271,6 +271,15 @@ async fn frame(input: &mut (impl AsyncRead + Unpin)) -> Result<Option<(Vec<u8>, 
         let mut byte = [0];
         match input.read(&mut byte).await {
             Ok(0) if bytes.is_empty() => return Ok(None),
+            Err(error)
+                if bytes.is_empty()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) =>
+            {
+                return Ok(None);
+            }
             Ok(0) | Err(_) => return Err("wire: incomplete header".into()),
             Ok(_) => bytes.push(byte[0]),
         }

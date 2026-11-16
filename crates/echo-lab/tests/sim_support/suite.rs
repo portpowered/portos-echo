@@ -74,10 +74,10 @@ fn discovery_executes_w1_and_both_m4_cases_and_skips_other_tiers() {
     );
     let output = command(&session).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .ends_with("executed=2 passed=1 failed=1 not_runnable=0\n")
+        stdout.ends_with("executed=2 passed=1 failed=1 not_runnable=0\n"),
+        "{stdout}"
     );
 }
 
