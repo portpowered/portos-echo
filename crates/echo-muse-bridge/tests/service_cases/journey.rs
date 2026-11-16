@@ -123,6 +123,7 @@ async fn f17_only_task_operations_are_public_and_context_cannot_select_commands(
     // the body, so the client's body write can lose the race with that close
     // (BrokenPipe/ConnectionReset). Retry only that transport race; the 413
     // response itself must still be observed.
+    let mut races = Vec::new();
     let mut response = None;
     for _ in 0..20 {
         match fixture
@@ -138,15 +139,14 @@ async fn f17_only_task_operations_are_public_and_context_cannot_select_commands(
                 response = Some(reply);
                 break;
             }
-            Err(error) => {
-                let detail = format!("{error:?}");
-                assert!(
-                    detail.contains("BrokenPipe") || detail.contains("ConnectionReset"),
-                    "only the early-close race may fail the send: {detail}"
-                );
-            }
+            Err(error) => races.push(format!("{error:?}")),
         }
     }
+    let early_close = |detail: &String| detail.contains("BrokenPipe") || detail.contains("ConnectionReset");
+    assert!(
+        races.iter().all(early_close),
+        "only the early-close race may fail the send: {races:?}"
+    );
     let response = response.expect("413 response observed within 20 attempts");
     assert_eq!(response.status(), 413);
     assert_eq!(
