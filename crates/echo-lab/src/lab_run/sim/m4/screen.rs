@@ -68,3 +68,6 @@ impl Screen {
         Err("screen: missing state within frame limit".into())
     }
 }
+
+#[cfg(test)]
+mod tests;

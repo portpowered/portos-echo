@@ -169,7 +169,10 @@ impl World {
         {
             failures.push(error);
         }
-        if self.root.is_dir() && std::fs::remove_dir_all(&self.root).is_err() {
+        if !self.root.as_os_str().is_empty()
+            && let Err(error) = std::fs::remove_dir_all(&self.root)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
             failures.push("cleanup: private M4 directory removal failed".into());
         }
         if failures.is_empty() {
@@ -286,5 +289,7 @@ pub fn command(root: &Path, bridge: &Path, live: &str, model: &str) -> tokio::pr
     command
 }
 
+#[cfg(test)]
+mod lifecycle;
 #[cfg(test)]
 mod tests;
