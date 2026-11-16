@@ -1,5 +1,6 @@
 //! The active call owner alone delivers prepared commentary. Workers own no Live socket.
 use super::bridge_budget::{Budget, Credentials};
+use super::journey::bridge_live::LivePort;
 use crate::{
     Error,
     bridge_input::{Provider, Settings},
@@ -11,7 +12,6 @@ use echo_contracts::{
     secret::Secret,
 };
 use echo_delegation::{DelegationRunner, TraceEvent, TraceSink};
-use echo_live::call::LiveCall;
 use echo_mcp_client::{McpClient, TokenError, TokenProvider};
 use serde_json::json;
 use std::{
@@ -202,7 +202,7 @@ impl Host {
         Ok(true)
     }
 
-    pub async fn service(&mut self, call: &mut LiveCall, trace: &mut Trace) -> Result<(), Error> {
+    pub async fn service(&mut self, call: &mut impl LivePort, trace: &mut Trace) -> Result<(), Error> {
         self.flush(trace)?;
         if !self.pending.as_ref().is_some_and(JoinHandle::is_finished) {
             return Ok(());

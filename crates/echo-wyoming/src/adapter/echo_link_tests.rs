@@ -1,0 +1,148 @@
+use super::*;
+use crate::wyoming_test_support::{receive, send};
+use serde_json::json;
+use tokio::io::{AsyncReadExt, duplex};
+
+fn pcm() -> PcmFormat {
+    PcmFormat {
+        rate: 24_000,
+        width: 2,
+        channels: 1,
+    }
+}
+
+#[test]
+fn echo_link_error_categories_and_pcm_boundary_are_exact() {
+    for (original, expected) in [
+        (crate::Error::InvalidOptions, Error::InvalidOptions),
+        (crate::Error::Disconnected, Error::Transport),
+        (crate::Error::Protocol, Error::Protocol),
+        (crate::Error::Capacity, Error::Capacity),
+        (crate::Error::Timeout, Error::Timeout),
+        (crate::Error::Busy, Error::Busy),
+        (crate::Error::Closed, Error::Closed),
+    ] {
+        assert_eq!(error(original), expected);
+    }
+    let format = wire(pcm());
+    assert_eq!((format.rate, format.width, format.channels), (24_000, 2, 1));
+    assert_eq!(format.extra, std::collections::BTreeMap::default());
+}
+
+#[tokio::test(start_paused = true)]
+async fn echo_link_capture_probe_wake_reply_pause_close_preserve_wire_order() {
+    let (io, peer) = duplex(65536);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = EchoLink::events(&mut client).unwrap();
+    assert_eq!(EchoLink::events(&mut client).err(), Some(Error::Busy));
+    let caller = async {
+        client.enable_capture().await.unwrap();
+        client.enable_capture().await.unwrap();
+        client.probe().await.unwrap();
+        assert!(matches!(
+            LinkEvents::recv(&mut events).await.unwrap(),
+            Some(LinkEvent::Other)
+        ));
+        let Some(LinkEvent::Wake(mut run)) = LinkEvents::recv(&mut events).await.unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(run.wake_phrase(), "Computer");
+        let frame = MicrophoneRun::recv(&mut run).await.unwrap().unwrap();
+        assert_eq!(frame.format, PcmFormat { rate: 16_000, ..pcm() });
+        assert_eq!(frame.payload, [1, 2, 3, 4]);
+        assert_eq!(
+            MicrophoneRun::stats(&run),
+            RunStats {
+                received: 1,
+                dropped: 0
+            }
+        );
+        let (tx, rx) = client.reply_channel(NonZeroUsize::new(1).unwrap());
+        ReplySink::send(&tx, vec![5, 6]).await.unwrap();
+        drop(tx);
+        assert_eq!(
+            EchoLink::play_with_timeout(&client, pcm(), rx, Duration::from_secs(2)).await,
+            Ok(PlayOutcome::Played)
+        );
+        EchoLink::pause(&client).await.unwrap();
+        EchoLink::pause(&client).await.unwrap();
+        assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
+        EchoLink::close(&client).await.unwrap();
+    };
+    let server = capture_server(peer);
+    tokio::join!(caller, server);
+}
+
+#[tokio::test(start_paused = true)]
+async fn echo_link_empty_reply_waits_for_played_and_timeout_retains_category() {
+    let (io, mut peer) = duplex(65536);
+    let client = WyomingClient::from_io(io, ClientOptions::default());
+    let (tx, rx) = client.reply_channel(NonZeroUsize::new(1).unwrap());
+    drop(tx);
+    let play = EchoLink::play_with_timeout(&client, pcm(), rx, Duration::from_secs(2));
+    tokio::pin!(play);
+    let server = async {
+        assert_eq!(receive(&mut peer).await.header.r#type, "audio-start");
+        assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
+    };
+    tokio::select! { biased; result = &mut play => unreachable!("premature result {result:?}"), () = server => () }
+    assert_eq!(play.await, Err(Error::Timeout));
+}
+
+#[tokio::test(start_paused = true)]
+async fn echo_link_cut_is_idempotent_and_waits_for_acknowledgment() {
+    let (io, mut peer) = duplex(65536);
+    let client = WyomingClient::from_io(io, ClientOptions::default());
+    let (_tx, rx) = client.reply_channel(NonZeroUsize::new(1).unwrap());
+    let play = EchoLink::play_with_timeout(&client, pcm(), rx, Duration::from_secs(2));
+    let server = async {
+        assert_eq!(receive(&mut peer).await.header.r#type, "audio-start");
+        assert_eq!(
+            EchoLink::cut_with_stats(&client).await.unwrap(),
+            CutStats { dropped_frames: 0 }
+        );
+        assert_eq!(
+            EchoLink::cut_with_stats(&client).await.unwrap(),
+            CutStats { dropped_frames: 0 }
+        );
+        assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
+        send(&mut peer, "played", json!(null), vec![]).await;
+    };
+    let (result, ()) = tokio::join!(play, server);
+    assert_eq!(result, Ok(PlayOutcome::Cut));
+    EchoLink::close(&client).await.unwrap();
+}
+
+async fn capture_server(mut peer: tokio::io::DuplexStream) {
+    assert_eq!(receive(&mut peer).await.header.r#type, "run-satellite");
+    assert_eq!(receive(&mut peer).await.header.r#type, "describe");
+    send(&mut peer, "info", json!({}), vec![]).await;
+    send(
+        &mut peer,
+        "run-pipeline",
+        json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"Computer"}),
+        vec![],
+    )
+    .await;
+    send(
+        &mut peer,
+        "audio-chunk",
+        json!({"rate":16000,"width":2,"channels":1,"extension":42}),
+        vec![1, 2, 3, 4],
+    )
+    .await;
+    reply_server(&mut peer).await;
+}
+
+async fn reply_server(peer: &mut tokio::io::DuplexStream) {
+    let start = receive(peer).await;
+    assert_eq!(start.header.r#type, "audio-start");
+    assert_eq!(start.header.data, Some(json!({"rate":24000,"width":2,"channels":1})));
+    let chunk = receive(peer).await;
+    assert_eq!(chunk.header.r#type, "audio-chunk");
+    assert_eq!(chunk.payload, [5, 6]);
+    assert_eq!(receive(peer).await.header.r#type, "audio-stop");
+    send(peer, "played", json!(null), vec![]).await;
+    assert_eq!(receive(peer).await.header.r#type, "pause-satellite");
+    assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+}

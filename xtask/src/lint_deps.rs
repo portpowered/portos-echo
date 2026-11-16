@@ -18,7 +18,7 @@ struct Rule {
 const RULES: &[Rule] = &[
     Rule {
         id: "R1",
-        sources: &["echo-contracts", "echo-config", "echo-screen-contract"],
+        sources: &["echo-contracts", "echo-config", "echo-screen-contract", "echo-link"],
         except_sources: &[],
         targets: &[
             "tokio",
@@ -33,7 +33,7 @@ const RULES: &[Rule] = &[
             "alsa",
         ],
         workspace_targets: true,
-        except_targets: &["echo-contracts", "echo-config", "echo-screen-contract"],
+        except_targets: &["echo-contracts", "echo-config", "echo-screen-contract", "echo-link"],
         explanation: "contract/config crates allow only contract peers and pure external dependencies",
     },
     Rule {
@@ -230,6 +230,17 @@ mod tests {
                 Ok(vec![diagnostic(source, target, 0)])
             );
         }
+    }
+
+    #[test]
+    fn echo_link_rejects_network_runtime_and_implementation_edges() {
+        for target in ["reqwest", "tokio", "cpal", "echo-audio", "echo-wyoming"] {
+            assert_eq!(
+                check(&graph("echo-link", &[(target, json!(null))])),
+                Ok(vec![diagnostic("echo-link", target, 0)])
+            );
+        }
+        assert_eq!(check(&graph("echo-link", &[])), Ok(vec![]));
     }
 
     #[test]

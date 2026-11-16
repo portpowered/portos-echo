@@ -1,3 +1,4 @@
+pub(super) mod bridge_live;
 use super::bridge_pacing::LeadPacer;
 use super::bridge_timing;
 use crate::{
@@ -5,16 +6,13 @@ use crate::{
     bridge_audio::{self, Microphone, Reply},
     bridge_trace::Trace,
 };
+use bridge_live::LivePort;
 use echo_audio::FrameQueue;
 use echo_contracts::live::LiveEvent;
-use echo_live::{
-    AudioFrame,
-    call::{CallError, LiveCall},
-};
-use echo_wyoming::{EventStream, MicFrame, Run, WyomingClient};
+use echo_link::{EchoLink, LinkEvents, MicFrame, MicrophoneRun, PlayOutcome, ReplySink};
+use echo_live::{AudioFrame, call::CallError};
 use serde_json::json;
 use std::{num::NonZeroUsize, time::Duration};
-use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 struct Source {
@@ -52,19 +50,14 @@ impl Source {
         })
     }
 
-    async fn microphone(&mut self, frame: MicFrame, call: &mut LiveCall, lab: bool) -> Result<(), Error> {
+    async fn microphone(&mut self, frame: MicFrame, call: &mut impl LivePort, lab: bool) -> Result<(), Error> {
         self.chunks += 1;
         if self.finished {
             return Ok(());
         }
-        let format = echo_contracts::wyoming::AudioFormat {
-            rate: frame.data.rate,
-            width: frame.data.width,
-            channels: frame.data.channels,
-            extra: frame.data.extra,
-        };
+        let format = frame.format;
         if self.mic.is_none() {
-            let mut mic = Microphone::new(format.clone())?;
+            let mut mic = Microphone::new(format)?;
             mic.packets = self.call_packets_base;
             self.mic = Some(mic);
         }
@@ -77,7 +70,7 @@ impl Source {
         Ok(())
     }
 
-    async fn finish_mic(&mut self, call: &mut LiveCall) -> Result<(), Error> {
+    async fn finish_mic(&mut self, call: &mut impl LivePort) -> Result<(), Error> {
         if !self.finished {
             if let Some(mic) = &mut self.mic {
                 self.sent += send(call, mic.finish()?).await?;
@@ -105,7 +98,7 @@ impl Source {
         retained
     }
 
-    async fn receive(&mut self, call: &mut LiveCall) -> Result<bool, Error> {
+    async fn receive(&mut self, call: &mut impl LivePort) -> Result<bool, Error> {
         // Leave time for the playback and Wyoming event futures in try_join!.
         // A provider burst must not monopolize the owner with synchronous
         // decoding/resampling while the bounded control queue fills up.
@@ -145,11 +138,11 @@ impl Source {
     }
 }
 
-pub(super) async fn run(
-    client: &WyomingClient,
-    events: &mut EventStream,
-    mut run: Run,
-    call: &mut LiveCall,
+pub(super) async fn run<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
+    mut run: <L::Events as LinkEvents>::Run,
+    call: &mut impl LivePort,
     trace: &mut Trace,
     id: &str,
     options: (
@@ -163,7 +156,7 @@ pub(super) async fn run(
 ) -> Result<(u64, bool), Error> {
     let mut source = Source::new()?;
     source.call_packets_base = options.2;
-    let (tx, rx) = mpsc::channel(1);
+    let (tx, rx) = client.reply_channel(NonZeroUsize::new(1).ok_or(Error::Audio)?);
     let budget = bridge_timing::playback(options.5.settings);
     let play = client.play_with_timeout(bridge_audio::format(24_000), rx, budget);
     let mut context = PlaybackContext {
@@ -195,7 +188,7 @@ pub(super) async fn run(
     trace.record(
         "reply.played",
         Some(id),
-        json!({"outcome":if outcome == echo_wyoming::PlayOutcome::Cut { "cut" } else { "played" }}),
+        json!({"outcome":if outcome == PlayOutcome::Cut { "cut" } else { "played" }}),
     )?;
     tokio::time::timeout(Duration::from_secs(1), async {
         while run.recv().await?.is_some() {}
@@ -219,9 +212,9 @@ pub(super) async fn run(
     Ok((source.sent, !source.cancelled && !abandoned))
 }
 
-async fn stop_failed_producer(
+async fn stop_failed_producer<L: EchoLink>(
     result: Result<(), Error>,
-    client: &WyomingClient,
+    client: &L,
     lab: bool,
 ) -> Result<Option<Error>, Error> {
     match result {
@@ -236,8 +229,8 @@ async fn stop_failed_producer(
     }
 }
 
-struct PlaybackContext<'a> {
-    client: &'a WyomingClient,
+struct PlaybackContext<'a, L: EchoLink> {
+    client: &'a L,
     trace: &'a mut Trace,
     id: &'a str,
     lead_ms: u16,
@@ -249,12 +242,12 @@ struct PlaybackContext<'a> {
     kill: &'a super::bridge_kill::Kill<'a>,
 }
 
-impl PlaybackContext<'_> {
+impl<L: EchoLink> PlaybackContext<'_, L> {
     async fn await_played(
         &mut self,
         mut acknowledgement: tokio::sync::oneshot::Receiver<()>,
         source: &mut Source,
-        call: &mut LiveCall,
+        call: &mut impl LivePort,
     ) -> Result<(), Error> {
         let deadline = Instant::now() + bridge_timing::CONTROL;
         loop {
@@ -272,7 +265,7 @@ impl PlaybackContext<'_> {
         }
     }
 
-    async fn cancelled(&mut self, source: &mut Source, call: &mut LiveCall) -> Result<bool, Error> {
+    async fn cancelled(&mut self, source: &mut Source, call: &mut impl LivePort) -> Result<bool, Error> {
         if self.kill.sync(self.trace).await? {
             source.cancelled = true;
             call.close();
@@ -288,7 +281,7 @@ impl PlaybackContext<'_> {
         &mut self,
         source: &mut Source,
         frame: MicFrame,
-        call: &mut LiveCall,
+        call: &mut impl LivePort,
         lab: bool,
     ) -> Result<(), Error> {
         source.microphone(frame, call, lab).await?;
@@ -311,7 +304,7 @@ impl PlaybackContext<'_> {
         }
     }
 
-    async fn forward(&mut self, tx: &mpsc::Sender<Vec<u8>>, frame: Vec<u8>) -> Result<(), Error> {
+    async fn forward(&mut self, tx: &L::ReplySink, frame: Vec<u8>) -> Result<(), Error> {
         tx.send(frame).await.map_err(|_| Error::Wyoming)?;
         if !self.speaking {
             self.trace.record("reply.started", Some(self.id), json!({}))?;
@@ -339,13 +332,13 @@ impl PlaybackContext<'_> {
     }
 }
 
-async fn produce(
+async fn produce<L: EchoLink>(
     source: &mut Source,
-    run: &mut Run,
-    call: &mut LiveCall,
-    tx: mpsc::Sender<Vec<u8>>,
+    run: &mut <L::Events as LinkEvents>::Run,
+    call: &mut impl LivePort,
+    tx: L::ReplySink,
     lab: (bool, u64),
-    context: &mut PlaybackContext<'_>,
+    context: &mut PlaybackContext<'_, L>,
 ) -> Result<(), Error> {
     let mut pacer = LeadPacer::new(context.lead_ms);
     let mut completed = false;
@@ -396,7 +389,7 @@ async fn produce(
     }
 }
 
-async fn send(call: &mut LiveCall, packets: Vec<AudioFrame>) -> Result<u64, Error> {
+async fn send(call: &mut impl LivePort, packets: Vec<AudioFrame>) -> Result<u64, Error> {
     let mut count = 0;
     for packet in packets {
         call.send_audio(packet, Instant::now().into_std()).await?;
@@ -493,3 +486,6 @@ mod bridge_pacing_cut_tests {
         assert_eq!(source.discard_reply(), 0);
     }
 }
+
+#[cfg(test)]
+mod bridge_link;

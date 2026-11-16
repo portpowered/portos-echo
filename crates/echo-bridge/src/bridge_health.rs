@@ -37,6 +37,15 @@ pub struct Health {
 }
 
 impl Health {
+    #[cfg(test)]
+    pub(crate) fn offline() -> Self {
+        Self {
+            address: ([127, 0, 0, 1], 0).into(),
+            state: watch::channel(Links::default()).0,
+            task: tokio::spawn(async {}),
+        }
+    }
+
     /// # Errors
     /// Only literal IPv4 loopback is admitted; bind failures prevent readiness.
     pub async fn bind(address: SocketAddr) -> Result<Self, Error> {

@@ -1,0 +1,347 @@
+//! In-memory link with bounded reply flow and explicit acknowledgment/failure injection.
+use crate::{
+    CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
+    ReplySink, RunStats,
+};
+use std::{
+    collections::VecDeque,
+    future::poll_fn,
+    num::NonZeroUsize,
+    sync::{Arc, Mutex, MutexGuard},
+    task::{Poll, Waker},
+    time::Duration,
+};
+
+fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
+    value.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Observable calls and transmitted frames in invocation order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    Connect,
+    Capture,
+    Probe,
+    Start(PcmFormat, Duration),
+    Frame(Vec<u8>),
+    Stop,
+    Cut(u64),
+    Pause,
+    Close,
+}
+#[derive(Default)]
+struct State {
+    commands: Vec<Command>,
+    events: VecDeque<LinkEvent<FakeRun>>,
+    event_waker: Option<Waker>,
+    play_waker: Option<Waker>,
+    outcome: Option<Result<(), Error>>,
+    cut: bool,
+    stopped: bool,
+    source: Option<Arc<Mutex<Queue>>>,
+    closed: bool,
+}
+/// An explicit script/observer; contains no executor, socket or clock.
+#[derive(Clone, Default)]
+pub struct Observer(Arc<Mutex<State>>);
+impl Observer {
+    #[must_use]
+    pub fn commands(&self) -> Vec<Command> {
+        lock(&self.0).commands.clone()
+    }
+    pub fn wake(&self, phrase: &str, frames: Vec<MicFrame>) {
+        let mut state = lock(&self.0);
+        state.events.push_back(LinkEvent::Wake(FakeRun {
+            phrase: phrase.into(),
+            stats: RunStats {
+                received: frames.len() as u64,
+                dropped: 0,
+            },
+            frames: frames.into(),
+            observer: self.clone(),
+        }));
+        if let Some(waker) = state.event_waker.take() {
+            waker.wake();
+        }
+    }
+    /// Deliver the actual acknowledgment, or an operation's scripted terminal failure.
+    pub fn finish(&self, result: Result<(), Error>) {
+        let mut state = lock(&self.0);
+        state.outcome = Some(result);
+        if result.is_ok() {
+            state.events.push_back(LinkEvent::Played);
+        }
+        if let Some(waker) = state.event_waker.take() {
+            waker.wake();
+        }
+        if let Some(waker) = state.play_waker.take() {
+            waker.wake();
+        }
+    }
+}
+/// One link owner; taking events twice is rejected.
+pub struct FakeLink {
+    observer: Observer,
+    taken: bool,
+}
+/// In-memory connector; reconnect is another explicit connect invocation.
+pub struct FakeConnector(Observer);
+impl FakeConnector {
+    #[must_use]
+    pub fn new(observer: Observer) -> Self {
+        Self(observer)
+    }
+}
+impl LinkConnector for FakeConnector {
+    type Link = FakeLink;
+    fn connect(&self) -> impl std::future::Future<Output = Result<FakeLink, Error>> + Send {
+        std::future::ready({
+            lock(&self.0.0).commands.push(Command::Connect);
+            Ok(FakeLink {
+                observer: self.0.clone(),
+                taken: false,
+            })
+        })
+    }
+}
+/// Scripted run frames drain before EOF; statistics belong to this run.
+pub struct FakeRun {
+    phrase: String,
+    frames: VecDeque<MicFrame>,
+    stats: RunStats,
+    observer: Observer,
+}
+impl MicrophoneRun for FakeRun {
+    fn wake_phrase(&self) -> &str {
+        &self.phrase
+    }
+    async fn recv(&mut self) -> Result<Option<MicFrame>, Error> {
+        if let Some(frame) = self.frames.pop_front() {
+            return Ok(Some(frame));
+        }
+        poll_fn(|cx| {
+            let mut state = lock(&self.observer.0);
+            if state.stopped {
+                return Poll::Ready(Ok(None));
+            }
+            state.play_waker = Some(cx.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+    fn stats(&self) -> RunStats {
+        self.stats
+    }
+}
+/// Sole event receiver for the script.
+pub struct Events(Observer);
+impl LinkEvents for Events {
+    type Run = FakeRun;
+    async fn recv(&mut self) -> Result<Option<LinkEvent<FakeRun>>, Error> {
+        poll_fn(|cx| {
+            let mut state = lock(&self.0.0);
+            if let Some(event) = state.events.pop_front() {
+                return Poll::Ready(Ok(Some(event)));
+            }
+            if state.closed {
+                return Poll::Ready(Ok(None));
+            }
+            if let Some(Err(error)) = state.outcome {
+                return Poll::Ready(Err(error));
+            }
+            state.event_waker = Some(cx.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+}
+struct Queue {
+    frames: VecDeque<Vec<u8>>,
+    capacity: usize,
+    senders: usize,
+    receiver: bool,
+    send_waker: Option<Waker>,
+    recv_waker: Option<Waker>,
+}
+/// Bounded producer; blocked sends resume when playback consumes a frame.
+pub struct Sink(Arc<Mutex<Queue>>);
+impl Drop for Sink {
+    fn drop(&mut self) {
+        let mut queue = lock(&self.0);
+        queue.senders -= 1;
+        if let Some(waker) = queue.recv_waker.take() {
+            waker.wake();
+        }
+    }
+}
+/// The adapter-owned receiver; never adds a second pump or executor.
+pub struct Source(Arc<Mutex<Queue>>);
+impl Drop for Source {
+    fn drop(&mut self) {
+        let mut queue = lock(&self.0);
+        queue.receiver = false;
+        if let Some(waker) = queue.send_waker.take() {
+            waker.wake();
+        }
+    }
+}
+impl ReplySink for Sink {
+    async fn send(&self, frame: Vec<u8>) -> Result<(), Error> {
+        let mut frame = Some(frame);
+        poll_fn(|cx| {
+            let mut queue = lock(&self.0);
+            if !queue.receiver {
+                return Poll::Ready(Err(Error::Closed));
+            }
+            if queue.frames.len() == queue.capacity {
+                queue.send_waker = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
+            if let Some(frame) = frame.take() {
+                queue.frames.push_back(frame);
+            }
+            if let Some(waker) = queue.recv_waker.take() {
+                waker.wake();
+            }
+            Poll::Ready(Ok(()))
+        })
+        .await
+    }
+}
+impl EchoLink for FakeLink {
+    type Events = Events;
+    type ReplySink = Sink;
+    type ReplySource = Source;
+    fn events(&mut self) -> Result<Events, Error> {
+        if self.taken {
+            return Err(Error::Busy);
+        }
+        self.taken = true;
+        Ok(Events(self.observer.clone()))
+    }
+    fn reply_channel(&self, capacity: NonZeroUsize) -> (Sink, Source) {
+        let queue = Arc::new(Mutex::new(Queue {
+            frames: VecDeque::new(),
+            capacity: capacity.get(),
+            senders: 1,
+            receiver: true,
+            send_waker: None,
+            recv_waker: None,
+        }));
+        (Sink(queue.clone()), Source(queue))
+    }
+    fn enable_capture(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::ready({
+            lock(&self.observer.0).commands.push(Command::Capture);
+            Ok(())
+        })
+    }
+    fn probe(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::ready({
+            lock(&self.observer.0).commands.push(Command::Probe);
+            Ok(())
+        })
+    }
+    async fn play_with_timeout(
+        &self,
+        format: PcmFormat,
+        source: Source,
+        deadline: Duration,
+    ) -> Result<PlayOutcome, Error> {
+        {
+            let mut state = lock(&self.observer.0);
+            if deadline.is_zero() {
+                return Err(Error::InvalidOptions);
+            }
+            if state.closed {
+                return Err(Error::Closed);
+            }
+            if state.source.is_some() {
+                return Err(Error::Busy);
+            }
+            state.commands.push(Command::Start(format, deadline));
+            state.source = Some(source.0.clone());
+            state.cut = false;
+            state.stopped = false;
+            state.outcome = None;
+        }
+        poll_fn(|cx| {
+            let mut state = lock(&self.observer.0);
+            let mut queue = lock(&source.0);
+            while let Some(frame) = queue.frames.pop_front() {
+                if !state.cut {
+                    state.commands.push(Command::Frame(frame));
+                }
+                if let Some(waker) = queue.send_waker.take() {
+                    waker.wake();
+                }
+            }
+            if (queue.senders == 0 || state.cut) && !state.stopped {
+                state.commands.push(Command::Stop);
+                state.stopped = true;
+            }
+            if let Some(result) = state.outcome {
+                state.source = None;
+                return Poll::Ready(result.map(|()| {
+                    if state.cut {
+                        PlayOutcome::Cut
+                    } else {
+                        PlayOutcome::Played
+                    }
+                }));
+            }
+            state.play_waker = Some(cx.waker().clone());
+            queue.recv_waker = Some(cx.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+    fn cut_with_stats(&self) -> impl std::future::Future<Output = Result<CutStats, Error>> + Send {
+        std::future::ready({
+            let mut state = lock(&self.observer.0);
+            let mut dropped = 0;
+            if !state.cut {
+                state.cut = true;
+                if let Some(source) = &state.source {
+                    let mut queue = lock(source);
+                    dropped = queue.frames.len() as u64;
+                    queue.frames.clear();
+                    if let Some(waker) = queue.send_waker.take() {
+                        waker.wake();
+                    }
+                }
+                state.commands.push(Command::Cut(dropped));
+            }
+            if let Some(waker) = state.play_waker.take() {
+                waker.wake();
+            }
+            Ok(CutStats {
+                dropped_frames: dropped,
+            })
+        })
+    }
+    fn pause(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::ready({
+            lock(&self.observer.0).commands.push(Command::Pause);
+            Ok(())
+        })
+    }
+    fn close(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::ready({
+            let mut state = lock(&self.observer.0);
+            state.commands.push(Command::Close);
+            state.closed = true;
+            if let Some(waker) = state.event_waker.take() {
+                waker.wake();
+            }
+            if let Some(waker) = state.play_waker.take() {
+                waker.wake();
+            }
+            Ok(())
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "fake/link_tests.rs"]
+mod tests;
