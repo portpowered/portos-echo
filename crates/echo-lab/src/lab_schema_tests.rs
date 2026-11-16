@@ -120,3 +120,45 @@ fn report_contract_preserves_extensions_and_manual_observations() {
     manual["manual_observation"].as_object_mut().unwrap().remove("observer");
     assert!(!validator.is_valid(&manual));
 }
+
+#[test]
+fn report_observations_are_optional_typed_and_allowlisted() {
+    let source: Value = serde_json::from_str(include_str!("../../../schemas/report.schema.json")).unwrap();
+    let validator = jsonschema::validator_for(&source).unwrap();
+    let mut report = json!({"milestone":"M1","result":"pass","placement":"bridge_pc",
+        "build_commit":"fixture","device":null,"evidence":[],"checks":{"ok":true},
+        "limitations":[],"tier":"T5","driver":"device","scenario_digest":"fixture",
+        "hassmic_commit":null,"bench_session_ids":[]});
+    assert!(validator.is_valid(&report));
+    let observation = json!({"event":"wyoming.mic_frames","run_id":"one","count":0});
+    report["observations"] = json!([observation, {"event":"wyoming.mic_frames","run_id":"two","count":18}]);
+    assert!(validator.is_valid(&report));
+    for invalid in [json!(null), json!({}), json!([null]), json!([3])] {
+        report["observations"] = invalid;
+        assert!(!validator.is_valid(&report));
+    }
+    for (key, value) in [
+        ("event", json!("unknown")),
+        ("run_id", json!("")),
+        ("run_id", json!(3)),
+        ("run_id", json!("invalid/id")),
+        ("run_id", json!("x".repeat(65))),
+        ("count", json!(-1)),
+        ("count", json!(1.5)),
+        ("count", json!(true)),
+        ("count", json!("10")),
+        ("count", json!(null)),
+        ("payload", json!("synthetic")),
+    ] {
+        let mut invalid = observation.clone();
+        invalid[key] = value;
+        report["observations"] = json!([invalid]);
+        assert!(!validator.is_valid(&report), "{key}");
+    }
+    for key in ["event", "run_id", "count"] {
+        let mut invalid = observation.clone();
+        invalid.as_object_mut().unwrap().remove(key);
+        report["observations"] = json!([invalid]);
+        assert!(!validator.is_valid(&report));
+    }
+}

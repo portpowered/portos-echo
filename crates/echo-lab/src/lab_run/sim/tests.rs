@@ -294,3 +294,26 @@ async fn pending_work_times_out_on_injected_clock_and_cancellation_wins() {
     );
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn microphone_counts_are_unsigned_observations_and_invalidity_is_sticky() {
+    for count in [json!(null), json!(-1), json!(1.5), json!(true), json!("10")] {
+        let mut record = records()[2].clone();
+        record["count"] = count;
+        let mut trace = Trace::default();
+        assert!(trace.append(format!("{record}\n").as_bytes()).is_err());
+        assert!(trace.append(b"").is_err());
+        assert!(trace.finish().is_err());
+    }
+    let mut missing = records()[2].clone();
+    missing.as_object_mut().unwrap().remove("count");
+    assert!(Trace::default().append(format!("{missing}\n").as_bytes()).is_err());
+    for count in [0, 10] {
+        let mut record = records()[2].clone();
+        record["count"] = json!(count);
+        let mut trace = Trace::default();
+        trace.append(format!("{record}\n").as_bytes()).unwrap();
+        assert_eq!(trace.finish(), Ok(()));
+        assert_eq!(trace.records[0]["count"], count);
+    }
+}

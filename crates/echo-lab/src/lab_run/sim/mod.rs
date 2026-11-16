@@ -175,7 +175,7 @@ impl Driver for Sim<'_> {
                 break;
             }
         }
-        for record in &self.world.trace.records {
+        for record in self.world.trace.records.iter().filter(|_| !invalid_trace) {
             if let Err(error) = artifacts.observation(record) {
                 failures.push(error);
                 break;

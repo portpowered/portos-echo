@@ -12,6 +12,7 @@ pub struct Artifacts {
     pub checks: BTreeMap<String, bool>,
     pub sessions: Vec<String>,
     pub evidence: Vec<String>,
+    observations: Vec<Value>,
     events: File,
     started: Instant,
 }
@@ -22,6 +23,7 @@ impl Artifacts {
         let events = File::create(root.join("events.jsonl")).map_err(|_| "run output: cannot create events")?;
         Ok(Self {
             sim: false,
+            observations: Vec::new(),
             root,
             checks: BTreeMap::new(),
             sessions: Vec::new(),
@@ -47,6 +49,8 @@ impl Artifacts {
         let mut safe = json!({"event":record["event"],"run_id":record["run_id"],"elapsed_ms":record["elapsed_ms"]});
         if record["event"] == "wyoming.mic_frames" {
             safe["count"] = record["count"].clone();
+            self.observations.push(json!({"event":"wyoming.mic_frames",
+                "run_id":record["run_id"], "count":record["count"]}));
         }
         writeln!(self.events, "{safe}").map_err(|_| "run output: cannot append observation".into())
     }
@@ -76,7 +80,7 @@ impl Artifacts {
         let report = json!({
             "milestone":milestone, "result":if error.is_none() { "pass" } else { "fail" },
             "placement":"bridge_pc", "build_commit":build_commit(), "device":null,
-            "evidence":self.evidence, "checks":self.checks,
+            "evidence":self.evidence, "checks":self.checks, "observations":self.observations,
             "limitations":error.into_iter().chain(if self.sim { vec!["pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)", "T3 simulation does not prove a physical milestone or real-provider compatibility."] } else { vec!["Device edges require independent operator verification; no physical milestone is proved."] }).collect::<Vec<_>>(),
             "tier":tier, "driver":if self.sim { "sim" } else { "device" }, "scenario_digest":digest,
             "hassmic_commit":if self.sim { include_str!("../../../../hassmic.pin").lines().find_map(|l| l.strip_prefix("commit=")) } else { None }, "bench_session_ids":self.sessions
