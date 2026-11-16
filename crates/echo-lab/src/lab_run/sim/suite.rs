@@ -8,13 +8,7 @@ pub fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
 }
 
 fn discover() -> Result<(PathBuf, Vec<PathBuf>), String> {
-    let bridge = std::env::current_exe()
-        .map_err(|_| "sim suite: cannot locate prebuilt bridge")?
-        .with_file_name(if cfg!(windows) {
-            "echo-lab-sim-bridge.exe"
-        } else {
-            "echo-lab-sim-bridge"
-        });
+    let bridge = bundled_bridge()?;
     let mut paths = std::fs::read_dir("tests/scenarios")
         .map_err(|_| "sim suite: cannot discover scenarios")?
         .map(|entry| entry.map(|e| e.path()))
@@ -23,6 +17,23 @@ fn discover() -> Result<(PathBuf, Vec<PathBuf>), String> {
     paths.retain(|path| path.extension().is_some_and(|e| e == "yaml"));
     paths.sort();
     Ok((bridge, paths))
+}
+
+pub fn bundled_bridge() -> Result<PathBuf, String> {
+    let bridge = std::env::current_exe()
+        .map_err(|_| "sim: cannot locate prebuilt bridge; run cargo build -p echo-lab --bins --locked")?
+        .with_file_name(if cfg!(windows) {
+            "echo-lab-sim-bridge.exe"
+        } else {
+            "echo-lab-sim-bridge"
+        });
+    if !bridge.is_file() {
+        return Err(format!(
+            "sim: bundled bridge missing at {}; run cargo build -p echo-lab --bins --locked",
+            bridge.display()
+        ));
+    }
+    Ok(bridge)
 }
 
 fn run_suite(

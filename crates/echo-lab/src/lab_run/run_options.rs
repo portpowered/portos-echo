@@ -137,8 +137,11 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
     {
         return Err("sim: requires one scenario and sim options only".into());
     }
-    let bridge =
-        explicit(required(flags, "--bridge")?).map_err(|_| "sim: --bridge requires an explicit executable path")?;
+    let bridge = match flags.get("--bridge") {
+        Some(value) => explicit(value)
+            .map_err(|_| format!("sim: --bridge requires an explicit executable path to an existing file: {value}"))?,
+        None => super::sim::suite::bundled_bridge()?,
+    };
     let scenario = crate::lab_validate::load(&scenarios[0])?;
     let milestone = scenario["milestone"].as_str().ok_or("sim: missing milestone")?;
     if !milestone
