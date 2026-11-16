@@ -34,15 +34,12 @@ export async function pageFor(
         viewport: { width: 1280, height: 800 },
         serviceWorkers: "block",
     });
-    const page = await context.newPage();
+    let page;
+    let coverageStarted = false;
     const requests = [];
-    await context.route("**/*", (route) => {
-        requests.push(route.request().url());
-        return route.abort();
-    });
-    await page.coverage.startJSCoverage({ resetOnNavigation: false });
     t.after(async () => {
         try {
+            if (!coverageStarted) return;
             assert.deepEqual(
                 requests,
                 [],
@@ -60,8 +57,16 @@ export async function pageFor(
             await context.close();
         }
     });
-    await page.clock.install({ time: 0 });
-    await page.clock.pauseAt(0);
+    // Record both clock operations before any page can run the installed clock.
+    await context.clock.install({ time: 0 });
+    await context.clock.pauseAt(0);
+    await context.route("**/*", (route) => {
+        requests.push(route.request().url());
+        return route.abort();
+    });
+    page = await context.newPage();
+    await page.coverage.startJSCoverage({ resetOnNavigation: false });
+    coverageStarted = true;
     await page.setContent(
         html
             .replace('<link rel="stylesheet" href="screen.css" />', "")
