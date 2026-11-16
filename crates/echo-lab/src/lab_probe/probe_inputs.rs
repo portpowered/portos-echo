@@ -10,7 +10,7 @@ fn quoted(line: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
-fn axis(line: &str) -> Result<Option<String>, String> {
+fn axis(line: &str) -> Result<Option<(&str, i64, i64)>, String> {
     let label = if line.contains("ABS_MT_POSITION_X") || line.contains("ABS_X") {
         "X"
     } else if line.contains("ABS_MT_POSITION_Y") || line.contains("ABS_Y") {
@@ -29,7 +29,7 @@ fn axis(line: &str) -> Result<Option<String>, String> {
     if min > max {
         return Err("probe getevent: reversed axis range".into());
     }
-    Ok(Some(format!("{label}={min}..{max}")))
+    Ok(Some((label, min, max)))
 }
 
 fn events(text: &str, devices: &mut BTreeMap<String, BTreeSet<String>>) -> Result<(), String> {
@@ -57,8 +57,8 @@ fn events(text: &str, devices: &mut BTreeMap<String, BTreeSet<String>>) -> Resul
                     capabilities.insert(kind.to_owned());
                 }
             }
-            if let Some(range) = axis(line)? {
-                capabilities.insert(range);
+            if let Some((label, min, max)) = axis(line)? {
+                capabilities.insert(format!("{label}={min}..{max}"));
             }
         }
     }
@@ -66,6 +66,63 @@ fn events(text: &str, devices: &mut BTreeMap<String, BTreeSet<String>>) -> Resul
         return Err("probe getevent: no named devices in nonempty observation".into());
     }
     Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct AxisRange {
+    pub min: i64,
+    pub max: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct TouchDevice {
+    pub node: String,
+    pub name: String,
+    pub x: AxisRange,
+    pub y: AxisRange,
+}
+
+pub(crate) fn touch_devices(text: &str) -> Result<Vec<TouchDevice>, String> {
+    // Apply the same inventory validation used by probe before retaining nodes.
+    parse(text, "")?;
+    let mut devices = Vec::new();
+    for block in text.split("add device").skip(1) {
+        let mut lines = block.lines();
+        let node = lines
+            .next()
+            .and_then(|s| s.split_once(':'))
+            .map(|(_, node)| node.trim())
+            .filter(|node| node.starts_with("/dev/input/event"))
+            .ok_or("probe getevent: missing device node")?;
+        let mut name = None;
+        let mut x = None;
+        let mut y = None;
+        for line in lines.map(str::trim) {
+            if line.starts_with("name:") {
+                name = Some(quoted(line)?);
+            }
+            if let Some((label, min, max)) = axis(line)? {
+                let range = AxisRange { min, max };
+                if label == "X" {
+                    x = Some(range);
+                } else {
+                    y = Some(range);
+                }
+            }
+        }
+        if let (Some(name), Some(x), Some(y)) = (name, x, y) {
+            devices.push(TouchDevice {
+                node: node.into(),
+                name,
+                x,
+                y,
+            });
+        }
+    }
+    if devices.is_empty() {
+        return Err("calibrate: no touch devices in inventory".into());
+    }
+    Ok(devices)
 }
 
 pub fn parse(getevent: &str, proc_input: &str) -> Result<Vec<Value>, String> {
@@ -103,6 +160,24 @@ pub fn parse(getevent: &str, proc_input: &str) -> Result<Vec<Value>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn touch_nodes_and_ranges_preserve_legacy_manifest_values() {
+        let text = "add device 1: /dev/input/event4\nname: \"fts_ts\"\nABS_MT_POSITION_X : min 0, max 1280\nABS_MT_POSITION_Y : min 0, max 800\n";
+        let devices = touch_devices(text).unwrap();
+        assert_eq!(
+            serde_json::to_value(devices).unwrap(),
+            json!([{"node":"/dev/input/event4","name":"fts_ts","x":{"min":0,"max":1280},"y":{"min":0,"max":800}}])
+        );
+        assert_eq!(
+            parse(text, "").unwrap(),
+            vec![json!({"name":"fts_ts","capabilities":["X=0..1280","Y=0..800"]})]
+        );
+        assert_eq!(
+            touch_devices("").unwrap_err(),
+            "calibrate: no touch devices in inventory"
+        );
+    }
 
     #[test]
     fn named_capabilities_and_proc_only_devices_round_trip() {

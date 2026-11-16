@@ -34,19 +34,7 @@ impl<'a> Device<'a> {
     }
 
     fn firmware(&self) -> Result<(), String> {
-        let build = self.property("ro.build.version.incremental")?;
-        if !include_str!("../../data/probed-builds.txt")
-            .lines()
-            .any(|known| known == build)
-        {
-            return Err("firmware: build is not in probed-builds.txt; coordinator probe required".into());
-        }
-        let mode = self.property("ro.bootmode")?;
-        let completed = self.property("sys.boot_completed")?;
-        if mode != "normal" || completed != "1" {
-            return Err(format!("firmware: Echo is not booted to Android (bootmode {mode})"));
-        }
-        Ok(())
+        crate::lab_gate::firmware(|name| self.property(name)).map(|_| ())
     }
 
     fn property(&self, name: &str) -> Result<String, String> {

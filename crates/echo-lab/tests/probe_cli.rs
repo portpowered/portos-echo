@@ -1,5 +1,37 @@
 #[cfg(test)]
+mod calibrate_cli {
+    include!("probe_support/calibrate.rs");
+}
+#[cfg(test)]
 mod probe_support;
+// Component T3 calibration cases share this prebuilt-fake test binary and its
+// existing nextest process-heavy concurrency group.
+mod lab_probe {
+    pub(crate) mod probe_command {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_command.rs"));
+    }
+    pub(crate) mod probe_stream {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_stream.rs"));
+    }
+    pub(crate) mod probe_parse {
+        pub(crate) mod probe_inputs {
+            include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_inputs.rs"));
+        }
+    }
+}
+mod lab_gate {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_gate.rs"));
+}
+mod lab_calibrate {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_calibrate/mod.rs"));
+    #[cfg(test)]
+    mod calibrate_tests {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/lab_calibrate/calibrate_tests.rs"
+        ));
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::probe_support;
@@ -110,6 +142,17 @@ mod tests {
         ["shell","wm","size"], ["shell","wm","density"], ["shell","ls","/system/local/models/keyword"]
     ]"#).unwrap();
         assert_eq!(session.ledger(), reads.iter().map(|r| json!(r)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn complete_probe_ledger_is_unchanged_by_calibration_reuse() {
+        let session = Session::new(&json!({}));
+        let output = session.run();
+        assert_eq!(
+            manifest(&session, &output)["display"],
+            json!({"width":1280,"height":800,"density":213})
+        );
+        check_reads(&session);
     }
 
     #[test]

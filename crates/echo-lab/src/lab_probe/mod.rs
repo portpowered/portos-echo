@@ -1,5 +1,7 @@
 mod probe_adb;
-mod probe_parse;
+pub(crate) mod probe_command;
+pub(crate) mod probe_parse;
+pub(crate) mod probe_stream;
 #[cfg(test)]
 mod probe_tests;
 mod probe_time;

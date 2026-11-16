@@ -1,5 +1,6 @@
+use super::probe_command::command;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 pub const READS: &[&[&str]] = &[
     &["getprop", "ro.serialno"],
@@ -57,9 +58,7 @@ pub fn scrub(text: &str, serials: &[String]) -> String {
 }
 
 fn invoke(adb: &Path, read: &[&str]) -> Result<Output, String> {
-    Command::new(adb)
-        .arg("shell")
-        .args(read)
+    command(adb, None, read)
         .output()
         .map_err(|_| format!("probe {}: cannot launch explicit adb", read.join(" ")))
 }
