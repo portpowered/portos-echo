@@ -20,17 +20,16 @@ async fn bridge_cut_nonempty_backlog_conserves_complete_frames() {
 async fn bridge_cut_overload_excludes_earlier_evictions_from_retained_frames() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace");
-    let live = bridge_peer::Live::bind_frames(300).await;
+    let live = bridge_peer::Live::bind_frames(32).await;
     let (mut stream, mut bridge) = satellite(&live.url, &path).await;
     assert_eq!(read(&mut stream).await.0["type"], "audio-start");
-    // Socket observation, not a wall-clock delay: the producer has consumed
-    // initial credit and is draining its bounded backlog before cancellation.
     receive_initial(&mut stream, 20).await;
+    let initial = overload_until_observed(&mut stream, &live, &path).await.unwrap();
     live.events
         .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
         .await
         .unwrap();
-    let sent = 20 + drain_to_stop(&mut stream).await;
+    let sent = initial + drain_to_stop(&mut stream).await;
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
     send(&mut stream, "played", json!({})).await;
     assert_eq!(
@@ -48,7 +47,7 @@ async fn bridge_cut_overload_excludes_earlier_evictions_from_retained_frames() {
         cut["bridge_dropped"].as_u64().unwrap() + cut["transport_dropped"].as_u64().unwrap(),
         retained
     );
-    assert!(framed <= 299); // The unflushed resampler tail is never a complete frame.
+    assert!(cut["bridge_dropped"].as_u64().unwrap() <= 128);
     assert_eq!(entries.iter().filter(|e| e["event"] == "reply.cut").count(), 1);
     assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 1);
     writeln!(
@@ -244,4 +243,23 @@ async fn assert_closed(stream: &mut tokio::net::TcpStream) {
         stream.read_u8().await.unwrap_err().kind(),
         std::io::ErrorKind::UnexpectedEof
     );
+}
+
+async fn overload_until_observed(
+    stream: &mut tokio::net::TcpStream,
+    live: &bridge_peer::Live,
+    path: &Path,
+) -> Option<u16> {
+    let mut sent = 20;
+    // Generate bounded load until the production queue reports its first
+    // eviction. Socket observations pace batches; UDP delivery is not assumed.
+    for _ in 0..64 {
+        live.events.send("synthetic.more_audio".into()).await.unwrap();
+        receive_initial(stream, 1).await;
+        sent += 1;
+        if trace(path).iter().any(|e| e["event"] == "reply.overflow") {
+            return Some(sent);
+        }
+    }
+    None
 }

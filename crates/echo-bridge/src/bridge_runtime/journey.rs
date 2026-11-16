@@ -227,12 +227,19 @@ async fn produce(
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut pacer = LeadPacer::new(context.lead_ms);
     let mut completed = false;
+    let mut pressure_reported = false;
     loop {
         if source.cancelled {
             context.cut(source).await?;
             return Ok(());
         }
         source.receive(call)?;
+        if !pressure_reported && source.queue.drop_count() > 0 {
+            context
+                .trace
+                .record("reply.overflow", Some(context.id), json!({"capacity":128}))?;
+            pressure_reported = true;
+        }
         let echo_done = lab
             && source.finished
             && source.sent > 0

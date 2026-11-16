@@ -2,6 +2,8 @@
 //! `reply.cut` also reports `bridge_evicted` (prior capacity evictions) and
 //! `reply_frames` (complete decoded frames offered to the bridge queue). Neither
 //! prior evictions nor partial tails belong to the retained `dropped_frames`.
+//! `reply.overflow` records the first bridge reply eviction per run, with its
+//! fixed frame capacity. Final eviction totals remain in `reply.cut`.
 use crate::Error;
 use serde_json::{Map, Value};
 use std::{

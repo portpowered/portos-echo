@@ -43,6 +43,9 @@ The same record reports `bridge_evicted` separately for earlier bridge capacity
 evictions and `reply_frames` for complete decoded frames offered to its queue.
 With no transport eviction, transmitted plus retained cut plus earlier bridge
 evictions equals `reply_frames`; the cut never counts an earlier eviction again.
+`reply.overflow` reports the first bridge eviction per run with capacity 128.
+The overload witness sends bounded synthetic batches until this observation;
+it never assumes that a UDP burst arrives without loss.
 
 The pinned-host timing regression reuses one bridge and host for ten trials.
 The host's FIFO observer timestamps cancellation dispatch at playback start plus

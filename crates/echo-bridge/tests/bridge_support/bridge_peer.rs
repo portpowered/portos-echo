@@ -77,19 +77,22 @@ async fn serve(
     while !peer.ready() {
         drive(&mut peer).await.unwrap();
     }
-    short_audio(&mut peer, frames).await;
-    next_connection(listener, receive, &mut peer).await
+    let mut sequence = 0;
+    short_audio(&mut peer, frames, &mut sequence).await;
+    next_connection(listener, receive, &mut peer, &mut sequence).await
 }
 
 async fn next_connection(
     listener: &TcpListener,
     receive: &mut mpsc::Receiver<String>,
     peer: &mut LivePeer,
+    sequence: &mut u16,
 ) -> TcpStream {
     loop {
         tokio::select! {
             next = listener.accept() => return next.unwrap().0,
             event = receive.recv() => match event {
+                Some(event) if event == "synthetic.more_audio" => short_audio(peer, 32, sequence).await,
                 Some(event) => peer.send_text(&event).await.unwrap(),
                 None => return listener.accept().await.unwrap().0,
             },
@@ -99,21 +102,22 @@ async fn next_connection(
     }
 }
 
-async fn short_audio(peer: &mut LivePeer, frames: u16) {
+async fn short_audio(peer: &mut LivePeer, frames: u16, sequence: &mut u16) {
     let mut encoder = echo_audio::OpusEncoder::new().unwrap();
     let mut bytes = [0; 1275];
-    for sequence in 0..frames {
+    for _ in 0..frames {
         let size = encoder.encode(&[0; 960], &mut bytes).unwrap();
         peer.send_audio(
             echo_live::AudioFrame {
-                sequence,
-                timestamp: u32::from(sequence) * 960,
+                sequence: *sequence,
+                timestamp: u32::from(*sequence) * 960,
                 payload: bytes[..size].to_vec(),
             },
             Instant::now(),
         )
         .await
         .unwrap();
+        *sequence += 1;
     }
 }
 
