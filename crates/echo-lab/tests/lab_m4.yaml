@@ -5,7 +5,7 @@ setup:
   mcp: spoof            # spoof | portos-pilot
   backend: client       # client | muse
 steps:
-  - say: "Alexa, call the test tool and tell me its result"   # sim: fixture PCM + SIGUSR1; device: Ring talkback
+  - say: "Computer, call the test tool and tell me its result"   # sim: fixture PCM + SIGUSR1; device: Ring talkback
   - expect_trace:
       - session.delegation.created
       - "tools/call {name: test.echo, count: 1}"

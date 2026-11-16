@@ -44,7 +44,7 @@ fn all_step_forms_and_negative_assertions_validate() {
     assert!(schema().unwrap().is_valid(&example));
     let mut value = scenario();
     value["steps"] = json!([
-        {"say": "Alexa, call the test tool and tell me its result"},
+        {"say": "Computer, call the test tool and tell me its result"},
         {"expect_trace": ["session.delegation.created", "tools/call {name: test.echo, count: 1}", "session.commentary.append"]},
         {"expect_speech_contains": ["test", "echo"]},
         {"expect_screen": {"state": "speaking"}},
