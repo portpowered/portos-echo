@@ -273,3 +273,28 @@ jobs:
           target: build-host
       - name: build-host
         run: make build-host
+  build-echo:
+    name: build-echo
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: build-echo
+      - name: Provision pinned Android Rust target
+        run: |
+          channel=$(python -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup target add --toolchain "$channel" armv7-linux-androideabi
+      - name: build-echo
+        run: make build-echo
+      - name: Publish Echo bridge
+        if: hashFiles('crates/echo-bridge/Cargo.toml') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: echo-bridge-armv7-android-${{ github.sha }}
+          path: target/armv7-linux-androideabi/release/echo-bridge
+          if-no-files-found: error

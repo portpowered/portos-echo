@@ -122,3 +122,25 @@ has already sent and not yet played.
 | --- | --- | --- |
 | M0 repository harness | Admitted at main `c9a044e`. All 15 T0 gates run in CI and are green on main (run 43748406902). Each gate was seen to fail on a seeded violation in its own lane's PR: F1 15, F2 18, F6 19, F7 20, F4 21, F8 22, F3 23, F9 27, F10 30 (hosted seeds for format, shape and coverage). `echo-lab check --milestone M0` exits 0. The Phase F loopback re-ran every seed from a fresh clone; four narrower gaps it found run as batch `m0-gaps-c9a044e-20261115-v1` alongside W0 (see `decisions.md`) | 2026-11-15, coordinator, from the PRs' seeded-proof comments and the Phase F loopback |
 | B0 bench, stock Echo | `echo-lab run` with the device driver passed at T5 on main `7a78937` with port main `179c4ab`: hold, play "Computer, what time is it?", wait for `playEndedAt`, snapshot, record 10 s, release. Whisper `small.en` heard "The time is 6.03 pm." and the time oracle matched. Mouth, ear and STT are proven by the tool, not by hand. Whisper writes the time with a dot (`6.01`), so the scenario's time pattern accepts `[:.]`. Eye: partly. Frames 1–3 s after the question show the Echo's screen wake and show the clock; the frame taken just after `playEndedAt` shows it still dark. The listening bar at the screen's bottom edge is out of frame, and the camera does not tilt lower (`step-ptz DOWN` reported −15° with an unchanged view). Proving the bar needs the camera or the Echo moved by hand | 2026-11-15, coordinator, runs at 18:01 (failed only on the dot) and 18:02 (passed) |
+
+## Bridge on the Echo: cross-build
+
+`make build-echo` targets `armv7-linux-androideabi` in release mode with Rust 1.100.0 and the installed NDK's
+`armv7a-linux-androideabi24-clang` (API 24). Run it on Linux or WSL after provisioning the pinned Rust target
+and locked dependency cache. `ANDROID_NDK_HOME` selects the NDK; `ANDROID_NDK_LATEST_HOME` is the fallback
+when the first variable is unset or empty. An invalid explicit selection fails. The command downloads nothing.
+The bundled Opus build uses the same NDK with `ANDROID_PLATFORM=android-24`; existing Rust crypto features stay
+unchanged.
+
+`ECHO_PACKAGES` in the Makefile is the package list: echo-contracts, echo-config, echo-wyoming, echo-audio,
+echo-live, echo-chatgpt-auth, echo-agent-api, echo-agent-loop, echo-mcp-auth, echo-mcp-client,
+echo-screen-contract, echo-screen-server, echo-delegation and echo-signin, plus echo-bridge. The bridge
+manifest is present at this change's base, so the job builds and inspects its real release binary.
+echo-link joins when its manifest lands on main. Executable architecture, Android interpreter, binary
+size and upload require the matching hosted artifact evidence; configuration alone does not prove them.
+
+The every-PR `build-echo` job logs the installed NDK revision and compiler versions. When echo-bridge exists,
+it checks ELF32, ARM, EABI5, `/system/bin/linker` and dynamic dependencies (rejecting OpenSSL), prints its size
+and uploads the release binary. Measured crate results, NDK revision, size and CI run ID belong in the
+[el-w4-echo-cross-build PR](https://github.com/portpowered/portos-echo/pull/103)
+evidence comment under this heading. This configuration establishes no device-runtime or T5 result.

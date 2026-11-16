@@ -58,6 +58,7 @@ lint-self-tests:
 	python scripts/test_lint_docs.py
 	python scripts/test_make_posix.py
 	python scripts/test_coverage_profiles.py
+	python scripts/test_build_echo.py
 
 test-unit:
 	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci
@@ -142,4 +143,11 @@ test-echo-screen-install:
 check-echo-screen: build-echo-screen test-echo-screen-jvm test-echo-screen-url test-echo-screen-install
 	python tests/verify_echo_screen_apk.py
 
-ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-docs lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency coverage build-host
+# echo-bridge and echo-link join when their manifests land on main; recheck at final rebase.
+ECHO_PACKAGES := echo-contracts echo-config echo-wyoming echo-audio echo-live echo-chatgpt-auth echo-agent-api echo-agent-loop echo-mcp-auth echo-mcp-client echo-screen-contract echo-screen-server echo-delegation echo-signin $(foreach crate,echo-bridge echo-link,$(if $(wildcard crates/$(crate)/Cargo.toml),$(crate)))
+
+.PHONY: build-echo
+build-echo:
+	sh scripts/build-echo.sh $(ECHO_PACKAGES)
+
+ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-docs lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency coverage build-host build-echo
