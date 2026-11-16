@@ -48,7 +48,8 @@ pub(super) fn reject_secrets(value: &toml::de::DeValue<'_>, path: &str) -> Resul
 // still scanned, but their keys and array positions are rejected input values.
 fn schema_field(path: &str, key: &str) -> bool {
     let fields: &[&str] = match path {
-        "" => &["echo", "live", "agent", "mcp", "screen", "audit"],
+        "" => &["echo", "live", "agent", "mcp", "screen", "audit", "chatgpt_auth"],
+        "chatgpt_auth" => crate::config_auth::FIELDS,
         "echo" => &["host", "wyoming_port"],
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
         "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap", "model"],
@@ -75,6 +76,7 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
+    config.chatgpt_auth.validate()?;
     if config.echo.wyoming_port == 0 {
         return Err(ConfigError::new("echo.wyoming_port", "must be nonzero"));
     }
@@ -113,7 +115,7 @@ pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
 }
 
 // Deliberately offline: validate authority syntax without DNS or a network dependency.
-fn http_url(url: &str) -> bool {
+pub(super) fn http_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
     };

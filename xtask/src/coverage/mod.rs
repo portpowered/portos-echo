@@ -93,7 +93,8 @@ fn evaluate(report: &lcov::Report, changes: &Changed, crates: &[(String, String)
     for (name, prefix) in crates {
         let floors = match name.as_str() {
             "echo-contracts" | "echo-config" | "echo-screen-contract" => (95, 90),
-            "echo-mcp-auth" | "echo-mcp-client" | "echo-agent-loop" | "echo-wyoming" | "echo-bridge" => (90, 85),
+            "echo-chatgpt-auth" | "echo-mcp-auth" | "echo-mcp-client" | "echo-agent-loop" | "echo-wyoming"
+            | "echo-bridge" => (90, 85),
             _ => (0, 0),
         };
         messages.extend(scope(
@@ -208,6 +209,31 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_auth_exact_line_and_branch_floors() {
+        let file = lcov::File {
+            lines: (1..=100).map(|i| (i, i <= 90)).collect(),
+            branches: (1..=100).map(|i| ((i, 0, 0), i <= 85)).collect(),
+        };
+        let mut report = lcov::Report::from([("crates/echo-chatgpt-auth/src/lib.rs".into(), file)]);
+        let crates = [("echo-chatgpt-auth".into(), "crates/echo-chatgpt-auth/".into())];
+        let passed = evaluate(&report, &Changed::new(), &crates).unwrap();
+        assert_eq!(passed[2], "echo-chatgpt-auth lines: 90/100 (90.00%), floor 90%");
+        assert_eq!(passed[3], "echo-chatgpt-auth branches: 85/100 (85.00%), floor 85%");
+        let path = "crates/echo-chatgpt-auth/src/lib.rs";
+        report.get_mut(path).unwrap().lines.insert(90, false);
+        assert_eq!(
+            evaluate(&report, &Changed::new(), &crates).unwrap_err(),
+            "echo-chatgpt-auth lines: 89/100 (89.00%), floor 90%"
+        );
+        report.get_mut(path).unwrap().lines.insert(90, true);
+        report.get_mut(path).unwrap().branches.insert((85, 0, 0), false);
+        assert_eq!(
+            evaluate(&report, &Changed::new(), &crates).unwrap_err(),
+            "echo-chatgpt-auth branches: 84/100 (84.00%), floor 85%"
+        );
+    }
+
+    #[test]
     fn changed_ranges_cover_additions_not_deletions_or_context() {
         let diff = "+++ b/xtask/src/main.rs\n@@ -1 +1,2 @@\n+x\n+y\n@@ -5,0 +7 @@\n+z\n+++ /dev/null\n@@ -1 +0,0 @@\n";
         assert_eq!(changed(diff).unwrap()["xtask/src/main.rs"], BTreeSet::from([1, 2, 7]));
@@ -259,6 +285,7 @@ mod tests {
             "echo-contracts",
             "echo-config",
             "echo-screen-contract",
+            "echo-chatgpt-auth",
             "echo-mcp-auth",
             "echo-mcp-client",
             "echo-agent-loop",

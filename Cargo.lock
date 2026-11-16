@@ -680,6 +680,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-chatgpt-auth"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "echo-config",
+ "echo-contracts",
+ "getrandom 0.4.3",
+ "loom",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "echo-config"
 version = "0.1.0"
 dependencies = [
