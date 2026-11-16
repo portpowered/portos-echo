@@ -22,6 +22,12 @@ pub struct ChatGptCredential {
     pub account_id: String,
 }
 
+/// Stored metadata only; inspecting it never refreshes a credential.
+pub struct CredentialStatus {
+    pub account_id: String,
+    pub expires: u64,
+}
+
 /// Display only in the caller's sign-in UI; never write this prompt to traces.
 pub struct DeviceCodePrompt {
     pub user_code: String,
@@ -70,6 +76,21 @@ pub struct AuthSource {
 }
 
 impl AuthSource {
+    /// Read validated stored metadata, including an expired record.
+    /// Does not change credentials or the pending-refresh marker.
+    ///
+    /// # Errors
+    /// Returns existing safe storage, validation and lock categories.
+    pub async fn status(&self) -> Result<CredentialStatus, AuthError> {
+        let _guard = self.operation.lock().await;
+        let _file_guard = auth_session::lock(&self.file)?;
+        let record = auth_store::load(&self.file)?;
+        Ok(CredentialStatus {
+            account_id: record.account_id,
+            expires: record.expires,
+        })
+    }
+
     /// Construct without opening credentials or contacting the issuer.
     ///
     /// # Errors
@@ -159,3 +180,6 @@ impl AuthSource {
 
 #[cfg(test)]
 mod auth_tests;
+
+#[cfg(test)]
+mod auth_status_tests;

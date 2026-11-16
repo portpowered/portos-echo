@@ -73,3 +73,4 @@ Add each new tracked documentation page to this index in the same change.
 
 - [Stateless MCP HTTP transport](adr/0006-mcp-http.md)
 - [Loopback screen transport](adr/0010-screen-server.md)
+- [Operator sign-in command library](adr/0008-signin.md)
