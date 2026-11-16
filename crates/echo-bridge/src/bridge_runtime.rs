@@ -16,7 +16,7 @@ use crate::{
     bridge_trace::Trace,
 };
 use echo_contracts::ids::SessionId;
-use echo_link::{EchoLink, LinkConnector, LinkEvent, LinkEvents};
+use echo_link::{EchoLink, LinkConnector, LinkEvent, LinkEvents, RunFailure};
 use echo_live::{
     LivePeer,
     call::{LiveAuthMode, LiveCall, LiveCallFactory, SessionOptions},
@@ -206,17 +206,22 @@ async fn observe<L: EchoLink>(
         let id = format!("run-{sequence}");
         trace.record("wyoming.run_started", Some(&id), json!({}))?;
         trace.record("run.started", Some(&id), json!({}))?;
+        let mut link = bridge_relink::RunLink::new(client);
+        link.kill = Some(&kill);
+        link.lab = options.lab;
         if kill.sync(trace).await? {
             trace.record("run.refused", Some(&id), json!({"reason":"kill"}))?;
+            link.refuse(RunFailure::KillSwitch).await?;
             continue;
         }
         if health.state.borrow().relink_required {
             trace.record("run.refused", Some(&id), json!({"reason":"relink_required"}))?;
+            link.refuse(RunFailure::RelinkRequired).await?;
             continue;
         }
         screen.publish(echo_screen_contract::UiState::Listening)?;
         let result = turn(
-            client,
+            &link,
             events,
             run,
             factory,
@@ -226,6 +231,7 @@ async fn observe<L: EchoLink>(
         )
         .await;
         if kill.sync(trace).await? {
+            result?;
             delegation.abandon();
             conversation.close("kill", trace)?;
             continue;
@@ -246,7 +252,7 @@ async fn observe<L: EchoLink>(
 }
 
 async fn turn<L: EchoLink>(
-    client: &L,
+    client: &bridge_relink::RunLink<'_, L>,
     events: &mut L::Events,
     run: <L::Events as LinkEvents>::Run,
     factory: &LiveCallFactory<Provider>,
@@ -267,13 +273,16 @@ async fn turn<L: EchoLink>(
         health.state.send_modify(|state| state.live = "connecting");
         let created = tokio::select! {
             biased;
-            () = kill.wait() => { kill.sync(trace).await?; return Ok(None); },
+            () = kill.wait() => {
+                client.refuse(RunFailure::KillSwitch).await?;
+                return Ok(None);
+            },
             result = create(factory, options, id) => result,
         };
         conversation.call = match created {
             Ok(call) => Some(call),
             Err(error) => {
-                bridge_relink::failure(error, options.lab, health, trace, screen, id).await?;
+                client.failure(error, (options.lab, health, trace, screen, id)).await?;
                 return Ok(None);
             }
         };
@@ -298,15 +307,21 @@ async fn turn<L: EchoLink>(
     )
     .await;
     match result {
-        Ok(outcome) => Ok(Some(outcome)),
+        Ok(outcome) => {
+            if kill.enabled() {
+                client.refuse(RunFailure::KillSwitch).await?;
+            }
+            Ok(Some(outcome))
+        }
         Err(error) => {
             delegation.abandon();
             if kill.sync(trace).await? {
+                client.refuse(RunFailure::KillSwitch).await?;
                 conversation.close("kill", trace)?;
                 return Ok(None);
             }
             conversation.close("failed", trace)?;
-            bridge_relink::failure(error, options.lab, health, trace, screen, id).await?;
+            client.failure(error, (options.lab, health, trace, screen, id)).await?;
             Ok(None)
         }
     }

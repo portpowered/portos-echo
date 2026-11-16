@@ -170,12 +170,13 @@ fn disconnected_commands_fail_without_retaining_audio() {
     let (reply, rx) = oneshot::channel();
     assert!(!reject(Some(Command::Describe(reply))));
     assert_eq!(rx.blocking_recv().unwrap(), Err(Error::Disconnected));
-    for kind in 0..3 {
+    for kind in 0..4 {
         let (reply, rx) = oneshot::channel();
         let command = match kind {
             0 => Command::Register(reply),
             1 => Command::Cut(reply),
-            _ => Command::Pause(reply),
+            2 => Command::Pause(reply),
+            _ => Command::Error("echo-unavailable".into(), "Live unavailable.".into(), reply),
         };
         assert!(!reject(Some(command)));
         assert_eq!(rx.blocking_recv().unwrap(), Err(Error::Disconnected));

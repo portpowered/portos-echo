@@ -21,7 +21,6 @@ pub(super) async fn wait_event(path: &Path, event: &str) {
     .await
     .unwrap();
 }
-
 async fn wake(stream: &mut bridge_short::Satellite) {
     bridge_short::send(
         stream,
@@ -32,7 +31,6 @@ async fn wake(stream: &mut bridge_short::Satellite) {
     )
     .await;
 }
-
 async fn retained_failure(credential: Option<&str>, status: u16) {
     let directory = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -57,6 +55,7 @@ async fn retained_failure(credential: Option<&str>, status: u16) {
     let path = directory.path().join("trace");
     let relink = status == 401;
     wait_event(&path, if relink { "auth.relink_required" } else { "run.failed" }).await;
+    bridge_refusal::error(&mut satellite, relink).await;
     let screen = assert_surfaces(&path, relink).await;
     if relink {
         assert_refused(directory.path(), &mut satellite, &path, &observer, credential).await;
@@ -66,7 +65,6 @@ async fn retained_failure(credential: Option<&str>, status: u16) {
     assert_private_trace(&path);
     fake.shutdown().await;
 }
-
 async fn assert_refused(
     directory: &Path,
     satellite: &mut bridge_short::Satellite,
@@ -78,12 +76,12 @@ async fn assert_refused(
     std::fs::write(directory.join("credential"), "synthetic-repaired-key").unwrap();
     wake(satellite).await;
     wait_event(path, "run.refused").await;
+    bridge_refusal::error(satellite, true).await;
     assert_eq!(
         observer.calls().unwrap().len(),
         usize::from(credential.is_some_and(|s| !s.contains('\0')))
     );
 }
-
 fn credential_file(directory: &Path, credential: Option<&str>) {
     let file = directory.join("credential");
     if let Some(credential) = credential {
@@ -92,7 +90,6 @@ fn credential_file(directory: &Path, credential: Option<&str>) {
         std::fs::remove_file(file).unwrap();
     }
 }
-
 fn assert_private_trace(path: &Path) {
     let text = std::fs::read_to_string(path).unwrap();
     for private in ["synthetic-api-key", "synthetic-repaired-key", "synthetic private body"] {
@@ -100,7 +97,6 @@ fn assert_private_trace(path: &Path) {
     }
     assert_eq!(trace(path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
 }
-
 pub(super) async fn assert_surfaces(path: &Path, relink: bool) -> String {
     let entries = trace(path);
     let screen = entries.iter().find(|e| e["event"] == "screen.listening").unwrap()["address"]
@@ -114,14 +110,22 @@ pub(super) async fn assert_surfaces(path: &Path, relink: bool) -> String {
     if relink {
         relink_instruction(&screen, &mut frames, &state).await;
     }
-    let response = health(entries[0]["health_addr"].as_str().unwrap(), "GET", "/healthz").await;
-    assert_eq!(
-        serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap(),
-        json!({"status":"running","wyoming":"connected","live":"error","relink_required":relink,"kill_switch":false})
-    );
+    let expected =
+        json!({"status":"running","wyoming":"connected","live":"error","relink_required":relink,"kill_switch":false});
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        loop {
+            let response = health(entries[0]["health_addr"].as_str().unwrap(), "GET", "/healthz").await;
+            let actual: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+            if actual == expected {
+                return;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("health never showed the exact connected failure state");
     screen
 }
-
 async fn relink_instruction(address: &str, frames: &mut Lines<BufReader<tokio::net::TcpStream>>, expected: &Value) {
     let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
     let body = r#"{"action":"relink"}"#;
@@ -137,7 +141,6 @@ async fn relink_instruction(address: &str, frames: &mut Lines<BufReader<tokio::n
         "Run echo-bridge signin with your config, then restart the bridge."
     );
 }
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_wire_auth_failure_missing_invalid_and_401_latch_without_retry() {

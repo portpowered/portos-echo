@@ -25,6 +25,7 @@ pub(crate) enum Command {
     #[cfg(test)]
     Cut(Reply<()>),
     CutWithStats(Reply<CutStats>),
+    Error(String, String, Reply<()>),
     Pause(Reply<()>),
     Close(Reply<()>),
 }
@@ -149,9 +150,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 .map(|play| play.frames.clone());
             let result = tokio::select! {
                 biased;
+                () = cancelled(&mut self.play) => self.cancel_playback(),
                 command = commands.recv() => self.command(command).await,
                 frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))),
-                () = cancelled(&mut self.play) => Err(Error::Closed),
                 frame = async { match frames { Some(queue) => queue.recv().await, None => std::future::pending().await } } => match frame {
                     Ok(frame) => self.audio(frame).await,
                     Err(error) => Err(error),
@@ -161,6 +162,21 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 return error;
             }
         }
+    }
+
+    fn cancel_playback(&mut self) -> Result<(), Error> {
+        // A missing Played can expire the run's control deadline after the
+        // complete stop was written. Retire that failed run without claiming
+        // playback success or invalidating the connection for its error frame.
+        // Cancellation before audio-stop still invalidates transport ownership.
+        if !self.play.as_ref().is_some_and(|play| play.stopped) {
+            return Err(Error::Closed);
+        }
+        if let Some(play) = self.play.take() {
+            play.finish(Err(Error::Closed));
+        }
+        self.router.end(Ok(()));
+        Ok(())
     }
 
     fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
@@ -240,6 +256,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 }
                 let _ = reply.send(Ok(()));
             }
+            Some(Command::Error(code, text, reply)) => {
+                self.fail_run(code, text, reply).await?;
+            }
             Some(Command::Close(reply)) => {
                 let _ = reply.send(Ok(()));
                 self.closing = true;
@@ -264,6 +283,17 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             }
         }
         Ok(stats)
+    }
+
+    async fn fail_run(&mut self, code: String, text: String, reply: Reply<()>) -> Result<(), Error> {
+        self.send(
+            WyomingEvent::Error(serde_json::json!({"code":code,"text":text})),
+            vec![],
+        )
+        .await?;
+        self.router.end(Ok(()));
+        let _ = reply.send(Ok(()));
+        Ok(())
     }
 
     async fn audio(&mut self, payload: Option<Vec<u8>>) -> Result<(), Error> {

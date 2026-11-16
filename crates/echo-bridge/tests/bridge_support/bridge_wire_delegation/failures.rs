@@ -191,3 +191,40 @@ async fn bridge_wire_delegation_mcp_500_is_one_attempt_and_exact_error() {
     fake.shutdown().await;
     spoof.shutdown().await.unwrap();
 }
+
+pub(super) async fn assert_relink_error(satellite: &mut bridge_short::Satellite) {
+    let (header, payload) = bridge_short::read_reply(satellite).await;
+    assert_eq!(
+        header,
+        json!({"type":"error", "data":{"code":"echo-relink-required", "text":"Relink required."},
+            "data_length":0, "payload_length":0})
+    );
+    assert_eq!(payload, Vec::<u8>::new());
+}
+
+pub(super) fn check_credential_refusals(path: &Path) {
+    let entries = trace(path);
+    let failures: Vec<_> = entries
+        .iter()
+        .filter(|e| matches!(e["event"].as_str(), Some("auth.relink_required" | "run.refused")))
+        .map(|e| (e["event"].clone(), e["run_id"].clone()))
+        .collect();
+    assert_eq!(
+        failures,
+        vec![
+            (json!("auth.relink_required"), json!("run-1")),
+            (json!("run.refused"), json!("run-2"))
+        ]
+    );
+    for event in ["session.commentary.append", "reply.played", "reply.started"] {
+        assert_eq!(entries.iter().filter(|e| e["event"] == event).count(), 0);
+    }
+    assert_eq!(entries.iter().filter(|e| e["event"] == "live.closed").count(), 1);
+
+    let refused = entries.iter().find(|e| e["event"] == "run.refused").unwrap();
+    assert_eq!(refused["reason"], "relink_required");
+    let text = std::fs::read_to_string(path).unwrap();
+    for private in ["synthetic-api-key", "synthetic-repaired-key", "synthetic-mcp-token"] {
+        assert!(!text.contains(private), "trace disclosure");
+    }
+}

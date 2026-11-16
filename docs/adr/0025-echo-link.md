@@ -70,3 +70,16 @@ suppressed active-run chunk is not counted twice.
 
 The in-memory fake scripts a muted connection snapshot or a mute at a specified
 frame position. This amendment adds no dependency, provider access or device run.
+
+## Amendment: unserved runs
+
+The coordinator authorized `RunFailure` and `EchoLink::fail_run` on 2026-11-16.
+The closed causes are `RelinkRequired`, `KillSwitch` and `Unavailable`. Only the
+Wyoming adapter maps them to `echo-relink-required` / `Relink required.`,
+`echo-kill-switch` / `Kill switch enabled.`, and `echo-unavailable` /
+`Live unavailable.`. The existing session writer sends one Wyoming error and
+ends local microphone routing without pausing registration or closing the
+connection. Trailing microphone frames are discarded; the next wake remains
+enabled. No synthesized speech or peer diagnostic enters this boundary.
+Rollback reverts the capability, callers and fakes together; no migration is
+needed and the previous pipeline-timeout behavior returns.

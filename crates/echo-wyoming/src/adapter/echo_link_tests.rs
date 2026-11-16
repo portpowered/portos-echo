@@ -146,3 +146,110 @@ async fn reply_server(peer: &mut tokio::io::DuplexStream) {
     assert_eq!(receive(peer).await.header.r#type, "pause-satellite");
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
 }
+
+#[tokio::test(start_paused = true)]
+async fn run_failure_literal_frames_then_describe_keep_the_same_stream() {
+    let (io, mut peer) = duplex(65536);
+    let client = WyomingClient::from_io(io, ClientOptions::default());
+    for (cause, expected) in [
+        (
+            RunFailure::RelinkRequired,
+            "{\"data\":{\"code\":\"echo-relink-required\",\"text\":\"Relink required.\"},\"data_length\":0,\"payload_length\":0,\"type\":\"error\"}\n",
+        ),
+        (
+            RunFailure::KillSwitch,
+            "{\"data\":{\"code\":\"echo-kill-switch\",\"text\":\"Kill switch enabled.\"},\"data_length\":0,\"payload_length\":0,\"type\":\"error\"}\n",
+        ),
+        (
+            RunFailure::Unavailable,
+            "{\"data\":{\"code\":\"echo-unavailable\",\"text\":\"Live unavailable.\"},\"data_length\":0,\"payload_length\":0,\"type\":\"error\"}\n",
+        ),
+    ] {
+        let caller = async {
+            client.fail_run(cause).await.unwrap();
+            assert_eq!(
+                client.describe().await.unwrap(),
+                WyomingEvent::Info(json!({"same":true}))
+            );
+        };
+        let server = async {
+            let mut bytes = vec![0; expected.len()];
+            peer.read_exact(&mut bytes).await.unwrap();
+            assert_eq!(bytes, expected.as_bytes());
+            assert_eq!(receive(&mut peer).await.header.r#type, "describe");
+            send(&mut peer, "info", json!({"same":true}), vec![]).await;
+        };
+        tokio::join!(caller, server);
+    }
+    client.close().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn run_failure_retires_mic_and_trailing_audio_never_enters_next_run() {
+    let (io, mut peer) = duplex(65536);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = WyomingClient::events(&mut client).unwrap();
+    send_wake(&mut peer).await;
+    let mut first = events.recv().await.unwrap().unwrap().run.unwrap();
+    client.fail_run(RunFailure::Unavailable).await.unwrap();
+    assert_eq!(first.recv().await.unwrap(), None);
+    assert_eq!(receive(&mut peer).await.header.r#type, "error");
+    send(
+        &mut peer,
+        "audio-chunk",
+        json!({"rate":16000,"width":2,"channels":1}),
+        vec![9, 9],
+    )
+    .await;
+    send_wake(&mut peer).await;
+    assert!(events.recv().await.unwrap().unwrap().run.is_none());
+    let mut next = events.recv().await.unwrap().unwrap().run.unwrap();
+    send(
+        &mut peer,
+        "audio-chunk",
+        json!({"rate":16000,"width":2,"channels":1}),
+        vec![1, 2],
+    )
+    .await;
+    assert_eq!(next.recv().await.unwrap().unwrap().payload, [1, 2]);
+    assert_eq!(first.stats().received, 0);
+    client.close().await.unwrap();
+}
+
+async fn send_wake(peer: &mut tokio::io::DuplexStream) {
+    send(
+        peer,
+        "run-pipeline",
+        json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"Computer"}),
+        vec![],
+    )
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn run_failure_writer_timeout_capacity_and_closed_are_fixed_errors() {
+    use tokio::io::AsyncWriteExt;
+    let (io, _stalled) = duplex(1);
+    let client = WyomingClient::from_io(io, ClientOptions::default());
+    assert_eq!(client.send_error("code", "text").await, Err(crate::Error::Timeout));
+    let (io, mut closed) = duplex(4096);
+    closed.shutdown().await.unwrap();
+    drop(closed);
+    let client = WyomingClient::from_io(io, ClientOptions::default());
+    assert!(matches!(
+        client.send_error("code", "text").await,
+        Err(crate::Error::Disconnected | crate::Error::Closed)
+    ));
+    let (io, _peer) = duplex(4096);
+    let client = WyomingClient::from_io(
+        io,
+        ClientOptions {
+            max_frame_bytes: 128,
+            ..ClientOptions::default()
+        },
+    );
+    assert_eq!(
+        client.send_error("code", &"x".repeat(256)).await,
+        Err(crate::Error::Capacity)
+    );
+}
