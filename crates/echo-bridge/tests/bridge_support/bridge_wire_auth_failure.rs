@@ -105,7 +105,19 @@ pub(super) async fn assert_surfaces(path: &Path, relink: bool) -> String {
         .unwrap()
         .to_owned();
     let mut frames = bridge_wire_screen::stream(&screen).await;
-    let state = bridge_wire_screen::state(&mut frames).await;
+    // The trace line and the screen are separate surfaces: the screen server drains published states on its own task, so
+    // a subscriber that connects right after "auth.relink_required" can first be handed the older snapshot.  Skip only
+    // those earlier states, within the one observation budget, and assert the error's exact values once it arrives.
+    let state = tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        loop {
+            let state = bridge_wire_screen::state(&mut frames).await;
+            if state["state"] == "error" {
+                return state;
+            }
+        }
+    })
+    .await
+    .expect("screen never showed the failure state");
     assert_eq!(state["state"], "error");
     assert_eq!(state["relink"], relink);
     if relink {
