@@ -1,4 +1,5 @@
 use super::*;
+use std::io::Write;
 
 struct Fixture {
     settings: bridge_input::Settings,
@@ -122,6 +123,14 @@ async fn bridge_link_empty_and_one_frame_replies_require_actual_acknowledgment()
         observer.finish(Ok(()));
         assert_eq!(journey.await.unwrap(), (0, true));
         assert_eq!(trace(&path).iter().filter(|r| r["outcome"] == "played").count(), 1);
+        let snapshots: Vec<_> = trace(&path)
+            .into_iter()
+            .filter(|r| r["event"] == "mic.frames")
+            .collect();
+        assert_eq!(
+            snapshots,
+            vec![row("mic.frames", 0, json!({"phase":"completed","count":0}))]
+        );
         link.close().await.unwrap();
     }
 }
@@ -200,4 +209,162 @@ fn assert_cut_trace(path: &std::path::Path) {
             row("wyoming.run_ended", 1, json!({})),
         ]
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_reused_call_isolates_different_and_empty_run_totals() {
+    let mut fixture = Fixture::new().await;
+    let observer = Observer::default();
+    let mut link = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = link.events().unwrap();
+    let mut live = Live::default();
+    let mut totals = Vec::new();
+    let path = fixture.directory.path().join("shared-trace");
+    let mut writer = Trace::open(&path, "api_key").unwrap();
+    for (index, (samples, cancel)) in [(1024, true), (1024, false), (0, false), (2048, false), (320, false)]
+        .into_iter()
+        .enumerate()
+    {
+        let id = format!("run-{index}");
+
+        observer.wake("Computer", capture(samples));
+        let run = select_wake(events.recv().await.unwrap()).unwrap().unwrap();
+        live.audio = reply(1);
+        live.events = if cancel {
+            VecDeque::new()
+        } else {
+            [LiveEvent::Other(json!({"type":"response.audio.done"}))].into()
+        };
+        live.cancel_at = cancel.then(|| Instant::now() + Duration::from_millis(1));
+        let base = live.sent.len() as u64;
+        let kill = Kill {
+            settings: &fixture.settings,
+            health: &fixture.health,
+            screen: &fixture.screen,
+        };
+        let mut journey = Box::pin(super::super::run(
+            &link,
+            &mut events,
+            run,
+            &mut live,
+            &mut writer,
+            &id,
+            (false, 200, base, &fixture.screen, &mut fixture.host, &kill),
+        ));
+        pending(journey.as_mut()).await;
+        assert!(
+            !trace(&path)
+                .iter()
+                .any(|r| r["phase"] == "completed" && r["run_id"] == id)
+        );
+        if cancel {
+            tokio::time::advance(Duration::from_millis(1)).await;
+            pending(journey.as_mut()).await;
+        }
+        observer.finish(Ok(()));
+        let (count, completed) = journey.await.unwrap();
+        check_reused_run((&path, &id, samples, cancel), &live, base, count, completed);
+        totals.push(count);
+        writeln!(std::io::stdout(), "{id} accepted={count}").unwrap();
+    }
+    assert_eq!(totals, [2, 3, 0, 6, 1]);
+    link.close().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_partial_send_failure_never_claims_completed() {
+    let mut fixture = Fixture::new().await;
+    let observer = Observer::default();
+    let mut link = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = link.events().unwrap();
+    observer.wake(
+        "Computer",
+        vec![MicFrame {
+            format: bridge_audio::format(16_000),
+            payload: vec![0; 2048],
+        }],
+    );
+    let run = select_wake(events.recv().await.unwrap()).unwrap().unwrap();
+    let mut live = Live {
+        reject_at: Some(1),
+        ..Live::default()
+    };
+    let path = fixture.directory.path().join("trace");
+    let mut writer = Trace::open(&path, "api_key").unwrap();
+    let kill = Kill {
+        settings: &fixture.settings,
+        health: &fixture.health,
+        screen: &fixture.screen,
+    };
+    assert_eq!(
+        super::super::run(
+            &link,
+            &mut events,
+            run,
+            &mut live,
+            &mut writer,
+            "run-1",
+            (true, 200, 0, &fixture.screen, &mut fixture.host, &kill)
+        )
+        .await,
+        Err(Error::Unavailable)
+    );
+    assert_eq!(live.sent.len(), 1);
+    assert!(!trace(&path).iter().any(|r| r["phase"] == "completed"));
+    link.close().await.unwrap();
+}
+
+fn assert_run_snapshots(path: &std::path::Path, id: &str, samples: usize, count: u64, receipt: u64) {
+    let rows: Vec<_> = trace(path).into_iter().filter(|r| r["run_id"] == id).collect();
+    let snapshots: Vec<_> = rows.iter().filter(|r| r["event"] == "mic.frames").collect();
+    assert_eq!(snapshots.len(), if samples == 0 { 1 } else { 2 });
+    assert_eq!(snapshots.last().unwrap()["phase"], "completed");
+    assert_eq!(snapshots.last().unwrap()["count"].as_u64(), Some(receipt));
+    assert!(snapshots.iter().all(|r| r["run_id"] == id));
+    assert_eq!(
+        rows.iter().find(|r| r["event"] == "mic.completed").unwrap()["count"],
+        count
+    );
+    if samples > 0 {
+        assert_eq!(snapshots[0]["phase"], "first");
+        assert!(
+            rows.iter().position(|r| r["phase"] == "first") < rows.iter().position(|r| r["event"] == "reply.started")
+        );
+    }
+}
+
+fn check_reused_run(case: (&std::path::Path, &str, usize, bool), live: &Live, base: u64, count: u64, completed: bool) {
+    let (path, id, samples, cancel) = case;
+    assert_eq!(completed, !cancel);
+    let receipt = live.sent.len() as u64 - base;
+    assert_eq!(count, receipt);
+    if cancel {
+        let rows = trace(path);
+        let snapshots: Vec<_> = rows
+            .iter()
+            .filter(|r| r["event"] == "mic.frames" && r["run_id"] == id)
+            .collect();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0]["phase"], "first");
+        assert_eq!(snapshots[0]["count"], receipt);
+    } else {
+        assert_run_snapshots(path, id, samples, count, receipt);
+    }
+    if samples > 0 {
+        assert_eq!(
+            live.sent[usize::try_from(base).unwrap()].sequence,
+            u16::try_from(base).unwrap()
+        );
+    }
+}
+
+fn capture(samples: usize) -> Vec<MicFrame> {
+    if samples == 0 {
+        vec![]
+    } else {
+        vec![MicFrame {
+            format: bridge_audio::format(16_000),
+            payload: vec![0; samples * 2],
+        }]
+    }
 }

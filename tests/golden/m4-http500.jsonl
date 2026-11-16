@@ -3,7 +3,7 @@
 {"elapsed_ms":0,"event":"wyoming.connected","provider_auth_mode":"api_key","run_id":"run_id-1"}
 {"elapsed_ms":0,"event":"wyoming.run_started","provider_auth_mode":"api_key","run_id":"run_id-2"}
 {"elapsed_ms":0,"event":"run.started","provider_auth_mode":"api_key","run_id":"run_id-2"}
-{"count":2,"elapsed_ms":0,"event":"mic.frames","provider_auth_mode":"api_key","run_id":"run_id-2"}
+{"count":2,"elapsed_ms":0,"event":"mic.frames","phase":"first","provider_auth_mode":"api_key","run_id":"run_id-2"}
 {"delegation_id":"delegation_id-1","elapsed_ms":0,"event":"session.delegation.created","provider_auth_mode":"api_key","run_id":"run_id-2"}
 {"delegation_id":"delegation_id-1","elapsed_ms":0,"event":"tools/call","name":"test.echo","provider_auth_mode":"api_key","run_id":"run_id-2"}
 {"delegation_id":"delegation_id-1","elapsed_ms":0,"event":"session.commentary.append","provider_auth_mode":"api_key","run_id":"run_id-2"}
@@ -11,4 +11,5 @@
 {"elapsed_ms":0,"event":"reply.played","outcome":"played","provider_auth_mode":"api_key","run_id":"run_id-2"}
 {"count":15,"elapsed_ms":0,"event":"wyoming.mic_frames","provider_auth_mode":"api_key","run_id":"run_id-2"}
 {"count":45,"dropped_chunks":0,"elapsed_ms":0,"event":"mic.completed","input_samples":14400,"provider_auth_mode":"api_key","received_chunks":15,"run_id":"run_id-2","tail_samples":0}
+{"count":45,"elapsed_ms":0,"event":"mic.frames","phase":"completed","provider_auth_mode":"api_key","run_id":"run_id-2"}
 {"elapsed_ms":0,"event":"wyoming.run_ended","provider_auth_mode":"api_key","run_id":"run_id-2"}
