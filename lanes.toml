@@ -74,3 +74,8 @@ kind = "bin"
 name = "echo-chatgpt-auth"
 path = "crates/echo-chatgpt-auth"
 kind = "lib"
+
+[[crate]]
+name = "echo-delegation"
+path = "crates/echo-delegation"
+kind = "lib"

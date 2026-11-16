@@ -719,6 +719,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-delegation"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-api",
+ "echo-agent-loop",
+ "echo-config",
+ "echo-contracts",
+ "echo-live",
+ "echo-mcp-client",
+ "echo-spoof-mcp",
+ "reqwest",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "echo-lab"
 version = "0.1.0"
 dependencies = [

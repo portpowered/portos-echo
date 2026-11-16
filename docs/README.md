@@ -72,3 +72,5 @@ Both modes compile every actual Mermaid block in tracked Markdown.
 Add each new tracked documentation page to this index in the same change.
 
 - [Stateless MCP HTTP transport](adr/0006-mcp-http.md)
+
+- [Bridge-hosted delegation runner](adr/0007-echo-delegation.md)
