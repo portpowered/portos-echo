@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 pub(super) struct Screen {
     server: Option<ScreenServer>,
     states: Option<mpsc::Sender<UiState>>,
+    actions: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Screen {
@@ -22,6 +23,7 @@ impl Screen {
             return Ok(Self {
                 server: None,
                 states: None,
+                actions: None,
             });
         };
         let bind = loopback(&config.listen.to_string(), true)?;
@@ -46,6 +48,7 @@ impl Screen {
         let screen = Self {
             server: Some(server),
             states: Some(states),
+            actions: None,
         };
         screen.ready()?;
         Ok(screen)
@@ -64,10 +67,52 @@ impl Screen {
         })
     }
 
+    pub fn supervise_actions(&mut self, health: tokio::sync::watch::Receiver<crate::bridge_health::Links>) {
+        let (Some(server), Some(states)) = (&mut self.server, &self.states) else {
+            return;
+        };
+        let mut actions = std::mem::replace(&mut server.actions, mpsc::channel(1).1);
+        let states = states.clone();
+        self.actions = Some(tokio::spawn(async move {
+            while let Some(action) = actions.recv().await {
+                if action == echo_screen_contract::UiAction::Relink && health.borrow().relink_required {
+                    // This is an instruction, never an implicit sign-in request.
+                    if states.send(failure_state(true)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }));
+    }
+
     pub async fn close(&mut self) -> Result<(), Error> {
+        if let Some(task) = self.actions.take() {
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(server) = &mut self.server {
             server.shutdown().await.map_err(|_| Error::Screen)?;
         }
         Ok(())
+    }
+}
+
+impl Drop for Screen {
+    fn drop(&mut self) {
+        if let Some(task) = &self.actions {
+            task.abort();
+        }
+    }
+}
+
+pub(super) fn failure_state(relink: bool) -> UiState {
+    UiState::Error {
+        message: if relink {
+            "Run echo-bridge signin with your config, then restart the bridge."
+        } else {
+            "Conversation unavailable. Try another wake."
+        }
+        .into(),
+        relink,
     }
 }

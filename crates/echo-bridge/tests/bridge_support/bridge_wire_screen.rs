@@ -2,7 +2,7 @@
 use super::*;
 use tokio::net::{TcpListener, TcpStream};
 
-fn setup(directory: &Path, port: u16) {
+pub(super) fn setup(directory: &Path, port: u16) {
     let path = bridge_wire_auth::config(directory, "api_key", "");
     let content = std::fs::read_to_string(&path)
         .unwrap()
@@ -17,7 +17,7 @@ fn setup(directory: &Path, port: u16) {
     .unwrap();
 }
 
-fn run_command(directory: &Path, origin: &str) -> Command {
+pub(super) fn run_command(directory: &Path, origin: &str) -> Command {
     bridge_wire_auth::command(
         directory,
         &[
@@ -35,7 +35,7 @@ fn run_command(directory: &Path, origin: &str) -> Command {
     )
 }
 
-async fn stream(address: &str) -> Lines<BufReader<TcpStream>> {
+pub(super) async fn stream(address: &str) -> Lines<BufReader<TcpStream>> {
     let mut socket = TcpStream::connect(address).await.unwrap();
     socket
         .write_all(b"GET /events?token=synthetic-screen-pair HTTP/1.1\r\nHost: local\r\n\r\n")
@@ -46,7 +46,7 @@ async fn stream(address: &str) -> Lines<BufReader<TcpStream>> {
     lines
 }
 
-async fn state(lines: &mut Lines<BufReader<TcpStream>>) -> Value {
+pub(super) async fn state(lines: &mut Lines<BufReader<TcpStream>>) -> Value {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let line = lines.next_line().await.unwrap().unwrap();

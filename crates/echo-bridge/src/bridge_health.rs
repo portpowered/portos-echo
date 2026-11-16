@@ -15,6 +15,8 @@ use tokio::{
 pub struct Links {
     pub wyoming: &'static str,
     pub live: &'static str,
+    pub relink_required: bool,
+    pub kill_switch: bool,
 }
 
 impl Default for Links {
@@ -22,6 +24,8 @@ impl Default for Links {
         Self {
             wyoming: "connecting",
             live: "idle",
+            relink_required: false,
+            kill_switch: false,
         }
     }
 }
@@ -104,7 +108,9 @@ pub fn response(request: &[u8], links: Links) -> String {
         (
             "200 OK",
             "",
-            serde_json::json!({"status":"running", "wyoming":links.wyoming,"live":links.live}).to_string(),
+            serde_json::json!({"status":"running", "wyoming":links.wyoming,"live":links.live,
+                "relink_required":links.relink_required,"kill_switch":links.kill_switch})
+            .to_string(),
         )
     };
     format!(

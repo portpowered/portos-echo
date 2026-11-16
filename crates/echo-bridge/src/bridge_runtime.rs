@@ -1,6 +1,7 @@
 //! One Live call owner drives WebRTC while Wyoming owns its bounded wire queues.
 mod bridge_lifecycle;
 mod bridge_pacing;
+mod bridge_relink;
 mod bridge_screen;
 mod journey;
 
@@ -35,6 +36,7 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
     )?;
     let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
     let health = Health::bind(settings.health).await?;
+    screen.supervise_actions(health.state.subscribe());
     trace.record(
         "bridge.started",
         None,
@@ -101,31 +103,30 @@ async fn observe(
     let mut sequence = 0_u64;
     loop {
         let run = conversation.wake(client, events, health, trace).await?;
-        screen.publish(echo_screen_contract::UiState::Listening)?;
         sequence += 1;
         let id = format!("run-{sequence}");
         trace.record("wyoming.run_started", Some(&id), json!({}))?;
         trace.record("run.started", Some(&id), json!({}))?;
-        if conversation.call.is_none() {
-            health.state.send_modify(|state| state.live = "connecting");
-            conversation.call = Some(create(factory, options, &id).await?);
+        if health.state.borrow().relink_required {
+            trace.record("run.refused", Some(&id), json!({"reason":"relink_required"}))?;
+            continue;
         }
-        health.state.send_modify(|state| state.live = "connected");
-        let call = conversation.call.as_mut().ok_or(Error::Unavailable)?;
-        let result = journey::run(
+        screen.publish(echo_screen_contract::UiState::Listening)?;
+        let result = turn(
             client,
             events,
             run,
-            call,
+            factory,
+            &mut conversation,
             trace,
-            &id,
-            (options.lab, options.reply_lead_ms, conversation.sent, screen),
+            (health, options, screen, &id),
         )
         .await;
-        health
-            .state
-            .send_modify(|state| state.live = if result.is_ok() { "idle" } else { "error" });
-        let (sent, reusable) = result?;
+        if result.is_err() {
+            health.state.send_modify(|state| state.live = "error");
+        }
+        let Some((sent, reusable)) = result? else { continue };
+        health.state.send_modify(|state| state.live = "idle");
         if reusable {
             conversation.completed(sent);
         } else {
@@ -134,6 +135,41 @@ async fn observe(
         screen.ready()?;
         publish("bridge.run_completed", Some(&id))?;
     }
+}
+
+async fn turn(
+    client: &WyomingClient,
+    events: &mut EventStream,
+    run: echo_wyoming::Run,
+    factory: &LiveCallFactory<Provider>,
+    conversation: &mut bridge_lifecycle::Conversation,
+    trace: &mut Trace,
+    context: (&Health, &Settings, &bridge_screen::Screen, &str),
+) -> Result<Option<(u64, bool)>, Error> {
+    let (health, options, screen, id) = context;
+    if conversation.call.is_none() {
+        health.state.send_modify(|state| state.live = "connecting");
+        conversation.call = match create(factory, options, id).await {
+            Ok(call) => Some(call),
+            Err(error) => {
+                bridge_relink::failure(error, options.lab, health, trace, screen, id)?;
+                return Ok(None);
+            }
+        };
+    }
+    health.state.send_modify(|state| state.live = "connected");
+    let call = conversation.call.as_mut().ok_or(Error::Unavailable)?;
+    journey::run(
+        client,
+        events,
+        run,
+        call,
+        trace,
+        id,
+        (options.lab, options.reply_lead_ms, conversation.sent, screen),
+    )
+    .await
+    .map(Some)
 }
 
 async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &str) -> Result<LiveCall, Error> {

@@ -2,7 +2,7 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
-fn token() -> String {
+pub(super) fn token() -> String {
     let claims = json!({
         "exp": 4_000_000_000_u64,
         "https://api.openai.com/auth": {"chatgpt_account_id":"synthetic-account-1234"}, // lint-rules: allow-literal inert JWT claim key
@@ -35,7 +35,7 @@ pub(super) fn command(directory: &Path, args: &[&str]) -> Command {
     command
 }
 
-async fn invoke(directory: &Path, args: &[&str], code: i32, stdout: &str) {
+pub(super) async fn invoke(directory: &Path, args: &[&str], code: i32, stdout: &str) {
     let output = tokio::time::timeout(Duration::from_secs(10), command(directory, args).output())
         .await
         .unwrap()
@@ -205,7 +205,7 @@ async fn bridge_wire_auth_device_signin_commits_isolated_credential() {
     .await;
 }
 
-async fn request(stream: &mut tokio::net::TcpStream) -> String {
+pub(super) async fn request(stream: &mut tokio::net::TcpStream) -> String {
     let mut bytes = Vec::new();
     while !bytes.ends_with(b"\r\n\r\n") {
         bytes.push(stream.read_u8().await.unwrap());
@@ -281,7 +281,8 @@ async fn bridge_wire_auth_configured_live_uses_selected_provider() {
             .await
             .unwrap()
             .unwrap();
-        bridge.finish(1).await;
+        super::bridge_wire_auth_failure::wait_event(&directory.path().join("trace"), "auth.relink_required").await;
+        bridge.finish(0).await;
         assert_configured_headers(&observer, mode, directory.path());
         drop(stream);
         fake.shutdown().await;
@@ -322,7 +323,7 @@ fn assert_configured_headers(observer: &echo_live::fake::FakeObserver, mode: &st
     );
 }
 
-async fn prepare_configured_credential(directory: &Path, mode: &str) {
+pub(super) async fn prepare_configured_credential(directory: &Path, mode: &str) {
     if mode == "chatgpt" {
         let source = json!({"tokens":{"access_token":token(),"refresh_token":"synthetic-refresh",
                 "account_id":"synthetic-account-1234"},"last_refresh":"2096-01-01T00:00:00Z"});

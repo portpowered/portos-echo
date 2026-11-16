@@ -26,6 +26,8 @@ mod bridge_short;
 mod bridge_spine_edges;
 #[path = "bridge_support/bridge_wire_auth.rs"]
 mod bridge_wire_auth;
+#[path = "bridge_support/bridge_wire_auth_failure.rs"]
+mod bridge_wire_auth_failure;
 #[path = "bridge_support/bridge_wire_screen.rs"]
 mod bridge_wire_screen;
 
@@ -182,7 +184,7 @@ async fn assert_health(address: &str) {
     let response = health(address, "GET", "/healthz").await;
     assert_eq!(
         serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap(),
-        json!({"status":"running","wyoming":"connected","live":"idle"})
+        json!({"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false})
     );
     assert!(
         health(address, "POST", "/healthz")

@@ -163,7 +163,7 @@ async fn bridge_spine_partial_headers_are_bounded_and_eof_cancels_call_setup() {
     let response = health(address, "GET", "/healthz").await;
     assert_eq!(
         serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap(),
-        json!({"status":"running","wyoming":"connected","live":"connecting"})
+        json!({"status":"running","wyoming":"connected","live":"connecting","relink_required":false,"kill_switch":false})
     );
     bridge.finish(0).await;
     assert!(tokio::net::TcpStream::connect(address).await.is_err());

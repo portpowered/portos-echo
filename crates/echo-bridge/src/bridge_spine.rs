@@ -81,12 +81,13 @@ fn bridge_spine_health_has_exact_states_methods_and_empty_errors() {
     let state = Links {
         wyoming: "connected",
         live: "idle",
+        ..Links::default()
     };
     let reply = response(b"GET /healthz HTTP/1.1\r\n\r\n", state);
     let body = reply.split_once("\r\n\r\n").unwrap().1;
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(body).unwrap(),
-        json!({"status":"running","wyoming":"connected","live":"idle"})
+        json!({"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false})
     );
     assert_eq!(
         response(b"POST /healthz HTTP/1.1\r\n\r\n", state),
