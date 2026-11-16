@@ -75,7 +75,7 @@ client id is `echo-lab`, with scope `endpoint:read`.
 The owner selects pending, approved or denied through `approve`, and advances
 fixture UTC explicitly with `advance`. Advance the bridge's paused clock by
 the same amount; socket readiness must never automatically advance either
-clock. `counts` reports successful links, polls, successful rotations, rejected
+clock. `counts` reports device authorizations, polls, successful rotations, rejected
 refresh replays and revokes without exposing credentials. Close the spoof and
 then `shutdown` the fixture to join both listeners.
 
@@ -109,6 +109,25 @@ cancellation after remote rotation; the owner must block further refresh and
 never publish an uncertain completion. All state is in isolated temporary
 directories outside the repository. These tests do not use `hassmic-host` or
 produce the M5 scenario report; those remain separate acceptance evidence.
+
+`echo_lab::lab_mcp::Observations` binds M5 measurements to those independent
+boundaries. Feed complete bridge trace records once and call `restarted` only
+after collecting an actual prior bridge process. Operation IDs are scoped to
+each process. Feed paired screen states and the delegated model's actual
+requests through `screen` and `model`; model call IDs are scoped to delegation,
+and repeated conversation history does not duplicate a result. `measure`
+reconciles lifecycle completions with authorization counts and the signed-spoof
+snapshot, returning the same `LinkCounts` type used by the report oracle.
+
+A spoof arrival is not a successful tool result: injected failures also record
+arrivals. Only the exact returned `m5-linked` tool output counts as a success,
+and it must have a corresponding admitted spoof dispatch. Restart evidence
+requires both a reload observation and successful use in the new process.
+Repeated identical relink screen states count as one transition. Malformed or
+contradictory trace/model observations latch a fixed diagnostic across restarts.
+Pending/denied authorizations and uncertain rotations never infer completions.
+The strict delivered-bridge witness exercises this binding;
+the pinned-host driver and authored M5 scenario remain separate unfinished work.
 
 ## Device runner
 

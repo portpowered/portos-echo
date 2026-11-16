@@ -1,8 +1,10 @@
 //! Strict section-9 authorization counterpart for isolated T3 M5 sessions.
 //! The scenario owns approval and fake UTC; no real principal or service exists.
+mod mcp_observations;
 mod mcp_proof;
 mod mcp_routes;
 mod mcp_tokens;
+pub use mcp_observations::{LinkCounts, Observations};
 
 use echo_contracts::secret::Secret;
 use echo_spoof_mcp::BearerValidator;

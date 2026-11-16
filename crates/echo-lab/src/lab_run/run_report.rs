@@ -6,19 +6,7 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
-/// Successful observed lifecycle outcomes, separate from attempted requests.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LinkCounts {
-    pub link: u64,
-    pub tools_list: u64,
-    pub tool_call: u64,
-    pub forced_refresh: u64,
-    pub replay_rejected: u64,
-    pub relink_error: u64,
-    pub restart_grant_kept: u64,
-    pub unlink: u64,
-}
+pub use echo_lab::lab_mcp::LinkCounts;
 
 pub struct Artifacts {
     pub sim: bool,

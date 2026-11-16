@@ -2,7 +2,7 @@
 //! Controlled Wyoming is a component boundary, not the pinned-host M5 scenario.
 use super::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-use echo_lab::lab_mcp::{Approval, Counts, Fixture};
+use echo_lab::lab_mcp::{Approval, Counts, Fixture, LinkCounts, Observations};
 use echo_spoof_mcp::BearerValidator;
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 
@@ -165,10 +165,13 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
         let mut session = h.start(true).await;
         let initial = h.link(&mut session).await;
         h.rotate(&initial, 2).await;
+        let mut observations = Observations::default();
+        let first_process = observe_trace(&mut observations, &h.path(), 0);
         // Completed CLI is the durable-rotation barrier, before any resource use.
         session.process.child.kill().await.unwrap();
         assert!(!session.process.child.wait().await.unwrap().success());
         drop(session);
+        observations.restarted();
         let mut restarted = h.start(false).await;
         assert_eq!(bridge_short::read(&mut restarted.satellite).await.0["type"], "describe");
         bridge_short::send(
@@ -188,17 +191,14 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
             .await
             .unwrap();
         assert_success(&h);
-        assert_eq!(
-            serde_json::from_str::<Value>(&h.live.commentary.recv().await.unwrap()).unwrap(),
-            json!({"type":"session.commentary.append","delegation_id":"m5-linked","text":"m5-linked"})
-        );
+        assert_commentary(&mut h).await;
         replay(&h, &initial).await;
         // A distinct delegated task on the retained Live call must reach MCP.
         h.live.events.send(event("m5-replayed", "client")).await.unwrap();
         journey::reach(&mut restarted.process, &h.path(), "mcp.relink_required")
             .await
             .unwrap();
-        assert_relink(&mut restarted.screen).await;
+        observations.screen(&assert_relink(&mut restarted.screen).await);
         journey::reach(&mut restarted.process, &h.path(), "mcp.run.failed")
             .await
             .unwrap();
@@ -218,9 +218,17 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
         restarted.process.finish(0).await;
         satellite.await.unwrap();
         assert_replayed(&h);
+        assert_measurements(&h, &mut observations, first_process);
         h.close().await;
     })
     .await;
+}
+
+async fn assert_commentary(h: &mut Harness) {
+    assert_eq!(
+        serde_json::from_str::<Value>(&h.live.commentary.recv().await.unwrap()).unwrap(),
+        json!({"type":"session.commentary.append","delegation_id":"m5-linked","text":"m5-linked"})
+    );
 }
 
 fn assert_success(h: &Harness) {
@@ -330,17 +338,48 @@ async fn mcp_link_strict_healthy_unlink_revokes_once_and_refuses_resource_use() 
     .await;
 }
 
-async fn assert_relink(screen: &mut Lines<BufReader<TcpStream>>) {
+async fn assert_relink(screen: &mut Lines<BufReader<TcpStream>>) -> echo_screen_contract::UiState {
     let expected =
         json!({"state":"error","message":"Run echo-bridge link with your config to relink Port OS MCP.","relink":true});
     loop {
         let state = bridge_wire_screen::state(screen).await;
         if state["state"] == "error" {
             assert_eq!(state, expected);
-            break;
+            return serde_json::from_value(state).unwrap();
         }
         assert_eq!(state, json!({"state":"listening"}));
     }
+}
+
+fn observe_trace(observations: &mut Observations, path: &Path, offset: usize) -> usize {
+    let records = trace(path);
+    for record in &records[offset..] {
+        observations.trace(record).unwrap();
+    }
+    records.len()
+}
+
+fn assert_measurements(h: &Harness, observations: &mut Observations, offset: usize) {
+    observe_trace(observations, &h.path(), offset);
+    for request in h.model.requests.lock().unwrap().iter() {
+        observations.model("m5-linked", &request.body).unwrap();
+    }
+    let actual = observations
+        .measure(h.fixture.counts().unwrap(), &h.spoof.snapshot().unwrap())
+        .unwrap();
+    assert_eq!(
+        actual,
+        LinkCounts {
+            link: 1,
+            tools_list: 1,
+            tool_call: 1,
+            forced_refresh: 2,
+            replay_rejected: 1,
+            relink_error: 1,
+            restart_grant_kept: 1,
+            unlink: 1,
+        }
+    );
 }
 
 async fn replay(h: &Harness, initial: &Value) {
