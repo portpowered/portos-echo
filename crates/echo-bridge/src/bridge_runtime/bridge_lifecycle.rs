@@ -81,7 +81,9 @@ impl Conversation {
                     continue;
                 }
             };
-            if let Some(run) = select_wake(event)? {
+            let event = event.ok_or(Error::Wyoming)?;
+            let muted = kill.screen.observe(&event, trace)?;
+            if let Some(run) = select_wake(Some(event))?.filter(|_| !muted) {
                 if self.expired() {
                     self.close("idle", trace)?;
                 }
@@ -141,7 +143,7 @@ fn observe_link(connected: bool, health: &Health, trace: &mut Trace) -> Result<(
 pub(super) fn select_wake<R>(event: Option<LinkEvent<R>>) -> Result<Option<R>, Error> {
     match event.ok_or(Error::Wyoming)? {
         LinkEvent::Wake(run) => Ok(Some(run)),
-        LinkEvent::Played | LinkEvent::Other => Ok(None),
+        LinkEvent::Played | LinkEvent::Other | LinkEvent::Mute(_) => Ok(None),
     }
 }
 

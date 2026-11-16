@@ -317,3 +317,56 @@ fn microphone_counts_are_unsigned_observations_and_invalidity_is_sticky() {
         assert_eq!(trace.records[0]["count"], count);
     }
 }
+
+#[test]
+fn muted_frame_oracle_accepts_only_measured_zero_and_rejects_one_missing_stale_or_duplicate() {
+    let selectors = selectors::parse(&[json!(
+        "mic.mute_window {window_id: mute-2, received_frames: 0, forwarded_frames: 0}"
+    )])
+    .unwrap();
+    let zero = json!({"event":"mic.mute_window","window_id":"mute-2","received_frames":0,"forwarded_frames":0});
+    assert_eq!(
+        selectors::check(std::slice::from_ref(&zero), &selectors, Some("previous-run")),
+        Ok(())
+    );
+    for field in ["received_frames", "forwarded_frames"] {
+        let mut one = zero.clone();
+        one[field] = json!(1);
+        let error = selectors::check(&[one], &selectors, None).unwrap_err();
+        assert!(
+            error.contains(field) && error.contains("expected 0, observed 1"),
+            "{error}"
+        );
+        let mut absent = zero.clone();
+        absent.as_object_mut().unwrap().remove(field);
+        assert!(
+            selectors::check(&[absent], &selectors, None)
+                .unwrap_err()
+                .contains("missing or invalid")
+        );
+    }
+    assert!(
+        selectors::check(&[], &selectors, None)
+            .unwrap_err()
+            .contains("observed 0")
+    );
+    let mut stale = zero.clone();
+    stale["window_id"] = json!("mute-1");
+    assert!(
+        selectors::check(&[stale], &selectors, None)
+            .unwrap_err()
+            .contains("observed 0")
+    );
+    assert!(
+        selectors::check(&[zero.clone(), zero], &selectors, None)
+            .unwrap_err()
+            .contains("observed 2")
+    );
+    for invalid in [
+        "mic.mute_window {}",
+        "mic.mute_window {window_id: mute-2, received_frames: 0}",
+        "mic.mute_window {window_id: mute-2, received_frames: 0, forwarded_frames: 1}",
+    ] {
+        assert!(selectors::Selector::parse(invalid).is_err());
+    }
+}

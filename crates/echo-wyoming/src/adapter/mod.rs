@@ -20,9 +20,11 @@ struct Connector {
 impl LinkConnector for Connector {
     type Link = WyomingClient;
     async fn connect(&self) -> Result<Self::Link, Error> {
-        WyomingClient::connect(self.addr, self.options.clone())
+        let mut client = WyomingClient::connect(self.addr, self.options.clone())
             .await
-            .map_err(error)
+            .map_err(error)?;
+        client.neutral_barrier = true;
+        Ok(client)
     }
 }
 fn error(value: crate::Error) -> Error {
@@ -71,25 +73,8 @@ impl MicrophoneRun for Run {
         }
     }
 }
-impl LinkEvents for EventStream {
-    type Run = Run;
-    async fn recv(&mut self) -> Result<Option<LinkEvent<Run>>, Error> {
-        EventStream::recv(self)
-            .await
-            .map(|event| {
-                event.map(|event| {
-                    if let Some(run) = event.run {
-                        LinkEvent::Wake(run)
-                    } else if matches!(event.event, WyomingEvent::Played(_)) {
-                        LinkEvent::Played
-                    } else {
-                        LinkEvent::Other
-                    }
-                })
-            })
-            .map_err(error)
-    }
-}
+mod mute_events;
+pub use mute_events::Events;
 /// The existing bounded producer with neutral send errors.
 pub struct Sink(mpsc::Sender<Vec<u8>>);
 impl ReplySink for Sink {
@@ -98,11 +83,12 @@ impl ReplySink for Sink {
     }
 }
 impl EchoLink for WyomingClient {
-    type Events = EventStream;
+    type Events = Events;
     type ReplySink = Sink;
     type ReplySource = mpsc::Receiver<Vec<u8>>;
-    fn events(&mut self) -> Result<EventStream, Error> {
-        Self::events(self).map_err(error)
+    fn events(&mut self) -> Result<Events, Error> {
+        let barrier = self.neutral_barrier;
+        Ok(Events::new(Self::events(self).map_err(error)?, barrier))
     }
     fn reply_channel(&self, capacity: NonZeroUsize) -> (Self::ReplySink, Self::ReplySource) {
         let (tx, rx) = mpsc::channel(capacity.get());
@@ -149,3 +135,6 @@ mod echo_link_tests;
 
 #[cfg(test)]
 mod echo_link_recovery;
+
+#[cfg(test)]
+mod mute_tests;

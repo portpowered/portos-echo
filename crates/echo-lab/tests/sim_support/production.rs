@@ -55,3 +55,55 @@ fn m1_prefix_selects_production_and_observes_ready_before_a_complete_wake() {
     assert!(!events.contains("synthetic-local-api"));
     assert!(!events.contains("synthetic-local-screen"));
 }
+
+#[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host"]
+fn m1_native_muted_say_measures_zero_and_unmuted_next_wake_streams() {
+    let session = Session::new();
+    session.scenario(
+        json!([
+            {"expect_screen":{"state":"ready","message":"Echo Live ready"}},
+            {"say":"fixture.pcm"},
+            {"expect_trace":["wyoming.run_started","wyoming.mic_frames {count_gte: 10}","wyoming.run_ended"]},
+            {"press":"mute"}, {"expect_screen":{"state":"muted"}},
+            {"say":"fixture.pcm"}, {"press":"mute"},
+            {"expect_screen":{"state":"ready","message":"Echo Live ready"}},
+            {"expect_trace":["mic.mute_window {window_id: mute-1, received_frames: 0, forwarded_frames: 0}"]},
+            {"say":"fixture.pcm"},
+            {"expect_trace":["wyoming.run_started","wyoming.mic_frames {count_gte: 10}","wyoming.run_ended"]}
+        ]),
+        json!({}),
+    );
+    let output = session
+        .command(
+            std::path::Path::new(env!("CARGO_BIN_EXE_echo-lab"))
+                .parent()
+                .unwrap()
+                .join(if cfg!(windows) {
+                    "echo-bridge.exe"
+                } else {
+                    "echo-bridge"
+                })
+                .to_str()
+                .unwrap(),
+        )
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = session.report();
+    assert_eq!(report["result"], "pass");
+    assert_eq!(report["checks"].as_object().unwrap().len(), 12);
+    assert!(report["checks"].as_object().unwrap().values().all(|v| v == true));
+    let observations = report["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 2);
+    for (index, observation) in observations.iter().enumerate() {
+        assert_eq!(observation["run_id"], format!("run-{}", index + 1));
+        assert!(observation["count"].as_u64().unwrap() >= 10);
+    }
+    assert!(!session.0.join("artifacts/configured.private").exists());
+}

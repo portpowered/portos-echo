@@ -37,6 +37,18 @@ impl Selector {
             .remove("count_gte")
             .map(|v| v.as_u64().ok_or("trace selector: invalid count_gte"))
             .transpose()?;
+        if name == "mic.mute_window"
+            && (fields
+                .get("window_id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+                || fields.get("received_frames") != Some(&Value::from(0))
+                || fields.get("forwarded_frames") != Some(&Value::from(0))
+                || occurrences != 1
+                || frames.is_some())
+        {
+            return Err("mute window selector requires window_id, received_frames: 0 and forwarded_frames: 0".into());
+        }
         if fields.iter().any(|(key, value)| {
             key == "event"
                 || key.ends_with("_gte")
@@ -85,11 +97,17 @@ pub fn check(records: &[Value], selectors: &[Selector], run: Option<&str>) -> Re
     let mut cursor = 0;
     let mut correlated = run.map(str::to_owned);
     for (index, selector) in selectors.iter().enumerate() {
+        let mute_window = selector.event == "mic.mute_window";
+        if mute_window {
+            muted_frame_oracle(records, &selector.fields["window_id"])?;
+        }
+
         let candidates = records
             .iter()
             .enumerate()
             .filter(|(_, r)| {
-                selector.matches(r) && correlated.as_deref().is_none_or(|id| r["run_id"].as_str() == Some(id))
+                selector.matches(r)
+                    && (mute_window || correlated.as_deref().is_none_or(|id| r["run_id"].as_str() == Some(id)))
             })
             .collect::<Vec<_>>();
         if candidates.len() != selector.occurrences {
@@ -111,6 +129,30 @@ pub fn check(records: &[Value], selectors: &[Selector], run: Option<&str>) -> Re
             if correlated.is_none() {
                 correlated = last["run_id"].as_str().map(str::to_owned);
             }
+        }
+    }
+    Ok(())
+}
+
+// A no-run privacy window must carry explicit, fresh measurements. Missing
+// values are never interpreted as zero, and duplicate IDs are ambiguous.
+fn muted_frame_oracle(records: &[Value], window: &Value) -> Result<(), String> {
+    let matching: Vec<_> = records
+        .iter()
+        .filter(|r| r["event"] == "mic.mute_window" && &r["window_id"] == window)
+        .collect();
+    if matching.len() != 1 {
+        return Err(format!(
+            "mute window {window}: expected 1 measurement, observed {}",
+            matching.len()
+        ));
+    }
+    for field in ["received_frames", "forwarded_frames"] {
+        let count = matching[0][field]
+            .as_u64()
+            .ok_or_else(|| format!("mute window {window}: missing or invalid {field}"))?;
+        if count != 0 {
+            return Err(format!("mute window {window} {field}: expected 0, observed {count}"));
         }
     }
     Ok(())

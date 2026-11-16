@@ -39,6 +39,8 @@ pub enum Error {
 pub enum LinkEvent<R> {
     Wake(R),
     Played,
+    /// Effective device mute, ordered with wake and playback events.
+    Mute(bool),
     Other,
 }
 /// Queued chunks drain before EOF or a terminal error.
@@ -47,6 +49,9 @@ pub trait MicrophoneRun: Send {
     fn wake_phrase(&self) -> &str;
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.
+    /// Device mute ends capture at its wire boundary. Pre-mute frames drain,
+    /// then recv returns Ok(None) before the matching Mute(true) is delivered.
+    /// Post-mute frames are never yielded and count in `RunStats::dropped`.
     fn recv(&mut self) -> impl Future<Output = Result<Option<MicFrame>, Error>> + Send;
     /// Received and evicted microphone chunks for this run only.
     fn stats(&self) -> RunStats;
@@ -99,6 +104,8 @@ pub trait EchoLink: Send + Sync {
     fn close(&self) -> impl Future<Output = Result<(), Error>> + Send;
 }
 /// Composition boundary; the adapter owns retries and reconnect registration.
+/// Each connection starts unmuted. A muted device supplies Mute(true) first;
+/// absence of a mute snapshot means unmuted. Handshake barriers stay in adapters.
 pub trait LinkConnector: Send + Sync {
     type Link: EchoLink;
     /// # Errors

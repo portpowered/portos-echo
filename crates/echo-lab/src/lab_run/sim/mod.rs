@@ -60,8 +60,7 @@ impl<'a> Sim<'a> {
                         if data.is_empty() || data.len() % 2 != 0 {
                             return Err("say: invalid PCM fixture".into());
                         }
-                        self.world.control(&json!({"action":"say", "pcm":data})).await?;
-                        self.world.complete_run().await
+                        say(&mut self.world, &data).await
                     }
                     Step::Press(action) => {
                         self.world.control(&json!({"action":action})).await?;
@@ -126,6 +125,17 @@ impl<'a> Sim<'a> {
             }
         }
         failures
+    }
+}
+
+async fn say(world: &mut World, data: &[u8]) -> Result<(), String> {
+    world.control(&json!({"action":"say", "pcm":data})).await?;
+    if world.screen.as_ref().is_some_and(production::Screen::muted) {
+        // Capture consumption is acknowledged by the host. Only the explicit
+        // bridge mute-window measurement can prove received/forwarded zero.
+        world.observe().await
+    } else {
+        world.complete_run().await
     }
 }
 

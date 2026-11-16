@@ -362,7 +362,12 @@ The committed `sim_host` M1 prefix test currently proves Ready and one wake only
 It does not claim the complete M1 scenario, mute latch or restart counts.
 Its existing FakeLive boundary sends a synthetic `response.audio.done`; this
 proves Wyoming capture at the bridge, not provider behavior or a spoken reply.
-Mute and restart steps remain implementation work in this lane.
+Mute steps use the real producer and bridge guard. The complete M1 scenario,
+reconnect generation handling, restart groups and aggregate report remain
+implementation work in this lane. The production sim configuration uses the
+existing zero-second session idle policy: each wake gets a fresh FakeLive call
+whose script emits one response completion. Call reuse has separate bridge
+component coverage.
 
 The runner replaces these variables for each child:
 
@@ -408,6 +413,13 @@ For example `wyoming.mic_frames {count_gte: 10}` checks the numeric frame payloa
 `count` defaults to one occurrence. Matching remains within the current run;
 unrelated events may intervene. Finalization checks exact counts again, so a
 late duplicate fails its earlier step. Unknown operators and invalid types fail.
+`mic.mute_window {window_id: mute-1, received_frames: 0, forwarded_frames: 0}`
+checks a bridge measurement independent of the previous wake's run ID. Both
+explicit counts must be zero; missing, stale or duplicate windows fail. A seeded
+forwarded count of one fails with `forwarded_frames: expected 0, observed 1`.
+A `say` after observed Muted waits for native capture consumption without
+waiting for a nonexistent run. Only the bridge measurement, emitted on unmute,
+proves zero microphone traffic.
 
 `expect_screen: {state: speaking}` compares selected fields against the latest
 complete typed `echo_screen_contract::UiState`. Wrong, missing or malformed

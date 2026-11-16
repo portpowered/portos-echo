@@ -159,3 +159,219 @@ async fn bridge_wire_screen_startup_failure_never_readies_or_dials() {
         assert!(tokio::time::timeout(Duration::ZERO, listener.accept()).await.is_err());
     }
 }
+
+// T3: the public SSE stream is the consumption barrier; no sleeps or real account.
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_mute_snapshot_idle_stray_frames_and_unmute_are_measured() {
+    for initially_muted in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        setup(directory.path(), listener.local_addr().unwrap().port());
+        let mut bridge = Process::spawn(&mut run_command(directory.path(), "http://127.0.0.1:1"));
+        let mut satellite = listener.accept().await.unwrap().0;
+        assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
+        assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
+        if initially_muted {
+            bridge_short::send(&mut satellite, "hassmic-mute", json!({"muted":true})).await;
+        }
+        bridge_short::send(&mut satellite, "info", json!({})).await;
+        assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
+        let address = trace(&path).iter().find(|e| e["event"] == "screen.listening").unwrap()["address"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut events = stream(&address).await;
+        let initial = if initially_muted {
+            json!({"state":"muted"})
+        } else {
+            json!({"state":"ready","message":"Echo Live ready"})
+        };
+        assert_eq!(presentation(&mut events).await, json!({"seq":1,"state":initial}));
+        if !initially_muted {
+            bridge_short::send(&mut satellite, "hassmic-mute", json!({"muted":true})).await;
+            assert_eq!(state(&mut events).await, json!({"state":"muted"}));
+        }
+        bridge_short::send(&mut satellite, "hassmic-mute", json!({"muted":true})).await;
+        microphone_chunk(&mut satellite).await;
+        bridge_short::send(&mut satellite, "hassmic-mute", json!({"muted":false})).await;
+        assert_eq!(
+            state(&mut events).await,
+            json!({"state":"ready","message":"Echo Live ready"})
+        );
+        let windows: Vec<_> = trace(&path)
+            .into_iter()
+            .filter(|e| e["event"] == "mic.mute_window")
+            .collect();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0]["window_id"], "mute-1");
+        // Post-mute wire frames are suppressed inside the neutral adapter.
+        assert_eq!(windows[0]["received_frames"], 0);
+        assert_eq!(windows[0]["forwarded_frames"], 0);
+        assert_eq!(trace(&path).iter().filter(|e| e["event"] == "run.started").count(), 0);
+        bridge.finish(0).await;
+    }
+}
+
+async fn microphone_chunk(satellite: &mut TcpStream) {
+    use echo_contracts::wyoming::{Event, Header, encode};
+    satellite
+        .write_all(&encode(&Event {
+            header: Header {
+                r#type: "audio-chunk".into(),
+                data: Some(json!({"rate":16000,"width":2,"channels":1})),
+                data_length: 0,
+                payload_length: 640,
+            },
+            data: None,
+            payload: vec![0; 640],
+        }))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_mute_active_and_played_wait_never_forward_or_replace_muted() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    setup(directory.path(), listener.local_addr().unwrap().port());
+    let live = bridge_peer::Live::bind().await;
+    let mut bridge = Process::spawn(&mut run_command(directory.path(), &live.url));
+    let mut satellite = listener.accept().await.unwrap().0;
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
+    bridge_short::send(&mut satellite, "info", json!({})).await;
+    assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
+    let address = trace(&path).iter().find(|e| e["event"] == "screen.listening").unwrap()["address"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut events = stream(&address).await;
+    assert_eq!(
+        state(&mut events).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
+    bridge_short::send(
+        &mut satellite,
+        "run-pipeline",
+        json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"synthetic"}),
+    )
+    .await;
+    assert_eq!(state(&mut events).await, json!({"state":"listening"}));
+    assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-start");
+    bridge_short::send(&mut satellite, "hassmic-mute", json!({"muted":true})).await;
+    // Speaking may have already been published, but can never follow observed Muted.
+    loop {
+        if state(&mut events).await == json!({"state":"muted"}) {
+            break;
+        }
+    }
+    microphone_chunk(&mut satellite).await;
+    bridge_short::receive_short(&mut satellite, &live, &path, 3).await;
+    // Second chunk arrives while the owner is waiting for Played, rather than producing.
+    microphone_chunk(&mut satellite).await;
+    bridge_short::send(&mut satellite, "played", json!({})).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
+        json!({"event":"bridge.run_completed","run_id":"run-1"})
+    );
+    bridge_short::send(&mut satellite, "hassmic-mute", json!({"muted":false})).await;
+    assert_eq!(
+        state(&mut events).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
+    assert_muted_run(&path, &live);
+    bridge.finish(0).await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_mute_reconnect_resets_absent_snapshot_and_retains_muted_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    setup(directory.path(), listener.local_addr().unwrap().port());
+    let mut bridge = Process::spawn(&mut run_command(directory.path(), "http://127.0.0.1:1"));
+    let pid = bridge.child.id();
+    let mut satellite = listener.accept().await.unwrap().0;
+    handshake(&mut satellite, true).await;
+    assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
+    let address = trace(&path).iter().find(|e| e["event"] == "screen.listening").unwrap()["address"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut events = stream(&address).await;
+    assert_eq!(
+        presentation(&mut events).await,
+        json!({"seq":1,"state":{"state":"muted"}})
+    );
+    // A new socket with a muted snapshot must not transiently publish Ready.
+    drop(satellite);
+    satellite = listener.accept().await.unwrap().0;
+    reconnect_handshake(&mut satellite, true).await;
+    bridge_short::send(&mut satellite, "hassmic-mute", json!({"muted":false})).await;
+    assert_eq!(
+        presentation(&mut events).await,
+        json!({"seq":2,"state":{"state":"ready","message":"Echo Live ready"}})
+    );
+    bridge_short::send(&mut satellite, "hassmic-mute", json!({"muted":true})).await;
+    assert_eq!(
+        presentation(&mut events).await,
+        json!({"seq":3,"state":{"state":"muted"}})
+    );
+    // Absence of a snapshot on the next generation is explicitly unmuted.
+    drop(satellite);
+    satellite = listener.accept().await.unwrap().0;
+    reconnect_handshake(&mut satellite, false).await;
+    assert_eq!(
+        presentation(&mut events).await,
+        json!({"seq":4,"state":{"state":"ready","message":"Echo Live ready"}})
+    );
+    assert_eq!(bridge.child.id(), pid);
+    assert_eq!(
+        trace(&path).iter().filter(|e| e["event"] == "mic.mute_window").count(),
+        2
+    );
+    bridge.finish(0).await;
+}
+
+async fn handshake(satellite: &mut TcpStream, muted: bool) {
+    assert_eq!(bridge_short::read(satellite).await.0["type"], "run-satellite");
+    reconnect_handshake(satellite, muted).await;
+}
+async fn reconnect_handshake(satellite: &mut TcpStream, muted: bool) {
+    if muted {
+        bridge_short::send(satellite, "hassmic-mute", json!({"muted":true})).await;
+    }
+    // Recovery re-registers before the idle owner probes.
+    loop {
+        let kind = bridge_short::read(satellite).await.0["type"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if kind == "describe" {
+            break;
+        }
+        assert_eq!(kind, "run-satellite");
+    }
+    bridge_short::send(satellite, "info", json!({})).await;
+}
+
+fn assert_muted_run(path: &Path, live: &bridge_peer::Live) {
+    let entries = trace(path);
+    let window = entries.iter().find(|e| e["event"] == "mic.mute_window").unwrap();
+    assert_eq!(window["received_frames"], 0);
+    assert_eq!(
+        entries.iter().find(|e| e["event"] == "mic.completed").unwrap()["dropped_chunks"],
+        2
+    );
+    assert_eq!(window["forwarded_frames"], 0);
+    assert_eq!(
+        entries.iter().find(|e| e["event"] == "mic.completed").unwrap()["count"],
+        0
+    );
+    assert_eq!(live.microphone_frames.load(std::sync::atomic::Ordering::SeqCst), 0);
+}

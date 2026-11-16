@@ -22,6 +22,9 @@ pub fn configure(command: &mut Command, root: &Path, address: SocketAddr, live: 
         .replace("mode = \"chatgpt\"", "mode = \"api_key\"")
         .replace("voice = \"default\"", "voice = \"alloy\"")
         .replace("0.0.0.0:16900", "127.0.0.1:0") // lint-rules: allow-literal inert example replaced with loopback
+        // FakeLive's script completes one turn per call. Use the existing
+        // idle policy to give each wake a fresh controlled provider session.
+        .replace("session_idle_seconds = 120", "session_idle_seconds = 0")
         .replace("credentials/live.json", "credential")
         .replace("credentials/screen-pairing.txt", "pairing")
         .replace("http://127.0.0.1:18080/mcp", mcp);
@@ -82,6 +85,10 @@ impl Screen {
             return Err("screen: expected exactly one initial Echo Live ready presentation".into());
         }
         Ok(Self { socket, current })
+    }
+
+    pub fn muted(&self) -> bool {
+        self.current.state == echo_screen_contract::UiState::Muted
     }
 
     pub async fn expect(&mut self, expected: &Value) -> Result<(), String> {
