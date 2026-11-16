@@ -2,7 +2,6 @@
 use super::*;
 use echo_contracts::wyoming::{Event, Header, encode};
 use tokio::net::{TcpListener, TcpStream};
-
 pub(super) async fn send(stream: &mut (impl tokio::io::AsyncWrite + Unpin), kind: &str, data: Value) {
     stream
         .write_all(&encode(&Event {
@@ -18,18 +17,21 @@ pub(super) async fn send(stream: &mut (impl tokio::io::AsyncWrite + Unpin), kind
         .await
         .unwrap();
 }
-
 pub(super) async fn read(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> (Value, Vec<u8>) {
     let (header, bytes) = frame(stream).await.unwrap().unwrap();
     let length = usize::try_from(header["payload_length"].as_u64().unwrap_or(0)).unwrap();
     (header, bytes[bytes.len() - length..].to_vec())
 }
-
 async fn frame(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> std::io::Result<Option<(Value, Vec<u8>)>> {
     let mut bytes = Vec::new();
     loop {
         let mut byte = [0];
-        if stream.read(&mut byte).await? == 0 {
+        if stream
+            .read(&mut byte)
+            .await
+            .map_err(|error| if bytes.is_empty() { error } else { nonterminal(error) })?
+            == 0
+        {
             return if bytes.is_empty() {
                 Ok(None)
             } else {
@@ -51,10 +53,9 @@ async fn frame(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> std::io::Res
         .sum::<usize>();
     let start = bytes.len();
     bytes.resize(start + body, 0);
-    stream.read_exact(&mut bytes[start..]).await?;
+    stream.read_exact(&mut bytes[start..]).await.map_err(nonterminal)?;
     Ok(Some((header, bytes)))
 }
-
 pub(super) async fn read_reply(
     stream: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin),
 ) -> (Value, Vec<u8>) {
@@ -69,7 +70,6 @@ pub(super) async fn read_reply(
         send(stream, "info", json!({"satellite":{"name":"synthetic"}})).await;
     }
 }
-
 async fn short_reply(acknowledge: bool, frames: u16) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace");
@@ -79,7 +79,6 @@ async fn short_reply(acknowledge: bool, frames: u16) {
     receive_short(&mut stream, &live, &path, frames).await;
     complete(&mut stream, &mut bridge, &path, acknowledge).await;
 }
-
 pub(super) async fn satellite(url: &str, path: &Path) -> (Satellite, Process) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port().to_string();
@@ -88,7 +87,6 @@ pub(super) async fn satellite(url: &str, path: &Path) -> (Satellite, Process) {
     register(&mut stream, &mut bridge).await;
     (Satellite::new(stream), bridge)
 }
-
 pub(super) async fn register(
     stream: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin),
     bridge: &mut Process,
@@ -106,7 +104,6 @@ pub(super) async fn register(
     .unwrap();
     send(stream, "run-pipeline", row["header"]["data"].clone()).await;
 }
-
 pub(super) async fn receive_short(
     stream: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin),
     live: &bridge_peer::Live,
@@ -143,7 +140,6 @@ pub(super) async fn receive_short(
         previously_played
     );
 }
-
 async fn complete(
     stream: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin),
     bridge: &mut Process,
@@ -172,7 +168,6 @@ async fn complete(
         assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 0);
     }
 }
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_spine_short_reply_requires_real_played() {
@@ -180,7 +175,6 @@ async fn bridge_spine_short_reply_requires_real_played() {
         .await
         .unwrap();
 }
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_spine_missing_played_is_deadline_not_success() {
@@ -188,7 +182,6 @@ async fn bridge_spine_missing_played_is_deadline_not_success() {
         .await
         .unwrap();
 }
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_spine_burst_completion_drains_all_decode_batches_before_stop() {
@@ -196,7 +189,6 @@ async fn bridge_spine_burst_completion_drains_all_decode_batches_before_stop() {
         .await
         .unwrap();
 }
-
 // The observation queue is unbounded only for these finite synthetic workloads:
 // a caller withholding audio observations must never block control replies.
 use std::{
@@ -213,7 +205,6 @@ use tokio::{
 };
 type WriteOperation = Pin<Box<dyn Future<Output = std::io::Result<usize>> + Send>>;
 type Observation = std::io::Result<Vec<u8>>;
-
 pub(super) struct Satellite {
     writer: Arc<Mutex<OwnedWriteHalf>>,
     worker: Option<JoinHandle<()>>,
@@ -222,11 +213,19 @@ pub(super) struct Satellite {
     probes: watch::Receiver<u64>,
     buffered: std::io::Cursor<Vec<u8>>,
     writing: Option<WriteOperation>,
+    shutdown: Option<WriteOperation>,
+    shut: bool,
 }
-
 impl Satellite {
     pub(super) fn new(socket: TcpStream) -> Self {
+        Self::with_reader(socket, |reader| reader)
+    }
+    pub(super) fn with_reader<R: AsyncRead + Unpin + Send + 'static>(
+        socket: TcpStream,
+        wrap: impl FnOnce(tokio::net::tcp::OwnedReadHalf) -> R,
+    ) -> Self {
         let (reader, writer) = socket.into_split();
+        let reader = wrap(reader);
         let writer = Arc::new(Mutex::new(writer));
         let (events, receiver) = mpsc::unbounded_channel();
         let (controls, commands) = mpsc::unbounded_channel();
@@ -246,34 +245,36 @@ impl Satellite {
             probes: observed,
             buffered: std::io::Cursor::new(Vec::new()),
             writing: None,
+            shutdown: None,
+            shut: false,
         }
     }
-
     pub(super) async fn responding(&mut self, enabled: bool) {
         let (done, ack) = oneshot::channel();
         self.controls.send((enabled, done)).unwrap();
         ack.await.unwrap();
     }
-
     pub(super) fn pending_probe(&self) -> bool {
         self.probes.has_changed().unwrap()
     }
-
     pub(super) async fn probe(&mut self) -> u64 {
         self.probes.changed().await.unwrap();
         *self.probes.borrow_and_update()
     }
-
-    pub(super) async fn close(mut self) {
+    pub(super) fn worker_handle(&self) -> tokio::task::AbortHandle {
+        self.worker.as_ref().unwrap().abort_handle()
+    }
+    pub(super) async fn close(mut self) -> std::io::Result<()> {
         if let Some(worker) = self.worker.take() {
+            // Explicit abandonment is cancellation, never successful drain.
             worker.abort();
             let result = worker.await;
             assert!(result.is_ok() || result.unwrap_err().is_cancelled());
+            return Err(std::io::ErrorKind::Interrupted.into());
         }
-        self.writer.lock().await.shutdown().await.unwrap();
+        self.shutdown().await
     }
 }
-
 impl Drop for Satellite {
     fn drop(&mut self) {
         if let Some(worker) = &self.worker {
@@ -281,9 +282,8 @@ impl Drop for Satellite {
         }
     }
 }
-
 async fn serve(
-    mut reader: tokio::net::tcp::OwnedReadHalf,
+    mut reader: impl AsyncRead + Unpin,
     writer: Arc<Mutex<OwnedWriteHalf>>,
     events: &mpsc::UnboundedSender<Observation>,
     mut controls: mpsc::UnboundedReceiver<(bool, oneshot::Sender<()>)>,
@@ -321,7 +321,12 @@ async fn serve(
                 data: None,
                 payload: vec![],
             };
-            writer.lock().await.write_all(&encode(&reply)).await?;
+            writer
+                .lock()
+                .await
+                .write_all(&encode(&reply))
+                .await
+                .map_err(nonterminal)?;
         } else if events.send(Ok(bytes)).is_err() {
             return Ok(());
         }
@@ -330,7 +335,6 @@ async fn serve(
         }
     }
 }
-
 impl AsyncRead for Satellite {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -360,9 +364,11 @@ impl AsyncRead for Satellite {
         Pin::new(&mut self.buffered).poll_read(cx, output)
     }
 }
-
 impl AsyncWrite for Satellite {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<std::io::Result<usize>> {
+        if self.shut {
+            return Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
         if self.writing.is_none() {
             let writer = self.writer.clone();
             let bytes = bytes.to_vec();
@@ -377,120 +383,112 @@ impl AsyncWrite for Satellite {
         }
         result
     }
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        if let Some(write) = &mut self.writing {
+            let result = std::task::ready!(write.as_mut().poll(cx));
+            self.writing = None;
+            result?;
+        }
         Poll::Ready(Ok(()))
     }
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        if let Some(worker) = &self.worker {
-            worker.abort();
+        std::task::ready!(self.as_mut().poll_flush(cx))?;
+        if self.shut {
+            return Poll::Ready(Ok(()));
         }
-        if self.writing.is_none() {
+        if self.shutdown.is_none() {
             let writer = self.writer.clone();
-            self.writing = Some(Box::pin(async move {
+            self.shutdown = Some(Box::pin(async move {
                 writer.lock().await.shutdown().await?;
                 Ok(0)
             }));
         }
-        let result = self.writing.as_mut().unwrap().as_mut().poll(cx);
-        if result.is_ready() {
-            self.writing = None;
+        let result = std::task::ready!(self.shutdown.as_mut().unwrap().as_mut().poll(cx));
+        self.shutdown = None;
+        result?;
+        self.shut = true;
+        Poll::Ready(Ok(()))
+    }
+}
+pub(super) use super::bridge_cut::ReadyClock;
+// Preserve the original kind/source, but distinguish partial reads and probe
+// writes from a raw reset encountered before any byte of a new frame.
+fn nonterminal(error: std::io::Error) -> std::io::Error {
+    std::io::Error::new(error.kind(), error)
+}
+pub(super) fn terminal(error: &std::io::Error, completed: bool) -> bool {
+    completed && error.kind() == std::io::ErrorKind::ConnectionReset && error.get_ref().is_none()
+}
+#[tokio::test]
+async fn bridge_satellite_pending_write_precedes_shutdown() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+    let mut satellite = Satellite::new(listener.accept().await.unwrap().0);
+    let writer = satellite.writer.clone();
+    let guard = writer.lock().await;
+    std::future::poll_fn(|cx| {
+        assert!(Pin::new(&mut satellite).poll_write(cx, b"accepted").is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    drop(guard);
+    satellite.shutdown().await.unwrap();
+    satellite.shutdown().await.unwrap();
+    let mut bytes = Vec::new();
+    peer.read_to_end(&mut bytes).await.unwrap();
+    assert_eq!(bytes, b"accepted");
+    peer.shutdown().await.unwrap();
+    assert_eq!(satellite.read(&mut [0]).await.unwrap(), 0);
+    satellite.close().await.unwrap();
+}
+struct Fault {
+    bytes: std::io::Cursor<Vec<u8>>,
+    kind: std::io::ErrorKind,
+}
+impl AsyncRead for Fault {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        output: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if self.bytes.position() == self.bytes.get_ref().len() as u64 {
+            return Poll::Ready(Err(self.kind.into()));
         }
-        result.map(|result| result.map(|_| ()))
+        Pin::new(&mut self.bytes).poll_read(cx, output)
     }
 }
-
-// Keep paused time from auto-advancing past OS socket readiness; scoped to a rig.
-pub(super) struct ReadyClock(JoinHandle<()>);
-impl ReadyClock {
-    pub(super) fn new() -> Self {
-        Self(tokio::spawn(async {
-            loop {
-                tokio::task::yield_now().await;
-            }
-        }))
-    }
-}
-impl Drop for ReadyClock {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 #[tokio::test]
-async fn bridge_satellite_probe_preserves_frames_and_drains_before_eof() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
-    let mut satellite = Satellite::new(listener.accept().await.unwrap().0);
-    let mut expected = Vec::new();
-    for kind in [
-        "audio-start",
-        "audio-chunk",
-        "audio-chunk",
-        "audio-stop",
-        "run-pipeline",
-        "error",
+async fn bridge_satellite_frame_errors_preserve_kind_and_terminal_authority() {
+    use std::io::ErrorKind::{ConnectionReset, PermissionDenied};
+    let complete = b"{\"type\":\"error\"}\n";
+    for mut tail in [
+        b"".as_slice(),
+        b"{",
+        b"{\"type\":\"error\",\"data_length\":2}\nX",
+        b"{\"type\":\"error\",\"payload_length\":2}\nX",
     ] {
-        let event = Event {
-            header: Header {
-                r#type: kind.into(),
-                data: Some(json!({"inline":1})),
-                data_length: 0,
-                payload_length: 0,
-            },
-            data: Some(json!({"external":2})),
-            payload: vec![0, 255, 10],
-        };
-        let bytes = encode(&event);
-        peer.write_all(&bytes).await.unwrap();
-        expected.extend(bytes);
-        send(&mut peer, "describe", json!({})).await;
-        assert_eq!(
-            read(&mut peer).await,
-            (
-                json!({"type":"info","data":{"satellite":{"name":"synthetic"}},
-            "data_length":0,"payload_length":0}),
-                vec![]
-            )
-        );
+        for kind in [ConnectionReset, PermissionDenied] {
+            let mut bytes = complete.to_vec();
+            bytes.extend(tail);
+            let mut reader = Fault {
+                bytes: std::io::Cursor::new(bytes),
+                kind,
+            };
+            assert_eq!(frame(&mut reader).await.unwrap().unwrap().1, complete);
+            let error = frame(&mut reader).await.unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert!(!terminal(&error, false));
+            assert_eq!(terminal(&error, true), tail.is_empty() && kind == ConnectionReset);
+        }
+        if !tail.is_empty() {
+            let error = frame(&mut tail).await.unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+            assert!(!terminal(&error, true));
+        }
     }
-    let external = br#"{ "external": 2 }"#;
-    let mut bytes = format!(
-        "{{\"type\":\"error\",\"extension\":7,\"data_length\":{}}}\n",
-        external.len()
-    )
-    .into_bytes();
-    bytes.extend(external);
-    peer.write_all(&bytes).await.unwrap();
-    expected.extend(bytes);
-    send(&mut peer, "describe", json!({})).await;
-    assert_eq!(read(&mut peer).await.0["type"], "info");
-    peer.shutdown().await.unwrap();
-    let mut actual = Vec::new();
-    satellite.read_to_end(&mut actual).await.unwrap();
-    assert_eq!(actual, expected);
-    satellite.close().await;
+    assert!(!terminal(&nonterminal(ConnectionReset.into()), true)); // A probe write failed.
     assert_eq!(
-        peer.read_u8().await.unwrap_err().kind(),
-        std::io::ErrorKind::UnexpectedEof
-    );
-}
-
-#[tokio::test]
-async fn bridge_satellite_probe_drop_closes_socket_and_truncation_is_visible() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
-    let mut satellite = Satellite::new(listener.accept().await.unwrap().0);
-    peer.write_all(b"{\"type\":\"error\",\"payload_length\":2}\nX")
-        .await
-        .unwrap();
-    peer.shutdown().await.unwrap();
-    assert_eq!(
-        satellite.read_u8().await.unwrap_err().kind(),
-        std::io::ErrorKind::UnexpectedEof
-    );
-    drop(satellite);
-    assert_eq!(
-        peer.read_u8().await.unwrap_err().kind(),
-        std::io::ErrorKind::UnexpectedEof
+        frame(&mut b"invalid\n".as_slice()).await.unwrap_err().kind(),
+        std::io::ErrorKind::InvalidData
     );
 }
