@@ -109,3 +109,227 @@ pub fn failed(output: &Output, diagnostic: &str) {
     assert!(errors.contains(diagnostic), "{errors}");
     assert!(!errors.contains("fixture-private-child-output"));
 }
+
+// T3: delivered CLI, per-session fake tools and a virtual wall-clock ledger.
+#[test]
+fn b0_driver_fixes_file_frame_speech_waits_before_every_held_command() {
+    for end in [
+        "2026-11-15T09:00:00.500Z",
+        "2026-11-15T10:00:00.500+01:00",
+        "2026-11-15T09:00:00Z",
+        "2026-11-15T08:59:59Z",
+    ] {
+        let session = Session::new(&json!({"play":{"held":true,"playEndedAt":end}}));
+        session.scenario(
+            "one.yaml",
+            &json!([{"say":"utterance.wav"},
+            {"expect_frame":"frame.jpg"}, {"expect_speech_contains":["time"]}]),
+        );
+        let output = session.run(&[]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            session.operations(),
+            [
+                "digest",
+                "firmware",
+                "firmware",
+                "firmware",
+                "clock",
+                "hold",
+                "clock",
+                "play",
+                "firmware",
+                "firmware",
+                "firmware",
+                "wait_until",
+                "snapshot",
+                "clock",
+                "record",
+                "firmware",
+                "firmware",
+                "firmware",
+                "wav",
+                "stt",
+                "release"
+            ]
+        );
+        assert_b0_ledger(&session, end);
+    }
+}
+
+fn assert_b0_ledger(session: &Session, end: &str) {
+    let ledger = session.ledger();
+    assert_eq!(
+        ledger[7]["args"],
+        json!([
+            "message",
+            "play-audio",
+            "fixture-ring",
+            "--lease",
+            "fixture-lease",
+            "--file",
+            session.0.join("utterance.wav"),
+            "--json"
+        ])
+    );
+    assert_eq!(ledger[11]["args"], json!(["-c", "<host-helper>", "wait_until", end]));
+    let reached = if end.contains(".500") {
+        1_794_733_200_500_i64
+    } else {
+        1_794_733_200_000_i64
+    };
+    assert_eq!(ledger[7]["wall_ms"], 1_794_733_200_000_i64);
+    for i in [12, 14, 20] {
+        assert_eq!(ledger[i]["wall_ms"], reached);
+    }
+    assert_capture_commands(session, &ledger);
+    assert!(!serde_json::to_string(&ledger).unwrap().contains("--chirp"));
+    assert_eq!(
+        session.report()["checks"],
+        json!({"step_0":true,"step_1":true,"step_2":true,"session_released":true})
+    );
+    assert_eq!(
+        fs::read(session.0.join("artifacts/frame.jpg")).unwrap(),
+        include_bytes!("../../../../tests/goldens/lab-frame.jpg")
+    );
+    print_ledger(session, ledger);
+}
+
+fn assert_capture_commands(session: &Session, ledger: &[Value]) {
+    assert_eq!(
+        ledger[12]["args"],
+        json!([
+            "message",
+            "snapshot",
+            "fixture-ring",
+            "--lease",
+            "fixture-lease",
+            "--output",
+            session.0.join("artifacts/frame.jpg"),
+            "--json"
+        ])
+    );
+    assert_eq!(
+        ledger[14]["args"],
+        json!([
+            "message",
+            "record",
+            "fixture-ring",
+            "--lease",
+            "fixture-lease",
+            "--audio-only",
+            "--duration",
+            "10",
+            "--output",
+            session.0.join("artifacts/reply-0.wav"),
+            "--json"
+        ])
+    );
+    assert_eq!(
+        ledger[20]["args"],
+        json!(["session", "release", "fixture-hold", "--json"])
+    );
+}
+
+fn print_ledger(session: &Session, ledger: Vec<Value>) {
+    use std::io::Write;
+    let mut normalized = ledger;
+    for entry in &mut normalized {
+        for arg in entry["args"].as_array_mut().unwrap() {
+            if let Some(value) = arg.as_str() {
+                *arg = Value::String(value.replace(session.0.to_str().unwrap(), "<session>"));
+            }
+        }
+    }
+    writeln!(
+        std::io::stdout(),
+        "{}",
+        serde_json::to_string_pretty(&normalized).unwrap()
+    )
+    .unwrap();
+}
+
+#[test]
+fn b0_driver_fixes_android_admission_has_exact_diagnostics_and_properties() {
+    for (fixture, message) in [
+        (
+            json!({"bootmode":"recovery"}),
+            "Echo is not booted to Android (bootmode recovery)",
+        ),
+        (
+            json!({"boot_completed":""}),
+            "Echo is not booted to Android (bootmode normal)",
+        ),
+        (
+            json!({"build":"unlisted"}),
+            "build is not in probed-builds.txt; coordinator probe required",
+        ),
+    ] {
+        let session = Session::new(&fixture);
+        let output = session.run(&[]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            format!("echo-lab: firmware: {message}\n")
+        );
+        assert!(!session.operations().contains(&"hold".into()));
+    }
+    let session = Session::new(&json!({"bootmode":"normal","boot_completed":"1"}));
+    assert_eq!(session.run(&[]).status.code(), Some(0));
+    let ledger = session.ledger();
+    for (i, property) in ["ro.build.version.incremental", "ro.bootmode", "sys.boot_completed"]
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(ledger[i + 1]["args"], json!(["shell", "getprop", property]));
+    }
+}
+
+#[test]
+fn b0_driver_fixes_invalid_playback_or_wait_never_dispatches_early() {
+    for fixture in [
+        json!({"play":{"held":true}}),
+        json!({"play":{"held":false}}),
+        json!({"play":{"held":true,"playEndedAt":"invalid"}}),
+        json!({"play":{"held":true,"playEndedAt":"2026-11-15T09:00:00"}}),
+        json!({"fail":"wait_until"}),
+        json!({"malformed":"wait_until"}),
+        json!({"wait_until":{"reached":false}}),
+    ] {
+        let session = Session::new(&fixture);
+        session.scenario(
+            "one.yaml",
+            &json!([{"say":"utterance.wav"},{"expect_frame":"frame.jpg"}]),
+        );
+        let output = session.run(&[]);
+        assert_eq!(output.status.code(), Some(1), "{fixture}");
+        let ops = session.operations();
+        for op in ["snapshot", "record", "release", "stt"] {
+            assert_eq!(ops.iter().filter(|v| *v == op).count(), 0, "{fixture}: {op}");
+        }
+        assert_eq!(ops.iter().filter(|v| *v == "play").count(), 1);
+        assert_eq!(session.report()["checks"]["session_released"], false);
+    }
+}
+
+#[test]
+fn b0_driver_fixes_cancel_during_wait_reaps_child_and_cleanup_uses_gate() {
+    let session = Session::new(&json!({"cancel_on":"wait_until","cancel_once":true,"fail":"wait_until"}));
+    session.scenario(
+        "one.yaml",
+        &json!([{"say":"utterance.wav"},{"expect_frame":"frame.jpg"}]),
+    );
+    let output = session.run(&["--cancel-file", "cancel.signal"]);
+    failed(&output, "child reaped");
+    assert_eq!(session.report()["checks"]["session_released"], false);
+    let ops = session.operations();
+    assert_eq!(ops.iter().filter(|v| *v == "wait_until").count(), 2);
+    for op in ["snapshot", "record", "release"] {
+        assert!(!ops.contains(&op.into()));
+    }
+}

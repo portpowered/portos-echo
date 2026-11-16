@@ -1,7 +1,7 @@
 //! Port CLI source pin: portos-monolith a4bc375, cli/internal/cli/routes.go:202,
 //! message_commands.go:204-290, `session_commands.go`; commands/session.go,
 //! play_audio.go:129-145. Coordinator response 2 (2026-11-15) authorizes these
-//! source-faithful forms. Listening chirps also need --output per `check()`.
+//! source-faithful forms. Playback completion is gated by returned timestamps.
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -31,22 +31,6 @@ const TABLE: &[(&str, &[&str])] = &[
             "--audio-only",
             "--duration",
             "10",
-            "--output",
-            "{output}",
-            "--json",
-        ],
-    ),
-    (
-        "chirp",
-        &[
-            "message",
-            "play-audio",
-            "{ring}",
-            "--lease",
-            "{lease}",
-            "--chirp",
-            "--listen",
-            "3",
             "--output",
             "{output}",
             "--json",

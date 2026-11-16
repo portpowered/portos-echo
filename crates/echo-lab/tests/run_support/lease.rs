@@ -24,8 +24,8 @@ fn holds() -> Value {
 }
 
 #[test]
-fn f08_rotate_before_ceiling_wait_exactly_25_seconds_and_chirp_only_once() {
-    let session = Session::new(&json!({"times":[0,0,0,659_000,684_000,684_000],"holds":holds()}));
+fn f08_rotate_before_ceiling_wait_exactly_25_seconds_without_chirp() {
+    let session = Session::new(&json!({"times":[0,0,659_000,684_000,684_000],"holds":holds()}));
     session.scenario("two.yaml", &json!([{"say":"utterance.wav"}]));
     let output = session.run(&["two.yaml"]);
     assert_eq!(
@@ -37,23 +37,48 @@ fn f08_rotate_before_ceiling_wait_exactly_25_seconds_and_chirp_only_once() {
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "reply", "firmware",
-            "clock", "release", "wait", "clock", "hold", "clock", "play", "reply", "release"
+            "digest",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "reply",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "wait_until",
+            "release",
+            "wait",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "reply",
+            "wait_until",
+            "release"
         ]
     );
     let ledger = session.ledger();
     assert_eq!(
-        ledger[12]["args"],
+        ledger[14]["args"],
         json!(["session", "release", "fixture-first", "--json"])
     );
-    assert_eq!(ledger[13]["args"], json!(["-c", "<host-helper>", "wait", "25000"]));
-    assert_eq!(ledger[17]["args"][4], "fixture-second-lease");
+    assert_eq!(ledger[15]["args"], json!(["-c", "<host-helper>", "wait", "25000"]));
+    assert_eq!(ledger[19]["args"][4], "fixture-second-lease");
     assert_eq!(
         session.report()["bench_session_ids"],
         json!(["batch-hold-1", "batch-hold-2"])
     );
+    assert_rotation_events(&session);
+}
+
+fn assert_rotation_events(session: &Session) {
     assert_eq!(
-        events(&session),
+        events(session),
         [
             "run_started",
             "step_started",
@@ -84,16 +109,34 @@ fn f09_confirmed_preemption_retries_only_the_interrupted_step_with_new_lease() {
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "status", "release",
-            "firmware", "clock", "hold", "clock", "play", "reply", "release"
+            "digest",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "status",
+            "release",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "reply",
+            "wait_until",
+            "release"
         ]
     );
     let ledger = session.ledger();
     assert_eq!(
-        ledger[9]["args"],
+        ledger[8]["args"],
         json!(["session", "status", "fixture-first", "--json"])
     );
-    assert_eq!(ledger[15]["args"][4], "fixture-second-lease");
+    assert_eq!(ledger[16]["args"][4], "fixture-second-lease");
     assert_eq!(
         session.report()["bench_session_ids"],
         json!(["batch-hold-1", "batch-hold-2"])
@@ -122,8 +165,8 @@ fn f10_second_preemption_fails_without_a_third_hold_or_retry() {
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "status", "release",
-            "firmware", "clock", "hold", "clock", "play", "status", "release"
+            "digest", "firmware", "firmware", "firmware", "clock", "hold", "clock", "play", "status", "release",
+            "firmware", "firmware", "firmware", "clock", "hold", "clock", "play", "status", "release"
         ]
     );
     assert_eq!(
@@ -144,7 +187,7 @@ fn f11_cancel_kills_stalled_child_and_releases_once_without_running_next_step() 
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "release"
+            "digest", "firmware", "firmware", "firmware", "clock", "hold", "clock", "play", "release"
         ]
     );
     assert_eq!(
@@ -182,13 +225,13 @@ fn ordinary_failure_or_untrusted_preemption_status_never_retries() {
 #[test]
 fn renewal_and_retry_recheck_quiet_hours_without_repeating_chirp() {
     for fixture in [
-        json!({"times":[0,0,659_000,684_000],"hours":[9,9,9,8]}),
-        json!({"preemptions":1,"hours":[9,9,9,8]}),
+        json!({"times":[0,659_000,684_000],"hours":[9,9,8]}),
+        json!({"preemptions":1,"hours":[9,9,8]}),
     ] {
         let session = Session::new(&fixture);
         failed(&session.run(&[]), "before 09:00"); // lint-rules: allow-literal expected renewal/retry quiet-hours diagnostic
         assert_eq!(session.operations().iter().filter(|s| *s == "hold").count(), 1);
-        assert_eq!(session.operations().iter().filter(|s| *s == "chirp").count(), 1);
+        assert_eq!(session.operations().iter().filter(|s| *s == "chirp").count(), 0);
         assert_eq!(session.operations().iter().filter(|s| *s == "release").count(), 1);
         assert_eq!(session.report()["result"], "fail");
     }
@@ -196,12 +239,12 @@ fn renewal_and_retry_recheck_quiet_hours_without_repeating_chirp() {
 
 #[test]
 fn failed_rotation_release_never_reopens_or_claims_cleanup_success() {
-    let session = Session::new(&json!({"times":[0,0,659_000],"fail":"release"}));
+    let session = Session::new(&json!({"times":[0,659_000],"fail":"release"}));
     failed(&session.run(&[]), "release failed");
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "release"
+            "digest", "firmware", "firmware", "firmware", "clock", "hold", "clock", "release"
         ]
     );
     assert_eq!(session.report()["checks"]["session_released"], false);

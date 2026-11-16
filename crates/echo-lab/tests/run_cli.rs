@@ -16,7 +16,7 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn f01_one_dispatch_hold_chirp_reply_release_and_atomic_report() {
+    fn f01_one_dispatch_hold_reply_release_and_atomic_report() {
         let session = Session::new(&json!({}));
         let output = session.run(&[]);
         assert_eq!(
@@ -29,7 +29,17 @@ mod tests {
         assert_eq!(
             session.operations(),
             [
-                "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "reply", "release"
+                "digest",
+                "firmware",
+                "firmware",
+                "firmware",
+                "clock",
+                "hold",
+                "clock",
+                "play",
+                "reply",
+                "wait_until",
+                "release"
             ]
         );
         assert_ledger(&session);
@@ -43,27 +53,11 @@ mod tests {
             json!(["shell", "getprop", "ro.build.version.incremental"])
         );
         assert_eq!(
-            ledger[3]["args"],
+            ledger[5]["args"],
             json!(["session", "hold", "fixture-ring", "--camera", "--listen", "--json"])
         );
         assert_eq!(
-            ledger[5]["args"],
-            json!([
-                "message",
-                "play-audio",
-                "fixture-ring",
-                "--lease",
-                "fixture-lease",
-                "--chirp",
-                "--listen",
-                "3",
-                "--output",
-                session.0.join("artifacts").join("alignment.wav"),
-                "--json"
-            ])
-        );
-        assert_eq!(
-            ledger[8]["args"],
+            ledger[7]["args"],
             json!([
                 "message",
                 "play-audio",
@@ -146,7 +140,10 @@ mod tests {
     fn f03_quiet_0859_refuses_and_0900_allows_audio() {
         let session = Session::new(&json!({"hour":8}));
         failed(&session.run(&[]), "before 09:00"); // lint-rules: allow-literal expected quiet-hours stderr, never a socket address
-        assert_eq!(session.operations(), ["digest", "firmware", "clock"]);
+        assert_eq!(
+            session.operations(),
+            ["digest", "firmware", "firmware", "firmware", "clock"]
+        );
         assert_eq!(session.report()["result"], "fail");
         let session = Session::new(&json!({"hour":9}));
         assert_eq!(session.run(&[]).status.code(), Some(0));
@@ -167,7 +164,7 @@ mod tests {
     fn f05_audio_failure_and_malformed_hold_release_without_child_output() {
         for (fixture, message, release) in [
             (json!({"fail":"play"}), "play:", true),
-            (json!({"malformed":"play"}), "play:", true),
+            (json!({"malformed":"play"}), "play:", false),
             (json!({"hold":{"holdId":"fixture-hold"}}), "missing lease", true),
             (
                 json!({"hold":{"holdId":"fixture-hold","lease":"fixture-lease"}}),
@@ -190,23 +187,15 @@ mod tests {
     }
 
     #[test]
-    fn f06_clock_rechecked_before_chirp_and_every_utterance() {
-        for (hours, expected) in [
-            (
-                json!([9, 8]),
-                vec!["digest", "firmware", "clock", "hold", "clock", "release"],
-            ),
-            (
-                json!([9, 9, 8]),
-                vec![
-                    "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "release",
-                ],
-            ),
-        ] {
-            let session = Session::new(&json!({"hours":hours}));
-            failed(&session.run(&[]), "before 09:00"); // lint-rules: allow-literal expected pre-audio quiet-hours diagnostic
-            assert_eq!(session.operations(), expected);
-        }
+    fn f06_clock_rechecked_before_every_utterance() {
+        let session = Session::new(&json!({"hours":[9,8]}));
+        failed(&session.run(&[]), "before 09:00"); // lint-rules: allow-literal expected pre-audio quiet-hours diagnostic
+        assert_eq!(
+            session.operations(),
+            [
+                "digest", "firmware", "firmware", "firmware", "clock", "hold", "clock", "release"
+            ]
+        );
     }
 
     #[test]
@@ -235,7 +224,7 @@ mod tests {
         session.scenario("two.yaml", &json!([{"say":"utterance.wav"}]));
         assert_eq!(session.run(&["two.yaml", "--keep-audio"]).status.code(), Some(0));
         let operations = session.operations();
-        for (op, count) in [("hold", 1), ("release", 1), ("chirp", 1), ("play", 2), ("firmware", 2)] {
+        for (op, count) in [("hold", 1), ("release", 1), ("chirp", 0), ("play", 2), ("firmware", 6)] {
             assert_eq!(operations.iter().filter(|s| s.as_str() == op).count(), count, "{op}");
         }
         assert!(session.0.join("artifacts").join("reply-1.wav").is_file());
@@ -296,7 +285,7 @@ mod tests {
         session.scenario("one.yaml", &json!([{"expect_trace":["fixture"]}]));
         failed(&session.run(&[]), "capability is not implemented");
         assert_eq!(session.report()["checks"]["step_0"], false);
-        assert_eq!(session.operations(), ["digest", "firmware"]);
+        assert_eq!(session.operations(), ["digest", "firmware", "firmware", "firmware"]);
         let session = Session::new(&json!({"fail":"release"}));
         failed(&session.run(&[]), "release failed");
         assert_eq!(session.report()["checks"]["session_released"], false);
@@ -379,5 +368,57 @@ mod tests {
         failed(&output, "stdout: write failed");
         assert_eq!(session.report()["result"], "pass");
         assert_eq!(session.operations().last().unwrap(), "release");
+    }
+    #[test]
+    fn local_real_host_helper_waits_on_instants_with_a_controlled_wall_clock() {
+        let helper = include_str!("../src/lab_run/run_host.py");
+        let script = format!(
+            r#"
+import sys,datetime
+from unittest.mock import patch
+ns={{"__name__":"test"}}
+exec({helper:?},ns)
+base=datetime.datetime(2026,11,15,9,tzinfo=datetime.timezone.utc)
+state={{"now":base,"waits":[]}}
+class Clock(datetime.datetime):
+    @classmethod
+    def now(cls,tz=None): return state["now"]
+def advance(seconds):
+    state["waits"].append(seconds)
+    state["now"] += datetime.timedelta(seconds=seconds)
+with patch.object(ns["datetime"],"datetime",Clock), patch.object(ns["time"],"sleep",advance):
+    assert ns["wait_until"]("2026-11-15T10:00:00.250+01:00")=={{"reached":True}}
+    assert state["now"]==base+datetime.timedelta(seconds=.25)
+    assert state["waits"]==[.1,.1,.05],state
+    state["waits"].clear()
+    assert ns["wait_until"]("2026-11-15T09:00:00.250Z")=={{"reached":True}}
+    assert state["waits"]==[]
+print("offsets equal; future waits [0.1, 0.1, 0.05]; reached/past waits []")
+"#
+        );
+        let output = Command::new("python").args(["-c", &script]).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "offsets equal; future waits [0.1, 0.1, 0.05]; reached/past waits []"
+        );
+        for (stamp, code) in [("2000-01-01T00:00:00Z", 0), ("bad", 1), ("2026-11-15T09:00:00", 1)] {
+            let output = Command::new("python")
+                .args(["-c", helper, "wait_until", stamp])
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(code));
+            if code == 0 {
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+                    json!({"reached":true})
+                );
+            }
+        }
     }
 }

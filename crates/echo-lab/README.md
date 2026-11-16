@@ -64,32 +64,37 @@ This is capture evidence only; it never asserts the Ring image's contents.
 Entropy is not decoded: structurally intact files with garbage entropy pass.
 The coordinator reads what the light ring shows from the frame at T5.
 
-When a frame immediately follows `say`, playback completes without `--listen`,
-then a bounded `message record --audio-only --duration 10` child starts.
-The next step takes the held snapshot while that child is pending; the speech
-oracle joins/checks the child before STT. Other utterances use the CLI's combined
-play/listen timestamps and trim the WAV at playback end. Finalization and the
-next utterance also join/check any pending recording before releasing/reusing
-the session. Every pending child has the same cancellation and lease deadlines.
+When a frame immediately follows `say`, play-only queues the clip without
+`--listen`. The device command gate waits through the bounded host helper until
+the wall clock reaches the returned `playEndedAt`, then takes the held snapshot
+and starts `message record --audio-only --duration 10`. No subsequent held port
+command (including status, release or a pending recording launch) can interrupt
+that playback. The helper parses RFC 3339 offsets as instants and rechecks wall
+time after each wait. Invalid timing or an unsuccessful wait fails closed;
+cleanup reports an unconfirmed release if it cannot establish eligibility.
+The speech oracle joins/checks the pending child before STT. Other utterances
+use combined play/listen timestamps and trim the WAV at playback end.
+Finalization and the next utterance join/check pending recordings before
+releasing/reusing the session. Every child has cancellation and lease deadlines.
 
-Every step first reads the firmware incremental using explicit adb. Only builds
-in `data/probed-builds.txt` are admitted. The initial entry is the measured 7809
-incremental from `docs/program/baselines.md`. The local clock is checked before
-opening the hold and immediately before each audio command. Before 09:00 the
-run refuses audio. There is no quiet-hours override. `--python` selects the host
-Python 3 interpreter, default `python`, for local clock, hashing and WAV work.
-Production time has no environment override.
+Every step reads the firmware incremental, `ro.bootmode` and
+`sys.boot_completed` through explicit adb. Only listed builds in
+`data/probed-builds.txt` with bootmode `normal` and boot-completed `1` are
+admitted. Recovery or incomplete startup refuses with
+`firmware: Echo is not booted to Android (bootmode <x>)`.
+The local clock is checked before opening the hold and each audio command.
+Before 09:00 the run refuses audio; there is no quiet-hours override.
+`--python` selects Python 3 (default `python`) for local clock, hashing and WAV
+work. Production time has no environment override.
 
-One hold and one alignment chirp serve a batch. All commands are pinned in
-`src/lab_run/run_command.rs` to the coordinator-approved CLI source. Listening
-chirps need `--output` as well as `--listen 3`, as required by that source.
-Reply WAVs contain only samples after playback ends, using the returned capture
-timestamps. Child output is bounded and discarded on failure; commands have
-30-second ceilings shortened by the remaining monotonic lease budget. A hold
-lasts at most 11 minutes; the runner reserves 90 seconds for playback, local
-WAV processing and release, rotating early when pending work cannot fit. Rotation
-releases, waits 25 seconds and reopens without repeating the batch chirp. The
-host helper uses a monotonic clock; the fixture clock advances without sleeping.
+One hold serves a batch; no alignment audio is played or saved. Commands are
+pinned in `src/lab_run/run_command.rs` to the coordinator-approved CLI source.
+Reply WAVs contain only post-playback samples using returned timestamps. Child
+output is bounded and discarded on failure; commands have 30-second ceilings
+shortened by the remaining monotonic lease budget. A hold lasts at most 11
+minutes, reserving 90 seconds for playback, WAV processing and release. Rotation
+releases, waits 25 seconds and reopens. The fixture clock advances without
+sleeping.
 After failed playback, `session status <hold> --json` must confirm the same
 hold ended with reason `preempted` before the interrupted step is reopened and
 retried once. A second preemption fails. Status/release JSON and argv follow
@@ -132,9 +137,9 @@ are consumed only by fakes. Tests also exercise the real host Python helper for
 PNG decoding; `real_pixels: true` forwards only the pure local pixel operation
 from the fake helper to Python. The remaining operations stay synthetic.
 `transcript` configures fake STT stdout (default `The time is 7:49 p.m.`).
-`record_waits_for_frame: true` makes the fake recording await an explicit
-snapshot notification; it proves frame-before-record-join ordering without a
-fixed sleep. The 221-byte black JPEG and 2-by-2 PNG in `tests/goldens/` are
+`wait_until` advances the fixture wall clock to the parsed playback end; each
+ledger entry includes `wall_ms`. `record_waits_for_frame: true` makes the fake
+recording require the snapshot notification, without a fixed sleep. The 221-byte black JPEG and 2-by-2 PNG in `tests/goldens/` are
 generated synthetic images, never device captures.
 
 To reproduce B0 safely in PowerShell, build the tools once in this worktree,
