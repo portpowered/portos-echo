@@ -122,6 +122,22 @@ fn bridge_spine_startup_rejects_partial_mixed_and_nonloopback_inputs_offline() {
     assert_eq!(bridge_input::lab_origin("http://127.0.0.1:1/path"), Err(Error::Input));
 }
 
+#[test]
+fn bridge_spine_configured_echo_is_any_ip_literal_on_the_lan() {
+    // TEST-NET-1 and documentation IPv6: the PC bridge dials the Echo across the LAN, not only loopback.
+    for (host, want) in [
+        ("192.0.2.10", "192.0.2.10:16700"), // lint-rules: allow-literal inert documentation address, parsed only, never dialed
+        ("2001:db8::7", "[2001:db8::7]:16700"), // lint-rules: allow-literal inert documentation address, parsed only, never dialed
+        ("[2001:db8::7]", "[2001:db8::7]:16700"), // lint-rules: allow-literal inert documentation address, parsed only, never dialed
+        ("127.0.0.1", "127.0.0.1:16700"),
+    ] {
+        let address = bridge_input::echo_address(host, 16700).unwrap();
+        assert_eq!(address.to_string(), want);
+    }
+    assert_eq!(bridge_input::echo_address("192.0.2.10", 0), Err(Error::Input)); // lint-rules: allow-literal inert documentation address, parsed only, never dialed
+    assert_eq!(bridge_input::echo_address("bad host", 16700), Err(Error::Input));
+}
+
 #[tokio::test]
 async fn bridge_spine_credentials_read_only_nominated_synthetic_files() {
     let dir = tempfile::tempdir().unwrap();

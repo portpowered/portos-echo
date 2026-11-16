@@ -3,7 +3,7 @@ use crate::Error;
 use echo_contracts::secret::Secret;
 use echo_live::call::{CallError, CredentialProvider, LiveAuthMode, LiveCredential};
 use std::{
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs},
     path::PathBuf,
 };
 
@@ -187,7 +187,7 @@ fn configured(
         kill_path: Some(config.audit.log_dir.join("bridge-kill")),
         delegation: config.mcp.server.first().cloned().map(|server| (config.agent, server)),
         screen: Some(config.screen),
-        wyoming: loopback(&format!("{}:{}", config.echo.host, config.echo.wyoming_port), false)?,
+        wyoming: echo_address(&config.echo.host, config.echo.wyoming_port)?,
         live_url,
         model_url,
         trace: trace.into(),
@@ -199,6 +199,27 @@ fn configured(
         reply_lead_ms: config.audio.reply_lead_ms,
         session_idle_seconds: config.live.session_idle_seconds,
     }))
+}
+
+/// The Echo's Wyoming address for a configured run: the bridge on the operator's PC dials the Echo across the LAN
+/// (plan sections 1-2), so any IP literal is accepted, and a name is resolved once, here. Lab runs stay loopback-only
+/// (`configured_origins`).
+///
+/// # Errors
+/// A zero port, or a name that does not resolve.
+pub fn echo_address(host: &str, port: u16) -> Result<SocketAddr, Error> {
+    if port == 0 {
+        return Err(Error::Input);
+    }
+    let literal = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    if let Ok(ip) = literal.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, port));
+    }
+    (host, port)
+        .to_socket_addrs()
+        .map_err(|_| Error::Input)?
+        .min_by_key(SocketAddr::is_ipv6)
+        .ok_or(Error::Input)
 }
 
 fn configured_origins(
