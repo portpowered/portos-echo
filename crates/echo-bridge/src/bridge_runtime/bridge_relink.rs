@@ -315,7 +315,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod run_tests {
     use super::*;
     use echo_link::{
         LinkConnector,
