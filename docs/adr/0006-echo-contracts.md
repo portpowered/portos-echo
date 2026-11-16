@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: accepted
 ---
 
-# 0004: Shared bridge contracts
+# 0006: Shared bridge contracts
 
 ## Context
 

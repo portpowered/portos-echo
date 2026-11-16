@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: accepted for local S1 transport; provider compatibility pending M2
 ---
 
-# 0005: Explicitly driven WebRTC transport
+# 0009: Explicitly driven WebRTC transport
 
 ## Decision
 

@@ -90,6 +90,8 @@ check exists, the coordinator checks it by hand.
 - A change that adds a page under `docs/` (an ADR, a spike report) also adds that page's own link to `docs/README.md`
   in the same change, since the docs index gate requires it. A factory lane may make that one-line index edit even
   though `docs/README.md` is not in its payload's paths; nothing else outside its paths.
+- ADR numbers are unique. A new ADR takes the highest number in `docs/adr/` plus one, checked again at the lane's
+  final rebase onto `origin/main`; on a clash, the lane renumbers its own ADR and its index link.
 - `docs/program/plan.md` wins over the drafts in `docs/design/`. Update the plan in the same change that departs
   from it.
 - Every owner request and decision goes into `docs/program/decisions.md` in the change that acts on it.

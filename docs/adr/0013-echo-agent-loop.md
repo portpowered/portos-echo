@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: provisional; local Responses component, real provider acceptance pending M2
 ---
 
-# 0006: Bridge-side Responses agent loop
+# 0013: Bridge-side Responses agent loop
 
 ## Decision
 

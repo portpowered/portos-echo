@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: accepted
 ---
 
-# F4: private Cargo metadata parsing
+# 0002: Private Cargo metadata parsing
 
 The binding F4 decision authorizes serde with derive and serde_json and their
 resolution closure for xtask only. Typed JSON decoding replaces fragile text

@@ -20,24 +20,24 @@ status: active; documentation index
 
 ## Architecture decisions
 
-- [Port OS OAuth client dependencies](adr/0005-mcp-auth.md)
-- [Provisional Live call adapter](adr/0006-live-call.md)
-- [Provisional Responses agent loop](adr/0006-echo-agent-loop.md)
-- [Independent ChatGPT credential source](adr/0006-chatgpt-auth.md)
-- [S1 WebRTC transport](adr/0005-live-transport.md)
+- [Port OS OAuth client dependencies](adr/0010-mcp-auth.md)
+- [Provisional Live call adapter](adr/0011-live-call.md)
+- [Provisional Responses agent loop](adr/0013-echo-agent-loop.md)
+- [Independent ChatGPT credential source](adr/0015-chatgpt-auth.md)
+- [S1 WebRTC transport](adr/0009-live-transport.md)
 
-- [Runtime-free delegated-task seam](adr/0005-echo-agent-api.md)
-- [PCM resampling and native Opus](adr/0005-echo-audio.md)
-- [Shared bridge contracts](adr/0004-echo-contracts.md)
-- [Bounded Wyoming client](adr/0005-echo-wyoming.md)
+- [Runtime-free delegated-task seam](adr/0007-echo-agent-api.md)
+- [PCM resampling and native Opus](adr/0008-echo-audio.md)
+- [Shared bridge contracts](adr/0006-echo-contracts.md)
+- [Bounded Wyoming client](adr/0012-echo-wyoming.md)
 - [ADR guide](adr/README.md)
 - [Workspace harness dependencies](adr/0000-workspace-baseline.md)
 - [TOML lanes declarations](adr/0001-xtask-toml.md)
-- [Local milestone schema validation](adr/0002-echo-lab-schema-validation.md)
-- [Bridge TOML configuration](adr/0003-echo-config.md)
-- [Private Cargo metadata parsing](adr/el-f4-xtask-parsing-deps.md)
+- [Local milestone schema validation](adr/0003-echo-lab-schema-validation.md)
+- [Bridge TOML configuration](adr/0005-echo-config.md)
+- [Private Cargo metadata parsing](adr/0002-xtask-parsing-deps.md)
 
-- [Checked screen messages](adr/0003-screen-contract.md)
+- [Checked screen messages](adr/0004-screen-contract.md)
 
 ## Spikes
 
@@ -71,7 +71,7 @@ The default gate checks local links and anchors without external requests after 
 Both modes compile every actual Mermaid block in tracked Markdown.
 Add each new tracked documentation page to this index in the same change.
 
-- [Stateless MCP HTTP transport](adr/0006-mcp-http.md)
-- [Bridge-hosted delegation runner](adr/0007-echo-delegation.md)
-- [Loopback screen transport](adr/0010-screen-server.md)
-- [Operator sign-in command library](adr/0008-signin.md)
+- [Stateless MCP HTTP transport](adr/0014-mcp-http.md)
+- [Bridge-hosted delegation runner](adr/0017-echo-delegation.md)
+- [Loopback screen transport](adr/0016-screen-server.md)
+- [Operator sign-in command library](adr/0018-signin.md)
