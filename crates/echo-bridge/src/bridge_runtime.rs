@@ -268,7 +268,7 @@ async fn turn<L: EchoLink>(
         conversation.call = match created {
             Ok(call) => Some(call),
             Err(error) => {
-                bridge_relink::failure(error, options.lab, health, trace, screen, id)?;
+                bridge_relink::failure(error, options.lab, health, trace, screen, id).await?;
                 return Ok(None);
             }
         };
@@ -301,7 +301,7 @@ async fn turn<L: EchoLink>(
                 return Ok(None);
             }
             conversation.close("failed", trace)?;
-            bridge_relink::failure(error, options.lab, health, trace, screen, id)?;
+            bridge_relink::failure(error, options.lab, health, trace, screen, id).await?;
             Ok(None)
         }
     }

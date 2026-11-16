@@ -88,15 +88,38 @@ impl Core {
     }
 }
 
-pub(crate) async fn pump(core: Arc<Mutex<Core>>, mut states: mpsc::Receiver<UiState>, stop: watch::Sender<bool>) {
+pub(crate) async fn pump(
+    core: Arc<Mutex<Core>>,
+    mut states: mpsc::Receiver<UiState>,
+    mut requests: mpsc::Receiver<tokio::sync::oneshot::Sender<()>>,
+    stop: watch::Sender<bool>,
+) {
     let stop_rx = stop.subscribe();
+    let mut requests_open = true;
     loop {
         tokio::select! {
             biased;
             () = crate::cancelled(stop_rx.clone()) => break,
+            request = requests.recv(), if requests_open => {
+                let Some(ack) = request else { requests_open = false; continue; };
+                // Snapshot a finite FIFO prefix: concurrent producers cannot prolong this barrier.
+                let prefix = states.len();
+                let mut current = core.lock().await;
+                if *stop.borrow() { break; }
+                let mut committed = true;
+                for _ in 0..prefix {
+                    if !states.try_recv().is_ok_and(|state| current.publish(state)) {
+                        committed = false;
+                        break;
+                    }
+                }
+                if !committed || *stop.borrow() { break; }
+                let _ = ack.send(());
+            }
             state = states.recv() => {
                 let Some(state) = state else { break; };
-                if !core.lock().await.publish(state) { break; }
+                let mut current = core.lock().await;
+                if *stop.borrow() || !current.publish(state) { break; }
             }
         }
     }
@@ -107,6 +130,104 @@ pub(crate) async fn pump(core: Arc<Mutex<Core>>, mut states: mpsc::Receiver<UiSt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+
+    #[tokio::test]
+    async fn held_pump_commits_fifo_before_ack_and_first_snapshot() {
+        let core = Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into()))));
+        let (states, input) = mpsc::channel(32);
+        let (requests, receipt) = mpsc::channel(32);
+        let (stop, _) = watch::channel(false);
+        let mut held = core.lock().await;
+        assert!(held.publish(UiState::Listening));
+        states.try_send(UiState::Connected).unwrap();
+        states
+            .try_send(UiState::Error {
+                message: "relink".into(),
+                relink: true,
+            })
+            .unwrap();
+        let (ack, mut done) = tokio::sync::oneshot::channel();
+        requests.try_send(ack).unwrap();
+        let pump = pump(core.clone(), input, receipt, stop.clone());
+        tokio::pin!(pump);
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
+        assert!(matches!(
+            done.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        let mut stale = held.attach(watch::channel(false).0).unwrap();
+        let stale: ScreenFrame = serde_json::from_str(&stale.frames.recv().await.unwrap()).unwrap();
+        assert_eq!(stale.state, UiState::Listening); // Queue admission alone reproduces the old race.
+        drop(held);
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
+        assert_eq!(done.try_recv(), Ok(()));
+        let mut late = core.lock().await.attach(watch::channel(false).0).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&late.frames.recv().await.unwrap()).unwrap();
+        assert_eq!(frame.seq, 3);
+        assert_eq!(
+            frame.state,
+            UiState::Error {
+                message: "relink".into(),
+                relink: true
+            }
+        );
+        stop.send_replace(true);
+        pump.await;
+    }
+
+    #[tokio::test]
+    async fn stopped_or_failed_pump_never_acknowledges() {
+        for stopped in [true, false] {
+            let core = Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into()))));
+            let (states, input) = mpsc::channel(1);
+            let (requests, receipt) = mpsc::channel(1);
+            let (stop, _) = watch::channel(false);
+            let mut held = core.lock().await;
+            held.seq = u64::MAX;
+            states.try_send(UiState::Muted).unwrap();
+            let (ack, mut done) = tokio::sync::oneshot::channel();
+            requests.try_send(ack).unwrap();
+            let pump = pump(core.clone(), input, receipt, stop.clone());
+            tokio::pin!(pump);
+            assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
+            if stopped {
+                stop.send_replace(true);
+            }
+            drop(held);
+            pump.await;
+            assert!(matches!(
+                done.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+            ));
+            assert!(*stop.borrow());
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_and_closed_request_channel_keep_state_pump_live() {
+        let core = Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into()))));
+        let (states, input) = mpsc::channel(1);
+        let (requests, receipt) = mpsc::channel(1);
+        let (stop, _) = watch::channel(false);
+        let (ack, done) = tokio::sync::oneshot::channel();
+        drop(done);
+        requests.try_send(ack).unwrap();
+        drop(requests);
+        states.try_send(UiState::Muted).unwrap();
+        let pump = pump(core.clone(), input, receipt, stop.clone());
+        tokio::pin!(pump);
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
+        let mut client = core.lock().await.attach(watch::channel(false).0).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap()).unwrap();
+        assert_eq!(frame.state, UiState::Muted);
+        states.try_send(UiState::Connected).unwrap();
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
+        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap()).unwrap();
+        assert_eq!(frame.state, UiState::Connected);
+        stop.send_replace(true);
+        pump.await;
+    }
 
     #[tokio::test]
     async fn bounded_stalled_writer_and_snapshot_sequence() {
