@@ -12,8 +12,8 @@ use echo_link::{
     LinkConnector, LinkEvents, MicrophoneRun,
     fake::{Command, FakeConnector, Observer},
 };
-use std::io::Write;
 use echo_live::AudioFrame;
+use std::io::Write;
 use std::{collections::VecDeque, future::Future, pin::Pin, task::Poll};
 
 #[derive(Default)]
