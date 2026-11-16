@@ -308,19 +308,21 @@ channels, and the wrapper uses both:
 - **To Muse:** `musegadget send-user-msg --session-id <s> --wait <seconds>` sends a user-role message into Muse and
   returns Muse's next reply, or exits 3 on timeout (1–600 s).
 - **From Muse:** a command spec in `/etc/musegadget/commands.d/` that Muse can call. The wrapper installs exactly
-  one, `echo.report_result {task_id, status, summary}`. That is the correlation channel the RFC said was missing.
+  one, `echo.report.result {task_id, status, summary}`. That is the correlation channel the RFC said was missing. The
+  SDK names commands as lowercase words joined by dots, so the plan's earlier `echo.report_result` became
+  `echo.report.result` (`docs/program/decisions.md`).
 
 | Operation | Implementation |
 | --- | --- |
-| `submit(task)` | Create `task_id` and a deadline. Send a message carrying the task, the `task_id`, and the instruction to finish by calling `echo.report_result` with that id. Persist the task |
-| `events(task)` | `Progress` from interim replies; `Completed` or `Failed` only from an `echo.report_result` call whose `task_id` matches a live task. Reject unknown or expired ids |
+| `submit(task)` | Create `task_id` and a deadline. Send a message carrying the task, the `task_id`, and the instruction to finish by calling `echo.report.result` with that id. Persist the task |
+| `events(task)` | `Progress` from interim replies; `Completed` or `Failed` only from an `echo.report.result` call whose `task_id` matches a live task. Reject unknown or expired ids |
 | `cancel(task)` | Mark cancelled, send a cancel message, ignore later results for that id |
-| Timeout | No `report_result` by the deadline: `Failed {retryable: false}` with an honest voice message. Never infer success from chat text |
+| Timeout | No `echo.report.result` by the deadline: `Failed {retryable: false}` with an honest voice message. Never infer success from chat text |
 
 Rules: Muse acts on Port OS through its own connector, never with the bridge's credentials. The Muse bridge never
 installs
 `system.run`, `file.write` or other host commands. `echo-bridge` talks to the Muse bridge over an
-authenticated LAN connection. A `report_result` never counts as user consent. The first proof (M7) is a
+authenticated LAN connection. An `echo.report.result` call never counts as user consent. The first proof (M7) is a
 harmless Port OS read that Muse performs and reports, with correlated ids end to end.
 
 ## 8. Testing as structure
