@@ -153,12 +153,17 @@ pub(super) async fn run(
     call: &mut LiveCall,
     trace: &mut Trace,
     id: &str,
-    options: (bool, u16, u64, &super::bridge_screen::Screen),
+    options: (
+        bool,
+        u16,
+        u64,
+        &super::bridge_screen::Screen,
+        &mut super::bridge_delegation::Host,
+    ),
 ) -> Result<(u64, bool), Error> {
     let mut source = Source::new()?;
     source.call_packets_base = options.2;
     let (tx, rx) = mpsc::channel(1);
-    trace.record("reply.started", Some(id), json!({}))?;
     let play = client.play(bridge_audio::format(24_000), rx);
     let mut context = PlaybackContext {
         client,
@@ -167,6 +172,8 @@ pub(super) async fn run(
         lead_ms: options.1,
         screen: options.3,
         speaking: false,
+        microphone: false,
+        delegation: options.4,
     };
     let producer = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context);
     let (outcome, (), ()) = tokio::time::timeout(Duration::from_secs(10), async {
@@ -178,6 +185,7 @@ pub(super) async fn run(
     })
     .await
     .map_err(|_| Error::Deadline)??;
+    let abandoned = context.delegation.abandon();
     trace.record(
         "reply.played",
         Some(id),
@@ -196,13 +204,13 @@ pub(super) async fn run(
         .as_ref()
         .map_or((0, 0), |m| (m.input_samples, m.tail_samples()));
     trace.record(
-        "mic.frames",
+        "mic.completed",
         Some(id),
         json!({"count":source.sent,"received_chunks":stats.received,
         "dropped_chunks":stats.dropped,"input_samples":samples,"tail_samples":tail}),
     )?;
     trace.record("wyoming.run_ended", Some(id), json!({}))?;
-    Ok((source.sent, !source.cancelled))
+    Ok((source.sent, !source.cancelled && !abandoned))
 }
 
 struct PlaybackContext<'a> {
@@ -212,12 +220,39 @@ struct PlaybackContext<'a> {
     lead_ms: u16,
     screen: &'a super::bridge_screen::Screen,
     speaking: bool,
+    microphone: bool,
+    delegation: &'a mut super::bridge_delegation::Host,
 }
 
 impl PlaybackContext<'_> {
+    async fn microphone(
+        &mut self,
+        source: &mut Source,
+        frame: MicFrame,
+        call: &mut LiveCall,
+        lab: bool,
+    ) -> Result<(), Error> {
+        source.microphone(frame, call, lab).await?;
+        if !self.microphone && source.sent > 0 {
+            self.trace
+                .record("mic.frames", Some(self.id), json!({"count":source.sent}))?;
+            self.microphone = true;
+        }
+        Ok(())
+    }
+
+    fn event(&mut self, event: LiveEvent, source: &mut Source, lab: bool) -> Result<(), Error> {
+        if matches!(event, LiveEvent::DelegationCreated { .. }) {
+            self.delegation.dispatch(event, self.id, self.trace)
+        } else {
+            source.event(event, lab)
+        }
+    }
+
     async fn forward(&mut self, tx: &mpsc::Sender<Vec<u8>>, frame: Vec<u8>) -> Result<(), Error> {
         tx.send(frame).await.map_err(|_| Error::Wyoming)?;
         if !self.speaking {
+            self.trace.record("reply.started", Some(self.id), json!({}))?;
             self.screen.publish(echo_screen_contract::UiState::Speaking)?;
             self.speaking = true;
         }
@@ -256,9 +291,11 @@ async fn produce(
     let mut pressure_reported = false;
     loop {
         if source.cancelled {
+            context.delegation.abandon();
             context.cut(source).await?;
             return Ok(());
         }
+        context.delegation.service(call, context.trace).await?;
         let drained = source.receive(call).await?;
         if !pressure_reported && source.queue.drop_count() > 0 {
             context
@@ -285,11 +322,11 @@ async fn produce(
         }
         tokio::select! {
             frame = run.recv() => match frame? {
-                Some(frame) => source.microphone(frame, call, lab.0).await?,
+                Some(frame) => context.microphone(source, frame, call, lab.0).await?,
                 None => return Err(Error::Wyoming),
             },
             event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(deadline)) => match event {
-                Ok(event) => source.event(event, lab.0)?,
+                Ok(event) => context.event(event, source, lab.0)?,
                 Err(CallError::Deadline) => (),
                 Err(error) => return Err(error.into()),
             },

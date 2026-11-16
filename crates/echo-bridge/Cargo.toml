@@ -9,6 +9,9 @@ publish = false
 workspace = true
 
 [dependencies]
+echo-agent-loop = { version = "0.1.0", path = "../echo-agent-loop" }
+echo-delegation = { version = "0.1.0", path = "../echo-delegation" }
+echo-mcp-client = { version = "0.1.0", path = "../echo-mcp-client" }
 echo-audio = { version = "0.1.0", path = "../echo-audio" }
 echo-config = { version = "0.1.0", path = "../echo-config" }
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
@@ -18,10 +21,12 @@ echo-screen-server = { version = "0.1.0", path = "../echo-screen-server" }
 echo-signin = { version = "0.1.0", path = "../echo-signin" }
 echo-wyoming = { version = "0.1.0", path = "../echo-wyoming" }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros", "io-util"] }
 
 [dev-dependencies]
+echo-spoof-mcp = { version = "0.1.0", path = "../echo-spoof-mcp" }
 base64 = "0.23"
 echo-live = { version = "0.1.0", path = "../echo-live", features = ["fake"] }
 tempfile = "3"

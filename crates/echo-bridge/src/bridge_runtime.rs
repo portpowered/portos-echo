@@ -1,4 +1,6 @@
 //! One Live call owner drives WebRTC while Wyoming owns its bounded wire queues.
+mod bridge_budget;
+mod bridge_delegation;
 mod bridge_lifecycle;
 mod bridge_pacing;
 mod bridge_relink;
@@ -75,7 +77,7 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
 async fn connected(
     client: &WyomingClient,
     events: &mut EventStream,
-    mut settings: Settings,
+    settings: Settings,
     health: &Health,
     trace: &mut Trace,
     screen: &bridge_screen::Screen,
@@ -85,7 +87,7 @@ async fn connected(
     health.state.send_modify(|state| state.wyoming = "connected");
     trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
     publish("bridge.ready", None)?;
-    let credential = std::mem::replace(&mut settings.credential, Provider::Unavailable);
+    let credential = settings.credential.clone();
     let factory = LiveCallFactory::new(&settings.live_url, settings.mode, credential)?;
     observe(client, events, &factory, health, trace, &settings, screen).await
 }
@@ -100,6 +102,7 @@ async fn observe(
     screen: &bridge_screen::Screen,
 ) -> Result<(), Error> {
     let mut conversation = bridge_lifecycle::Conversation::new(options.session_idle_seconds);
+    let mut delegation = bridge_delegation::Host::new(options);
     let mut sequence = 0_u64;
     loop {
         let run = conversation.wake(client, events, health, trace).await?;
@@ -119,7 +122,7 @@ async fn observe(
             factory,
             &mut conversation,
             trace,
-            (health, options, screen, &id),
+            (health, options, screen, &id, &mut delegation),
         )
         .await;
         if result.is_err() {
@@ -144,10 +147,17 @@ async fn turn(
     factory: &LiveCallFactory<Provider>,
     conversation: &mut bridge_lifecycle::Conversation,
     trace: &mut Trace,
-    context: (&Health, &Settings, &bridge_screen::Screen, &str),
+    context: (
+        &Health,
+        &Settings,
+        &bridge_screen::Screen,
+        &str,
+        &mut bridge_delegation::Host,
+    ),
 ) -> Result<Option<(u64, bool)>, Error> {
-    let (health, options, screen, id) = context;
+    let (health, options, screen, id, delegation) = context;
     if conversation.call.is_none() {
+        delegation.new_call();
         health.state.send_modify(|state| state.live = "connecting");
         conversation.call = match create(factory, options, id).await {
             Ok(call) => Some(call),
@@ -166,7 +176,13 @@ async fn turn(
         call,
         trace,
         id,
-        (options.lab, options.reply_lead_ms, conversation.sent, screen),
+        (
+            options.lab,
+            options.reply_lead_ms,
+            conversation.sent,
+            screen,
+            delegation,
+        ),
     )
     .await
     .map(Some)

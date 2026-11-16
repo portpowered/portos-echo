@@ -156,7 +156,9 @@ fn bridge_spine_trace_preserves_aliases_counters_and_safe_mode() {
     trace
         .record("wyoming.mic_frames", Some("run-1"), json!({"count":10}))
         .unwrap();
-    trace.record("mic.frames", Some("run-1"), json!({"count":32})).unwrap();
+    trace
+        .record("mic.completed", Some("run-1"), json!({"count":32}))
+        .unwrap();
     let lines: Vec<serde_json::Value> = std::fs::read_to_string(path)
         .unwrap()
         .lines()

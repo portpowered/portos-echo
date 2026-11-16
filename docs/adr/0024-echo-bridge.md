@@ -12,6 +12,32 @@ status: accepted
 It reuses the locked `tokio`, `serde_json` and `thiserror` dependencies;
 tests reuse `tempfile`. No external package is introduced.
 
+Configured delegation mounts the existing `echo-delegation`, `echo-agent-loop`
+and `echo-mcp-client` crates. The header adapter reuses locked `reqwest` types;
+component tests reuse `echo-spoof-mcp`. These add dependency edges only, with no
+new locked package. The first configured MCP server is the selected host, with
+its existing exact tool allowlist. Bearer-file auth reads only its nominated,
+bounded file. Unauthenticated spoof mode supplies an empty bearer because the
+existing MCP client always sends that header; no credential is synthesized.
+Port OS device-code onboarding is outside this slice and fails closed here.
+
+One runner is retained between completed delegations. Only one delegation is
+pending at a time; other targets or concurrent distinct requests are refused.
+Duplicate ids are remembered within the Live call, with a bounded 1024-id set.
+The worker owns no Live socket. The active call owner sends prepared commentary
+and only then records `session.commentary.append`. A bounded sink adds run and
+delegation correlation to tool dispatch attempts. It omits raw payloads and masks
+unlisted tool names. Cancellation abandons the runner and its backend workers;
+replacement sinks cannot attribute late observations to a new run. Host UTC-day
+request reservations survive replacement and never refund uncertain dispatch.
+Exhaustion returns fixed limit commentary without claiming an auth failure.
+
+`mic.frames` records the first successfully sent microphone batch. Exact final
+packet/sample/drop totals are in `mic.completed`; `wyoming.mic_frames` stays
+compatible. `reply.started` follows the first forwarded PCM payload, so arming
+an empty reply no longer claims audible activity. A Played acknowledgment is
+still required for terminal playback evidence.
+
 One multi-thread Tokio runtime drives one Live call owner. Conversion uses
 fixed scratch and complete 20 ms Opus frames. Reply buffering is bounded and
 evicts oldest frames. The local health listener accepts one bounded request

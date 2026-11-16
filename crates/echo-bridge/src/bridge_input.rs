@@ -8,6 +8,7 @@ use std::{
 };
 
 pub struct Settings {
+    pub delegation: Option<(echo_config::AgentConfig, echo_config::McpServer)>,
     pub screen: Option<echo_config::ScreenConfig>,
     pub wyoming: SocketAddr,
     pub live_url: String,
@@ -37,6 +38,7 @@ impl Settings {
     }
 }
 
+#[derive(Clone)]
 pub enum Provider {
     Synthetic,
     Resolved(echo_signin::Providers),
@@ -141,6 +143,7 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
             return Err(Error::Input);
         };
         return Ok(Some(Settings {
+            delegation: None,
             screen: None,
             wyoming: loopback(&wyoming, false)?,
             live_url: lab_origin(&url)?,
@@ -179,6 +182,7 @@ fn configured(
         echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth.clone()).map_err(|_| Error::Input)?,
     );
     Ok(Some(Settings {
+        delegation: config.mcp.server.first().cloned().map(|server| (config.agent, server)),
         screen: Some(config.screen),
         wyoming: loopback(&format!("{}:{}", config.echo.host, config.echo.wyoming_port), false)?,
         live_url,

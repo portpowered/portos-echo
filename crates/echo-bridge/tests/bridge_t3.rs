@@ -28,6 +28,8 @@ mod bridge_spine_edges;
 mod bridge_wire_auth;
 #[path = "bridge_support/bridge_wire_auth_failure.rs"]
 mod bridge_wire_auth_failure;
+#[path = "bridge_support/bridge_wire_delegation.rs"]
+mod bridge_wire_delegation;
 #[path = "bridge_support/bridge_wire_screen.rs"]
 mod bridge_wire_screen;
 
@@ -223,7 +225,7 @@ async fn bridge_spine_host_echo_health_and_eof() {
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
     let entries = trace(&path);
-    let mic = entries.iter().find(|e| e["event"] == "mic.frames").unwrap();
+    let mic = entries.iter().find(|e| e["event"] == "mic.completed").unwrap();
     assert_eq!(mic["count"], 32);
     assert_eq!(mic["input_samples"], 10240);
     assert_eq!(mic["tail_samples"], 0);
@@ -242,10 +244,11 @@ async fn bridge_spine_host_echo_health_and_eof() {
         [
             "wyoming.run_started",
             "run.started",
+            "mic.frames",
             "reply.started",
             "reply.played",
             "wyoming.mic_frames",
-            "mic.frames",
+            "mic.completed",
             "wyoming.run_ended"
         ]
     );

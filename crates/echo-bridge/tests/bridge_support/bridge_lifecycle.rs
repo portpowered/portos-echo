@@ -168,7 +168,7 @@ async fn bridge_lifecycle_wake_during_playback_stays_in_the_existing_run() {
         "reply.started",
         "reply.cut",
         "reply.played",
-        "mic.frames",
+        "mic.completed",
         "wyoming.run_ended",
     ] {
         let records: Vec<_> = entries.iter().filter(|e| e["event"] == name).collect();
@@ -281,7 +281,7 @@ async fn bridge_lifecycle_three_wakes_reuse_one_call_with_per_run_audio_counts()
             (0..u16::try_from(run * 32).unwrap()).collect::<Vec<_>>()
         );
         let entries = trace(&path);
-        let mic: Vec<_> = entries.iter().filter(|e| e["event"] == "mic.frames").collect();
+        let mic: Vec<_> = entries.iter().filter(|e| e["event"] == "mic.completed").collect();
         assert_eq!(mic.len(), run);
         assert_eq!(mic.last().unwrap()["run_id"], format!("run-{run}"));
         assert_eq!(mic.last().unwrap()["count"], 32);
