@@ -35,7 +35,9 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
         // cut/Played handshake must wake themselves, before any deadline tick.
         failed_without_clock_advance(&path).await;
         next_wake.send(()).await.unwrap();
-        reach(&mut session.process, &path, "delegation.refused").await.unwrap();
+        // Refusal and its loopback handshakes need no elapsed product time.
+        // Advancing here can expire a probe before instrumented I/O is serviced.
+        event_without_clock_advance(&path, "delegation.refused").await;
         session.process.finish(0).await;
         satellite.await.unwrap();
         rejected_once(&mock, &model, &path);
@@ -45,6 +47,17 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
 }
 
 async fn failed_without_clock_advance(path: &Path) {
+    let events = event_without_clock_advance(path, "mcp.run.failed").await;
+    let failed = events.iter().find(|e| e["event"] == "mcp.run.failed").unwrap();
+    assert_eq!(failed["reason"], "relink_required");
+    assert_eq!(events.iter().filter(|e| e["event"] == "run.failed").count(), 0);
+    assert_eq!(
+        events.iter().filter(|e| e["event"] == "wyoming.reconnecting").count(),
+        0
+    );
+}
+
+async fn event_without_clock_advance(path: &Path, event: &str) -> Vec<Value> {
     let started = std::time::Instant::now();
     loop {
         let text = tokio::fs::read_to_string(path).await.unwrap();
@@ -52,18 +65,12 @@ async fn failed_without_clock_advance(path: &Path) {
             .lines()
             .filter_map(|line| serde_json::from_str(line).ok())
             .collect();
-        if let Some(failed) = events.iter().find(|e| e["event"] == "mcp.run.failed") {
-            assert_eq!(failed["reason"], "relink_required");
-            assert_eq!(events.iter().filter(|e| e["event"] == "run.failed").count(), 0);
-            assert_eq!(
-                events.iter().filter(|e| e["event"] == "wyoming.reconnecting").count(),
-                0
-            );
-            return;
+        if events.iter().any(|e| e["event"] == event) {
+            return events;
         }
         assert!(
             started.elapsed() < OBSERVATION_TIMEOUT,
-            "completion stalled with clocks frozen: {events:?}"
+            "did not observe {event} with clocks frozen: {events:?}"
         );
     }
 }
@@ -104,6 +111,12 @@ fn rejected_once(mock: &Mock, model: &Model, path: &Path) {
     assert_eq!(refused.len(), 1);
     assert_eq!(refused[0]["run_id"], "run-2");
     assert_eq!(refused[0]["reason"], "mcp_relink_required");
+    let failed = events.iter().find(|e| e["event"] == "mcp.run.failed").unwrap();
+    assert_eq!(refused[0]["elapsed_ms"], failed["elapsed_ms"]);
+    assert_eq!(
+        events.iter().filter(|e| e["event"] == "wyoming.reconnecting").count(),
+        0
+    );
     assert_eq!(
         events
             .iter()
