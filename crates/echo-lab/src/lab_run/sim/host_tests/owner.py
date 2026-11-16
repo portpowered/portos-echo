@@ -49,11 +49,28 @@ def instrument(namespace, audit):
     host.start, host.close = observed_start, observed_close
 
 
+def runtime_observer():
+    namespace = runpy.run_path(str(Path(__file__).with_name("runtime_owner.py")))
+    return namespace["Runtime"]()
+
+
 def guest(script, directory):
     namespace = runpy.run_path(script)
     audit = Path(script).resolve().parents[5] / ".cache" / directory / "host.json"
     instrument(namespace, audit)
-    return namespace["main"]()
+    runtime = runtime_observer()
+    command = namespace["Host"].command
+
+    def registered(self, value):
+        if value.get("action") == "registered":
+            runtime.registered()
+        return command(self, value)
+
+    namespace["Host"].command = registered
+    try:
+        return namespace["main"]()
+    finally:
+        runtime.close()
 
 
 def main():
@@ -81,7 +98,27 @@ def main():
         return popen(argv, **kwargs)
 
     namespace["launch_windows"].__globals__["subprocess"].Popen = boundary
-    return namespace["launch_windows"]()
+    runtime = runtime_observer()
+    read = os.read
+    pending = b""
+
+    def observed_input(fd, size):
+        nonlocal pending
+        data = read(fd, size)
+        if fd == sys.stdin.fileno():
+            pending += data
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                if json.loads(line).get("action") == "registered":
+                    runtime.registered()
+        return data
+
+    os.read = observed_input
+    try:
+        return namespace["launch_windows"]()
+    finally:
+        os.read = read
+        runtime.close()
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from unittest import mock
 
 from test_controls import CONTROLLER, real_wsl_launcher_fixture
 from owner import instrument
+from runtime_owner import Owner, Runtime
 
 POPEN = subprocess.Popen
 
@@ -53,7 +54,7 @@ class ListenerOwner(unittest.TestCase):
                     self.assertEqual(events, [{"event": "host.ready", "address": f"127.0.0.1:{host.port}"}])
                     host.close()
                     observed = json.loads(audit.read_text())
-                    self.assertEqual(observed["owner_completed"], not leak)
+                    self.assertEqual(observed[0]["owner_completed"], not leak)
                     self.assertTrue(host.closed)
                     self.assertIsNotNone(host.proc.returncode)
                 finally:
@@ -62,6 +63,42 @@ class ListenerOwner(unittest.TestCase):
                     host.proc.wait(timeout=4)
                     host.proc.stdin.close()
                     host.proc.stdout.close()
+
+
+class RuntimeOwner(unittest.TestCase):
+    def test_t3_handle_observes_exit_and_rejects_a_retained_listener(self):
+        for leak in [False, True]:
+            with self.subTest(leak=leak):
+                code = ("import socket,sys; s=socket.socket(); s.bind(('127.0.0.1',0)); "
+                        "s.listen(); print(s.getsockname()[1],flush=True); sys.stdin.buffer.read()")
+                with POPEN([sys.executable, "-u", "-c", code], stdin=subprocess.PIPE,
+                           stdout=subprocess.PIPE) as child:
+                    self.assertGreater(int(child.stdout.readline()), 0)
+                    owner = Owner(child.pid)
+                    if not leak:
+                        child.stdin.close()
+                        child.wait(timeout=4)
+                    observation = owner.close()
+                    self.assertEqual(observation, {"owner_completed": not leak, "pid": child.pid})
+                    child.wait(timeout=4)
+
+    def test_t3_registration_retains_each_real_runtime_generation(self):
+        with tempfile.TemporaryDirectory(prefix="runtime-owners-") as folder:
+            audit = Path(folder) / "runtime.json"
+            with mock.patch.dict(os.environ, {"ECHO_LAB_TEST_RUNTIME_OWNERS": str(audit)}):
+                runtime = Runtime()
+            for _ in range(2):
+                with POPEN([sys.executable, "-u", "-c", "import sys; sys.stdin.buffer.read()"],
+                           stdin=subprocess.PIPE) as child:
+                    entries = {os.getpid(): (1, "echo-lab"), child.pid: (os.getpid(), "echo-bridge")}
+                    with mock.patch("runtime_owner.processes", return_value=entries):
+                        runtime.registered()
+                    child.stdin.close()
+                    child.wait(timeout=4)
+            runtime.close()
+            observations = json.loads(audit.read_text())
+            self.assertEqual(len(observations), 2)
+            self.assertEqual([value["owner_completed"] for value in observations], [True, True])
 
 
 class FixtureHandshake(unittest.TestCase):

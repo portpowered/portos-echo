@@ -66,9 +66,7 @@ fn authored_cleanup(session: &Session, report: &Value, output: &std::process::Ou
         .filter(|event| event["event"] == "sim.endpoint")
         .collect::<Vec<_>>();
     assert_eq!(endpoints.len(), 10);
-    for endpoint in &endpoints[1..] {
-        assert!(std::net::TcpStream::connect(endpoint["address"].as_str().unwrap()).is_err());
-    }
+    session.m5_owners_closed((endpoints.len() - 4) / 3);
 }
 
 #[test]
@@ -137,11 +135,7 @@ fn scenario(session: &Session, steps: Value) {
 }
 
 fn run(session: &Session) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_echo-lab"))
-        .current_dir(&session.0)
-        .args(["run", "scenario.yaml", "--driver", "sim", "--out", "artifacts"])
-        .output()
-        .unwrap()
+    session.m5_command().output().unwrap()
 }
 
 #[test]
@@ -319,11 +313,7 @@ fn m5_pending_link_is_not_approval_and_failed_count_oracle_closes_the_world() {
     let mut scenario: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     scenario["milestone"] = json!("M5");
     std::fs::write(path, scenario.to_string()).unwrap();
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_echo-lab"))
-        .current_dir(&session.0)
-        .args(["run", "scenario.yaml", "--driver", "sim", "--out", "artifacts"])
-        .output()
-        .unwrap();
+    let output = run(&session);
     assert_eq!(output.status.code(), Some(1));
     let report = session.report();
     assert_eq!(report["result"], "fail");
@@ -349,9 +339,7 @@ fn m5_pending_link_is_not_approval_and_failed_count_oracle_closes_the_world() {
         .filter(|event| event["event"] == "sim.endpoint")
         .collect::<Vec<_>>();
     assert_eq!(endpoints.len(), 7);
-    for endpoint in &endpoints[1..] {
-        assert!(std::net::TcpStream::connect(endpoint["address"].as_str().unwrap()).is_err());
-    }
+    session.m5_owners_closed((endpoints.len() - 4) / 3);
 }
 
 // Partial M5 journey: exact CLI/screen/grant observations, not the final M5
@@ -378,11 +366,7 @@ fn m5_operator_controls_use_production_bridge_and_report_observed_partial_counts
     scenario["milestone"] = json!("M5");
     std::fs::write(path, scenario.to_string()).unwrap();
     // Omit --bridge deliberately: M5 defaults to the actual delivered binary.
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_echo-lab"))
-        .current_dir(&session.0)
-        .args(["run", "scenario.yaml", "--driver", "sim", "--out", "artifacts"])
-        .output()
-        .unwrap();
+    let output = run(&session);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -410,7 +394,5 @@ fn m5_operator_controls_use_production_bridge_and_report_observed_partial_counts
         .filter(|event| event["event"] == "sim.endpoint")
         .collect::<Vec<_>>();
     assert_eq!(endpoints.len(), 10);
-    for endpoint in &endpoints[1..] {
-        assert!(std::net::TcpStream::connect(endpoint["address"].as_str().unwrap()).is_err());
-    }
+    session.m5_owners_closed((endpoints.len() - 4) / 3);
 }

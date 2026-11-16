@@ -73,6 +73,49 @@ impl Session {
         command
     }
 
+    // M5 retains the real direct child, including cancellation of pending link.
+    pub fn m5_command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_echo-lab"));
+        command
+            .current_dir(&self.0)
+            .args([
+                "run",
+                "scenario.yaml",
+                "--driver",
+                "sim",
+                "--out",
+                "artifacts",
+                "--python",
+                env!("CARGO_BIN_EXE_echo-lab-sim-script"),
+            ])
+            .env("ECHO_LAB_TEST_RUNTIME_OWNERS", self.0.join("runtime-owners.json"))
+            .env(
+                "ECHO_LAB_TEST_HOST_DIRECTORY",
+                std::path::Path::new(self.1.python())
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap(),
+            );
+        command
+    }
+
+    pub fn m5_owners_closed(&self, generations: usize) {
+        let observations: Value =
+            serde_json::from_slice(&fs::read(self.0.join("runtime-owners.json")).unwrap()).unwrap();
+        let owners = observations.as_array().unwrap();
+        assert_eq!(
+            owners.len(),
+            generations,
+            "every registered bridge generation needs its own owner handle"
+        );
+        for owner in owners {
+            assert_eq!(owner["owner_completed"], true, "direct bridge listener owner survived");
+        }
+        // The already-collected CLI owns auth/resource/Live; host has its own pidfd.
+        self.1.assert_closed();
+    }
+
     // M5 cancellation owns the delivered child directly; its adapter migration
     // remains separate from the normal runtime child collection below.
     pub fn raw_command(&self, bridge: &str) -> Command {
