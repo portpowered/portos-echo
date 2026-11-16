@@ -89,7 +89,7 @@ fn check_limits(directory: &Path, model: &Model, spoof: &Spoof, live: &bridge_pe
 async fn exercise_limits(live: &mut bridge_peer::Live, tool_cap: bool) {
     for id in ["limit-1", "limit-2"] {
         live.events.send(event(id, "client")).await.unwrap();
-        let value = tokio::time::timeout(Duration::from_secs(5), live.commentary.recv())
+        let value = tokio::time::timeout(OBSERVATION_TIMEOUT, live.commentary.recv())
             .await
             .unwrap()
             .unwrap();

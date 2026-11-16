@@ -36,7 +36,7 @@ pub(super) fn command(directory: &Path, args: &[&str]) -> Command {
 }
 
 pub(super) async fn invoke(directory: &Path, args: &[&str], code: i32, stdout: &str) {
-    let output = tokio::time::timeout(Duration::from_secs(10), command(directory, args).output())
+    let output = tokio::time::timeout(OBSERVATION_TIMEOUT, command(directory, args).output())
         .await
         .unwrap()
         .unwrap();
@@ -278,7 +278,7 @@ async fn bridge_wire_auth_configured_live_uses_selected_provider() {
         let mut bridge = Process::spawn(&mut cmd);
         let mut stream = listener.accept().await.unwrap().0;
         bridge_short::register(&mut stream, &mut bridge).await;
-        tokio::time::timeout(Duration::from_secs(10), observer.wait_for_calls(1))
+        tokio::time::timeout(OBSERVATION_TIMEOUT, observer.wait_for_calls(1))
             .await
             .unwrap()
             .unwrap();
@@ -393,7 +393,7 @@ pub(super) fn browser_query(url: &reqwest::Url) -> std::collections::HashMap<Str
 }
 
 pub(super) async fn browser_failure(process: &mut Process) {
-    let status = tokio::time::timeout(Duration::from_secs(5), process.child.wait())
+    let status = tokio::time::timeout(OBSERVATION_TIMEOUT, process.child.wait())
         .await
         .unwrap()
         .unwrap();

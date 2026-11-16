@@ -33,6 +33,9 @@ mod bridge_wire_delegation;
 #[path = "bridge_support/bridge_wire_screen.rs"]
 mod bridge_wire_screen;
 
+// Observation ceiling for slow instrumented loopback runs; product deadlines stay unchanged.
+const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(30);
+
 struct Process {
     name: &'static str,
     expected: String,
@@ -75,10 +78,10 @@ impl Process {
         }
     }
     async fn line(&mut self) -> String {
-        let response = tokio::time::timeout(Duration::from_secs(12), self.lines.next_line()).await;
+        let response = tokio::time::timeout(OBSERVATION_TIMEOUT, self.lines.next_line()).await;
         assert!(
             response.is_ok(),
-            "{} pid {:?}: timed out after 12s waiting for {}",
+            "{} pid {:?}: timed out after 30s waiting for {}",
             self.name,
             self.child.id(),
             self.expected

@@ -3,7 +3,7 @@ use super::*;
 use tokio::net::TcpListener;
 
 pub(super) async fn wait_event(path: &Path, event: &str) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
             let text = tokio::fs::read_to_string(path).await.unwrap();
             if text

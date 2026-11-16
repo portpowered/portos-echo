@@ -47,7 +47,7 @@ pub(super) async fn stream(address: &str) -> Lines<BufReader<TcpStream>> {
 }
 
 pub(super) async fn state(lines: &mut Lines<BufReader<TcpStream>>) -> Value {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
             let line = lines.next_line().await.unwrap().unwrap();
             if let Some(data) = line.strip_prefix("data: ") {

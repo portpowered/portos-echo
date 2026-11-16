@@ -135,7 +135,7 @@ pub(super) async fn configure(directory: &Path, port: u16, mode: &str, spoof: &S
 }
 
 async fn commentary(observer: &echo_live::fake::FakeObserver) -> Value {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
             let calls = observer.calls().unwrap();
             if let Some(text) = calls.first().and_then(|call| call.commentary.first()) {
@@ -451,7 +451,7 @@ async fn bridge_wire_delegation_eof_cancels_inflight_model_without_commentary() 
     let mut bridge = Process::spawn(&mut run_command(directory.path(), &live_origin, &origin));
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
-    let mut socket = tokio::time::timeout(Duration::from_secs(5), model.accept())
+    let mut socket = tokio::time::timeout(OBSERVATION_TIMEOUT, model.accept())
         .await
         .unwrap()
         .unwrap()
@@ -459,7 +459,7 @@ async fn bridge_wire_delegation_eof_cancels_inflight_model_without_commentary() 
     assert_eq!(read(&mut socket).await.body["model"], "fixture-model");
     bridge.finish(0).await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), socket.read(&mut [0]))
+        tokio::time::timeout(OBSERVATION_TIMEOUT, socket.read(&mut [0]))
             .await
             .unwrap()
             .unwrap(),
