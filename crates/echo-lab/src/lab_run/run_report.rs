@@ -11,6 +11,7 @@ pub use echo_lab::lab_mcp::LinkCounts;
 pub struct Artifacts {
     pub sim: bool,
     pub m1: Option<Value>,
+    pub m6: Option<Value>,
     pub root: PathBuf,
     pub checks: BTreeMap<String, bool>,
     pub blocked: BTreeMap<String, String>,
@@ -30,6 +31,7 @@ impl Artifacts {
         Ok(Self {
             sim: false,
             m1: None,
+            m6: None,
             link_counts: None,
             link_expectations: Vec::new(),
             observations: Vec::new(),
@@ -134,6 +136,9 @@ impl Artifacts {
         });
         if let Some(m1) = &self.m1 {
             report["m1"] = m1.clone();
+        }
+        if let Some(m6) = &self.m6 {
+            report["m6"] = m6.clone();
         }
         if let Some(counts) = self.link_counts {
             report["link_counts"] = serde_json::to_value(counts).map_err(|_| "run report: cannot encode counts")?;

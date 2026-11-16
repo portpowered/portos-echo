@@ -1,0 +1,23 @@
+id: m6-emotion
+milestone: M6
+tiers: [T3, T5]
+setup:
+  mcp: spoof
+  backend: client
+steps:
+  - say: "Computer, show me a happy face"
+  - expect_trace:
+      - session.delegation.created
+      - "tools/call {name: ui.show_emotion, count: 1}"
+      - session.commentary.append
+  - expect_screen:
+      sequence:
+        - {state: ready, message: "Echo Live ready"}
+        - {state: listening}
+        - {state: emotion, name: happy, frame_ms: 80, frames: ["(^_^)", "(^o^)"]}
+        - {state: listening}
+        - {state: speaking}
+        - {state: ready, message: "Echo Live ready"}
+  - expect_speech_contains: ["happy", "face"]
+budgets: {}
+negative: []

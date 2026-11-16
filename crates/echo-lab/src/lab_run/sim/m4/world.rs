@@ -17,6 +17,11 @@ use super::{
 
 #[derive(Default)]
 pub struct World {
+    pub emotion: bool,
+    pub ui_states: Vec<Value>,
+    pub playback: Option<Value>,
+    pub reply_pcm_bytes: usize,
+    result_gate: Option<tokio::sync::oneshot::Sender<()>>,
     pub host: Option<Process>,
     pub bridge: Option<Process>,
     relay: Option<Relay>,
@@ -60,19 +65,64 @@ impl World {
             .await
             .map_err(|_| "m4: spoof startup failed")?,
         );
+        self.start_model(negative).await?;
+        self.start_live(negative).await?;
+        configure(
+            root,
+            self.relay.as_ref().ok_or("m4: missing relay")?.address.port(),
+            self.spoof.as_ref().ok_or("m4: missing spoof")?,
+        )?;
+        self.configure_emotion()?;
+        let mut command = command(
+            root,
+            bridge,
+            self.live.as_ref().ok_or("m4: missing Live")?.base_url(),
+            &self.model.as_ref().ok_or("m4: missing model")?.origin,
+        );
+        if self.emotion {
+            command.arg("--sim-clock");
+        }
+        self.bridge = Some(Process::start(&mut command)?);
+        self.bridge
+            .as_mut()
+            .ok_or("m4: missing bridge")?
+            .expect("bridge.ready")
+            .await?;
+        self.control(json!({"action":"registered"})).await
+    }
+
+    async fn start_model(&mut self, negative: bool) -> Result<(), String> {
         let mut timing = self.relay.as_ref().ok_or("m4: missing relay")?.observations();
+        let (release, held) = tokio::sync::oneshot::channel();
+        if self.emotion {
+            self.result_gate = Some(release);
+        }
         self.model = Some(
-            Model::bind_after(negative, async move {
-                loop {
-                    if timing.borrow().endpoint_seen() {
-                        return Ok(());
+            Model::bind_controlled(
+                negative,
+                async move {
+                    loop {
+                        if timing.borrow().endpoint_seen() {
+                            return Ok(());
+                        }
+                        timing.changed().await.map_err(|_| "m4: capture observer closed")?;
                     }
-                    timing.changed().await.map_err(|_| "m4: capture observer closed")?;
-                }
-            })
+                },
+                self.emotion.then_some(held),
+            )
             .await?,
         );
-        let text = if negative { FALLBACK } else { SUCCESS };
+        Ok(())
+    }
+
+    async fn start_live(&mut self, negative: bool) -> Result<(), String> {
+        let text = if self.emotion {
+            super::emotion::REPLY
+        } else if negative {
+            FALLBACK
+        } else {
+            SUCCESS
+        };
         self.live = Some(
             FakeLive::bind_dialogue(DialogueScript {
                 delegation_id: "d-1".into(),
@@ -88,23 +138,7 @@ impl World {
             .await
             .map_err(|_| "m4: Live startup failed")?,
         );
-        configure(
-            root,
-            self.relay.as_ref().ok_or("m4: missing relay")?.address.port(),
-            self.spoof.as_ref().ok_or("m4: missing spoof")?,
-        )?;
-        self.bridge = Some(Process::start(&mut command(
-            root,
-            bridge,
-            self.live.as_ref().ok_or("m4: missing Live")?.base_url(),
-            &self.model.as_ref().ok_or("m4: missing model")?.origin,
-        ))?);
-        self.bridge
-            .as_mut()
-            .ok_or("m4: missing bridge")?
-            .expect("bridge.ready")
-            .await?;
-        self.control(json!({"action":"registered"})).await
+        Ok(())
     }
 
     async fn control(&mut self, value: Value) -> Result<(), String> {
@@ -120,24 +154,32 @@ impl World {
 
     pub async fn speak(&mut self) -> Result<(Value, Timing), String> {
         let mut screen = Screen::connect(&self.root).await?;
-        screen.expect("ready").await?;
+        self.observe(&mut screen, 0, "ready").await?;
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
-        screen.expect("listening").await?;
-        self.speaking = Some(screen.expect("speaking").await?);
+        self.observe(&mut screen, 1, "listening").await?;
+        if self.emotion {
+            self.animate(&mut screen).await?;
+        }
+        self.speaking = Some(self.observe(&mut screen, 4, "speaking").await?);
         let completion = self
             .bridge
             .as_mut()
             .ok_or("m4: missing bridge")?
             .expect("bridge.run_completed")
             .await?;
-        screen.expect("ready").await?;
+        self.observe(&mut screen, 5, "ready").await?;
         let host = self.host.as_mut().ok_or("m4: missing host")?;
         host.send(&json!({"action":"playback"})).await?;
         let playback = host.expect("host.ack").await?;
         if playback != json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0}) {
             return Err("m4: expected exact decoded host playback PCM".into());
         }
+        self.playback = Some(playback);
         let timing = self.relay.as_ref().ok_or("m4: missing relay")?.timing();
+        self.reply_pcm_bytes = timing.played;
+        if self.emotion && timing.played != 9600 {
+            return Err(format!("m6: forwarded PCM bytes {}; expected 9600", timing.played));
+        }
         timing.sample()?;
         Ok((completion, timing))
     }
@@ -150,9 +192,14 @@ impl World {
             .ok_or("m4: missing spoof")?
             .snapshot()
             .map_err(|_| "m4: spoof observation failed")?;
+        let (name, args) = if self.emotion {
+            ("ui.show_emotion", json!({"name":"happy"}))
+        } else {
+            ("test.echo", json!({"text":"delegated echo"}))
+        };
         if snapshot.calls.len() != 1
-            || snapshot.calls[0].name != "test.echo"
-            || snapshot.calls[0].args != json!({"text":"delegated echo"})
+            || snapshot.calls[0].name != name
+            || snapshot.calls[0].args != args
             || snapshot.calls[0].count != 1
         {
             return Err("m4: expected exactly one test.echo attempt with exact arguments".into());
@@ -205,6 +252,7 @@ impl World {
     }
 
     async fn close_peers(&mut self, failures: &mut Vec<String>) {
+        self.result_gate.take();
         if let Some(relay) = self.relay.take()
             && let Err(error) = relay.close().await
         {
@@ -227,6 +275,8 @@ impl World {
         }
     }
 }
+
+mod emotion;
 
 pub fn configure(root: &Path, port: u16, spoof: &Spoof) -> Result<(), String> {
     let config = format!(

@@ -1,6 +1,37 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn m6_report_extension_is_optional_complete_and_strictly_typed() {
+    let source: Value = serde_json::from_str(include_str!("../../../schemas/report.schema.json")).unwrap();
+    let validator = jsonschema::validator_for(&source["properties"]["m6"]).unwrap();
+    let measurement = json!({"ui_states":[{"seq":1,"state":{"state":"listening"}}],
+        "frame_count":2,"frame_ms":80,"return_state":{"state":"listening"},
+        "reply_pcm_bytes":9600,"host_pcm_bytes":9600,"host_nonzero_bytes":0});
+    assert!(validator.is_valid(&measurement));
+    assert!(!source["required"].as_array().unwrap().contains(&json!("m6")));
+    for field in source["properties"]["m6"]["required"].as_array().unwrap() {
+        let field = field.as_str().unwrap();
+        let mut missing = measurement.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(!validator.is_valid(&missing), "{field}");
+        let mut wrong = measurement.clone();
+        wrong[field] = json!("wrong");
+        assert!(!validator.is_valid(&wrong), "{field}");
+    }
+    for wrong in [
+        json!({"seq":-1,"state":{}}),
+        json!({"seq":1}),
+        json!({"seq":1,"state":{},"private":"body"}),
+    ] {
+        let mut invalid = measurement.clone();
+        invalid["ui_states"] = json!([wrong]);
+        assert!(!validator.is_valid(&invalid));
+    }
+    let scenario: Value = serde_norway::from_str(include_str!("../../../tests/scenarios/m6-emotion.yaml")).unwrap();
+    assert!(schema().unwrap().is_valid(&scenario));
+}
+
 fn scenario() -> Value {
     serde_norway::from_str(include_str!("../../../tests/scenarios/m0-harness.yaml")).unwrap()
 }

@@ -1,0 +1,74 @@
+use super::*;
+
+fn frames() -> Vec<Value> {
+    sequence()
+        .into_iter()
+        .enumerate()
+        .map(|(seq, state)| json!({"seq":seq,"state":state}))
+        .collect()
+}
+
+#[test]
+fn m6_ordered_oracle_requires_exact_values_and_increasing_native_sequences() {
+    let expected = json!({"sequence":sequence()});
+    assert_eq!(ordered(&frames(), &expected), Ok(()));
+    for (field, value) in [
+        ("name", json!("sad")),
+        ("frame_ms", json!(81)),
+        ("frames", json!(["a", "b"])),
+    ] {
+        let mut wrong = frames();
+        wrong[2]["state"][field] = value;
+        let message = ordered(&wrong, &expected).unwrap_err();
+        assert_eq!(
+            message,
+            format!("m6: expected state {}; observed {}", state(), wrong[2]["state"])
+        );
+    }
+    for index in 1..6 {
+        let mut wrong = frames();
+        wrong[index]["seq"] = wrong[index - 1]["seq"].clone();
+        assert_eq!(
+            ordered(&wrong, &expected),
+            Err("m6: screen sequence must strictly increase".into())
+        );
+    }
+    let mut swapped = frames();
+    swapped.swap(3, 4);
+    assert!(
+        ordered(&swapped, &expected)
+            .unwrap_err()
+            .starts_with("m6: expected state")
+    );
+    let mut missing = frames();
+    missing.remove(3);
+    assert_eq!(
+        ordered(&missing, &expected),
+        Err("m6: ordered screen state count mismatch".into())
+    );
+}
+
+#[test]
+fn m6_still_empty_duplicate_and_malformed_frames_fail_before_value_comparison() {
+    for (frames_value, distinct) in [(json!([]), 0), (json!(["(^_^)"]), 1), (json!(["same", "same"]), 1)] {
+        let mut actual = frames();
+        actual[2]["state"]["frames"] = frames_value;
+        assert_eq!(
+            ordered(&actual, &json!({"sequence":sequence()})),
+            Err(format!(
+                "m6: animation frame count {distinct}; expected at least 2 distinct frames"
+            ))
+        );
+    }
+    for invalid in [
+        json!({}),
+        json!({"seq":-1,"state":state()}),
+        json!({"seq":1,"state":{"state":"unknown"}}),
+    ] {
+        assert_eq!(
+            frame(&invalid, None, &state()),
+            Err("m6: malformed screen frame".into())
+        );
+    }
+    assert_eq!(ordered(&[], &json!({})), Err("m6: missing expected sequence".into()));
+}

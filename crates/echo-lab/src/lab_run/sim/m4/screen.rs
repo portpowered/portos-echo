@@ -53,16 +53,21 @@ impl Screen {
     }
 
     pub async fn expect(&mut self, expected: &str) -> Result<Value, String> {
+        let frame = self.next().await?;
+        if frame["state"]["state"] != expected {
+            return Err(format!(
+                "screen: expected current state {expected}, observed {}",
+                frame["state"]["state"]
+            ));
+        }
+        Ok(frame["state"].clone())
+    }
+
+    pub async fn next(&mut self) -> Result<Value, String> {
         for _ in 0..128 {
             if let Some(data) = self.line().await?.strip_prefix("data: ") {
                 let frame: Value = serde_json::from_str(data).map_err(|_| "screen: malformed state")?;
-                if frame["state"]["state"] != expected {
-                    return Err(format!(
-                        "screen: expected current state {expected}, observed {}",
-                        frame["state"]["state"]
-                    ));
-                }
-                return Ok(frame["state"].clone());
+                return Ok(frame);
             }
         }
         Err("screen: missing state within frame limit".into())

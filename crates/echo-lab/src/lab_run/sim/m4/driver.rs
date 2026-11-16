@@ -17,6 +17,13 @@ pub fn utterance(value: &str) -> Result<Step, String> {
     Ok(Step::SayText(value.into()))
 }
 
+pub fn emotion_utterance(value: &str) -> Result<Step, String> {
+    if value != super::emotion::UTTERANCE {
+        return Err("m6: no finite synthetic fixture for this utterance".into());
+    }
+    Ok(Step::SayText(value.into()))
+}
+
 pub fn negative(scenario: &Value) -> Result<Vec<Step>, String> {
     if scenario["id"] != "m4-spoof-tool" {
         return Ok(vec![]);
@@ -49,11 +56,13 @@ pub struct M4<'a> {
     samples: Vec<Duration>,
     negative: bool,
     completed: bool,
+    emotion: bool,
 }
 
 impl<'a> M4<'a> {
     pub fn new(options: &'a Options) -> Result<Self, String> {
         Ok(Self {
+            emotion: crate::lab_validate::load(&options.scenarios[0])?["id"] == "m6-emotion",
             options,
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -74,6 +83,7 @@ impl<'a> M4<'a> {
         self.transcript = None;
         self.run = None;
         self.world = World::default();
+        self.world.emotion = self.emotion;
         let case = if self.negative { "http500" } else { "success" };
         let work = self.runtime.block_on(controlled(
             async {
@@ -100,6 +110,9 @@ impl<'a> M4<'a> {
             tokio::time::Instant::now() + Duration::from_secs(30),
         ));
         let cleanup = self.runtime.block_on(self.world.close());
+        if self.emotion {
+            artifacts.m6 = Some(super::emotion::measurement(&self.world));
+        }
         let (completion, timing, text) = match (work, cleanup) {
             (Err(primary), Err(cleanup)) => return Err(format!("{primary}; {cleanup}")),
             (Err(error), _) | (_, Err(error)) => return Err(error),
@@ -109,20 +122,40 @@ impl<'a> M4<'a> {
             .as_str()
             .filter(|s| !s.is_empty())
             .ok_or("m4: missing completed run")?;
-        selectors::check(
-            &self.world.trace.records,
-            &selectors::parse(&[
-                json!("session.delegation.created"),
-                json!("tools/call {name: test.echo, count: 1}"),
-                json!("session.commentary.append"),
-            ])?,
-            Some(run),
-        )?;
+        self.check_delegation(run)?;
         self.samples.push(timing.sample()?);
         self.run = Some(run.into());
         self.transcript = Some(text);
         self.completed = true;
-        self.record(artifacts, case, &timing)
+        if self.emotion {
+            super::emotion::ordered(&self.world.ui_states, &json!({"sequence":super::emotion::sequence()}))
+        } else {
+            self.record(artifacts, case, &timing)
+        }
+    }
+
+    fn check_delegation(&self, run: &str) -> Result<(), String> {
+        selectors::check(
+            &self.world.trace.records,
+            &selectors::parse(&[
+                json!("session.delegation.created"),
+                json!(if self.emotion {
+                    "tools/call {name: ui.show_emotion, count: 1}"
+                } else {
+                    "tools/call {name: test.echo, count: 1}"
+                }),
+                json!("session.commentary.append"),
+            ])?,
+            Some(run),
+        )?;
+        if self.emotion {
+            selectors::check(
+                &self.world.trace.records,
+                &selectors::parse(&[json!("reply.played {outcome: played}")])?,
+                Some(run),
+            )?;
+        }
+        Ok(())
     }
 
     fn record(&self, artifacts: &mut Artifacts, case: &str, timing: &wire::Timing) -> Result<(), String> {
@@ -173,6 +206,7 @@ impl<'a> M4<'a> {
                     .as_bytes(),
                 phrases,
             ),
+            Step::Ui(expected) if self.emotion => super::emotion::ordered(&self.world.ui_states, expected),
             Step::Ui(expected) => observers::screen(
                 &serde_json::to_vec(
                     self.world
@@ -199,7 +233,11 @@ impl Driver for M4<'_> {
     fn execute(&mut self, step: &Step, _: usize, _: Option<&Step>, artifacts: &mut Artifacts) -> Result<(), String> {
         match step {
             Step::SayText(text) if !self.completed && !self.negative => {
-                utterance(text)?;
+                if self.emotion {
+                    emotion_utterance(text)?;
+                } else {
+                    utterance(text)?;
+                }
                 self.journey(artifacts)
             }
             Step::Inject if self.completed && !self.negative => {

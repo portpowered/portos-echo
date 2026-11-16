@@ -27,11 +27,13 @@ pub fn default_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
     if scenario["milestone"] == "M5" {
         return production_bridge();
     }
-    prebuilt(if scenario["milestone"] == "M1" || scenario["id"] == "m4-spoof-tool" {
-        "echo-bridge"
-    } else {
-        "echo-lab-sim-bridge"
-    })
+    prebuilt(
+        if scenario["milestone"] == "M1" || matches!(scenario["id"].as_str(), Some("m4-spoof-tool" | "m6-emotion")) {
+            "echo-bridge"
+        } else {
+            "echo-lab-sim-bridge"
+        },
+    )
 }
 
 fn prebuilt(name: &str) -> Result<PathBuf, String> {
@@ -125,7 +127,9 @@ fn run_suite(
 
 fn scenario_command(bridge: &Path, name: &str, scenario: &serde_json::Value) -> Result<Vec<String>, String> {
     let production;
-    let selected = if matches!(scenario["milestone"].as_str(), Some("M1" | "M5")) || scenario["id"] == "m4-spoof-tool" {
+    let selected = if matches!(scenario["milestone"].as_str(), Some("M1" | "M5"))
+        || matches!(scenario["id"].as_str(), Some("m4-spoof-tool" | "m6-emotion"))
+    {
         production = default_bridge(scenario)?;
         production.as_path()
     } else {
@@ -196,7 +200,7 @@ pub fn destination(root: &Path, milestone: &str) -> Result<PathBuf, String> {
 
 /// M4 consumes the delivered bridge; earlier scenarios retain their helper.
 pub fn scenario_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
-    if scenario["id"] != "m4-spoof-tool" {
+    if !matches!(scenario["id"].as_str(), Some("m4-spoof-tool" | "m6-emotion")) {
         return default_bridge(scenario);
     }
     let bridge = std::env::current_exe()

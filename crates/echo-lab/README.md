@@ -644,3 +644,21 @@ Component coverage for one independent restart of each process is available with
 cargo nextest run --locked -p echo-lab --test sim_host --run-ignored only \
   -E 'test(m1_independent_restart_steps)' --config-file .github/nextest.toml --profile ci --no-capture
 ```
+
+M6 extends the M4 production world with the spoof `ui.show_emotion` tool:
+
+```sh
+target/debug/echo-lab run tests/scenarios/m6-emotion.yaml --driver sim
+```
+
+The paired SSE observer checks Ready, Listening, Emotion, Listening, Speaking,
+and Ready by exact value with strictly increasing sequence numbers. The happy
+animation has frames `(^_^)` and `(^o^)` at 80 ms. Only after observing Emotion
+does the harness advance the guarded bridge clock by 160 ms. The controlled
+Responses peer holds terminal output until the native return to Listening is
+observed. The report's optional `m6` measurement retains the received screen
+frames, duration, return state, forwarded reply bytes and host playback counts.
+A still image fails with `m6: animation frame count 1; expected at least 2 distinct frames`.
+The later reply must forward 9600 PCM bytes, with the same host playback count
+and zero nonzero bytes. This proves synthetic playback through the host; real
+speech, device animation and program milestone M6 require the operator T5 run.
