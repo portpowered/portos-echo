@@ -62,6 +62,8 @@ pub enum Step {
     Restart { process: String, count: u64, say: PathBuf },
     LinkCounts(LinkCounts),
     Mcp(McpAction),
+    Inject,
+    TraceAbsent(Vec<serde_json::Value>),
     Unsupported,
 }
 
@@ -78,6 +80,9 @@ pub trait Driver {
 
 fn say(value: &str, scenario: &str, options: &Options) -> Result<Step, String> {
     if options.sim {
+        if crate::lab_validate::load(scenario)?["id"] == "m4-spoof-tool" {
+            return sim::m4::utterance(value);
+        }
         return Ok(Step::SayFile(sim::fixture(value, scenario)?));
     }
     if let Some(text) = value.strip_prefix("text:") {
@@ -141,6 +146,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
             });
         }
         if options.sim {
+            steps.extend(sim::m4::negative(&scenario)?);
             for (name, value) in scenario["budgets"].as_object().ok_or("sim: missing budgets")? {
                 steps.push(Step::Budget(
                     name.clone(),
@@ -171,6 +177,10 @@ fn sim_setup(scenario: &serde_json::Value) -> Result<(), String> {
         })
     }) {
         return Err("sim: unsupported setup mode".into());
+    }
+    if scenario["id"] == "m4-spoof-tool" {
+        sim::m4::negative(scenario)?;
+        return Ok(());
     }
     if scenario["negative"].as_array().is_none_or(|v| !v.is_empty()) {
         return Err("sim: unsupported negative injection".into());
@@ -243,13 +253,7 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
         .ok_or("scenario: invalid SHA-256 digest")?;
     let mut artifacts = Artifacts::create(root)?;
     artifacts.sim = options.sim;
-    let mut driver: Box<dyn Driver> = if options.sim && milestone == "M5" {
-        Box::new(sim::mcp::M5::new(&options)?)
-    } else if options.sim {
-        Box::new(sim::Sim::new(&options)?)
-    } else {
-        Box::new(run_device::Device::new(&options))
-    };
+    let mut driver = driver(&options)?;
     let result = dispatch(driver.as_mut(), &steps, &mut artifacts);
     let cleanup = driver.close(&mut artifacts);
     let final_counts = artifacts.finalize_link_counts();
@@ -297,5 +301,20 @@ pub fn run(args: &[String], output: &mut impl Write, errors: &mut impl Write) ->
             let _ = writeln!(errors, "echo-lab: {message}");
             1
         }
+    }
+}
+
+fn driver(options: &Options) -> Result<Box<dyn Driver + '_>, String> {
+    if !options.sim {
+        return Ok(Box::new(run_device::Device::new(options)));
+    }
+    let scenario = crate::lab_validate::load(&options.scenarios[0])?;
+    if scenario["milestone"] == "M5" {
+        return Ok(Box::new(sim::mcp::M5::new(options)?));
+    }
+    if scenario["id"] == "m4-spoof-tool" {
+        Ok(Box::new(sim::m4::M4::new(options)?))
+    } else {
+        Ok(Box::new(sim::Sim::new(options)?))
     }
 }

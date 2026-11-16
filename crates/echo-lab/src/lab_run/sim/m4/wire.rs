@@ -104,6 +104,7 @@ pub struct Relay {
 impl Relay {
     // capture_bytes is the known finite fixture endpoint including its lead-in.
     // The fixture owner must supply it; this observer never infers speech/VAD.
+    #[cfg(test)]
     pub async fn bind(host: SocketAddr, capture_bytes: usize) -> Result<Self, String> {
         if host.ip() != std::net::Ipv4Addr::LOCALHOST || host.port() == 0 {
             return Err("wire: host must be bound on 127.0.0.1".into());
@@ -204,13 +205,18 @@ async fn serve(
 }
 
 enum Endpoint {
+    #[cfg(test)]
     Count(usize),
-    Fixture { bytes: Vec<u8>, tail: Vec<u8> },
+    Fixture {
+        bytes: Vec<u8>,
+        tail: Vec<u8>,
+    },
 }
 
 impl Endpoint {
     fn observe(&mut self, state: &mut Timing, event: &Event, now: Duration) -> Result<(), String> {
         match self {
+            #[cfg(test)]
             Self::Count(target) => state.capture(event, *target, now),
             Self::Fixture { bytes, tail } => {
                 // Retain only a possible cross-frame match; never retain room PCM.

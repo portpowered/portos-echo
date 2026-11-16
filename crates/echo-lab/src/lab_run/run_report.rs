@@ -65,6 +65,12 @@ impl Artifacts {
         writeln!(self.events, "{safe}").map_err(|_| "run output: cannot append observation".into())
     }
 
+    pub fn measurement(&mut self, value: Value) -> Result<(), String> {
+        writeln!(self.events, "{value}").map_err(|_| "run output: cannot append measurement")?;
+        self.observations.push(value);
+        Ok(())
+    }
+
     pub fn endpoint(&mut self, address: std::net::SocketAddr) -> Result<(), String> {
         let safe = json!({"event":"sim.endpoint","address":address.to_string()});
         writeln!(self.events, "{safe}").map_err(|_| "run output: cannot append endpoint".into())

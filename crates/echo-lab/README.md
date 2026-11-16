@@ -40,8 +40,30 @@ the successful socket write containing that endpoint to the first reply PCM
 write. These are host-boundary observations, not DAC or acoustic timings.
 The paired screen SSE must show ready, listening, speaking, and ready in order.
 Success and HTTP 500 use independent worlds, exact model results, and checked
-cleanup. These witnesses are test-only pending M4 scenario driver integration;
-they do not claim that `m4-spoof-tool.yaml` passes yet.
+cleanup. The public M4 scenario uses these same owned worlds:
+
+```sh
+cargo build -p echo-bridge -p echo-lab --bins --locked
+target/debug/echo-lab run tests/scenarios/m4-spoof-tool.yaml --driver sim
+```
+
+The unchanged utterance maps to the finite synthetic capture. The sim driver
+selects the sibling production `echo-bridge`; `--bridge` explicitly overrides it.
+W1 retains its helper. Discovery executes M4 too, and `make test-sim` repeats
+both cases ten times without retries. Each case uses fresh peers and private
+configuration; cleanup failures fail the run. `report.json` records actual
+sent transcript, paired screen state, counts, PCM bytes and socket latency.
+The p95 budget covers the positive and fresh HTTP 500 samples together.
+
+`tests/golden/m4-success.jsonl` and `m4-http500.jsonl` were recorded from these
+configured bridge worlds. The runner normalizes only incidental timestamps,
+IDs and ephemeral endpoints, then compares every line. A difference fails and
+prints expected/actual lines. There is no automatic update option. Normalized
+actual traces are retained beside the report for inspection; private raw traces,
+keys, configuration and PCM are removed. The explicit dialogue capture gate
+orders the first microphone observation before delegation without sorting or
+filtering the trace. Golden changes require a separately observed run and
+review of each semantic difference.
 
 `cargo build -p echo-lab --bin echo-lab-sim-bridge --locked` builds the
 test-purpose Wyoming bridge. It has no model or tool execution. Supply

@@ -81,6 +81,7 @@ test-sim:
 	cargo nextest run -p echo-lab --test sim_host --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
 	cargo nextest run -p echo-lab --bin echo-lab --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
 	cargo run --locked -p echo-lab -- run --all --driver sim
+	for attempt in 1 2 3 4 5 6 7 8 9 10; do target/debug/echo-lab run tests/scenarios/m4-spoof-tool.yaml --driver sim; done
 
 .PHONY: hassmic-host capture-wyoming measure-barge-in
 hassmic-host:

@@ -384,6 +384,8 @@ impl Device<'_> {
                 )
             }
             Step::Restart { .. }
+            | Step::Inject
+            | Step::TraceAbsent(_)
             | Step::Unsupported
             | Step::Trace(_)
             | Step::Ui(_)

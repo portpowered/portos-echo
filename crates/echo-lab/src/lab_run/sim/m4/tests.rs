@@ -144,6 +144,7 @@ async fn journey(negative: bool) {
         commentary: text.into(),
         transcript: text.into(),
         audio_frames: 10,
+        initial_after_audio_frames: 0,
     })
     .await
     .unwrap();

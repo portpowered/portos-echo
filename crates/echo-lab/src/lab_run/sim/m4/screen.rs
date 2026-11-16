@@ -52,7 +52,7 @@ impl Screen {
             .map_err(|_| "screen: malformed frame".into())
     }
 
-    pub async fn expect(&mut self, expected: &str) -> Result<(), String> {
+    pub async fn expect(&mut self, expected: &str) -> Result<Value, String> {
         for _ in 0..128 {
             if let Some(data) = self.line().await?.strip_prefix("data: ") {
                 let frame: Value = serde_json::from_str(data).map_err(|_| "screen: malformed state")?;
@@ -62,7 +62,7 @@ impl Screen {
                         frame["state"]["state"]
                     ));
                 }
-                return Ok(());
+                return Ok(frame["state"].clone());
             }
         }
         Err("screen: missing state within frame limit".into())

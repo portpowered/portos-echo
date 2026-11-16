@@ -312,3 +312,74 @@ fn observation_projection_excludes_private_payloads_and_preserves_explicit_zero(
         }
     }
 }
+
+// T3: customer CLI, prebuilt production bridge, pinned host and owned local peers.
+#[test]
+#[ignore = "T3 requires the prebuilt pinned hassmic-host and echo-bridge"]
+fn m4_cli_both_cases_and_wrong_count_report_exact_results_and_cleanup() {
+    let bridge = std::path::Path::new(env!("CARGO_BIN_EXE_echo-lab")).with_file_name(if cfg!(windows) {
+        "echo-bridge.exe"
+    } else {
+        "echo-bridge"
+    });
+    for seeded in [false, true] {
+        let session = Session::new();
+        let original = include_str!("../../../tests/scenarios/m4-spoof-tool.yaml");
+        let scenario = if seeded {
+            original.replace("count: 1", "count: 2")
+        } else {
+            original.into()
+        };
+        std::fs::write(session.0.join("scenario.yaml"), scenario).unwrap();
+        let output = session.command(bridge.to_str().unwrap()).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(i32::from(seeded)),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = session.report();
+        let (result, count) = if seeded { ("fail", 1) } else { ("pass", 2) };
+        assert_eq!(report["result"], result);
+        assert_eq!(report["checks"]["world_closed"], true);
+        assert_eq!(report["checks"]["step_1"], !seeded);
+        let observations = report["observations"].as_array().unwrap();
+        assert_eq!(observations.len(), count);
+        for (index, observation) in observations.iter().enumerate() {
+            assert_m4_case(observation, index == 1);
+        }
+        assert_m4_seed(&output, seeded);
+        assert!(!session.0.join("artifacts/private-success").exists());
+        assert!(!session.0.join("artifacts/private-http500").exists());
+    }
+}
+
+fn assert_m4_case(observation: &Value, negative: bool) {
+    assert_eq!(observation["case"], if negative { "http500" } else { "success" });
+    assert_eq!(observation["tools_call_count"], 1);
+    assert_eq!(observation["commentary_count"], 1);
+    assert_eq!(observation["capture_bytes"], 28800);
+    assert_eq!(observation["reply_pcm_bytes"], 9600);
+    assert_eq!(observation["screen"], "speaking");
+    assert_eq!(
+        observation["transcript"],
+        if negative {
+            "I couldn't call test echo."
+        } else {
+            "test echo: delegated echo"
+        }
+    );
+    assert!(
+        observation["endpoint_to_first_pcm_us"]
+            .as_u64()
+            .is_some_and(|micros| micros <= 1_500_000)
+    );
+}
+
+fn assert_m4_seed(output: &std::process::Output, seeded: bool) {
+    if seeded {
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("step 1:"));
+        assert!(error.contains("expected 2 occurrences, observed 1"));
+    }
+}

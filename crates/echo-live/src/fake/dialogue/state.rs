@@ -8,6 +8,7 @@ impl DialogueScript {
     pub(super) fn validate(&self) -> Result<(), CallError> {
         if self.delegation_id.len() > 128
             || DelegationId::new(self.delegation_id.clone()).is_err()
+            || self.initial_after_audio_frames > 128
             || !(1..=20).contains(&self.audio_frames)
             || [&self.input, &self.commentary, &self.transcript]
                 .iter()

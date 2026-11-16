@@ -27,6 +27,9 @@ pub struct DialogueScript {
     pub transcript: String,
     /// 1..=20 valid 20-ms Opus comfort-noise frames, not speech synthesis.
     pub audio_frames: u16,
+    /// Wait for 0..=128 microphone frames before the initial delegation.
+    /// Zero preserves immediate dialogue replay; finite scenarios can order capture.
+    pub initial_after_audio_frames: u16,
 }
 
 /// Ordered successful sends, retained with their containing call/delegation identity.
@@ -229,6 +232,17 @@ async fn replay(
     let deadline = now() + Duration::from_secs(20);
     while !peer.ready() {
         drive(peer, deadline).await?;
+    }
+    let mut received = 0;
+    while received < script.initial_after_audio_frames {
+        drive(peer, deadline).await?;
+        while peer.pop_audio().is_some() {
+            if received == 128 {
+                return Err(CallError::Decode);
+            }
+            received += 1;
+            observer.update(index, |call| call.received_audio += 1)?;
+        }
     }
     let initial = json!({"type":"session.delegation.created", "delegation": {
         "id":script.delegation_id, "target":"client", "input":script.input

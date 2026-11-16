@@ -281,3 +281,30 @@ async fn t3_dialogue_drop_closes_listener_and_partial_http_tasks() {
     );
     assert!(TcpStream::connect(address).await.is_err());
 }
+
+#[tokio::test(start_paused = true)]
+async fn t3_dialogue_initial_delegation_waits_for_explicit_capture_gate() {
+    let mut script = script();
+    script.initial_after_audio_frames = 1;
+    let fake = crate::fake::FakeLive::bind_dialogue(script.clone()).await.unwrap();
+    let observer = fake.observer();
+    let mut call = open(&fake).await;
+    assert_eq!(observer.calls().unwrap()[0].sent, vec![]);
+    call.send_audio(
+        AudioFrame {
+            sequence: 0,
+            timestamp: 0,
+            payload: vec![0xf8, 0xff, 0xfe],
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    let event = receive(&mut call).await;
+    assert!(matches!(event, LiveEvent::DelegationCreated { .. }));
+    wait(&observer, 0, |call| call.received_audio == 1).await;
+    append(&mut call, "d-1", &script.commentary).await;
+    receive_reply(&mut call, &script).await;
+    call.close();
+    fake.shutdown().await.unwrap();
+}

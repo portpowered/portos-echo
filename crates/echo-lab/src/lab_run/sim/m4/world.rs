@@ -25,6 +25,7 @@ pub struct World {
     spoof: Option<Spoof>,
     root: PathBuf,
     pub trace: Trace,
+    pub speaking: Option<Value>,
 }
 
 // A finite synthetic 100 ms utterance, distinguishable from startup silence.
@@ -79,6 +80,7 @@ impl World {
                 commentary: text.into(),
                 transcript: text.into(),
                 audio_frames: 10,
+                initial_after_audio_frames: 1,
             })
             .await
             .map_err(|_| "m4: Live startup failed")?,
@@ -118,7 +120,7 @@ impl World {
         screen.expect("ready").await?;
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
         screen.expect("listening").await?;
-        screen.expect("speaking").await?;
+        self.speaking = Some(screen.expect("speaking").await?);
         let completion = self
             .bridge
             .as_mut()

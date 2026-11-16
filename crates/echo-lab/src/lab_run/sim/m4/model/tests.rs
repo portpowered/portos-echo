@@ -2,7 +2,7 @@ use super::*;
 
 fn request() -> Value {
     json!({"model":"fixture-model","stream":true,"store":false,"parallel_tool_calls":false,
-        "tools":tools(),"input":[{"role":"developer"},{"role":"user"}]})
+        "tools":tools().unwrap(),"input":[{"role":"developer"},{"role":"user"}]})
 }
 
 fn followup(negative: bool) -> Value {

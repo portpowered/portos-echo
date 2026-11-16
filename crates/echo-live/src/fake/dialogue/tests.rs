@@ -12,6 +12,7 @@ fn script() -> DialogueScript {
         commentary: "test echo: delegated echo".into(),
         transcript: "test echo: delegated echo".into(),
         audio_frames: 3,
+        initial_after_audio_frames: 0,
     }
 }
 
@@ -124,4 +125,13 @@ fn dialogue_error_reply_is_explicit_and_observations_remain_bounded() {
     assert_eq!(observer.record("d-1"), Err(CallError::Signaling));
     assert_eq!(observer.calls().unwrap().len(), MAX_CALLS);
     assert_eq!(observer.update(MAX_CALLS, |_| ()), Err(CallError::Signaling));
+}
+
+#[test]
+fn initial_capture_gate_rejects_unbounded_wait() {
+    let mut script = script();
+    script.initial_after_audio_frames = 129;
+    assert_eq!(script.validate(), Err(CallError::Configuration));
+    script.initial_after_audio_frames = 128;
+    assert_eq!(script.validate(), Ok(()));
 }

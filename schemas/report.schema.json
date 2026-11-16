@@ -131,28 +131,92 @@
     "observations": {
       "type": "array",
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "event",
-          "run_id",
-          "count"
-        ],
-        "properties": {
-          "event": {
-            "const": "wyoming.mic_frames"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "event",
+              "run_id",
+              "count"
+            ],
+            "properties": {
+              "event": {
+                "const": "wyoming.mic_frames"
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           },
-          "run_id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64,
-            "pattern": "^[A-Za-z0-9_-]+$"
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "event",
+              "case",
+              "run_id",
+              "delegation_id",
+              "tools_call_count",
+              "commentary_count",
+              "screen",
+              "transcript",
+              "capture_bytes",
+              "reply_pcm_bytes",
+              "endpoint_to_first_pcm_us"
+            ],
+            "properties": {
+              "event": {
+                "const": "m4.case"
+              },
+              "case": {
+                "enum": [
+                  "success",
+                  "http500"
+                ]
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "delegation_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tools_call_count": {
+                "const": 1
+              },
+              "commentary_count": {
+                "const": 1
+              },
+              "screen": {
+                "const": "speaking"
+              },
+              "transcript": {
+                "type": "string",
+                "minLength": 1
+              },
+              "capture_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "reply_pcm_bytes": {
+                "const": 9600
+              },
+              "endpoint_to_first_pcm_us": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           }
-        }
+        ]
       }
     },
     "m1": {

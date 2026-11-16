@@ -26,6 +26,7 @@ pub struct Model {
 }
 
 impl Model {
+    #[cfg(test)]
     pub async fn bind(negative: bool) -> Result<Self, String> {
         Self::bind_after(negative, async { Ok(()) }).await
     }
@@ -116,12 +117,12 @@ fn call() -> Value {
     json!({"type":"function_call","call_id":"call-1","name":"tool_0","arguments":"{\"text\":\"delegated echo\"}"})
 }
 
-fn tools() -> Value {
+fn tools() -> Result<Value, &'static str> {
     let catalog = echo_spoof_mcp::catalog();
-    Value::Array(
+    Ok(Value::Array(
         catalog
             .as_array()
-            .expect("fixed spoof catalog")
+            .ok_or("model: malformed spoof catalog")?
             .iter()
             .enumerate()
             .map(|(index, tool)| {
@@ -129,7 +130,7 @@ fn tools() -> Value {
             "parameters":tool["inputSchema"],"strict":false})
             })
             .collect(),
-    )
+    ))
 }
 
 fn response(request: &Value, index: usize, negative: bool) -> Result<Value, &'static str> {
@@ -140,7 +141,7 @@ fn response(request: &Value, index: usize, negative: bool) -> Result<Value, &'st
         || request["stream"] != true
         || request["store"] != false
         || request["parallel_tool_calls"] != false
-        || request["tools"] != tools()
+        || request["tools"] != tools()?
     {
         return Err("model: request contract mismatch");
     }

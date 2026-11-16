@@ -18,19 +18,14 @@ fn command(session: &Session) -> std::process::Command {
 }
 
 #[test]
-fn suite_requires_an_executed_t3_and_preserves_not_runnable_without_a_pass() {
+fn suite_requires_an_executed_t3_and_rejects_invalid_options() {
     let session = Session::new();
     scenario(&session, "m0.yaml", &["T0"], json!([]));
-    std::fs::write(
-        session.0.join("tests/scenarios/m4.yaml"),
-        include_str!("../lab_m4.yaml"),
-    )
-    .unwrap();
     let output = command(&session).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "m4-spoof-tool: not-runnable (requires W2 assembled bridge/agent integration)\nexecuted=0 passed=0 failed=0 not_runnable=1\n"
+        "executed=0 passed=0 failed=0 not_runnable=0\n"
     );
     for extra in [vec!["--unknown"], vec!["--python"], vec!["--driver", "sim"]] {
         assert_eq!(command(&session).args(extra).output().unwrap().status.code(), Some(1));
@@ -39,7 +34,7 @@ fn suite_requires_an_executed_t3_and_preserves_not_runnable_without_a_pass() {
 
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host"]
-fn discovery_executes_w1_skips_other_tiers_and_reports_m4_without_passing_it() {
+fn discovery_executes_w1_and_both_m4_cases_and_skips_other_tiers() {
     let session = Session::new();
     scenario(
         &session,
@@ -62,8 +57,8 @@ fn discovery_executes_w1_skips_other_tiers_and_reports_m4_without_passing_it() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("m4-spoof-tool: not-runnable (requires W2 assembled bridge/agent integration)"));
-    assert!(stdout.ends_with("executed=1 passed=1 failed=0 not_runnable=1\n"));
+    assert!(!stdout.contains("not-runnable"));
+    assert!(stdout.ends_with("executed=2 passed=2 failed=0 not_runnable=0\n"));
     let runs = std::fs::read_dir(session.0.join("suite-root/artifacts/W1"))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
@@ -82,7 +77,7 @@ fn discovery_executes_w1_skips_other_tiers_and_reports_m4_without_passing_it() {
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
-            .ends_with("executed=1 passed=0 failed=1 not_runnable=1\n")
+            .ends_with("executed=2 passed=1 failed=1 not_runnable=0\n")
     );
 }
 
