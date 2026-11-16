@@ -162,6 +162,7 @@ fn assert_journey(root: &Root, model: &Model, spoof: &Spoof) {
     assert_eq!(snapshot.calls[0].count, 1);
     let raw = std::fs::read_to_string(root.0.join("trace")).unwrap();
     let trace: Vec<Value> = raw.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_recorded_comparison(&raw);
     let edges: Vec<_> = trace
         .iter()
         .filter(|event| {
@@ -184,6 +185,19 @@ fn assert_journey(root: &Root, model: &Model, spoof: &Spoof) {
     for forbidden in ["synthetic-m4-key", "test-pair", "delegated echo"] {
         assert!(!raw.contains(forbidden));
     }
+}
+
+fn assert_recorded_comparison(raw: &str) {
+    let mut actual = crate::lab_run::sim::trace::Trace::default();
+    actual.append(raw.as_bytes()).unwrap();
+    let recorded = format!("{}\n", super::golden::normalize(&actual).unwrap().join("\n"));
+    assert_eq!(super::golden::compare(&actual, recorded.as_bytes()), Ok(()));
+    let index = actual.records.iter().position(|r| r["event"] == "tools/call").unwrap();
+    actual.records[index]["name"] = json!("test.wait");
+    let error = super::golden::compare(&actual, recorded.as_bytes()).unwrap_err();
+    assert!(error.contains(&format!("line {}\n- ", index + 1)), "{error}");
+    assert!(error.contains("\"name\":\"test.echo\""), "{error}");
+    assert!(error.contains("\"name\":\"test.wait\""), "{error}");
 }
 
 #[tokio::test]
