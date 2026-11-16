@@ -11,7 +11,7 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let settings = settings();
-        let host = Host::new(&settings, std::sync::Arc::new(|| 0));
+        let host = Host::new(&settings, std::sync::Arc::new(|| 0)).unwrap();
         Self {
             settings,
             screen: Screen::bind(None).await.unwrap(),

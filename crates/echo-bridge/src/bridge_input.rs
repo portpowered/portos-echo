@@ -12,6 +12,7 @@ pub struct Settings {
     pub sim_epoch: Option<u64>,
     pub mcp: Option<crate::bridge_mcp::Settings>,
     pub kill_path: Option<PathBuf>,
+    pub muse: Option<(echo_config::AgentConfig, echo_config::MuseConfig)>,
     pub delegation: Option<(echo_config::AgentConfig, echo_config::McpServer)>,
     pub screen: Option<echo_config::ScreenConfig>,
     pub wyoming: SocketAddr,
@@ -176,6 +177,7 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
         mcp: None,
         kill_path: None,
         delegation: None,
+        muse: None,
         screen: None,
         wyoming: loopback(&wyoming, false)?,
         live_url: lab_origin(&url)?,
@@ -198,10 +200,11 @@ fn configured(
     origins: Option<(&str, &str)>,
 ) -> Result<Option<Settings>, Error> {
     let config = echo_config::BridgeConfig::load(config).map_err(|_| Error::Input)?;
-    // Until the Muse host is wired, an explicit selection must never execute client tools.
-    if config.agent_backend == echo_config::AgentBackend::Muse {
-        return Err(Error::Input);
-    }
+    let muse = if config.agent_backend == echo_config::AgentBackend::Muse {
+        Some((config.agent.clone(), config.muse.clone().ok_or(Error::Input)?))
+    } else {
+        None
+    };
     let mode = match config.live.mode {
         echo_config::LiveMode::Chatgpt => LiveAuthMode::Chatgpt,
         echo_config::LiveMode::ApiKey => LiveAuthMode::ApiKey,
@@ -213,9 +216,18 @@ fn configured(
     Ok(Some(Settings {
         sim_clock: false,
         sim_epoch: None,
-        mcp: crate::bridge_mcp::Settings::configured(&config)?,
+        mcp: if muse.is_none() {
+            crate::bridge_mcp::Settings::configured(&config)?
+        } else {
+            None
+        },
+        muse,
         kill_path: Some(config.audit.log_dir.join("bridge-kill")),
-        delegation: config.mcp.server.first().cloned().map(|server| (config.agent, server)),
+        delegation: if config.agent_backend == echo_config::AgentBackend::Client {
+            config.mcp.server.first().cloned().map(|server| (config.agent, server))
+        } else {
+            None
+        },
         screen: Some(config.screen),
         wyoming: echo_address(&config.echo.host, config.echo.wyoming_port)?,
         live_url,

@@ -11,7 +11,7 @@ fn muse_origin_refuses_credentials_paths_and_nonlocal_lab_hosts() {
         );
     }
     assert_eq!(
-        origin("https://muse.example", false).unwrap().host_str(),
+        origin("https://muse.example", false).unwrap().host_str(), // lint-rules: allow-literal offline origin parser fixture, never dialed
         Some("muse.example")
     );
     // lint-rules: allow-literal URL parser rejection fixtures, never contacted.
@@ -23,9 +23,9 @@ fn muse_origin_refuses_credentials_paths_and_nonlocal_lab_hosts() {
         "https://127.0.0.1:7448/?x",
         "https://127.0.0.1:7448/#x",
         "https://localhost:7448",
-        "https://[::1]:7448",
-        "https://muse.example",
-        "https://127.1:7448",
+        "https://[::1]:7448",   // lint-rules: allow-literal offline rejection fixture, never dialed
+        "https://muse.example", // lint-rules: allow-literal offline rejection fixture, never dialed
+        "https://127.1:7448",   // lint-rules: allow-literal offline noncanonical host rejection fixture
         "https://@127.0.0.1:7448",
         "https://127.0.0.1:7448\\path",
     ] {

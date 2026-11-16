@@ -71,6 +71,7 @@ pub async fn execute_controlled<C: LinkConnector>(
     if let Some(path) = &settings.kill_path {
         bridge_kill::inspect(path)?;
     }
+    let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day)?;
     let mut trace = Trace::open(
         &settings.trace,
         match settings.mode {
@@ -90,7 +91,6 @@ pub async fn execute_controlled<C: LinkConnector>(
         trace.record("screen.listening", None, json!({"address":address.to_string()}))?;
     }
     let mut shutdown = control.shutdown;
-    let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day);
     let mut mcp = mount_mcp(
         settings.mcp.take(),
         settings.sim_epoch,
@@ -113,7 +113,7 @@ pub async fn execute_controlled<C: LinkConnector>(
             result = connected(&client, &mut events, settings, &health, &mut trace, &screen, &mut delegation) => result,
             eof = &mut shutdown => match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
-        delegation.abandon();
+        delegation.abandon().await;
         let cleanup = stop_link(&client, &screen).await;
         result.and(cleanup)
     };
@@ -232,7 +232,7 @@ async fn observe<L: EchoLink>(
         .await;
         if kill.sync(trace).await? {
             result?;
-            delegation.abandon();
+            delegation.abandon().await;
             conversation.close("kill", trace)?;
             continue;
         }
@@ -269,7 +269,7 @@ async fn turn<L: EchoLink>(
 ) -> Result<Option<(u64, bool)>, Error> {
     let (health, options, screen, id, delegation, kill) = context;
     if conversation.call.is_none() {
-        delegation.new_call();
+        delegation.new_call().await;
         health.state.send_modify(|state| state.live = "connecting");
         let created = tokio::select! {
             biased;
@@ -314,7 +314,7 @@ async fn turn<L: EchoLink>(
             Ok(Some(outcome))
         }
         Err(error) => {
-            delegation.abandon();
+            delegation.abandon().await;
             if kill.sync(trace).await? {
                 client.refuse(RunFailure::KillSwitch).await?;
                 conversation.close("kill", trace)?;
