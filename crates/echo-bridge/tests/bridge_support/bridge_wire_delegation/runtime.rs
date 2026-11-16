@@ -123,7 +123,7 @@ impl Application {
             {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
     }
 

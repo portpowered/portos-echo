@@ -13,7 +13,7 @@ pub(super) async fn wait_event(path: &Path, event: &str) {
             {
                 return;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
     })
     .await
