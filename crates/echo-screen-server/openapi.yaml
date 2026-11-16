@@ -48,7 +48,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: ../../../schemas/screen/ui_action.json
+              $ref: ../../schemas/screen/ui_action.json
       responses:
         '204': { description: Exact UiAction queued once on returned receiver }
         '400': { description: Malformed JSON or invalid UiAction; nothing queued }

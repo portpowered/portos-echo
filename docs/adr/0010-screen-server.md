@@ -20,6 +20,7 @@ token grammar; duplicate tokens are refused. Static assets carry no state or tok
 All responses disable caching and referrer propagation; URLs are never logged.
 
 State input, stream backlog, active streams and returned actions are bounded.
+At most 128 HTTP connections are owned at once; excess sockets close immediately.
 Frames share one sequence and reconnect receives only the current presentation.
 Revocation is serialized with authorization and dispatch. Shutdown or input closure
 cancels delivery. UI actions are intents only; this library executes no tools.

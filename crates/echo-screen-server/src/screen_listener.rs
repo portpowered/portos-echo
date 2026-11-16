@@ -18,7 +18,9 @@ pub(crate) async fn run(listener: TcpListener, app: Router, stop: watch::Receive
             Some(_) = connections.join_next() => {},
             accepted = listener.accept() => {
                 let Ok((socket, _)) = accepted else { break; };
-                connections.spawn(connection(socket, app.clone(), stop.clone()));
+                if connections.len() < 128 {
+                    connections.spawn(connection(socket, app.clone(), stop.clone()));
+                }
             }
         }
     }
