@@ -81,12 +81,13 @@ fn bridge_spine_health_has_exact_states_methods_and_empty_errors() {
     let state = Links {
         wyoming: "connected",
         live: "idle",
+        ..Links::default()
     };
     let reply = response(b"GET /healthz HTTP/1.1\r\n\r\n", state);
     let body = reply.split_once("\r\n\r\n").unwrap().1;
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(body).unwrap(),
-        json!({"status":"running","wyoming":"connected","live":"idle"})
+        json!({"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false})
     );
     assert_eq!(
         response(b"POST /healthz HTTP/1.1\r\n\r\n", state),
@@ -155,7 +156,9 @@ fn bridge_spine_trace_preserves_aliases_counters_and_safe_mode() {
     trace
         .record("wyoming.mic_frames", Some("run-1"), json!({"count":10}))
         .unwrap();
-    trace.record("mic.frames", Some("run-1"), json!({"count":32})).unwrap();
+    trace
+        .record("mic.completed", Some("run-1"), json!({"count":32}))
+        .unwrap();
     let lines: Vec<serde_json::Value> = std::fs::read_to_string(path)
         .unwrap()
         .lines()
@@ -207,12 +210,12 @@ fn assert_configured_provider(settings: bridge_input::Settings, mode: &str) {
     if mode == "chatgpt" {
         assert_eq!(settings.mode, echo_live::call::LiveAuthMode::Chatgpt);
         assert_eq!(settings.live_url.split_once("://"), Some(("https", "chatgpt.com")));
-        assert!(matches!(settings.credential, Provider::Unavailable));
+        assert!(matches!(settings.credential, Provider::Resolved(_)));
     } else {
         assert_eq!(settings.mode, echo_live::call::LiveAuthMode::ApiKey);
         assert_eq!(settings.live_url.split_once("://"), Some(("https", "api.openai.com")));
         match settings.credential {
-            Provider::ApiKey(key) => assert_eq!(key, std::path::Path::new("credentials/live.json")),
+            Provider::Resolved(providers) => assert_eq!(providers.mode(), echo_config::LiveMode::ApiKey),
             _ => unreachable!(),
         }
     }
@@ -257,5 +260,56 @@ async fn bridge_spine_credential_bytes_are_bounded_and_utf8_only() {
     match provider.credential().await.unwrap() {
         LiveCredential::ApiKey { key } => assert_eq!(key.expose(), &"x".repeat(16_384)),
         LiveCredential::Chatgpt { .. } => unreachable!(),
+    }
+}
+
+#[test]
+fn bridge_wire_mock_origins_require_complete_pair_and_local_dial_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let template = include_str!("../../../examples/bridge.example.toml")
+        .replace("echo.example.invalid", "127.0.0.1")
+        .replace("0.0.0.0:16900", "127.0.0.1:0"); // lint-rules: allow-literal inert example replacement
+    let local = format!("{template}\n[chatgpt_auth]\ntoken_endpoint = 'http://127.0.0.1:1/token'");
+    let args: Vec<String> = vec![
+        "--config".into(),
+        path.to_string_lossy().into_owned(),
+        "--trace".into(),
+        "unused".into(),
+    ];
+    for origin in [
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:1/",
+        "http://localhost:1",
+        "http://127.0.0.1:0",
+        "http://127.0.0.1:1/path",
+        "http://127.0.0.1:1?x",
+        "http://user@127.0.0.1:1",
+    ] {
+        std::fs::write(&path, &local).unwrap();
+        let mut paired = args.clone();
+        paired.extend([
+            "--live-loopback".into(),
+            origin.into(),
+            "--model-loopback".into(),
+            "http://127.0.0.1:2".into(),
+        ]);
+        if origin == "http://127.0.0.1:1" {
+            let settings = parse(&paired, [None, None, None]).unwrap().unwrap();
+            assert_eq!(settings.live_url, origin);
+            assert_eq!(settings.model_url.as_deref(), Some("http://127.0.0.1:2"));
+            for invalid in [
+                template.clone(),
+                local.replace("127.0.0.1:18080", "localhost:18080"),
+                local.replace("127.0.0.1:0", "[::1]:0"),
+            ] {
+                std::fs::write(&path, invalid).unwrap();
+                assert_eq!(parse(&paired, [None, None, None]).err(), Some(Error::Input));
+            }
+        } else {
+            assert_eq!(parse(&paired, [None, None, None]).err(), Some(Error::Input));
+        }
+        paired.truncate(6);
+        assert_eq!(parse(&paired, [None, None, None]).err(), Some(Error::Input));
     }
 }

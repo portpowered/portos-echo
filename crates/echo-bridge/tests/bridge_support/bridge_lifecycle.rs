@@ -50,7 +50,7 @@ async fn idle_failure(path: &Path) {
                 let response = health(address, "GET", "/healthz").await;
                 assert_eq!(
                     serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap(),
-                    json!({"status":"running","wyoming":"connected","live":"error"})
+                    json!({"status":"running","wyoming":"connected","live":"error","relink_required":false,"kill_switch":false})
                 );
                 break;
             }
@@ -151,7 +151,7 @@ async fn bridge_lifecycle_wake_during_playback_stays_in_the_existing_run() {
     assert_eq!(host.command("arm").await, "armed");
     assert_eq!(host.command("wake").await, "wake");
     assert_eq!(host.command("cut-ready").await, "cut-ready");
-    assert_eq!(host.command("wake").await, "wake");
+    assert_eq!(host.command("wake-playing").await, "wake-playing");
     live.events
         .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
         .await
@@ -168,7 +168,7 @@ async fn bridge_lifecycle_wake_during_playback_stays_in_the_existing_run() {
         "reply.started",
         "reply.cut",
         "reply.played",
-        "mic.frames",
+        "mic.completed",
         "wyoming.run_ended",
     ] {
         let records: Vec<_> = entries.iter().filter(|e| e["event"] == name).collect();
@@ -281,7 +281,7 @@ async fn bridge_lifecycle_three_wakes_reuse_one_call_with_per_run_audio_counts()
             (0..u16::try_from(run * 32).unwrap()).collect::<Vec<_>>()
         );
         let entries = trace(&path);
-        let mic: Vec<_> = entries.iter().filter(|e| e["event"] == "mic.frames").collect();
+        let mic: Vec<_> = entries.iter().filter(|e| e["event"] == "mic.completed").collect();
         assert_eq!(mic.len(), run);
         assert_eq!(mic.last().unwrap()["run_id"], format!("run-{run}"));
         assert_eq!(mic.last().unwrap()["count"], 32);

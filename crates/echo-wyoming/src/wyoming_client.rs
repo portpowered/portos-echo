@@ -85,11 +85,20 @@ impl WyomingClient {
     }
 
     async fn request<T>(&self, command: Command, reply: oneshot::Receiver<Result<T, Error>>) -> Result<T, Error> {
+        self.request_timed(command, reply, self.deadline).await
+    }
+
+    async fn request_timed<T>(
+        &self,
+        command: Command,
+        reply: oneshot::Receiver<Result<T, Error>>,
+        deadline: Duration,
+    ) -> Result<T, Error> {
         let work = async {
             self.commands.send(command).await.map_err(|_| self.failure())?;
             reply.await.map_err(|_| self.failure())?
         };
-        if let Ok(result) = timeout(self.deadline, work).await {
+        if let Ok(result) = timeout(deadline, work).await {
             result
         } else {
             if let Some(reset) = &self.reset {
@@ -133,8 +142,26 @@ impl WyomingClient {
     /// # Errors
     /// Busy, oversized frame, connection failure or operation timeout.
     pub async fn play(&self, format: AudioFormat, frames: mpsc::Receiver<Vec<u8>>) -> Result<PlayOutcome, Error> {
+        self.play_with_timeout(format, frames, self.deadline).await
+    }
+
+    /// Send a bounded reply with its own lifetime, including source production and `played`.
+    /// Ordinary control requests retain the configured operation timeout.
+    /// Cancellation and timeout invalidate playback exactly as for `play`.
+    /// # Errors
+    /// The same failures as `play`; a zero timeout is invalid.
+    pub async fn play_with_timeout(
+        &self,
+        format: AudioFormat,
+        frames: mpsc::Receiver<Vec<u8>>,
+        deadline: Duration,
+    ) -> Result<PlayOutcome, Error> {
+        if deadline.is_zero() {
+            return Err(Error::InvalidOptions);
+        }
         let (tx, rx) = oneshot::channel();
-        self.request(Command::Play(format, frames, tx), rx).await
+        self.request_timed(Command::Play(format, frames, tx), rx, deadline)
+            .await
     }
 
     /// Discard unsent reply audio and send one early stop. Playback still waits

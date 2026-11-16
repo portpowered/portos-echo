@@ -24,6 +24,17 @@ mod bridge_peer;
 mod bridge_short;
 #[path = "bridge_support/bridge_spine_edges.rs"]
 mod bridge_spine_edges;
+#[path = "bridge_support/bridge_wire_auth.rs"]
+mod bridge_wire_auth;
+#[path = "bridge_support/bridge_wire_auth_failure.rs"]
+mod bridge_wire_auth_failure;
+#[path = "bridge_support/bridge_wire_delegation.rs"]
+mod bridge_wire_delegation;
+#[path = "bridge_support/bridge_wire_screen.rs"]
+mod bridge_wire_screen;
+
+// Observation ceiling for slow instrumented loopback runs; product deadlines stay unchanged.
+const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct Process {
     name: &'static str,
@@ -67,10 +78,10 @@ impl Process {
         }
     }
     async fn line(&mut self) -> String {
-        let response = tokio::time::timeout(Duration::from_secs(12), self.lines.next_line()).await;
+        let response = tokio::time::timeout(OBSERVATION_TIMEOUT, self.lines.next_line()).await;
         assert!(
             response.is_ok(),
-            "{} pid {:?}: timed out after 12s waiting for {}",
+            "{} pid {:?}: timed out after 30s waiting for {}",
             self.name,
             self.child.id(),
             self.expected
@@ -166,7 +177,7 @@ fn trace(path: &Path) -> Vec<Value> {
 async fn health(address: &str, method: &str, path: &str) -> String {
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
     stream
-        .write_all(format!("{method} {path} HTTP/1.1\r\nHost: local\r\n\r\n").as_bytes())
+        .write_all(format!("{method} {path} HTTP/1.1\r\nHost: local\r\nConnection: close\r\n\r\n").as_bytes())
         .await
         .unwrap();
     let mut response = String::new();
@@ -178,7 +189,7 @@ async fn assert_health(address: &str) {
     let response = health(address, "GET", "/healthz").await;
     assert_eq!(
         serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap(),
-        json!({"status":"running","wyoming":"connected","live":"idle"})
+        json!({"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false})
     );
     assert!(
         health(address, "POST", "/healthz")
@@ -217,7 +228,7 @@ async fn bridge_spine_host_echo_health_and_eof() {
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
     let entries = trace(&path);
-    let mic = entries.iter().find(|e| e["event"] == "mic.frames").unwrap();
+    let mic = entries.iter().find(|e| e["event"] == "mic.completed").unwrap();
     assert_eq!(mic["count"], 32);
     assert_eq!(mic["input_samples"], 10240);
     assert_eq!(mic["tail_samples"], 0);
@@ -236,10 +247,11 @@ async fn bridge_spine_host_echo_health_and_eof() {
         [
             "wyoming.run_started",
             "run.started",
+            "mic.frames",
             "reply.started",
             "reply.played",
             "wyoming.mic_frames",
-            "mic.frames",
+            "mic.completed",
             "wyoming.run_ended"
         ]
     );
@@ -344,4 +356,141 @@ async fn bridge_spine_empty_explicit_completion_waits_for_host_played() {
     bridge.finish(0).await;
     host.finish(0).await;
     fake.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut host = Process::spawn(&mut host());
+    let port = host.line().await.parse().unwrap();
+    let spoof = echo_spoof_mcp::Spoof::start(echo_spoof_mcp::Options {
+        expected_bearer: Some(echo_contracts::secret::Secret::new("synthetic-mcp-token".into())),
+        ..echo_spoof_mcp::Options::default()
+    })
+    .await
+    .unwrap();
+    bridge_wire_delegation::configure(directory.path(), port, "api_key", &spoof, true).await;
+    let model = bridge_wire_delegation::Model::start(false, true).await;
+    let mut live = bridge_peer::Live::bind_frames(0).await;
+    let mut bridge = Process::spawn(&mut bridge_wire_delegation::run_command(
+        directory.path(),
+        &live.url,
+        &model.origin,
+    ));
+    assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
+    let path = directory.path().join("trace");
+    let mut screen = wire_journey_screen(directory.path()).await;
+    assert_eq!(host.command("wake").await, "wake");
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"listening"})
+    );
+    bridge_wire_auth_failure::wait_event(&path, "mic.frames").await;
+    live.events
+        .send(bridge_wire_delegation::event("d-1", "client"))
+        .await
+        .unwrap();
+    wire_journey_commentary(&mut live).await;
+    live.events.send("synthetic.more_audio".into()).await.unwrap();
+    bridge_wire_auth_failure::wait_event(&path, "reply.started").await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"speaking"})
+    );
+    live.events
+        .send(json!({"type":"response.audio.done"}).to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
+        json!({"event":"bridge.run_completed","run_id":"run-1"})
+    );
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"ready","message":"Ready"})
+    );
+    assert_eq!(host.command("pcm").await, "30720 0");
+    bridge.finish(0).await;
+    host.finish(0).await;
+    bridge_wire_delegation::check_journey(&model, &spoof);
+    check_wire_journey_trace(&path);
+    assert_eq!(live.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(live.commentary.try_recv().is_err());
+    spoof.shutdown().await.unwrap();
+}
+
+fn check_wire_journey_trace(path: &Path) {
+    let entries = trace(path);
+    let expected = [
+        "run.started",
+        "mic.frames",
+        "session.delegation.created",
+        "tools/call",
+        "session.commentary.append",
+        "reply.started",
+        "reply.played",
+    ];
+    let edges: Vec<_> = entries
+        .iter()
+        .filter(|e| expected.contains(&e["event"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        edges.iter().map(|e| e["event"].as_str().unwrap()).collect::<Vec<_>>(),
+        expected
+    );
+    for edge in edges {
+        assert_eq!(edge["run_id"], "run-1");
+        assert_eq!(edge["provider_auth_mode"], "api_key");
+        if ["session.delegation.created", "tools/call", "session.commentary.append"]
+            .contains(&edge["event"].as_str().unwrap())
+        {
+            assert_eq!(edge["delegation_id"], "d-1");
+        }
+    }
+    let text = std::fs::read_to_string(path).unwrap();
+    for private in ["synthetic-api-key", "synthetic-screen-pair", "synthetic-mcp-token"] {
+        assert!(!text.contains(private), "trace disclosure");
+    }
+}
+
+async fn wire_journey_screen(directory: &Path) -> Lines<BufReader<tokio::net::TcpStream>> {
+    let address = trace(&directory.join("trace"))
+        .iter()
+        .find(|e| e["event"] == "screen.listening")
+        .unwrap()["address"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut screen = bridge_wire_screen::stream(&address).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"ready","message":"Ready"})
+    );
+    bridge_wire_auth::invoke(
+        directory,
+        &["status", "--config", "bridge.toml"],
+        0,
+        "mode: api-key\naccount: n/a\nexpires: n/a\n",
+    )
+    .await;
+    screen
+}
+
+async fn wire_journey_commentary(live: &mut bridge_peer::Live) {
+    let commentary = tokio::time::timeout(Duration::from_secs(5), live.commentary.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&commentary).unwrap(),
+        json!({"type":"session.commentary.append","delegation_id":"d-1","text":"delegated result"})
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while live.microphone_frames.load(std::sync::atomic::Ordering::SeqCst) < 32 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 }

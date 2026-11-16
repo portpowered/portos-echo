@@ -67,7 +67,7 @@ pub(super) async fn satellite(url: &str, path: &Path) -> (TcpStream, Process) {
     (stream, bridge)
 }
 
-async fn register(stream: &mut TcpStream, bridge: &mut Process) {
+pub(super) async fn register(stream: &mut TcpStream, bridge: &mut Process) {
     assert_eq!(read(stream).await.0["type"], "run-satellite");
     assert_eq!(read(stream).await.0["type"], "describe");
     send(stream, "info", json!({"satellite":{"name":"synthetic"}})).await;

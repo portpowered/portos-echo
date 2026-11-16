@@ -11,6 +11,8 @@ use tokio::{
 pub struct Live {
     pub url: String,
     pub events: mpsc::Sender<String>,
+    pub commentary: mpsc::Receiver<String>,
+    pub microphone_frames: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     task: JoinHandle<()>,
 }
@@ -38,18 +40,23 @@ impl Live {
         let origin = "http://127.0.0.1";
         let url = format!("{origin}:{}", listener.local_addr().unwrap().port());
         let (events, mut receive) = mpsc::channel::<String>(8);
+        let (sent, commentary) = mpsc::channel(8);
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = calls.clone();
+        let microphone_frames = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let microphone = microphone_frames.clone();
         let task = tokio::spawn(async move {
             let mut stream = listener.accept().await.unwrap().0;
             loop {
                 observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                stream = serve(&listener, stream, &mut receive, frames, gate.take()).await;
+                stream = serve(&listener, stream, &mut receive, frames, gate.take(), &sent, &microphone).await;
             }
         });
         Self {
             url,
             events,
+            commentary,
+            microphone_frames,
             calls,
             task,
         }
@@ -62,6 +69,8 @@ async fn serve(
     receive: &mut mpsc::Receiver<String>,
     frames: u16,
     gate: Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>,
+    commentary: &mpsc::Sender<String>,
+    microphone: &std::sync::atomic::AtomicUsize,
 ) -> TcpStream {
     let body = request(&mut stream).await;
     if let Some((ready, release)) = gate {
@@ -88,7 +97,7 @@ async fn serve(
     }
     let mut sequence = 0;
     short_audio(&mut peer, frames, &mut sequence).await;
-    next_connection(listener, receive, &mut peer, &mut sequence).await
+    next_connection(listener, receive, &mut peer, &mut sequence, commentary, microphone).await
 }
 
 async fn next_connection(
@@ -96,6 +105,8 @@ async fn next_connection(
     receive: &mut mpsc::Receiver<String>,
     peer: &mut LivePeer,
     sequence: &mut u16,
+    commentary: &mpsc::Sender<String>,
+    microphone: &std::sync::atomic::AtomicUsize,
 ) -> TcpStream {
     loop {
         tokio::select! {
@@ -107,7 +118,12 @@ async fn next_connection(
             },
             result = drive(peer) => if result.is_err() { return listener.accept().await.unwrap().0; },
         }
-        while peer.pop_audio().is_some() {}
+        while peer.pop_audio().is_some() {
+            microphone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        while let Some(text) = peer.pop_text() {
+            commentary.try_send(text).unwrap();
+        }
     }
 }
 

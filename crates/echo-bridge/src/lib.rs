@@ -2,6 +2,7 @@
 pub mod bridge_audio;
 pub mod bridge_health;
 pub mod bridge_input;
+pub mod bridge_operator;
 pub mod bridge_runtime;
 pub mod bridge_trace;
 
@@ -26,6 +27,8 @@ pub enum Error {
     Trace,
     #[error("health")]
     Health,
+    #[error("screen")]
+    Screen,
     #[error("control")]
     Control,
 }

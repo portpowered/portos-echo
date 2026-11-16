@@ -51,16 +51,21 @@ impl Conversation {
         events: &mut EventStream,
         health: &Health,
         trace: &mut Trace,
+        kill: &super::bridge_kill::Kill<'_>,
     ) -> Result<Run, Error> {
         let mut backoff = Duration::from_millis(100);
         let probe = probe_link(client, Duration::ZERO);
         tokio::pin!(probe);
         loop {
+            if kill.sync(trace).await? {
+                self.close("kill", trace)?;
+            }
             // Expiry wins at equality, including when a wake is already queued.
             if self.expired() {
                 self.close("idle", trace)?;
             }
             let event = tokio::select! {
+                () = tokio::time::sleep(Duration::from_millis(20)) => continue,
                 event = events.recv() => event?,
                 connected = &mut probe => {
                     observe_link(connected, health, trace)?;

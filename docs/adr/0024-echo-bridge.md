@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 16
 status: accepted
 ---
 
@@ -11,6 +11,52 @@ status: accepted
 `echo-config`, `echo-contracts`, `echo-live` and `echo-wyoming` public APIs.
 It reuses the locked `tokio`, `serde_json` and `thiserror` dependencies;
 tests reuse `tempfile`. No external package is introduced.
+
+Configured delegation mounts the existing `echo-delegation`, `echo-agent-loop`
+and `echo-mcp-client` crates. The header adapter reuses locked `reqwest` types;
+component tests reuse `echo-spoof-mcp`. These add dependency edges only, with no
+new locked package. The first configured MCP server is the selected host, with
+its existing exact tool allowlist. Bearer-file auth reads only its nominated,
+bounded file. Unauthenticated spoof mode supplies an empty bearer because the
+existing MCP client always sends that header; no credential is synthesized.
+Port OS device-code onboarding is outside this slice and fails closed here.
+
+One runner is retained between completed delegations. Only one delegation is
+pending at a time; other targets or concurrent distinct requests are refused.
+Duplicate ids are remembered within the Live call, with a bounded 1024-id set.
+The worker owns no Live socket. The active call owner sends prepared commentary
+and only then records `session.commentary.append`. A bounded sink adds run and
+delegation correlation to tool dispatch attempts. It omits raw payloads and masks
+unlisted tool names. Cancellation abandons the runner and its backend workers;
+replacement sinks cannot attribute late observations to a new run. Host UTC-day
+request reservations survive replacement and never refund uncertain dispatch.
+Exhaustion returns fixed limit commentary without claiming an auth failure.
+
+The application owner accepts an explicit UTC-day source and shutdown receiver.
+The binary supplies real UTC and stdin EOF. Delegation reservations consult that
+same host source after credential acquisition; cancellation never refunds them.
+Monotonic call and journey deadlines use Tokio's clock, converted at the Live
+boundary, so component T3 can advance application time without changing system
+time. Shutdown abandons pending delegation before joining network cleanup.
+
+Each admitted delegation extends the existing ten-second production budget by its
+configured task window. Duplicate or refused events add no time. Wyoming's playback
+ceiling covers the existing bounded 1024-id call capacity plus fifteen seconds for
+cut, Played and transport completion, using the additive per-playback timeout API.
+Ordinary Wyoming operations keep their original timer and reconnect reset. Playback
+cannot apply its default
+five-second request limit to a model/tool task. The delegated runner still owns
+its exact configured task deadline and safe timeout commentary. Production expiry
+cuts playback before reporting failure. Registration, describe, cut and close
+retain independent five-second control limits. Once production ends, Played has
+its own five-second limit rather than inheriting the longer task window. Kill
+and shutdown remain selectable throughout the task and cleanup.
+
+`mic.frames` records the first successfully sent microphone batch. Exact final
+packet/sample/drop totals are in `mic.completed`; `wyoming.mic_frames` stays
+compatible. `reply.started` follows the first forwarded PCM payload, so arming
+an empty reply no longer claims audible activity. A Played acknowledgment is
+still required for terminal playback evidence.
 
 One multi-thread Tokio runtime drives one Live call owner. Conversion uses
 fixed scratch and complete 20 ms Opus frames. Reply buffering is bounded and
@@ -29,9 +75,54 @@ means 120 seconds. Invalid values and any override in configured mode fail
 offline. This permits delivered-binary expiry proof within the T3 time budget
 without changing configured TOML behavior, credentials or the lab stdout protocol.
 
-Configured API-key mode reads only its nominated key file. ChatGPT mode reports
-authorization unavailable until the separately owned sign-in integration mounts
-its provider. No home-directory credential discovery is used.
+Configured runs use `echo-signin` providers for Live credentials in both modes.
+Operator commands dispatch before run initialization; import requires an explicit
+source and leaves it unchanged. No home-directory credential discovery is used.
+
+Configured runs host the existing `echo-screen-server` page and authenticated
+stream on literal IPv4 loopback. The nominated pairing file is bounded to 16 KiB,
+UTF-8, nonblank and free of control characters after removing one LF or CRLF
+terminator. Token or bind failure prevents readiness and Wyoming connection.
+The token never appears in stdout or trace; `screen.listening` records only the
+bound address. The synthetic lab route does not require a screen or pairing file.
+
+The bridge publishes Ready initially, Listening on wake, Speaking after the first
+forwarded PCM payload, and Ready after the acknowledged run completes. A bounded
+32-state channel feeds the screen library; capacity or closed-input failure is
+fatal rather than silently losing activity updates. EOF shuts down the screen
+with the other owned resources. Relink and delegated activity remain part of the
+same bridge assembly, using the existing screen contract.
+
+Configured call-creation and model-credential acquisition failures keep both listeners alive, set
+`live=error` and `relink_required=true`, and emit `auth.relink_required` with a
+fixed reason. Later wakes emit `run.refused` without another credential or Live
+request. Explicit sign-in followed by restart clears this in-process latch; a
+file change alone does not. The paired screen displays the operator sign-in and
+restart instruction. Its Relink action repeats that instruction without starting
+authentication. Call-creation outages display a non-relink error and permit the
+next wake to try again. The synthetic lab route retains its fatal-error protocol.
+Active producer failures cut playback while its receiver remains alive and wait
+for the satellite's Played acknowledgment before publishing the safe error.
+They close the failed call and abandon delegation without recording successful
+commentary or playback. Ordinary model outages retain fixed failure commentary;
+request-cap refusal remains distinct from relink.
+`echo-bridge kill --config PATH` atomically creates and syncs a zero-byte
+`bridge-kill` marker inside the configured `audit.log_dir`. Repeating it is
+idempotent. `kill --clear` removes the marker; an absent marker is success.
+Non-regular, nonempty or inaccessible marker paths produce the fixed `control`
+diagnostic without success output. Invalid startup inspection prevents readiness;
+inspection failures during operation refuse work. No mutation HTTP endpoint exists.
+
+The call owner checks the marker before wake admission and on bounded 20 ms
+control ticks, including idle, call setup, reply production and waiting for Played.
+The shared signin Providers receive the observed kill state. Kill abandons pending
+delegation, closes Live, discards unsent reply audio and uses the existing paced
+Wyoming cut; already transmitted audio remains the host's responsibility. Played
+is still required for playback evidence. Health exposes `kill_switch=true` and
+`live=error`; the screen displays a fixed clear instruction without relink.
+`kill.enabled`, `kill.cleared`, `live.closed` with reason `kill`, and `run.refused`
+with reason `kill` contain no credential or provider data. Restart retains the
+marker. Clear permits a fresh call and never resumes abandoned work.
 
 The optional `[audio]` table sets `reply_lead_ms`, default 200, as a positive
 multiple of 20 that fits `u16`. Existing configurations keep the default. The

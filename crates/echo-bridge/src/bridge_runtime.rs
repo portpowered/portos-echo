@@ -1,6 +1,12 @@
 //! One Live call owner drives WebRTC while Wyoming owns its bounded wire queues.
+mod bridge_budget;
+mod bridge_delegation;
+pub(crate) mod bridge_kill;
 mod bridge_lifecycle;
 mod bridge_pacing;
+mod bridge_relink;
+mod bridge_screen;
+mod bridge_timing;
 mod journey;
 
 use crate::{
@@ -18,13 +24,45 @@ use echo_wyoming::{ClientOptions, EventStream, WyomingClient};
 use serde_json::json;
 use std::{
     io::{Read, Write},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::sync::oneshot;
+use tokio::time::Instant;
+
+/// Host clock and shutdown boundary. The binary uses real UTC and stdin EOF.
+pub struct Control {
+    pub utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
+    pub shutdown: oneshot::Receiver<bool>,
+}
 
 /// # Errors
 /// All failures use fixed categories. EOF closes owned tasks and sockets.
 pub async fn execute(settings: Settings) -> Result<(), Error> {
+    execute_controlled(
+        settings,
+        Control {
+            utc_day: std::sync::Arc::new(utc_day),
+            shutdown: control()?,
+        },
+    )
+    .await
+}
+
+fn utc_day() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 86_400
+}
+
+/// Runs the same application owner with an explicit host clock and stop receiver.
+/// # Errors
+/// Returns the same fixed operational failures as `execute`.
+pub async fn execute_controlled(settings: Settings, control: Control) -> Result<(), Error> {
+    if let Some(path) = &settings.kill_path {
+        bridge_kill::inspect(path)?;
+    }
     let mut trace = Trace::open(
         &settings.trace,
         match settings.mode {
@@ -32,13 +70,19 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
             LiveAuthMode::ApiKey => "api_key",
         },
     )?;
+    let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
     let health = Health::bind(settings.health).await?;
+    screen.supervise_actions(health.state.subscribe());
     trace.record(
         "bridge.started",
         None,
         json!({"health_addr":health.address.to_string()}),
     )?;
-    let mut shutdown = control()?;
+    if let Some(address) = screen.address() {
+        trace.record("screen.listening", None, json!({"address":address.to_string()}))?;
+    }
+    let mut shutdown = control.shutdown;
+    let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day);
     let work = async {
         let mut client = tokio::select! {
             result = WyomingClient::connect(settings.wyoming, ClientOptions::default()) => result?,
@@ -50,9 +94,10 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
         // terminal capacity failure and races otherwise successful EOF cleanup.
         let mut events = client.events()?;
         let result = tokio::select! {
-            result = connected(&client, &mut events, settings, &health, &mut trace) => result,
+            result = connected(&client, &mut events, settings, &health, &mut trace, &screen, &mut delegation) => result,
             eof = &mut shutdown => match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
+        delegation.abandon();
         let cleanup = client.close().await.map_err(Error::from);
         result.and(cleanup)
     };
@@ -61,24 +106,27 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
         trace.record("bridge.error", None, json!({"reason":error.to_string()}))
     });
     health.close().await;
-    result.and(report)
+    let cleanup = screen.close().await;
+    result.and(report).and(cleanup)
 }
 
 async fn connected(
     client: &WyomingClient,
     events: &mut EventStream,
-    mut settings: Settings,
+    settings: Settings,
     health: &Health,
     trace: &mut Trace,
+    screen: &bridge_screen::Screen,
+    delegation: &mut bridge_delegation::Host,
 ) -> Result<(), Error> {
     client.run_satellite().await?;
     client.describe().await?;
     health.state.send_modify(|state| state.wyoming = "connected");
     trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
     publish("bridge.ready", None)?;
-    let credential = std::mem::replace(&mut settings.credential, Provider::Unavailable);
+    let credential = settings.credential.clone();
     let factory = LiveCallFactory::new(&settings.live_url, settings.mode, credential)?;
-    observe(client, events, &factory, health, trace, &settings).await
+    observe(client, events, &factory, health, trace, &settings, (screen, delegation)).await
 }
 
 async fn observe(
@@ -88,46 +136,130 @@ async fn observe(
     health: &Health,
     trace: &mut Trace,
     options: &Settings,
+    context: (&bridge_screen::Screen, &mut bridge_delegation::Host),
 ) -> Result<(), Error> {
+    let (screen, delegation) = context;
+    let kill = bridge_kill::Kill {
+        settings: options,
+        health,
+        screen,
+    };
     let mut conversation = bridge_lifecycle::Conversation::new(options.session_idle_seconds);
     let mut sequence = 0_u64;
     loop {
-        let run = conversation.wake(client, events, health, trace).await?;
+        let run = conversation.wake(client, events, health, trace, &kill).await?;
         sequence += 1;
         let id = format!("run-{sequence}");
         trace.record("wyoming.run_started", Some(&id), json!({}))?;
         trace.record("run.started", Some(&id), json!({}))?;
-        if conversation.call.is_none() {
-            health.state.send_modify(|state| state.live = "connecting");
-            conversation.call = Some(create(factory, options, &id).await?);
+        if kill.sync(trace).await? {
+            trace.record("run.refused", Some(&id), json!({"reason":"kill"}))?;
+            continue;
         }
-        health.state.send_modify(|state| state.live = "connected");
-        let call = conversation.call.as_mut().ok_or(Error::Unavailable)?;
-        let result = journey::run(
+        if health.state.borrow().relink_required {
+            trace.record("run.refused", Some(&id), json!({"reason":"relink_required"}))?;
+            continue;
+        }
+        screen.publish(echo_screen_contract::UiState::Listening)?;
+        let result = turn(
             client,
             events,
             run,
-            call,
+            factory,
+            &mut conversation,
             trace,
-            &id,
-            (options.lab, options.reply_lead_ms, conversation.sent),
+            (health, options, screen, &id, delegation, &kill),
         )
         .await;
-        health
-            .state
-            .send_modify(|state| state.live = if result.is_ok() { "idle" } else { "error" });
-        let (sent, reusable) = result?;
+        if kill.sync(trace).await? {
+            delegation.abandon();
+            conversation.close("kill", trace)?;
+            continue;
+        }
+        if result.is_err() {
+            health.state.send_modify(|state| state.live = "error");
+        }
+        let Some((sent, reusable)) = result? else { continue };
+        health.state.send_modify(|state| state.live = "idle");
         if reusable {
             conversation.completed(sent);
         } else {
             conversation.close("cut", trace)?;
         }
+        screen.ready()?;
         publish("bridge.run_completed", Some(&id))?;
     }
 }
 
+async fn turn(
+    client: &WyomingClient,
+    events: &mut EventStream,
+    run: echo_wyoming::Run,
+    factory: &LiveCallFactory<Provider>,
+    conversation: &mut bridge_lifecycle::Conversation,
+    trace: &mut Trace,
+    context: (
+        &Health,
+        &Settings,
+        &bridge_screen::Screen,
+        &str,
+        &mut bridge_delegation::Host,
+        &bridge_kill::Kill<'_>,
+    ),
+) -> Result<Option<(u64, bool)>, Error> {
+    let (health, options, screen, id, delegation, kill) = context;
+    if conversation.call.is_none() {
+        delegation.new_call();
+        health.state.send_modify(|state| state.live = "connecting");
+        let created = tokio::select! {
+            biased;
+            () = kill.wait() => { kill.sync(trace).await?; return Ok(None); },
+            result = create(factory, options, id) => result,
+        };
+        conversation.call = match created {
+            Ok(call) => Some(call),
+            Err(error) => {
+                bridge_relink::failure(error, options.lab, health, trace, screen, id)?;
+                return Ok(None);
+            }
+        };
+    }
+    health.state.send_modify(|state| state.live = "connected");
+    let call = conversation.call.as_mut().ok_or(Error::Unavailable)?;
+    let result = journey::run(
+        client,
+        events,
+        run,
+        call,
+        trace,
+        id,
+        (
+            options.lab,
+            options.reply_lead_ms,
+            conversation.sent,
+            screen,
+            &mut *delegation,
+            kill,
+        ),
+    )
+    .await;
+    match result {
+        Ok(outcome) => Ok(Some(outcome)),
+        Err(error) => {
+            delegation.abandon();
+            if kill.sync(trace).await? {
+                conversation.close("kill", trace)?;
+                return Ok(None);
+            }
+            conversation.close("failed", trace)?;
+            bridge_relink::failure(error, options.lab, health, trace, screen, id)?;
+            Ok(None)
+        }
+    }
+}
+
 async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &str) -> Result<LiveCall, Error> {
-    let peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now())
+    let peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
         .await
         .map_err(|_| Error::Unavailable)?;
     let options = SessionOptions {
@@ -142,7 +274,7 @@ async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &s
         thread_id: id.to_owned(),
     };
     factory
-        .create(peer, options, Instant::now() + Duration::from_secs(5))
+        .create(peer, options, (Instant::now() + Duration::from_secs(5)).into_std())
         .await
         .map_err(Error::from)
 }

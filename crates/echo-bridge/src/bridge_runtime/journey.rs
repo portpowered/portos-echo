@@ -1,4 +1,5 @@
 use super::bridge_pacing::LeadPacer;
+use super::bridge_timing;
 use crate::{
     Error,
     bridge_audio::{self, Microphone, Reply},
@@ -12,11 +13,9 @@ use echo_live::{
 };
 use echo_wyoming::{EventStream, MicFrame, Run, WyomingClient};
 use serde_json::json;
-use std::{
-    num::NonZeroUsize,
-    time::{Duration, Instant},
-};
+use std::{num::NonZeroUsize, time::Duration};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 struct Source {
     mic: Option<Microphone>,
@@ -153,29 +152,46 @@ pub(super) async fn run(
     call: &mut LiveCall,
     trace: &mut Trace,
     id: &str,
-    options: (bool, u16, u64),
+    options: (
+        bool,
+        u16,
+        u64,
+        &super::bridge_screen::Screen,
+        &mut super::bridge_delegation::Host,
+        &super::bridge_kill::Kill<'_>,
+    ),
 ) -> Result<(u64, bool), Error> {
     let mut source = Source::new()?;
     source.call_packets_base = options.2;
     let (tx, rx) = mpsc::channel(1);
-    trace.record("reply.started", Some(id), json!({}))?;
-    let play = client.play(bridge_audio::format(24_000), rx);
+    let budget = bridge_timing::playback(options.5.settings);
+    let play = client.play_with_timeout(bridge_audio::format(24_000), rx, budget);
     let mut context = PlaybackContext {
         client,
         trace,
         id,
         lead_ms: options.1,
+        screen: options.3,
+        speaking: false,
+        microphone: false,
+        deadline: Instant::now() + bridge_timing::RESPONSE,
+        delegation: options.4,
+        kill: options.5,
     };
-    let producer = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context);
-    let (outcome, (), ()) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::try_join!(
-            async { play.await.map_err(Error::from) },
-            producer,
-            super::played(events)
-        )
-    })
-    .await
-    .map_err(|_| Error::Deadline)??;
+    let mut failure = None;
+    let (acknowledged, acknowledgement) = tokio::sync::oneshot::channel();
+    let producer = async {
+        let result = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context).await;
+        failure = stop_failed_producer(result, client, options.0).await?;
+        context.await_played(acknowledgement, &mut source, call).await
+    };
+    let (outcome, (), ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer, async {
+        let result = super::played(events).await;
+        let _ = acknowledged.send(());
+        result
+    })?;
+    failure.map_or(Ok(()), Err)?;
+    let abandoned = context.delegation.abandon();
     trace.record(
         "reply.played",
         Some(id),
@@ -194,13 +210,30 @@ pub(super) async fn run(
         .as_ref()
         .map_or((0, 0), |m| (m.input_samples, m.tail_samples()));
     trace.record(
-        "mic.frames",
+        "mic.completed",
         Some(id),
         json!({"count":source.sent,"received_chunks":stats.received,
         "dropped_chunks":stats.dropped,"input_samples":samples,"tail_samples":tail}),
     )?;
     trace.record("wyoming.run_ended", Some(id), json!({}))?;
-    Ok((source.sent, !source.cancelled))
+    Ok((source.sent, !source.cancelled && !abandoned))
+}
+
+async fn stop_failed_producer(
+    result: Result<(), Error>,
+    client: &WyomingClient,
+    lab: bool,
+) -> Result<Option<Error>, Error> {
+    match result {
+        Ok(()) => Ok(None),
+        Err(error) if lab => Err(error), // Preserve the lab caller's fatal-error protocol.
+        Err(error) => {
+            // Keep play's receiver alive through cut and Played. Dropping it
+            // first invalidates the Wyoming connection and loses the stop.
+            client.cut_with_stats().await?;
+            Ok(Some(error))
+        }
+    }
 }
 
 struct PlaybackContext<'a> {
@@ -208,9 +241,86 @@ struct PlaybackContext<'a> {
     trace: &'a mut Trace,
     id: &'a str,
     lead_ms: u16,
+    screen: &'a super::bridge_screen::Screen,
+    speaking: bool,
+    microphone: bool,
+    deadline: Instant,
+    delegation: &'a mut super::bridge_delegation::Host,
+    kill: &'a super::bridge_kill::Kill<'a>,
 }
 
 impl PlaybackContext<'_> {
+    async fn await_played(
+        &mut self,
+        mut acknowledgement: tokio::sync::oneshot::Receiver<()>,
+        source: &mut Source,
+        call: &mut LiveCall,
+    ) -> Result<(), Error> {
+        let deadline = Instant::now() + bridge_timing::CONTROL;
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut acknowledgement => return Ok(()),
+                () = tokio::time::sleep_until(deadline) => return Err(Error::Deadline),
+                () = self.kill.wait(), if !source.cancelled => {
+                    self.kill.sync(self.trace).await?;
+                    source.cancelled = true;
+                    self.delegation.abandon();
+                    call.close();
+                }
+            }
+        }
+    }
+
+    async fn cancelled(&mut self, source: &mut Source, call: &mut LiveCall) -> Result<bool, Error> {
+        if self.kill.sync(self.trace).await? {
+            source.cancelled = true;
+            call.close();
+        }
+        if source.cancelled {
+            self.delegation.abandon();
+            self.cut(source).await?;
+        }
+        Ok(source.cancelled)
+    }
+
+    async fn microphone(
+        &mut self,
+        source: &mut Source,
+        frame: MicFrame,
+        call: &mut LiveCall,
+        lab: bool,
+    ) -> Result<(), Error> {
+        source.microphone(frame, call, lab).await?;
+        if !self.microphone && source.sent > 0 {
+            self.trace
+                .record("mic.frames", Some(self.id), json!({"count":source.sent}))?;
+            self.microphone = true;
+        }
+        Ok(())
+    }
+
+    fn event(&mut self, event: LiveEvent, source: &mut Source, lab: bool) -> Result<(), Error> {
+        if matches!(event, LiveEvent::DelegationCreated { .. }) {
+            if self.delegation.dispatch(event, self.id, self.trace)? {
+                self.deadline += bridge_timing::task(self.kill.settings);
+            }
+            Ok(())
+        } else {
+            source.event(event, lab)
+        }
+    }
+
+    async fn forward(&mut self, tx: &mpsc::Sender<Vec<u8>>, frame: Vec<u8>) -> Result<(), Error> {
+        tx.send(frame).await.map_err(|_| Error::Wyoming)?;
+        if !self.speaking {
+            self.trace.record("reply.started", Some(self.id), json!({}))?;
+            self.screen.publish(echo_screen_contract::UiState::Speaking)?;
+            self.speaking = true;
+        }
+        Ok(())
+    }
+
     async fn cut(&mut self, source: &mut Source) -> Result<(), Error> {
         let bridge_evicted = source.queue.drop_count();
         let bridge_dropped = source.discard_reply();
@@ -237,15 +347,14 @@ async fn produce(
     lab: (bool, u64),
     context: &mut PlaybackContext<'_>,
 ) -> Result<(), Error> {
-    let deadline = Instant::now() + Duration::from_secs(10);
     let mut pacer = LeadPacer::new(context.lead_ms);
     let mut completed = false;
     let mut pressure_reported = false;
     loop {
-        if source.cancelled {
-            context.cut(source).await?;
+        if context.cancelled(source, call).await? {
             return Ok(());
         }
+        context.delegation.service(call, context.trace).await?;
         let drained = source.receive(call).await?;
         if !pressure_reported && source.queue.drop_count() > 0 {
             context
@@ -267,21 +376,21 @@ async fn produce(
         if completed && source.queue.is_empty() {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= context.deadline {
             return Err(Error::Deadline);
         }
         tokio::select! {
             frame = run.recv() => match frame? {
-                Some(frame) => source.microphone(frame, call, lab.0).await?,
+                Some(frame) => context.microphone(source, frame, call, lab.0).await?,
                 None => return Err(Error::Wyoming),
             },
-            event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(deadline)) => match event {
-                Ok(event) => source.event(event, lab.0)?,
+            event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()) => match event {
+                Ok(event) => context.event(event, source, lab.0)?,
                 Err(CallError::Deadline) => (),
                 Err(error) => return Err(error.into()),
             },
             frame = pacer.next_frame(&mut source.queue), if !source.queue.is_empty() => {
-                if let Some(frame) = frame { tx.send(frame).await.map_err(|_| Error::Wyoming)?; }
+                if let Some(frame) = frame { context.forward(&tx, frame).await?; }
             }
         }
     }
@@ -290,7 +399,7 @@ async fn produce(
 async fn send(call: &mut LiveCall, packets: Vec<AudioFrame>) -> Result<u64, Error> {
     let mut count = 0;
     for packet in packets {
-        call.send_audio(packet, Instant::now()).await?;
+        call.send_audio(packet, Instant::now().into_std()).await?;
         count += 1;
     }
     Ok(count)

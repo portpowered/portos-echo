@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Echo bridge local health
-  version: 1.0.0
+  version: 1.1.0
 paths:
   /healthz:
     get:
@@ -13,12 +13,14 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [status, wyoming, live]
+                required: [status, wyoming, live, relink_required, kill_switch]
                 properties:
                   status: {const: running}
                   wyoming: {enum: [connecting, connected, reconnecting, error]}
                   live: {enum: [idle, connecting, connected, error]}
-              example: {status: running, wyoming: connected, live: idle}
+                  relink_required: {type: boolean}
+                  kill_switch: {type: boolean}
+              example: {status: running, wyoming: connected, live: error, relink_required: true, kill_switch: false}
         '404':
           description: Unknown path; empty body.
         '405':
