@@ -52,8 +52,9 @@ impl Conversation {
         health: &Health,
         trace: &mut Trace,
     ) -> Result<Run, Error> {
-        let mut probe = tokio::time::interval(Duration::from_millis(250));
-        probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut backoff = Duration::from_millis(100);
+        let probe = probe_link(client, Duration::ZERO);
+        tokio::pin!(probe);
         loop {
             // Expiry wins at equality, including when a wake is already queued.
             if self.expired() {
@@ -61,8 +62,10 @@ impl Conversation {
             }
             let event = tokio::select! {
                 event = events.recv() => event?,
-                _ = probe.tick() => {
-                    observe_link(client, health, trace).await?;
+                connected = &mut probe => {
+                    observe_link(connected, health, trace)?;
+                    backoff = if connected { Duration::from_millis(100) } else { (backoff * 2).min(Duration::from_secs(2)) };
+                    probe.set(probe_link(client, backoff));
                     continue;
                 }
                 result = self.service() => {
@@ -102,8 +105,12 @@ impl Conversation {
     }
 }
 
-async fn observe_link(client: &WyomingClient, health: &Health, trace: &mut Trace) -> Result<(), Error> {
-    let connected = client.describe().await.is_ok();
+async fn probe_link(client: &WyomingClient, delay: Duration) -> bool {
+    tokio::time::sleep(delay).await;
+    client.describe().await.is_ok()
+}
+
+fn observe_link(connected: bool, health: &Health, trace: &mut Trace) -> Result<(), Error> {
     let previous = health.state.borrow().wyoming;
     let state = if connected { "connected" } else { "reconnecting" };
     if previous != state {
