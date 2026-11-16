@@ -71,6 +71,8 @@ test-sim:
 	cargo run --locked -p echo-lab -- validate
 	$(MAKE) hassmic-host
 	sh tests/hassmic_host_smoke.sh
+	cargo build --locked -p echo-bridge --bins
+	cargo nextest run -p echo-bridge --test bridge_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
 	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
 	cargo nextest run -p echo-lab --test sim_bridge_cli --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
 	cargo build -p echo-lab --bins --locked
@@ -103,6 +105,7 @@ coverage: hassmic-host
 	cargo +nightly-2026-11-05 llvm-cov clean --workspace
 	mkdir -p target/llvm-cov
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) --workspace --all-targets --locked --branch --no-report
+	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-bridge --test bridge_t3 --locked --branch --no-report -- --ignored --nocapture
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) $(COVERAGE_HOST_T3) --locked --branch --no-report -- --ignored --nocapture
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --test sim_bridge_cli --locked --branch --no-report -- --ignored --nocapture
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --test sim_host --locked --branch --no-report -- --ignored --nocapture --test-threads=2
