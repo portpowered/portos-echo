@@ -547,8 +547,9 @@ once its smoke test has passed (`docs/program/coordinator.md`).
 | `el-f10-ci` | The required checks in section 11 as GitHub Actions jobs calling the make targets; branch protection on `main` requiring them | A red required check blocks merge; a seeded coverage drop fails `coverage` |
 
 The drafts' `el-f5-lane-ownership` stays dropped, and so does the native lint item: no C of ours exists in this
-repository. The drafts' `build-armv7` gate goes with the on-device daemon; `echo-screen`'s build becomes a gate in
-W1 once spike S3 has chosen its shape.
+repository. The drafts' `build-armv7` gate went with the on-device daemon. W4 brings back a narrower one,
+`build-echo`, which builds the bridge for `armv7-linux-androideabi` (section 12, item 7). `echo-screen`'s build
+becomes a gate in W1 once spike S3 has chosen its shape.
 
 Order: F1 first. F2–F4 and F6–F8 are independent after it (each owns a separate config or xtask file) and run as
 parallel factory lanes. F9 and F10 come last. M0 passes when F10 has merged with every seeded proof linked.
@@ -627,12 +628,13 @@ loopback (`docs/program/coordinator.md`), and fans out inside a phase only where
 5. **W3 device.** hassmic installed on the Echo (the owner's go-ahead), then M1, M3, M5 and M6 as operator-started
    T5 runs. PR 2731 and the PB-6 simulator are on the pilot.
 6. **Muse** (`el-w3-muse-bridge`), gating M7.
-7. **W4 the bridge on the Echo** (owner, 2026-11-16: credentials may live on the device), after M1 passes on the PC.
-   - First the protocol-neutral `echo-link` (`el-w3-echo-link`).
-   - Then the bridge built for `armv7-linux-androideabi` in CI, as a release artifact with its size recorded. This
-     is T0–T2 only.
-   - Then the credential store on the device: the bridge's own user, mode 0600, and device-code sign-in shown on the
-     Echo's screen.
+7. **W4 the bridge on the Echo** (owner, 2026-11-16: credentials may live on the device). Two parts.
+   - **Device-free preparation, which starts now**, in parallel with W2 and W3: the bridge-side crates, and the
+     `echo-bridge` binary once it is on main, built for `armv7-linux-androideabi` in CI on every PR
+     (`el-w4-echo-cross-build`). It is a release artifact with its size recorded, T0–T2 only. The protocol-neutral
+     `echo-link` (`el-w3-echo-link`) follows bridge-wire.
+   - **The device move, after M1 passes on the PC and `echo-link` is on main.** First the credential store on the
+     device: the bridge's own user, mode 0600, and device-code sign-in shown on the Echo's screen.
    - Then the fork starts the bridge beside hassmic, with Wyoming on loopback only. `LISTEN_FROM` becomes
      `127.0.0.1`, so nothing on the LAN reaches hassmic at all.
    - Done when M1 and M4 pass as T5 runs with no PC in the path, and the screen app has no read access to the
