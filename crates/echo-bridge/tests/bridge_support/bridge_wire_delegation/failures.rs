@@ -1,7 +1,7 @@
 //! Component T3: configured limits and an actual MCP HTTP 500, without replay.
 use super::*;
 
-async fn scripted(items: Vec<Value>) -> Model {
+pub(super) async fn scripted(items: Vec<Value>) -> Model {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = "http://127.0.0.1";
     let origin = format!("{base}:{}", listener.local_addr().unwrap().port());
@@ -35,11 +35,11 @@ async fn scripted(items: Vec<Value>) -> Model {
     }
 }
 
-fn tool(id: &str) -> Value {
+pub(super) fn tool(id: &str) -> Value {
     json!({"type":"function_call","call_id":id,"name":"tool_0","arguments":"{\"text\":\"delegated echo\"}"})
 }
 
-fn answer(text: &str) -> Value {
+pub(super) fn answer(text: &str) -> Value {
     json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]})
 }
 

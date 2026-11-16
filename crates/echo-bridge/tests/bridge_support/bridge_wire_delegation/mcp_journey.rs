@@ -42,7 +42,7 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
     }).await;
 }
 
-async fn link(session: &mut Session, mock: &Mock, directory: &Path) {
+pub(super) async fn link(session: &mut Session, mock: &Mock, directory: &Path) {
     let link = operator(directory, "link");
     session.prompt(mock).await;
     tokio::time::advance(Duration::from_secs(5)).await;
@@ -87,7 +87,7 @@ fn rejected_once(mock: &Mock, model: &Model, path: &Path) {
     );
 }
 
-async fn reach(process: &mut Process, path: &Path, event: &str) -> Result<(), String> {
+pub(super) async fn reach(process: &mut Process, path: &Path, event: &str) -> Result<(), String> {
     // Drive both clocks while the persistent satellite services control traffic.
     // Thirty simulated seconds is a ceiling, never a synchronization sleep.
     for _ in 0..1500 {
@@ -104,7 +104,7 @@ async fn reach(process: &mut Process, path: &Path, event: &str) -> Result<(), St
     Err(format!("did not observe {event}: {:?}", trace(path)))
 }
 
-async fn wake(writer: &mut (impl tokio::io::AsyncWrite + Unpin)) {
+pub(super) async fn wake(writer: &mut (impl tokio::io::AsyncWrite + Unpin)) {
     bridge_short::send(
         writer,
         "run-pipeline",
@@ -115,7 +115,7 @@ async fn wake(writer: &mut (impl tokio::io::AsyncWrite + Unpin)) {
     .await;
 }
 
-async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::Receiver<()>) {
+pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::Receiver<()>) {
     let (reader, mut writer) = socket.into_split();
     let mut lines = BufReader::new(reader).lines();
     loop {

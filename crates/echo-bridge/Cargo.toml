@@ -28,6 +28,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros", "io-util", "test-util"] }
 
 [dev-dependencies]
+echo-lab = { version = "0.1.0", path = "../echo-lab" }
+p256 = { version = "0.14", features = ["ecdsa"] }
 echo-link = { version = "0.1.0", path = "../echo-link", features = ["fake"] }
 echo-mcp-auth = { version = "0.1.0", path = "../echo-mcp-auth", features = ["mock"] }
 echo-spoof-mcp = { version = "0.1.0", path = "../echo-spoof-mcp" }

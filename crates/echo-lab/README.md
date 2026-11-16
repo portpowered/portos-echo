@@ -90,6 +90,26 @@ a first-party access token which MCP rejects; a wrong resource returns
 auth client and private store. These component witnesses do not replace the
 real bridge's M5 scenario or prove cloud/device compatibility.
 
+Build the delivered bridge once, then run its grant integration witnesses:
+
+```sh
+cargo build --locked -p echo-bridge --bin echo-bridge
+cargo test --locked -p echo-bridge --test bridge_t3 mcp_link -- --ignored --nocapture
+```
+
+The strict cases use this authorization counterpart, the signed-token spoof,
+the prebuilt configured bridge, its public operator commands, paired screen,
+and controlled Live/model/Wyoming peers. They prove a crash after rotation,
+restart and a second refresh followed by authenticated `test.echo` returning
+`m5-linked`, replay rejection and the MCP relink latch, and healthy repeated
+unlink. Resource admission independently reads the configured durable store
+before accepting each Bearer, so premature access publication fails the test.
+Additional cases inject failed storage replacement, failed auth transport and
+cancellation after remote rotation; the owner must block further refresh and
+never publish an uncertain completion. All state is in isolated temporary
+directories outside the repository. These tests do not use `hassmic-host` or
+produce the M5 scenario report; those remain separate acceptance evidence.
+
 ## Device runner
 
 The device runner supports batches of speech, screen and frame steps, firmware

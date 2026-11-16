@@ -4,8 +4,12 @@ use super::*;
 use echo_mcp_auth::mock::Mock;
 use std::{future::Future, task::Poll};
 
+#[path = "mcp_failures.rs"]
+mod faults;
 #[path = "mcp_journey.rs"]
 mod journey;
+#[path = "mcp_strict.rs"]
+mod strict;
 
 struct Session {
     process: Process,
@@ -20,8 +24,12 @@ impl Session {
     }
 
     async fn start_with(directory: &Path, mock: &Mock, first: bool, peers: Option<(&str, &str)>) -> Self {
+        Self::start_resource(directory, &mock.base, first, peers).await
+    }
+
+    async fn start_resource(directory: &Path, resource: &str, first: bool, peers: Option<(&str, &str)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        configure(directory, mock, first, listener.local_addr().unwrap().port());
+        configure(directory, resource, first, listener.local_addr().unwrap().port());
         let path = directory.join("bridge.toml");
         if peers.is_some() && first {
             let text = std::fs::read_to_string(&path)
@@ -31,7 +39,7 @@ impl Session {
         }
         let mut command = match peers {
             Some((live, model)) => run_command(directory, live, model),
-            None => bridge_wire_screen::run_command(directory, &mock.base),
+            None => bridge_wire_screen::run_command(directory, resource),
         };
         command.arg("--sim-clock");
         let mut process = Process::spawn(&mut command);
@@ -92,7 +100,7 @@ impl Session {
     }
 }
 
-fn configure(directory: &Path, mock: &Mock, first: bool, port: u16) {
+fn configure(directory: &Path, resource: &str, first: bool, port: u16) {
     if first {
         bridge_wire_screen::setup(directory, port);
     }
@@ -113,9 +121,9 @@ fn configure(directory: &Path, mock: &Mock, first: bool, port: u16) {
         .join("\n");
     let text = if first {
         let state = directory.join("portos").to_str().unwrap().replace('\\', "/");
-        let mcp = format!("[mcp]\nstate_dir = '{state}'\noperator_listen = '127.0.0.1:0'\n");
+        let mcp = format!("[mcp]\nstate_dir = '{state}'\nclient_id = 'echo-lab'\noperator_listen = '127.0.0.1:0'\n");
         text.replace("[[mcp.server]]", &format!("{mcp}[[mcp.server]]"))
-            .replace("http://127.0.0.1:18080/mcp", &format!("{}/mcp", mock.base))
+            .replace("http://127.0.0.1:18080/mcp", &format!("{resource}/mcp"))
             .replace("auth = \"none\"", "auth = 'portos_device_code'")
     } else {
         text
