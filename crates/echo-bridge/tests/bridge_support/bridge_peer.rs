@@ -1,5 +1,8 @@
 //! A controlled synthetic Live boundary, using the shipped public peer.
 use super::*;
+#[cfg(unix)]
+#[path = "../bridge_muse_tests/mod.rs"]
+mod bridge_muse_tests;
 use echo_live::LivePeer;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -21,6 +24,7 @@ pub struct Live {
 struct Audio {
     initial: Vec<Vec<u8>>,
     more: Vec<Vec<u8>>,
+    muse: Vec<Vec<u8>>,
 }
 
 impl Drop for Live {
@@ -62,6 +66,7 @@ impl Live {
         let audio = Audio {
             initial: encode(frames),
             more: encode(32),
+            muse: encode(10),
         };
         let task = tokio::spawn(async move {
             let mut stream = listener.accept().await.unwrap().0;
@@ -125,7 +130,7 @@ async fn serve(
         &mut sequence,
         commentary,
         microphone,
-        &audio.more,
+        audio,
     )
     .await
 }
@@ -137,14 +142,13 @@ async fn next_connection(
     sequence: &mut u16,
     commentary: &mpsc::Sender<String>,
     microphone: &std::sync::atomic::AtomicUsize,
-    audio: &[Vec<u8>],
+    audio: &Audio,
 ) -> TcpStream {
     loop {
         tokio::select! {
             next = listener.accept() => return next.unwrap().0,
             event = receive.recv() => match event {
-                Some(event) if event == "synthetic.more_audio" => short_audio(peer, audio, sequence).await,
-                Some(event) => peer.send_text(&event).await.unwrap(),
+                Some(event) => send_event(peer, &event, audio, sequence).await,
                 None => return listener.accept().await.unwrap().0,
             },
             result = drive(peer) => if result.is_err() { return listener.accept().await.unwrap().0; },
@@ -155,6 +159,14 @@ async fn next_connection(
         while let Some(text) = peer.pop_text() {
             commentary.try_send(text).unwrap();
         }
+    }
+}
+
+async fn send_event(peer: &mut LivePeer, event: &str, audio: &Audio, sequence: &mut u16) {
+    match event {
+        "synthetic.more_audio" => short_audio(peer, &audio.more, sequence).await,
+        "synthetic.muse_audio" => short_audio(peer, &audio.muse, sequence).await,
+        _ => peer.send_text(event).await.unwrap(),
     }
 }
 
