@@ -3,6 +3,90 @@ use crate::wyoming_test_support as wyoming_peer;
 use crate::{ClientOptions, Error, WyomingClient, wyoming_wire};
 use tokio::io::{AsyncWriteExt, duplex};
 
+#[tokio::test(start_paused = true)]
+async fn first_reconnected_wake_completes_with_lifecycle_consumer_held() {
+    use echo_contracts::wyoming::WyomingEvent;
+    use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, mpsc};
+    let (io, mut old) = duplex(4096);
+    let (connections, incoming) = mpsc::channel(1);
+    let incoming = Arc::new(Mutex::new(incoming));
+    let mut client = WyomingClient::reconnecting(io, ClientOptions::default(), move || {
+        let incoming = incoming.clone();
+        async move { incoming.lock().await.recv().await.unwrap() }
+    });
+    let mut events = client.events().unwrap();
+    let pipeline = json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"Computer"});
+    let (registered, ()) = tokio::join!(client.run_satellite(), async {
+        assert_eq!(wyoming_peer::receive(&mut old).await.header.r#type, "run-satellite");
+        wyoming_peer::send(&mut old, "run-pipeline", pipeline.clone(), vec![]).await;
+        wyoming_peer::send(
+            &mut old,
+            "audio-chunk",
+            json!({"rate":16000,"width":2,"channels":1}),
+            vec![99; 2048],
+        )
+        .await;
+    });
+    registered.unwrap();
+    let mut interrupted = events.recv().await.unwrap().unwrap().run.unwrap();
+    assert_eq!(events.recv().await.unwrap().unwrap().audio_count, 1);
+    drop(old);
+    assert_eq!(interrupted.recv().await.unwrap().unwrap().payload, vec![99; 2048]);
+    assert_eq!(interrupted.recv().await, Err(Error::Disconnected));
+    let (io, mut fresh) = duplex(4096);
+    connections.send(Ok(io)).await.unwrap();
+    let caller = async {
+        let mut run = events.recv().await.unwrap().unwrap().run.unwrap();
+        assert_eq!(run.stats().received, 0);
+        // Info is a wire barrier after audio-stop. Do not drain lifecycle events
+        // until every fresh chunk has been routed, exceeding the old 32 slots.
+        assert_eq!(
+            client.describe().await.unwrap(),
+            WyomingEvent::Info(json!({"fresh":true}))
+        );
+        assert_eq!(
+            run.stats(),
+            crate::RunStats {
+                received: 33,
+                dropped: 1
+            }
+        );
+        for index in 1..33 {
+            assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![index; 2048]);
+        }
+        assert_eq!(run.recv().await.unwrap(), None);
+        assert_eq!(events.recv().await.unwrap().unwrap().audio_count, 33);
+        assert!(matches!(
+            events.recv().await.unwrap().unwrap().event,
+            WyomingEvent::AudioStop(_)
+        ));
+        client.close().await.unwrap();
+    };
+    tokio::join!(caller, reconnected_microphone_peer(&mut fresh, pipeline));
+}
+
+async fn reconnected_microphone_peer(fresh: &mut tokio::io::DuplexStream, pipeline: serde_json::Value) {
+    use serde_json::json;
+    assert_eq!(wyoming_peer::receive(fresh).await.header.r#type, "run-satellite");
+    wyoming_peer::send(fresh, "run-pipeline", pipeline, vec![]).await;
+    // Caller acknowledges receipt of the fresh Run through describe.
+    assert_eq!(wyoming_peer::receive(fresh).await.header.r#type, "describe");
+    for index in 0..33 {
+        wyoming_peer::send(
+            fresh,
+            "audio-chunk",
+            json!({"rate":16000,"width":2,"channels":1}),
+            vec![index; 2048],
+        )
+        .await;
+    }
+    wyoming_peer::send(fresh, "audio-stop", json!({}), vec![]).await;
+    wyoming_peer::send(fresh, "info", json!({"fresh":true}), vec![]).await;
+    assert_eq!(tokio::io::AsyncReadExt::read(fresh, &mut [0]).await.unwrap(), 0);
+}
+
 #[path = "wyoming_session/wyoming_control_support.rs"]
 mod wyoming_control;
 
