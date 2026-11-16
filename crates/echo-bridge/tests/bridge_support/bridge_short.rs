@@ -82,7 +82,8 @@ async fn register(stream: &mut TcpStream, bridge: &mut Process) {
     send(stream, "run-pipeline", row["header"]["data"].clone()).await;
 }
 
-async fn receive_short(stream: &mut TcpStream, live: &bridge_peer::Live, path: &Path, frames: u16) {
+pub(super) async fn receive_short(stream: &mut TcpStream, live: &bridge_peer::Live, path: &Path, frames: u16) {
+    let previously_played = trace(path).iter().filter(|e| e["event"] == "reply.played").count();
     let mut bytes = Vec::new();
     // Observe admission of the first two frames before closing the source.
     // This barrier tests completion after short audio without RTP/control races.
@@ -107,7 +108,10 @@ async fn receive_short(stream: &mut TcpStream, live: &bridge_peer::Live, path: &
     }
     assert_eq!(chunks, frames);
     assert_eq!(bytes, vec![0; usize::from(frames) * 960]);
-    assert_eq!(trace(path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
+    assert_eq!(
+        trace(path).iter().filter(|e| e["event"] == "reply.played").count(),
+        previously_played
+    );
 }
 
 async fn complete(stream: &mut TcpStream, bridge: &mut Process, path: &Path, acknowledge: bool) {

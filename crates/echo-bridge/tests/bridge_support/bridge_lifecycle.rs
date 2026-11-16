@@ -3,6 +3,66 @@ use super::*;
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_lifecycle_idle_provider_failure_next_wake_creates_fresh_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let live = bridge_peer::Live::bind().await;
+    let (mut satellite, mut process) = bridge_short::satellite(&live.url, &path).await;
+    let pid = process.child.id();
+    for run in 1..=2 {
+        assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-start");
+        bridge_short::receive_short(&mut satellite, &live, &path, 3).await;
+        bridge_short::send(&mut satellite, "played", json!({})).await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&process.line().await).unwrap(),
+            json!({"event":"bridge.run_completed","run_id":format!("run-{run}")})
+        );
+        assert_eq!(process.child.id(), pid);
+        assert_eq!(live.calls.load(std::sync::atomic::Ordering::SeqCst), run);
+        if run == 1 {
+            live.events.send(json!({"type":"error"}).to_string()).await.unwrap();
+            idle_failure(&path).await;
+            bridge_short::send(
+                &mut satellite,
+                "run-pipeline",
+                json!({"start_stage":"asr", "end_stage":"tts", "restart_on_end":false, "wake_word_name":"alexa"}),
+            )
+            .await;
+        }
+    }
+    let entries = trace(&path);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 2);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "bridge.error").count(), 0);
+    let closes: Vec<_> = entries.iter().filter(|e| e["event"] == "live.closed").collect();
+    assert_eq!(closes.len(), 1);
+    assert_eq!(closes[0]["reason"], "unavailable");
+    process.finish(0).await;
+    let address = entries[0]["health_addr"].as_str().unwrap();
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+}
+
+async fn idle_failure(path: &Path) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let entries = trace(path);
+            if entries.iter().any(|e| e["event"] == "live.closed") {
+                let address = entries[0]["health_addr"].as_str().unwrap();
+                let response = health(address, "GET", "/healthz").await;
+                assert_eq!(
+                    serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap(),
+                    json!({"status":"running","wyoming":"connected","live":"error"})
+                );
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_lifecycle_invalid_idle_override_exits_offline_without_trace() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace");

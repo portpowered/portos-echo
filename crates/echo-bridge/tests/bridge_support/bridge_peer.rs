@@ -11,6 +11,7 @@ use tokio::{
 pub struct Live {
     pub url: String,
     pub events: mpsc::Sender<String>,
+    pub calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     task: JoinHandle<()>,
 }
 
@@ -37,13 +38,21 @@ impl Live {
         let origin = "http://127.0.0.1";
         let url = format!("{origin}:{}", listener.local_addr().unwrap().port());
         let (events, mut receive) = mpsc::channel::<String>(8);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
         let task = tokio::spawn(async move {
             let mut stream = listener.accept().await.unwrap().0;
             loop {
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 stream = serve(&listener, stream, &mut receive, frames, gate.take()).await;
             }
         });
-        Self { url, events, task }
+        Self {
+            url,
+            events,
+            calls,
+            task,
+        }
     }
 }
 
