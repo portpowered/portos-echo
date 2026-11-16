@@ -256,7 +256,9 @@ jobs:
       - name: Build pinned hassmic-host
         run: make hassmic-host
       - name: coverage
-        run: make coverage
+        run: |
+          python scripts/test_coverage_profiles.py --instrumented
+          make coverage
         env:
           COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
   build-host:
