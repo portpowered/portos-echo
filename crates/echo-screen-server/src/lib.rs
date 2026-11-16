@@ -36,12 +36,34 @@ pub enum ScreenServerError {
 pub struct ScreenServer {
     pub bound_addr: SocketAddr,
     pub actions: mpsc::Receiver<UiAction>,
+    publication_requests: mpsc::Sender<tokio::sync::oneshot::Sender<()>>,
     core: Arc<Mutex<Core>>,
     stop: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl ScreenServer {
+    /// Acknowledge states admitted before this call through the existing pump.
+    /// Success commits the current snapshot, not delivery to existing clients.
+    ///
+    /// # Errors
+    /// Returns `Task` on deadline, shutdown or a closed pump.
+    pub async fn flush(&self, deadline: tokio::time::Instant) -> Result<(), ScreenServerError> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        tokio::time::timeout_at(deadline, async {
+            if *self.stop.borrow() {
+                return Err(ScreenServerError::Task);
+            }
+            self.publication_requests
+                .send(send)
+                .await
+                .map_err(|_| ScreenServerError::Task)?;
+            receive.await.map_err(|_| ScreenServerError::Task)
+        })
+        .await
+        .map_err(|_| ScreenServerError::Task)?
+    }
+
     /// Close active streams and bar future authorization before returning.
     /// Bytes already delivered to the operating system cannot be recalled.
     ///
@@ -95,10 +117,12 @@ pub async fn serve(
     let (stop, stop_rx) = watch::channel(false);
     let app = screen_http::router(core.clone(), actions_tx, stop_rx.clone(), bound_addr);
     let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx));
-    let state_task = tokio::spawn(screen_core::pump(core.clone(), states, stop.clone()));
+    let (publication_requests, requests) = mpsc::channel(32);
+    let state_task = tokio::spawn(screen_core::pump(core.clone(), states, requests, stop.clone()));
     Ok(ScreenServer {
         bound_addr,
         actions,
+        publication_requests,
         core,
         stop,
         tasks: vec![state_task, listener_task],
@@ -108,5 +132,77 @@ pub async fn serve(
 pub(crate) async fn cancelled(mut signal: watch::Receiver<bool>) {
     if !*signal.borrow() {
         let _ = signal.wait_for(|value| *value).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{future::Future, time::Duration};
+    use tokio::time::Instant;
+
+    fn offline(capacity: usize) -> (ScreenServer, mpsc::Receiver<tokio::sync::oneshot::Sender<()>>) {
+        let (publication_requests, requests) = mpsc::channel(capacity);
+        (
+            ScreenServer {
+                bound_addr: ([127, 0, 0, 1], 0).into(),
+                actions: mpsc::channel(1).1,
+                publication_requests,
+                core: Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into())))),
+                stop: watch::channel(false).0,
+                tasks: vec![],
+            },
+            requests,
+        )
+    }
+
+    #[tokio::test]
+    async fn flush_success_requires_a_receipt() {
+        let (server, mut requests) = offline(1);
+        let flush = server.flush(Instant::now() + Duration::from_secs(5));
+        tokio::pin!(flush);
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(flush.as_mut().poll(cx).is_pending())).await);
+        requests.recv().await.unwrap().send(()).unwrap();
+        assert!(flush.await.is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn flush_uses_one_deadline_for_admission_and_receipt() {
+        let (server, mut requests) = offline(1);
+        server
+            .publication_requests
+            .try_send(tokio::sync::oneshot::channel().0)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let flush = server.flush(deadline);
+        tokio::pin!(flush);
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(flush.as_mut().poll(cx).is_pending())).await);
+        tokio::time::advance(Duration::from_secs(4)).await;
+        drop(requests.recv().await.unwrap());
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(flush.as_mut().poll(cx).is_pending())).await);
+        let _held = requests.recv().await.unwrap();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(flush.await, Err(ScreenServerError::Task)));
+        assert_eq!(Instant::now(), deadline);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn flush_handles_saturation_closure_stop_and_cancelled_receipt() {
+        let (server, mut requests) = offline(1);
+        server
+            .publication_requests
+            .try_send(tokio::sync::oneshot::channel().0)
+            .unwrap();
+        assert!(server.flush(Instant::now() + Duration::from_secs(5)).await.is_err());
+        drop(requests.recv().await.unwrap());
+        let flush = server.flush(Instant::now() + Duration::from_secs(5));
+        tokio::pin!(flush);
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(flush.as_mut().poll(cx).is_pending())).await);
+        drop(requests.recv().await.unwrap());
+        assert!(flush.await.is_err());
+        drop(requests);
+        assert!(server.flush(Instant::now() + Duration::from_secs(5)).await.is_err());
+        server.stop.send_replace(true);
+        assert!(server.flush(Instant::now() + Duration::from_secs(5)).await.is_err());
     }
 }

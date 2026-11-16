@@ -264,11 +264,17 @@ async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() 
     assert_eq!(model.requests.lock().unwrap().len(), 0);
     assert_eq!(spoof.snapshot().unwrap().calls.len(), 0);
     bridge.finish(0).await;
+    let mut remaining = Vec::new();
+    satellite.read_to_end(&mut remaining).await.unwrap();
+    assert_eq!(remaining, Vec::<u8>::new()); // Exactly the one audio-stop consumed above; no replay.
     let entries = trace(&path);
     for event in ["session.commentary.append", "reply.played", "reply.started"] {
         assert_eq!(entries.iter().filter(|e| e["event"] == event).count(), 0);
     }
     assert_eq!(entries.iter().filter(|e| e["event"] == "live.closed").count(), 1);
+
+    let refused = entries.iter().find(|e| e["event"] == "run.refused").unwrap();
+    assert_eq!(refused["reason"], "relink_required");
     let text = std::fs::read_to_string(&path).unwrap();
     for private in ["synthetic-api-key", "synthetic-repaired-key", "synthetic-mcp-token"] {
         assert!(!text.contains(private), "trace disclosure");

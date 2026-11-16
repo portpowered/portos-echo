@@ -67,6 +67,15 @@ impl Screen {
             .publish(self.mute.lock().map_err(|_| Error::Screen)?.project(state))
     }
 
+    pub async fn publish_confirmed(&self, state: UiState) -> Result<(), Error> {
+        self.publish(state)?;
+        if let Some(server) = &self.server {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            server.flush(deadline).await.map_err(|_| Error::Screen)?;
+        }
+        Ok(())
+    }
+
     pub fn muted(&self) -> Result<bool, Error> {
         Ok(self.mute.lock().map_err(|_| Error::Screen)?.muted)
     }
@@ -155,5 +164,47 @@ pub(super) fn failure_state(relink: bool) -> UiState {
         }
         .into(),
         relink,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bridge_relink_confirmed_publication_keeps_projection_and_queue_failure() {
+        let (send, mut receive) = mpsc::channel(1);
+        let screen = Screen {
+            mute: Arc::default(),
+            server: None,
+            actions: None,
+            presentation: Presentation::new(Some(send)),
+        };
+        let overlay = UiState::Error {
+            message: "MCP link".into(),
+            relink: true,
+        };
+        screen.presentation.overlay(Some(overlay.clone())).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), overlay);
+        screen.publish_confirmed(failure_state(true)).await.unwrap();
+        assert_eq!(receive.try_recv().unwrap(), overlay);
+        screen.presentation.muted(true).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Muted);
+        screen.publish_confirmed(failure_state(true)).await.unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Muted);
+        screen.presentation.muted(false).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), overlay);
+        screen.presentation.overlay(None).unwrap();
+        assert_eq!(
+            receive.try_recv().unwrap(),
+            UiState::Ready {
+                message: "Echo Live ready".into()
+            }
+        );
+        screen.publish_confirmed(failure_state(false)).await.unwrap();
+        assert_eq!(screen.publish_confirmed(failure_state(true)).await, Err(Error::Screen));
+        assert_eq!(receive.try_recv().unwrap(), failure_state(false));
+        drop(receive);
+        assert_eq!(screen.publish_confirmed(failure_state(true)).await, Err(Error::Screen));
     }
 }
