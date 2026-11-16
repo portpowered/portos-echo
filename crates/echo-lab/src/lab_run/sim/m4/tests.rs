@@ -161,7 +161,6 @@ fn assert_timing(timing: &super::wire::Timing) {
     assert_eq!(timing.captured, 640);
     assert_eq!(timing.played, 9600);
     let latency = super::wire::p95(&[timing.sample().unwrap()]).unwrap();
-    eprintln!("M4 controlled Wyoming: capture=640 PCM=9600 endpoint_to_reply={latency:?}");
     assert!(latency <= std::time::Duration::from_millis(1500));
 }
 
