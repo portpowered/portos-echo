@@ -1,7 +1,9 @@
 //! T3: real selected bridge/daemon/report binaries and pinned playback host.
 use super::*;
+mod failures;
 mod fixture;
 mod pending;
+mod transport;
 use fixture::{Muse, configure};
 
 fn evidence(message: &str) {

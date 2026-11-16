@@ -27,6 +27,10 @@ pub struct Model {
 }
 
 impl Model {
+    pub fn requests(&self) -> usize {
+        self.observed.borrow().requests
+    }
+
     #[cfg(test)]
     pub async fn wait_for_result_request(&self) {
         self.observed.clone().wait_for(|o| o.requests == 2).await.unwrap();

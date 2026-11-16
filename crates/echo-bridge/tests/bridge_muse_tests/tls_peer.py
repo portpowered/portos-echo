@@ -9,6 +9,9 @@ from pathlib import Path
 
 requests = []
 credential = Path("muse-credential").read_text()
+mode = sys.argv[1] if len(sys.argv) > 1 else "pending"
+stalled = threading.Event()
+release = threading.Event()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -35,6 +38,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         assert 0 < length <= 65536
         body = json.loads(self.rfile.read(length))
         requests.append({"method": "POST", "path": self.path, "body": body})
+        if mode == "interrupted":
+            self.send_response(201)
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.write(b'{"task_id":')
+            return
         self.respond(201, {"task_id": "task-pending"})
 
     def do_GET(self):
@@ -42,6 +51,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         requests.append({"method": "GET", "path": self.path})
         index = len(requests) - 2
+        if mode == "wrong_id":
+            self.respond(200, {"type": "completed", "task_id": "another-task",
+                               "summary": "Private guessed success"})
+            return
+        if mode == "invalid":
+            self.respond(200, {"type": "completed", "summary": "Private guessed success"})
+            return
+        if mode == "oversized":
+            self.respond(200, {"type": "completed", "task_id": "task-pending",
+                               "summary": "x" * 1048576})
+            return
+        if mode == "unavailable":
+            self.respond(503, {"private": "Private provider response"})
+            return
+        if mode == "stalled":
+            stalled.set()
+            release.wait()
+            self.close_connection = True
+            return
+        if mode == "duplicate":
+            self.respond(200, {"type": "completed", "task_id": "task-pending",
+                               "summary": "Muse test job completed"})
+            return
         if index == 0:
             self.respond(204)
         elif index == 1:
@@ -63,8 +95,15 @@ worker.start()
 print(server.server_address[1], flush=True)
 try:
     # EOF also gracefully closes the peer after an assertion in the Rust owner.
-    sys.stdin.readline()
+    while True:
+        command = sys.stdin.readline().strip()
+        if command == "waiting":
+            assert stalled.wait(5), "event request was not observed"
+            print("waiting", flush=True)
+        else:
+            break
 finally:
+    release.set()
     server.shutdown()
     worker.join()
     server.server_close()

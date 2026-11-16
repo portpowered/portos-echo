@@ -135,6 +135,13 @@ impl Muse {
     }
 
     pub async fn report(&self, id: &str) -> Value {
+        let output = self.report_output(id, "completed", "Muse test job completed").await;
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(output.stderr, b"");
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+
+    pub async fn report_output(&self, id: &str, status: &str, summary: &str) -> std::process::Output {
         let mut child = Command::new(binary("echo-muse-report"))
             .env("ECHO_MUSE_REPORT_SOCKET", self.path("report.sock"))
             .stdin(Stdio::piped())
@@ -148,19 +155,27 @@ impl Muse {
             .take()
             .unwrap()
             .write_all(
-                json!({"task_id":id,"status":"completed","summary":"Muse test job completed"})
+                json!({"task_id":id,"status":status,"summary":summary})
                     .to_string()
                     .as_bytes(),
             )
             .await
             .unwrap();
-        let output = tokio::time::timeout(OBSERVATION_TIMEOUT, child.wait_with_output())
+        tokio::time::timeout(OBSERVATION_TIMEOUT, child.wait_with_output())
             .await
             .unwrap()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(0));
-        assert_eq!(output.stderr, b"");
-        serde_json::from_slice(&output.stdout).unwrap()
+            .unwrap()
+    }
+
+    pub async fn set_time(&mut self, unix_seconds: u64) {
+        let response = self
+            .child
+            .command(&json!({"operation":"set_time","unix_seconds":unix_seconds}).to_string())
+            .await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&response).unwrap(),
+            json!({"clock_unix_seconds":unix_seconds})
+        );
     }
 
     pub async fn stop(mut self) {

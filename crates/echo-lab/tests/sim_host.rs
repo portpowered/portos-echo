@@ -3,6 +3,9 @@
 mod sim_support;
 use serde_json::{Value, json};
 use sim_support::{Session, records};
+#[cfg(unix)]
+#[path = "sim_support/muse.rs"]
+mod muse;
 
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host"]
