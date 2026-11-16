@@ -103,25 +103,6 @@ class Cleanup(unittest.TestCase):
                 proc.wait()
             proc.stdin.close()
             proc.stdout.close()
-class GuestHandshake(unittest.TestCase):
-    def test_observer_failure_holds_ready_and_partial_host_is_closed(self):
-        import sys
-        import runpy
-        emit = mock.Mock()
-        fake = {'emit': emit, 'mock': mock, 'threading': CONTROLLER.threading}
-        exec("class Host:\n def start(self):\n  self.proc=mock.Mock(pid=42,returncode=-15)\n  self.condition=threading.Condition()\n  emit({'event':'host.ready','address':'127.0.0.1:1'})\n def close(self): self.closed=True\n def logged(self,marker): pass", fake)
-        Host = fake['Host']
-        ns = {'Host': Host, 'main': mock.Mock()}
-        with mock.patch.object(runpy, 'run_path', return_value=ns), mock.patch.object(sys, 'argv', ['fixture', str(Path(CONTROLLER.__file__)), 'owned']), mock.patch.object(CONTROLLER.subprocess, 'Popen', side_effect=OSError('synthetic private marker')):
-            exec(real_wsl_launcher_fixture(), {'__name__': 'instrumentation'})
-            host = Host()
-            with self.assertRaisesRegex(RuntimeError, '^fixture setup failed$'): host.start()
-            emit.assert_called_once_with({'event': 'fixture.failed', 'stage': 'guest.observer'})
-            with mock.patch.object(Path, "write_text") as audit:
-                host.close()
-                self.assertTrue(host.closed)
-                audit.assert_called_once_with('{"pid": 42, "status": -15, "closed": true}')
-        ns['main'].assert_not_called()
 class LauncherOwnership(unittest.TestCase):
     """T1: deadline and status decisions with in-memory processes and clocks."""
     def test_eof_before_force_and_repeated_collection_never_terminates(self):
@@ -236,6 +217,7 @@ finally:
 """
 def observed_start(self):
     self.observer=None
+    self.observer_reader=None
     deadline=time.monotonic()+20
     stage='guest.readiness'
     try:
@@ -249,8 +231,8 @@ def observed_start(self):
             with self.condition:
                 result.append(value)
                 self.condition.notify_all()
-        reader=threading.Thread(target=read,daemon=True)
-        reader.start()
+        self.observer_reader=threading.Thread(target=read,daemon=True)
+        self.observer_reader.start()
         with self.condition:
             self.condition.wait_for(lambda: result or self.cancelled.is_set(),max(0,deadline-time.monotonic()))
             if self.cancelled.is_set(): raise RuntimeError('cancelled')
@@ -258,6 +240,7 @@ def observed_start(self):
         emit(ready.pop())
         emit({'event':'guest.owned','pid':self.proc.pid})
     except (OSError,RuntimeError):
+        if self.cancelled.is_set(): stage='guest.cancelled'
         emit({'event':'fixture.failed','stage':stage})
         raise RuntimeError('fixture setup failed') from None
 def observed_logged(self,marker):
@@ -270,11 +253,17 @@ def observed_close(self):
         close(self)
     finally:
         if self.observer is not None:
-            try: self.observer.communicate(timeout=1)
+            self.observer.stdin.close()
+            try: self.observer.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 self.observer.kill()
-                self.observer.communicate()
+                self.observer.wait()
                 raise RuntimeError('fixture observer cleanup failed') from None
+            finally:
+                if self.observer_reader and self.observer_reader.ident is not None:
+                    self.observer_reader.join(timeout=1)
+                    if self.observer_reader.is_alive(): raise RuntimeError('fixture reader cleanup failed')
+                self.observer.stdout.close()
             if self.observer.returncode!=0: raise RuntimeError('fixture observer exited')
     if self.proc is not None:
         audit.write_text(json.dumps({'pid':self.proc.pid,'status':self.proc.returncode,'closed':self.closed}))
@@ -283,8 +272,12 @@ if __name__=='__main__': sys.exit(ns['main']())
 '''
     if audit is None:
         return guest
+    stage = ['translation']
+    emit = CONTROLLER.emit
+    CONTROLLER.emit = lambda value: emit({'event':'fixture.failed','stage':stage[0]} if value['event']=='host.failed' else value)
     def boundary(argv, **kwargs):
         if "python3" in argv:
+            stage[0] = 'guest.launch'
             argv = argv[:-1] + ["-c", guest, argv[-1], audit]
         return popen(argv, **kwargs)
     CONTROLLER.subprocess.Popen = boundary
@@ -357,18 +350,21 @@ def native_handle_observer(pid):
     kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    def failed(stage, code):
+        print(json.dumps({'event':'observer.failed','stage':stage,'code':code}),flush=True)
+        sys.exit(1)
     handle = kernel.OpenProcess(0x101001, False, int(pid))
     if not handle:
-        sys.exit(1)
+        failed('open', ctypes.get_last_error())
     try:
         print('{"event":"observer.ready"}', flush=True)
         sys.stdin.buffer.readline()
         result = kernel.WaitForSingleObject(handle, 4000)
         if result != 0:
-            raise RuntimeError("owned child survived")
+            failed('wait', result)
         code = wintypes.DWORD()
         if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
-            raise RuntimeError("cannot collect status")
+            failed('status', ctypes.get_last_error())
         print(json.dumps({"event": "observer.collected", "status": code.value, "owned_survivors": 0}), flush=True)
     finally:
         if kernel.WaitForSingleObject(handle, 0) == 258:

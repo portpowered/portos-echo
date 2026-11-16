@@ -218,7 +218,8 @@ impl WindowsLauncher {
                 .stderr(std::process::Stdio::null())
                 .spawn()
                 .unwrap();
-            assert_eq!(Self::observation(&mut observer)["event"], "observer.ready");
+            let value = Self::observation(&mut observer);
+            assert_eq!(value["event"], "observer.ready", "{value}");
             fixture.observers.push(observer);
             reader.get_mut().write_all(b"G").await.unwrap();
         }
@@ -232,6 +233,11 @@ impl WindowsLauncher {
             &mut line,
         )
         .unwrap();
+        assert!(
+            !line.is_empty(),
+            "native observer EOF; observed status={:?}",
+            observer.try_wait().unwrap()
+        );
         serde_json::from_str(&line).unwrap()
     }
 
@@ -241,7 +247,7 @@ impl WindowsLauncher {
         for (index, observer) in self.observers.iter_mut().enumerate() {
             std::io::Write::write_all(observer.stdin.as_mut().unwrap(), b"collect\n").unwrap();
             let value = Self::observation(observer);
-            assert_eq!(value["event"], "observer.collected");
+            assert_eq!(value["event"], "observer.collected", "{value}");
             assert_eq!(value["owned_survivors"], 0);
             assert_eq!(value["status"], u32::from(forced && index == last));
             assert!(observer.wait().unwrap().success());
