@@ -276,8 +276,7 @@ async fn assert_idle_cleanup(mut satellite: tokio::net::TcpStream, path: &Path, 
             .await
             .is_err()
     );
-    let mut remaining = Vec::new();
-    satellite.read_to_end(&mut remaining).await.unwrap();
+    let remaining = bridge_spine_edges::read_to_close(&mut satellite).await;
     // A final idle describe can race stdin EOF; no reply audio may remain.
     for line in remaining.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
         assert_eq!(serde_json::from_slice::<Value>(line).unwrap()["type"], "describe");
