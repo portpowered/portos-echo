@@ -126,7 +126,12 @@ fn cancellation_and_combined_primary_cleanup_failure_never_pass_remaining_steps(
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cancelled"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("cancelled"),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(cancel.report()["checks"], json!({"step_0":false,"world_closed":true}));
     assert!(cancel.0.join("cancel").exists());
     cancel.endpoints();
