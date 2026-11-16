@@ -57,7 +57,8 @@ if "$has_binary"; then
   printf '%s\n' "$headers"
   printf '%s\n' "$headers" | grep -Eq 'Class:[[:space:]]+ELF32' || fail 'expected ELF32 class'
   printf '%s\n' "$headers" | grep -Eq 'Machine:[[:space:]]+ARM[[:space:]]*$' || fail 'expected ARM machine'
-  printf '%s\n' "$headers" | grep -q 'Version5 EABI' || fail 'expected Version5 EABI'
+  # EF_ARM_EABIMASK is 0xff000000; LLVM prints numeric flags without GNU's label.
+  printf '%s\n' "$headers" | grep -Eq '^[[:space:]]*Flags:[[:space:]]+0x0*5[[:xdigit:]]{6}([[:space:],]|$)' || fail 'expected Version5 EABI'
   printf '%s\n' "$headers" | grep -Fq '[Requesting program interpreter: /system/bin/linker]' || fail 'expected Android /system/bin/linker interpreter'
   if printf '%s\n' "$headers" | grep -E 'NEEDED.*lib(ssl|crypto)' >/dev/null; then
     fail 'unexpected OpenSSL dynamic dependency'

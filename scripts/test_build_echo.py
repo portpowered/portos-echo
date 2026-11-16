@@ -199,14 +199,37 @@ class BuildEchoTests(unittest.TestCase):
         self.assertNotIn('llvm-readelf', [c['name'] for c in commands])
         self.assertNotIn('binary size', result.stdout)
 
+    def test_numeric_eabi_flags_control_artifact_acceptance(self):
+        self.optional('echo-bridge')
+        for flags, accepted in (('0x5000200', True),
+                                ('0x05000200, Version5 EABI', True),
+                                ('0x4000200', False),
+                                ('0x6000200', False),
+                                ('0x0', False),
+                                ('0x15000200', False),
+                                ('0x50002000', False),
+                                ('0x4000200, Version5 EABI', False)):
+            with self.subTest(flags=flags):
+                headers = ('Class: ELF32\nMachine: ARM\n'
+                           f'  Flags:                             {flags}\n'
+                           '[Requesting program interpreter: /system/bin/linker]\n')
+                result, _ = self.run_make(ANDROID_NDK_HOME=str(self.ndk), HEADERS=headers)
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('binary size 19 bytes', result.stdout)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('expected Version5 EABI', result.stderr)
+                    self.assertNotIn('binary size', result.stdout)
+
     def test_inspector_errors_and_wrong_artifact_properties_fail(self):
         self.optional('echo-bridge')
-        valid = ('Class: ELF32\nMachine: ARM\nFlags: Version5 EABI\n'
+        valid = ('Class: ELF32\nMachine: ARM\nFlags: 0x5000200, Version5 EABI\n'
                  '[Requesting program interpreter: /system/bin/linker]\n')
         cases = [({'INSPECT_FAILURE': '1'}, ''),
                  ({'HEADERS': valid.replace('ELF32', 'ELF64')}, 'expected ELF32'),
                  ({'HEADERS': valid.replace('Machine: ARM', 'Machine: AArch64')}, 'expected ARM'),
-                 ({'HEADERS': valid.replace('Version5', 'Version4')}, 'expected Version5'),
+                 ({'HEADERS': valid.replace('0x5000200, Version5', '0x4000200, Version4')}, 'expected Version5'),
                  ({'HEADERS': valid.replace('/system/bin/linker', '/lib/ld-linux.so')}, 'expected Android'),
                  ({'HEADERS': valid + '(NEEDED) [libssl.so]\n'}, 'unexpected OpenSSL'),
                  ({'HEADERS': valid + '(NEEDED) [libcrypto.so]\n'}, 'unexpected OpenSSL')]
