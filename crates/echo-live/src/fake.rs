@@ -12,6 +12,9 @@ use crate::{AudioFrame, LivePeer, fake_http};
 
 pub use crate::fake_http::ObservedRequest;
 
+mod dialogue;
+pub use dialogue::{DialogueCall, DialogueLive, DialogueObserver, DialogueScript, DialogueSent};
+
 /// Explicit fault injection, with no network retry or provider access.
 #[derive(Clone)]
 pub enum FakeResponse {
@@ -116,6 +119,13 @@ pub struct FakeLive {
 }
 
 impl FakeLive {
+    /// Explicit commentary-gated synthetic dialogue; legacy replay remains unchanged.
+    /// # Errors
+    /// Returns sanitized configuration or listener setup errors.
+    pub async fn bind_dialogue(script: DialogueScript) -> Result<DialogueLive, CallError> {
+        DialogueLive::bind(script).await
+    }
+
     /// Bind an ephemeral loopback listener and start serving one script per call.
     /// # Errors
     /// Returns sanitized signaling errors for listener setup failures.
