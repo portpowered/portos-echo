@@ -171,6 +171,66 @@ class PinnedHost(unittest.TestCase):
         kill.assert_not_called()
         self.assertTrue(proc.stderr.closed)
 
+    def test_two_stop_commands_then_eof_have_exact_acknowledgements(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / 'tests/wyoming_host.py')],
+            input='stop\nstop\n', capture_output=True, text=True, timeout=25)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertTrue(lines[0].isdecimal())
+        self.assertEqual(lines[1:], ['stop', 'stop', 'cleaned'])
+        self.assertEqual(result.stderr, '')
+
+    def test_bridge_active_writer_eof_closes_reader_and_collects_host(self):
+        sinks, processes = [], []
+        original = bridge_host.playback
+
+        def sink(folder):
+            observer = original(folder)
+            sinks.append(observer)
+            return observer
+
+        owned = []
+
+        def host(folder):
+            instance = Host(folder)
+            owned.append(instance)
+            return instance
+
+        output = io.StringIO()
+        # A separate open descriptor keeps the writer active after the input
+        # iterator ends; close it only after observing controller cleanup.
+        writers = []
+
+        def active_commands():
+            yield 'arm\n'
+            observer = sinks[0]
+            writers.append(observer.path.open('wb', buffering=0))
+            writers[0].write(bytes(64))
+            with observer.condition:
+                self.assertTrue(observer.condition.wait_for(
+                    lambda: len(observer.data) == 64, timeout=2))
+            processes.append(owned[0].proc)
+
+        try:
+            with mock.patch.object(bridge_host, 'Host', side_effect=host):
+                with mock.patch.object(bridge_host, 'playback', side_effect=sink):
+                    with mock.patch('sys.stdin', active_commands()):
+                        with contextlib.redirect_stdout(output):
+                            bridge_host.main()
+            self.assertEqual(processes[0].returncode, -signal.SIGKILL)
+            self.assertTrue(processes[0].stderr.closed)
+            self.assertIsNone(owned[0].proc)
+            self.assertFalse(sinks[0].thread.is_alive())
+            self.assertEqual(sinks[0].data, bytes(64))
+            self.assertIsNone(sinks[0].anchor)
+            with self.assertRaises(OSError):
+                os.fstat(sinks[0].fd)
+            self.assertEqual(output.getvalue().splitlines()[1:], ['armed', 'cleaned'])
+        finally:
+            for writer in writers:
+                writer.close()
+
     def test_other_host_and_unrelated_sentinel_survive_stop(self):
         sentinel = subprocess.Popen(['cat'], stdin=subprocess.PIPE,
                                     stdout=subprocess.DEVNULL, start_new_session=True)
@@ -227,6 +287,97 @@ class PinnedHost(unittest.TestCase):
                         os.fstat(fd)
                 self.assertEqual(output.getvalue().splitlines()[1:],
                                  ['armed'] if fails else ['armed', 'cleaned'])
+
+
+class ControllerFailureBoundary(unittest.TestCase):
+    """T3: actual interpreter exit status and stdout on failed cleanup."""
+
+    def test_ordinary_startup_exit_reports_failure_after_collecting_resources(self):
+        runner = '''
+import sys
+from unittest import mock
+sys.path.insert(0, sys.argv[1])
+import wyoming_host
+original = wyoming_host.subprocess.Popen
+children = []
+def rejected(args, **kwargs):
+    proc = original([*args, '--invalid-test-option'], **kwargs)
+    children.append(proc)
+    return proc
+try:
+    with mock.patch.object(wyoming_host.subprocess, 'Popen', side_effect=rejected):
+        wyoming_host.main()
+finally:
+    assert len(children) == 1
+    assert children[0].returncode is not None
+    assert children[0].stderr.closed
+    print('startup-child-collected; stderr-closed', file=sys.stderr)
+'''
+        result = subprocess.run(
+            [sys.executable, '-c', runner, str(ROOT / 'tests')],
+            input='', capture_output=True, text=True, timeout=25)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('RuntimeError: host readiness failed', result.stderr)
+        self.assertIn('startup-child-collected; stderr-closed', result.stderr)
+
+    FAILURE_RUNNER = '''
+import os, signal, subprocess, sys
+from unittest import mock
+sys.path.insert(0, sys.argv[1])
+import bridge_host
+from wyoming_host import Host
+hosts, sinks = [], []
+real_playback = bridge_host.playback
+real_killpg = os.killpg
+def host(folder):
+    instance = Host(folder)
+    hosts.append(instance)
+    return instance
+def playback(folder):
+    instance = real_playback(folder)
+    sinks.append(instance)
+    return instance
+fault = PermissionError if sys.argv[2] == 'signal' else None
+try:
+    with mock.patch.object(bridge_host, 'Host', side_effect=host):
+        with mock.patch.object(bridge_host, 'playback', side_effect=playback):
+            with mock.patch('wyoming_host.os.killpg', side_effect=fault):
+                bridge_host.main()
+    raise AssertionError('failed cleanup claimed success')
+except (PermissionError, subprocess.TimeoutExpired):
+    proc = hosts[0].proc
+    try:
+        assert proc is not None and proc.poll() is None
+        assert proc.stderr.closed
+        observer = sinks[0]
+        assert not observer.thread.is_alive()
+        for fd in (observer.fd, observer.anchor):
+            try:
+                os.fstat(fd)
+            except OSError:
+                continue
+            raise AssertionError('observer descriptor leaked')
+        print('failed-owned-child; stderr-and-observer-closed', file=sys.stderr)
+    finally:
+        # Emergency cleanup also runs if an observation fails.
+        if proc is not None:
+            real_killpg(proc.pid, signal.SIGKILL)
+            assert proc.wait(timeout=2) == -signal.SIGKILL
+    sys.exit(1)
+'''
+
+    def test_failed_signal_and_real_wait_deadline_exit_nonzero_without_cleaned(self):
+        for fault in ['signal', 'timeout']:
+            with self.subTest(fault=fault):
+                result = subprocess.run(
+                    [sys.executable, '-c', self.FAILURE_RUNNER, str(ROOT / 'tests'), fault],
+                    input='arm\n', capture_output=True, text=True, timeout=25)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                lines = result.stdout.splitlines()
+                self.assertTrue(lines[0].isdecimal())
+                self.assertEqual(lines[1:], ['armed'])
+                self.assertIn('failed-owned-child; stderr-and-observer-closed', result.stderr)
 
 
 if __name__ == '__main__':
