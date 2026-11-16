@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 16
 status: active; the program plan. It wins over the drafts in docs/design/
 ---
 
@@ -38,9 +38,10 @@ device.
 Premises the review found wrong, and what this plan does instead:
 
 1. **A server-side peer is required in every topology.** GPT-Live creates a session from your server with your
-   credential (a Platform API key, or the ChatGPT sign-in OpenClaw uses, section 4), and neither belongs on a
-   rooted device. With the `-D` route the bridge is that server and the WebRTC peer itself: audio flows Echo ↔
-   bridge over Wyoming, and bridge ↔ OpenAI over WebRTC.
+   credential (a Platform API key, or the ChatGPT sign-in OpenClaw uses, section 4). With the `-D` route the bridge
+   is that server and the WebRTC peer itself: audio flows Echo ↔ bridge over Wyoming, and bridge ↔ OpenAI over
+   WebRTC. Owner decision (2026-11-16): credentials may live on the device, so the bridge's role moves onto the Echo
+   after M1 (W4, section 12).
 2. **The drafts' GPT-Live event names are wrong.** Delegation arrives as `session.delegation.created` with
    `delegation.target` set to `client` or `responses`. Results go back with `session.commentary.append`. There is
    no `delegation.context.append`. Contracts are generated from captured traces, never from the RFC.
@@ -118,8 +119,11 @@ sequenceDiagram
 
 Consequences:
 
-- **No credential reaches the Echo.** The GPT-Live credential and the Port OS grant stay on the bridge host. A
-  stolen Echo yields a Wyoming endpoint and a screen pairing token, both revocable from the bridge.
+- **No credential reaches the Echo, until W4.** Today the GPT-Live credential and the Port OS grant stay on the
+  bridge host, and a stolen Echo yields a Wyoming endpoint and a screen pairing token, both revocable from the
+  bridge. The owner decided on 2026-11-16 that credentials may live on the device. In W4 the bridge runs on the Echo
+  and holds them the way OpenClaw's gateway does: only the bridge's own process can read them, and the screen app
+  gets one-time tokens (`docs/program/decisions.md`).
 - **No Codex runs in the product.** The agent loop is a small crate (`echo-agent-loop`). The drafts' Codex
   app-server backend and its ARMv7 build (EL-004, `el-x-codex-spike`) are dropped.
 - **No code of ours runs as root on the Echo.** The screen client is an ordinary app; hassmic is upstream's.
@@ -161,8 +165,11 @@ file comes with it.
 | `chatgpt` (default, the OpenClaw path) | The operator's ChatGPT sign-in: OAuth access token plus the `chatgpt-account-id` | `POST https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas`, model `gpt-live-1-codex` | `https://chatgpt.com/backend-api/codex/responses` | What OpenClaw ships; preview interface (section 4.5) |
 | `api-key` | An OpenAI Platform API key | `POST /v1/live/sessions`, model `gpt-live-1` (the documented GPT-Live path) | `https://api.openai.com/v1/responses` | Documented; billed per use |
 
-Either way the bridge is the WebRTC peer and the credential never leaves the bridge host. OpenClaw does the same:
-its SDP exchange runs on its gateway server, so the OAuth token never reaches the browser.
+Either way the bridge is the WebRTC peer and the credential never leaves the bridge process. OpenClaw does the
+same: its gateway holds the token, and a client (browser, phone, watch) gets a one-time offer token valid for 60 s.
+The client POSTs its SDP offer to the gateway, and the gateway forwards it to OpenAI with the token. Media then
+flows from the client to OpenAI directly (`docs/program/decisions.md`, 2026-11-16). In W4 the bridge process runs on
+the Echo, so the device is the gateway.
 
 ### 4.2 Signing in (the `chatgpt` mode)
 
@@ -288,8 +295,11 @@ What follows from it:
   credentials are the operator's own, so they stay on the operator's machine; the Echo is on the same LAN, so
   Wyoming never crosses the internet; nothing is exposed to the internet. The cost is that the device only works
   while the PC is on, which is fine for development and the bench.
-- **Where it can move later.** The same binary builds for a Raspberry Pi (always on; it can also host the Muse
-  bridge). Moving off the PC means moving the credentials, so it is an owner decision (`docs/program/decisions.md`).
+- **Where it moves: the Echo (W4).** The owner decided (2026-11-16) that credentials may live on the device, so the
+  bridge's target host is the Echo itself: `armv7-linux-androideabi`, built with the Android NDK like the fork's
+  hassmic. There it runs as its own user, started by the fork's service scripts, and reaches hassmic on loopback.
+  Nothing changes on `/system`, partitions or firmware. The PC stays the development and bench host. A Raspberry Pi
+  stays possible for the Muse bridge.
 - **It talks to Port OS directly.** The bridge is the Port OS OAuth client and the only MCP client. Section 9 says
   what it can use today and what waits for portos-backend.
 - **Crates** (declared in `lanes.toml`, section 10): `echo-contracts`, `echo-config`, `echo-wyoming`, `echo-audio`,
@@ -617,5 +627,15 @@ loopback (`docs/program/coordinator.md`), and fans out inside a phase only where
 5. **W3 device.** hassmic installed on the Echo (the owner's go-ahead), then M1, M3, M5 and M6 as operator-started
    T5 runs. PR 2731 and the PB-6 simulator are on the pilot.
 6. **Muse** (`el-w3-muse-bridge`), gating M7.
+7. **W4 the bridge on the Echo** (owner, 2026-11-16: credentials may live on the device), after M1 passes on the PC.
+   - First the protocol-neutral `echo-link` (`el-w3-echo-link`).
+   - Then the bridge built for `armv7-linux-androideabi` in CI, as a release artifact with its size recorded. This
+     is T0–T2 only.
+   - Then the credential store on the device: the bridge's own user, mode 0600, and device-code sign-in shown on the
+     Echo's screen.
+   - Then the fork starts the bridge beside hassmic, with Wyoming on loopback only. `LISTEN_FROM` becomes
+     `127.0.0.1`, so nothing on the LAN reaches hassmic at all.
+   - Done when M1 and M4 pass as T5 runs with no PC in the path, and the screen app has no read access to the
+     credential file (shown on the device).
 
 Contract changes after W0 are their own pull request, made by the coordinator, never a side effect of a feature.
