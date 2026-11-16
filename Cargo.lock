@@ -807,8 +807,13 @@ name = "echo-signin"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "echo-agent-api",
+ "echo-agent-loop",
  "echo-chatgpt-auth",
  "echo-config",
+ "echo-contracts",
+ "echo-live",
+ "reqwest",
  "serde_json",
  "thiserror",
  "tokio",

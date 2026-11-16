@@ -4,6 +4,7 @@
 //! Status reads stored metadata without refreshing. The host owns argv parsing,
 //! exit codes, traces and cancellation of active calls/audio on a kill signal.
 mod signin_commands;
+mod signin_providers;
 
 use echo_chatgpt_auth::{AuthError, AuthSource};
 use echo_config::{ChatGptAuthConfig, LiveConfig, LiveMode};
@@ -21,6 +22,8 @@ struct State {
     mode: LiveMode,
     auth: Option<AuthSource>,
     kill: watch::Sender<bool>,
+    cancellation: watch::Sender<()>,
+    credential_file: PathBuf,
 }
 
 pub enum OperatorCommand {
@@ -49,7 +52,7 @@ pub enum SigninError {
 /// Returns a sanitized auth configuration/client initialization error.
 pub fn resolve_mode(live: LiveConfig, auth: ChatGptAuthConfig) -> Result<Providers, SigninError> {
     let source = match live.mode {
-        LiveMode::Chatgpt => Some(AuthSource::new(auth, live.credential_file)?),
+        LiveMode::Chatgpt => Some(AuthSource::new(auth, live.credential_file.clone())?),
         LiveMode::ApiKey => None,
     };
     let (kill, _) = watch::channel(false);
@@ -58,6 +61,8 @@ pub fn resolve_mode(live: LiveConfig, auth: ChatGptAuthConfig) -> Result<Provide
             mode: live.mode,
             auth: source,
             kill,
+            cancellation: watch::channel(()).0,
+            credential_file: live.credential_file,
         }),
     })
 }
@@ -85,6 +90,9 @@ impl Providers {
             OperatorCommand::KillSwitch { enabled } => {
                 self.state.kill.send_if_modified(|current| {
                     let changed = *current != enabled;
+                    if changed && enabled {
+                        self.state.cancellation.send_replace(());
+                    }
                     *current = enabled;
                     changed
                 });
