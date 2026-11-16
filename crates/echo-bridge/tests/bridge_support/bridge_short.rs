@@ -20,20 +20,27 @@ pub(super) async fn send(stream: &mut (impl tokio::io::AsyncWrite + Unpin), kind
 }
 
 pub(super) async fn read(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> (Value, Vec<u8>) {
-    let (header, bytes) = frame(stream).await.unwrap();
+    let (header, bytes) = frame(stream).await.unwrap().unwrap();
     let length = usize::try_from(header["payload_length"].as_u64().unwrap_or(0)).unwrap();
     (header, bytes[bytes.len() - length..].to_vec())
 }
 
-async fn frame(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> std::io::Result<(Value, Vec<u8>)> {
+async fn frame(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> std::io::Result<Option<(Value, Vec<u8>)>> {
     let mut bytes = Vec::new();
     loop {
-        let byte = stream.read_u8().await?;
-        bytes.push(byte);
+        let mut byte = [0];
+        if stream.read(&mut byte).await? == 0 {
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+            };
+        }
+        bytes.push(byte[0]);
         if bytes.len() > 8192 {
             return Err(std::io::Error::other("satellite header too large"));
         }
-        if byte == b'\n' {
+        if byte[0] == b'\n' {
             break;
         }
     }
@@ -45,7 +52,7 @@ async fn frame(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> std::io::Res
     let start = bytes.len();
     bytes.resize(start + body, 0);
     stream.read_exact(&mut bytes[start..]).await?;
-    Ok((header, bytes))
+    Ok(Some((header, bytes)))
 }
 
 pub(super) async fn read_reply(
@@ -283,38 +290,43 @@ async fn serve(
     probes: watch::Sender<u64>,
 ) -> std::io::Result<()> {
     let mut enabled = true;
-    let mut decoder = echo_contracts::wyoming::Decoder::new();
-    let mut buffer = [0; 8192];
     loop {
-        let length = tokio::select! {
-            result = reader.read(&mut buffer) => result?,
-            Some((value, done)) = controls.recv() => {
-                enabled = value; let _ = done.send(()); continue;
+        // Retain partially read frames across response-mode changes.
+        let incoming = frame(&mut reader);
+        tokio::pin!(incoming);
+        let next = loop {
+            tokio::select! {
+                result = &mut incoming => break result?,
+                Some((value, done)) = controls.recv() => {
+                    enabled = value; let _ = done.send(());
+                }
             }
         };
-        if length == 0 {
-            return decoder.finish().map_err(std::io::Error::other);
+        let Some((header, bytes)) = next else {
+            return Ok(());
+        };
+        // Validate full framing/data without rewriting header fields or JSON spacing.
+        echo_contracts::wyoming::Decoder::new()
+            .feed(&bytes)
+            .map_err(std::io::Error::other)?;
+        let describe = header["type"] == "describe";
+        if describe && enabled {
+            let reply = Event {
+                header: Header {
+                    r#type: "info".into(),
+                    data: Some(json!({"satellite":{"name":"synthetic"}})),
+                    data_length: 0,
+                    payload_length: 0,
+                },
+                data: None,
+                payload: vec![],
+            };
+            writer.lock().await.write_all(&encode(&reply)).await?;
+        } else if events.send(Ok(bytes)).is_err() {
+            return Ok(());
         }
-        for event in decoder.feed(&buffer[..length]).map_err(std::io::Error::other)? {
-            let describe = event.header.r#type == "describe";
-            if describe && enabled {
-                let reply = Event {
-                    header: Header {
-                        r#type: "info".into(),
-                        data: Some(json!({"satellite":{"name":"synthetic"}})),
-                        data_length: 0,
-                        payload_length: 0,
-                    },
-                    data: None,
-                    payload: vec![],
-                };
-                writer.lock().await.write_all(&encode(&reply)).await?;
-            } else if events.send(Ok(encode(&event))).is_err() {
-                return Ok(());
-            }
-            if describe {
-                probes.send_modify(|count| *count += 1);
-            }
+        if describe {
+            probes.send_modify(|count| *count += 1);
         }
     }
 }
@@ -441,6 +453,17 @@ async fn bridge_satellite_probe_preserves_frames_and_drains_before_eof() {
             )
         );
     }
+    let external = br#"{ "external": 2 }"#;
+    let mut bytes = format!(
+        "{{\"type\":\"error\",\"extension\":7,\"data_length\":{}}}\n",
+        external.len()
+    )
+    .into_bytes();
+    bytes.extend(external);
+    peer.write_all(&bytes).await.unwrap();
+    expected.extend(bytes);
+    send(&mut peer, "describe", json!({})).await;
+    assert_eq!(read(&mut peer).await.0["type"], "info");
     peer.shutdown().await.unwrap();
     let mut actual = Vec::new();
     satellite.read_to_end(&mut actual).await.unwrap();
@@ -461,7 +484,10 @@ async fn bridge_satellite_probe_drop_closes_socket_and_truncation_is_visible() {
         .await
         .unwrap();
     peer.shutdown().await.unwrap();
-    assert_eq!(satellite.read_u8().await.unwrap_err().kind(), std::io::ErrorKind::Other);
+    assert_eq!(
+        satellite.read_u8().await.unwrap_err().kind(),
+        std::io::ErrorKind::UnexpectedEof
+    );
     drop(satellite);
     assert_eq!(
         peer.read_u8().await.unwrap_err().kind(),
