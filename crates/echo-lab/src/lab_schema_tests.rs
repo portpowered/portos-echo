@@ -162,3 +162,50 @@ fn report_observations_are_optional_typed_and_allowlisted() {
         assert!(!validator.is_valid(&report));
     }
 }
+
+#[test]
+fn link_counts_are_complete_exact_and_optional_in_other_reports() {
+    let source: Value = serde_json::from_str(include_str!("../../../schemas/report.schema.json")).unwrap();
+    let report_validator = jsonschema::validator_for(&source).unwrap();
+    let scenario_validator = schema().unwrap();
+    let counts = json!({"link":1,"tools_list":1,"tool_call":1,"forced_refresh":2,
+        "replay_rejected":1,"relink_error":1,"restart_grant_kept":1,"unlink":1});
+    let mut report = json!({"milestone":"M5","result":"pass","placement":"bridge_pc",
+        "build_commit":"fixture","device":null,"evidence":[],"checks":{},"limitations":[],
+        "tier":"T3","driver":"sim","scenario_digest":"fixture","hassmic_commit":null,"bench_session_ids":[]});
+    assert!(report_validator.is_valid(&report));
+    let mut scenario = scenario();
+    let valid = |value: &Value| {
+        let mut report = report.clone();
+        report["link_counts"] = value.clone();
+        let mut scenario = scenario.clone();
+        scenario["steps"] = json!([{"expect_link_counts":value}]);
+        (
+            report_validator.is_valid(&report),
+            scenario_validator.is_valid(&scenario),
+        )
+    };
+    assert_eq!(valid(&counts), (true, true));
+    for field in counts.as_object().unwrap().keys() {
+        let mut missing = counts.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert_eq!(valid(&missing), (false, false), "missing {field}");
+        for value in [json!(-1), json!(1.5), json!(true), json!("1"), Value::Null] {
+            let mut invalid = counts.clone();
+            invalid[field] = value;
+            assert_eq!(valid(&invalid), (false, false), "invalid {field}");
+        }
+    }
+    let mut extra = counts.clone();
+    extra["unknown"] = json!(0);
+    assert_eq!(valid(&extra), (false, false));
+    for invalid in [json!({}), json!([]), Value::Null] {
+        assert_eq!(valid(&invalid), (false, false));
+    }
+    report["link_counts"] = counts.clone();
+    scenario["steps"] = json!([{"expect_link_counts":counts}]);
+    for value in [report, scenario] {
+        let encoded = serde_json::to_vec(&value).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&encoded).unwrap(), value);
+    }
+}

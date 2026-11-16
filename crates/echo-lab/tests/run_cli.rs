@@ -16,6 +16,32 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    fn link_counts_without_measured_outcomes_fail_before_any_device_operation() {
+        let session = Session::new(&json!({}));
+        session.scenario(
+            "one.yaml",
+            &json!([{"expect_link_counts":{
+            "link":0,"tools_list":0,"tool_call":0,"forced_refresh":0,
+            "replay_rejected":0,"relink_error":0,"restart_grant_kept":0,"unlink":0}}]),
+        );
+        let output = session.run(&[]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            "echo-lab: link counts: measurement unavailable\n"
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{}: fail\n", session.0.join("artifacts").display())
+        );
+        assert_eq!(session.operations(), ["digest"]);
+        let report = session.report();
+        assert_eq!(report["result"], "fail");
+        assert_eq!(report["checks"], json!({"step_0":false,"session_released":true}));
+        assert!(report.get("link_counts").is_none());
+    }
+
+    #[test]
     fn f01_one_dispatch_hold_reply_release_and_atomic_report() {
         let session = Session::new(&json!({}));
         let output = session.run(&[]);

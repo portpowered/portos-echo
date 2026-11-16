@@ -358,6 +358,7 @@ impl Device<'_> {
             self.finish_reply()?;
         }
         match step {
+            Step::LinkCounts(expected) => artifacts.expect_link_counts(index, expected),
             Step::SayFile(path) => {
                 self.open(artifacts)?;
                 let file = path.to_str().ok_or("say: file path is not UTF-8")?;

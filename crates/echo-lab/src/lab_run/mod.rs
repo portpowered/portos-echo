@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use run_options::Options;
 use run_report::Artifacts;
+pub use run_report::LinkCounts;
 
 /// One step representation and dispatcher, shared by future drivers.
 pub enum Step {
@@ -25,6 +26,7 @@ pub enum Step {
     Press(String),
     Budget(String, f64),
     Restart { process: String, count: u64, say: PathBuf },
+    LinkCounts(LinkCounts),
     Unsupported,
 }
 
@@ -141,15 +143,23 @@ fn sim_setup(scenario: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+fn combine(primary: Result<(), String>, cleanup: Result<(), String>) -> Result<(), String> {
+    match (primary, cleanup) {
+        (Err(primary), Err(cleanup)) => Err(format!("{primary}; {cleanup}")),
+        (primary, cleanup) => primary.and(cleanup),
+    }
+}
+
 fn dispatch(driver: &mut dyn Driver, steps: &[Step], artifacts: &mut Artifacts) -> Result<(), String> {
     artifacts.event("run_started", None, None)?;
     for (index, step) in steps.iter().enumerate() {
         artifacts.event("step_started", Some(index), None)?;
-        let result = driver.execute(step, index, steps.get(index + 1), artifacts);
+        let result = match step {
+            Step::LinkCounts(expected) => artifacts.expect_link_counts(index, expected),
+            _ => driver.execute(step, index, steps.get(index + 1), artifacts),
+        };
         let key = format!("step_{index}");
-        artifacts
-            .checks
-            .insert(key.clone(), result.is_ok() && !artifacts.blocked.contains_key(&key));
+        artifacts.checks.insert(key.clone(), result.is_ok() && !artifacts.blocked.contains_key(&key));
         if let Err(message) = result {
             artifacts.event("step_failed", Some(index), Some(&message))?;
             return Err(if artifacts.sim {
@@ -203,6 +213,7 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
     };
     let result = dispatch(driver.as_mut(), &steps, &mut artifacts);
     let cleanup = driver.close(&mut artifacts);
+    let final_counts = artifacts.finalize_link_counts();
     artifacts.checks.insert(
         if options.sim {
             "world_closed"
@@ -212,10 +223,7 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
         .into(),
         cleanup.is_ok(),
     );
-    let result = match (result, cleanup) {
-        (Err(primary), Err(cleanup)) => Err(format!("{primary}; {cleanup}")),
-        (primary, cleanup) => primary.and(cleanup),
-    };
+    let result = combine(result, combine(cleanup, final_counts));
     artifacts.event(
         if result.is_ok() { "run_completed" } else { "run_failed" },
         None,

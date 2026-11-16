@@ -215,6 +215,18 @@ reports or events. `bench_session_ids` contains ordered local aliases
 is retained outside git for triage. An interrupted or unwritable publication
 may leave an incomplete external directory without a report.
 
+`expect_link_counts` compares all eight MCP lifecycle counters: `link`,
+`tools_list`, `tool_call`, `forced_refresh`, `replay_rejected`, `relink_error`,
+`restart_grant_kept` and `unlink`. Each is a nonnegative integer; omitted or
+unknown counters are invalid. Counts must come from driver observations.
+An expected object never supplies missing measurements, even when every
+expected count is zero. A mismatch prints the full expected and actual objects
+and fails the step. Finalization checks the counts again after driver cleanup
+so late duplicate outcomes fail the earlier assertion. Reports include optional
+`link_counts` only when measurements exist, preserving actual counts on failure.
+The existing generic drivers do not produce these measurements; the integrated
+M5 driver and scenario remain pending.
+
 Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
 `echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child
 `ECHO_LAB_RUN_FIXTURE` / `ECHO_LAB_RUN_LEDGER`. The latter executable implements

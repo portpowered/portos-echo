@@ -52,7 +52,10 @@ async fn mcp_link_cancelled_rotated_response_never_replays_or_publishes() {
         journey::link(&mut session, &mock, directory.path()).await;
         let original = record(directory.path());
         mock.state.lock().unwrap().hold = Some("/custom/token".into());
-        let url = format!("http://{}/operator/mcp", session.control);
+        let address: std::net::SocketAddr = session.control.parse().unwrap();
+        assert_eq!(address.ip(), std::net::Ipv4Addr::LOCALHOST);
+        let mut url = reqwest::Url::parse("http://127.0.0.1/operator/mcp").unwrap();
+        url.set_port(Some(address.port())).unwrap();
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let request = tokio::spawn(client.post(url).bearer_auth("synthetic-screen-pair").json(&json!({"operation":"refresh"})).send());
         while !mock.state.lock().unwrap().held { tokio::task::yield_now().await; }

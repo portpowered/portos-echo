@@ -14,6 +14,11 @@ fn pattern(value: &str) -> Result<jsonschema::Validator, String> {
 }
 
 pub fn parse(value: &Value) -> Result<Step, String> {
+    if let Some(counts) = value.get("expect_link_counts") {
+        return serde_json::from_value(counts.clone())
+            .map(Step::LinkCounts)
+            .map_err(|_| "link counts: expected all eight unsigned integer counts".into());
+    }
     if let Some(phrases) = value["expect_speech_contains"].as_array() {
         let phrases = phrases
             .iter()
@@ -132,6 +137,31 @@ pub fn frame_destination(root: &Path, name: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_count_parser_rejects_incomplete_or_non_integer_measurements() {
+        let complete = json!({"link":0,"tools_list":0,"tool_call":0,"forced_refresh":0,
+            "replay_rejected":0,"relink_error":0,"restart_grant_kept":0,"unlink":0});
+        assert!(matches!(
+            parse(&json!({"expect_link_counts":complete})).unwrap(),
+            Step::LinkCounts(_)
+        ));
+        for field in complete.as_object().unwrap().keys() {
+            let mut missing = complete.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(parse(&json!({"expect_link_counts":missing})).is_err());
+            for value in [json!(-1), json!(1.5), json!(true), json!("0"), Value::Null] {
+                let mut invalid = complete.clone();
+                invalid[field] = value;
+                assert!(parse(&json!({"expect_link_counts":invalid})).is_err());
+            }
+        }
+        let mut extra = complete;
+        extra["unknown"] = json!(0);
+        for invalid in [extra, Value::Null, json!([])] {
+            assert!(parse(&json!({"expect_link_counts":invalid})).is_err());
+        }
+    }
 
     #[test]
     fn literal_and_opt_in_patterns_have_distinct_semantics() {
