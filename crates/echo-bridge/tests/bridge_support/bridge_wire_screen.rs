@@ -73,6 +73,7 @@ async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
     assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
     assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
     bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
+    let mut satellite = bridge_short::Satellite::new(satellite);
     assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
     let path = directory.path().join("trace");
     let address = trace(&path).iter().find(|e| e["event"] == "screen.listening").unwrap()["address"]

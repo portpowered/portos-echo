@@ -183,6 +183,7 @@ async fn delegated(mode: &str, allowed: bool, outage: bool) {
     let mut bridge = Process::spawn(&mut command);
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
+    let _satellite = bridge_short::Satellite::new(satellite);
     assert_commentary(&observer, allowed, outage).await;
     let path = directory.path().join("trace");
     bridge_wire_auth_failure::wait_event(&path, "session.commentary.append").await;
@@ -233,6 +234,7 @@ async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() 
     let mut bridge = Process::spawn(&mut run_command(directory.path(), &live.url, &model.origin));
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
+    let mut satellite = bridge_short::Satellite::new(satellite);
     // Live has consumed the valid key; fail the model's separate acquisition.
     entered.await.unwrap();
     std::fs::remove_file(directory.path().join("credential")).unwrap();
@@ -451,6 +453,7 @@ async fn bridge_wire_delegation_eof_cancels_inflight_model_without_commentary() 
     let mut bridge = Process::spawn(&mut run_command(directory.path(), &live_origin, &origin));
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
+    let _satellite = bridge_short::Satellite::new(satellite);
     let mut socket = tokio::time::timeout(OBSERVATION_TIMEOUT, model.accept())
         .await
         .unwrap()

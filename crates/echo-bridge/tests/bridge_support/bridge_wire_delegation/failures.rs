@@ -61,6 +61,7 @@ async fn limits(tool_cap: bool) {
     let mut bridge = Process::spawn(&mut run_command(directory.path(), &live.url, &model.origin));
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
+    let mut satellite = bridge_short::Satellite::new(satellite);
     assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-start");
     exercise_limits(&mut live, tool_cap).await;
     bridge.finish(0).await;
@@ -165,6 +166,7 @@ async fn bridge_wire_delegation_mcp_500_is_one_attempt_and_exact_error() {
     let mut bridge = Process::spawn(&mut run_command(directory.path(), &origin, &model.origin));
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
+    let _satellite = bridge_short::Satellite::new(satellite);
     assert_eq!(
         commentary(&fake.observer()).await,
         json!({

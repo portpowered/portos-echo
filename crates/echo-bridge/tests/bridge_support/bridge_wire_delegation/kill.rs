@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 struct Rig {
     directory: tempfile::TempDir,
     listener: TcpListener,
-    satellite: TcpStream,
+    satellite: bridge_short::Satellite,
     bridge: Option<Process>,
     live: bridge_peer::Live,
     model: TcpListener,
@@ -32,6 +32,7 @@ impl Rig {
         let mut bridge = Process::spawn(&mut run_command(directory.path(), &live.url, &origin));
         let mut satellite = listener.accept().await.unwrap().0;
         register(&mut satellite, &mut bridge).await;
+        let satellite = bridge_short::Satellite::new(satellite);
         Self {
             directory,
             listener,
@@ -161,6 +162,7 @@ async fn bridge_wire_kill_reply_refuses_restart_and_clear_creates_fresh_call() {
     assert!(chunks < 32, "kill must discard the unsent reply");
     assert_killed(&rig.path()).await;
     rig.command(false).await;
+    rig.satellite.responding(false).await;
     rig.refused("run-2").await;
     assert_eq!(bridge_short::read(&mut rig.satellite).await.0["type"], "describe");
     bridge_short::send(&mut rig.satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
@@ -184,8 +186,9 @@ async fn restart_and_clear(rig: &mut Rig) {
     let base = "http://127.0.0.1";
     let origin = format!("{base}:{}", rig.model.local_addr().unwrap().port());
     let mut bridge = Process::spawn(&mut run_command(rig.directory.path(), &rig.live.url, &origin));
-    rig.satellite = rig.listener.accept().await.unwrap().0;
-    register(&mut rig.satellite, &mut bridge).await;
+    let mut satellite = rig.listener.accept().await.unwrap().0;
+    register(&mut satellite, &mut bridge).await;
+    rig.satellite = bridge_short::Satellite::new(satellite);
     rig.bridge = Some(bridge);
     bridge_wire_auth_failure::wait_event(&rig.path(), "kill.enabled").await;
     assert_killed(&rig.path()).await;
@@ -272,7 +275,7 @@ async fn bridge_wire_kill_abandons_delegation_and_never_replays_after_clear() {
     rig.finish().await;
 }
 
-async fn wake_socket(socket: &mut TcpStream) {
+async fn wake_socket(socket: &mut bridge_short::Satellite) {
     bridge_short::send(
         socket,
         "run-pipeline",
@@ -295,6 +298,7 @@ async fn bridge_wire_kill_during_call_setup_cancels_http_and_refuses_another_req
     let mut bridge = Process::spawn(&mut bridge_wire_screen::run_command(directory.path(), &origin));
     let mut satellite = listener.accept().await.unwrap().0;
     register(&mut satellite, &mut bridge).await;
+    let mut satellite = bridge_short::Satellite::new(satellite);
     wake_socket(&mut satellite).await;
     let mut pending = live.accept().await.unwrap().0;
     assert_eq!(read(&mut pending).await.body["session"]["model"], "gpt-live-1");
