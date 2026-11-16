@@ -98,7 +98,7 @@ fn assert_private_trace(path: &Path) {
     assert_eq!(trace(path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
 }
 
-async fn assert_surfaces(path: &Path, relink: bool) -> String {
+pub(super) async fn assert_surfaces(path: &Path, relink: bool) -> String {
     let entries = trace(path);
     let screen = entries.iter().find(|e| e["event"] == "screen.listening").unwrap()["address"]
         .as_str()

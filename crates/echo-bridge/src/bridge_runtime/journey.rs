@@ -175,7 +175,12 @@ pub(super) async fn run(
         microphone: false,
         delegation: options.4,
     };
-    let producer = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context);
+    let mut failure = None;
+    let producer = async {
+        let result = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context).await;
+        failure = stop_failed_producer(result, client, options.0).await?;
+        Ok(())
+    };
     let (outcome, (), ()) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::try_join!(
             async { play.await.map_err(Error::from) },
@@ -185,6 +190,7 @@ pub(super) async fn run(
     })
     .await
     .map_err(|_| Error::Deadline)??;
+    failure.map_or(Ok(()), Err)?;
     let abandoned = context.delegation.abandon();
     trace.record(
         "reply.played",
@@ -211,6 +217,23 @@ pub(super) async fn run(
     )?;
     trace.record("wyoming.run_ended", Some(id), json!({}))?;
     Ok((source.sent, !source.cancelled && !abandoned))
+}
+
+async fn stop_failed_producer(
+    result: Result<(), Error>,
+    client: &WyomingClient,
+    lab: bool,
+) -> Result<Option<Error>, Error> {
+    match result {
+        Ok(()) => Ok(None),
+        Err(error) if lab => Err(error), // Preserve the lab caller's fatal-error protocol.
+        Err(error) => {
+            // Keep play's receiver alive through cut and Played. Dropping it
+            // first invalidates the Wyoming connection and loses the stop.
+            client.cut_with_stats().await?;
+            Ok(Some(error))
+        }
+    }
 }
 
 struct PlaybackContext<'a> {

@@ -199,6 +199,66 @@ fn expected(allowed: bool, outage: bool) -> &'static str {
     }
 }
 
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let spoof = Spoof::start(Options::default()).await.unwrap();
+    configure(
+        directory.path(),
+        listener.local_addr().unwrap().port(),
+        "api_key",
+        &spoof,
+        true,
+    )
+    .await;
+    let model = Model::start(false, true).await;
+    let (ready, entered) = tokio::sync::oneshot::channel();
+    let (release, wait) = tokio::sync::oneshot::channel();
+    let live = bridge_peer::Live::bind_after(0, Some((ready, wait))).await;
+    let mut bridge = Process::spawn(&mut run_command(directory.path(), &live.url, &model.origin));
+    let mut satellite = listener.accept().await.unwrap().0;
+    bridge_short::register(&mut satellite, &mut bridge).await;
+    // Live has consumed the valid key; fail the model's separate acquisition.
+    entered.await.unwrap();
+    std::fs::remove_file(directory.path().join("credential")).unwrap();
+    release.send(()).unwrap();
+    assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-start");
+    live.events.send(event("d-auth", "client")).await.unwrap();
+    assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-stop");
+    bridge_short::send(&mut satellite, "played", json!({})).await;
+    bridge_short::send(&mut satellite, "audio-stop", json!({})).await;
+    let path = directory.path().join("trace");
+    bridge_wire_auth_failure::wait_event(&path, "auth.relink_required").await;
+    bridge_wire_auth_failure::assert_surfaces(&path, true).await;
+    // File repair is insufficient: another wake must refuse without dispatch.
+    std::fs::write(directory.path().join("credential"), "synthetic-repaired-key").unwrap();
+    bridge_short::send(
+        &mut satellite,
+        "run-pipeline",
+        json!({
+            "start_stage":"asr", "end_stage":"tts", "restart_on_end":false, "wake_word_name":"alexa"
+        }),
+    )
+    .await;
+    bridge_wire_auth_failure::wait_event(&path, "run.refused").await;
+    assert_eq!(live.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(model.requests.lock().unwrap().len(), 0);
+    assert_eq!(spoof.snapshot().unwrap().calls.len(), 0);
+    bridge.finish(0).await;
+    let entries = trace(&path);
+    for event in ["session.commentary.append", "reply.played", "reply.started"] {
+        assert_eq!(entries.iter().filter(|e| e["event"] == event).count(), 0);
+    }
+    assert_eq!(entries.iter().filter(|e| e["event"] == "live.closed").count(), 1);
+    let text = std::fs::read_to_string(&path).unwrap();
+    for private in ["synthetic-api-key", "synthetic-repaired-key", "synthetic-mcp-token"] {
+        assert!(!text.contains(private), "trace disclosure");
+    }
+    spoof.shutdown().await.unwrap();
+}
+
 fn run_command(directory: &Path, origin: &str, model: &str) -> Command {
     bridge_wire_auth::command(
         directory,

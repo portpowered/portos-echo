@@ -38,11 +38,14 @@ pub(super) struct Credentials {
     pub providers: echo_signin::Providers,
     pub budget: Arc<Budget>,
     pub limited: AtomicBool,
+    pub authorization_failed: AtomicBool,
 }
 
 impl ModelCredential for Credentials {
     async fn headers(&self, mode: LiveMode) -> Result<Secret<HeaderMap>, CredentialError> {
-        let headers = self.providers.headers(mode).await?;
+        let headers = self.providers.headers(mode).await.inspect_err(|_| {
+            self.authorization_failed.store(true, Ordering::Relaxed);
+        })?;
         let day = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap_or_default()

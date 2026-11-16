@@ -73,7 +73,7 @@ fatal rather than silently losing activity updates. EOF shuts down the screen
 with the other owned resources. Relink and delegated activity remain part of the
 same bridge assembly, using the existing screen contract.
 
-Configured call-creation authorization failures keep both listeners alive, set
+Configured call-creation and model-credential acquisition failures keep both listeners alive, set
 `live=error` and `relink_required=true`, and emit `auth.relink_required` with a
 fixed reason. Later wakes emit `run.refused` without another credential or Live
 request. Explicit sign-in followed by restart clears this in-process latch; a
@@ -81,6 +81,11 @@ file change alone does not. The paired screen displays the operator sign-in and
 restart instruction. Its Relink action repeats that instruction without starting
 authentication. Call-creation outages display a non-relink error and permit the
 next wake to try again. The synthetic lab route retains its fatal-error protocol.
+Active producer failures cut playback while its receiver remains alive and wait
+for the satellite's Played acknowledgment before publishing the safe error.
+They close the failed call and abandon delegation without recording successful
+commentary or playback. Ordinary model outages retain fixed failure commentary;
+request-cap refusal remains distinct from relink.
 The health schema also reserves the `kill_switch` boolean, initially false;
 durable kill control remains the next retained story.
 

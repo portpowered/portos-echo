@@ -132,6 +132,7 @@ impl Host {
             providers: providers.clone(),
             budget: self.budget.clone(),
             limited: AtomicBool::new(false),
+            authorization_failed: AtomicBool::new(false),
         });
         let host = McpClient::new(
             server.clone(),
@@ -180,6 +181,7 @@ impl Host {
         };
         if let Some(credentials) = &self.credentials {
             credentials.limited.store(false, Ordering::Relaxed);
+            credentials.authorization_failed.store(false, Ordering::Relaxed);
         }
         self.active = Some((run.into(), id));
         self.pending = Some(tokio::spawn(async move {
@@ -203,6 +205,13 @@ impl Host {
         let (runner, result) = pending.await.map_err(|_| Error::Unavailable)?;
         self.runner = Some(runner);
         self.flush(trace)?;
+        if self
+            .credentials
+            .as_ref()
+            .is_some_and(|c| c.authorization_failed.load(Ordering::Relaxed))
+        {
+            return Err(Error::Authorization);
+        }
         let (run, id) = self.active.take().ok_or(Error::Unavailable)?;
         let Some(LiveEvent::CommentaryAppend {
             delegation_id,

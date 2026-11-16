@@ -169,7 +169,7 @@ async fn turn(
     }
     health.state.send_modify(|state| state.live = "connected");
     let call = conversation.call.as_mut().ok_or(Error::Unavailable)?;
-    journey::run(
+    let result = journey::run(
         client,
         events,
         run,
@@ -181,11 +181,19 @@ async fn turn(
             options.reply_lead_ms,
             conversation.sent,
             screen,
-            delegation,
+            &mut *delegation,
         ),
     )
-    .await
-    .map(Some)
+    .await;
+    match result {
+        Ok(outcome) => Ok(Some(outcome)),
+        Err(error) => {
+            delegation.abandon();
+            conversation.close("failed", trace)?;
+            bridge_relink::failure(error, options.lab, health, trace, screen, id)?;
+            Ok(None)
+        }
+    }
 }
 
 async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &str) -> Result<LiveCall, Error> {
