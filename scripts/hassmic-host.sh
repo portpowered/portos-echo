@@ -27,7 +27,7 @@ esac
 # Parse data, never source executable shell from the pin.
 repo=$(sed -n 's/^repo=//p' hassmic.pin)
 commit=$(sed -n 's/^commit=//p' hassmic.pin)
-[ "$repo" = 'https://github.com/Gamer92000/echo-dot-assist' ] || fail 'invalid pin repository'
+[ "$repo" = 'https://github.com/portpowered/echo-dot-assist' ] || fail 'invalid pin repository'
 [ "${#commit}" -eq 40 ] || fail 'pin requires a full commit'
 case $commit in *[!0-9a-f]*) fail 'invalid pin commit' ;; esac
 [ "$(wc -l <hassmic.pin)" -eq 2 ] || fail 'pin requires exactly two lines'
