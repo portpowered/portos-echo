@@ -22,6 +22,47 @@ root, read and parse errors use the empty pointer. It continues after failures a
 returns 1 for any failure or empty discovery. Schemas are embedded; validation
 uses no network. `--help` prints the command grammar.
 
+## Sim test bridge
+
+`cargo build -p echo-lab --bin echo-lab-sim-bridge --locked` builds the
+test-purpose Wyoming bridge. It has no model or tool execution. Supply
+`ECHO_LAB_WYOMING_ADDR=127.0.0.1:<port>` and an absolute native
+`ECHO_LAB_TRACE_PATH` naming a fresh JSONL file. Addresses are numeric IPv4
+loopback only. An existing trace is refused without changing its bytes.
+
+The owner keeps bridge stdin open during observation and closes it for clean
+shutdown. Stdout emits `{"event":"bridge.ready"}` after registration and a
+round-trip describe barrier. Each completed run produces exactly these trace
+records, sharing a bridge-local `run_id` (`run-1`, `run-2`, ...):
+
+```jsonl
+{"event":"wyoming.run_started","elapsed_ms":0,"run_id":"run-1"}
+{"event":"wyoming.mic_frames","elapsed_ms":700,"run_id":"run-1","count":16}
+{"event":"wyoming.run_ended","elapsed_ms":700,"run_id":"run-1"}
+```
+
+Counts come from frames read through `echo-wyoming`, including frames received
+while the bridge sends a 100 ms silent reply. After at least ten microphone
+frames, that reply ends the host run; `played` and microphone closure must both
+arrive before the terminal records. Dropped frames, short runs and protocol
+errors fail with exit 1. No microphone `audio-start` is required or invented.
+Audio bytes are discarded. Timestamps observe the host's real clock edge;
+the 120-second timeout is only a safety ceiling.
+
+After flushing the terminal trace, stdout emits
+`{"event":"bridge.run_completed","run_id":"run-1"}` as a completion barrier.
+Non-EOF stdin data fails. EOF stops the connection; owners must check their
+expected terminal trace before requesting shutdown. A protocol failure exits
+even when the owner still holds stdin open.
+
+The component test in `make test-sim` uses the pinned prebuilt host through the
+existing `tests/wyoming_host.sh` controller, with its default synthetic silence.
+It proves the bridge's real Wyoming boundary. It does not yet execute scenario
+steps or publish a sim report. The scenario driver, fixture feeding, fake
+servers, observation oracles and discovery remain implementation work in this
+lane. The upstream host's wildcard listeners remain an accepted limitation:
+`pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)`.
+
 ## Device runner
 
 The device runner supports batches of speech, screen and frame steps, firmware
