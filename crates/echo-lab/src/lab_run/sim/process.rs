@@ -9,20 +9,44 @@ pub struct Process {
     child: Child,
     input: Option<ChildStdin>,
     output: ChildStdout,
+    status: Option<std::process::ExitStatus>,
+    stopping: Option<(std::time::Instant, tokio::time::Instant)>,
+    forced: bool,
+    #[cfg(test)]
+    collected: Option<std::sync::mpsc::Sender<std::process::ExitStatus>>,
 }
 
 impl Process {
+    #[cfg(test)]
+    pub(super) fn observe_collection(&mut self) -> std::sync::mpsc::Receiver<std::process::ExitStatus> {
+        let (send, receive) = std::sync::mpsc::channel();
+        self.collected = Some(send);
+        receive
+    }
+
     pub fn start(command: &mut Command) -> Result<Self, String> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
             .spawn()
             .map_err(|_| "launch: cannot spawn owned process")?;
         let input = child.stdin.take();
-        let output = child.stdout.take().ok_or("launch: missing owned stdout")?;
-        Ok(Self { child, input, output })
+        let Some(output) = child.stdout.take() else {
+            drop(input);
+            super::super::run_command::stop_child(&mut child, super::super::run_command::CLEANUP, false)?;
+            return Err("launch: missing owned stdout".into());
+        };
+        Ok(Self {
+            child,
+            input,
+            output,
+            status: None,
+            stopping: None,
+            forced: false,
+            #[cfg(test)]
+            collected: None,
+        })
     }
 
     pub async fn line(&mut self) -> Result<Value, String> {
@@ -64,28 +88,71 @@ impl Process {
 
     pub async fn close(&mut self) -> Result<(), String> {
         drop(self.input.take());
-        let status = self
-            .child
-            .wait()
-            .await
+        let (_, deadline) = *self.stopping.get_or_insert_with(|| {
+            (
+                std::time::Instant::now(),
+                tokio::time::Instant::now() + super::super::run_command::CLEANUP,
+            )
+        });
+        if self.status.is_none() {
+            let status = if self.forced {
+                self.child.wait().await
+            } else if let Ok(result) = tokio::time::timeout_at(deadline, self.child.wait()).await {
+                result
+            } else {
+                self.child
+                    .start_kill()
+                    .map_err(|_| "cleanup: cannot kill owned child")?;
+                self.forced = true;
+                self.child.wait().await
+            }
             .map_err(|_| "cleanup: cannot reap owned child")?;
-        if !status.success() {
-            return Err("cleanup: owned child exited nonzero".into());
+            self.status = Some(status);
         }
-        Ok(())
-    }
-
-    pub async fn terminate(&mut self) {
-        drop(self.input.take());
-        let _ = self.child.kill().await;
-        let _ = self.child.wait().await;
+        if self.status.is_some_and(|status| status.success()) {
+            Ok(())
+        } else {
+            Err("cleanup: owned child exited nonzero".into())
+        }
     }
 
     pub fn exited(&mut self) -> Result<bool, String> {
-        self.child
-            .try_wait()
-            .map(|s| s.is_some())
-            .map_err(|_| "process: cannot observe child exit".into())
+        if self.status.is_none() {
+            self.status = self
+                .child
+                .try_wait()
+                .map_err(|_| "process: cannot observe child exit")?;
+        }
+        Ok(self.status.is_some())
+    }
+}
+
+impl super::super::run_command::ReapChild for Child {
+    fn exited(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.try_wait()
+    }
+    fn force(&mut self) -> std::io::Result<()> {
+        self.start_kill()
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        drop(self.input.take());
+        if self.status.is_none() {
+            let remaining = self.stopping.map_or(super::super::run_command::CLEANUP, |start| {
+                super::super::run_command::CLEANUP.saturating_sub(start.0.elapsed())
+            });
+            if let Ok((status, _)) = super::super::run_command::stop_child(&mut self.child, remaining, self.forced) {
+                self.status = Some(status);
+            }
+        }
+        #[cfg(test)]
+        if let Some(observer) = self.collected.take()
+            && let Some(status) = self.status
+        {
+            let _ = observer.send(status);
+        }
     }
 }
 

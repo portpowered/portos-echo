@@ -43,6 +43,7 @@ class Host:
         self.fd = None
         self.threads = []
         self.error = False
+        self.closed = False
 
     def logs(self):
         while not self.stop.is_set():
@@ -98,8 +99,8 @@ class Host:
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
         for target in [self.logs, self.feed]:
             thread = threading.Thread(target=target, daemon=True)
-            self.threads.append(thread)
             thread.start()
+            self.threads.append(thread)
         self.logged(b"wyoming on ")
         emit({"event": "host.ready", "address": "127.0.0.1:" + str(port)})
 
@@ -125,19 +126,33 @@ class Host:
         emit({"event": "host.ack"})
 
     def close(self):
+        if self.closed:
+            return
         self.stop.set()
-        if self.proc:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(self.proc.pid, signal.SIGKILL)
-            self.proc.wait(timeout=3)
-        for thread in self.threads:
-            thread.join(timeout=2)
-            if thread.is_alive():
+        deadline = time.monotonic() + 4
+        try:
+            if self.proc and self.proc.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(self.proc.pid, signal.SIGTERM)
+                try:
+                    self.proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(self.proc.pid, signal.SIGKILL)
+                    self.proc.wait()
+        finally:
+            failed = False
+            for thread in self.threads:
+                thread.join(timeout=max(0, deadline - time.monotonic()))
+                failed = failed or thread.is_alive()
+            if self.proc:
+                self.proc.stderr.close()
+            if self.fd is not None:
+                os.close(self.fd)
+                self.fd = None
+            if failed:
                 raise RuntimeError("host thread cleanup failed")
-        if self.proc:
-            self.proc.stderr.close()
-        if self.fd is not None:
-            os.close(self.fd)
+        self.closed = True
 
 
 def main():
