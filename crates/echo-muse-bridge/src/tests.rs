@@ -1,12 +1,9 @@
 //! T1 component flows through the public backend and intake, with no real time.
-#[path = "cases/races.rs"]
+#[path = "../tests/cases/races.rs"]
 mod races;
-#[path = "cases/report.rs"]
-mod report_cases;
-#[path = "cases/store.rs"]
-mod store_cases;
-#[path = "cases/store_faults.rs"]
+#[path = "../tests/cases/store_faults.rs"]
 mod store_faults;
+#[path = "../tests/support/mod.rs"]
 mod support;
 
 use echo_agent_api::{AgentBackend, AgentError};

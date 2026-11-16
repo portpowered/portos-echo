@@ -3,7 +3,7 @@ use echo_agent_api::{AgentBackend, AgentError};
 use echo_muse_bridge::{Clock, EpochClock, JsonFileStore, MuseBackend, StoreError, TaskStore};
 use serde_json::{Value, json};
 
-use crate::support::{FakeClock, RecordingGadget, task};
+use crate::tests::support::{FakeClock, RecordingGadget, task};
 
 #[tokio::test]
 async fn missing_parent_write_and_unreadable_snapshot_fail_without_admission_or_send() {

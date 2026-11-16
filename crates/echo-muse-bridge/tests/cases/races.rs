@@ -9,7 +9,7 @@ use echo_contracts::ids::TaskId;
 use echo_muse_bridge::{Gadget, GadgetError, InMemoryStore, MuseBackend, Reply, SideChat};
 use tokio::sync::Semaphore;
 
-use crate::support::{FakeClock, RecordingGadget, accepted, completed, progress, report, task, timeout};
+use crate::tests::support::{FakeClock, RecordingGadget, accepted, completed, progress, report, task, timeout};
 
 struct HeldGadget {
     calls: Mutex<Vec<(SideChat, String)>>,

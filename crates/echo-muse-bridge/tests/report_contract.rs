@@ -1,4 +1,5 @@
 #![cfg(test)]
+pub mod support;
 use std::path::Path;
 
 use echo_agent_api::AgentBackend;
@@ -79,7 +80,7 @@ fn handler_maps_accepted_json_and_every_rejection_to_sdk_output() {
 #[test]
 fn only_dotted_result_command_matches_golden_bytes_and_value() {
     let (name, spec) = report_command_spec(Path::new("/opt/echo/bin/echo-muse-report"));
-    let golden = include_bytes!("../fixtures/echo.report.result.json");
+    let golden = include_bytes!("fixtures/echo.report.result.json");
     assert_eq!(name, "echo.report.result.json");
     assert_eq!(serde_json::to_vec(&spec).unwrap(), golden);
     assert_eq!(spec, serde_json::from_slice::<Value>(golden).unwrap());

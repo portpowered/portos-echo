@@ -65,6 +65,9 @@ impl Gadget for RecordingGadget {
     }
 }
 
+/// # Panics
+/// The fixed, nonempty synthetic delegation identifier must remain valid.
+#[must_use]
 pub fn task() -> Task {
     Task {
         delegation_id: DelegationId::new("delegation-test").unwrap(),
@@ -75,10 +78,12 @@ pub fn task() -> Task {
     }
 }
 
+#[must_use]
 pub fn report(id: &TaskId, status: &str) -> String {
     json!({"task_id": id, "status": status, "summary": "light is on"}).to_string()
 }
 
+#[must_use]
 pub fn progress(id: &TaskId) -> TaskEvent {
     TaskEvent::Progress {
         task_id: id.clone(),
@@ -86,6 +91,7 @@ pub fn progress(id: &TaskId) -> TaskEvent {
     }
 }
 
+#[must_use]
 pub fn completed(id: &TaskId) -> TaskEvent {
     TaskEvent::Completed {
         task_id: id.clone(),
@@ -93,6 +99,7 @@ pub fn completed(id: &TaskId) -> TaskEvent {
     }
 }
 
+#[must_use]
 pub fn timeout(id: &TaskId) -> TaskEvent {
     TaskEvent::Failed {
         task_id: id.clone(),
@@ -101,6 +108,7 @@ pub fn timeout(id: &TaskId) -> TaskEvent {
     }
 }
 
+#[must_use]
 pub fn accepted(id: &TaskId) -> Value {
     json!({"accepted": true, "task_id": id})
 }

@@ -1,4 +1,5 @@
 #![cfg(test)]
+pub mod support;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
