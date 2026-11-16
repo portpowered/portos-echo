@@ -125,6 +125,7 @@ impl World {
         screen.expect("ready").await?;
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
         screen.expect("listening").await?;
+        screen.expect("connected").await?;
         let id = self.progress().await?;
         self.muse.terminal(&id, negative).await?;
         self.speaking = Some(screen.expect("speaking").await?);
