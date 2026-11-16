@@ -1,6 +1,8 @@
 //! T3: configured prebuilt process retains health/screen after credential refusal.
 use super::*;
 use tokio::net::TcpListener;
+#[path = "bridge_wire_auth_failure/stream.rs"]
+mod stream;
 
 pub(super) async fn wait_event(path: &Path, event: &str) {
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {

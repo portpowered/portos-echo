@@ -1,3 +1,4 @@
+use crate::wyoming_events;
 use crate::{
     ClientOptions, CutStats, Error, EventStream, PlayOutcome,
     wyoming_session::{self, Command},
@@ -40,7 +41,7 @@ impl WyomingClient {
         Fut: Future<Output = std::io::Result<T>> + Send + 'static,
     {
         let (commands, receiver) = mpsc::channel(opts.command_capacity);
-        let (events, event_receiver) = mpsc::channel(opts.event_capacity);
+        let (events, event_receiver) = wyoming_events::channel(opts.event_capacity);
         let (end, terminal) = watch::channel(None);
         let (reset, resets) = watch::channel(0_u64);
         let deadline = opts.operation_timeout;
@@ -69,7 +70,7 @@ impl WyomingClient {
     #[cfg(test)]
     pub(crate) fn from_io<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(io: T, opts: ClientOptions) -> Self {
         let (commands, receiver) = mpsc::channel(opts.command_capacity);
-        let (events, event_receiver) = mpsc::channel(opts.event_capacity);
+        let (events, event_receiver) = wyoming_events::channel(opts.event_capacity);
         let (end, terminal) = watch::channel(None);
         let deadline = opts.operation_timeout;
         let task = tokio::spawn(wyoming_session::serve(io, opts, receiver, events, end));
