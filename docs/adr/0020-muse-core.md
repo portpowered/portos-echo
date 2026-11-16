@@ -5,7 +5,7 @@ last modified: 2026, november, 16
 status: accepted
 ---
 
-# Correlated Muse core
+# ADR 0020: Correlated Muse core
 
 `echo-muse-bridge` implements the existing `echo-agent-api` backend boundary
 without mounting a backend into the bridge. Each admitted task gets an independent

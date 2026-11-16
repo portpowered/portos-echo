@@ -1,4 +1,4 @@
-//! T3 test support only; scripts and captures live beside the copied executable.
+//! T3 test support only; scripts and captures live beside the hard-linked executable.
 use std::{
     io::{Read, Write},
     process::ExitCode,

@@ -14,9 +14,10 @@ struct Child {
 
 impl Child {
     fn new(stdout: &str, stderr: &str, exit: u8) -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
         let program = directory.path().join(if cfg!(windows) { "fake.exe" } else { "fake" });
-        std::fs::copy(env!("CARGO_BIN_EXE_echo-muse-fake-gadget"), &program).unwrap();
+        // Link the prebuilt artifact without a writable executable handle during parallel spawns.
+        std::fs::hard_link(env!("CARGO_BIN_EXE_echo-muse-fake-gadget"), &program).unwrap();
         std::fs::write(
             directory.path().join("script.json"),
             json!({"stdout": stdout, "stderr": stderr, "exit": exit}).to_string(),

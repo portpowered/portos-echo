@@ -77,4 +77,4 @@ Add each new tracked documentation page to this index in the same change.
 - [Bridge-hosted delegation runner](adr/0017-echo-delegation.md)
 - [Loopback screen transport](adr/0016-screen-server.md)
 - [Operator sign-in command library](adr/0018-signin.md)
-- [Correlated Muse core](adr/0019-muse-core.md)
+- [Correlated Muse core](adr/0020-muse-core.md)
