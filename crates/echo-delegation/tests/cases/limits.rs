@@ -1,8 +1,8 @@
 use super::{
     journey::*,
     model::{Model, Reply, final_item},
-    support::*,
 };
+use crate::support::{config, sse};
 use echo_config::LiveMode;
 
 #[tokio::test]

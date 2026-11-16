@@ -1,5 +1,5 @@
 //! T3 loopback fixture with explicit request, release and disconnect signals.
-use super::support::{Request, read};
+use crate::support::{Request, read};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tokio::{
