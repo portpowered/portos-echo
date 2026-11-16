@@ -75,6 +75,10 @@ under one held camera session.
 | Ring microphone during its own playback | sometimes ducked to about −80 dBFS while the Ring speaker plays; record replies after the clip ends | 2026-11-13 |
 | Synthetic voices | quiet or robotic Windows voices woke the Echo but were rejected as false wakes; a natural TTS voice at full level worked | 2026-11-13 |
 | Held session lifetime | a hold can be preempted when another viewer takes the camera (`reason: preempted`); open a new hold and retry | 2026-11-13 |
+| Wake word | the owner set this Echo's wake word to "computer" (2026-11-15); bench clips say "Computer, what time is it?" | 2026-11-15 |
+| A play without `--listen` returns early | `play-audio --file` alone returns when the clip is queued, about 0.7 s after it starts and about 2 s before it ends; wait for the returned `playEndedAt` before the next command on the hold | 2026-11-15 |
+| Snapshot during playback, before the fix | port main 5ef4727: a snapshot about 1.5 s into the 2.8 s question → the Echo answered with the time 13 of 22 times (3 no answer, 6 wrong reply); controls with no snapshot 15 of 15. Late talkback packets (worst 34 ms) and a keyframe request (never sent) ruled out; the Ring-side mechanism is unknown | 2026-11-15 |
+| Snapshot during playback, with the fix | port main 179c4ab (portos-monolith PR 2741): a snapshot sent mid-clip waits until the clip stops, returns 2.3–3.4 s after it was sent, frame 0.38–0.49 s after `playEndedAt`; the Echo answered with the time 8 of 8, controls 2 of 2 (Fisher one-sided against before, p ≈ 0.035). Whisper `large-v3-turbo` on 8 s after the clip | 2026-11-15 |
 
 Not measured yet: a Ring frame of the Echo's light ring (the "eye" half of milestone B0), and the Ring's lockout
 threshold for repeated sessions.
