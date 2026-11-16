@@ -368,3 +368,56 @@ fn capture(samples: usize) -> Vec<MicFrame> {
         }]
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_continuation_requires_new_input_and_preserves_admitted_totals() {
+    let mut fixture = Fixture::new().await;
+    let observer = Observer::default();
+    let link = FakeConnector::new(observer).connect().await.unwrap();
+    let mut writer = Trace::open(&fixture.directory.path().join("trace"), "api_key").unwrap();
+    let kill = Kill {
+        settings: &fixture.settings,
+        health: &fixture.health,
+        screen: &fixture.screen,
+    };
+    let mut context = PlaybackContext {
+        client: &link,
+        trace: &mut writer,
+        id: "run-1",
+        lead_ms: 200,
+        screen: &fixture.screen,
+        speaking: true,
+        microphone: true,
+        microphone_at_reply: Some(44),
+        played: true,
+        cancellation: Cancellation::Response,
+        deadline: Instant::now(),
+        delegation: &mut fixture.host,
+        kill: &kill,
+    };
+    let mut source = Source::new().unwrap();
+    source.sent = 44;
+    source.chunks = 17;
+    source.call_packets_base = 10;
+    source.cancelled = true;
+    assert!(!context.continuing(&source));
+    source.sent = 49;
+    assert!(context.continuing(&source));
+    context.cancellation = Cancellation::Shutdown;
+    assert!(!context.continuing(&source));
+    context.cancellation = Cancellation::Response;
+    context.microphone_at_reply = None;
+    assert!(!context.continuing(&source));
+    context.microphone_at_reply = Some(44);
+    source.finished = true;
+    assert!(!context.continuing(&source));
+    source.finished = false;
+    source.audio_done = true;
+    let mut live = Live::default();
+    source.resume_reply(&mut live, &fixture.screen).await.unwrap();
+    assert_eq!((source.sent, source.chunks, source.call_packets_base), (49, 17, 10));
+    assert!(source.finished);
+    assert!(!source.cancelled);
+    assert!(!source.audio_done);
+    assert!(!context.continuing(&source));
+}

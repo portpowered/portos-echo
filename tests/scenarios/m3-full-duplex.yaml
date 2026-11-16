@@ -1,0 +1,28 @@
+id: m3-full-duplex
+milestone: M3
+tiers: [T3, T5]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - expect_trace:
+      - reply.started
+  - expect_speech_contains: ["time"]
+  - say: "Computer, what day is it?"
+  - expect_trace:
+      - reply.cut
+      - "reply.played {outcome: cut}"
+  - expect_speech_contains: ["day"]
+  - expect_trace:
+      - "reply.played {outcome: played}"
+  - press: mute
+  - expect_screen: {state: muted}
+  - say: "Computer, what time is it?"
+  - press: mute
+  - expect_trace:
+      - "mic.mute_window {window_id: mute-1, received_frames: 0, forwarded_frames: 0}"
+# S2: hassmic drains received audio; the bridge's send lead bounds residue.
+# Preserve the 200 ms lead and bridge_latency.rs's strict 600 ms ceiling.
+budgets:
+  reply_send_window_ms: 200
+  barge_in_cut_ms: 600
+negative: []

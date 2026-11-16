@@ -20,6 +20,21 @@ Echo Show (Rust + C shim)                   Gateway (small trusted service)     
 The Echo executes every MCP call itself. The gateway only handles the models. Section 3 of the plan explains why
 a gateway is needed in every topology.
 
+## M3 simulated full-duplex voice
+
+Build the local artifacts with `make hassmic-host` and
+`cargo build --locked -p echo-lab -p echo-bridge --bins`, then run
+`cargo run --locked -p echo-lab -- run tests/scenarios/m3-full-duplex.yaml --driver sim`
+or `cargo run --locked -p echo-lab -- check --milestone M3`. Normal `make test-sim`
+discovery includes the same scenario.
+
+The report references scalar evidence in `events.jsonl`: native first playback,
+one overlapping question in the same run, the measured cut below 600 ms with a
+200 ms send window, replacement playback, and a closed native mute window with
+zero outbound frames. Input phrases map to deterministic synthetic PCM markers;
+this T3 check proves local transport and playback, without speech recognition or
+real-provider compatibility. Physical M3 remains an operator-run T5 gate.
+
 ## Layout
 
 | Path | What it holds |

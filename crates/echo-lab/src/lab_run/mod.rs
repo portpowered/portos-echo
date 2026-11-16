@@ -81,6 +81,7 @@ pub trait Driver {
 fn say(value: &str, scenario: &str, options: &Options) -> Result<Step, String> {
     if options.sim {
         match crate::lab_validate::load(scenario)?["id"].as_str() {
+            Some("m3-full-duplex") => return sim::m3::utterance(value),
             Some("m4-spoof-tool") => return sim::m4::utterance(value),
             Some("m6-emotion") => return sim::m4::emotion_utterance(value),
             Some("m7-muse") => return sim::m7::utterance(value),
@@ -324,6 +325,9 @@ fn driver(options: &Options) -> Result<Box<dyn Driver + '_>, String> {
     let scenario = crate::lab_validate::load(&options.scenarios[0])?;
     if scenario["id"] == "m2-live-connect" {
         return Ok(Box::new(sim::m2::M2::new(options)?));
+    }
+    if scenario["id"] == "m3-full-duplex" {
+        return Ok(Box::new(sim::m3::M3::new(options)?));
     }
     if scenario["milestone"] == "M5" {
         return Ok(Box::new(sim::mcp::M5::new(options)?));

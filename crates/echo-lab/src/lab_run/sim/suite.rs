@@ -31,7 +31,7 @@ pub fn default_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
         if matches!(scenario["milestone"].as_str(), Some("M1" | "M2"))
             || matches!(
                 scenario["id"].as_str(),
-                Some("m4-spoof-tool" | "m6-emotion" | "m7-muse")
+                Some("m3-full-duplex" | "m4-spoof-tool" | "m6-emotion" | "m7-muse")
             )
         {
             "echo-bridge"
@@ -135,7 +135,7 @@ fn scenario_command(bridge: &Path, name: &str, scenario: &serde_json::Value) -> 
     let selected = if matches!(scenario["milestone"].as_str(), Some("M1" | "M2" | "M5"))
         || matches!(
             scenario["id"].as_str(),
-            Some("m4-spoof-tool" | "m6-emotion" | "m7-muse")
+            Some("m3-full-duplex" | "m4-spoof-tool" | "m6-emotion" | "m7-muse")
         ) {
         production = default_bridge(scenario)?;
         production.as_path()

@@ -89,6 +89,17 @@ impl Source {
         }
         Ok(())
     }
+    async fn resume_reply(
+        &mut self,
+        call: &mut impl LivePort,
+        screen: &super::bridge_screen::Screen,
+    ) -> Result<(), Error> {
+        self.finish_mic(call, screen).await?;
+        self.reply = Reply::new()?;
+        self.audio_done = false;
+        self.cancelled = false;
+        Ok(())
+    }
     fn record(&self, trace: &mut Trace, id: &str, stats: echo_link::RunStats, completed: bool) -> Result<(), Error> {
         trace.record("wyoming.mic_frames", Some(id), json!({"count":stats.received}))?;
         let (samples, tail) = self
@@ -180,73 +191,8 @@ impl Source {
         }
     }
 }
-pub(super) async fn run<L: EchoLink>(
-    client: &L,
-    events: &mut L::Events,
-    mut run: <L::Events as LinkEvents>::Run,
-    call: &mut impl LivePort,
-    trace: &mut Trace,
-    id: &str,
-    options: (
-        bool,
-        u16,
-        u64,
-        &super::bridge_screen::Screen,
-        &mut super::bridge_delegation::Host,
-        &super::bridge_kill::Kill<'_>,
-    ),
-) -> Result<(u64, bool), Error> {
-    let mut source = Source::new()?;
-    source.call_packets_base = options.2;
-    let (tx, rx) = client.reply_channel(NonZeroUsize::new(1).ok_or(Error::Audio)?);
-    let budget = bridge_timing::playback(options.5.settings);
-    let play = client.play_with_timeout(bridge_audio::format(24_000), rx, budget);
-    let mut context = PlaybackContext {
-        client,
-        trace,
-        id,
-        lead_ms: options.1,
-        screen: options.3,
-        speaking: false,
-        microphone: false,
-        played: false,
-        deadline: Instant::now() + bridge_timing::RESPONSE,
-        delegation: options.4,
-        kill: options.5,
-    };
-    let mut failure = None;
-    let producer = async {
-        let result = produce(
-            &mut source,
-            &mut run,
-            events,
-            call,
-            tx,
-            (options.0, options.2),
-            &mut context,
-        )
-        .await;
-        failure = stop_failed_producer(result, client, options.0).await?;
-        context.await_played(events, &mut run, &mut source, call).await
-    };
-    let (outcome, ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer)?;
-    failure.map_or(Ok(()), Err)?;
-    let abandoned = context.delegation.abandon().await;
-    context.screen.presentation.clear_emotion()?;
-    trace.record(
-        "reply.played",
-        Some(id),
-        json!({"outcome":if outcome == PlayOutcome::Cut { "cut" } else { "played" }}),
-    )?;
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while run.recv().await?.is_some() {}
-        Ok::<_, Error>(())
-    })
-    .await
-    .map_err(|_| Error::Deadline)??;
-    source.record(trace, id, run.stats(), !source.cancelled && !abandoned)?;
-    Ok((source.sent, !source.cancelled && !abandoned))
-}
+mod bridge_response;
+pub(super) use bridge_response::run;
 async fn stop_failed_producer<L: EchoLink>(
     result: Result<(), Error>,
     client: &L,
@@ -263,6 +209,11 @@ async fn stop_failed_producer<L: EchoLink>(
         }
     }
 }
+#[derive(PartialEq, Eq)]
+enum Cancellation {
+    Response,
+    Shutdown,
+}
 struct PlaybackContext<'a, L: EchoLink> {
     client: &'a L,
     trace: &'a mut Trace,
@@ -271,12 +222,20 @@ struct PlaybackContext<'a, L: EchoLink> {
     screen: &'a super::bridge_screen::Screen,
     speaking: bool,
     microphone: bool,
+    microphone_at_reply: Option<u64>,
     played: bool,
+    cancellation: Cancellation,
     deadline: Instant,
     delegation: &'a mut super::bridge_delegation::Host,
     kill: &'a super::bridge_kill::Kill<'a>,
 }
 impl<L: EchoLink> PlaybackContext<'_, L> {
+    fn continuing(&self, source: &Source) -> bool {
+        source.cancelled
+            && !source.finished
+            && self.cancellation == Cancellation::Response
+            && self.microphone_at_reply.is_some_and(|before| source.sent > before)
+    }
     fn pressure(&mut self, source: &Source, reported: &mut bool) -> Result<(), Error> {
         if !*reported && source.queue.drop_count() > 0 {
             self.trace
@@ -313,6 +272,7 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
                 () = tokio::time::sleep_until(deadline) => return Err(Error::Deadline),
                 () = self.kill.wait(), if !source.cancelled => {
                     self.kill.sync(self.trace).await?;
+                    self.cancellation = Cancellation::Shutdown;
                     source.cancelled = true;
                     self.delegation.abandon().await;
                     call.close();
@@ -322,11 +282,15 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
     }
     async fn cancelled(&mut self, source: &mut Source, call: &mut impl LivePort) -> Result<bool, Error> {
         if self.kill.sync(self.trace).await? {
+            self.cancellation = Cancellation::Shutdown;
             source.cancelled = true;
             call.close();
         }
         if source.cancelled {
             self.screen.presentation.clear_emotion()?;
+            // These packets were admitted for the response being cancelled.
+            // Drain them before cut can await Played and admit a replacement.
+            while call.pop_audio().is_some() {}
             self.cut(source).await?;
             self.delegation.abandon().await;
         }
@@ -398,8 +362,11 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         }
         Ok(())
     }
-    async fn forward_available(&mut self, tx: &L::ReplySink, frame: Option<Vec<u8>>) -> Result<(), Error> {
+    async fn forward_available(&mut self, tx: &L::ReplySink, frame: Option<Vec<u8>>, sent: u64) -> Result<(), Error> {
         if let Some(frame) = frame {
+            if !self.speaking {
+                self.microphone_at_reply = Some(sent);
+            }
             self.forward(tx, frame).await?;
         }
         Ok(())
@@ -467,7 +434,7 @@ async fn produce<L: EchoLink>(
                 Err(error) => return Err(error.into()),
             },
             frame = pacer.next_frame(&mut source.queue), if !source.queue.is_empty() => {
-                context.forward_available(&tx, frame).await?;
+                context.forward_available(&tx, frame, source.sent).await?;
             }
         }
     }

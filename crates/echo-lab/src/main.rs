@@ -8,7 +8,7 @@ mod lab_validate;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "echo-lab validate [paths...]\necho-lab check --milestone M0\necho-lab probe --adb <path-to-adb> --out <dir>\necho-lab calibrate --adb <path> [--serial <s>] --out <dir> [--timeout-secs 120]\necho-lab run <scenario>... --driver device --bench ring --port <path> --adb <path> --stt <command> [--ring <id>] [--out <fresh-dir>] [--python <path>] [--keep-audio] [--cancel-file <path>] [--speech-endpoint <id> --speech-model <model>]\necho-lab run <scenario> --driver sim --bridge <executable-path> [--out <fresh-dir>] [--python <path>] [--cancel-file <path>]\necho-lab run --all --driver sim [--out <fresh-root>] [--python <path>] [--cancel-file <path>]\necho-lab --help";
+const USAGE: &str = "echo-lab validate [paths...]\necho-lab check --milestone M0|M3\necho-lab probe --adb <path-to-adb> --out <dir>\necho-lab calibrate --adb <path> [--serial <s>] --out <dir> [--timeout-secs 120]\necho-lab run <scenario>... --driver device --bench ring --port <path> --adb <path> --stt <command> [--ring <id>] [--out <fresh-dir>] [--python <path>] [--keep-audio] [--cancel-file <path>] [--speech-endpoint <id> --speech-model <model>]\necho-lab run <scenario> --driver sim --bridge <executable-path> [--out <fresh-dir>] [--python <path>] [--cancel-file <path>]\necho-lab run --all --driver sim [--out <fresh-root>] [--python <path>] [--cancel-file <path>]\necho-lab --help";
 
 fn dispatch(args: &[String], output: &mut impl Write) -> io::Result<bool> {
     match args {
@@ -19,6 +19,17 @@ fn dispatch(args: &[String], output: &mut impl Write) -> io::Result<bool> {
         [command, paths @ ..] if command == "validate" => lab_validate::validate(paths, output),
         [command, flag, milestone] if command == "check" && flag == "--milestone" && milestone == "M0" => {
             lab_check::check(output)
+        }
+        [command, flag, milestone] if command == "check" && flag == "--milestone" && milestone == "M3" => {
+            Ok(lab_run::run(
+                &[
+                    "tests/scenarios/m3-full-duplex.yaml".into(),
+                    "--driver".into(),
+                    "sim".into(),
+                ],
+                output,
+                &mut io::stderr().lock(),
+            ) == 0)
         }
         _ => {
             writeln!(output, "invalid arguments or unsupported milestone\n{USAGE}")?;
