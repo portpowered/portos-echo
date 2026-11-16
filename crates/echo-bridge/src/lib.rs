@@ -36,8 +36,11 @@ impl From<echo_audio::AudioError> for Error {
     }
 }
 impl From<echo_wyoming::Error> for Error {
-    fn from(_: echo_wyoming::Error) -> Self {
-        Self::Wyoming
+    fn from(error: echo_wyoming::Error) -> Self {
+        match error {
+            echo_wyoming::Error::Timeout => Self::Deadline,
+            _ => Self::Wyoming,
+        }
     }
 }
 impl From<echo_live::call::CallError> for Error {

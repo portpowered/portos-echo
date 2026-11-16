@@ -12,6 +12,13 @@ use tokio::{
     process::{Child, ChildStdin, ChildStdout, Command},
 };
 
+#[path = "bridge_support/bridge_peer.rs"]
+mod bridge_peer;
+#[path = "bridge_support/bridge_short.rs"]
+mod bridge_short;
+#[path = "bridge_support/bridge_spine_edges.rs"]
+mod bridge_spine_edges;
+
 struct Process {
     child: Child,
     input: Option<ChildStdin>,
@@ -210,15 +217,78 @@ async fn bridge_spine_host_echo_health_and_eof() {
 #[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_spine_authorization_is_safe_and_never_played() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("trace");
-    let fake = FakeLive::bind(FakeScript {
-        events: vec![],
-        response: FakeResponse::Http {
+    failed_call(
+        FakeResponse::Http {
             status: 401,
             body: "synthetic private body".into(),
             location: None,
         },
+        vec![],
+        "authorization",
+    )
+    .await;
+}
+
+async fn failed_call(response: FakeResponse, events: Vec<String>, reason: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let fake = FakeLive::bind(FakeScript { events, response }).await.unwrap();
+    let (_satellite, mut bridge) = bridge_short::satellite(&fake.base_url(), &path).await;
+    // Keep stdin open: operational failure must not wait for the control reader.
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(12), bridge.child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .code(),
+        Some(1)
+    );
+    let entries = trace(&path);
+    assert_eq!(entries.last().unwrap()["reason"], reason);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 0);
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("synthetic private body")
+    );
+    fake.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_spine_provider_outage_is_safe_and_never_played() {
+    failed_call(
+        FakeResponse::Http {
+            status: 503,
+            body: "synthetic private body".into(),
+            location: None,
+        },
+        vec![],
+        "unavailable",
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_spine_provider_stall_has_a_deadline() {
+    failed_call(FakeResponse::StallHttp, vec![], "deadline").await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_spine_malformed_event_is_safe_and_never_played() {
+    failed_call(FakeResponse::Answer, vec!["synthetic private body".into()], "decode").await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_spine_empty_explicit_completion_waits_for_host_played() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bridge.jsonl");
+    let fake = FakeLive::bind(FakeScript {
+        events: vec![json!({"type":"response.audio.done"}).to_string()],
+        response: FakeResponse::Answer,
     })
     .await
     .unwrap();
@@ -227,23 +297,14 @@ async fn bridge_spine_authorization_is_safe_and_never_played() {
     let mut bridge = Process::spawn(&mut bridge(&port, &fake.base_url(), &path));
     assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
     assert_eq!(host.command("wake").await, "wake");
-    // Keep stdin open: operational failure must not wait for the control reader.
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(8), bridge.child.wait())
-            .await
-            .unwrap()
-            .unwrap()
-            .code(),
-        Some(1)
+        serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
+        json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
     let entries = trace(&path);
-    assert_eq!(entries.last().unwrap()["reason"], "authorization");
-    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 0);
-    assert!(
-        !std::fs::read_to_string(&path)
-            .unwrap()
-            .contains("synthetic private body")
-    );
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 1);
+    assert_eq!(host.command("pcm").await, "0 0");
+    bridge.finish(0).await;
     host.finish(0).await;
     fake.shutdown().await;
 }

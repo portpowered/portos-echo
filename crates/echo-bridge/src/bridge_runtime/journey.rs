@@ -24,6 +24,7 @@ struct Source {
     received: u64,
     acknowledged: u64,
     finished: bool,
+    audio_done: bool,
     reply: Reply,
     queue: FrameQueue<Vec<u8>>,
     partial: Vec<u8>,
@@ -38,6 +39,7 @@ impl Source {
             received: 0,
             acknowledged: 0,
             finished: false,
+            audio_done: false,
             reply: Reply::new()?,
             queue: FrameQueue::new(NonZeroUsize::new(128).ok_or(Error::Audio)?),
             partial: Vec::with_capacity(960),
@@ -99,6 +101,12 @@ impl Source {
     fn event(&mut self, event: LiveEvent, lab: bool) -> Result<(), Error> {
         match event {
             LiveEvent::Error { .. } => Err(Error::Unavailable),
+            // Provisional passthrough vocabulary selected by the packet. M2 owns
+            // captured provider compatibility; unknown events never close audio.
+            LiveEvent::Other(value) if value["type"] == "response.audio.done" => {
+                self.audio_done = true;
+                Ok(())
+            }
             LiveEvent::Other(value) if lab && value["type"] == "fake.audio.frames" => {
                 self.acknowledged = value["count"].as_u64().ok_or(Error::Decode)?;
                 Ok(())
@@ -122,13 +130,22 @@ pub(super) async fn run(
     trace.record("reply.started", Some(id), json!({}))?;
     let play = client.play(bridge_audio::format(24_000), rx);
     let producer = produce(&mut source, &mut run, call, tx, lab);
-    let (_, (), ()) = tokio::try_join!(
-        async { play.await.map_err(Error::from) },
-        producer,
-        super::played(events)
-    )?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::try_join!(
+            async { play.await.map_err(Error::from) },
+            producer,
+            super::played(events)
+        )
+    })
+    .await
+    .map_err(|_| Error::Deadline)??;
     trace.record("reply.played", Some(id), json!({"outcome":"played"}))?;
-    while run.recv().await?.is_some() {}
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while run.recv().await?.is_some() {}
+        Ok::<_, Error>(())
+    })
+    .await
+    .map_err(|_| Error::Deadline)??;
     let stats = run.stats();
     trace.record("wyoming.mic_frames", Some(id), json!({"count":stats.received}))?;
     let (samples, tail) = source
@@ -156,8 +173,13 @@ async fn produce(
     let mut completed = false;
     loop {
         source.receive(call)?;
-        if !completed && lab && source.finished && source.received == source.sent && source.acknowledged == source.sent
-        {
+        let echo_done = lab
+            && source.finished
+            && source.sent > 0
+            && source.received == source.sent
+            && source.acknowledged == source.sent;
+        if !completed && (source.audio_done || echo_done) {
+            source.finish_mic(call).await?;
             let bytes = source.reply.finish()?;
             source.enqueue(&bytes);
             completed = true;
@@ -192,4 +214,72 @@ async fn send(call: &mut LiveCall, packets: Vec<AudioFrame>) -> Result<u64, Erro
         count += 1;
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod bridge_spine_tests {
+    use super::*;
+
+    #[test]
+    fn bridge_spine_only_explicit_completion_closes_audio() {
+        let mut source = Source::new().unwrap();
+        for value in [
+            json!({"type":"future.event"}),
+            json!({"type":"response.done"}),
+            json!({}),
+        ] {
+            source.event(LiveEvent::Other(value), false).unwrap();
+            assert!(!source.audio_done);
+        }
+        source
+            .event(LiveEvent::Other(json!({"type":"response.audio.done"})), false)
+            .unwrap();
+        assert!(source.audio_done);
+        assert_eq!(source.queue.len(), 0);
+        assert_eq!(source.reply.finish().unwrap(), Vec::<u8>::new());
+        assert_eq!(
+            source.event(
+                LiveEvent::Error {
+                    extra: std::collections::BTreeMap::default()
+                },
+                false
+            ),
+            Err(Error::Unavailable)
+        );
+    }
+
+    #[test]
+    fn bridge_spine_echo_acknowledgment_is_lab_only_and_validated() {
+        let mut source = Source::new().unwrap();
+        let event = LiveEvent::Other(json!({"type":"fake.audio.frames","count":3}));
+        source.event(event.clone(), false).unwrap();
+        assert_eq!(source.acknowledged, 0);
+        source.event(event, true).unwrap();
+        assert_eq!(source.acknowledged, 3);
+        for count in [json!(-1), json!("3"), json!(null)] {
+            assert_eq!(
+                source.event(
+                    LiveEvent::Other(json!({"type":"fake.audio.frames","count":count})),
+                    true
+                ),
+                Err(Error::Decode)
+            );
+        }
+        assert!(!source.audio_done);
+    }
+
+    #[test]
+    fn bridge_spine_reply_queue_keeps_newest_complete_frames_and_tail() {
+        let mut source = Source::new().unwrap();
+        for value in 0..130_u8 {
+            source.enqueue(&vec![value; 960]);
+        }
+        source.enqueue(&[255; 13]);
+        assert_eq!(source.partial, vec![255; 13]);
+        assert_eq!(source.queue.drop_count(), 2);
+        for value in 2..130_u8 {
+            assert_eq!(source.queue.pop(), Some(vec![value; 960]));
+        }
+        assert_eq!(source.queue.pop(), None);
+    }
 }
