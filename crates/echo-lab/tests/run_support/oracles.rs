@@ -69,11 +69,10 @@ fn f13_f14_f20_f23_f29_b0_pass_fail_frame_and_audio_privacy() {
             fs::read(session.0.join("artifacts/light-ring.jpg")).unwrap(),
             include_bytes!("../../../../tests/goldens/lab-frame.jpg")
         );
-        for name in ["alignment.wav", "reply-0.wav"] {
-            assert_eq!(session.0.join("artifacts").join(name).exists(), keep || !pass);
-        }
+        assert!(!session.0.join("artifacts/alignment.wav").exists());
+        assert_eq!(session.0.join("artifacts/reply-0.wav").exists(), keep || !pass);
         let operations = session.operations();
-        for op in ["hold", "chirp", "play", "record", "snapshot", "stt", "release"] {
+        for op in ["hold", "play", "record", "snapshot", "stt", "release"] {
             assert_eq!(operations.iter().filter(|v| v.as_str() == op).count(), 1, "{op}");
         }
         let at = |op| operations.iter().position(|v| v == op).unwrap();
@@ -177,7 +176,7 @@ fn f16_f26_stt_absent_failure_empty_and_no_reply_fail_without_raw_output() {
     let session = Session::new(&json!({}));
     session.scenario("one.yaml", &json!([{"expect_speech_contains":["expected"]}]));
     failed(&session.run(&[]), "no recorded reply");
-    assert_eq!(session.operations(), ["digest", "firmware"]);
+    assert_eq!(session.operations(), ["digest", "firmware", "firmware", "firmware"]);
     let session = Session::new(&json!({}));
     session.scenario(
         "one.yaml",
@@ -323,8 +322,11 @@ fn f18_equal_decoded_pixels_pass_with_different_png_encoding_and_preserve_raw_by
     let (session, bytes) = screen_session("equal", false);
     assert_ne!(bytes, include_bytes!("../../../../tests/goldens/lab-screen.png"));
     success(&session.run(&[]));
-    assert_eq!(session.operations(), ["digest", "firmware", "screencap", "pixels"]);
-    assert_eq!(session.ledger()[2]["args"], json!(["exec-out", "screencap", "-p"]));
+    assert_eq!(
+        session.operations(),
+        ["digest", "firmware", "firmware", "firmware", "screencap", "pixels"]
+    );
+    assert_eq!(session.ledger()[4]["args"], json!(["exec-out", "screencap", "-p"]));
     assert_eq!(fs::read(session.0.join("artifacts/screen-0.png")).unwrap(), bytes);
     assert_eq!(session.report()["evidence"], json!(["events.jsonl", "screen-0.png"]));
     assert_eq!(session.report()["checks"]["step_0"], true);
@@ -382,7 +384,7 @@ fn assert_isolated_b0(session: &Session, other: &Session) {
     );
     assert_eq!(report["evidence"], json!(["events.jsonl", "light-ring.jpg"]));
     let operations = session.operations();
-    for op in ["hold", "chirp", "play", "record", "snapshot", "stt", "release"] {
+    for op in ["hold", "play", "record", "snapshot", "stt", "release"] {
         assert_eq!(operations.iter().filter(|v| v.as_str() == op).count(), 1, "{op}");
     }
     assert_capture_argv(session);

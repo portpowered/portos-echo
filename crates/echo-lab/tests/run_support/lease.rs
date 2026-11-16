@@ -24,8 +24,8 @@ fn holds() -> Value {
 }
 
 #[test]
-fn f08_rotate_before_ceiling_wait_exactly_25_seconds_and_chirp_only_once() {
-    let session = Session::new(&json!({"times":[0,0,0,659_000,684_000,684_000],"holds":holds()}));
+fn f08_rotate_before_ceiling_wait_exactly_25_seconds_without_chirp() {
+    let session = Session::new(&json!({"times":[0,0,600_000,625_000,625_000],"holds":holds()}));
     session.scenario("two.yaml", &json!([{"say":"utterance.wav"}]));
     let output = session.run(&["two.yaml"]);
     assert_eq!(
@@ -37,23 +37,48 @@ fn f08_rotate_before_ceiling_wait_exactly_25_seconds_and_chirp_only_once() {
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "reply", "firmware",
-            "clock", "release", "wait", "clock", "hold", "clock", "play", "reply", "release"
+            "digest",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "reply",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "wait_until",
+            "release",
+            "wait",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "reply",
+            "wait_until",
+            "release"
         ]
     );
     let ledger = session.ledger();
     assert_eq!(
-        ledger[12]["args"],
+        ledger[14]["args"],
         json!(["session", "release", "fixture-first", "--json"])
     );
-    assert_eq!(ledger[13]["args"], json!(["-c", "<host-helper>", "wait", "25000"]));
-    assert_eq!(ledger[17]["args"][4], "fixture-second-lease");
+    assert_eq!(ledger[15]["args"], json!(["-c", "<host-helper>", "wait", "25000"]));
+    assert_eq!(ledger[19]["args"][4], "fixture-second-lease");
     assert_eq!(
         session.report()["bench_session_ids"],
         json!(["batch-hold-1", "batch-hold-2"])
     );
+    assert_rotation_events(&session);
+}
+
+fn assert_rotation_events(session: &Session) {
     assert_eq!(
-        events(&session),
+        events(session),
         [
             "run_started",
             "step_started",
@@ -84,8 +109,27 @@ fn f09_confirmed_preemption_retries_only_the_interrupted_step_with_new_lease() {
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "status", "release",
-            "firmware", "clock", "hold", "clock", "play", "reply", "release"
+            "digest",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "wait_until",
+            "status",
+            "release",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "reply",
+            "wait_until",
+            "release"
         ]
     );
     let ledger = session.ledger();
@@ -93,7 +137,7 @@ fn f09_confirmed_preemption_retries_only_the_interrupted_step_with_new_lease() {
         ledger[9]["args"],
         json!(["session", "status", "fixture-first", "--json"])
     );
-    assert_eq!(ledger[15]["args"][4], "fixture-second-lease");
+    assert_eq!(ledger[17]["args"][4], "fixture-second-lease");
     assert_eq!(
         session.report()["bench_session_ids"],
         json!(["batch-hold-1", "batch-hold-2"])
@@ -122,8 +166,27 @@ fn f10_second_preemption_fails_without_a_third_hold_or_retry() {
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "status", "release",
-            "firmware", "clock", "hold", "clock", "play", "status", "release"
+            "digest",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "wait_until",
+            "status",
+            "release",
+            "firmware",
+            "firmware",
+            "firmware",
+            "clock",
+            "hold",
+            "clock",
+            "play",
+            "wait_until",
+            "status",
+            "release"
         ]
     );
     assert_eq!(
@@ -134,7 +197,7 @@ fn f10_second_preemption_fails_without_a_third_hold_or_retry() {
 }
 
 #[test]
-fn f11_cancel_kills_stalled_child_and_releases_once_without_running_next_step() {
+fn f11_cancel_kills_stalled_child_without_dispatching_unsafe_cleanup() {
     let session = Session::new(&json!({"cancel_on":"play"}));
     session.scenario("two.yaml", &json!([{"say":"utterance.wav"}]));
     failed(
@@ -144,26 +207,29 @@ fn f11_cancel_kills_stalled_child_and_releases_once_without_running_next_step() 
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "play", "release"
+            "digest", "firmware", "firmware", "firmware", "clock", "hold", "clock", "play"
         ]
     );
     assert_eq!(
         session.report()["checks"],
-        json!({"step_0":false,"session_released":true})
+        json!({"step_0":false,"session_released":false})
     );
     assert_eq!(events(&session).last().unwrap(), "run_failed");
 }
 
 #[test]
 fn f11_primary_and_cleanup_errors_are_both_visible() {
-    let session = Session::new(&json!({"cancel_on":"play","fail":"release"}));
+    let session = Session::new(&json!({"cancel_on":"play"}));
     let output = session.run(&["--cancel-file", "cancel.signal"]);
-    failed(&output, "cancelled; child reaped; cleanup: port session release failed");
+    failed(
+        &output,
+        "cancelled; child reaped; cleanup: port session release failed: playback completion unknown; coordinator recovery required",
+    );
     assert_eq!(
         session.report()["checks"],
         json!({"step_0":false,"session_released":false})
     );
-    assert_eq!(session.operations().iter().filter(|s| *s == "release").count(), 1);
+    assert_eq!(session.operations().iter().filter(|s| *s == "release").count(), 0);
 }
 
 #[test]
@@ -172,7 +238,7 @@ fn ordinary_failure_or_untrusted_preemption_status_never_retries() {
         json!({"holds":[]}),
         json!({"holds":[{"id":"other-hold","ending":{"reason":"preempted"}}]}),
     ] {
-        let session = Session::new(&json!({"fail":"play","status":status}));
+        let session = Session::new(&json!({"preemptions":1,"status":status}));
         failed(&session.run(&[]), "play:");
         assert_eq!(session.operations().iter().filter(|s| *s == "hold").count(), 1);
         assert_eq!(session.report()["result"], "fail");
@@ -182,13 +248,13 @@ fn ordinary_failure_or_untrusted_preemption_status_never_retries() {
 #[test]
 fn renewal_and_retry_recheck_quiet_hours_without_repeating_chirp() {
     for fixture in [
-        json!({"times":[0,0,659_000,684_000],"hours":[9,9,9,8]}),
-        json!({"preemptions":1,"hours":[9,9,9,8]}),
+        json!({"times":[0,600_000,625_000],"hours":[9,9,8]}),
+        json!({"preemptions":1,"hours":[9,9,8]}),
     ] {
         let session = Session::new(&fixture);
         failed(&session.run(&[]), "before 09:00"); // lint-rules: allow-literal expected renewal/retry quiet-hours diagnostic
         assert_eq!(session.operations().iter().filter(|s| *s == "hold").count(), 1);
-        assert_eq!(session.operations().iter().filter(|s| *s == "chirp").count(), 1);
+        assert_eq!(session.operations().iter().filter(|s| *s == "chirp").count(), 0);
         assert_eq!(session.operations().iter().filter(|s| *s == "release").count(), 1);
         assert_eq!(session.report()["result"], "fail");
     }
@@ -196,12 +262,12 @@ fn renewal_and_retry_recheck_quiet_hours_without_repeating_chirp() {
 
 #[test]
 fn failed_rotation_release_never_reopens_or_claims_cleanup_success() {
-    let session = Session::new(&json!({"times":[0,0,659_000],"fail":"release"}));
+    let session = Session::new(&json!({"times":[0,600_000],"fail":"release"}));
     failed(&session.run(&[]), "release failed");
     assert_eq!(
         session.operations(),
         [
-            "digest", "firmware", "clock", "hold", "clock", "chirp", "reply", "clock", "release"
+            "digest", "firmware", "firmware", "firmware", "clock", "hold", "clock", "release"
         ]
     );
     assert_eq!(session.report()["checks"]["session_released"], false);
@@ -221,5 +287,59 @@ fn f12_release_requires_confirmation_for_the_matching_ended_hold() {
             json!({"step_0":true,"session_released":false})
         );
         assert_eq!(session.operations().iter().filter(|s| *s == "release").count(), 1);
+    }
+}
+
+// T3: response loss after a synthetic queue must never authorize another held command.
+#[test]
+fn b0_lost_play_response_retains_unknown_completion_and_primary_error() {
+    for frame in [false, true] {
+        for (fixture, primary) in [
+            (
+                json!({"fail":"play"}),
+                "selected tool failed or exceeded output limit; child output discarded",
+            ),
+            (json!({"cancel_on":"play"}), "run cancelled; child reaped"),
+            (json!({"malformed":"play"}), "port: malformed JSON"),
+            (
+                json!({"oversized":"play"}),
+                "selected tool failed or exceeded output limit; child output discarded",
+            ),
+        ] {
+            let session = Session::new(&fixture);
+            let mut steps = vec![json!({"say":"utterance.wav"})];
+            if frame {
+                steps.push(json!({"expect_frame":"frame.jpg"}));
+            }
+            steps.extend([
+                json!({"expect_speech_contains":["time"]}),
+                json!({"say":"utterance.wav"}),
+            ]);
+            session.scenario("one.yaml", &json!(steps));
+            let output = session.run(&["--cancel-file", "cancel.signal"]);
+            failed(&output, primary);
+            assert_eq!(
+                String::from_utf8(output.stderr).unwrap(),
+                format!(
+                    "echo-lab: play: {primary}; cleanup: port session release failed: playback completion unknown; coordinator recovery required\n"
+                )
+            );
+            assert_eq!(
+                fs::read(session.0.join("play-queued")).unwrap(),
+                b"synthetic queued playback"
+            );
+            assert_eq!(
+                session.operations(),
+                [
+                    "digest", "firmware", "firmware", "firmware", "clock", "hold", "clock", "play"
+                ]
+            );
+            assert_eq!(session.ledger().last().unwrap()["wall_ms"], 1_794_733_200_000_i64);
+            assert_eq!(
+                session.report()["checks"],
+                json!({"step_0":false,"session_released":false})
+            );
+            assert_eq!(session.report()["result"], "fail");
+        }
     }
 }

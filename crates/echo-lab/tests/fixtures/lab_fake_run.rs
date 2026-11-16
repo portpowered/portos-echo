@@ -9,7 +9,6 @@ fn operation(args: &[String]) -> &str {
         Some("exec-out") => "screencap",
         Some("-c") => args.get(2).map_or("unknown", String::as_str),
         Some("session") => args.get(1).map_or("unknown", String::as_str),
-        Some("message") if args.iter().any(|a| a == "--chirp") => "chirp",
         Some("message") if args.get(1).is_some_and(|v| v == "snapshot") => "snapshot",
         Some("message") if args.get(1).is_some_and(|v| v == "record") => "record",
         Some("message") => "play",
@@ -37,11 +36,29 @@ fn recording(path: &str) -> io::Result<()> {
     fs::write(path, data)
 }
 
+fn wait_until(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
+    let target = args.get(3).ok_or("missing end")?;
+    let script = "import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')); assert t.tzinfo is not None; print(round(t.timestamp()*1000))"; // lint-rules: allow-literal synthetic timestamp parsing fixture, never a network target
+    let output = std::process::Command::new("python")
+        .args(["-c", script, target])
+        .output()?;
+    if !output.status.success() {
+        return Err("invalid end".into());
+    }
+    let end: i64 = std::str::from_utf8(&output.stdout)?.trim().parse()?;
+    let now: i64 = fs::read_to_string("wall-ms")
+        .unwrap_or_else(|_| "1794733200000".into())
+        .parse()?;
+    fs::write("wall-ms", now.max(end).to_string())?;
+    Ok(json!({"reached":true}))
+}
+
 fn response(op: &str, args: &[String], fixture: &Value) -> Result<Value, Box<dyn std::error::Error>> {
     Ok(match op {
         "hold" => json!({"holdId":"fixture-hold", "lease":"fixture-lease", "listening":true, "talking":true}),
         "release" => json!({"holds":[{"id":args.get(2),"state":"ended"}]}),
         "status" => json!({"holds":[{"id":"fixture-hold","state":"live"}]}),
+        "wait_until" => wait_until(args)?,
         "wait" => json!({"waited_ms":25000}),
         "clock" => json!({"hour":fixture.get("hour").unwrap_or(&json!(9)),"monotonic_ms":0}),
         "digest" => json!({"sha256":"a".repeat(64)}),
@@ -72,7 +89,7 @@ fn response(op: &str, args: &[String], fixture: &Value) -> Result<Value, Box<dyn
             }
             json!({"success":true,"hasAudio":true})
         }
-        "chirp" | "play" => {
+        "play" => {
             let Some(index) = args.iter().position(|a| a == "--output") else {
                 return Ok(json!({"held":true,"playEndedAt":"2026-11-15T09:00:00.500Z"}));
             };
@@ -145,7 +162,10 @@ fn ledger(op: &str, args: &[String]) -> Result<usize, Box<dyn std::error::Error>
         })
         .collect();
     // One append write keeps concurrent recording/snapshot JSON lines intact.
-    let entry = format!("{}\n", json!({"operation":op, "args":ledger_args}));
+    let wall: i64 = fs::read_to_string("wall-ms")
+        .unwrap_or_else(|_| "1794733200000".into())
+        .parse()?;
+    let entry = format!("{}\n", json!({"operation":op, "args":ledger_args, "wall_ms":wall}));
     OpenOptions::new()
         .create(true)
         .append(true)
@@ -154,12 +174,29 @@ fn ledger(op: &str, args: &[String]) -> Result<usize, Box<dyn std::error::Error>
     Ok(count)
 }
 
+// A completed play response with no recording permits a safe status probe.
+fn completed_without_recording() -> Result<u8, Box<dyn std::error::Error>> {
+    writeln!(
+        io::stdout(),
+        "{}",
+        json!({"held":true,"playEndedAt":"2026-11-15T09:00:00.500Z"})
+    )?;
+    Ok(0)
+}
+
 fn run() -> Result<u8, Box<dyn std::error::Error>> {
     let fixture: Value = serde_json::from_slice(&fs::read(std::env::var("ECHO_LAB_RUN_FIXTURE")?)?)?;
     let args: Vec<_> = std::env::args().skip(1).collect();
     let op = operation(&args);
     let count = ledger(op, &args)?;
-    if fixture["cancel_on"] == op {
+    if op == "play" {
+        fs::write("play-queued", b"synthetic queued playback")?;
+    }
+    if fixture["oversized"] == op {
+        io::stdout().write_all(&vec![b'x'; 1024 * 1024 + 1])?;
+        return Ok(0);
+    }
+    if fixture["cancel_on"] == op && (fixture["cancel_once"] != true || count == 0) {
         fs::write("cancel.signal", b"cancel")?;
         // Explicit fixture notification, then remain blocked until killed.
         loop {
@@ -167,18 +204,13 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
         }
     }
     if op == "play" && u64::try_from(count).unwrap_or(u64::MAX) < fixture["preemptions"].as_u64().unwrap_or(0) {
-        return Ok(1);
+        return completed_without_recording();
     }
     if fixture["fail"] == op {
         io::stderr().write_all(b"fixture-private-child-output")?;
         return Ok(1);
     }
     if op == "snapshot" {
-        if fixture["record_waits_for_frame"] == true {
-            while !std::path::Path::new("record-ready").exists() {
-                std::thread::yield_now();
-            }
-        }
         fs::write("frame-ready", b"ready")?;
     }
     if fixture["real_pixels"] == true && op == "pixels" {
@@ -196,7 +228,12 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
         let file = fixture["screencap_file"].as_str().ok_or("missing screencap fixture")?;
         io::stdout().write_all(&fs::read(file)?)?;
     } else if op == "firmware" {
-        writeln!(io::stdout(), "{}", fixture["build"].as_str().unwrap_or("0036811211140"))?;
+        let value = match args.get(2).map(String::as_str) {
+            Some("ro.bootmode") => fixture["bootmode"].as_str().unwrap_or("normal"),
+            Some("sys.boot_completed") => fixture["boot_completed"].as_str().unwrap_or("1"),
+            _ => fixture["build"].as_str().unwrap_or("0036811211140"),
+        };
+        writeln!(io::stdout(), "{value}")?;
     } else if fixture["malformed"] == op {
         io::stdout().write_all(b"not JSON fixture-private-child-output")?;
     } else {

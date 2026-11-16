@@ -60,9 +60,42 @@ impl LeaseClock {
     }
 }
 
+/// A queued clip retains its deadline until the host confirms eligibility.
+#[derive(Default)]
+pub struct PlaybackGate {
+    pub pending: Option<String>,
+}
+
+impl PlaybackGate {
+    pub fn acknowledge(&mut self, reached: bool) -> Result<(), String> {
+        if !reached {
+            return Err("playback wait: completion not reached".into());
+        }
+        self.pending = None;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_gate_retains_pending_end_until_confirmed() {
+        let mut gate = PlaybackGate::default();
+        assert_eq!(gate.pending, None);
+        gate.pending = Some("2026-11-15T09:00:00.500Z".into());
+        assert_eq!(
+            gate.acknowledge(false),
+            Err("playback wait: completion not reached".into())
+        );
+        assert_eq!(gate.pending.as_deref(), Some("2026-11-15T09:00:00.500Z"));
+        assert_eq!(gate.acknowledge(true), Ok(()));
+        assert_eq!(gate.pending, None);
+        gate.pending = Some(String::new());
+        assert!(gate.acknowledge(false).is_err());
+        assert_eq!(gate.pending, Some(String::new()));
+    }
 
     #[test]
     fn budgets_never_extend_and_clock_regressions_fail_closed() {

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::run_command::{argv, cancelled, controlled};
-use super::run_lease::LeaseClock;
+use super::run_lease::{LeaseClock, PlaybackGate};
 use super::run_options::Options;
 use super::run_report::Artifacts;
 use super::{Driver, Step};
@@ -10,11 +10,12 @@ pub struct Device<'a> {
     options: &'a Options,
     hold: Option<(String, String)>,
     clock: LeaseClock,
-    aligned: bool,
+    playback_end: std::cell::RefCell<PlaybackGate>,
     release_failed: bool,
     reply: Option<PathBuf>,
     pending: Option<super::run_command::Pending>,
     capture_window: bool,
+    deferred_reply: bool,
 }
 
 impl<'a> Device<'a> {
@@ -23,33 +24,43 @@ impl<'a> Device<'a> {
             options,
             hold: None,
             clock: LeaseClock::new(),
-            aligned: false,
+            playback_end: std::cell::RefCell::new(PlaybackGate::default()),
             release_failed: false,
             reply: None,
             pending: None,
             capture_window: false,
+            deferred_reply: false,
         }
     }
 
     fn firmware(&self) -> Result<(), String> {
-        let args = ["shell", "getprop", "ro.build.version.incremental"].map(str::to_owned);
-        let output = controlled(
-            &self.options.adb,
-            &args,
-            self.clock.deadline(false),
-            self.options.cancel.as_deref(),
-        )
-        .map_err(|error| format!("firmware: {error}"))?;
-        let build = std::str::from_utf8(&output)
-            .map_err(|_| "firmware: malformed build")?
-            .trim();
+        let build = self.property("ro.build.version.incremental")?;
         if !include_str!("../../data/probed-builds.txt")
             .lines()
             .any(|known| known == build)
         {
             return Err("firmware: build is not in probed-builds.txt; coordinator probe required".into());
         }
+        let mode = self.property("ro.bootmode")?;
+        let completed = self.property("sys.boot_completed")?;
+        if mode != "normal" || completed != "1" {
+            return Err(format!("firmware: Echo is not booted to Android (bootmode {mode})"));
+        }
         Ok(())
+    }
+
+    fn property(&self, name: &str) -> Result<String, String> {
+        let output = controlled(
+            &self.options.adb,
+            &["shell".into(), "getprop".into(), name.into()],
+            self.clock.deadline(false),
+            self.options.cancel.as_deref(),
+        )
+        .map_err(|error| format!("firmware: {error}"))?;
+        Ok(std::str::from_utf8(&output)
+            .map_err(|_| "firmware: malformed property")?
+            .trim()
+            .to_owned())
     }
 
     fn host(&self, operation: &str, args: &[String]) -> Result<serde_json::Value, String> {
@@ -102,22 +113,65 @@ impl<'a> Device<'a> {
         artifacts
             .sessions
             .push(format!("batch-hold-{}", artifacts.sessions.len() + 1));
-        if !self.aligned {
-            let path = artifacts.root.join("alignment.wav");
-            self.play("chirp", &[], &path, artifacts)?;
-            self.aligned = true;
-        }
         Ok(())
     }
 
     fn port(&self, operation: &str, values: &[(&str, &str)], cleanup: bool) -> Result<serde_json::Value, String> {
-        let output = controlled(
+        let output = self.start_port(operation, values, cleanup)?.finish()?;
+        let playing = matches!(operation, "file" | "text" | "file_only" | "text_only");
+        let value: serde_json::Value = serde_json::from_slice(&output).map_err(|_| "port: malformed JSON")?;
+        if playing {
+            if value["held"] != true {
+                return Err("play: missing held playback completion".into());
+            }
+            let end = value["playEndedAt"]
+                .as_str()
+                .ok_or("play: missing playback end timestamp")?;
+            self.playback_end.borrow_mut().pending = Some(end.to_owned());
+        }
+        Ok(value)
+    }
+
+    fn start_port(
+        &self,
+        operation: &str,
+        values: &[(&str, &str)],
+        cleanup: bool,
+    ) -> Result<super::run_command::Pending, String> {
+        let pending = self.playback_end.borrow().pending.clone();
+        if let Some(end) = pending.as_ref() {
+            if end.is_empty() {
+                return Err("playback completion unknown; coordinator recovery required".into());
+            }
+            let args = vec![
+                "-c".into(),
+                super::run_command::HOST.into(),
+                "wait_until".into(),
+                end.clone(),
+            ];
+            let output = controlled(
+                Path::new(&self.options.python),
+                &args,
+                self.clock.deadline(cleanup),
+                if cleanup { None } else { self.options.cancel.as_deref() },
+            )
+            .map_err(|error| format!("playback wait: {error}"))?;
+            let value: serde_json::Value =
+                serde_json::from_slice(&output).map_err(|_| "playback wait: malformed JSON")?;
+            self.playback_end.borrow_mut().acknowledge(value["reached"] == true)?;
+        }
+        self.playback_end.borrow_mut().pending = None;
+        let child = super::run_command::Pending::start(
             &self.options.port,
             &argv(operation, values)?,
             self.clock.deadline(cleanup),
             if cleanup { None } else { self.options.cancel.as_deref() },
         )?;
-        serde_json::from_slice(&output).map_err(|_| "port: malformed JSON".into())
+        if matches!(operation, "file" | "text" | "file_only" | "text_only") {
+            // Launch can queue remote audio even if waiting for the CLI later fails.
+            self.playback_end.borrow_mut().pending = Some(String::new());
+        }
+        Ok(child)
     }
 
     fn rotate(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
@@ -152,14 +206,14 @@ impl<'a> Device<'a> {
             ("{output}", output),
         ];
         values.extend_from_slice(extra);
-        if operation != "chirp" && self.capture_window {
+        if self.capture_window {
             return self.play_then_record(operation, &values, path);
         }
         let result = self
             .port(operation, &values, false)
             .map_err(|error| self.play_error(&error))?;
         if result["held"] != true || !path.is_file() {
-            return Err("play: missing held recording".into());
+            return Err(self.play_error("missing held recording"));
         }
         let mut trim = vec![output.to_owned()];
         for key in ["playStartedAt", "playEndedAt", "recordStartedAt", "recordEndedAt"] {
@@ -176,9 +230,7 @@ impl<'a> Device<'a> {
         if reply["reply_frames"].as_u64().is_none_or(|frames| frames == 0) {
             return Err("play: no post-playback reply audio".into());
         }
-        if operation != "chirp" {
-            self.reply = Some(path.to_path_buf());
-        }
+        self.reply = Some(path.to_path_buf());
         Ok(())
     }
 
@@ -203,20 +255,34 @@ impl Device<'_> {
         let result = self
             .port(&format!("{operation}_only"), values, false)
             .map_err(|e| self.play_error(&e))?;
-        if result["held"] != true || result["playEndedAt"].as_str().is_none() {
+        if result["held"] != true {
             return Err("play: missing held playback completion".into());
         }
-        self.audio_allowed()?;
-        self.pending = Some(
-            super::run_command::Pending::start(
-                &self.options.port,
-                &argv("record", values)?,
-                self.clock.deadline(false),
-                self.options.cancel.as_deref(),
-            )
-            .map_err(|_| "record: cannot start held reply capture")?,
-        );
         self.reply = Some(path.to_path_buf());
+        self.deferred_reply = true;
+        Ok(())
+    }
+
+    fn start_reply(&mut self) -> Result<(), String> {
+        if !self.deferred_reply {
+            return Ok(());
+        }
+        self.deferred_reply = false;
+        self.audio_allowed()?;
+        let (_, lease) = self.hold.as_ref().ok_or("record: no held session")?;
+        let path = self.reply.as_ref().ok_or("record: missing reply path")?;
+        self.pending = Some(
+            self.start_port(
+                "record",
+                &[
+                    ("{ring}", &self.options.ring),
+                    ("{lease}", lease),
+                    ("{output}", path.to_str().ok_or("record: invalid path")?),
+                ],
+                false,
+            )
+            .map_err(|error| format!("record: {error}"))?,
+        );
         Ok(())
     }
 
@@ -282,7 +348,7 @@ impl Device<'_> {
                 ],
                 false,
             )
-            .map_err(|_| "frame capture: held snapshot failed")?;
+            .map_err(|error| format!("frame capture: held snapshot failed: {error}"))?;
         if result["success"] != true || result["captured_at"].as_str().is_none() {
             return Err("frame capture: missing held capture confirmation".into());
         }
@@ -295,7 +361,7 @@ impl Device<'_> {
         let bytes = std::fs::read(path).map_err(|_| "frame capture: missing image")?;
         super::run_jpeg::validate(&bytes).map_err(|reason| format!("frame capture: {reason}"))?;
         artifacts.evidence.push(name.to_owned());
-        Ok(())
+        self.start_reply()
     }
 
     fn attempt(&mut self, step: &Step, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {

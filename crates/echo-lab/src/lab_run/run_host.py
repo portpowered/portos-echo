@@ -3,13 +3,38 @@
 import datetime
 import hashlib
 import json
+import re
 import sys
 import wave
 import time
 
 
+def instant(value):
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", value):
+        raise ValueError("timestamp requires RFC 3339 offset")
+    parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp requires offset")
+    return parsed
+
+
+def wait_until(value):
+    target = instant(value)
+    fraction = re.search(r"\.(\d+)", value)
+    # datetime truncates beyond microseconds; round the eligibility boundary up.
+    if fraction and any(digit != "0" for digit in fraction[1][6:]):
+        target += datetime.timedelta(microseconds=1)
+    while True:
+        remaining = (target - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+        if remaining <= 0:
+            return {"reached": True}
+        time.sleep(min(remaining, 0.1))
+
+
 def main():
     operation, *args = sys.argv[1:]
+    if operation == "wait_until":
+        return wait_until(args[0])
     if operation == "pixels":
         return compare_pixels(*args)
     if operation == "wav":
@@ -33,7 +58,7 @@ def main():
         return {"sha256": digest.hexdigest()}
     if operation == "reply":
         path, started, ended, recorded, stopped = args
-        times = [datetime.datetime.fromisoformat(t.replace("Z", "+00:00"))
+        times = [instant(t)
                  for t in [started, ended, recorded, stopped]]
         play_start, play_end, record_start, record_end = times
         if not record_start <= play_start <= play_end < record_end:
