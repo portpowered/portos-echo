@@ -369,6 +369,19 @@ existing zero-second session idle policy: each wake gets a fresh FakeLive call
 whose script emits one response completion. Call reuse has separate bridge
 component coverage.
 
+The bridge's component recovery tests also exercise a peer closing its idle
+Wyoming socket after either a streamed turn or a missing-credential refusal.
+After building `echo-bridge`, run them from a POSIX shell:
+
+```sh
+cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only \
+  --config-file .github/nextest.toml --profile ci -E 'test(idle_socket_close)' --no-capture
+```
+
+They restore the same loopback endpoint, retain the bridge process, check
+registration and health recovery, and exercise another wake. This socket-fault
+proof does not replace the real-host M1 scenario or its 10+10 process restarts.
+
 The runner replaces these variables for each child:
 
 | Variable | Value |

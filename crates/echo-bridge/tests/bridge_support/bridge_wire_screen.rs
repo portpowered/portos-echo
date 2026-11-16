@@ -214,7 +214,7 @@ async fn bridge_mute_snapshot_idle_stray_frames_and_unmute_are_measured() {
     }
 }
 
-async fn microphone_chunk(satellite: &mut TcpStream) {
+pub(super) async fn microphone_chunk(satellite: &mut TcpStream) {
     use echo_contracts::wyoming::{Event, Header, encode};
     satellite
         .write_all(&encode(&Event {
