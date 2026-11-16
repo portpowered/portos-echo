@@ -81,6 +81,8 @@ check exists, the coordinator checks it by hand.
 - The description says what was run and what it printed. Evidence of a CI run goes in a comment, not a commit.
 - Merge with `gh pr merge --squash` only when every required check is green. Never `--admin`.
 - Generated files are regenerated, never hand-merged.
+- The workspace lists crates by glob (`members = ["xtask", "crates/*"]`). A new crate adds only its directory; never
+  edit `members` in `Cargo.toml`.
 
 ## Documents
 
