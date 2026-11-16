@@ -262,21 +262,21 @@ either credential, only Wyoming audio.
 
 ## 5. Wake word
 
-Owner decision (2026-11-15): the wake word is the one echo-dot-assist uses, the Pryon "Alexa" model from the
-firmware's `libpryon`. It needs no model of our own and no training. `hassmic` loads it on the Echo; nothing of ours
-touches Pryon.
+Owner decision (2026-11-16): the wake word is "Computer", the Pryon model set the firmware ships next to "Alexa"
+(`/system/local/models/keyword/en-US/COMPUTER/`). It needs no model of our own, no training and no download:
+`hassmic` loads an unmodified copy of that folder as its model set `computer-en-US`. Nothing of ours touches Pryon.
 
 What follows from it:
 
-- **Bench interference.** Stock Echos in the house also wake on "Alexa". Run T5 scenarios in a room without a
-  stock Echo in earshot, and record the room in every report. The bench already measured that a natural TTS voice
-  at full level wakes an Echo through the Ring speaker, and that quiet or robotic voices are rejected as false
-  wakes (`docs/program/baselines.md`).
+- **Bench interference.** Stock Echos in the house wake on "Alexa", not on "Computer", so they no longer answer
+  the bench's utterances. Still record the room in every report. The bench measured that a natural TTS voice at
+  full level wakes an Echo through the Ring speaker, and that quiet or robotic voices are rejected as false wakes
+  (`docs/program/baselines.md`).
 - **Firmware dependency.** The Pryon library and model are the firmware's, so a firmware build nobody has probed
   may move them. The probe (section 8.5) records their hashes; 7809's `libpryon.so` differs from the pinned 7080's
   (`docs/program/baselines.md`).
-- **Other keywords exist.** The firmware also carries "Amazon", "Computer" and "Echo"; switching is a hassmic
-  setting, so it costs no code (`docs/program/decisions.md`, open).
+- **Other keywords exist.** The firmware also carries "Alexa", "Amazon" and "Echo"; switching is a hassmic
+  setting, so it costs no code (`docs/program/decisions.md`).
 - **False-wake rate** is a T6 soak measurement, not a T5 pass condition.
 
 ## 6. The bridge: what it runs and where
@@ -373,7 +373,7 @@ setup:
   mcp: spoof            # spoof | portos-pilot
   backend: client       # client | muse
 steps:
-  - say: "Alexa, call the test tool and tell me its result"   # sim: fixture PCM + SIGUSR1; device: Ring talkback
+  - say: "Computer, call the test tool and tell me its result"   # sim: fixture PCM + SIGUSR1; device: Ring talkback
   - expect_trace:
       - session.delegation.created
       - tools/call {name: test.echo, count: 1}
