@@ -126,13 +126,16 @@ async fn receive(peer: &mut TcpStream, decoder: &mut Decoder) -> Event {
 async fn journey(negative: bool) {
     let root = Root::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay = super::wire::Relay::bind(listener.local_addr().unwrap(), 640)
+        .await
+        .unwrap();
     let spoof = Spoof::start(Options {
         fault: if negative { Fault::Http500 } else { Fault::None },
         ..Options::default()
     })
     .await
     .unwrap();
-    configure(&root, listener.local_addr().unwrap().port(), &spoof);
+    configure(&root, relay.address.port(), &spoof);
     let model = Model::bind(negative).await.unwrap();
     let text = if negative { FALLBACK } else { SUCCESS };
     let live = FakeLive::bind_dialogue(DialogueScript {
@@ -147,10 +150,19 @@ async fn journey(negative: bool) {
     let observer = live.observer();
     let mut bridge = Process::start(&mut command(&root, live.base_url(), &model.origin)).unwrap();
     exercise(&root, &listener, &mut bridge, &observer, text).await;
+    assert_timing(&relay.close().await.unwrap());
     assert_journey(&root, &model, &spoof);
     live.shutdown().await.unwrap();
     model.close().await.unwrap();
     spoof.shutdown().await.unwrap();
+}
+
+fn assert_timing(timing: &super::wire::Timing) {
+    assert_eq!(timing.captured, 640);
+    assert_eq!(timing.played, 9600);
+    let latency = super::wire::p95(&[timing.sample().unwrap()]).unwrap();
+    eprintln!("M4 controlled Wyoming: capture=640 PCM=9600 endpoint_to_reply={latency:?}");
+    assert!(latency <= std::time::Duration::from_millis(1500));
 }
 
 fn assert_journey(root: &Root, model: &Model, spoof: &Spoof) {
@@ -325,6 +337,17 @@ async fn exercise(
         json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"computer"}),
     )
     .await;
+    let microphone = Event {
+        header: Header {
+            r#type: "audio-chunk".into(),
+            data: Some(json!({"rate":16000,"width":2,"channels":1})),
+            data_length: 0,
+            payload_length: 640,
+        },
+        data: None,
+        payload: vec![0; 640],
+    };
+    peer.write_all(&encode(&microphone)).await.unwrap();
     finish_reply(&mut peer, &mut decoder, &mut screen, bridge, observer, text).await;
     bridge.close().await.unwrap();
 }

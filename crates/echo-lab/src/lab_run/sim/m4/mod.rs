@@ -2,6 +2,7 @@
 //! scenario; the production driver will use these same external-boundary fakes.
 mod golden;
 mod model;
+mod wire;
 
 #[cfg(test)]
 mod tests;
