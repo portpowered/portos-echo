@@ -217,7 +217,7 @@ fn check_exchange(requests: &[Request], mode: LiveMode, id: &str, fault: Fault, 
     let result = if !allowed {
         json!({"content":{"error":"denied"},"is_error":true})
     } else if fault == Fault::Http500 {
-        json!({"content":{"error":"server error: http_status:500"},"is_error":true})
+        json!({"content":{"error":"server error: http_status:500"},"is_error":true}) // lint-rules: allow-literal never dialled; asserts exact tool error text
     } else {
         json!({"content":[{"type":"text","text":"test echo"}],"is_error":false})
     };
