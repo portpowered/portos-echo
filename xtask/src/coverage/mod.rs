@@ -1,5 +1,8 @@
 mod lcov;
 
+#[cfg(test)]
+mod declaration_tests;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::process::Command;
@@ -88,7 +91,19 @@ fn scope(label: &str, counts: (usize, usize, usize, usize), floors: (usize, usiz
     ])
 }
 
-fn evaluate(report: &lcov::Report, changes: &Changed, crates: &[(String, String)]) -> Result<Vec<String>, String> {
+fn no_executable_code(path: &str, source: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension == "rs")
+        && !crate::lint_rules::has_syntax_token(source, "fn")
+}
+
+fn evaluate(
+    report: &lcov::Report,
+    changes: &Changed,
+    crates: &[(String, String)],
+    mut read_head: impl FnMut(&str) -> Result<String, String>,
+) -> Result<Vec<String>, String> {
     let mut messages = scope("workspace", counts(report.values()), (80, 70))?;
     for (name, prefix) in crates {
         let floors = match name.as_str() {
@@ -119,7 +134,10 @@ fn evaluate(report: &lcov::Report, changes: &Changed, crates: &[(String, String)
                 }
             }
         } else if !lines.is_empty() {
-            return Err(format!("changed Rust source missing from coverage: {path}"));
+            if !read_head(path).is_ok_and(|source| no_executable_code(path, &source)) {
+                return Err(format!("changed Rust source missing from coverage: {path}"));
+            }
+            messages.push(format!("coverage: no executable code: {path}"));
         }
     }
     messages.push(floor("changed executable Rust lines", hits, total, 85)?);
@@ -182,7 +200,9 @@ pub fn run(path: &str, base: &str) -> Result<(), String> {
     ])?;
     let changes = changed(&diff)?;
     println!("coverage base: {base}");
-    for message in evaluate(&report, &changes, &crates(&root)?)? {
+    for message in evaluate(&report, &changes, &crates(&root)?, |path| {
+        git(&["show", &format!("HEAD:{path}")])
+    })? {
         println!("{message}");
     }
     Ok(())
@@ -192,7 +212,11 @@ pub fn run(path: &str, base: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn report() -> lcov::Report {
+    fn evaluate(report: &lcov::Report, changes: &Changed, crates: &[(String, String)]) -> Result<Vec<String>, String> {
+        super::evaluate(report, changes, crates, |_| Err("no source".into()))
+    }
+
+    pub(super) fn report() -> lcov::Report {
         lcov::parse("SF:xtask/src/main.rs\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,1\nDA:5,0\nBRDA:1,0,0,1\nBRDA:1,0,1,1\nBRDA:2,0,0,1\nBRDA:2,0,1,0\nend_of_record", "/repo").unwrap() // lint-rules: allow-literal LCOV parser coverage assertion fixture
     }
 

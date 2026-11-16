@@ -8,6 +8,10 @@ mod secret;
 mod test_source;
 mod tokens;
 
+pub(crate) fn has_syntax_token(source: &str, text: &str) -> bool {
+    tokens::lex(source).iter().any(|token| token.text == text)
+}
+
 type Names = BTreeSet<String>;
 
 pub fn run() -> Result<(), String> {
