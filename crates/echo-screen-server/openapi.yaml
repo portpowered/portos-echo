@@ -1,0 +1,62 @@
+openapi: 3.1.0
+info: { title: Loopback screen server, version: 0.1.0 }
+servers:
+  - url: http://127.0.0.1:16900
+paths:
+  /:
+    get:
+      description: Existing events/actions bootstrap query grammar; static page only
+      responses:
+        '200':
+          description: Existing page, no state or token injected
+          content:
+            text/html: { schema: { type: string } }
+  /screen.css:
+    get:
+      responses:
+        '200':
+          description: Existing stylesheet
+          content:
+            text/css: { schema: { type: string } }
+  /screen.js:
+    get:
+      responses:
+        '200':
+          description: Bundle produced by web/screen/tools/build.mjs
+          content:
+            text/javascript: { schema: { type: string } }
+        '503': { description: Bundle unavailable; no fallback or state }
+  /events:
+    get:
+      security: [{ pairingToken: [] }]
+      description: Current frame if present, then ordered updates; no history replay; revocation closes streams
+      responses:
+        '200':
+          description: Unnamed SSE messages; data is canonical ScreenFrame JSON, terminated by two newlines
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: 'data: {"seq":1,"state":{"state":"ready","message":"Echo Live ready"}}'
+        '401': { description: Missing, wrong, empty, duplicate or revoked token; empty body, no state }
+        '503': { description: Stream capacity exhausted or stopping; empty body }
+  /actions:
+    post:
+      security: [{ pairingToken: [] }]
+      description: Auth before parsing; enqueue only; no execution/retry; supplied foreign Origin refused
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../schemas/screen/ui_action.json
+      responses:
+        '204': { description: Exact UiAction queued once on returned receiver }
+        '400': { description: Malformed JSON or invalid UiAction; nothing queued }
+        '401': { description: Missing, wrong, empty, duplicate or revoked token; empty body, nothing queued }
+        '403': { description: Supplied Origin differs from loopback server origin; nothing queued }
+        '413': { description: Body exceeds 65536 bytes; nothing queued }
+        '415': { description: Content-Type is not application/json; nothing queued }
+        '503': { description: Action queue full or receiver closed; nothing queued }
+components:
+  securitySchemes:
+    pairingToken: { type: apiKey, in: query, name: token }
