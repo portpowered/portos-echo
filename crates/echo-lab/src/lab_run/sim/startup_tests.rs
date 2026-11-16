@@ -367,7 +367,7 @@ fn require_prebuilt_host() {
 }
 
 #[cfg(windows)]
-async fn real_wsl_cleanup(interrupted: bool) {
+async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
     require_prebuilt_host();
     let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let root = std::env::temp_dir().join(format!(
@@ -389,6 +389,10 @@ async fn real_wsl_cleanup(interrupted: bool) {
     let ready = process.expect("host.ready").await.unwrap();
     let identity = process.expect("guest.owned").await.unwrap();
     assert!(identity["pid"].as_u64().unwrap() > 0);
+    if busy {
+        process.send(&serde_json::json!({"action":"registered"})).await.unwrap();
+        process.expect("guest.command.entered").await.unwrap();
+    }
     if interrupted {
         drop(process);
     } else {
@@ -399,21 +403,37 @@ async fn real_wsl_cleanup(interrupted: bool) {
         );
         drop(process);
     }
-    assert_eq!(fixture.collected.try_recv().unwrap().code(), Some(0));
+    assert_eq!(fixture.collected.try_recv().unwrap().code(), Some(i32::from(busy)));
+    let (witness, exit) = guest_cleanup_witness(&fixture, &identity);
+    let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
+    assert_endpoint_closed(address).await;
+    std::io::Write::write_all(
+        &mut std::io::stdout(),
+        format!(
+            "R-WSL interrupted={interrupted}, busy={busy}: guest={witness}, observer={exit}, endpoint_closed=true\n"
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+}
+
+#[cfg(windows)]
+fn guest_cleanup_witness(
+    fixture: &WindowsLauncher,
+    identity: &serde_json::Value,
+) -> (serde_json::Value, serde_json::Value) {
+    let exit_path = fixture.root.join("guest.json.exit");
+    let exit: serde_json::Value = serde_json::from_slice(&std::fs::read(&exit_path).unwrap()).unwrap();
+    assert_eq!(exit["owned_survivors"], 0);
+    assert_eq!(exit["fixture_cleaned"], true);
+    std::fs::remove_file(exit_path).unwrap();
     let witness: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixture.root.join("guest.json")).unwrap()).unwrap();
     assert_eq!(witness["pid"], identity["pid"]);
     assert_eq!(witness["closed"], true);
     assert!(witness["status"].as_i64().is_some());
-    let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
-    assert_endpoint_closed(address).await;
     std::fs::remove_file(fixture.root.join("guest.json")).unwrap();
-    std::io::Write::write_all(
-        &mut std::io::stdout(),
-        format!("R-WSL interrupted={interrupted}: guest={witness}, wrapper_status=0, endpoint_closed=true\n")
-            .as_bytes(),
-    )
-    .unwrap();
+    (witness, exit)
 }
 
 #[cfg(windows)]
@@ -433,12 +453,19 @@ async fn assert_endpoint_closed(address: std::net::SocketAddr) {
 #[cfg(windows)]
 #[ignore = "T3 requires prebuilt pinned hassmic-host and native WSL guest observer"]
 async fn t3_windows_wsl_owned_cleanup_normal() {
-    real_wsl_cleanup(false).await;
+    real_wsl_cleanup(false, false).await;
 }
 
 #[tokio::test]
 #[cfg(windows)]
 #[ignore = "T3 requires prebuilt pinned hassmic-host and native WSL guest observer"]
 async fn t3_windows_wsl_owned_cleanup_interrupted() {
-    real_wsl_cleanup(true).await;
+    real_wsl_cleanup(true, false).await;
+}
+
+#[tokio::test]
+#[cfg(windows)]
+#[ignore = "T3 requires prebuilt pinned hassmic-host and native WSL guest observer"]
+async fn t3_windows_wsl_owned_cleanup_busy_interrupted() {
+    real_wsl_cleanup(true, true).await;
 }

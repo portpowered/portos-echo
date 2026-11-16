@@ -240,6 +240,7 @@ class Host:
         self.folder = Path(folder)
         self.proc = None
         self.stop = threading.Event()
+        self.cancelled = threading.Event()
         self.condition = threading.Condition()
         self.log = bytearray()
         self.fixture = bytes(640)
@@ -264,8 +265,9 @@ class Host:
 
     def logged(self, marker):
         with self.condition:
-            ready = self.condition.wait_for(lambda: marker in self.log or self.error, 20)
-            if not ready or self.error:
+            ready = self.condition.wait_for(
+                lambda: marker in self.log or self.error or self.cancelled.is_set(), 20)
+            if not ready or self.error or self.cancelled.is_set():
                 raise RuntimeError("host readiness failed")
             self.log = self.log[self.log.index(marker) + len(marker):]
 
@@ -309,6 +311,8 @@ class Host:
         emit({"event": "host.ready", "address": "127.0.0.1:" + str(port)})
 
     def command(self, value):
+        if self.cancelled.is_set():
+            raise RuntimeError("host command cancelled")
         action = value.get("action")
         if action == "registered":
             self.logged(b"satellite: running")
@@ -321,7 +325,9 @@ class Host:
                 with self.condition:
                     self.fixture = data
                     target = self.fed + fcntl.fcntl(self.fd, fcntl.F_GETPIPE_SZ) + 8192
-                    if not self.condition.wait_for(lambda: self.fed >= target or self.error, 20) or self.error:
+                    ready = self.condition.wait_for(
+                        lambda: self.fed >= target or self.error or self.cancelled.is_set(), 20)
+                    if not ready or self.error or self.cancelled.is_set():
                         raise RuntimeError("fixture consumption failed")
                 action = "wake"
             signals = {"wake": signal.SIGUSR1, "action": signal.SIGUSR2,
@@ -359,18 +365,32 @@ class Host:
         self.closed = True
 
 
+def host_input(host, events):
+    # Read EOF independently of log/FIFO waits. Only the main owner closes the
+    # host: interrupt its wait, then let its finally stop and collect the group
+    # before the Windows client's retained four-second deadline expires.
+    try:
+        launcher_input(events)
+    finally:
+        with host.condition:
+            host.cancelled.set()
+            host.condition.notify_all()
+
+
 def main():
     failed = False
     with tempfile.TemporaryDirectory(prefix="echo-lab-sim-") as folder:
         host = Host(folder)
+        events = queue.Queue()
         try:
+            threading.Thread(target=host_input, args=(host, events), daemon=True).start()
             host.start()
             while True:
-                line = sys.stdin.buffer.readline(LIMIT + 1)
-                if not line:
+                action, line = events.get()
+                if action == "eof":
                     break
-                if len(line) > LIMIT or not line.endswith(b"\n"):
-                    raise ValueError("oversized command")
+                if action != "input":
+                    raise ValueError("invalid command")
                 host.command(json.loads(line))
         except (OSError, ValueError, KeyError, RuntimeError):
             failed = True

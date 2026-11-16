@@ -34,6 +34,18 @@ class Controls(unittest.TestCase):
             self.host.proc.send_signal.assert_not_called()
             emit.assert_called_once_with({"event": "host.ack"})
 
+    def test_eof_interrupts_readiness_and_rejects_further_commands(self):
+        events = CONTROLLER.queue.Queue()
+        with mock.patch.object(CONTROLLER, "launcher_input") as reader:
+            CONTROLLER.host_input(self.host, events)
+            reader.assert_called_once_with(events)
+        for marker in [b"wyoming on ", b"satellite: running"]:
+            with self.assertRaisesRegex(RuntimeError, "host readiness failed"):
+                self.host.logged(marker)
+        with self.assertRaisesRegex(RuntimeError, "host command cancelled"):
+            self.host.command({"action": "wake"})
+        self.host.proc.send_signal.assert_not_called()
+
     def test_unsupported_controls_and_invalid_pcm_cannot_signal(self):
         # Supply Unix signal names on Windows without starting the host backend.
         with mock.patch.multiple(CONTROLLER.signal, create=True, SIGUSR1=10, SIGUSR2=12, SIGWINCH=28, SIGHUP=1):
@@ -191,18 +203,46 @@ def real_wsl_launcher_fixture(audit):
     import sys
     popen = subprocess.Popen
     guest = r'''
-import json,runpy,sys
+import json,runpy,subprocess,sys
 from pathlib import Path
 ns=runpy.run_path(sys.argv[1])
 host=ns['Host']
-start,close=host.start,host.close
+start,close,logged=host.start,host.close,host.logged
+observer = r"""
+import json,os,select,signal,sys
+from pathlib import Path
+fd=os.pidfd_open(int(sys.argv[1]))
+print('observer.ready',flush=True)
+try:
+    sys.stdin.buffer.read()
+    survivors=int(not bool(select.select([fd],[],[],0)[0]))
+    if survivors:
+        signal.pidfd_send_signal(fd,signal.SIGTERM)
+    cleaned=bool(select.select([fd],[],[],4)[0])
+    if not cleaned:
+        signal.pidfd_send_signal(fd,signal.SIGKILL)
+        cleaned=bool(select.select([fd],[],[],4)[0])
+    Path(sys.argv[2]+'.exit').write_text(json.dumps({'owned_survivors':survivors,'fixture_cleaned':cleaned}))
+finally:
+    os.close(fd)
+"""
 def observed_start(self):
     start(self)
+    self.observer=subprocess.Popen([sys.executable,'-u','-c',observer,str(self.proc.pid),sys.argv[2]],
+        stdin=subprocess.PIPE,stdout=subprocess.PIPE,start_new_session=True)
+    assert self.observer.stdout.readline()==b'observer.ready\n'
     print(json.dumps({'event':'guest.owned','pid':self.proc.pid}),flush=True)
+def observed_logged(self,marker):
+    with self.condition:
+        if marker==b'satellite: running':
+            print(json.dumps({'event':'guest.command.entered'}),flush=True)
+        return logged(self,marker)
 def observed_close(self):
     close(self)
+    self.observer.communicate(timeout=1)
+    assert self.observer.returncode==0
     Path(sys.argv[2]).write_text(json.dumps({'pid':self.proc.pid,'status':self.proc.returncode,'closed':self.closed}))
-host.start,host.close=observed_start,observed_close
+host.start,host.close,host.logged=observed_start,observed_close,observed_logged
 sys.exit(ns['main']())
 '''
     # Resolve the test-owned observation path with a bounded, collected client.
