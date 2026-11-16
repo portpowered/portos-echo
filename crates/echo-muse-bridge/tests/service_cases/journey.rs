@@ -119,15 +119,35 @@ async fn f17_only_task_operations_are_public_and_context_cannot_select_commands(
             (status, json!({"error":code}))
         );
     }
-    let response = fixture
-        .client
-        .post(format!("{}/v1/tasks", daemon.url))
-        .bearer_auth(&fixture.credential)
-        .header("content-type", "application/json")
-        .body("x".repeat(65537))
-        .send()
-        .await
-        .unwrap();
+    // The daemon answers 413 from Content-Length and closes without reading
+    // the body, so the client's body write can lose the race with that close
+    // (BrokenPipe/ConnectionReset). Retry only that transport race; the 413
+    // response itself must still be observed.
+    let mut response = None;
+    for _ in 0..20 {
+        match fixture
+            .client
+            .post(format!("{}/v1/tasks", daemon.url))
+            .bearer_auth(&fixture.credential)
+            .header("content-type", "application/json")
+            .body("x".repeat(65537))
+            .send()
+            .await
+        {
+            Ok(reply) => {
+                response = Some(reply);
+                break;
+            }
+            Err(error) => {
+                let detail = format!("{error:?}");
+                assert!(
+                    detail.contains("BrokenPipe") || detail.contains("ConnectionReset"),
+                    "only the early-close race may fail the send: {detail}"
+                );
+            }
+        }
+    }
+    let response = response.expect("413 response observed within 20 attempts");
     assert_eq!(response.status(), 413);
     assert_eq!(
         response.json::<Value>().await.unwrap(),
