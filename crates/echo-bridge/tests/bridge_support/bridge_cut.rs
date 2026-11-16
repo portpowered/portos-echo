@@ -1,6 +1,7 @@
 //! T3: delivered bridge and codec/WebRTC path, controlled loopback peers.
 use super::bridge_short::{read, satellite, send};
 use super::*;
+use std::io::Write;
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
@@ -16,6 +17,51 @@ async fn bridge_cut_nonempty_backlog_conserves_complete_frames() {
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_cut_overload_excludes_earlier_evictions_from_retained_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let live = bridge_peer::Live::bind_frames(300).await;
+    let (mut stream, mut bridge) = satellite(&live.url, &path).await;
+    assert_eq!(read(&mut stream).await.0["type"], "audio-start");
+    // Socket observation, not a wall-clock delay: the producer has consumed
+    // initial credit and is draining its bounded backlog before cancellation.
+    receive_initial(&mut stream, 20).await;
+    live.events
+        .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
+        .await
+        .unwrap();
+    let sent = 20 + drain_to_stop(&mut stream).await;
+    assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
+    send(&mut stream, "played", json!({})).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
+        json!({"event":"bridge.run_completed","run_id":"run-1"})
+    );
+    let entries = trace(&path);
+    let cut = entries.iter().find(|e| e["event"] == "reply.cut").unwrap();
+    let evicted = cut["bridge_evicted"].as_u64().unwrap();
+    let retained = cut["dropped_frames"].as_u64().unwrap();
+    let framed = cut["reply_frames"].as_u64().unwrap();
+    assert!(evicted > 0, "fixture must exercise actual bounded eviction");
+    assert_eq!(u64::from(sent) + retained + evicted, framed);
+    assert_eq!(
+        cut["bridge_dropped"].as_u64().unwrap() + cut["transport_dropped"].as_u64().unwrap(),
+        retained
+    );
+    assert!(framed <= 299); // The unflushed resampler tail is never a complete frame.
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.cut").count(), 1);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 1);
+    writeln!(
+        std::io::stdout(),
+        "overload sent={sent} cut={retained} prior_evicted={evicted} framed={framed}"
+    )
+    .unwrap();
+    bridge.finish(0).await;
+    assert_closed(&mut stream).await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_cut_missing_played_is_deadline_and_reaps_health() {
     cut_failure(false).await;
 }
@@ -24,6 +70,49 @@ async fn bridge_cut_missing_played_is_deadline_and_reaps_health() {
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_cut_disconnected_satellite_never_fabricates_played() {
     cut_failure(true).await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_cut_control_overflow_closes_receiver_and_reaps_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let (ready, request) = tokio::sync::oneshot::channel();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let live = bridge_peer::Live::bind_after(0, Some((ready, gate))).await;
+    let (mut stream, mut bridge) = satellite(&live.url, &path).await;
+    request.await.unwrap(); // The call owner is waiting on signaling, not draining events.
+    let mut burst = Vec::new();
+    for index in 0..40 {
+        burst.extend(echo_contracts::wyoming::encode(&echo_contracts::wyoming::Event {
+            header: echo_contracts::wyoming::Header {
+                r#type: "ping".into(),
+                data: Some(json!({"sequence":index})),
+                data_length: 0,
+                payload_length: 0,
+            },
+            data: None,
+            payload: vec![],
+        }));
+    }
+    stream.write_all(&burst).await.unwrap();
+    // EOF is the session's overflow barrier; no sleep or scheduling assumption.
+    assert_eq!(
+        stream.read_u8().await.unwrap_err().kind(),
+        std::io::ErrorKind::UnexpectedEof
+    );
+    release.send(()).unwrap();
+    assert_cut_process_failure(&mut bridge, true).await;
+    let entries = trace(&path);
+    for event in ["reply.cut", "reply.played", "wyoming.run_ended"] {
+        assert_eq!(entries.iter().filter(|e| e["event"] == event).count(), 0);
+    }
+    assert_eq!(entries.last().unwrap()["reason"], "wyoming");
+    assert!(
+        tokio::net::TcpStream::connect(entries[0]["health_addr"].as_str().unwrap())
+            .await
+            .is_err()
+    );
 }
 
 async fn cut_failure(disconnect: bool) {
@@ -108,6 +197,7 @@ async fn cut_reply(offered: u16, initial: u16) {
     );
     assert_cut_trace(&path, offered, sent);
     bridge.finish(0).await;
+    assert_closed(&mut stream).await;
 }
 
 async fn receive_initial(stream: &mut tokio::net::TcpStream, initial: u16) {
@@ -147,4 +237,11 @@ fn assert_cut_trace(path: &Path, offered: u16, sent: u16) {
     assert_eq!(played.len(), 1);
     assert_eq!(played[0]["outcome"], "cut");
     assert_eq!(played[0]["run_id"], "run-1");
+}
+
+async fn assert_closed(stream: &mut tokio::net::TcpStream) {
+    assert_eq!(
+        stream.read_u8().await.unwrap_err().kind(),
+        std::io::ErrorKind::UnexpectedEof
+    );
 }

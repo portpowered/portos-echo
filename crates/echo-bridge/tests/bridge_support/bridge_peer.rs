@@ -26,6 +26,13 @@ impl Live {
     }
 
     pub async fn bind_frames(frames: u16) -> Self {
+        Self::bind_after(frames, None).await
+    }
+
+    pub async fn bind_after(
+        frames: u16,
+        mut gate: Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = "http://127.0.0.1";
         let url = format!("{origin}:{}", listener.local_addr().unwrap().port());
@@ -33,7 +40,7 @@ impl Live {
         let task = tokio::spawn(async move {
             let mut stream = listener.accept().await.unwrap().0;
             loop {
-                stream = serve(&listener, stream, &mut receive, frames).await;
+                stream = serve(&listener, stream, &mut receive, frames, gate.take()).await;
             }
         });
         Self { url, events, task }
@@ -45,8 +52,13 @@ async fn serve(
     mut stream: TcpStream,
     receive: &mut mpsc::Receiver<String>,
     frames: u16,
+    gate: Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>,
 ) -> TcpStream {
     let body = request(&mut stream).await;
+    if let Some((ready, release)) = gate {
+        ready.send(()).unwrap();
+        release.await.unwrap();
+    }
     let mut peer = Box::pin(LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now()))
         .await
         .unwrap();

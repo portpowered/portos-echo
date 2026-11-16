@@ -39,6 +39,10 @@ source and queue frames; prior capacity evictions are excluded. Only the session
 writes the early stop, and playback still requires real `played`. `reply.cut`
 records `bridge_dropped`, `transport_dropped` and their sum `dropped_frames`.
 Neither partial resampler tails nor audio already transmitted are counted.
+The same record reports `bridge_evicted` separately for earlier bridge capacity
+evictions and `reply_frames` for complete decoded frames offered to its queue.
+With no transport eviction, transmitted plus retained cut plus earlier bridge
+evictions equals `reply_frames`; the cut never counts an earlier eviction again.
 
 The pinned-host timing regression reuses one bridge and host for ten trials.
 The host's FIFO observer timestamps cancellation dispatch at playback start plus

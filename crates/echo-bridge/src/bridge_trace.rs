@@ -1,4 +1,7 @@
 //! Closed event vocabulary and counters only. Never serialize provider events.
+//! `reply.cut` also reports `bridge_evicted` (prior capacity evictions) and
+//! `reply_frames` (complete decoded frames offered to the bridge queue). Neither
+//! prior evictions nor partial tails belong to the retained `dropped_frames`.
 use crate::Error;
 use serde_json::{Map, Value};
 use std::{

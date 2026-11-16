@@ -23,6 +23,7 @@ struct Source {
     chunks: u64,
     sent: u64,
     received: u64,
+    framed: u64,
     acknowledged: u64,
     finished: bool,
     audio_done: bool,
@@ -39,6 +40,7 @@ impl Source {
             chunks: 0,
             sent: 0,
             received: 0,
+            framed: 0,
             acknowledged: 0,
             finished: false,
             audio_done: false,
@@ -86,10 +88,18 @@ impl Source {
         for &byte in bytes {
             self.partial.push(byte);
             if self.partial.len() == 960 {
+                self.framed += 1;
                 self.queue
                     .push(std::mem::replace(&mut self.partial, Vec::with_capacity(960)));
             }
         }
+    }
+
+    fn discard_reply(&mut self) -> u64 {
+        let retained = self.queue.len() as u64;
+        self.queue.clear();
+        self.partial.clear();
+        retained
     }
 
     fn receive(&mut self, call: &mut LiveCall) -> Result<(), Error> {
@@ -189,9 +199,8 @@ struct PlaybackContext<'a> {
 
 impl PlaybackContext<'_> {
     async fn cut(&mut self, source: &mut Source) -> Result<(), Error> {
-        let bridge_dropped = source.queue.len() as u64;
-        source.queue.clear();
-        source.partial.clear();
+        let bridge_evicted = source.queue.drop_count();
+        let bridge_dropped = source.discard_reply();
         // Keep the source sender alive through this request: EOF must not race
         // the cut and turn its acknowledgment into normal completion.
         let stats = self.client.cut_with_stats().await?;
@@ -200,7 +209,8 @@ impl PlaybackContext<'_> {
             Some(self.id),
             json!({
                 "bridge_dropped":bridge_dropped, "transport_dropped":stats.dropped_frames,
-                "dropped_frames":bridge_dropped + stats.dropped_frames
+                "dropped_frames":bridge_dropped + stats.dropped_frames,
+                "bridge_evicted":bridge_evicted, "reply_frames":source.framed
             }),
         )
     }
@@ -331,5 +341,26 @@ mod bridge_spine_tests {
             assert_eq!(source.queue.pop(), Some(vec![value; 960]));
         }
         assert_eq!(source.queue.pop(), None);
+    }
+}
+
+#[cfg(test)]
+mod bridge_pacing_cut_tests {
+    use super::*;
+
+    #[test]
+    fn bridge_pacing_cut_excludes_prior_evictions_and_partial_tail() {
+        let mut source = Source::new().unwrap();
+        for value in 0..130_u8 {
+            source.enqueue(&vec![value; 960]);
+        }
+        source.enqueue(&[255; 13]);
+        assert_eq!(source.framed, 130);
+        assert_eq!(source.queue.drop_count(), 2);
+        assert_eq!(source.discard_reply(), 128);
+        assert_eq!(source.queue.drop_count(), 0); // FrameQueue::clear resets its interval statistics.
+        assert_eq!(source.queue.pop(), None);
+        assert_eq!(source.partial, Vec::<u8>::new());
+        assert_eq!(source.discard_reply(), 0);
     }
 }
