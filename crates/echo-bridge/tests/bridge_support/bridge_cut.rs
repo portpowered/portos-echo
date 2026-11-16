@@ -239,10 +239,28 @@ fn assert_cut_trace(path: &Path, offered: u16, sent: u16) {
 }
 
 async fn assert_closed(stream: &mut tokio::net::TcpStream) {
-    assert_eq!(
-        stream.read_u8().await.unwrap_err().kind(),
-        std::io::ErrorKind::UnexpectedEof
-    );
+    // After a completed run the bridge's idle loop probes the link with
+    // `describe` at once; one can reach the wire before stdin EOF stops the
+    // bridge. Allow only those empty control probes before EOF, never audio.
+    loop {
+        let first = match stream.read_u8().await {
+            Ok(byte) => byte,
+            Err(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+                return;
+            }
+        };
+        let mut header = vec![first];
+        while *header.last().unwrap() != b'\n' {
+            header.push(stream.read_u8().await.unwrap());
+            assert!(header.len() <= 8192);
+        }
+        let header: Value = serde_json::from_slice(&header).unwrap();
+        assert_eq!(header["type"], "describe", "only an idle probe may precede EOF");
+        assert_eq!(header["payload_length"].as_u64().unwrap_or(0), 0);
+        let data = usize::try_from(header["data_length"].as_u64().unwrap_or(0)).unwrap();
+        stream.read_exact(&mut vec![0; data]).await.unwrap();
+    }
 }
 
 async fn overload_until_observed(

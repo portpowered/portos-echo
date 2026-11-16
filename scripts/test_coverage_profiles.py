@@ -160,6 +160,14 @@ if "coverage-check" in args:
         overrides.write_text("hassmic-host:\n\t@true\n")
         environment = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
                        "LLVM_PROFDATA": TOOL}
+        # Every selection the coverage recipe runs, read from the Makefile itself, so a lane that adds a
+        # selection (as the bridge did) does not have to edit this count.
+        makefile = (ROOT / "Makefile").read_text()
+        recipe = makefile.split("\ncoverage:", 1)[1].split("\n\n", 1)[0]
+        expected_selections = sum(
+            "llvm-cov" in line and "--no-report" in line for line in recipe.splitlines()
+        )
+        self.assertGreaterEqual(expected_selections, 1)
         for bad_count, gate_exit in ((1, 0), (2, 0), (0, 23)):
             with self.subTest(bad_count=bad_count, gate_exit=gate_exit):
                 for path in raw_dir.glob("*.profraw"):
@@ -178,7 +186,7 @@ if "coverage-check" in args:
                 )
                 calls = [json.loads(line) for line in log.read_text().splitlines()]
                 self.assertEqual(json.loads(self_test.read_text()), ["--instrumented"])
-                self.assertEqual(sum("--no-report" in call for call in calls), 5)
+                self.assertEqual(sum("--no-report" in call for call in calls), expected_selections)
                 reports = [call for call in calls if "report" in call]
                 checks = [call for call in calls if "coverage-check" in call]
                 self.assertEqual((len(reports), len(checks)),
@@ -189,7 +197,8 @@ if "coverage-check" in args:
                     index = reports[0].index("--fail-under-lines")
                     self.assertEqual(reports[0][index + 1], "80")
                     self.assertIn("--no-default-ignore-filename-regex", reports[0])
-        print("Make recipe: selections=5; one bad gates=1/1; two bad gates=0/0; gate failure retained")
+        print(f"Make recipe: selections={expected_selections}; "
+              "one bad gates=1/1; two bad gates=0/0; gate failure retained")
 
 
 if __name__ == "__main__":
