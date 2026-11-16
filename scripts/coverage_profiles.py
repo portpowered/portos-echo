@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,11 @@ def annotation(value):
     return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def module_signature(name):
+    match = re.fullmatch(r"portos-echo-\d+-(\d+)(?:_\d+)?\.profraw", name)
+    return match[1] if match else "unknown"
+
+
 def validate(directory, quarantine, tool):
     """Keep good inputs byte-for-byte; retain bad inputs outside the merge glob."""
     subprocess.run([tool, "--version"], check=True, capture_output=True)
@@ -46,7 +52,8 @@ def validate(directory, quarantine, tool):
         destination = Path(tempfile.mkdtemp(prefix="run-", dir=quarantine))
         for profile, error in bad:
             shutil.move(str(profile), destination / profile.name)
-            print(f"::warning::{annotation(profile.name)}: {annotation(error)}",
+            print(f"::warning::module_signature={module_signature(profile.name)} "
+                  f"file={annotation(profile.name)}: {annotation(error)}",
                   flush=True)
     if len(bad) > 1 or len(profiles) == len(bad):
         raise ValueError(

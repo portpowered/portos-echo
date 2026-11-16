@@ -23,6 +23,14 @@ TOOL = None
 
 
 class PolicyTests(unittest.TestCase):
+    def test_module_signature_separates_pool_and_rejects_unknown_names(self):
+        for name in ("portos-echo-5519-8660843643471611737_0.profraw",
+                     "portos-echo-5447-8660843643471611737.profraw"):
+            self.assertEqual(profiles.module_signature(name), "8660843643471611737")
+        for name in ("writer.profraw", "portos-echo-1-invalid_0.profraw",
+                     "portos-echo-1-123_0.profraw\n"):
+            self.assertEqual(profiles.module_signature(name), "unknown")
+
     def test_no_inputs_refuses_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -70,7 +78,7 @@ class InstrumentedTests(unittest.TestCase):
         )
 
     def test_one_truncated_warns_then_gates_run(self):
-        bad = self.root / "truncated.profraw"
+        bad = self.root / "portos-echo-5519-8660843643471611737_0.profraw"
         truncated = self.raw.read_bytes()[:16]
         bad.write_bytes(truncated)
         old = self.merge(self.root / "old.profdata")
@@ -79,7 +87,8 @@ class InstrumentedTests(unittest.TestCase):
         new = self.admit()
         self.assertEqual(new.returncode, 0, new.stderr)
         self.assertEqual(new.stdout.count("::warning::"), 1)
-        self.assertIn("truncated.profraw", new.stdout)
+        self.assertIn(bad.name, new.stdout)
+        self.assertIn("module_signature=8660843643471611737", new.stdout)
         self.assertIn("file header is corrupt", new.stdout)
         self.assertFalse(bad.exists())
         retained = list(self.quarantine.glob("run-*/*.profraw"))
@@ -89,21 +98,28 @@ class InstrumentedTests(unittest.TestCase):
         print("one bad: old exit=1 (file header is corrupt); new exit=0; warnings=1; merge gate=0")
 
     def test_two_bad_fail_systemic(self):
+        truncated = self.raw.read_bytes()[:16]
         for name in ("bad1", "bad2"):
-            (self.root / f"{name}.profraw").write_bytes(self.raw.read_bytes()[:16])
+            (self.root / f"{name}.profraw").write_bytes(truncated)
         result = self.admit()
         self.assertEqual(result.returncode, 1)
         self.assertIn("Systemic coverage profile problem", result.stderr)
         self.assertIn("quarantined=2, remaining=1", result.stderr)
         self.assertEqual(result.stdout.count("::warning::"), 2)
         self.assertEqual(len(list(self.quarantine.glob("run-*/*.profraw"))), 2)
+        self.assertEqual(result.stdout.count("module_signature=unknown"), 2)
+        self.assertEqual([p.read_bytes() for p in self.quarantine.glob("run-*/*.profraw")],
+                         [truncated, truncated])
         print("two bad: exit=1; warnings=2; systemic refusal; remaining=1")
 
     def test_only_bad_fails_systemic(self):
         self.raw.write_bytes(self.raw.read_bytes()[:16])
+        truncated = self.raw.read_bytes()
         result = self.admit()
         self.assertEqual(result.returncode, 1)
         self.assertIn("quarantined=1, remaining=0", result.stderr)
+        self.assertEqual([p.read_bytes() for p in self.quarantine.glob("run-*/*.profraw")],
+                         [truncated])
 
     def test_all_good_byte_identical(self):
         second = self.root / "second.profraw"
