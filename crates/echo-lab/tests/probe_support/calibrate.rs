@@ -3,7 +3,7 @@ use crate::probe_support::{FAKE, Session, response};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::Write;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 const POINTS: [(i32, i32); 5] = [(64, 64), (1216, 64), (1216, 736), (64, 736), (640, 400)];
 const PROMPTS: &str = "tap target 1 of 5: top-left at (64,64)\ntap target 2 of 5: top-right at (1216,64)\ntap target 3 of 5: bottom-right at (1216,736)\ntap target 4 of 5: bottom-left at (64,736)\ntap target 5 of 5: centre at (640,400)\n";
@@ -221,16 +221,23 @@ fn calibrate_cli_usage_destinations_and_race() {
         assert_eq!(session.ledger(), Vec::<Value>::new());
     }
     let session = Session::new(&fixture(&events("/dev/input/event4", &POINTS)));
-    let first = command(&session, false).spawn().unwrap();
+    let first = command(&session, false)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     let second = command(&session, false).output().unwrap();
-    let status = first.wait_with_output().unwrap().status;
+    let first = first.wait_with_output().unwrap();
     assert_eq!(
-        [status.success(), second.status.success()]
+        [first.status.success(), second.status.success()]
             .iter()
             .filter(|v| **v)
             .count(),
         1
     );
+    let loser = if first.status.success() { &second } else { &first };
+    failure(loser, "calibrate: output destination already exists");
+    assert_eq!(loser.stdout, b"");
     assert_eq!(report(&session), expected_report());
     fs::write(session.0.join("out/sentinel"), "retained").unwrap();
     let before = session.ledger();
