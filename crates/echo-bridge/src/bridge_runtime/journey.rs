@@ -288,6 +288,14 @@ struct PlaybackContext<'a, L: EchoLink> {
 }
 
 impl<L: EchoLink> PlaybackContext<'_, L> {
+    fn pressure(&mut self, source: &Source, reported: &mut bool) -> Result<(), Error> {
+        if !*reported && source.queue.drop_count() > 0 {
+            self.trace
+                .record("reply.overflow", Some(self.id), json!({"capacity":128}))?;
+            *reported = true;
+        }
+        Ok(())
+    }
     async fn await_played(
         &mut self,
         events: &mut L::Events,
@@ -437,12 +445,7 @@ async fn produce<L: EchoLink>(
         }
         context.delegation.service(call, context.trace).await?;
         let drained = source.receive(call).await?;
-        if !pressure_reported && source.queue.drop_count() > 0 {
-            context
-                .trace
-                .record("reply.overflow", Some(context.id), json!({"capacity":128}))?;
-            pressure_reported = true;
-        }
+        context.pressure(source, &mut pressure_reported)?;
         let echo_done = source.echo_done(lab);
         completed = source
             .completion(completed, drained, echo_done, call, context.screen)
@@ -460,6 +463,7 @@ async fn produce<L: EchoLink>(
                 context.device(source, &event)?;
             },
             frame = run.recv(), if !ended => { ended = context.capture(source, frame?, call, lab.0).await?; },
+            () = context.delegation.ready() => (),
             event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()) => match event {
                 Ok(event) => context.event(event, source, lab.0)?,
                 Err(CallError::Deadline) => (),

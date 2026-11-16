@@ -49,6 +49,7 @@ pub(super) struct Host {
     credentials: Option<Arc<Credentials>>,
     runner: Option<Runner>,
     pending: Option<JoinHandle<Completion>>,
+    completed: Option<Result<Completion, tokio::task::JoinError>>,
     sink: Arc<Sink>,
     receive: mpsc::Receiver<TraceEvent>,
     seen: HashSet<String>,
@@ -74,6 +75,7 @@ impl Host {
             credentials: None,
             runner: None,
             pending: None,
+            completed: None,
             sink: Arc::new(Sink {
                 send,
                 overflow: AtomicBool::new(false),
@@ -180,13 +182,25 @@ impl Host {
         Ok(true)
     }
 
+    /// Await worker completion without requiring another Live, device or timer event.
+    /// Retain the result when select cancels the other owner futures.
+    pub async fn ready(&mut self) {
+        let Some(pending) = self.pending.as_mut() else {
+            return std::future::pending().await;
+        };
+        self.completed = Some(pending.await);
+        self.pending = None;
+    }
+
     pub async fn service(&mut self, call: &mut impl LivePort, trace: &mut Trace) -> Result<(), Error> {
         self.flush(trace)?;
-        if !self.pending.as_ref().is_some_and(JoinHandle::is_finished) {
-            return Ok(());
+        if self.pending.as_ref().is_some_and(JoinHandle::is_finished) {
+            self.ready().await;
         }
-        let pending = self.pending.take().ok_or(Error::Unavailable)?;
-        let (runner, result) = pending.await.map_err(|_| Error::Unavailable)?;
+        let Some(completed) = self.completed.take() else {
+            return Ok(());
+        };
+        let (runner, result) = completed.map_err(|_| Error::Unavailable)?;
         self.runner = Some(runner);
         self.flush(trace)?;
         if let Some(grant) = &self.grant {
@@ -246,7 +260,7 @@ impl Host {
     /// Aborting the owner drops the runner and its backend workers; no late result is reusable.
     pub fn abandon(&mut self) -> bool {
         let pending = self.pending.take();
-        let abandoned = pending.is_some();
+        let abandoned = pending.is_some() || self.completed.take().is_some();
         if let Some(task) = pending {
             task.abort();
         }

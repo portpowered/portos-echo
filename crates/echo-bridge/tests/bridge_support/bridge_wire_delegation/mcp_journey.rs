@@ -31,7 +31,9 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
             1, "", "echo-bridge: Grant requires relinking\n",
         );
         assert_eq!(bridge_wire_screen::state(&mut session.screen).await, expected);
-        reach(&mut session.process, &path, "mcp.run.failed").await.unwrap();
+        // Once the 401 is observed, hold both clocks fixed. Completion and the
+        // cut/Played handshake must wake themselves, before any deadline tick.
+        failed_without_clock_advance(&path).await;
         next_wake.send(()).await.unwrap();
         reach(&mut session.process, &path, "delegation.refused").await.unwrap();
         session.process.finish(0).await;
@@ -40,6 +42,30 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
         assert_eq!(live.observer().calls().unwrap().len(), 2);
         live.shutdown().await;
     }).await;
+}
+
+async fn failed_without_clock_advance(path: &Path) {
+    let started = std::time::Instant::now();
+    loop {
+        let text = tokio::fs::read_to_string(path).await.unwrap();
+        let events: Vec<Value> = text
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        if let Some(failed) = events.iter().find(|e| e["event"] == "mcp.run.failed") {
+            assert_eq!(failed["reason"], "relink_required");
+            assert_eq!(events.iter().filter(|e| e["event"] == "run.failed").count(), 0);
+            assert_eq!(
+                events.iter().filter(|e| e["event"] == "wyoming.reconnecting").count(),
+                0
+            );
+            return;
+        }
+        assert!(
+            started.elapsed() < OBSERVATION_TIMEOUT,
+            "completion stalled with clocks frozen: {events:?}"
+        );
+    }
 }
 
 pub(super) async fn link(session: &mut Session, mock: &Mock, directory: &Path) {
