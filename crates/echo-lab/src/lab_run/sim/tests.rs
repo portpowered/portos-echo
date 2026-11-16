@@ -99,6 +99,88 @@ fn frame_threshold_and_exact_call_count_are_distinct() {
     );
 }
 
+fn delegation_records() -> Vec<Value> {
+    ["session.delegation.created", "tools/call", "session.commentary.append"]
+        .into_iter()
+        .map(|event| json!({"event":event,"run_id":"run-1","delegation_id":"d-1","name":"test.echo"}))
+        .collect()
+}
+
+fn delegation_selectors() -> Vec<selectors::Selector> {
+    selectors::parse(&[
+        json!("session.delegation.created"),
+        json!("tools/call {name: test.echo, count: 1}"),
+        json!("session.commentary.append"),
+    ])
+    .unwrap()
+}
+
+#[test]
+fn delegation_sequence_requires_the_same_nonempty_identity_at_every_step() {
+    let selectors = delegation_selectors();
+    assert_eq!(selectors::check(&delegation_records(), &selectors, None), Ok(()));
+    for index in 0..3 {
+        for value in [json!(null), json!(""), json!(42)] {
+            let mut records = delegation_records();
+            records[index]["delegation_id"] = value;
+            assert_eq!(
+                selectors::check(&records, &selectors, Some("run-1")),
+                Err("trace expectation: missing delegation ID".into())
+            );
+        }
+        let mut records = delegation_records();
+        records[index]["delegation_id"] = json!("d-2");
+        assert_eq!(
+            selectors::check(&records, &selectors, Some("run-1")),
+            Err("trace expectation: mismatched delegation ID".into())
+        );
+    }
+}
+
+#[test]
+fn delegation_identity_is_scoped_to_the_selected_run_and_final_counts() {
+    let mut records = delegation_records();
+    let mut other = delegation_records();
+    for record in &mut other {
+        record["run_id"] = json!("run-2");
+        record["delegation_id"] = json!("d-2");
+    }
+    records.extend(other);
+    assert_eq!(
+        selectors::check(&records, &delegation_selectors(), Some("run-1")),
+        Ok(())
+    );
+    assert_eq!(
+        selectors::check(&records, &delegation_selectors(), Some("run-2")),
+        Ok(())
+    );
+    records.push(records[1].clone());
+    assert_eq!(
+        selectors::check(&records, &delegation_selectors(), Some("run-1")),
+        Err("trace expectation 1 (tools/call): expected 1 occurrences, observed 2".into())
+    );
+}
+
+#[test]
+fn delegation_sequence_cannot_correlate_records_without_a_run() {
+    let mut records = delegation_records();
+    for record in &mut records {
+        record.as_object_mut().unwrap().remove("run_id");
+    }
+    assert_eq!(
+        selectors::check(&records, &delegation_selectors(), None),
+        Err("trace expectation: missing run ID in delegation sequence".into())
+    );
+    for event in ["session.delegation.created", "session.commentary.append"] {
+        let mut trace = Trace::default();
+        assert_eq!(
+            trace.append(format!("{}\n", json!({"event":event,"elapsed_ms":0,"delegation_id":"d-1"})).as_bytes()),
+            Err("trace: missing run ID".into())
+        );
+        assert_eq!(trace.finish(), Err("trace: previously invalid trace".into()));
+    }
+}
+
 #[test]
 fn selectors_reject_empty_invalid_operators_and_non_scalar_values() {
     assert_eq!(selectors::parse(&[]).unwrap_err(), "trace expectation: empty selectors");

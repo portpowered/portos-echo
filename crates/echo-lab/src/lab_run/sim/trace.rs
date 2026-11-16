@@ -49,7 +49,16 @@ impl Trace {
             .ok_or("trace: missing event")?;
         let elapsed = value["elapsed_ms"].as_u64().ok_or("trace: invalid timestamp")?;
         let id = value["run_id"].as_str().filter(|s| !s.is_empty());
-        if id.is_none() && (name.starts_with("wyoming.") || matches!(name, "timing" | "live.transcript" | "tools/call"))
+        if id.is_none()
+            && (name.starts_with("wyoming.")
+                || matches!(
+                    name,
+                    "timing"
+                        | "live.transcript"
+                        | "tools/call"
+                        | "session.delegation.created"
+                        | "session.commentary.append"
+                ))
         {
             return Err("trace: missing run ID".into());
         }
