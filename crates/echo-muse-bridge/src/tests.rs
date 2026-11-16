@@ -1,10 +1,9 @@
 //! T1 component flows through the public backend and intake, with no real time.
-#[path = "../tests/cases/races.rs"]
 mod races;
-#[path = "../tests/cases/store_faults.rs"]
 mod store_faults;
-#[path = "../tests/support/mod.rs"]
-mod support;
+mod support {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/mod.rs"));
+}
 
 use echo_agent_api::{AgentBackend, AgentError};
 use echo_contracts::{ids::TaskId, task::TaskEvent};

@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
