@@ -134,6 +134,12 @@ class InstrumentedTests(unittest.TestCase):
         raw_dir.mkdir(parents=True)
         shutil.copytree(ROOT / "scripts", self.root / "scripts",
                         ignore=shutil.ignore_patterns("__pycache__"))
+        # The outer driver already runs the real instrumented suite. Substitute
+        # its recursive invocation while observing the Make command boundary.
+        (self.root / "scripts/test_coverage_profiles.py").write_text(
+            'import json, pathlib, sys\n'
+            'pathlib.Path("self-test.json").write_text(json.dumps(sys.argv[1:]))\n'
+        )
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         (bin_dir / "python").symlink_to(sys.executable)
@@ -163,12 +169,15 @@ if "coverage-check" in args:
                     (raw_dir / f"bad{index}.profraw").write_bytes(self.raw.read_bytes()[:16])
                 log = self.root / "calls.jsonl"
                 log.unlink(missing_ok=True)
+                self_test = self.root / "self-test.json"
+                self_test.unlink(missing_ok=True)
                 result = subprocess.run(
                     ["make", "-f", str(ROOT / "Makefile"), "-f", str(overrides), "coverage"],
                     cwd=self.root, env={**environment, "CHECK_EXIT": str(gate_exit)},
                     capture_output=True, text=True,
                 )
                 calls = [json.loads(line) for line in log.read_text().splitlines()]
+                self.assertEqual(json.loads(self_test.read_text()), ["--instrumented"])
                 self.assertEqual(sum("--no-report" in call for call in calls), 5)
                 reports = [call for call in calls if "report" in call]
                 checks = [call for call in calls if "coverage-check" in call]

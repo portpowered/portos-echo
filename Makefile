@@ -101,6 +101,7 @@ COVERAGE_DEPENDENCY_SOURCES := \.cargo.(registry|git).|\.rustup.toolchains.|.rus
 COVERAGE_HOST_T3 := -p echo-wyoming --test wyoming_t3
 
 coverage: hassmic-host
+	if [ "$$(uname -s)" = Linux ]; then python scripts/test_coverage_profiles.py --instrumented; fi
 	cargo +nightly-2026-11-05 llvm-cov clean --workspace
 	mkdir -p target/llvm-cov
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) --workspace --all-targets --locked --branch --no-report
