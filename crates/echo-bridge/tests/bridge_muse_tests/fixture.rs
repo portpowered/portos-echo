@@ -84,7 +84,8 @@ pub(super) struct Muse {
 
 impl Muse {
     pub async fn start(san: &str) -> Self {
-        let directory = tempfile::tempdir_in(binary("echo-muse-fake-gadget").parent().unwrap()).unwrap();
+        // Private daemon state must stay outside repository-local build artifacts.
+        let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
         certificate(root, "server", san);
@@ -92,7 +93,8 @@ impl Muse {
         let credential = std::fs::read(root.join("server.key")).unwrap();
         let credential: String = credential.iter().take(64).map(|b| char::from(b'a' + b % 26)).collect();
         private(&root.join("muse-credential"), credential.as_bytes());
-        std::fs::hard_link(binary("echo-muse-fake-gadget"), root.join("gadget")).unwrap();
+        std::fs::copy(binary("echo-muse-fake-gadget"), root.join("gadget")).unwrap();
+        std::fs::set_permissions(root.join("gadget"), std::fs::Permissions::from_mode(0o700)).unwrap();
         private(
             &root.join("script.json"),
             json!({"stdout":"Done! The job completed successfully.","stderr":"","exit":0})
