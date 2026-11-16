@@ -218,7 +218,8 @@ impl WindowsLauncher {
                 .stderr(std::process::Stdio::null())
                 .spawn()
                 .unwrap();
-            assert_eq!(Self::observation(&mut observer)["event"], "observer.ready");
+            let value = Self::observation(&mut observer);
+            assert_eq!(value["event"], "observer.ready", "{value}");
             fixture.observers.push(observer);
             reader.get_mut().write_all(b"G").await.unwrap();
         }
@@ -232,6 +233,11 @@ impl WindowsLauncher {
             &mut line,
         )
         .unwrap();
+        assert!(
+            !line.is_empty(),
+            "native observer EOF; observed status={:?}",
+            observer.try_wait().unwrap()
+        );
         serde_json::from_str(&line).unwrap()
     }
 
@@ -241,7 +247,7 @@ impl WindowsLauncher {
         for (index, observer) in self.observers.iter_mut().enumerate() {
             std::io::Write::write_all(observer.stdin.as_mut().unwrap(), b"collect\n").unwrap();
             let value = Self::observation(observer);
-            assert_eq!(value["event"], "observer.collected");
+            assert_eq!(value["event"], "observer.collected", "{value}");
             assert_eq!(value["owned_survivors"], 0);
             assert_eq!(value["status"], u32::from(forced && index == last));
             assert!(observer.wait().unwrap().success());
@@ -370,14 +376,20 @@ fn require_prebuilt_host() {
 async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
     require_prebuilt_host();
     let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let root = std::env::temp_dir().join(format!(
-        "lab-real-wsl-{}-{}",
-        std::process::id(),
-        reservation.local_addr().unwrap().port()
-    ));
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(".cache")
+        .join(format!(
+            "lab-real-wsl-{}-{}",
+            std::process::id(),
+            reservation.local_addr().unwrap().port()
+        ));
     std::fs::create_dir(&root).unwrap();
     let mut command = WindowsLauncher::command("real_wsl_launcher_fixture");
-    command.arg(root.join("guest.json"));
+    command.arg(root.file_name().unwrap());
     let mut process = super::process::Process::start(&mut command.into()).unwrap();
     let collected = process.observe_collection();
     let fixture = WindowsLauncher {
@@ -386,8 +398,7 @@ async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
         collected,
         root,
     };
-    let ready = process.expect("host.ready").await.unwrap();
-    let identity = process.expect("guest.owned").await.unwrap();
+    let (ready, identity) = owned_handshake(&mut process).await;
     assert!(identity["pid"].as_u64().unwrap() > 0);
     if busy {
         process.send(&serde_json::json!({"action":"registered"})).await.unwrap();
@@ -410,11 +421,27 @@ async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
     std::io::Write::write_all(
         &mut std::io::stdout(),
         format!(
-            "R-WSL interrupted={interrupted}, busy={busy}: guest={witness}, observer={exit}, endpoint_closed=true\n"
+            "R-WSL host.ready then guest.owned; interrupted={interrupted}, busy={busy}: guest={witness}, observer={exit}, endpoint_closed=true\n"
         )
         .as_bytes(),
     )
     .unwrap();
+}
+
+#[cfg(windows)]
+async fn owned_handshake(process: &mut super::process::Process) -> (serde_json::Value, serde_json::Value) {
+    let deadline = super::process::readiness_deadline();
+    let ready = tokio::time::timeout_at(deadline, process.line())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ready["event"], "host.ready", "{ready}");
+    let identity = tokio::time::timeout_at(deadline, process.line())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(identity["event"], "guest.owned", "{identity}");
+    (ready, identity)
 }
 
 #[cfg(windows)]
