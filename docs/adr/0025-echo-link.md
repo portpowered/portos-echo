@@ -40,7 +40,6 @@ client API, fixtures, sim oracles and diagnostic strings stay compatible.
 Rollback removes the neutral seam and returns binary wiring and library callers
 to the unchanged Wyoming client. No stored state or wire migration is needed.
 
-
 ## Amendment: device mute
 
 The coordinator authorized this additive contract on 2026-11-16 for M1:
