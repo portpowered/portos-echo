@@ -77,7 +77,7 @@ fn run(session: &Session) -> std::process::Output {
 
 #[test]
 fn m5_unimplemented_controls_fail_before_host_or_bridge_launch() {
-    for action in ["call", "replay", "probe"] {
+    for action in ["call", "probe"] {
         let session = Session::new();
         session.scenario(json!([{"mcp":{"action":action}}]), json!({}));
         let path = session.0.join("scenario.yaml");
@@ -101,6 +101,139 @@ fn m5_unimplemented_controls_fail_before_host_or_bridge_launch() {
         assert!(!events.contains("sim.endpoint"));
         assert!(!session.0.join("artifacts/mcp.private").exists());
     }
+}
+
+#[test]
+fn m5_replay_without_a_running_rotated_grant_fails_before_launch() {
+    let session = Session::new();
+    scenario(&session, json!([{"mcp":{"action":"replay"}}]));
+    let output = session
+        .command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "echo-lab: scenario.yaml: step 0: M5: replay requires a live rotated grant\n"
+    );
+    let report = session.report();
+    assert_eq!(report["checks"], json!({"step_0":false,"world_closed":true}));
+    assert!(report.get("link_counts").is_none());
+    assert!(!session.0.join("artifacts/mcp.private").exists());
+    assert!(
+        !std::fs::read_to_string(session.0.join("artifacts/events.jsonl"))
+            .unwrap()
+            .contains("sim.endpoint")
+    );
+}
+
+#[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host"]
+fn m5_replay_revokes_the_rotated_grant_after_restart_and_retains_exact_counts() {
+    let session = Session::new();
+    scenario(
+        &session,
+        json!([
+            {"mcp":{"action":"link"}}, {"mcp":{"action":"approve"}},
+            {"mcp":{"action":"refresh"}}, {"mcp":{"action":"restart"}},
+            {"mcp":{"action":"refresh"}}, {"mcp":{"action":"replay"}},
+            {"mcp":{"action":"unlink"}},
+            {"expect_screen":{"state":"error","relink":true,
+                "message":"Run echo-bridge link with your config to relink Port OS MCP."}},
+            {"expect_link_counts":{"link":1,"tools_list":0,"tool_call":0,"forced_refresh":2,
+                "replay_rejected":1,"relink_error":1,"restart_grant_kept":0,"unlink":1}}
+        ]),
+    );
+    let output = run(&session);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = session.report();
+    assert_eq!(report["result"], "pass");
+    assert_eq!(
+        report["link_counts"],
+        json!({"link":1,"tools_list":0,"tool_call":0,"forced_refresh":2,
+        "replay_rejected":1,"relink_error":1,"restart_grant_kept":0,"unlink":1})
+    );
+    assert_eq!(report["checks"]["world_closed"], true);
+    assert!(!session.0.join("artifacts/mcp.private").exists());
+    let events = std::fs::read_to_string(session.0.join("artifacts/events.jsonl")).unwrap();
+    for private in [
+        "synthetic-refresh-",
+        "synthetic-api-key",
+        "private_key_jwk",
+        "m5-external-replay",
+    ] {
+        assert!(!events.contains(private));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(private));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(private));
+        assert!(!report.to_string().contains(private));
+    }
+}
+
+#[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host"]
+fn m5_replay_before_rotation_never_consumes_the_live_refresh_token() {
+    let session = Session::new();
+    scenario(
+        &session,
+        json!([
+            {"mcp":{"action":"link"}}, {"mcp":{"action":"approve"}}, {"mcp":{"action":"replay"}}
+        ]),
+    );
+    let output = run(&session);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "echo-lab: scenario.yaml: step 2: M5: replay requires a live rotated grant\n"
+    );
+    let report = session.report();
+    assert_eq!(report["result"], "fail");
+    assert_eq!(
+        report["checks"],
+        json!({"step_0":true,"step_1":true,"step_2":false,"world_closed":true})
+    );
+    assert_eq!(
+        report["link_counts"],
+        json!({"link":1,"tools_list":0,"tool_call":0,"forced_refresh":0,
+        "replay_rejected":0,"relink_error":0,"restart_grant_kept":0,"unlink":0})
+    );
+    assert!(!session.0.join("artifacts/mcp.private").exists());
+}
+
+#[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host"]
+fn m5_replay_cannot_repeat_a_rejected_refresh() {
+    let session = Session::new();
+    scenario(
+        &session,
+        json!([
+            {"mcp":{"action":"link"}}, {"mcp":{"action":"approve"}},
+            {"mcp":{"action":"refresh"}}, {"mcp":{"action":"replay"}}, {"mcp":{"action":"replay"}}
+        ]),
+    );
+    let output = run(&session);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "echo-lab: scenario.yaml: step 4: M5: replay requires a live rotated grant\n"
+    );
+    let report = session.report();
+    assert_eq!(report["result"], "fail");
+    assert_eq!(
+        report["checks"],
+        json!({"step_0":true,"step_1":true,"step_2":true,
+        "step_3":true,"step_4":false,"world_closed":true})
+    );
+    assert_eq!(
+        report["link_counts"],
+        json!({"link":1,"tools_list":0,"tool_call":0,"forced_refresh":1,
+        "replay_rejected":1,"relink_error":0,"restart_grant_kept":0,"unlink":0})
+    );
+    assert!(!session.0.join("artifacts/mcp.private").exists());
 }
 
 #[test]

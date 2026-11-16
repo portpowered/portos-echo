@@ -1,4 +1,5 @@
 //! M5 owns the production bridge, pinned host and strict loopback grant peers.
+mod mcp_replay;
 mod mcp_session;
 mod mcp_wire;
 
@@ -41,6 +42,7 @@ impl<'a> M5<'a> {
             Step::Mcp(McpAction::Restart) if !session.started() => {
                 return Err("M5: restart requires a running linked bridge".into());
             }
+            Step::Mcp(McpAction::Replay) => session.admit_replay()?,
             Step::Mcp(
                 McpAction::Link | McpAction::Approve | McpAction::Refresh | McpAction::Unlink | McpAction::Restart,
             )
@@ -58,6 +60,7 @@ impl<'a> M5<'a> {
             Step::Mcp(McpAction::Refresh) => session.operator("--refresh-now", "MCP refreshed\n").await?,
             Step::Mcp(McpAction::Unlink) => session.operator("unlink", "MCP unlinked\n").await?,
             Step::Mcp(McpAction::Restart) => session.restart().await?,
+            Step::Mcp(McpAction::Replay) => session.replay().await?,
             Step::Ui(expected) => super::observers::screen(
                 &serde_json::to_vec(&session.screen).map_err(|_| "M5: screen encoding")?,
                 expected,

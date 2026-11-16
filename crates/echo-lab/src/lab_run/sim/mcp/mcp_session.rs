@@ -39,6 +39,8 @@ pub struct Session {
     binary: PathBuf,
     measured: Option<LinkCounts>,
     elapsed_ms: u64,
+    initial: Option<Secret<Value>>,
+    replayed: bool,
     pub endpoints: Vec<SocketAddr>,
 }
 
@@ -292,6 +294,55 @@ impl Session {
         if self.screen != json!({"state":"ready","message":"Echo Live ready"}) {
             return Err("M5: approved screen mismatch".into());
         }
+        self.initial = Some(self.grant()?);
+        self.replayed = false;
+        Ok(())
+    }
+
+    pub fn admit_replay(&self) -> Result<(), String> {
+        if self.pending.is_some() || self.replayed {
+            return Err("M5: replay requires a live rotated grant".into());
+        }
+        let initial = self
+            .initial
+            .as_ref()
+            .ok_or("M5: replay requires a live rotated grant")?;
+        let current = self.grant()?;
+        if current.expose()["grant"].is_null()
+            || current.expose()["grant"]["refresh_token"] == initial.expose()["grant"]["refresh_token"]
+            || current.expose()["private_key_jwk"] != initial.expose()["private_key_jwk"]
+        {
+            return Err("M5: replay requires a live rotated grant".into());
+        }
+        Ok(())
+    }
+
+    pub async fn replay(&mut self) -> Result<(), String> {
+        self.admit_replay()?;
+        let current = self.grant()?;
+        let fixture = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?;
+        let before = fixture.counts().map_err(|_| "M5: authorization observation failed")?;
+        let token = current.expose()["grant"]["access_token"]
+            .as_str()
+            .ok_or("M5: missing access token")?;
+        if !fixture.validator().accepts(token) {
+            return Err("M5: replay requires a live rotated grant".into());
+        }
+        super::mcp_replay::reject(
+            self.initial.as_ref().ok_or("M5: missing replay record")?,
+            EPOCH + self.elapsed_ms / 1000,
+            before.links,
+        )
+        .await?;
+        let mut expected = before;
+        expected.replay_rejected += 1;
+        if fixture.counts().map_err(|_| "M5: authorization observation failed")? != expected
+            || fixture.validator().accepts(token)
+            || self.grant()?.expose() != current.expose()
+        {
+            return Err("M5: replay did not revoke the unchanged stored grant".into());
+        }
+        self.replayed = true;
         Ok(())
     }
 
@@ -380,6 +431,7 @@ impl Session {
         }
         self.stream.take();
         failures.extend(self.close_bridge().await);
+        self.initial.take();
         if let Some(live) = self.live.take() {
             live.shutdown().await;
         }
