@@ -38,7 +38,7 @@ fn recording(path: &str) -> io::Result<()> {
 
 fn wait_until(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
     let target = args.get(3).ok_or("missing end")?;
-    let script = "import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')); assert t.tzinfo is not None; print(round(t.timestamp()*1000))";
+    let script = "import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')); assert t.tzinfo is not None; print(round(t.timestamp()*1000))"; // lint-rules: allow-literal synthetic timestamp parsing fixture, never a network target
     let output = std::process::Command::new("python")
         .args(["-c", script, target])
         .output()?;

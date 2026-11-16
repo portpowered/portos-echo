@@ -115,7 +115,7 @@ pub fn failed(output: &Output, diagnostic: &str) {
 fn b0_driver_fixes_file_frame_speech_waits_before_every_held_command() {
     for end in [
         "2026-11-15T09:00:00.500Z",
-        "2026-11-15T10:00:00.500+01:00",
+        "2026-11-15T10:00:00.500+01:00", // lint-rules: allow-literal synthetic timestamp parsing fixture, never a network target
         "2026-11-15T09:00:00Z",
         "2026-11-15T08:59:59Z",
     ] {
@@ -296,7 +296,7 @@ fn b0_driver_fixes_invalid_playback_or_wait_never_dispatches_early() {
         json!({"play":{"held":true}}),
         json!({"play":{"held":false}}),
         json!({"play":{"held":true,"playEndedAt":"invalid"}}),
-        json!({"play":{"held":true,"playEndedAt":"2026-11-15T09:00:00"}}),
+        json!({"play":{"held":true,"playEndedAt":"2026-11-15T09:00:00"}}), // lint-rules: allow-literal synthetic timestamp parsing fixture, never a network target
         json!({"fail":"wait_until"}),
         json!({"malformed":"wait_until"}),
         json!({"wait_until":{"reached":false}}),

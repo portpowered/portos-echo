@@ -372,6 +372,7 @@ mod tests {
     #[test]
     fn local_real_host_helper_waits_on_instants_with_a_controlled_wall_clock() {
         let helper = include_str!("../src/lab_run/run_host.py");
+        let target = "2026-11-15T10:00:00.250+01:00"; // lint-rules: allow-literal offset timestamp parsing fixture
         let script = format!(
             r#"
 import sys,datetime
@@ -387,7 +388,7 @@ def advance(seconds):
     state["waits"].append(seconds)
     state["now"] += datetime.timedelta(seconds=seconds)
 with patch.object(ns["datetime"],"datetime",Clock), patch.object(ns["time"],"sleep",advance):
-    assert ns["wait_until"]("2026-11-15T10:00:00.250+01:00")=={{"reached":True}}
+    assert ns["wait_until"]({target:?})=={{"reached":True}}
     assert state["now"]==base+datetime.timedelta(seconds=.25)
     assert state["waits"]==[.1,.1,.05],state
     state["waits"].clear()
@@ -407,7 +408,12 @@ print("offsets equal; future waits [0.1, 0.1, 0.05]; reached/past waits []")
             String::from_utf8(output.stdout).unwrap().trim(),
             "offsets equal; future waits [0.1, 0.1, 0.05]; reached/past waits []"
         );
-        for (stamp, code) in [("2000-01-01T00:00:00Z", 0), ("bad", 1), ("2026-11-15T09:00:00", 1)] {
+        let cases = [
+            ("2000-01-01T00:00:00Z", 0),
+            ("bad", 1),
+            ("2026-11-15T09:00:00", 1), // lint-rules: allow-literal naive timestamp rejection fixture
+        ];
+        for (stamp, code) in cases {
             let output = Command::new("python")
                 .args(["-c", helper, "wait_until", stamp])
                 .output()
