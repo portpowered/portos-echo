@@ -16,7 +16,15 @@ serde_norway = "0.9.42"
 jsonschema = { version = "0.33", default-features = false }
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
 echo-wyoming = { version = "0.1.0", path = "../echo-wyoming" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "io-util", "sync", "time"] }
+echo-screen-contract = { version = "0.1.0", path = "../echo-screen-contract" }
+echo-spoof-mcp = { version = "0.1.0", path = "../echo-spoof-mcp" }
+echo-live = { version = "0.1.0", path = "../echo-live", features = ["fake"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "io-util", "sync", "time", "test-util", "fs"] }
+
+[[bin]]
+name = "echo-lab-sim-script"
+path = "tests/fixtures/lab_sim_script.rs"
+bench = false
 
 [[bin]]
 name = "echo-lab-sim-bridge"

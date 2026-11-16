@@ -7,6 +7,7 @@ use std::time::Instant;
 use serde_json::{Value, json};
 
 pub struct Artifacts {
+    pub sim: bool,
     pub root: PathBuf,
     pub checks: BTreeMap<String, bool>,
     pub sessions: Vec<String>,
@@ -20,6 +21,7 @@ impl Artifacts {
         fs::create_dir(&root).map_err(|_| "run output: cannot create fresh directory")?;
         let events = File::create(root.join("events.jsonl")).map_err(|_| "run output: cannot create events")?;
         Ok(Self {
+            sim: false,
             root,
             checks: BTreeMap::new(),
             sessions: Vec::new(),
@@ -33,6 +35,25 @@ impl Artifacts {
         let value = json!({"event":event, "scenario":"batch", "step":step,
             "elapsed_ms":self.started.elapsed().as_millis(), "message":message});
         writeln!(self.events, "{value}").map_err(|_| "run output: cannot append event".into())
+    }
+
+    pub fn observation(&mut self, record: &Value) -> Result<(), String> {
+        if !matches!(
+            record["event"].as_str(),
+            Some("wyoming.run_started" | "wyoming.mic_frames" | "wyoming.run_ended")
+        ) {
+            return Ok(());
+        }
+        let mut safe = json!({"event":record["event"],"run_id":record["run_id"],"elapsed_ms":record["elapsed_ms"]});
+        if record["event"] == "wyoming.mic_frames" {
+            safe["count"] = record["count"].clone();
+        }
+        writeln!(self.events, "{safe}").map_err(|_| "run output: cannot append observation".into())
+    }
+
+    pub fn endpoint(&mut self, address: std::net::SocketAddr) -> Result<(), String> {
+        let safe = json!({"event":"sim.endpoint","address":address.to_string()});
+        writeln!(self.events, "{safe}").map_err(|_| "run output: cannot append endpoint".into())
     }
 
     pub fn publish(
@@ -56,9 +77,9 @@ impl Artifacts {
             "milestone":milestone, "result":if error.is_none() { "pass" } else { "fail" },
             "placement":"bridge_pc", "build_commit":build_commit(), "device":null,
             "evidence":self.evidence, "checks":self.checks,
-            "limitations":error.into_iter().chain(["Device edges require independent operator verification; no physical milestone is proved."]).collect::<Vec<_>>(),
-            "tier":tier, "driver":"device", "scenario_digest":digest,
-            "hassmic_commit":null, "bench_session_ids":self.sessions
+            "limitations":error.into_iter().chain(if self.sim { vec!["pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)", "T3 simulation does not prove a physical milestone or real-provider compatibility."] } else { vec!["Device edges require independent operator verification; no physical milestone is proved."] }).collect::<Vec<_>>(),
+            "tier":tier, "driver":if self.sim { "sim" } else { "device" }, "scenario_digest":digest,
+            "hassmic_commit":if self.sim { include_str!("../../../../hassmic.pin").lines().find_map(|l| l.strip_prefix("commit=")) } else { None }, "bench_session_ids":self.sessions
         });
         validate(&report)?;
         let text = serde_json::to_vec_pretty(&report).map_err(|_| "run output: cannot encode report")?;

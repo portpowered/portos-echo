@@ -55,6 +55,7 @@ lint-self-tests:
 
 test-unit:
 	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci
+	python -m unittest discover -s crates/echo-lab/src/lab_run/sim/host_tests
 	if [ -f web/screen/package.json ]; then cd web/screen && npm ci && npm test; fi
 
 test-contract:
@@ -67,6 +68,10 @@ test-sim:
 	sh tests/hassmic_host_smoke.sh
 	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
 	cargo nextest run -p echo-lab --test sim_bridge_cli --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
+	cargo build -p echo-lab --bins --locked
+	cargo nextest run -p echo-lab --test sim_host --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
+	cargo nextest run -p echo-lab --bin echo-lab --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
+	cargo run --locked -p echo-lab -- run --all --driver sim
 
 .PHONY: hassmic-host capture-wyoming measure-barge-in
 hassmic-host:
@@ -95,6 +100,8 @@ coverage: hassmic-host
 	cargo +nightly-2026-11-05 llvm-cov --workspace --all-targets --locked --branch --no-report
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_HOST_T3) --locked --branch --no-report -- --ignored --nocapture
 	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --test sim_bridge_cli --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --test sim_host --locked --branch --no-report -- --ignored --nocapture --test-threads=2
+	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --bin echo-lab --locked --branch --no-report -- --ignored --nocapture
 	cargo +nightly-2026-11-05 llvm-cov report --branch --no-default-ignore-filename-regex --ignore-filename-regex '$(COVERAGE_DEPENDENCY_SOURCES)' --fail-under-lines 80 --lcov --output-path target/llvm-cov/coverage.lcov
 	cargo xtask coverage-check target/llvm-cov/coverage.lcov "$(COVERAGE_BASE)"
 

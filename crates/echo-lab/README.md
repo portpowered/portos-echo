@@ -291,7 +291,110 @@ directory. Future drivers create only applicable artifacts: redacted event/tool
 traces, screen recording for animation, and derived audio metrics when applicable.
 No raw credentials or unnecessary voice recordings belong in these artifacts.
 
-W1 owns driver semantics, execution and artifact creation. Screen, key, touch and
-injection payloads currently receive structural validation only. T0-T2 tests use
-the prebuilt binary, isolated temporary directories, local schemas and real make
-dry runs; no hardware, remote account or conversation behavior is exercised.
+The sim driver executes the W1 scenario below. Unsupported controls, touch,
+frame capture, remote/Muse setup and negative injections fail explicitly.
+M4 remains not runnable until the W2 assembled bridge and agent integration.
+
+## Sim runner
+
+Build once with `make hassmic-host` and `cargo build -p echo-lab --bins --locked`.
+The host requires the development packages documented by
+`scripts/hassmic-host.sh`; Windows uses the existing WSL Ubuntu installation.
+The runner never builds binaries, installs packages or accesses hardware.
+
+```text
+cargo run -p echo-lab -- run tests/scenarios/w1-wake-stream.yaml --driver sim --bridge target/debug/echo-lab-sim-bridge
+cargo run -p echo-lab -- run --all --driver sim
+```
+
+On Windows the explicit bridge path ends in `.exe`. `--bridge` is one executable
+path, including spaces, with native argv and no shell evaluation. Use a wrapper
+for fixed arguments. `--python` selects Python (`python` on Windows, `python3`
+on Linux). A fresh `--cancel-file` can be created to cancel a pending run; it
+remains after cleanup. One scenario has a 120-second safety ceiling; cleanup
+has its own bounded deadline and runs independently of cancellation.
+
+Defaults write outside every git worktree under the temporary directory's
+`echo-lab-artifacts/artifacts/<milestone>/<unique-run-id>/`. `--out` selects a
+fresh external run directory. With `--all`, it selects a fresh external root
+containing `artifacts/<milestone>/<run-id>/`. Existing destinations are immutable.
+Only `report.json` marks completed publication; exit 1 and `result: fail` report
+failed expectations. Preflight errors may produce no directory. A broken stdout
+returns 1 even if a completed report remains. All audio and private observation
+files are removed at cleanup; reports persist allowlisted Wyoming metadata,
+checks and fixed diagnostic categories, never transcript or full UI payloads.
+
+Every sim world owns the pinned host controller, the existing Spoof MCP and
+FakeLive library servers, and one bridge child. Readiness uses flushed JSON
+records and Wyoming registration. EOF closes the bridge and the host controller;
+the controller reaps its own Linux process group and feeder/log threads.
+The upstream host retains its real audio clock. Its accepted limitation appears
+in every sim report verbatim:
+`pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)`.
+Our connections and listeners use literal `127.0.0.1` only. Windows WSL may
+retain a forwarding socket after the Linux listener closes; cleanup tests
+require EOF/reset without a Wyoming response, and native fake sockets refuse
+connections. T3 proves no provider, acoustic wake, hardware mute or physical
+milestone behavior.
+
+### Sim bridge contract
+
+The runner replaces these variables for each child:
+
+| Variable | Value |
+| --- | --- |
+| `ECHO_LAB_WYOMING_ADDR` | `127.0.0.1:<host-port>` |
+| `ECHO_LAB_MCP_URL` | `http://127.0.0.1:<spoof-port>/mcp` |
+| `ECHO_LAB_LIVE_URL` | `http://127.0.0.1:<live-port>/` |
+| `ECHO_LAB_TRACE_PATH` | Absolute native private JSONL path |
+| `ECHO_LAB_UI_STATE_PATH` | Absolute native private UiState JSON path |
+
+After registration, the bridge flushes `{"event":"bridge.ready"}` on stdout.
+After a complete wake it flushes
+`{"event":"bridge.run_completed","run_id":"run-1"}`. Closing stdin requests
+shutdown; exit 0 closes the trace, and nonzero exit fails the run. These are
+local harness records, separate from production bridge configuration.
+`echo-lab-sim-bridge` counts actual microphone frames through echo-wyoming,
+plays a short silent reply and records start, frame count and end. It never
+invents the microphone `audio-start` absent from the pinned host.
+
+Trace records are UTF-8 JSON objects, newline terminated, with `event` and
+nonnegative integer `elapsed_ms`. Run observations require `run_id`: 1–64 ASCII
+letters, digits, hyphens or underscores. Timestamps cannot regress within a run.
+The private trace is bounded to 1 MiB. Partial lines wait until complete and
+fail if still incomplete at shutdown. Complete malformed lines fail.
+
+### Sim steps and oracles
+
+`say` selects scenario-relative raw s16le mono 16000 Hz `.pcm` data (1–2048
+samples), cycled through the host capture FIFO before SIGUSR1. The W1 fixture
+is a durable synthetic 400 Hz waveform, 320 samples at amplitude 2000, generated
+as `int(2000 * sin(2*pi*i/40))`; it contains no recorded voice.
+`press` accepts `wake`/SIGUSR1, `action`/SIGUSR2, `pair`/SIGWINCH and `stop`/SIGHUP,
+either as a string or `{key: action}`. Other controls fail.
+
+`expect_trace` is a nonempty ordered array of selectors: `EVENT {scalar: value}`.
+For example `wyoming.mic_frames {count_gte: 10}` checks the numeric frame payload;
+`tools/call {name: test.echo, count: 1}` requires exactly one matching record.
+`count` defaults to one occurrence. Matching remains within the current run;
+unrelated events may intervene. Finalization checks exact counts again, so a
+late duplicate fails its earlier step. Unknown operators and invalid types fail.
+
+`expect_screen: {state: speaking}` compares selected fields against the latest
+complete typed `echo_screen_contract::UiState`. Wrong, missing or malformed
+state fails. `expect_speech_contains` consumes the current run's latest
+`live.transcript` record's `text`, using the existing case-insensitive literal
+matcher and explicit `regex:` opt-in. Its text never enters reports.
+`first_audio_after_endpoint_ms_p95` sorts current-run `timing` records named
+`first_audio_after_endpoint_ms`, selecting nearest rank `ceil(0.95*n)` of their
+nonnegative `duration_ms`. Equality at the budget passes; missing/invalid samples
+and unsupported metrics fail. W1's bridge produces neither speech, UI nor timing;
+scripted T3 bridges test those observations without claiming W2 integration.
+
+`make test-sim` validates scenarios, preserves the host/Wyoming component tests,
+builds the lab binaries once, runs ignored `sim_host` integration cases with
+two workers and discovers all T3 scenarios. It prints pass/fail/not-runnable
+outcomes and `executed`, `passed`, `failed`, `not_runnable` totals. A runnable
+failure or zero executed scenarios returns 1; M4 is never counted as passed.
+The test-only `echo-lab-sim-script` binary consumes explicit synthetic scripts
+at the child-process boundary; it is never the W1 acceptance bridge.

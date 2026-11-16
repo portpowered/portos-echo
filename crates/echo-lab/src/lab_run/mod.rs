@@ -5,6 +5,7 @@ mod run_lease;
 mod run_options;
 mod run_oracles;
 mod run_report;
+mod sim;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,10 @@ pub enum Step {
     Speech(Vec<String>),
     Screen(PathBuf),
     Frame(String),
+    Trace(Vec<serde_json::Value>),
+    Ui(serde_json::Value),
+    Press(String),
+    Budget(String, f64),
     Unsupported,
 }
 
@@ -34,6 +39,9 @@ pub trait Driver {
 }
 
 fn say(value: &str, scenario: &str, options: &Options) -> Result<Step, String> {
+    if options.sim {
+        return Ok(Step::SayFile(sim::fixture(value, scenario)?));
+    }
     if let Some(text) = value.strip_prefix("text:") {
         if options.speech.is_none() || text.trim().is_empty() {
             return Err(
@@ -76,17 +84,31 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
                 value.clone_into(&mut tier);
             }
         }
-        if scenario["setup"].as_object().is_none_or(|v| !v.is_empty())
-            || scenario["budgets"].as_object().is_none_or(|v| !v.is_empty())
-            || scenario["negative"].as_array().is_none_or(|v| !v.is_empty())
+        if !options.sim
+            && (scenario["setup"].as_object().is_none_or(|v| !v.is_empty())
+                || scenario["budgets"].as_object().is_none_or(|v| !v.is_empty())
+                || scenario["negative"].as_array().is_none_or(|v| !v.is_empty()))
         {
             return Err("run: setup, budgets and injections are not implemented by device driver".into());
+        }
+        if options.sim {
+            sim_setup(&scenario)?;
+            tier = "T3".into();
         }
         for step in scenario["steps"].as_array().ok_or("scenario: missing steps")? {
             steps.push(match step["say"].as_str() {
                 Some(value) => say(value, path, options)?,
+                None if options.sim => sim::parse(step)?,
                 None => run_oracles::parse(step)?,
             });
+        }
+        if options.sim {
+            for (name, value) in scenario["budgets"].as_object().ok_or("sim: missing budgets")? {
+                steps.push(Step::Budget(
+                    name.clone(),
+                    value.as_f64().ok_or("budget: invalid ceiling")?,
+                ));
+            }
         }
     }
     if steps.is_empty() {
@@ -95,7 +117,30 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
     Ok((milestone.ok_or("run: missing milestone")?, tier, steps))
 }
 
-fn dispatch(driver: &mut impl Driver, steps: &[Step], artifacts: &mut Artifacts) -> Result<(), String> {
+fn sim_setup(scenario: &serde_json::Value) -> Result<(), String> {
+    if !scenario["tiers"]
+        .as_array()
+        .is_some_and(|v| v.iter().any(|t| t == "T3"))
+    {
+        return Err("sim: scenario does not admit T3".into());
+    }
+    if scenario["setup"].as_object().is_none_or(|m| {
+        m.iter().any(|(k, v)| {
+            !matches!(
+                (k.as_str(), v.as_str()),
+                ("mcp", Some("spoof")) | ("backend", Some("client"))
+            )
+        })
+    }) {
+        return Err("sim: unsupported setup mode".into());
+    }
+    if scenario["negative"].as_array().is_none_or(|v| !v.is_empty()) {
+        return Err("sim: unsupported negative injection".into());
+    }
+    Ok(())
+}
+
+fn dispatch(driver: &mut dyn Driver, steps: &[Step], artifacts: &mut Artifacts) -> Result<(), String> {
     artifacts.event("run_started", None, None)?;
     for (index, step) in steps.iter().enumerate() {
         artifacts.event("step_started", Some(index), None)?;
@@ -103,7 +148,11 @@ fn dispatch(driver: &mut impl Driver, steps: &[Step], artifacts: &mut Artifacts)
         artifacts.checks.insert(format!("step_{index}"), result.is_ok());
         if let Err(message) = result {
             artifacts.event("step_failed", Some(index), Some(&message))?;
-            return Err(message);
+            return Err(if artifacts.sim {
+                format!("step {index}: {message}")
+            } else {
+                message
+            });
         }
         artifacts.event("step_completed", Some(index), None)?;
     }
@@ -121,10 +170,23 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
         .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or("scenario: invalid SHA-256 digest")?;
     let mut artifacts = Artifacts::create(root)?;
-    let mut driver = run_device::Device::new(&options);
-    let result = dispatch(&mut driver, &steps, &mut artifacts);
+    artifacts.sim = options.sim;
+    let mut driver: Box<dyn Driver> = if options.sim {
+        Box::new(sim::Sim::new(&options)?)
+    } else {
+        Box::new(run_device::Device::new(&options))
+    };
+    let result = dispatch(driver.as_mut(), &steps, &mut artifacts);
     let cleanup = driver.close(&mut artifacts);
-    artifacts.checks.insert("session_released".into(), cleanup.is_ok());
+    artifacts.checks.insert(
+        if options.sim {
+            "world_closed"
+        } else {
+            "session_released"
+        }
+        .into(),
+        cleanup.is_ok(),
+    );
     let result = match (result, cleanup) {
         (Err(primary), Err(cleanup)) => Err(format!("{primary}; {cleanup}")),
         (primary, cleanup) => primary.and(cleanup),
@@ -148,11 +210,22 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
         if result.is_ok() { "pass" } else { "fail" }
     )
     .map_err(|_| "run stdout: write failed")?;
-    result
+    result.map_err(|e| {
+        if options.sim {
+            format!("{}: {e}", options.scenarios[0])
+        } else {
+            e
+        }
+    })
 }
 
 pub fn run(args: &[String], output: &mut impl Write, errors: &mut impl Write) -> u8 {
-    match execute(args, output) {
+    let result = if args.iter().any(|s| s == "--all") {
+        sim::suite::execute(args, output)
+    } else {
+        execute(args, output)
+    };
+    match result {
         Ok(()) => 0,
         Err(message) => {
             let _ = writeln!(errors, "echo-lab: {message}");

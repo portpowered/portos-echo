@@ -1,0 +1,12 @@
+id: w1-wake-stream
+milestone: W1
+tiers: [T3]
+setup: {}
+steps:
+  - say: ../fixtures/lab/w1-utterance.pcm
+  - expect_trace:
+      - wyoming.run_started
+      - "wyoming.mic_frames {count_gte: 10}"
+      - wyoming.run_ended
+budgets: {}
+negative: []
