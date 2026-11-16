@@ -106,7 +106,7 @@ impl Source {
         retained
     }
 
-    fn receive(&mut self, call: &mut LiveCall) -> Result<bool, Error> {
+    async fn receive(&mut self, call: &mut LiveCall) -> Result<bool, Error> {
         // Leave time for the playback and Wyoming event futures in try_join!.
         // A provider burst must not monopolize the owner with synchronous
         // decoding/resampling while the bounded control queue fills up.
@@ -118,6 +118,7 @@ impl Source {
             let bytes = self.reply.process(&frame)?;
             self.enqueue(&bytes);
         }
+        tokio::task::yield_now().await;
         Ok(false)
     }
 
@@ -245,7 +246,7 @@ async fn produce(
             context.cut(source).await?;
             return Ok(());
         }
-        let drained = source.receive(call)?;
+        let drained = source.receive(call).await?;
         if !pressure_reported && source.queue.drop_count() > 0 {
             context
                 .trace
