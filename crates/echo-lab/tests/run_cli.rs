@@ -394,6 +394,9 @@ with patch.object(ns["datetime"],"datetime",Clock), patch.object(ns["time"],"sle
     state["waits"].clear()
     assert ns["wait_until"]("2026-11-15T09:00:00.250Z")=={{"reached":True}}
     assert state["waits"]==[]
+    assert ns["wait_until"]("2026-11-15T09:00:00.250000001Z")=={{"reached":True}}
+    assert state["now"]==base+datetime.timedelta(microseconds=250001)
+    assert state["waits"]==[.000001]
 print("offsets equal; future waits [0.1, 0.1, 0.05]; reached/past waits []")
 "#
         );

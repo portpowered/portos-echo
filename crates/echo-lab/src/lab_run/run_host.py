@@ -20,6 +20,10 @@ def instant(value):
 
 def wait_until(value):
     target = instant(value)
+    fraction = re.search(r"\.(\d+)", value)
+    # datetime truncates beyond microseconds; round the eligibility boundary up.
+    if fraction and any(digit != "0" for digit in fraction[1][6:]):
+        target += datetime.timedelta(microseconds=1)
     while True:
         remaining = (target - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
         if remaining <= 0:
