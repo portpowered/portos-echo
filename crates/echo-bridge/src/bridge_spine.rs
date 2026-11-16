@@ -169,6 +169,7 @@ fn bridge_spine_configured_modes_preserve_paths_and_never_read_credentials_at_pa
         assert_eq!(settings.health.to_string(), "127.0.0.1:16901");
         assert_eq!(settings.trace, std::path::PathBuf::from("trace.jsonl"));
         assert_eq!(settings.voice, "default");
+        assert_eq!(settings.session_idle_seconds, 120);
         assert!(!settings.lab);
         assert_configured_provider(settings, mode);
     }

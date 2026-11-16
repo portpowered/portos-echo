@@ -16,7 +16,14 @@ async fn bridge_cut_latency_ten_trials_at_200ms_lead() {
     for trial in 1..=10 {
         assert_eq!(host.command("arm").await, "armed");
         assert_eq!(host.command("wake").await, "wake");
-        assert_eq!(host.command("cut-ready").await, "cut-ready");
+        let ready = host.command("cut-ready").await;
+        assert_eq!(
+            ready,
+            "cut-ready",
+            "trial={trial} bridge_exit={:?} trace={:?}",
+            bridge.child.try_wait().unwrap(),
+            trace(&path)
+        );
         live.events
             .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
             .await

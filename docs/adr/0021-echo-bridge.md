@@ -54,5 +54,20 @@ timestamp includes controller/pipe dispatch overhead. It never substitutes
 `played` for sink closure or treats a missing EOF as zero. The fake offers 150
 encoded 20 ms frames per trial. No physical silence or provider claim follows.
 
-Remaining cancellation failure cases and reuse/recovery remain in this lane.
-Until those increments are complete the lane is not ready for acceptance.
+Healthy completed runs retain their Live call for `live.session_idle_seconds`.
+The call owner drives WebRTC while idle and discards idle audio. Each wake gets
+fresh codecs and counters, while RTP sequence/timestamps and the synthetic
+fake's cumulative packet acknowledgment remain scoped to the retained call.
+Idle expiry wins at the exact deadline; an unrepresentable `u64` duration has
+no reachable expiry rather than panicking or narrowing the config contract.
+Cancellation closes this provisional call before accepting another wake, so
+late audio cannot cross the cut into another run.
+
+Idle describe probes observe the existing Wyoming reconnect supervisor; the
+bridge never creates a competing dial loop. Health and fixed trace events show
+loss and recovery. Registration remains the supervisor's responsibility. EOF
+cancels probes and closes the owned call, client and health listener.
+
+Delivered-artifact idle-expiry and the remaining lifecycle failure matrix stay
+in this lane. Until final assembly and quality proof are complete the lane is
+not ready for acceptance.

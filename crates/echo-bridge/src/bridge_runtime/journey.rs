@@ -22,6 +22,7 @@ struct Source {
     mic: Option<Microphone>,
     chunks: u64,
     sent: u64,
+    call_packets_base: u64,
     received: u64,
     framed: u64,
     acknowledged: u64,
@@ -39,6 +40,7 @@ impl Source {
             mic: None,
             chunks: 0,
             sent: 0,
+            call_packets_base: 0,
             received: 0,
             framed: 0,
             acknowledged: 0,
@@ -63,7 +65,9 @@ impl Source {
             extra: frame.data.extra,
         };
         if self.mic.is_none() {
-            self.mic = Some(Microphone::new(format.clone())?);
+            let mut mic = Microphone::new(format.clone())?;
+            mic.packets = self.call_packets_base;
+            self.mic = Some(mic);
         }
         let mic = self.mic.as_mut().ok_or(Error::Audio)?;
         let packets = mic.process(&format, &frame.payload)?;
@@ -142,9 +146,10 @@ pub(super) async fn run(
     call: &mut LiveCall,
     trace: &mut Trace,
     id: &str,
-    options: (bool, u16),
-) -> Result<(), Error> {
+    options: (bool, u16, u64),
+) -> Result<(u64, bool), Error> {
     let mut source = Source::new()?;
+    source.call_packets_base = options.2;
     let (tx, rx) = mpsc::channel(1);
     trace.record("reply.started", Some(id), json!({}))?;
     let play = client.play(bridge_audio::format(24_000), rx);
@@ -154,7 +159,7 @@ pub(super) async fn run(
         id,
         lead_ms: options.1,
     };
-    let producer = produce(&mut source, &mut run, call, tx, options.0, &mut context);
+    let producer = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context);
     let (outcome, (), ()) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::try_join!(
             async { play.await.map_err(Error::from) },
@@ -187,7 +192,8 @@ pub(super) async fn run(
         json!({"count":source.sent,"received_chunks":stats.received,
         "dropped_chunks":stats.dropped,"input_samples":samples,"tail_samples":tail}),
     )?;
-    trace.record("wyoming.run_ended", Some(id), json!({}))
+    trace.record("wyoming.run_ended", Some(id), json!({}))?;
+    Ok((source.sent, !source.cancelled))
 }
 
 struct PlaybackContext<'a> {
@@ -221,7 +227,7 @@ async fn produce(
     run: &mut Run,
     call: &mut LiveCall,
     tx: mpsc::Sender<Vec<u8>>,
-    lab: bool,
+    lab: (bool, u64),
     context: &mut PlaybackContext<'_>,
 ) -> Result<(), Error> {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -240,11 +246,11 @@ async fn produce(
                 .record("reply.overflow", Some(context.id), json!({"capacity":128}))?;
             pressure_reported = true;
         }
-        let echo_done = lab
+        let echo_done = lab.0
             && source.finished
             && source.sent > 0
             && source.received == source.sent
-            && source.acknowledged == source.sent;
+            && source.acknowledged == source.sent + lab.1;
         if !completed && (source.audio_done || echo_done) {
             source.finish_mic(call).await?;
             let bytes = source.reply.finish()?;
@@ -259,11 +265,11 @@ async fn produce(
         }
         tokio::select! {
             frame = run.recv() => match frame? {
-                Some(frame) => source.microphone(frame, call, lab).await?,
+                Some(frame) => source.microphone(frame, call, lab.0).await?,
                 None => return Err(Error::Wyoming),
             },
             event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(deadline)) => match event {
-                Ok(event) => source.event(event, lab)?,
+                Ok(event) => source.event(event, lab.0)?,
                 Err(CallError::Deadline) => (),
                 Err(error) => return Err(error.into()),
             },

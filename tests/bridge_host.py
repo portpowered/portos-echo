@@ -68,8 +68,12 @@ def main():
                     sink = playback(folder)
                     print("armed", flush=True)
                 elif command.strip() == "cut-ready":
-                    cut = cut_ready(sink, host)
-                    print("cut-ready", flush=True)
+                    try:
+                        cut = cut_ready(sink, host)
+                        print("cut-ready", flush=True)
+                    except TimeoutError as error:
+                        print(error, file=sys.stderr, flush=True)
+                        print("sink-start-failed", flush=True)
                 elif command.strip() == "cut-result":
                     print(result(sink, cut), flush=True)
                 elif command.strip() == "pcm":
@@ -79,6 +83,9 @@ def main():
                     host.proc.send_signal(signal.SIGUSR1)
                     print("wake", flush=True)
                 else:
+                    if command.strip() == "restart":
+                        host.deadline = time.monotonic() + 20
+                        awake = False
                     host.command(command.strip())
                     awake = awake or command.strip() == "wake"
         finally:

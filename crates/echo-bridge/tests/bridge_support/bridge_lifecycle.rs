@@ -1,0 +1,170 @@
+//! T3: separate wakes through the delivered binary and pinned host share one call.
+use super::*;
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_lifecycle_wake_during_playback_stays_in_the_existing_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let live = bridge_peer::Live::bind_frames(150).await;
+    let mut host = Process::spawn(&mut host());
+    let port = host.line().await;
+    let mut process = Process::spawn(&mut bridge(&port, &live.url, &path));
+    assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+    assert_eq!(host.command("arm").await, "armed");
+    assert_eq!(host.command("wake").await, "wake");
+    assert_eq!(host.command("cut-ready").await, "cut-ready");
+    assert_eq!(host.command("wake").await, "wake");
+    live.events
+        .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
+        .await
+        .unwrap();
+    let latency: f64 = host.command("cut-result").await.parse().unwrap();
+    assert!((0.0..600.0).contains(&latency));
+    assert_eq!(
+        serde_json::from_str::<Value>(&process.line().await).unwrap(),
+        json!({"event":"bridge.run_completed","run_id":"run-1"})
+    );
+    let entries = trace(&path);
+    for name in [
+        "run.started",
+        "reply.started",
+        "reply.cut",
+        "reply.played",
+        "mic.frames",
+        "wyoming.run_ended",
+    ] {
+        let records: Vec<_> = entries.iter().filter(|e| e["event"] == name).collect();
+        assert_eq!(records.len(), 1, "{name}");
+        assert_eq!(records[0]["run_id"], "run-1");
+    }
+    process.finish(0).await;
+    host.finish(0).await;
+}
+
+async fn link(address: &str, expected: &str) {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let response = health(address, "GET", "/healthz").await;
+            let body: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body["status"], "running");
+            if body["wyoming"] == expected {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_lifecycle_idle_host_restart_recovers_without_a_bridge_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let fake = FakeLive::bind(FakeScript {
+        events: vec![],
+        response: FakeResponse::Answer,
+    })
+    .await
+    .unwrap();
+    let mut host = Process::spawn(&mut host());
+    let port = host.line().await;
+    let mut process = Process::spawn(&mut bridge(&port, &fake.base_url(), &path));
+    let pid = process.child.id();
+    assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+    assert_eq!(host.command("wake").await, "wake");
+    assert_eq!(
+        serde_json::from_str::<Value>(&process.line().await).unwrap(),
+        json!({"event":"bridge.run_completed","run_id":"run-1"})
+    );
+    let address = trace(&path)[0]["health_addr"].as_str().unwrap().to_owned();
+    assert_eq!(host.command("stop").await, "stop");
+    link(&address, "reconnecting").await;
+    assert_eq!(host.command("restart").await, "restart");
+    link(&address, "connected").await;
+    assert_eq!(host.command("wake").await, "wake");
+    assert_eq!(
+        serde_json::from_str::<Value>(&process.line().await).unwrap(),
+        json!({"event":"bridge.run_completed","run_id":"run-2"})
+    );
+    assert_eq!(host.command("pcm").await, "61440 0");
+    assert_eq!(process.child.id(), pid);
+    let calls = fake.observer().calls().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].frames.len(), 64);
+    let entries = trace(&path);
+    let states: Vec<_> = entries
+        .iter()
+        .filter(|e| e["event"] == "wyoming.connected" || e["event"] == "wyoming.reconnecting")
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        states,
+        ["wyoming.connected", "wyoming.reconnecting", "wyoming.connected"]
+    );
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 2);
+    process.finish(0).await;
+    assert!(tokio::net::TcpStream::connect(&address).await.is_err());
+    host.finish(0).await;
+    fake.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_lifecycle_three_wakes_reuse_one_call_with_per_run_audio_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let fake = FakeLive::bind(FakeScript {
+        events: vec![],
+        response: FakeResponse::Answer,
+    })
+    .await
+    .unwrap();
+    let observer = fake.observer();
+    let mut host = Process::spawn(&mut host());
+    let port = host.line().await;
+    let mut process = Process::spawn(&mut bridge(&port, &fake.base_url(), &path));
+    let pid = process.child.id();
+    assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+    for run in 1..=3 {
+        assert_eq!(host.command("wake").await, "wake");
+        assert_eq!(
+            serde_json::from_str::<Value>(&process.line().await).unwrap(),
+            json!({"event":"bridge.run_completed","run_id":format!("run-{run}")})
+        );
+        assert_eq!(process.child.id(), pid);
+        assert_eq!(host.command("pcm").await, format!("{} 0", run * 30720));
+        let calls = observer.calls().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].frames.len(), run * 32);
+        assert_eq!(
+            calls[0].frames.iter().map(|f| f.sequence).collect::<Vec<_>>(),
+            (0..u16::try_from(run * 32).unwrap()).collect::<Vec<_>>()
+        );
+        let entries = trace(&path);
+        let mic: Vec<_> = entries.iter().filter(|e| e["event"] == "mic.frames").collect();
+        assert_eq!(mic.len(), run);
+        assert_eq!(mic.last().unwrap()["run_id"], format!("run-{run}"));
+        assert_eq!(mic.last().unwrap()["count"], 32);
+        let wire = entries
+            .iter()
+            .rev()
+            .find(|e| e["event"] == "wyoming.mic_frames")
+            .unwrap();
+        assert_eq!(mic.last().unwrap()["received_chunks"], wire["count"]);
+        assert!(wire["count"].as_u64().unwrap() >= 10);
+        assert_eq!(mic.last().unwrap()["input_samples"], 10240);
+        let address = entries[0]["health_addr"].as_str().unwrap();
+        assert_health(address).await;
+    }
+    let entries = trace(&path);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 3);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "live.closed").count(), 0);
+    process.finish(0).await;
+    let address = entries[0]["health_addr"].as_str().unwrap();
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    host.finish(0).await;
+    fake.shutdown().await;
+}

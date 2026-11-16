@@ -16,6 +16,8 @@ use tokio::{
 mod bridge_cut;
 #[path = "bridge_support/bridge_latency.rs"]
 mod bridge_latency;
+#[path = "bridge_support/bridge_lifecycle.rs"]
+mod bridge_lifecycle;
 #[path = "bridge_support/bridge_peer.rs"]
 mod bridge_peer;
 #[path = "bridge_support/bridge_short.rs"]

@@ -1,4 +1,5 @@
 //! One Live call owner drives WebRTC while Wyoming owns its bounded wire queues.
+mod bridge_lifecycle;
 mod bridge_pacing;
 mod journey;
 
@@ -11,7 +12,7 @@ use crate::{
 use echo_contracts::{ids::SessionId, wyoming::WyomingEvent};
 use echo_live::{
     LivePeer,
-    call::{LiveAuthMode, LiveCallFactory, SessionOptions},
+    call::{LiveAuthMode, LiveCall, LiveCallFactory, SessionOptions},
 };
 use echo_wyoming::{ClientOptions, EventStream, WyomingClient};
 use serde_json::json;
@@ -60,7 +61,7 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
 
 async fn connected(
     client: &mut WyomingClient,
-    settings: Settings,
+    mut settings: Settings,
     health: &Health,
     trace: &mut Trace,
 ) -> Result<(), Error> {
@@ -70,16 +71,9 @@ async fn connected(
     health.state.send_modify(|state| state.wyoming = "connected");
     trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
     publish("bridge.ready", None)?;
-    let factory = LiveCallFactory::new(&settings.live_url, settings.mode, settings.credential)?;
-    observe(
-        client,
-        &mut events,
-        &factory,
-        health,
-        trace,
-        (settings.mode, settings.voice, settings.lab, settings.reply_lead_ms),
-    )
-    .await
+    let credential = std::mem::replace(&mut settings.credential, Provider::Unavailable);
+    let factory = LiveCallFactory::new(&settings.live_url, settings.mode, credential)?;
+    observe(client, &mut events, &factory, health, trace, &settings).await
 }
 
 async fn observe(
@@ -88,46 +82,64 @@ async fn observe(
     factory: &LiveCallFactory<Provider>,
     health: &Health,
     trace: &mut Trace,
-    options: (LiveAuthMode, String, bool, u16),
+    options: &Settings,
 ) -> Result<(), Error> {
-    let (mode, voice, lab, lead_ms) = options;
+    let mut conversation = bridge_lifecycle::Conversation::new(options.session_idle_seconds);
     let mut sequence = 0_u64;
     loop {
-        let event = events.recv().await?.ok_or(Error::Wyoming)?;
-        let Some(run) = event.run else {
-            continue;
-        };
+        let run = conversation.wake(client, events, health, trace).await?;
         sequence += 1;
         let id = format!("run-{sequence}");
         trace.record("wyoming.run_started", Some(&id), json!({}))?;
         trace.record("run.started", Some(&id), json!({}))?;
-        health.state.send_modify(|state| state.live = "connecting");
-        let peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now())
-            .await
-            .map_err(|_| Error::Unavailable)?;
-        let options = SessionOptions {
-            model: match mode {
-                LiveAuthMode::Chatgpt => "gpt-live-1-codex",
-                LiveAuthMode::ApiKey => "gpt-live-1",
-            }
-            .into(),
-            voice: voice.clone(),
-            instructions: "Client audio bridge".into(),
-            session_id: SessionId::new(id.clone()).map_err(|_| Error::Input)?,
-            thread_id: id.clone(),
-        };
-        let mut call = factory
-            .create(peer, options, Instant::now() + Duration::from_secs(5))
-            .await?;
+        if conversation.call.is_none() {
+            health.state.send_modify(|state| state.live = "connecting");
+            conversation.call = Some(create(factory, options, &id).await?);
+        }
         health.state.send_modify(|state| state.live = "connected");
-        let result = journey::run(client, events, run, &mut call, trace, &id, (lab, lead_ms)).await;
-        call.close();
+        let call = conversation.call.as_mut().ok_or(Error::Unavailable)?;
+        let result = journey::run(
+            client,
+            events,
+            run,
+            call,
+            trace,
+            &id,
+            (options.lab, options.reply_lead_ms, conversation.sent),
+        )
+        .await;
         health
             .state
             .send_modify(|state| state.live = if result.is_ok() { "idle" } else { "error" });
-        result?;
+        let (sent, reusable) = result?;
+        if reusable {
+            conversation.completed(sent);
+        } else {
+            conversation.close("cut", trace)?;
+        }
         publish("bridge.run_completed", Some(&id))?;
     }
+}
+
+async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &str) -> Result<LiveCall, Error> {
+    let peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now())
+        .await
+        .map_err(|_| Error::Unavailable)?;
+    let options = SessionOptions {
+        model: match settings.mode {
+            LiveAuthMode::Chatgpt => "gpt-live-1-codex",
+            LiveAuthMode::ApiKey => "gpt-live-1",
+        }
+        .into(),
+        voice: settings.voice.clone(),
+        instructions: "Client audio bridge".into(),
+        session_id: SessionId::new(id.to_owned()).map_err(|_| Error::Input)?,
+        thread_id: id.to_owned(),
+    };
+    factory
+        .create(peer, options, Instant::now() + Duration::from_secs(5))
+        .await
+        .map_err(Error::from)
 }
 
 fn control() -> Result<oneshot::Receiver<bool>, Error> {

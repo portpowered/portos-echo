@@ -17,6 +17,7 @@ pub struct Settings {
     pub credential: Provider,
     pub lab: bool,
     pub reply_lead_ms: u16,
+    pub session_idle_seconds: u64,
 }
 
 pub enum Provider {
@@ -124,9 +125,18 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
             credential: Provider::Synthetic,
             lab: true,
             reply_lead_ms: 200,
+            session_idle_seconds: 120,
         }));
     }
-    let config = echo_config::BridgeConfig::load(config.ok_or(Error::Input)?).map_err(|_| Error::Input)?;
+    configured(
+        config.ok_or(Error::Input)?,
+        trace.ok_or(Error::Input)?,
+        health.as_deref(),
+    )
+}
+
+fn configured(config: String, trace: String, health: Option<&str>) -> Result<Option<Settings>, Error> {
+    let config = echo_config::BridgeConfig::load(config).map_err(|_| Error::Input)?;
     let mode = match config.live.mode {
         echo_config::LiveMode::Chatgpt => LiveAuthMode::Chatgpt,
         echo_config::LiveMode::ApiKey => LiveAuthMode::ApiKey,
@@ -138,12 +148,13 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
     Ok(Some(Settings {
         wyoming: loopback(&format!("{}:{}", config.echo.host, config.echo.wyoming_port), false)?,
         live_url: live_url.into(),
-        trace: trace.ok_or(Error::Input)?.into(),
-        health: loopback(health.as_deref().unwrap_or("127.0.0.1:16901"), true)?,
+        trace: trace.into(),
+        health: loopback(health.unwrap_or("127.0.0.1:16901"), true)?,
         mode,
         voice: config.live.voice.unwrap_or_else(|| "alloy".into()),
         credential,
         lab: false,
         reply_lead_ms: config.audio.reply_lead_ms,
+        session_idle_seconds: config.live.session_idle_seconds,
     }))
 }
