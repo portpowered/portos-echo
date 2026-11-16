@@ -29,13 +29,21 @@ impl Presentation {
     pub fn publish(&self, state: UiState) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
         current.0 = state;
-        self.send(if current.2 { UiState::Muted } else { current.1.as_ref().unwrap_or(&current.0).clone() })
+        self.send(if current.2 {
+            UiState::Muted
+        } else {
+            current.1.as_ref().unwrap_or(&current.0).clone()
+        })
     }
 
     pub fn overlay(&self, state: Option<UiState>) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
         current.1 = state;
-        self.send(if current.2 { UiState::Muted } else { current.1.as_ref().unwrap_or(&current.0).clone() })
+        self.send(if current.2 {
+            UiState::Muted
+        } else {
+            current.1.as_ref().unwrap_or(&current.0).clone()
+        })
     }
 
     pub fn muted(&self, muted: bool) -> Result<(), Error> {
@@ -59,13 +67,52 @@ impl Presentation {
 
     pub fn refresh(&self) -> Result<(), Error> {
         let current = self.current.lock().map_err(|_| Error::Screen)?;
-        self.send(if current.2 { UiState::Muted } else { current.1.as_ref().unwrap_or(&current.0).clone() })
+        self.send(if current.2 {
+            UiState::Muted
+        } else {
+            current.1.as_ref().unwrap_or(&current.0).clone()
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_prompts_and_actions_preserve_the_mute_screen_until_unmuted() {
+        let (send, mut receive) = mpsc::channel(16);
+        let screen = Presentation::new(Some(send));
+        let prompt = UiState::LinkCode {
+            user_code: "TEST-CODE".into(),
+            verification_uri: "http://127.0.0.1:1/approve".into(),
+            expires_at_unix: 1800,
+        };
+        screen.muted(true).unwrap();
+        screen.overlay(Some(prompt.clone())).unwrap();
+        screen.publish(UiState::Speaking).unwrap();
+        screen.refresh().unwrap();
+        for _ in 0..4 {
+            assert_eq!(receive.try_recv().unwrap(), UiState::Muted);
+        }
+        screen.muted(false).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), prompt);
+        screen.muted(true).unwrap();
+        screen.rejected(RELINK).unwrap();
+        screen.refresh().unwrap();
+        for _ in 0..3 {
+            assert_eq!(receive.try_recv().unwrap(), UiState::Muted);
+        }
+        screen.muted(false).unwrap();
+        assert_eq!(
+            receive.try_recv().unwrap(),
+            UiState::Error {
+                message: RELINK.into(),
+                relink: true
+            }
+        );
+        assert!(receive.try_recv().is_err());
+    }
 
     #[test]
     fn mcp_link_prompt_restores_run_state_and_rejection_survives_activity() {

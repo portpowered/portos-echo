@@ -101,7 +101,7 @@ impl Harness {
         completed(&pending.await.unwrap(), 0, "MCP linked\n", "");
         assert_eq!(
             bridge_wire_screen::state(&mut session.screen).await,
-            json!({"state":"ready","message":"Ready"})
+            json!({"state":"ready","message":"Echo Live ready"})
         );
         record(self.directory.path())
     }

@@ -13,6 +13,14 @@ pub struct Trace {
 }
 
 impl Trace {
+    // Elapsed times and run IDs belong to one collected production process.
+    // Keep its validated records and total byte budget for final oracles.
+    pub fn restarted(&mut self) -> Result<(), String> {
+        self.finish()?;
+        self.timestamps.clear();
+        Ok(())
+    }
+
     pub fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
         self.finish_invalid()?;
         let result = self.append_valid(bytes);

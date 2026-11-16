@@ -70,7 +70,7 @@ impl Session {
         let mut screen = bridge_wire_screen::stream(&screen_address).await;
         assert_eq!(
             bridge_wire_screen::state(&mut screen).await,
-            json!({"state":"ready","message":"Ready"})
+            json!({"state":"ready","message":"Echo Live ready"})
         );
         Self {
             process,
@@ -175,7 +175,7 @@ async fn mcp_link_cli_screen_rotation_reload_and_healthy_unlink() {
         tokio::time::advance(Duration::from_secs(5)).await;
         session.advance(5000).await;
         completed(&link.await.unwrap(), 0, "MCP linked\n", "");
-        assert_eq!(bridge_wire_screen::state(&mut session.screen).await, json!({"state":"ready","message":"Ready"}));
+        assert_eq!(bridge_wire_screen::state(&mut session.screen).await, json!({"state":"ready","message":"Echo Live ready"}));
         let first = record(directory.path());
         for generation in [2, 3] {
             completed(&operator(directory.path(), "--refresh-now").await.unwrap(), 0, "MCP refreshed\n", "");

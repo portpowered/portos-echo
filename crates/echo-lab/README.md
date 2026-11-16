@@ -128,8 +128,8 @@ contradictory trace/model observations latch a fixed diagnostic across restarts.
 Pending/denied authorizations and uncertain rotations never infer completions.
 The strict delivered-bridge witness exercises this binding. The M5 pinned-host
 runner also consumes lifecycle and paired-screen observations for its mounted
-operator controls. Tool/restart/replay controls and the complete authored M5
-scenario remain unfinished.
+operator controls. Tool/replay controls and the complete authored M5
+scenario remain unfinished. Restart alone never counts as live grant reuse.
 
 ## Device runner
 
@@ -257,16 +257,21 @@ beside `echo-lab` by default, including in `--all`; `--bridge` can override it.
 Prebuild both with `cargo build --locked -p echo-lab -p echo-bridge --bins`,
 and prepare the pinned host with `make hassmic-host`.
 
-The M5 runner mounts `link`, `approve`, `refresh` and `unlink`. It owns one
+The M5 runner mounts `link`, `approve`, `refresh`, `restart` and `unlink`. It owns one
 private state directory outside git, the real bridge, pinned host, strict
 authorization fixture, signed-token spoof and local Live fixture. Link invokes
 the bridge CLI and independently checks the paired screen's code/URI/exact
 expiry. Approval advances the fixture and guarded bridge clock by five seconds;
-refresh and unlink use the CLI too. Lifecycle trace and screen transitions
+refresh and unlink use the CLI too. Restart collects only the bridge, preserves
+the stored grant and key exactly, restores elapsed simulated time from the same
+epoch, and checks that authorization counters did not change. The host and
+external peers stay alive. Pending links and absent grants refuse restart.
+Lifecycle trace and screen transitions
 supply counts, rechecked after shutdown. EOF collects the owned processes and
 removes private state. Unimplemented M5 controls fail before lazy startup.
-This partial operator journey does not prove the retained tool, restart,
-replay, browser or complete M5 scenario criteria.
+This partial operator journey proves restart followed by a successful refresh;
+resource use after restart, tools, replay, browser and the complete M5 scenario
+remain unproved. Only successful resource use can count `restart_grant_kept`.
 
 Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
 `echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 mod failures;
+mod mcp;
 mod production;
 mod suite;
 pub struct Session(pub PathBuf);

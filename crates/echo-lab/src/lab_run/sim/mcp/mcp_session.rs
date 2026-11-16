@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use echo_contracts::secret::Secret;
 use echo_lab::lab_mcp::{Approval, Fixture, LinkCounts, Observations};
 use echo_live::fake::{FakeLive, FakeResponse, FakeScript};
 use echo_spoof_mcp::{Options as SpoofOptions, Spoof};
@@ -37,6 +38,7 @@ pub struct Session {
     directory: PathBuf,
     binary: PathBuf,
     measured: Option<LinkCounts>,
+    elapsed_ms: u64,
     pub endpoints: Vec<SocketAddr>,
 }
 
@@ -60,6 +62,10 @@ impl Session {
         )
         .await?;
         let origin = self.start_peers(address).await?;
+        self.launch(&origin).await
+    }
+
+    async fn launch(&mut self, origin: &str) -> Result<(), String> {
         let mut command = mcp_wire::command(&self.binary, &self.directory);
         command.args([
             "--config",
@@ -69,9 +75,9 @@ impl Session {
             "--health-listen",
             "127.0.0.1:0",
             "--live-loopback",
-            &origin,
+            origin,
             "--model-loopback",
-            &origin,
+            origin,
             "--sim-clock",
             "--sim-epoch",
             &EPOCH.to_string(),
@@ -93,8 +99,78 @@ impl Session {
         let screen = self.address("screen.listening")?;
         self.stream = Some(mcp_wire::screen(&screen).await?);
         self.receive_screen().await?;
-        if self.screen != json!({"state":"ready","message":"Ready"}) {
+        if self.screen != json!({"state":"ready","message":"Echo Live ready"}) {
             return Err("M5: initial screen mismatch".into());
+        }
+        Ok(())
+    }
+
+    pub async fn restart(&mut self) -> Result<(), String> {
+        if self.pending.is_some() {
+            return Err("M5: restart refused while link is pending".into());
+        }
+        let stored = self.grant()?;
+        if stored.expose()["grant"].is_null() {
+            return Err("M5: restart requires a stored grant".into());
+        }
+        let before = self
+            .fixture
+            .as_ref()
+            .ok_or("M5: missing authorization fixture")?
+            .counts()
+            .map_err(|_| "M5: authorization observation failed")?;
+        self.stream.take();
+        let failures = self.stop_bridge().await;
+        if !failures.is_empty() {
+            return Err(failures.join("; "));
+        }
+        self.trace.restarted()?;
+        self.observations.restarted();
+        let origin = self
+            .live
+            .as_ref()
+            .ok_or("M5: missing Live fixture")?
+            .base_url()
+            .trim_end_matches('/')
+            .to_owned();
+        self.launch(&origin).await?;
+        // Reuse the recorded epoch, restoring elapsed time without advancing AS
+        // UTC a second time. No AuthClient/store writer exists in the driver.
+        if self.elapsed_ms != 0 {
+            self.advance_bridge(self.elapsed_ms).await?;
+        }
+        self.observe()?;
+        let after = self
+            .fixture
+            .as_ref()
+            .ok_or("M5: missing authorization fixture")?
+            .counts()
+            .map_err(|_| "M5: authorization observation failed")?;
+        if self.grant()?.expose() != stored.expose() || after != before {
+            return Err("M5: restart changed the stored grant or authorization counters".into());
+        }
+        Ok(())
+    }
+
+    fn grant(&self) -> Result<Secret<Value>, String> {
+        let bytes = Secret::new(super::super::observers::bytes(
+            &self.directory.join("portos/grant.json"),
+            65536,
+            "M5 private grant",
+        )?);
+        serde_json::from_slice(bytes.expose())
+            .map(Secret::new)
+            .map_err(|_| "M5: invalid private grant".into())
+    }
+
+    async fn advance_bridge(&mut self, milliseconds: u64) -> Result<(), String> {
+        let bridge = self.bridge.as_mut().ok_or("M5: missing bridge")?;
+        bridge
+            .send(&json!({"action":"advance_clock", "milliseconds":milliseconds}))
+            .await?;
+        let ack = bridge.expect("bridge.clock_advanced").await?;
+        if ack["milliseconds"] != milliseconds {
+            return Err("M5: clock acknowledgment mismatch".into());
         }
         Ok(())
     }
@@ -201,14 +277,8 @@ impl Session {
             .approve(Approval::Approved)
             .map_err(|_| "M5: cannot approve grant")?;
         fixture.advance(5).map_err(|_| "M5: cannot advance fixture clock")?;
-        let bridge = self.bridge.as_mut().ok_or("M5: missing bridge")?;
-        bridge
-            .send(&json!({"action":"advance_clock", "milliseconds":5000}))
-            .await?;
-        let ack = bridge.expect("bridge.clock_advanced").await?;
-        if ack["milliseconds"] != 5000 {
-            return Err("M5: clock acknowledgment mismatch".into());
-        }
+        self.advance_bridge(5000).await?;
+        self.elapsed_ms += 5000;
         let output = self
             .pending
             .as_mut()
@@ -219,7 +289,7 @@ impl Session {
         self.pending.take();
         mcp_wire::completion(&output, "MCP linked\n")?;
         self.receive_screen().await?;
-        if self.screen != json!({"state":"ready","message":"Ready"}) {
+        if self.screen != json!({"state":"ready","message":"Echo Live ready"}) {
             return Err("M5: approved screen mismatch".into());
         }
         Ok(())
@@ -278,7 +348,7 @@ impl Session {
         self.measured
     }
 
-    async fn close_bridge(&mut self) -> Vec<String> {
+    async fn stop_bridge(&mut self) -> Vec<String> {
         let mut failures = Vec::new();
         if let Some(mut bridge) = self.bridge.take() {
             if let Err(error) = bridge.close().await {
@@ -288,6 +358,11 @@ impl Session {
                 failures.push(error);
             }
         }
+        failures
+    }
+
+    async fn close_bridge(&mut self) -> Vec<String> {
+        let mut failures = self.stop_bridge().await;
         if self.fixture.is_some() && self.spoof.is_some() {
             match self.measure() {
                 Ok(counts) => self.measured = Some(counts),

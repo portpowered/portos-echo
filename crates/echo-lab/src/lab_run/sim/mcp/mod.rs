@@ -38,7 +38,12 @@ impl<'a> M5<'a> {
     ) -> Result<(), String> {
         // Refuse unfinished capabilities before lazy startup, even for M5.
         match step {
-            Step::Mcp(McpAction::Link | McpAction::Approve | McpAction::Refresh | McpAction::Unlink)
+            Step::Mcp(McpAction::Restart) if !session.started() => {
+                return Err("M5: restart requires a running linked bridge".into());
+            }
+            Step::Mcp(
+                McpAction::Link | McpAction::Approve | McpAction::Refresh | McpAction::Unlink | McpAction::Restart,
+            )
             | Step::Ui(_)
             | Step::Trace(_) => {}
             Step::Mcp(action) => return Err(format!("M5: MCP {} control is not implemented", action.name())),
@@ -52,6 +57,7 @@ impl<'a> M5<'a> {
             Step::Mcp(McpAction::Approve) => session.approve().await?,
             Step::Mcp(McpAction::Refresh) => session.operator("--refresh-now", "MCP refreshed\n").await?,
             Step::Mcp(McpAction::Unlink) => session.operator("unlink", "MCP unlinked\n").await?,
+            Step::Mcp(McpAction::Restart) => session.restart().await?,
             Step::Ui(expected) => super::observers::screen(
                 &serde_json::to_vec(&session.screen).map_err(|_| "M5: screen encoding")?,
                 expected,

@@ -192,7 +192,6 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
     })
 }
 
-
 pub fn destination(path: &Path) -> Result<PathBuf, String> {
     let name = path
         .file_name()

@@ -194,7 +194,9 @@ fn dispatch(driver: &mut dyn Driver, steps: &[Step], artifacts: &mut Artifacts) 
             _ => driver.execute(step, index, steps.get(index + 1), artifacts),
         };
         let key = format!("step_{index}");
-        artifacts.checks.insert(key.clone(), result.is_ok() && !artifacts.blocked.contains_key(&key));
+        artifacts
+            .checks
+            .insert(key.clone(), result.is_ok() && !artifacts.blocked.contains_key(&key));
         if let Err(message) = result {
             artifacts.event("step_failed", Some(index), Some(&message))?;
             return Err(if artifacts.sim {

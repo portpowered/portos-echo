@@ -63,7 +63,8 @@ impl Screen {
         if self.muted()? && state != UiState::Muted {
             return Ok(());
         }
-        self.presentation.publish(self.mute.lock().map_err(|_| Error::Screen)?.project(state))
+        self.presentation
+            .publish(self.mute.lock().map_err(|_| Error::Screen)?.project(state))
     }
 
     pub fn muted(&self) -> Result<bool, Error> {
