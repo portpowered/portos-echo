@@ -1,6 +1,22 @@
 use crate::spoof_wire::{catalog, valid_args, valid_envelope};
 use serde_json::json;
 
+#[tokio::test]
+async fn t2_m6_happy_result_contains_exact_animation_and_other_results_are_unchanged() {
+    let emotion = json!({"state":"emotion","name":"happy","frame_ms":80,"frames":["(^_^)","(^o^)"]});
+    for (name, args, text, error) in [
+        ("ui.show_emotion", json!({"name":"happy"}), emotion.to_string(), false),
+        ("ui.show_emotion", json!({"name":"other"}), "other".into(), false),
+        ("test.echo", json!({"text":"happy"}), "happy".into(), false),
+        ("test.requires_approval", json!({}), "approval_required".into(), true),
+    ] {
+        assert_eq!(
+            crate::spoof_wire::execute(name, &args).await,
+            json!({"content":[{"type":"text","text":text}],"isError":error})
+        );
+    }
+}
+
 #[test]
 fn t2_catalog_is_exact_with_closed_argument_schemas() {
     assert_eq!(

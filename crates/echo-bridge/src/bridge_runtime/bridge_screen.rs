@@ -8,6 +8,7 @@ use echo_screen_server::ScreenServer;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+pub(super) mod emotion;
 mod mute;
 
 pub(super) struct Screen {

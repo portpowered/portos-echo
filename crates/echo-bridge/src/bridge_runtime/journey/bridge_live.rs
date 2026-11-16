@@ -1,4 +1,5 @@
 //! Minimal bridge-owned Live port; production forwards directly to the existing call.
+use crate::Error;
 use echo_contracts::{ids::DelegationId, live::LiveEvent};
 use echo_live::{
     AudioFrame,
@@ -33,4 +34,21 @@ impl LivePort for LiveCall {
     fn close(&mut self) {
         Self::close(self);
     }
+}
+
+pub(super) async fn send(
+    call: &mut impl LivePort,
+    packets: Vec<AudioFrame>,
+    screen: &super::super::bridge_screen::Screen,
+    sent: &mut u64,
+) -> Result<(), Error> {
+    for packet in packets {
+        if screen.muted()? {
+            break;
+        }
+        call.send_audio(packet, tokio::time::Instant::now().into_std()).await?;
+        *sent += 1;
+        screen.sent()?;
+    }
+    Ok(())
 }

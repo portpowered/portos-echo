@@ -37,6 +37,11 @@ pub(crate) async fn execute(name: &str, args: &Value) -> Value {
             format!("waited {ms} ms")
         }
         "test.requires_approval" => "approval_required".into(),
+        "ui.show_emotion" if args["name"] == "happy" => json!({
+            "state":"emotion", "name":"happy", "frame_ms":80,
+            "frames":["(^_^)", "(^o^)"]
+        })
+        .to_string(),
         _ => args["name"].as_str().unwrap_or_default().to_owned(),
     };
     json!({"content":[{"type":"text","text":text}],"isError":name=="test.requires_approval"})

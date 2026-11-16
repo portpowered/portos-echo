@@ -35,6 +35,9 @@ impl TraceEvent {
 /// Synchronous observation only; implementations must not block or expose secrets.
 pub trait TraceSink: Send + Sync {
     fn record(&self, event: TraceEvent);
+    /// Observe an actual tool response without changing its backend value.
+    /// Implementations must not block or log tool content or credentials.
+    fn tool_result(&self, _name: &str, _content: &Value, _is_error: bool) {}
 }
 
 struct TracingHost<P, S> {
@@ -47,7 +50,9 @@ impl<P: TokenProvider, S: TraceSink> ToolHost for TracingHost<P, S> {
     }
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
         self.sink.record(TraceEvent::ToolCall { name: name.into() });
-        self.host.call_tool(name, args, key).await
+        let result = self.host.call_tool(name, args, key).await?;
+        self.sink.tool_result(name, &result.content, result.is_error);
+        Ok(result)
     }
 }
 

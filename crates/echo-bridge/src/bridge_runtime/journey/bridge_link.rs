@@ -13,6 +13,7 @@ use echo_link::{
     fake::{Command, FakeConnector, Observer},
 };
 use std::io::Write;
+use echo_live::AudioFrame;
 use std::{collections::VecDeque, future::Future, pin::Pin, task::Poll};
 
 #[derive(Default)]

@@ -6,11 +6,11 @@ use crate::{
     bridge_audio::{self, Microphone, Reply},
     bridge_trace::Trace,
 };
-use bridge_live::LivePort;
+use bridge_live::{LivePort, send};
 use echo_audio::FrameQueue;
 use echo_contracts::live::LiveEvent;
 use echo_link::{EchoLink, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PlayOutcome, ReplySink};
-use echo_live::{AudioFrame, call::CallError};
+use echo_live::call::CallError;
 use serde_json::json;
 use std::{num::NonZeroUsize, time::Duration};
 use tokio::time::Instant;
@@ -232,6 +232,7 @@ pub(super) async fn run<L: EchoLink>(
     let (outcome, ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer)?;
     failure.map_or(Ok(()), Err)?;
     let abandoned = context.delegation.abandon();
+    context.screen.presentation.clear_emotion()?;
     trace.record(
         "reply.played",
         Some(id),
@@ -326,6 +327,7 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         }
         if source.cancelled {
             self.delegation.abandon();
+            self.screen.presentation.clear_emotion()?;
             self.cut(source).await?;
         }
         Ok(source.cancelled)
@@ -396,6 +398,13 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         }
         Ok(())
     }
+    async fn forward_available(&mut self, tx: &L::ReplySink, frame: Option<Vec<u8>>) -> Result<(), Error> {
+        if let Some(frame) = frame {
+            self.forward(tx, frame).await?;
+        }
+        Ok(())
+    }
+
     async fn cut(&mut self, source: &mut Source) -> Result<(), Error> {
         let bridge_evicted = source.queue.drop_count();
         let bridge_dropped = source.discard_reply();
@@ -430,7 +439,8 @@ async fn produce<L: EchoLink>(
         if context.cancelled(source, call).await? {
             return Ok(());
         }
-        context.delegation.service(call, context.trace).await?;
+        context.delegation.service(call, context.trace, context.screen).await?;
+        context.screen.presentation.expire_emotion()?;
         let drained = source.receive(call).await?;
         context.pressure(source, &mut pressure_reported)?;
         let echo_done = source.echo_done(lab);
@@ -441,9 +451,7 @@ async fn produce<L: EchoLink>(
         if completed && source.queue.is_empty() {
             return Ok(());
         }
-        if Instant::now() >= context.deadline {
-            return Err(Error::Deadline);
-        }
+        bridge_timing::check_deadline(context.deadline)?;
         tokio::select! {
             biased;
             event = events.recv() => {
@@ -452,32 +460,17 @@ async fn produce<L: EchoLink>(
             },
             frame = run.recv(), if !ended => { ended = context.capture(source, frame?, call, lab.0).await?; },
             () = context.delegation.ready() => (),
+            () = context.screen.presentation.emotion_deadline() => (),
             event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()) => match event {
                 Ok(event) => context.event(event, source, lab.0)?,
                 Err(CallError::Deadline) => (),
                 Err(error) => return Err(error.into()),
             },
             frame = pacer.next_frame(&mut source.queue), if !source.queue.is_empty() => {
-                if let Some(frame) = frame { context.forward(&tx, frame).await?; }
+                context.forward_available(&tx, frame).await?;
             }
         }
     }
-}
-async fn send(
-    call: &mut impl LivePort,
-    packets: Vec<AudioFrame>,
-    screen: &super::bridge_screen::Screen,
-    sent: &mut u64,
-) -> Result<(), Error> {
-    for packet in packets {
-        if screen.muted()? {
-            break;
-        }
-        call.send_audio(packet, Instant::now().into_std()).await?;
-        *sent += 1;
-        screen.sent()?;
-    }
-    Ok(())
 }
 #[cfg(test)]
 mod bridge_link;

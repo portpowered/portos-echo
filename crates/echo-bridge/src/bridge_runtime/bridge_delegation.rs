@@ -22,14 +22,28 @@ use std::{
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 
+enum Observation {
+    Trace(TraceEvent),
+    Emotion(echo_screen_contract::UiState, tokio::time::Instant),
+}
+
 struct Sink {
-    send: mpsc::Sender<TraceEvent>,
+    send: mpsc::Sender<Observation>,
     overflow: AtomicBool,
 }
 impl TraceSink for Sink {
     fn record(&self, event: TraceEvent) {
         // This event observes preparation only, never delivery to Live.
-        if !matches!(event, TraceEvent::CommentaryAppend { .. }) && self.send.try_send(event).is_err() {
+        if !matches!(event, TraceEvent::CommentaryAppend { .. })
+            && self.send.try_send(Observation::Trace(event)).is_err()
+        {
+            self.overflow.store(true, Ordering::Relaxed);
+        }
+    }
+    fn tool_result(&self, name: &str, content: &serde_json::Value, is_error: bool) {
+        if let Some((state, deadline)) = super::bridge_screen::emotion::decode(name, content, is_error)
+            && self.send.try_send(Observation::Emotion(state, deadline)).is_err()
+        {
             self.overflow.store(true, Ordering::Relaxed);
         }
     }
@@ -51,7 +65,8 @@ pub(super) struct Host {
     pending: Option<JoinHandle<Completion>>,
     completed: Option<Result<Completion, tokio::task::JoinError>>,
     sink: Arc<Sink>,
-    receive: mpsc::Receiver<TraceEvent>,
+    receive: mpsc::Receiver<Observation>,
+    observed: Option<Observation>,
     seen: HashSet<String>,
     active: Option<(String, String)>,
 }
@@ -81,6 +96,7 @@ impl Host {
                 overflow: AtomicBool::new(false),
             }),
             receive,
+            observed: None,
             seen: HashSet::new(),
             active: None,
         }
@@ -188,12 +204,22 @@ impl Host {
         let Some(pending) = self.pending.as_mut() else {
             return std::future::pending().await;
         };
-        self.completed = Some(pending.await);
-        self.pending = None;
+        tokio::select! {
+            completed = pending => {
+                self.completed = Some(completed);
+                self.pending = None;
+            },
+            event = self.receive.recv() => self.observed = event,
+        }
     }
 
-    pub async fn service(&mut self, call: &mut impl LivePort, trace: &mut Trace) -> Result<(), Error> {
-        self.flush(trace)?;
+    pub async fn service(
+        &mut self,
+        call: &mut impl LivePort,
+        trace: &mut Trace,
+        screen: &super::bridge_screen::Screen,
+    ) -> Result<(), Error> {
+        self.flush(trace, screen)?;
         if self.pending.as_ref().is_some_and(JoinHandle::is_finished) {
             self.ready().await;
         }
@@ -202,7 +228,7 @@ impl Host {
         };
         let (runner, result) = completed.map_err(|_| Error::Unavailable)?;
         self.runner = Some(runner);
-        self.flush(trace)?;
+        self.flush(trace, screen)?;
         if let Some(grant) = &self.grant {
             grant.check()?;
             if grant.blocked() {
@@ -236,11 +262,20 @@ impl Host {
         trace.record("session.commentary.append", Some(&run), json!({"delegation_id":id}))
     }
 
-    fn flush(&mut self, trace: &mut Trace) -> Result<(), Error> {
+    fn flush(&mut self, trace: &mut Trace, screen: &super::bridge_screen::Screen) -> Result<(), Error> {
         if self.sink.overflow.load(Ordering::Relaxed) {
             return Err(Error::Trace);
         }
-        while let Ok(event) = self.receive.try_recv() {
+        while let Some(event) = self.observed.take().or_else(|| self.receive.try_recv().ok()) {
+            let event = match event {
+                Observation::Trace(event) => event,
+                Observation::Emotion(state, deadline) => {
+                    if self.active.is_some() && deadline > tokio::time::Instant::now() {
+                        screen.presentation.emotion(state, deadline)?;
+                    }
+                    continue;
+                }
+            };
             let (run, id) = self.active.as_ref().ok_or(Error::Trace)?;
             let fields = match &event {
                 TraceEvent::ToolCall { name } => {
@@ -267,6 +302,7 @@ impl Host {
         // A retained completed runner keeps its backend accounting. A cancelled
         // runner is rebuilt with the host's still-retained request reservations.
         self.active = None;
+        self.observed = None;
         while self.receive.try_recv().is_ok() {}
         abandoned
     }
@@ -277,3 +313,6 @@ impl Drop for Host {
         self.abandon();
     }
 }
+
+#[cfg(test)]
+mod tests;
