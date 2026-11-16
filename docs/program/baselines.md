@@ -19,10 +19,13 @@ factory payloads cite these instead of rediscovering them. Add a row whenever a 
 | ABI | `armeabi-v7a`, 32-bit userland | 2026-11-15, `getprop ro.product.cpu.abi` |
 | Memory | about 1.9 GB (`MemTotal` 1973744 kB) | 2026-11-15, `/proc/meminfo` |
 | Access | rooted; `adb shell` runs as `uid=0` | 2026-11-15, `adb shell id` |
-| Assistant software | stock: `hassmic` (echo-dot-assist) is not installed | 2026-11-15, no `/data/local/hassmic` |
+| Assistant software | `hassmic` 2026.11.13.185908 (echo-dot-assist `8646a4f`, the signed release build) installed in `/system`, running as `hassmic -P wyoming -D -E`: a Wyoming satellite on TCP 16700, the microphone streaming during replies, no wake sound. Its self test passes on 7809. Alexa's apps are off and out of `/system` (kept in `/system/hassmic-removed`), and hassmic's lockdown limits Amazon's programs to the LAN | 2026-11-15, `boot.log` (`wyoming on 16700, wake=local`, `self test: passed`), `netstat` (LISTEN `0.0.0.0:16700`), `/proc/<pid>/cmdline` |
+| Wyoming from the operator's PC | `describe` over the LAN answers `info` with the satellite's name | 2026-11-15, a TCP client on the PC |
+| Wake word on the Echo | "Alexa", the firmware's model (`wake word: alexa "Alexa" (en), active`). hassmic takes other keywords as model sets fetched from Amazon (its settings page); none is fetched yet. The B0 bench's stock-Echo runs used "computer" | 2026-11-15, `boot.log` |
 | Wake word models | Pryon models for "Alexa", "Amazon", "Computer" and "Echo" in `/system/local/models/keyword/<locale>/` (21 locales); hassmic supports all four. "Alexa" is the decided wake word | 2026-11-15, `ls /system/local/models/keyword/en-US/` |
 | Free memory with stock Alexa running | `MemAvailable` about 670 MB | 2026-11-15, `/proc/meminfo` |
 | SELinux | `Enforcing` (the unlock's policy; hassmic's install extends it) | 2026-11-15, `getenforce` |
+| Installing from Windows | echo-dot-assist's scripts run from Git Bash with `MSYS_NO_PATHCONV=1` (otherwise adb gets `C:/Program Files/Git/data/...`). `scripts/otatool.py` needs `os.fchmod`, which Windows Python has only from 3.13. With 3.11 or 3.12, a `sitecustomize.py` that defines it as a no-op (on Windows it only sets read-only) lets the bundle verify and unpack; the Echo-side `chmod` sets the real modes. `HASSMIC_FIRMWARE_OK=1` answers the 7809-vs-7080 question | 2026-11-15, the install run |
 
 ## Firmware probe of build 7809
 
