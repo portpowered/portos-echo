@@ -89,7 +89,9 @@ fn late_duplicates_and_incomplete_traces_fail_at_finalization() {
             .unwrap()
             .extend(tail.as_object().unwrap().clone());
         assert_eq!(session.script(&script).status.code(), Some(1));
-        assert_eq!(session.report()["result"], "fail");
+        let report = session.report();
+        assert_eq!(report["result"], "fail");
+        assert_eq!(report["checks"]["step_0"], false);
         session.endpoints();
     }
 }

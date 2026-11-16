@@ -96,6 +96,33 @@ impl<'a> Sim<'a> {
             controlled(work, self.options.cancel.as_deref(), self.deadline).await
         })
     }
+
+    fn finalize(&self, artifacts: &mut Artifacts, invalid_trace: bool) -> Vec<String> {
+        let mut failures = Vec::new();
+        for (step, selectors, run) in &self.expectations {
+            let result = if invalid_trace {
+                Err("trace: invalid final trace".into())
+            } else {
+                selectors::check(&self.world.trace.records, selectors, run.as_deref())
+            };
+            if let Err(error) = result {
+                artifacts.checks.insert(format!("step_{step}"), false);
+                failures.push(format!("step {step}: {error}"));
+            }
+        }
+        for (step, name, ceiling, run) in &self.budgets {
+            let result = if invalid_trace {
+                Err("trace: invalid final trace".into())
+            } else {
+                observers::budget(&self.world.trace.records, name, *ceiling, run.as_deref())
+            };
+            if let Err(error) = result {
+                artifacts.checks.insert(format!("step_{step}"), false);
+                failures.push(format!("step {step}: {error}"));
+            }
+        }
+        failures
+    }
 }
 
 async fn controlled<T>(
@@ -140,6 +167,7 @@ impl Driver for Sim<'_> {
 
     fn close(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
         let cleanup = self.runtime.block_on(self.world.close());
+        let invalid_trace = cleanup.as_ref().err().is_some_and(|e| e.contains("trace:"));
         let mut failures = cleanup.err().into_iter().collect::<Vec<_>>();
         for address in &self.world.endpoints {
             if let Err(error) = artifacts.endpoint(*address) {
@@ -153,18 +181,7 @@ impl Driver for Sim<'_> {
                 break;
             }
         }
-        for (step, selectors, run) in &self.expectations {
-            if let Err(error) = selectors::check(&self.world.trace.records, selectors, run.as_deref()) {
-                artifacts.checks.insert(format!("step_{step}"), false);
-                failures.push(format!("step {step}: {error}"));
-            }
-        }
-        for (step, name, ceiling, run) in &self.budgets {
-            if let Err(error) = observers::budget(&self.world.trace.records, name, *ceiling, run.as_deref()) {
-                artifacts.checks.insert(format!("step_{step}"), false);
-                failures.push(format!("step {step}: {error}"));
-            }
-        }
+        failures.extend(self.finalize(artifacts, invalid_trace));
         if failures.is_empty() {
             Ok(())
         } else {
