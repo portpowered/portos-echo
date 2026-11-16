@@ -8,15 +8,12 @@ from unittest import mock
 SPEC = importlib.util.spec_from_file_location("sim_host", Path(__file__).resolve().parents[1] / "host.py")
 CONTROLLER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CONTROLLER)
-
-
 class Controls(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix="lab-host-unit-")
         self.addCleanup(self.directory.cleanup)
         self.host = CONTROLLER.Host(self.directory.name)
         self.host.proc = mock.Mock()
-
     def test_supported_controls_send_exact_signal_once(self):
         signals = {"SIGUSR1": 10, "SIGUSR2": 12, "SIGWINCH": 28, "SIGHUP": 1}
         with mock.patch.multiple(CONTROLLER.signal, create=True, **signals), mock.patch.object(CONTROLLER, "emit") as emit:
@@ -26,14 +23,12 @@ class Controls(unittest.TestCase):
                 self.host.command({"action": action})
                 self.host.proc.send_signal.assert_called_once_with(expected)
                 emit.assert_called_once_with({"event": "host.ack"})
-
     def test_registration_waits_for_log_without_sending_a_signal(self):
         with mock.patch.object(self.host, "logged") as logged, mock.patch.object(CONTROLLER, "emit") as emit:
             self.host.command({"action": "registered"})
             logged.assert_called_once_with(b"satellite: running")
             self.host.proc.send_signal.assert_not_called()
             emit.assert_called_once_with({"event": "host.ack"})
-
     def test_eof_interrupts_readiness_and_rejects_further_commands(self):
         events = CONTROLLER.queue.Queue()
         with mock.patch.object(CONTROLLER, "launcher_input") as reader:
@@ -50,7 +45,6 @@ class Controls(unittest.TestCase):
             CONTROLLER.host_input(self.host, events)
         with self.assertRaisesRegex(RuntimeError, "host input failed"):
             self.host.command({"action": "wake"})
-
     def test_unsupported_controls_and_invalid_pcm_cannot_signal(self):
         # Supply Unix signal names on Windows without starting the host backend.
         with mock.patch.multiple(CONTROLLER.signal, create=True, SIGUSR1=10, SIGUSR2=12, SIGWINCH=28, SIGHUP=1):
@@ -60,8 +54,6 @@ class Controls(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.host.command({"action": "say", "pcm": pcm})
             self.host.proc.send_signal.assert_not_called()
-
-
 class Cleanup(unittest.TestCase):
     def setUp(self):
         Controls.setUp(self)
@@ -76,7 +68,6 @@ class Cleanup(unittest.TestCase):
             signal.assert_called_once_with(self.host.proc.pid, CONTROLLER.signal.SIGTERM)
             self.assertEqual(self.host.proc.wait.call_args_list, [mock.call(timeout=3)])
             self.host.proc.stderr.close.assert_called_once_with()
-
     def test_timeout_kills_then_collects_before_closing_pipes(self):
         self.host.proc.poll.return_value = None
         self.host.proc.wait.side_effect = [CONTROLLER.subprocess.TimeoutExpired("fixture", 3), 0]
@@ -112,8 +103,25 @@ class Cleanup(unittest.TestCase):
                 proc.wait()
             proc.stdin.close()
             proc.stdout.close()
-
-
+class GuestHandshake(unittest.TestCase):
+    def test_observer_failure_holds_ready_and_partial_host_is_closed(self):
+        import sys
+        import runpy
+        emit = mock.Mock()
+        fake = {'emit': emit, 'mock': mock, 'threading': CONTROLLER.threading}
+        exec("class Host:\n def start(self):\n  self.proc=mock.Mock(pid=42,returncode=-15)\n  self.condition=threading.Condition()\n  emit({'event':'host.ready','address':'127.0.0.1:1'})\n def close(self): self.closed=True\n def logged(self,marker): pass", fake)
+        Host = fake['Host']
+        ns = {'Host': Host, 'main': mock.Mock()}
+        with mock.patch.object(runpy, 'run_path', return_value=ns), mock.patch.object(sys, 'argv', ['fixture', str(Path(CONTROLLER.__file__)), 'owned']), mock.patch.object(CONTROLLER.subprocess, 'Popen', side_effect=OSError('synthetic private marker')):
+            exec(real_wsl_launcher_fixture(), {'__name__': 'instrumentation'})
+            host = Host()
+            with self.assertRaisesRegex(RuntimeError, '^fixture setup failed$'): host.start()
+            emit.assert_called_once_with({'event': 'fixture.failed', 'stage': 'guest.observer'})
+            with mock.patch.object(Path, "write_text") as audit:
+                host.close()
+                self.assertTrue(host.closed)
+                audit.assert_called_once_with('{"pid": 42, "status": -15, "closed": true}')
+        ns['main'].assert_not_called()
 class LauncherOwnership(unittest.TestCase):
     """T1: deadline and status decisions with in-memory processes and clocks."""
     def test_eof_before_force_and_repeated_collection_never_terminates(self):
@@ -126,7 +134,6 @@ class LauncherOwnership(unittest.TestCase):
         proc.stdin.close.assert_called_once_with()
         proc.wait.assert_called_once_with(timeout=4)
         proc.kill.assert_not_called()
-
     def test_timeout_forces_once_and_collects_before_return(self):
         proc = mock.Mock()
         proc.wait.side_effect = [CONTROLLER.subprocess.TimeoutExpired("owned", 4), 1]
@@ -139,7 +146,6 @@ class LauncherOwnership(unittest.TestCase):
             self.assertEqual(owner.close(), 1)
         self.assertEqual(events.mock_calls, [mock.call.eof(), mock.call.wait(timeout=3),
                                             mock.call.force(), mock.call.wait()])
-
     def test_collection_failure_keeps_handle_and_original_deadline(self):
         proc = mock.Mock()
         proc.wait.side_effect = [OSError("synthetic private marker"),
@@ -154,7 +160,6 @@ class LauncherOwnership(unittest.TestCase):
         proc.stdin.close.assert_called_once_with()
         self.assertEqual(proc.wait.call_args_list, [mock.call(timeout=3), mock.call(timeout=0), mock.call()])
         proc.kill.assert_called_once_with()
-
     def test_partial_reader_setup_failure_collects_acquired_child(self):
         proc = mock.Mock()
         proc.wait.return_value = 0
@@ -166,7 +171,6 @@ class LauncherOwnership(unittest.TestCase):
         proc.wait.assert_called_once()
         proc.kill.assert_not_called()
         emit.assert_called_once_with({"event": "host.failed"})
-
     def test_force_and_collection_errors_cannot_become_success(self):
         for stage in ["force", "collect"]:
             proc = mock.Mock()
@@ -180,7 +184,6 @@ class LauncherOwnership(unittest.TestCase):
                 owner.close()
             self.assertIsNone(owner.status)
             self.assertIs(owner.proc, proc)
-
     def test_observation_and_input_close_failures_stay_sanitized(self):
         proc = mock.Mock()
         proc.poll.side_effect = OSError("synthetic private marker")
@@ -195,19 +198,24 @@ class LauncherOwnership(unittest.TestCase):
         self.assertEqual(owner.status, 0)
         proc.wait.assert_called_once()
         proc.kill.assert_not_called()
-
-
-def real_wsl_launcher_fixture(audit):
+def real_wsl_launcher_fixture(audit=None):
     """Prebuilt real WSL Host with retained guest collection/exit observers."""
     import subprocess
     import sys
     popen = subprocess.Popen
     guest = r'''
-import json,runpy,subprocess,sys
+import json,runpy,subprocess,sys,time,threading
 from pathlib import Path
 ns=runpy.run_path(sys.argv[1])
 host=ns['Host']
 start,close,logged=host.start,host.close,host.logged
+emit=start.__globals__['emit']
+audit=Path(sys.argv[1]).resolve().parents[5]/'.cache'/sys.argv[2]/'guest.json'
+ready=[]
+def capture(value):
+    if value['event']=='host.ready': ready.append(value)
+    else: emit(value)
+start.__globals__['emit']=capture
 observer = r"""
 import json,os,select,signal,sys
 from pathlib import Path
@@ -227,46 +235,60 @@ finally:
     os.close(fd)
 """
 def observed_start(self):
-    start(self)
-    self.observer=subprocess.Popen([sys.executable,'-u','-c',observer,str(self.proc.pid),sys.argv[2]],
-        stdin=subprocess.PIPE,stdout=subprocess.PIPE,start_new_session=True)
-    assert self.observer.stdout.readline()==b'observer.ready\n'
-    print(json.dumps({'event':'guest.owned','pid':self.proc.pid}),flush=True)
+    self.observer=None
+    deadline=time.monotonic()+20
+    stage='guest.readiness'
+    try:
+        start(self)
+        stage='guest.observer'
+        self.observer=subprocess.Popen([sys.executable,'-u','-c',observer,str(self.proc.pid),str(audit)],
+            stdin=subprocess.PIPE,stdout=subprocess.PIPE,start_new_session=True)
+        result=[]
+        def read():
+            value=self.observer.stdout.readline()
+            with self.condition:
+                result.append(value)
+                self.condition.notify_all()
+        reader=threading.Thread(target=read,daemon=True)
+        reader.start()
+        with self.condition:
+            self.condition.wait_for(lambda: result or self.cancelled.is_set(),max(0,deadline-time.monotonic()))
+            if self.cancelled.is_set(): raise RuntimeError('cancelled')
+            if result!=[b'observer.ready\n']: raise RuntimeError('observer unavailable')
+        emit(ready.pop())
+        emit({'event':'guest.owned','pid':self.proc.pid})
+    except (OSError,RuntimeError):
+        emit({'event':'fixture.failed','stage':stage})
+        raise RuntimeError('fixture setup failed') from None
 def observed_logged(self,marker):
     with self.condition:
         if marker==b'satellite: running':
             print(json.dumps({'event':'guest.command.entered'}),flush=True)
         return logged(self,marker)
 def observed_close(self):
-    close(self)
-    self.observer.communicate(timeout=1)
-    assert self.observer.returncode==0
-    Path(sys.argv[2]).write_text(json.dumps({'pid':self.proc.pid,'status':self.proc.returncode,'closed':self.closed}))
-host.start,host.close,host.logged=observed_start,observed_close,observed_logged
-sys.exit(ns['main']())
-'''
-    # Resolve the test-owned observation path with a bounded, collected client.
-    path = popen(["wsl", "-d", "Ubuntu", "--exec", "wslpath", "-u", audit],
-                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
-        output, _ = path.communicate(timeout=4)
-        if path.returncode != 0:
-            raise RuntimeError("test observer path translation failed")
+        close(self)
     finally:
-        if path.poll() is None:
-            path.kill()
-        path.wait()
-        path.stdout.close()
-    guest_audit = output.decode("utf-8").strip()
-
+        if self.observer is not None:
+            try: self.observer.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.observer.kill()
+                self.observer.communicate()
+                raise RuntimeError('fixture observer cleanup failed') from None
+            if self.observer.returncode!=0: raise RuntimeError('fixture observer exited')
+    if self.proc is not None:
+        audit.write_text(json.dumps({'pid':self.proc.pid,'status':self.proc.returncode,'closed':self.closed}))
+host.start,host.close,host.logged=observed_start,observed_close,observed_logged
+if __name__=='__main__': sys.exit(ns['main']())
+'''
+    if audit is None:
+        return guest
     def boundary(argv, **kwargs):
         if "python3" in argv:
-            argv = argv[:-1] + ["-c", guest, argv[-1], guest_audit]
+            argv = argv[:-1] + ["-c", guest, argv[-1], audit]
         return popen(argv, **kwargs)
     CONTROLLER.subprocess.Popen = boundary
     sys.exit(CONTROLLER.launch_windows())
-
-
 def native_launcher_fixture(mode, port, audit):
     """Substitute only wsl argv; everything else is the delivered launcher."""
     import subprocess
@@ -297,19 +319,16 @@ else:
     sys.stdout.buffer.write(b'{"event": "host.closed"}\n')
     sys.stdout.buffer.flush()
 '''
-
     def boundary(argv, **kwargs):
         phase = "translation" if "wslpath" in argv else "running"
         if phase == "running" and mode == "spawn-fail":
             raise OSError("synthetic private marker")
         proc = popen([sys.executable, "-u", "-c", child, mode, phase, str(port)], **kwargs)
         kill, wait = proc.kill, proc.wait
-
         def force():
             with open(audit, "a", encoding="utf-8") as log:
                 log.write(phase + " force\n")
             return kill()
-
         def collect(*args, **options):
             status = wait(*args, **options)
             with open(audit, "a", encoding="utf-8") as log:
@@ -317,18 +336,14 @@ else:
             return status
         proc.kill, proc.wait = force, collect
         return proc
-
     CONTROLLER.subprocess.Popen = boundary
     original_thread = CONTROLLER.threading.Thread
-
     def setup_thread(*args, **kwargs):
         if mode == "setup-fail" and kwargs.get("target") == CONTROLLER.launcher_write:
             raise RuntimeError("synthetic private marker")
         return original_thread(*args, **kwargs)
     CONTROLLER.threading.Thread = setup_thread
     sys.exit(CONTROLLER.launch_windows())
-
-
 def native_handle_observer(pid):
     """Rust tests retain this OS observer before releasing any fixture child."""
     import ctypes
@@ -360,8 +375,6 @@ def native_handle_observer(pid):
             kernel.TerminateProcess(handle, 1)
             kernel.WaitForSingleObject(handle, 4000)
         kernel.CloseHandle(handle)
-
-
 @unittest.skipUnless(CONTROLLER.os.name == "nt", "T3 native Windows retained process handles")
 class NativeLauncher(unittest.TestCase):
     """T3 controlled wsl boundary; real wrapper, descendant, pipe and OS waits."""
@@ -391,7 +404,6 @@ class NativeLauncher(unittest.TestCase):
         self.addCleanup(self.cleanup_owned)
         self.sentinel = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
                                          stdin=subprocess.PIPE)
-
     def cleanup_owned(self):
         if self.wrapper:
             if self.wrapper.poll() is None:
@@ -407,7 +419,6 @@ class NativeLauncher(unittest.TestCase):
             self.kernel.CloseHandle(handle)
         self.sentinel.stdin.close()
         self.sentinel.wait(timeout=5)
-
     def ready(self, phase):
         import ctypes
         import json
@@ -421,7 +432,6 @@ class NativeLauncher(unittest.TestCase):
             self.handles.append(handle)
             control.sendall(b"G")
         return handle
-
     def run_case(self, mode):
         import ctypes
         from ctypes import wintypes
@@ -469,30 +479,21 @@ class NativeLauncher(unittest.TestCase):
         print(f"N-WIN {mode}: wrapper_status={self.wrapper.returncode}, descendant_statuses={statuses}, "
               f"owned_survivors=0, force_requests={audit.count(' force' + chr(10))}, sentinel_alive=true, "
               f"stdout={output!r}")
-
     def test_t3_normal_eof_collects_exact_marker(self):
         self.run_case("normal")
-
     def test_t3_commands_are_forwarded_exactly_before_eof(self):
         self.run_case("forward")
-
     def test_t3_blocked_pipe_writer_cannot_block_owned_cleanup(self):
         self.run_case("blocked-write-stall")
-
     def test_t3_translation_stall_is_forced_and_collected(self):
         self.run_case("translation-stall")
-
     def test_t3_running_stall_is_forced_and_collected(self):
         self.run_case("running-stall")
-
     def test_t3_nonzero_status_is_preserved(self):
         self.run_case("status")
-
     def test_t3_translation_failure_is_sanitized_and_collected(self):
         self.run_case("translation-fail")
-
     def test_t3_partial_spawn_failure_keeps_translation_collected(self):
         self.run_case("spawn-fail")
-
     def test_t3_partial_writer_setup_failure_collects_running_child(self):
         self.run_case("setup-fail")
