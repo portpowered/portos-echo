@@ -44,6 +44,7 @@ status: active; documentation index
 ## Spikes
 
 - [S2 Wyoming reply cancellation](spikes/s2-barge-in.md)
+- [S3 The screen client](spikes/s3-screen-client.md)
 
 ## Original drafts
 
