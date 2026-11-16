@@ -1,0 +1,33 @@
+id: m1-hassmic-bridge
+milestone: M1
+tiers: [T3, T5]
+setup: {}
+steps:
+  - expect_screen: {state: ready, message: "Echo Live ready"}
+  - say: ../fixtures/lab/w1-utterance.pcm
+  - expect_trace:
+      - wyoming.run_started
+      - "wyoming.mic_frames {count_gte: 10}"
+      - wyoming.run_ended
+  - press: mute
+  - expect_screen: {state: muted}
+  - say: ../fixtures/lab/w1-utterance.pcm
+  - press: mute
+  - expect_screen: {state: ready, message: "Echo Live ready"}
+  - expect_trace:
+      - "mic.mute_window {window_id: mute-1, received_frames: 0, forwarded_frames: 0}"
+  - say: ../fixtures/lab/w1-utterance.pcm
+  - expect_trace:
+      - wyoming.run_started
+      - "wyoming.mic_frames {count_gte: 10}"
+      - wyoming.run_ended
+  - restart:
+      process: bridge
+      count: 10
+      say: ../fixtures/lab/w1-utterance.pcm
+  - restart:
+      process: hassmic-host
+      count: 10
+      say: ../fixtures/lab/w1-utterance.pcm
+budgets: {}
+negative: []

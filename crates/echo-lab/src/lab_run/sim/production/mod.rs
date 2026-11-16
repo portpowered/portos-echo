@@ -1,4 +1,6 @@
 //! Configured production child and authenticated screen observation for M1.
+pub mod report;
+pub mod restart;
 use std::{net::SocketAddr, path::Path};
 
 use echo_screen_contract::ScreenFrame;
@@ -64,7 +66,7 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub async fn connect(address: SocketAddr) -> Result<Self, String> {
+    pub async fn connect(address: SocketAddr, initial: bool) -> Result<Self, String> {
         let mut socket = TcpStream::connect(address)
             .await
             .map_err(|_| "screen: connection failed")?;
@@ -76,15 +78,20 @@ impl Screen {
             return Err("screen: authentication failed".into());
         }
         let current = frame(&mut socket).await?;
-        if current.seq != 1
-            || current.state
-                != (echo_screen_contract::UiState::Ready {
-                    message: "Echo Live ready".into(),
-                })
+        if initial
+            && (current.seq != 1
+                || current.state
+                    != (echo_screen_contract::UiState::Ready {
+                        message: "Echo Live ready".into(),
+                    }))
         {
             return Err("screen: expected exactly one initial Echo Live ready presentation".into());
         }
         Ok(Self { socket, current })
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.current.seq
     }
 
     pub fn muted(&self) -> bool {

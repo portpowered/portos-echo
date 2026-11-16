@@ -258,6 +258,7 @@ class Host:
         self.threads = []
         self.error = False
         self.closed = False
+        self.port = None
 
     def logs(self):
         while not self.stop.is_set():
@@ -298,16 +299,19 @@ class Host:
                 self.condition.notify_all()
 
     def start(self):
-        (self.folder / "state").mkdir()
+        (self.folder / "state").mkdir(exist_ok=True)
         (self.folder / "state/config").write_text("even_volume=off\n")
         (self.folder / "addrs").write_text("127.0.0.1\n")
+        (self.folder / "capture").unlink(missing_ok=True)
         os.mkfifo(self.folder / "capture")
         self.fd = os.open(self.folder / "capture", os.O_RDWR | os.O_NONBLOCK)
+        (self.folder / "keys").unlink(missing_ok=True)
         os.mkfifo(self.folder / "keys")
         self.keys = os.open(self.folder / "keys", os.O_RDWR | os.O_NONBLOCK)
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
-            port = reservation.getsockname()[1]
+            port = self.port or reservation.getsockname()[1]
+        self.port = port
         env = {k: v for k, v in os.environ.items() if not k.startswith("HASSMIC_")}
         env.update(HASSMIC_STATE=str(self.folder / "state"), HASSMIC_CAP=str(self.folder / "capture"),
                    HASSMIC_PLAY=str(self.folder / "play.raw"), HASSMIC_FAKE_LED=str(self.folder / "led"),
@@ -347,6 +351,18 @@ class Host:
                 raise RuntimeError("host input failed")
             raise HostCancelled("host command cancelled")
         action = value.get("action")
+        if action == "restart":
+            previous = self.proc.pid
+            self.close()
+            self.stop = threading.Event()
+            self.threads, self.log = [], bytearray()
+            self.closed = self.error = self.keys_ready = self.muted = False
+            self.start()
+            emit({"event": "host.ack", "previous_pid": previous, "pid": self.proc.pid})
+            return
+        if action == "identity":
+            emit({"event": "host.ack", "pid": self.proc.pid})
+            return
         if action == "registered":
             self.logged(b"satellite: running")
         elif action == "mute":

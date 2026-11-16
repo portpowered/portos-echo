@@ -49,6 +49,10 @@ impl Process {
         })
     }
 
+    pub fn id(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     pub async fn line(&mut self) -> Result<Value, String> {
         let mut bytes = Vec::new();
         loop {

@@ -107,3 +107,47 @@ fn m1_native_muted_say_measures_zero_and_unmuted_next_wake_streams() {
     }
     assert!(!session.0.join("artifacts/configured.private").exists());
 }
+
+#[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host"]
+fn m1_independent_restart_steps_preserve_prior_generation_oracles() {
+    let session = Session::new();
+    session.scenario(
+        json!([
+            {"expect_screen":{"state":"ready","message":"Echo Live ready"}},
+            {"say":"fixture.pcm"},
+            {"expect_trace":["wyoming.run_started","wyoming.mic_frames {count_gte: 10}","wyoming.run_ended"]},
+            {"restart":{"process":"bridge","count":1,"say":"fixture.pcm"}},
+            {"restart":{"process":"hassmic-host","count":1,"say":"fixture.pcm"}}
+        ]),
+        json!({}),
+    );
+    let bridge = std::path::Path::new(env!("CARGO_BIN_EXE_echo-lab")).with_file_name(if cfg!(windows) {
+        "echo-bridge.exe"
+    } else {
+        "echo-bridge"
+    });
+    let output = session.command(bridge.to_str().unwrap()).output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = session.report();
+    assert_eq!(report["result"], "pass");
+    assert_eq!(
+        report["checks"],
+        json!({"step_0":true,"step_1":true,"step_2":true,"step_3":true,"step_4":true,"world_closed":true})
+    );
+    let observations = report["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 3);
+    assert_eq!(
+        observations
+            .iter()
+            .map(|r| r["run_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["run-1", "run-1", "run-2"]
+    );
+    assert!(observations.iter().all(|r| r["count"].as_u64().unwrap() >= 10));
+}

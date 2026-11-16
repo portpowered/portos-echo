@@ -452,3 +452,24 @@ outcomes and `executed`, `passed`, `failed`, `not_runnable` totals. A runnable
 failure or zero executed scenarios returns 1; M4 is never counted as passed.
 The test-only `echo-lab-sim-script` binary consumes explicit synthetic scripts
 at the child-process boundary; it is never the W1 acceptance bridge.
+
+M1 uses the production bridge by default:
+
+```sh
+make hassmic-host
+cargo build --locked -p echo-lab -p echo-bridge --bins
+cargo run --locked -p echo-lab -- run tests/scenarios/m1-hassmic-bridge.yaml --driver sim
+```
+
+The schema-valid report's `m1` measurements include one Ready presentation before the first wake,
+all 22 streamed wakes (each at least 10 microphone frames), the real native mute window
+(received and forwarded both zero), and 10 bridge plus 10 hassmic-host restarts. Run IDs are
+scoped by `bridge_generation`. Each restart stops and collects that process before replacement,
+checks the opposite process identity, reconnects on the same host endpoint, and runs the ordered
+wake oracle. The scenario has a 120 second ceiling; no real service, device or account is used.
+Component coverage for one independent restart of each process is available with:
+
+```sh
+cargo nextest run --locked -p echo-lab --test sim_host --run-ignored only \
+  -E 'test(m1_independent_restart_steps)' --config-file .github/nextest.toml --profile ci --no-capture
+```

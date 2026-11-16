@@ -154,6 +154,101 @@
           }
         }
       }
+    },
+    "m1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ready_before_first_wake",
+        "streamed_wakes",
+        "bridge_restarts",
+        "hassmic_host_restarts",
+        "mute_status"
+      ],
+      "properties": {
+        "ready_before_first_wake": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "streamed_wakes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "bridge_generation",
+              "run_id",
+              "mic_frames"
+            ],
+            "properties": {
+              "bridge_generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "run_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mic_frames": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "bridge_restarts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hassmic_host_restarts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mute_status": {
+          "enum": [
+            "pass",
+            "fail",
+            "blocked"
+          ]
+        },
+        "mute_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "received_frames",
+            "forwarded_frames"
+          ],
+          "properties": {
+            "received_frames": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "forwarded_frames": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mute_status": {
+                "const": "pass"
+              }
+            },
+            "required": [
+              "mute_status"
+            ]
+          },
+          "then": {
+            "required": [
+              "mute_window"
+            ]
+          }
+        }
+      ]
     }
   },
   "allOf": [

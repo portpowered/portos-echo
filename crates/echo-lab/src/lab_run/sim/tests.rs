@@ -370,3 +370,38 @@ fn muted_frame_oracle_accepts_only_measured_zero_and_rejects_one_missing_stale_o
         assert!(selectors::Selector::parse(invalid).is_err());
     }
 }
+
+#[test]
+fn restart_capability_bounds_count_process_and_fixture_before_launch() {
+    let scenario = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/scenarios/m1-hassmic-bridge.yaml"
+    );
+    for process in ["bridge", "hassmic-host"] {
+        let value = json!({"restart":{"process":process,"count":10,"say":"../fixtures/lab/w1-utterance.pcm"}});
+        assert!(matches!(
+            super::parse_step(&value, scenario).unwrap(),
+            super::Step::Restart { count: 10, .. }
+        ));
+        for count in [0, 11] {
+            let mut invalid = value.clone();
+            invalid["restart"]["count"] = json!(count);
+            assert_eq!(
+                super::parse_step(&invalid, scenario).err().unwrap(),
+                "restart: count must be 1..10"
+            );
+        }
+        let mut missing = value;
+        missing["restart"]["say"] = json!("missing.pcm");
+        assert_eq!(
+            super::parse_step(&missing, scenario).err().unwrap(),
+            "sim say: missing PCM fixture"
+        );
+    }
+    assert_eq!(
+        super::parse_step(&json!({"restart":{"process":"other"}}), scenario)
+            .err()
+            .unwrap(),
+        "restart: unsupported process"
+    );
+}

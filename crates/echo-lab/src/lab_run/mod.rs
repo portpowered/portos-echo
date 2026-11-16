@@ -24,6 +24,7 @@ pub enum Step {
     Ui(serde_json::Value),
     Press(String),
     Budget(String, f64),
+    Restart { process: String, count: u64, say: PathBuf },
     Unsupported,
 }
 
@@ -98,7 +99,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
         for step in scenario["steps"].as_array().ok_or("scenario: missing steps")? {
             steps.push(match step["say"].as_str() {
                 Some(value) => say(value, path, options)?,
-                None if options.sim => sim::parse(step)?,
+                None if options.sim => sim::parse_step(step, path)?,
                 None => run_oracles::parse(step)?,
             });
         }

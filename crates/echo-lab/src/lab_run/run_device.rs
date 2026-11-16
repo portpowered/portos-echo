@@ -382,9 +382,12 @@ impl Device<'_> {
                     artifacts,
                 )
             }
-            Step::Unsupported | Step::Trace(_) | Step::Ui(_) | Step::Press(_) | Step::Budget(_, _) => {
-                Err("step: capability is not implemented by device driver".into())
-            }
+            Step::Restart { .. }
+            | Step::Unsupported
+            | Step::Trace(_)
+            | Step::Ui(_)
+            | Step::Press(_)
+            | Step::Budget(_, _) => Err("step: capability is not implemented by device driver".into()),
             Step::Speech(phrases) => self.speech(phrases),
             Step::Screen(golden) => self.screen(golden, index, artifacts),
             Step::Frame(name) => self.frame(name, artifacts),

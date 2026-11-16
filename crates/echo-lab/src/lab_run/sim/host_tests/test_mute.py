@@ -18,6 +18,34 @@ class MuteControls(unittest.TestCase):
         self.host.keys = 17
         self.host.proc = mock.Mock()
 
+    def test_restart_collects_before_start_and_preserves_cancellation_authority(self):
+        events = mock.Mock()
+        self.host.proc.pid = 101
+        cancelled = self.host.cancelled
+        condition = self.host.condition
+        with mock.patch.object(self.host, "close") as close, \
+                mock.patch.object(self.host, "start") as start, \
+                mock.patch.object(CONTROLLER, "emit") as emit:
+            events.attach_mock(close, "close")
+            events.attach_mock(start, "start")
+            events.attach_mock(emit, "ack")
+            def started():
+                self.assertFalse(self.host.stop.is_set())
+                self.assertFalse(self.host.muted)
+                self.host.proc.pid = 102
+            start.side_effect = started
+            self.host.muted = True
+            self.host.command({"action": "restart"})
+            self.assertEqual(events.mock_calls, [mock.call.close(), mock.call.start(),
+                mock.call.ack({"event": "host.ack", "previous_pid": 101, "pid": 102})])
+            self.assertIs(self.host.cancelled, cancelled)
+            self.assertIs(self.host.condition, condition)
+            close.side_effect = RuntimeError("cleanup failed")
+            events.reset_mock()
+            with self.assertRaises(RuntimeError):
+                self.host.command({"action": "restart"})
+            self.assertEqual(events.mock_calls, [mock.call.close()])
+
     def test_key_release_toggles_once_and_acknowledges_after_observed_state(self):
         events = mock.Mock()
         with mock.patch.object(CONTROLLER.os, "write") as write, \

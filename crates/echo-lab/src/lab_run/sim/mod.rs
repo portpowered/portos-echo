@@ -18,9 +18,10 @@ pub struct Sim<'a> {
     runtime: tokio::runtime::Runtime,
     world: World,
     launched: bool,
-    expectations: Vec<(usize, Vec<selectors::Selector>, Option<String>)>,
-    budgets: Vec<(usize, String, f64, Option<String>)>,
+    expectations: Vec<(usize, Vec<selectors::Selector>, Option<String>, u64)>,
+    budgets: Vec<(usize, String, f64, Option<String>, u64)>,
     deadline: tokio::time::Instant,
+    m1: bool,
 }
 
 impl<'a> Sim<'a> {
@@ -31,6 +32,10 @@ impl<'a> Sim<'a> {
             .build()
             .map_err(|_| "sim: cannot start runtime")?;
         Ok(Self {
+            m1: options
+                .scenarios
+                .iter()
+                .any(|path| crate::lab_validate::load(path).is_ok_and(|s| s["id"] == "m1-hassmic-bridge")),
             options,
             runtime,
             world: World::default(),
@@ -54,47 +59,7 @@ impl<'a> Sim<'a> {
                         )
                         .await?;
                 }
-                match step {
-                    Step::SayFile(path) => {
-                        let data = observers::bytes(path, 4096, "say")?;
-                        if data.is_empty() || data.len() % 2 != 0 {
-                            return Err("say: invalid PCM fixture".into());
-                        }
-                        say(&mut self.world, &data).await
-                    }
-                    Step::Press(action) => {
-                        self.world.control(&json!({"action":action})).await?;
-                        if matches!(action.as_str(), "wake" | "action") {
-                            self.world.complete_run().await?;
-                        }
-                        Ok(())
-                    }
-                    Step::Trace(values) => {
-                        self.world.observe().await?;
-                        selectors::check(
-                            &self.world.trace.records,
-                            &selectors::parse(values)?,
-                            self.world.run.as_deref(),
-                        )
-                    }
-                    Step::Ui(expected) => {
-                        if let Some(screen) = &mut self.world.screen {
-                            return screen.expect(expected).await;
-                        }
-                        let bytes = observers::bytes(&self.world.ui_path, 65536, "screen expectation")?;
-                        observers::screen(&bytes, expected)
-                    }
-                    Step::Speech(phrases) => {
-                        self.world.observe().await?;
-                        let text = observers::transcript(&self.world.trace.records, self.world.run.as_deref())?;
-                        super::run_oracles::speech(text.as_bytes(), phrases)
-                    }
-                    Step::Budget(name, ceiling) => {
-                        self.world.observe().await?;
-                        observers::budget(&self.world.trace.records, name, *ceiling, self.world.run.as_deref())
-                    }
-                    _ => Err("sim: unsupported step capability".into()),
-                }
+                execute_step(&mut self.world, step, self.options, &artifacts.root).await
             };
             controlled(work, self.options.cancel.as_deref(), self.deadline).await
         })
@@ -102,22 +67,22 @@ impl<'a> Sim<'a> {
 
     fn finalize(&self, artifacts: &mut Artifacts, invalid_trace: bool) -> Vec<String> {
         let mut failures = Vec::new();
-        for (step, selectors, run) in &self.expectations {
+        for (step, selectors, run, generation) in &self.expectations {
             let result = if invalid_trace {
                 Err("trace: invalid final trace".into())
             } else {
-                selectors::check(&self.world.trace.records, selectors, run.as_deref())
+                selectors::check(self.world.records(*generation), selectors, run.as_deref())
             };
             if let Err(error) = result {
                 artifacts.checks.insert(format!("step_{step}"), false);
                 failures.push(format!("step {step}: {error}"));
             }
         }
-        for (step, name, ceiling, run) in &self.budgets {
+        for (step, name, ceiling, run, generation) in &self.budgets {
             let result = if invalid_trace {
                 Err("trace: invalid final trace".into())
             } else {
-                observers::budget(&self.world.trace.records, name, *ceiling, run.as_deref())
+                observers::budget(self.world.records(*generation), name, *ceiling, run.as_deref())
             };
             if let Err(error) = result {
                 artifacts.checks.insert(format!("step_{step}"), false);
@@ -125,6 +90,61 @@ impl<'a> Sim<'a> {
             }
         }
         failures
+    }
+}
+
+async fn execute_step(world: &mut World, step: &Step, options: &Options, root: &std::path::Path) -> Result<(), String> {
+    match step {
+        Step::Restart {
+            process,
+            count,
+            say: path,
+        } => {
+            production::restart::group(
+                world,
+                process,
+                *count,
+                path,
+                options.bridge.as_deref().ok_or("sim: missing bridge")?,
+                root,
+            )
+            .await
+        }
+        Step::SayFile(path) => {
+            let data = observers::bytes(path, 4096, "say")?;
+            if data.is_empty() || data.len() % 2 != 0 {
+                return Err("say: invalid PCM fixture".into());
+            }
+            say(world, &data).await
+        }
+        Step::Press(action) => {
+            world.control(&json!({"action":action})).await?;
+            if matches!(action.as_str(), "wake" | "action") {
+                world.complete_run().await?;
+            }
+            Ok(())
+        }
+        Step::Trace(values) => {
+            world.observe().await?;
+            selectors::check(&world.trace.records, &selectors::parse(values)?, world.run.as_deref())
+        }
+        Step::Ui(expected) => {
+            if let Some(screen) = &mut world.screen {
+                return screen.expect(expected).await;
+            }
+            let bytes = observers::bytes(&world.ui_path, 65536, "screen expectation")?;
+            observers::screen(&bytes, expected)
+        }
+        Step::Speech(phrases) => {
+            world.observe().await?;
+            let text = observers::transcript(&world.trace.records, world.run.as_deref())?;
+            super::run_oracles::speech(text.as_bytes(), phrases)
+        }
+        Step::Budget(name, ceiling) => {
+            world.observe().await?;
+            observers::budget(&world.trace.records, name, *ceiling, world.run.as_deref())
+        }
+        _ => Err("sim: unsupported step capability".into()),
     }
 }
 
@@ -169,12 +189,21 @@ impl Driver for Sim<'_> {
     ) -> Result<(), String> {
         self.attempt(step, artifacts)?;
         if let Step::Trace(values) = step {
-            self.expectations
-                .push((index, selectors::parse(values)?, self.world.run.clone()));
+            self.expectations.push((
+                index,
+                selectors::parse(values)?,
+                self.world.run.clone(),
+                self.world.generation,
+            ));
         }
         if let Step::Budget(name, ceiling) = step {
-            self.budgets
-                .push((index, name.clone(), *ceiling, self.world.run.clone()));
+            self.budgets.push((
+                index,
+                name.clone(),
+                *ceiling,
+                self.world.run.clone(),
+                self.world.generation,
+            ));
         }
         Ok(())
     }
@@ -189,19 +218,52 @@ impl Driver for Sim<'_> {
                 break;
             }
         }
-        for record in self.world.trace.records.iter().filter(|_| !invalid_trace) {
+        for record in self
+            .world
+            .history
+            .iter()
+            .flat_map(|t| &t.records)
+            .chain(&self.world.trace.records)
+            .filter(|_| !invalid_trace)
+        {
             if let Err(error) = artifacts.observation(record) {
                 failures.push(error);
                 break;
             }
         }
         failures.extend(self.finalize(artifacts, invalid_trace));
+        if self.m1 && self.world.initial_ready.is_some() {
+            let m1 = production::report::collect(&self.world);
+            let checked = production::report::check(&self.world, &m1);
+            artifacts.checks.insert("m1_counts".into(), checked.is_ok());
+            failures.extend(checked.err());
+            artifacts.m1 = Some(m1);
+        }
         if failures.is_empty() {
             Ok(())
         } else {
             Err(failures.join("; "))
         }
     }
+}
+
+pub fn parse_step(value: &Value, scenario: &str) -> Result<Step, String> {
+    if let Some(restart) = value.get("restart") {
+        let process = restart["process"]
+            .as_str()
+            .filter(|p| matches!(*p, "bridge" | "hassmic-host"))
+            .ok_or("restart: unsupported process")?;
+        let count = restart["count"]
+            .as_u64()
+            .filter(|n| (1..=10).contains(n))
+            .ok_or("restart: count must be 1..10")?;
+        return Ok(Step::Restart {
+            process: process.into(),
+            count,
+            say: fixture(restart["say"].as_str().ok_or("restart: missing say fixture")?, scenario)?,
+        });
+    }
+    parse(value)
 }
 
 pub fn parse(value: &Value) -> Result<Step, String> {
