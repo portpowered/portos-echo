@@ -16,6 +16,13 @@ pub struct Live {
     task: JoinHandle<()>,
 }
 
+// Immutable packets are local to one fixture. Every call still offers the
+// same freshly encoded sequence; preparation is paid once, outside each cut.
+struct Audio {
+    initial: Vec<Vec<u8>>,
+    more: Vec<Vec<u8>>,
+}
+
 impl Drop for Live {
     fn drop(&mut self) {
         self.task.abort();
@@ -52,11 +59,15 @@ impl Live {
         let observed = calls.clone();
         let microphone_frames = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let microphone = microphone_frames.clone();
+        let audio = Audio {
+            initial: encode(frames),
+            more: encode(32),
+        };
         let task = tokio::spawn(async move {
             let mut stream = listener.accept().await.unwrap().0;
             loop {
                 observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                stream = serve(&listener, stream, &mut receive, frames, gate.take(), &sent, &microphone).await;
+                stream = serve(&listener, stream, &mut receive, &audio, gate.take(), &sent, &microphone).await;
             }
         });
         Self {
@@ -74,7 +85,7 @@ async fn serve(
     listener: &TcpListener,
     mut stream: TcpStream,
     receive: &mut mpsc::Receiver<String>,
-    frames: u16,
+    audio: &Audio,
     gate: Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>,
     commentary: &mpsc::Sender<String>,
     microphone: &std::sync::atomic::AtomicUsize,
@@ -106,8 +117,17 @@ async fn serve(
         drive(&mut peer).await.unwrap();
     }
     let mut sequence = 0;
-    short_audio(&mut peer, frames, &mut sequence).await;
-    next_connection(listener, receive, &mut peer, &mut sequence, commentary, microphone).await
+    short_audio(&mut peer, &audio.initial, &mut sequence).await;
+    next_connection(
+        listener,
+        receive,
+        &mut peer,
+        &mut sequence,
+        commentary,
+        microphone,
+        &audio.more,
+    )
+    .await
 }
 
 async fn next_connection(
@@ -117,12 +137,13 @@ async fn next_connection(
     sequence: &mut u16,
     commentary: &mpsc::Sender<String>,
     microphone: &std::sync::atomic::AtomicUsize,
+    audio: &[Vec<u8>],
 ) -> TcpStream {
     loop {
         tokio::select! {
             next = listener.accept() => return next.unwrap().0,
             event = receive.recv() => match event {
-                Some(event) if event == "synthetic.more_audio" => short_audio(peer, 32, sequence).await,
+                Some(event) if event == "synthetic.more_audio" => short_audio(peer, audio, sequence).await,
                 Some(event) => peer.send_text(&event).await.unwrap(),
                 None => return listener.accept().await.unwrap().0,
             },
@@ -137,16 +158,24 @@ async fn next_connection(
     }
 }
 
-async fn short_audio(peer: &mut LivePeer, frames: u16, sequence: &mut u16) {
+fn encode(frames: u16) -> Vec<Vec<u8>> {
     let mut encoder = echo_audio::OpusEncoder::new().unwrap();
     let mut bytes = [0; 1275];
-    for _ in 0..frames {
-        let size = encoder.encode(&[0; 960], &mut bytes).unwrap();
+    (0..frames)
+        .map(|_| {
+            let size = encoder.encode(&[0; 960], &mut bytes).unwrap();
+            bytes[..size].to_vec()
+        })
+        .collect()
+}
+
+async fn short_audio(peer: &mut LivePeer, audio: &[Vec<u8>], sequence: &mut u16) {
+    for payload in audio {
         peer.send_audio(
             echo_live::AudioFrame {
                 sequence: *sequence,
                 timestamp: u32::from(*sequence) * 960,
-                payload: bytes[..size].to_vec(),
+                payload: payload.clone(),
             },
             tokio::time::Instant::now().into_std(),
         )

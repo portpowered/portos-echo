@@ -32,9 +32,7 @@ fn suite_requires_an_executed_t3_and_rejects_invalid_options() {
     }
 }
 
-#[test]
-#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
-fn discovery_executes_w1_and_both_m4_cases_and_skips_other_tiers() {
+fn discovery_session() -> Session {
     let session = Session::new();
     scenario(
         &session,
@@ -49,36 +47,54 @@ fn discovery_executes_w1_and_both_m4_cases_and_skips_other_tiers() {
         include_str!("../lab_m4.yaml"),
     )
     .unwrap();
-    let output = command(&session).args(["--out", "suite-root"]).output().unwrap();
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(!stdout.contains("not-runnable"));
-    assert!(stdout.ends_with("executed=2 passed=2 failed=0 not_runnable=0\n"));
-    let runs = std::fs::read_dir(session.0.join("suite-root/artifacts/W1"))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(runs.len(), 1);
-    let report: Value = serde_json::from_slice(&std::fs::read(runs[0].path().join("report.json")).unwrap()).unwrap();
-    assert_eq!(report["result"], "pass");
-    scenario(
-        &session,
-        "w1.yaml",
-        &["T3"],
-        json!([{"press":"action"},{"expect_trace":["absent"]}]),
-    );
-    let output = command(&session).output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.ends_with("executed=2 passed=1 failed=1 not_runnable=0\n"),
-        "{stdout}"
-    );
+    session
+}
+
+#[test]
+#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
+fn discovery_executes_w1_and_both_m4_cases_and_skips_other_tiers() {
+    // Each complete --all journey retains its serial scenario execution. The
+    // success and seeded-failure invocations have independent private worlds,
+    // so pair them instead of accumulating six host launches under one ceiling.
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let session = discovery_session();
+            let output = command(&session).args(["--out", "suite-root"]).output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(!stdout.contains("not-runnable"));
+            assert!(stdout.ends_with("executed=2 passed=2 failed=0 not_runnable=0\n"));
+            let runs = std::fs::read_dir(session.0.join("suite-root/artifacts/W1"))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(runs.len(), 1);
+            let report: Value =
+                serde_json::from_slice(&std::fs::read(runs[0].path().join("report.json")).unwrap()).unwrap();
+            assert_eq!(report["result"], "pass");
+        });
+        scope.spawn(|| {
+            let session = discovery_session();
+            scenario(
+                &session,
+                "w1.yaml",
+                &["T3"],
+                json!([{"press":"action"},{"expect_trace":["absent"]}]),
+            );
+            let output = command(&session).output().unwrap();
+            assert_eq!(output.status.code(), Some(1));
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(
+                stdout.ends_with("executed=2 passed=1 failed=1 not_runnable=0\n"),
+                "{stdout}"
+            );
+        });
+    });
 }
 
 fn w1_copy(session: &Session, threshold: u64) {
