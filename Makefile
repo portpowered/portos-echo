@@ -13,6 +13,11 @@ SHELL := sh
 endif
 .SHELLFLAGS := -ec
 COVERAGE_BASE ?= origin/main
+# Cargo uses response files for long Windows compiler commands. The coverage
+# wrapper cannot read their crate names; direct instrumentation preserves mappings.
+ifeq ($(OS),Windows_NT)
+COVERAGE_INSTRUMENTATION := --no-rustc-wrapper
+endif
 
 .PHONY: fmt-check lint-shape lint lint-rust lint-deps lint-rules lint-scripts-web lint-docs lint-docs-online lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency coverage deps-fresh build-host ci
 .NOTPARALLEL: lint ci
@@ -97,11 +102,11 @@ COVERAGE_HOST_T3 := -p echo-wyoming --test wyoming_t3
 coverage: hassmic-host
 	cargo +nightly-2026-11-05 llvm-cov clean --workspace
 	mkdir -p target/llvm-cov
-	cargo +nightly-2026-11-05 llvm-cov --workspace --all-targets --locked --branch --no-report
-	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_HOST_T3) --locked --branch --no-report -- --ignored --nocapture
-	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --test sim_bridge_cli --locked --branch --no-report -- --ignored --nocapture
-	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --test sim_host --locked --branch --no-report -- --ignored --nocapture --test-threads=2
-	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --bin echo-lab --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) --workspace --all-targets --locked --branch --no-report
+	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) $(COVERAGE_HOST_T3) --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --test sim_bridge_cli --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --test sim_host --locked --branch --no-report -- --ignored --nocapture --test-threads=2
+	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --bin echo-lab --locked --branch --no-report -- --ignored --nocapture
 	cargo +nightly-2026-11-05 llvm-cov report --branch --no-default-ignore-filename-regex --ignore-filename-regex '$(COVERAGE_DEPENDENCY_SOURCES)' --fail-under-lines 80 --lcov --output-path target/llvm-cov/coverage.lcov
 	cargo xtask coverage-check target/llvm-cov/coverage.lcov "$(COVERAGE_BASE)"
 
