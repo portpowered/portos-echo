@@ -118,31 +118,38 @@ fn observation_failures() -> [(serde_json::Value, serde_json::Value, serde_json:
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host"]
 fn missing_wrong_and_unsupported_observations_fail_without_following_steps() {
-    for (step, script, budgets, error) in observation_failures() {
-        let session = Session::new();
-        let has_budget = budgets.as_object().unwrap().len() == 1;
-        session.scenario(
-            if has_budget {
-                json!([step])
-            } else {
-                json!([step,{"press":"action"}])
-            },
-            budgets,
-        );
-        let mut fixture = json!({"records":records()});
-        fixture
-            .as_object_mut()
-            .unwrap()
-            .extend(script.as_object().unwrap().clone());
-        let output = session.script(&fixture);
-        assert_eq!(output.status.code(), Some(1));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(stderr.trim(), format!("echo-lab: scenario.yaml: {error}"));
-        let report = session.report();
-        assert_eq!(report["result"], "fail");
-        assert_eq!(report["checks"][if has_budget { "step_1" } else { "step_0" }], false);
-        assert_eq!(report["checks"]["world_closed"], true);
-        session.endpoints();
+    // Each pair owns independent processes, endpoints and files.
+    for cases in observation_failures().chunks(2) {
+        std::thread::scope(|scope| {
+            for (step, script, budgets, error) in cases.iter().cloned() {
+                scope.spawn(move || {
+                    let session = Session::new();
+                    let has_budget = budgets.as_object().unwrap().len() == 1;
+                    session.scenario(
+                        if has_budget {
+                            json!([step])
+                        } else {
+                            json!([step,{"press":"action"}])
+                        },
+                        budgets,
+                    );
+                    let mut fixture = json!({"records":records()});
+                    fixture
+                        .as_object_mut()
+                        .unwrap()
+                        .extend(script.as_object().unwrap().clone());
+                    let output = session.script(&fixture);
+                    assert_eq!(output.status.code(), Some(1));
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    assert_eq!(stderr.trim(), format!("echo-lab: scenario.yaml: {error}"));
+                    let report = session.report();
+                    assert_eq!(report["result"], "fail");
+                    assert_eq!(report["checks"][if has_budget { "step_1" } else { "step_0" }], false);
+                    assert_eq!(report["checks"]["world_closed"], true);
+                    session.endpoints();
+                });
+            }
+        });
     }
 }
 
