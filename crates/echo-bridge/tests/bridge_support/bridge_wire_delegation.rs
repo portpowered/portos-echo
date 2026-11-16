@@ -158,6 +158,7 @@ async fn delegated(mode: &str, allowed: bool, outage: bool) {
         allowed,
     )
     .await;
+    let renewal = bridge_wire_auth_failure::rotate_credential(directory.path(), mode).await;
     let model = Model::start(outage, allowed).await;
     let fake = FakeLive::bind(FakeScript {
         events: vec![
@@ -175,18 +176,23 @@ async fn delegated(mode: &str, allowed: bool, outage: bool) {
     let mut bridge = Process::spawn(&mut command);
     let mut satellite = listener.accept().await.unwrap().0;
     bridge_short::register(&mut satellite, &mut bridge).await;
-    let delivered = commentary(&observer).await;
+    assert_commentary(&observer, allowed, outage).await;
+    let path = directory.path().join("trace");
+    bridge_wire_auth_failure::wait_event(&path, "session.commentary.append").await;
+    bridge.finish(0).await;
+    bridge_wire_auth_failure::check_rotation(directory.path(), renewal).await;
+    check(&path, &model, &observer, &spoof, mode, allowed, outage);
+    fake.shutdown().await;
+    spoof.shutdown().await.unwrap();
+}
+
+async fn assert_commentary(observer: &echo_live::fake::FakeObserver, allowed: bool, outage: bool) {
+    let delivered = commentary(observer).await;
     let expected = expected(allowed, outage);
     assert_eq!(
         delivered,
         json!({"type":"session.commentary.append","delegation_id":"d-1","text":expected})
     );
-    let path = directory.path().join("trace");
-    bridge_wire_auth_failure::wait_event(&path, "session.commentary.append").await;
-    bridge.finish(0).await;
-    check(&path, &model, &observer, &spoof, mode, allowed, outage);
-    fake.shutdown().await;
-    spoof.shutdown().await.unwrap();
 }
 
 fn expected(allowed: bool, outage: bool) -> &'static str {
@@ -290,7 +296,7 @@ fn check(
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].commentary.len(), 1);
     let token = if mode == "chatgpt" {
-        bridge_wire_auth::token()
+        format!("{}-rotated", bridge_wire_auth::token())
     } else {
         "synthetic-api-key".into()
     };
@@ -377,8 +383,12 @@ fn check_trace(path: &Path, outage: bool, token: &str) {
     assert_eq!(edges[0]["event"], "session.delegation.created");
     assert_eq!(edges.last().unwrap()["event"], "session.commentary.append");
     let text = std::fs::read_to_string(path).unwrap();
+    let original = bridge_wire_auth::token();
     for private in [
         token,
+        original.as_str(),
+        "synthetic-refresh",
+        "synthetic-rotated-refresh",
         "synthetic-account-1234",
         "synthetic-mcp-token",
         "synthetic private provider body",

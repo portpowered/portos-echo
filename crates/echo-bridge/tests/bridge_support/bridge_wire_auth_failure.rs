@@ -306,3 +306,178 @@ fn auth_recovery(
     });
     (token, requests, task)
 }
+
+// HTTP clients drive the printed callback; no desktop browser or real issuer is used.
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_wire_auth_browser_success_and_callback_refusal_preserve_credentials() {
+    for outcome in ["success", "wrong-state", "denied"] {
+        browser_signin(outcome).await;
+    }
+}
+
+async fn browser_signin(outcome: &str) {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    bridge_wire_screen::setup(directory.path(), listener.local_addr().unwrap().port());
+    let auth = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = "http://127.0.0.1";
+    let origin = format!("{base}:{}", auth.local_addr().unwrap().port());
+    let path = directory.path().join("bridge.toml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("mode = \"api_key\"", "mode = \"chatgpt\"");
+    std::fs::write(&path, format!("{text}\n[chatgpt_auth]\nclient_id = 'fixture-client'\nauthorization_endpoint = '{origin}/authorize'\ntoken_endpoint = '{origin}/token'\nbrowser_redirect_uri = 'http://127.0.0.1:0/auth/callback'\n")).unwrap();
+    std::fs::remove_file(directory.path().join("credential")).unwrap();
+    bridge_wire_auth::prepare_configured_credential(directory.path(), "chatgpt").await;
+    let before = std::fs::read(directory.path().join("credential")).unwrap();
+    let mut process = Process::spawn(&mut bridge_wire_auth::command(
+        directory.path(),
+        &["signin", "--browser", "--config", "bridge.toml"],
+    ));
+    let line = process.line().await;
+    let url = reqwest::Url::parse(line.strip_prefix("url: ").unwrap()).unwrap();
+    assert_eq!(url.origin().ascii_serialization(), origin);
+    assert_eq!(url.path(), "/authorize");
+    let query = bridge_wire_auth::browser_query(&url);
+    let mut callback = reqwest::Url::parse(&query["redirect_uri"]).unwrap();
+    browser_callback(&mut process, &mut callback, &query["state"], outcome, auth, url).await;
+    if outcome == "success" {
+        let stored: Value =
+            serde_json::from_slice(&std::fs::read(directory.path().join("credential")).unwrap()).unwrap();
+        assert!(
+            stored["access"].as_str() == Some(bridge_wire_auth::token().as_str()),
+            "persisted credential mismatch"
+        );
+        assert!(
+            stored["refresh"].as_str() == Some("synthetic-browser-refresh"),
+            "persisted refresh mismatch"
+        );
+        std::fs::write(directory.path().join("trace"), "").unwrap();
+        recovered_run(directory.path(), &listener, &bridge_wire_auth::token()).await;
+    } else {
+        assert!(
+            std::fs::read(directory.path().join("credential")).unwrap() == before,
+            "prior credential changed"
+        );
+    }
+    assert!(
+        tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, callback.port().unwrap()))
+            .await
+            .is_err()
+    );
+}
+
+async fn browser_callback(
+    process: &mut Process,
+    callback: &mut reqwest::Url,
+    state: &str,
+    outcome: &str,
+    auth: TcpListener,
+    authorization: reqwest::Url,
+) {
+    // The printed URL is inert until the operator follows it.
+    let auth = auth.into_std().unwrap();
+    assert_eq!(auth.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    let auth = TcpListener::from_std(auth).unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let visit = client.get(authorization).send();
+    let serve = async {
+        let mut socket = auth.accept().await.unwrap().0;
+        let (head, _) = bridge_wire_auth::request_body(&mut socket).await;
+        assert!(head.starts_with("GET /authorize?"), "authorization route mismatch");
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+    };
+    let (response, ()) = tokio::join!(visit, serve);
+    assert_eq!(response.unwrap().status().as_u16(), 200);
+    let mut auth = Some(auth);
+    let exchange = if outcome == "success" {
+        Some(tokio::spawn(bridge_wire_auth::browser_exchange(
+            auth.take().unwrap(),
+            callback.to_string(),
+        )))
+    } else {
+        None
+    };
+    bridge_wire_auth::callback_query(callback, state, outcome);
+    assert_eq!(
+        client.get(callback.clone()).send().await.unwrap().status().as_u16(),
+        if outcome == "success" { 200 } else { 400 }
+    );
+    if let Some(exchange) = exchange {
+        assert_eq!(process.line().await, "signed in");
+        process.finish(0).await;
+        exchange.await.unwrap();
+    } else {
+        bridge_wire_auth::browser_failure(process).await;
+        assert_eq!(
+            auth.unwrap().into_std().unwrap().accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+pub(super) async fn rotate_credential(directory: &Path, mode: &str) -> Option<tokio::task::JoinHandle<()>> {
+    if mode != "chatgpt" {
+        return None;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = "http://127.0.0.1";
+    let origin = format!("{base}:{}", listener.local_addr().unwrap().port());
+    let path = directory.join("bridge.toml");
+    let config = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("http://127.0.0.1:1/token", &format!("{origin}/token"));
+    std::fs::write(path, config).unwrap();
+    let path = directory.join("credential");
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["expires"] = 1.into();
+    record["last_refresh"] = 0.into();
+    std::fs::write(path, record.to_string()).unwrap();
+    Some(tokio::spawn(async move {
+        let mut socket = listener.accept().await.unwrap().0;
+        let (header, body) = bridge_wire_auth::request_body(&mut socket).await;
+        assert!(header.starts_with("POST /token HTTP/1.1\r\n"), "refresh route mismatch");
+        let form = bridge_wire_auth::fields(&body);
+        assert_eq!(form.len(), 3);
+        assert!(
+            form.get("grant_type").is_some_and(|value| value == "refresh_token"),
+            "refresh grant mismatch"
+        );
+        assert!(
+            form.get("refresh_token")
+                .is_some_and(|value| value == "synthetic-refresh"),
+            "refresh credential mismatch"
+        );
+        let body = json!({"access_token":format!("{}-rotated", bridge_wire_auth::token()), "refresh_token":"synthetic-rotated-refresh"}).to_string();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        // Any subsequent refresh cannot succeed: both consumers must reuse this rotation.
+    }))
+}
+
+pub(super) async fn check_rotation(directory: &Path, renewal: Option<tokio::task::JoinHandle<()>>) {
+    if let Some(renewal) = renewal {
+        renewal.await.unwrap();
+        let stored: Value = serde_json::from_slice(&std::fs::read(directory.join("credential")).unwrap()).unwrap();
+        assert!(
+            stored["access"].as_str() == Some(format!("{}-rotated", bridge_wire_auth::token()).as_str()),
+            "rotated access mismatch"
+        );
+        assert!(
+            stored["refresh"].as_str() == Some("synthetic-rotated-refresh"),
+            "rotated refresh mismatch"
+        );
+    }
+}

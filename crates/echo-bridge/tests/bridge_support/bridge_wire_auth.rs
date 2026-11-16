@@ -206,6 +206,10 @@ async fn bridge_wire_auth_device_signin_commits_isolated_credential() {
 }
 
 pub(super) async fn request(stream: &mut tokio::net::TcpStream) -> String {
+    request_body(stream).await.0
+}
+
+pub(super) async fn request_body(stream: &mut tokio::net::TcpStream) -> (String, String) {
     let mut bytes = Vec::new();
     while !bytes.ends_with(b"\r\n\r\n") {
         bytes.push(stream.read_u8().await.unwrap());
@@ -216,14 +220,11 @@ pub(super) async fn request(stream: &mut tokio::net::TcpStream) -> String {
         .lines()
         .filter_map(|line| line.split_once(':'))
         .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
-        .unwrap()
-        .1
-        .trim()
-        .parse()
-        .unwrap();
+        .map_or(0, |(_, value)| value.trim().parse().unwrap());
     assert!(length < 16_384);
-    stream.read_exact(&mut vec![0; length]).await.unwrap();
-    header
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).await.unwrap();
+    (header, String::from_utf8(body).unwrap())
 }
 
 #[tokio::test]
@@ -338,4 +339,86 @@ pub(super) async fn prepare_configured_credential(directory: &Path, mode: &str) 
     } else {
         std::fs::write(directory.join("credential"), "synthetic-api-key\r\n").unwrap();
     }
+}
+
+pub(super) fn fields(query: &str) -> std::collections::HashMap<String, String> {
+    let mut url = reqwest::Url::parse("http://127.0.0.1/").unwrap();
+    url.set_query(Some(query));
+    url.query_pairs().into_owned().collect()
+}
+
+pub(super) async fn browser_exchange(listener: tokio::net::TcpListener, redirect: String) {
+    let mut socket = listener.accept().await.unwrap().0;
+    let (head, body) = request_body(&mut socket).await;
+    assert!(head.starts_with("POST /token HTTP/1.1\r\n"), "token route mismatch");
+    let form = fields(&body);
+    assert_eq!(form.len(), 5);
+    for (key, value) in [
+        ("grant_type", "authorization_code"),
+        ("code", "synthetic-code"),
+        ("client_id", "fixture-client"),
+        ("redirect_uri", redirect.as_str()),
+    ] {
+        assert!(
+            form.get(key).is_some_and(|actual| actual == value),
+            "exchange form mismatch"
+        );
+    }
+    assert_eq!(form["code_verifier"].len(), 43);
+    let body = json!({"access_token":token(),"refresh_token":"synthetic-browser-refresh"}).to_string();
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+}
+
+pub(super) fn browser_query(url: &reqwest::Url) -> std::collections::HashMap<String, String> {
+    let query = fields(url.query().unwrap());
+    assert_eq!(query["code_challenge_method"], "S256");
+    assert_eq!(query["code_challenge"].len(), 43);
+    assert_eq!(query["state"].len(), 43);
+    assert_eq!(query["client_id"], "fixture-client");
+    assert_eq!(query["response_type"], "code");
+    let callback = reqwest::Url::parse(&query["redirect_uri"]).unwrap();
+    assert_eq!(callback.host_str(), Some("127.0.0.1"));
+    assert_eq!(callback.path(), "/auth/callback");
+    assert!(callback.port().is_some_and(|port| port != 0));
+    query
+}
+
+pub(super) async fn browser_failure(process: &mut Process) {
+    let status = tokio::time::timeout(Duration::from_secs(5), process.child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.code(), Some(1));
+    let mut error = String::new();
+    process
+        .child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut error)
+        .await
+        .unwrap();
+    assert!(error == "echo-bridge: authorization\n", "unsafe diagnostic");
+    assert!(process.lines.next_line().await.unwrap().is_none());
+}
+
+pub(super) fn callback_query(callback: &mut reqwest::Url, state: &str, outcome: &str) {
+    let (key, value) = if outcome == "denied" {
+        ("error", "access_denied")
+    } else {
+        ("code", "synthetic-code")
+    };
+    callback.query_pairs_mut().extend_pairs([
+        (key, value),
+        ("state", if outcome == "wrong-state" { "wrong" } else { state }),
+    ]);
 }
