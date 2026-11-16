@@ -5,7 +5,7 @@ last modified: 2026, november, 16
 status: accepted
 ---
 
-# ADR 0021: One authenticated Muse service owner
+# ADR 0022: One authenticated Muse service owner
 
 Extend the existing Muse crate with opt-in Linux `echo-muse-daemon` and
 `echo-muse-report` targets. One leased durable backend handles both HTTPS task

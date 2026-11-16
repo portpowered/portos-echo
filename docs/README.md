@@ -78,4 +78,4 @@ Add each new tracked documentation page to this index in the same change.
 - [Loopback screen transport](adr/0016-screen-server.md)
 - [Operator sign-in command library](adr/0018-signin.md)
 - [Correlated Muse core](adr/0020-muse-core.md)
-- [Authenticated Muse service](adr/0021-muse-service.md)
+- [Authenticated Muse service](adr/0022-muse-service.md)
