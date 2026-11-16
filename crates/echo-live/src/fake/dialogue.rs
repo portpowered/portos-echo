@@ -265,5 +265,17 @@ async fn send(
         DialogueSent::Text(text) => peer.send_text(text).await?,
         DialogueSent::Audio(frame) => peer.send_audio(frame.clone(), now()).await?,
     }
-    observer.update(index, |call| call.sent.push(output))
+    let audio = matches!(output, DialogueSent::Audio(_));
+    observer.update(index, |call| call.sent.push(output))?;
+    if audio {
+        // Each fixture frame represents 20 ms. Drive the peer throughout that
+        // media interval, including the final frame, before emitting done.
+        // Bursting RTP and done together lets the control channel finish the
+        // bridge reply before its audio receiver admits even the first frame.
+        let next = now() + Duration::from_millis(20);
+        while now() < next {
+            drive(peer, next).await?;
+        }
+    }
+    Ok(())
 }

@@ -1,4 +1,6 @@
 pub(super) mod mcp;
+#[cfg(test)]
+mod m4;
 mod observers;
 mod process;
 mod production;
