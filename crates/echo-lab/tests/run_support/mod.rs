@@ -16,6 +16,9 @@ impl Session {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+        // The name carries this process id; one that already exists is a stale leftover of an
+        // interrupted earlier process that had the same id (Windows reuses ids), never a live one.
+        let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         fs::write(root.join("fixture.json"), fixture.to_string()).unwrap();
         let session = Self(root.canonicalize().unwrap());

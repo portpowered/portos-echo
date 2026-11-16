@@ -48,6 +48,9 @@ fn schema_snapshots() -> Result<(), Box<dyn Error>> {
 #[test]
 fn snapshot_update_and_failure_diagnostics() -> Result<(), Box<dyn Error>> {
     let directory = env::temp_dir().join(format!("contracts-snapshot-test-{}", std::process::id()));
+    // The name carries this process id; one that already exists is a stale leftover of an
+    // interrupted earlier process that had the same id (Windows reuses ids), never a live one.
+    let _ = fs::remove_dir_all(&directory);
     fs::create_dir(&directory)?;
     let path = directory.join("nested/task_event.json");
     let generated = format!("{}\n", serde_json::to_string_pretty(&schema_for!(TaskEvent))?);
