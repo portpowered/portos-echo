@@ -116,11 +116,10 @@ async fn t3_model_matches_wire_results_rejects_retry_and_closes_listener() {
         observed.wait_for(|v| v.failure.is_some()).await.unwrap();
         assert_eq!(model.check(), Err("model: unexpected extra request".into()));
         model.close().await.unwrap();
-        assert!(
-            TcpStream::connect(origin.strip_prefix("http://").unwrap())
-                .await
-                .is_err()
-        );
+        // post read EOF on the owned retry connection. close joins the listener
+        // task; its observation sender must now be dropped, without probing a
+        // released ephemeral address that another parallel test may own.
+        assert!(observed.has_changed().is_err());
     }
 }
 
@@ -144,7 +143,10 @@ async fn t3_model_wrong_result_never_emits_commentary_and_stalled_body_is_collec
         )
         .await
         .unwrap();
+    let mut observed = model.observed.clone();
+    observed.wait_for(|v| v.requests == 1).await.unwrap();
     model.close().await.unwrap();
+    assert!(observed.has_changed().is_err());
     match socket.read(&mut [0]).await {
         Ok(count) => assert_eq!(count, 0),
         Err(error) => assert!(matches!(
