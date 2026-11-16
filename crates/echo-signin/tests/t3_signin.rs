@@ -1,6 +1,12 @@
 //! Component T3: public commands with real auth/client/store and a loopback issuer.
 //! Each test owns a temporary directory and an ephemeral port; no real credentials.
 #[cfg(test)]
+#[path = "support/signin_browser.rs"]
+mod signin_browser;
+#[cfg(test)]
+#[path = "support/signin_import.rs"]
+mod signin_import;
+#[cfg(test)]
 mod support;
 
 use echo_chatgpt_auth::{AuthError, AuthSource};
