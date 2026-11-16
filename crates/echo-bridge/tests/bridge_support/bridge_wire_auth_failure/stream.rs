@@ -62,11 +62,10 @@ async fn verify(path: &Path, bridge: &mut Process, fake: FakeLive, entries: &[Va
     assert!(bridge.child.try_wait().unwrap().is_none());
     check_second_wake(entries);
     assert_eq!(fake.observer().calls().unwrap().len(), 1);
-    let screen = assert_surfaces(path, true).await;
+    assert_surfaces(path, true).await;
     bridge.finish(0).await;
-    assert!(tokio::net::TcpStream::connect(&screen).await.is_err());
-    let health = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(health).await.is_err());
+    bridge.assert_collected();
+    // The same collected process owns health and screen listeners.
     fake.shutdown().await;
 }
 

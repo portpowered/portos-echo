@@ -129,10 +129,25 @@ impl Process {
     }
     pub(super) async fn finish(&mut self, code: i32) {
         drop(self.input.take());
-        let status = tokio::time::timeout(Duration::from_secs(5), self.child.wait())
-            .await
-            .unwrap()
-            .unwrap();
+        self.collect(code).await;
+    }
+    // The child owns both health and screen listeners. Observe this child,
+    // never whoever happens to bind its former ephemeral addresses.
+    pub(super) fn assert_collected(&mut self) {
+        assert!(
+            self.child.try_wait().unwrap().is_some(),
+            "{} listener owner still running",
+            self.name
+        );
+    }
+    pub(super) async fn collect(&mut self, code: i32) {
+        let completion = tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await;
+        if completion.is_err() {
+            self.child.kill().await.unwrap();
+            self.child.wait().await.unwrap();
+        }
+        assert!(completion.is_ok(), "{} listener owner did not complete", self.name);
+        let status = completion.unwrap().unwrap();
         let error = self.stderr().await;
         assert_eq!(status.code(), Some(code), "{}", diagnostics::safe(error.as_bytes()));
     }

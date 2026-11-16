@@ -366,11 +366,7 @@ async fn browser_signin(outcome: &str) {
             "prior credential changed"
         );
     }
-    assert!(
-        tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, callback.port().unwrap()))
-            .await
-            .is_err()
-    );
+    process.assert_collected();
 }
 
 async fn browser_callback(

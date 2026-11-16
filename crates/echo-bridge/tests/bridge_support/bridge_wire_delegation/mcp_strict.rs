@@ -124,20 +124,13 @@ impl Harness {
         );
     }
     async fn close(self) {
-        let resource = self
-            .spoof
-            .url()
-            .strip_prefix("http://")
-            .unwrap()
-            .strip_suffix("/mcp")
-            .unwrap()
-            .to_owned();
-        let auth = self.fixture.base().strip_prefix("http://").unwrap().to_owned();
+        let mut spoof = bridge_spine_edges::Owner::new("strict MCP spoof", self.spoof.shutdown());
+        let mut auth = bridge_spine_edges::Owner::new("strict MCP auth", self.fixture.shutdown());
         drop(self.live);
-        self.spoof.shutdown().await.unwrap();
-        self.fixture.shutdown().await.unwrap();
-        assert!(TcpStream::connect(resource).await.is_err());
-        assert!(TcpStream::connect(auth).await.is_err());
+        spoof.stop();
+        auth.stop();
+        spoof.assert_closed().await;
+        auth.assert_closed().await;
     }
 }
 #[tokio::test(start_paused = true)]
