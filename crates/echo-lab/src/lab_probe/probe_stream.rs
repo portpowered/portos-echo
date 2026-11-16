@@ -1,4 +1,4 @@
-//! Bounded read-only adb stream. Drop closes the channel, kills/reaps and joins readers.
+// Bounded read-only adb stream. Drop closes the channel, kills/reaps and joins readers.
 use std::io::{self, BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};

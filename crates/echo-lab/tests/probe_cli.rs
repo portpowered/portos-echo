@@ -2,21 +2,22 @@
 mod probe_support;
 // Component T3 calibration cases share this prebuilt-fake test binary and its
 // existing nextest process-heavy concurrency group. No production dispatch yet.
-#[path = "../src/lab_probe/probe_command.rs"]
-pub(crate) mod calibrate_command;
-#[path = "../src/lab_probe/probe_inputs.rs"]
-pub(crate) mod calibrate_inputs;
-#[path = "../src/lab_probe/probe_stream.rs"]
-pub(crate) mod calibrate_stream;
 mod lab_probe {
-    pub(crate) use crate::calibrate_command as probe_command;
-    pub(crate) use crate::calibrate_stream as probe_stream;
+    pub(crate) mod probe_command {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_command.rs"));
+    }
+    pub(crate) mod probe_stream {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_stream.rs"));
+    }
     pub(crate) mod probe_parse {
-        pub(crate) use crate::calibrate_inputs as probe_inputs;
+        pub(crate) mod probe_inputs {
+            include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_inputs.rs"));
+        }
     }
 }
-#[path = "../src/lab_calibrate/mod.rs"]
-mod lab_calibrate;
+mod lab_calibrate {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_calibrate/mod.rs"));
+}
 #[cfg(test)]
 mod tests {
     use super::probe_support;
