@@ -2,12 +2,28 @@
 use super::*;
 
 fn binaries() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map_or_else(
-            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"),
-            PathBuf::from,
-        )
-        .join("debug")
+    // Cargo places tests under <profile>/deps or <profile>/build/<crate>/<hash>/out.
+    // Follow the executable so llvm-cov's separate target uses its own artifacts.
+    let executable = std::env::current_exe().unwrap();
+    let directory = executable
+        .ancestors()
+        .find(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("deps" | "build")))
+        .and_then(Path::parent)
+        .unwrap()
+        .to_owned();
+    for name in [
+        "echo-bridge",
+        "echo-muse-daemon",
+        "echo-muse-report",
+        "echo-muse-fake-gadget",
+    ] {
+        assert!(
+            directory.join(name).is_file(),
+            "missing prebuilt {name} in {}",
+            directory.display()
+        );
+    }
+    directory
 }
 
 async fn start(world: &mut World, root: &Path, bridge: &Path) -> Result<(), String> {
@@ -41,7 +57,10 @@ async fn m7_partial_startup_reaps_daemon_helper_host_and_all_listeners() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("world");
     let mut world = World::default();
-    assert!(start(&mut world, &root, &root.join("missing-bridge")).await.is_err());
+    assert_eq!(
+        start(&mut world, &root, &root.join("missing-bridge")).await,
+        Err("launch: cannot spawn owned process".into())
+    );
     let addresses = endpoints(&world);
     let daemon = world.muse.daemon.as_mut().unwrap().observe_collection();
     let host = world.host.as_mut().unwrap().observe_collection();
