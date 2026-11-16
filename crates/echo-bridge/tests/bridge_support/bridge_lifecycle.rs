@@ -151,7 +151,7 @@ async fn bridge_lifecycle_wake_during_playback_stays_in_the_existing_run() {
     assert_eq!(host.command("arm").await, "armed");
     assert_eq!(host.command("wake").await, "wake");
     assert_eq!(host.command("cut-ready").await, "cut-ready");
-    assert_eq!(host.command("wake").await, "wake");
+    assert_eq!(host.command("wake-playing").await, "wake-playing");
     live.events
         .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
         .await

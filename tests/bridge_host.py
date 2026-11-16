@@ -79,6 +79,15 @@ def main():
                 elif command.strip() == "pcm":
                     data = (host.folder / "play.raw").read_bytes()
                     print(f"{len(data)} {sum(byte != 0 for byte in data)}", flush=True)
+                elif command.strip() == "wake-playing":
+                    # Signal delivery alone does not prove the wake ran before
+                    # Live cancellation. Wait for the real host's duplex branch
+                    # while playback remains open, then measure the client cut.
+                    host.deadline = time.monotonic() + 5
+                    host.proc.send_signal(signal.SIGUSR1)
+                    host.logged(b"wake word during the reply: left to the client (-D)")
+                    cut = time.monotonic()
+                    print("wake-playing", flush=True)
                 elif command.strip() == "wake" and awake:
                     host.proc.send_signal(signal.SIGUSR1)
                     print("wake", flush=True)
