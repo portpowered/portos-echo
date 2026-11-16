@@ -27,6 +27,13 @@ pub struct Model {
 
 impl Model {
     pub async fn bind(negative: bool) -> Result<Self, String> {
+        Self::bind_after(negative, async { Ok(()) }).await
+    }
+
+    pub async fn bind_after(
+        negative: bool,
+        gate: impl std::future::Future<Output = Result<(), String>> + Send + 'static,
+    ) -> Result<Self, String> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(|_| "model: bind failed")?;
@@ -37,7 +44,12 @@ impl Model {
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             tokio::select! {
-                () = serve(listener, negative, &observations) => {},
+                () = async {
+                    match gate.await {
+                        Ok(()) => serve(listener, negative, &observations).await,
+                        Err(error) => observations.send_modify(|o| o.failure = Some(error)),
+                    }
+                } => {},
                 _ = stopped => {},
             }
         });

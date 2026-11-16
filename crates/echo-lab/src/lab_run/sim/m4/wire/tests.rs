@@ -21,6 +21,67 @@ fn reply(bytes: usize) -> Event {
 }
 
 #[test]
+fn finite_waveform_endpoint_ignores_silence_and_matches_gain_across_frames() {
+    let fixture = super::super::world::fixture();
+    let mut endpoint = Endpoint::Fixture {
+        bytes: signs(&fixture),
+        tail: vec![],
+    };
+    let mut state = Timing::default();
+    endpoint
+        .observe(&mut state, &event("run-pipeline", 0), Duration::ZERO)
+        .unwrap();
+    endpoint
+        .observe(&mut state, &event("audio-chunk", 25600), Duration::ZERO)
+        .unwrap();
+    assert_eq!(state.endpoint, None);
+    let scaled: Vec<_> = fixture
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .flat_map(|bytes| (i16::from_le_bytes(*bytes) * 2).to_le_bytes())
+        .collect();
+    for (part, time) in [(scaled[..1600].to_vec(), 10), (scaled[1600..].to_vec(), 20)] {
+        let mut capture = event("audio-chunk", part.len());
+        capture.payload = part;
+        endpoint
+            .observe(&mut state, &capture, Duration::from_millis(time))
+            .unwrap();
+        assert_eq!(state.endpoint_seen(), time == 20);
+    }
+    state.playback(&reply(960), Duration::from_millis(1520)).unwrap();
+    assert_eq!(state.sample(), Ok(Duration::from_millis(1500)));
+    assert_eq!(state.captured, 28800);
+    assert!(matches!(endpoint, Endpoint::Fixture { tail, .. } if tail.is_empty()));
+}
+
+#[test]
+fn corrupted_or_incomplete_waveform_never_supplies_an_endpoint_and_retention_is_bounded() {
+    let fixture = super::super::world::fixture();
+    let mut endpoint = Endpoint::Fixture {
+        bytes: signs(&fixture),
+        tail: vec![],
+    };
+    let mut state = Timing::default();
+    endpoint
+        .observe(&mut state, &event("run-pipeline", 0), Duration::ZERO)
+        .unwrap();
+    let mut corrupted = event("audio-chunk", fixture.len());
+    corrupted.payload = fixture;
+    corrupted.payload[0] ^= 0x80;
+    corrupted.payload[1] ^= 0x80;
+    endpoint.observe(&mut state, &corrupted, Duration::ZERO).unwrap();
+    for _ in 0..100 {
+        endpoint
+            .observe(&mut state, &event("audio-chunk", 1600), Duration::ZERO)
+            .unwrap();
+        assert!(!state.endpoint_seen());
+    }
+    assert!(matches!(endpoint, Endpoint::Fixture { bytes, tail } if tail.len() < bytes.len()));
+    assert_eq!(state.sample(), Err("wire: missing finite utterance endpoint".into()));
+}
+
+#[test]
 fn endpoint_requires_current_run_and_complete_finite_capture() {
     let mut state = Timing::default();
     state.capture(&event("audio-chunk", 4), 4, Duration::ZERO).unwrap();

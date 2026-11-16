@@ -227,7 +227,7 @@ async fn t3_m4_fresh_http500_result_releases_honest_fallback_without_retry() {
         .unwrap();
 }
 
-fn assert_dialogue(observer: &echo_live::fake::DialogueObserver, text: &str) {
+pub(super) fn assert_dialogue(observer: &echo_live::fake::DialogueObserver, text: &str) {
     let calls = observer.calls().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].delegation_id, "d-1");

@@ -24,6 +24,25 @@ uses no network. `--help` prints the command grammar.
 
 ## Sim test bridge
 
+The M4 component witnesses use the prebuilt configured `echo-bridge` binary,
+the pinned host, synthetic Live and Responses peers, and the spoof MCP:
+
+```sh
+cargo test -p echo-lab --bin echo-lab t3_m4_pinned_host --locked -- --ignored --nocapture
+```
+
+Each fresh world sends one finite 100 ms synthetic capture through the host.
+Its explicit `--finite` owner disables wake sounds and their removal, sends
+the fixture once, and stops feeding the FIFO afterward. The transparent Wyoming
+observer matches the complete sample-sign sequence across frames, preserving
+the endpoint through the host's microphone gain. It measures the interval from
+the successful socket write containing that endpoint to the first reply PCM
+write. These are host-boundary observations, not DAC or acoustic timings.
+The paired screen SSE must show ready, listening, speaking, and ready in order.
+Success and HTTP 500 use independent worlds, exact model results, and checked
+cleanup. These witnesses are test-only pending M4 scenario driver integration;
+they do not claim that `m4-spoof-tool.yaml` passes yet.
+
 `cargo build -p echo-lab --bin echo-lab-sim-bridge --locked` builds the
 test-purpose Wyoming bridge. It has no model or tool execution. Supply
 `ECHO_LAB_WYOMING_ADDR=127.0.0.1:<port>` and an absolute native

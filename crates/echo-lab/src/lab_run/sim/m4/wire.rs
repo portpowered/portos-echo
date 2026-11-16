@@ -22,6 +22,10 @@ pub struct Timing {
 }
 
 impl Timing {
+    pub fn endpoint_seen(&self) -> bool {
+        self.endpoint.is_some()
+    }
+
     fn capture(&mut self, event: &Event, target: usize, now: Duration) -> Result<(), String> {
         match event.header.r#type.as_str() {
             "run-pipeline" if self.run => return Err("wire: multiple runs in one world".into()),
@@ -107,6 +111,27 @@ impl Relay {
         if capture_bytes == 0 || capture_bytes > 65536 || !capture_bytes.is_multiple_of(2) {
             return Err("wire: invalid finite utterance size".into());
         }
+        Self::start(host, Endpoint::Count(capture_bytes)).await
+    }
+
+    pub async fn bind_fixture(host: SocketAddr, fixture: Vec<u8>) -> Result<Self, String> {
+        if host.ip() != std::net::Ipv4Addr::LOCALHOST || host.port() == 0 {
+            return Err("wire: host must be bound on 127.0.0.1".into());
+        }
+        if fixture.is_empty() || fixture.len() > 4096 || !fixture.len().is_multiple_of(2) {
+            return Err("wire: invalid finite fixture".into());
+        }
+        Self::start(
+            host,
+            Endpoint::Fixture {
+                bytes: signs(&fixture),
+                tail: vec![],
+            },
+        )
+        .await
+    }
+
+    async fn start(host: SocketAddr, endpoint: Endpoint) -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|_| "wire: bind failed")?;
@@ -115,7 +140,7 @@ impl Relay {
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             let result = tokio::select! {
-                result = serve(listener, host, capture_bytes, &observed) => result,
+                result = serve(listener, host, endpoint, &observed) => result,
                 _ = stopped => Ok(()),
             };
             if let Err(error) = &result {
@@ -133,6 +158,10 @@ impl Relay {
 
     pub fn timing(&self) -> Timing {
         self.observed.borrow().clone()
+    }
+
+    pub fn observations(&self) -> watch::Receiver<Timing> {
+        self.observed.clone()
     }
 
     pub async fn close(mut self) -> Result<Timing, String> {
@@ -153,7 +182,7 @@ impl Drop for Relay {
 async fn serve(
     listener: TcpListener,
     host: SocketAddr,
-    target: usize,
+    mut endpoint: Endpoint,
     observed: &watch::Sender<Timing>,
 ) -> Result<(), String> {
     let (bridge, _) = listener.accept().await.map_err(|_| "wire: accept failed")?;
@@ -166,12 +195,53 @@ async fn serve(
     let epoch = Instant::now();
     tokio::select! {
         result = forward(&mut host_in, &mut bridge_out, observed, |state, event| {
-            state.capture(event, target, epoch.elapsed())
+            endpoint.observe(state, event, epoch.elapsed())
         }) => result,
         result = forward(&mut bridge_in, &mut host_out, observed, |state, event| {
             state.playback(event, epoch.elapsed())
         }) => result,
     }
+}
+
+enum Endpoint {
+    Count(usize),
+    Fixture { bytes: Vec<u8>, tail: Vec<u8> },
+}
+
+impl Endpoint {
+    fn observe(&mut self, state: &mut Timing, event: &Event, now: Duration) -> Result<(), String> {
+        match self {
+            Self::Count(target) => state.capture(event, *target, now),
+            Self::Fixture { bytes, tail } => {
+                // Retain only a possible cross-frame match; never retain room PCM.
+                state.capture(event, usize::MAX, now)?;
+                if event.header.r#type == "audio-chunk" && state.run && !state.endpoint_seen() {
+                    // Upstream microphone gain changes magnitudes but preserves
+                    // signs. Match the complete finite fixture across frames.
+                    tail.extend(signs(&event.payload));
+                    if tail.windows(bytes.len()).any(|window| window == bytes) {
+                        state.endpoint = Some(now);
+                        tail.clear();
+                    } else {
+                        let discard = tail.len().saturating_sub(bytes.len() - 1);
+                        tail.drain(..discard);
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn signs(pcm: &[u8]) -> Vec<u8> {
+    pcm.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|bytes| {
+            let sample = i16::from_le_bytes([bytes[0], bytes[1]]);
+            u8::from(sample > 0) + 2 * u8::from(sample < 0)
+        })
+        .collect()
 }
 
 async fn forward(
