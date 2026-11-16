@@ -19,10 +19,10 @@ async fn mute_orders_snapshot_frames_eof_and_cancellation_safe_event_delivery() 
         let Some(LinkEvent::Wake(mut run)) = events.recv().await.unwrap() else {
             unreachable!()
         };
-        // Consume the two pre-mute audio notifications; no neutral PCM duplicates.
-        for _ in 0..2 {
-            assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));
-        }
+        // A response after the peer's full sequence proves both pre-mute
+        // frames are coalesced before receiving their notification.
+        client.describe().await.unwrap();
+        assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));
         let mut mute = Box::pin(events.recv());
         assert!(mute.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
         drop(mute); // cancellation must not lose the pending Mute.
@@ -32,12 +32,10 @@ async fn mute_orders_snapshot_frames_eof_and_cancellation_safe_event_delivery() 
         assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
         assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Mute(true))));
         // Drain all post-mute notifications, so counts are measured after their routing.
-        for _ in 0..3 {
-            assert!(matches!(
-                events.recv().await.unwrap(),
-                Some(LinkEvent::MicrophoneDropped(1))
-            ));
-        }
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            Some(LinkEvent::MicrophoneDropped(3))
+        ));
         assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));
         assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
         assert_eq!(
@@ -126,5 +124,10 @@ async fn muted_run_peer(peer: &mut tokio::io::DuplexStream) {
         .await;
     }
     send(peer, "ping", json!({}), vec![]).await;
+    assert_eq!(
+        crate::wyoming_test_support::receive(peer).await.header.r#type,
+        "describe"
+    );
+    send(peer, "info", json!({}), vec![]).await;
     std::future::pending::<()>().await;
 }

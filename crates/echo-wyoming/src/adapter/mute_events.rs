@@ -87,7 +87,7 @@ impl Events {
             return Ok(Some(LinkEvent::Wake(run)));
         }
         if matches!(event.event, WyomingEvent::AudioChunk(_)) && self.capture == Capture::Ended {
-            return Ok(Some(LinkEvent::MicrophoneDropped(1)));
+            return Ok(Some(LinkEvent::MicrophoneDropped(event.audio_count)));
         }
         if matches!(event.event, WyomingEvent::AudioStop(_) | WyomingEvent::Played(_)) {
             self.capture = Capture::Ended;

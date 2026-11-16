@@ -1,5 +1,6 @@
 use super::{Command, generation};
-use crate::{ClientOptions, Error, ReceivedEvent};
+use crate::wyoming_events;
+use crate::{ClientOptions, Error};
 use std::{future::Future, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -45,7 +46,7 @@ where
 pub(crate) struct Supervisor {
     pub(crate) opts: ClientOptions,
     pub(crate) commands: mpsc::Receiver<Command>,
-    pub(crate) events: mpsc::Sender<ReceivedEvent>,
+    pub(crate) events: wyoming_events::Sender,
     pub(crate) end: watch::Sender<Option<Error>>,
     pub(crate) reset: watch::Receiver<u64>,
 }

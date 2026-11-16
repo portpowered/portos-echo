@@ -54,11 +54,12 @@ impl Conversation {
         kill: &super::bridge_kill::Kill<'_>,
     ) -> Result<<L::Events as LinkEvents>::Run, Error> {
         let policy = echo_wyoming::ClientOptions::default();
+        let mut cadence = KillCadence(Instant::now());
         let mut backoff = policy.reconnect_initial;
         let probe = probe_link(client, Duration::ZERO);
         tokio::pin!(probe);
         loop {
-            if kill.sync(trace).await? {
+            if cadence.due(Instant::now()) && kill.sync(trace).await? {
                 self.close("kill", trace)?;
             }
             // Expiry wins at equality, including when a wake is already queued.
@@ -66,7 +67,7 @@ impl Conversation {
                 self.close("idle", trace)?;
             }
             let event = tokio::select! {
-                () = tokio::time::sleep(Duration::from_millis(20)) => continue,
+                () = tokio::time::sleep_until(cadence.0) => continue,
                 event = events.recv() => event?,
                 connected = &mut probe => {
                     observe_link(connected, health, trace)?;
@@ -110,6 +111,19 @@ impl Conversation {
             Ok(_) | Err(CallError::Deadline) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+}
+
+// The due decision precedes select, so ready events cannot starve checks.
+// A late check schedules the next interval without a catch-up syscall burst.
+struct KillCadence(Instant);
+impl KillCadence {
+    fn due(&mut self, now: Instant) -> bool {
+        if now < self.0 {
+            return false;
+        }
+        self.0 = now + Duration::from_millis(20);
+        true
     }
 }
 
@@ -159,6 +173,23 @@ pub(super) fn select_wake<R>(event: Option<LinkEvent<R>>) -> Result<Option<R>, E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn bridge_lifecycle_kill_cadence_ignores_ready_event_count() {
+        let start = Instant::now();
+        let mut cadence = KillCadence(start);
+        assert!(cadence.due(start));
+        for _ in 0..10_000 {
+            assert!(!cadence.due(Instant::now()));
+        }
+        tokio::time::advance(Duration::from_millis(19)).await;
+        assert!(!cadence.due(Instant::now()));
+        assert_eq!(cadence.0, start + Duration::from_millis(20));
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(cadence.due(Instant::now()));
+        assert!(!cadence.due(Instant::now()));
+        assert_eq!(cadence.0, start + Duration::from_millis(40));
+    }
 
     #[test]
     fn bridge_lifecycle_probe_backoff_uses_client_policy_and_resets_on_success() {

@@ -13,6 +13,7 @@ extern crate self as echo_wyoming;
 pub mod adapter;
 
 mod wyoming_client;
+mod wyoming_events;
 mod wyoming_options;
 mod wyoming_queue;
 mod wyoming_route;
@@ -29,7 +30,7 @@ pub use wyoming_options::ClientOptions;
 
 use echo_contracts::wyoming::{AudioChunkData, RunPipelineData, WyomingEvent};
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use wyoming_queue::MicQueue;
 
 /// Fixed error categories never include microphone bytes or peer data.
@@ -65,9 +66,12 @@ pub struct RunStats {
     pub dropped: u64,
 }
 
-/// A typed event, with a new microphone handle only on `run-pipeline`.
+/// A lifecycle event or coalesced audio notification in wire order.
+/// Audio notifications contain no PCM; receive PCM through `Run::recv`.
+/// A new microphone handle is present only on `run-pipeline`.
 pub struct ReceivedEvent {
     pub(crate) generation: Arc<()>,
+    pub(crate) audio_count: u64,
     pub event: WyomingEvent,
     pub payload: Vec<u8>,
     pub run: Option<Run>,
@@ -88,7 +92,7 @@ pub struct CutStats {
 
 /// The sole receiver for this client's bounded event queue.
 pub struct EventStream {
-    receiver: mpsc::Receiver<ReceivedEvent>,
+    receiver: wyoming_events::Receiver,
     terminal: watch::Receiver<Option<Error>>,
 }
 
@@ -126,9 +130,9 @@ impl Run {
         self.queue.recv().await
     }
 
-    /// Consume microphone payloads through the ordered `EventStream` instead.
-    /// Retains run counts but releases the duplicate microphone queue. Select
-    /// this before reading audio; `recv` then waits only for the run to end.
+    /// Stop retaining microphone payloads while preserving exact run counts.
+    /// `EventStream` carries only coalesced notifications, never microphone PCM.
+    /// Select before reading audio; `recv` waits only for the run to end.
     pub fn use_event_audio(&self) {
         self.queue.use_event_audio();
     }

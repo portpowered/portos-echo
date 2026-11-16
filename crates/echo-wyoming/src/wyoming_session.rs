@@ -1,4 +1,5 @@
-use crate::{ClientOptions, CutStats, Error, PlayOutcome, ReceivedEvent, wyoming_route::Router, wyoming_wire};
+use crate::wyoming_events;
+use crate::{ClientOptions, CutStats, Error, PlayOutcome, wyoming_route::Router, wyoming_wire};
 use echo_contracts::wyoming::{AudioChunkData, AudioFormat, WyomingEvent};
 use serde_json::Value;
 use tokio::{
@@ -51,7 +52,7 @@ pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: T,
     opts: ClientOptions,
     mut commands: mpsc::Receiver<Command>,
-    events: mpsc::Sender<ReceivedEvent>,
+    events: wyoming_events::Sender,
     end: watch::Sender<Option<Error>>,
 ) {
     let (_reset, mut reset) = watch::channel(0_u64);
@@ -64,7 +65,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: T,
     opts: ClientOptions,
     commands: &mut mpsc::Receiver<Command>,
-    events: mpsc::Sender<ReceivedEvent>,
+    events: wyoming_events::Sender,
     reset: &mut watch::Receiver<u64>,
     enabled: &mut bool,
 ) -> (Error, bool) {
