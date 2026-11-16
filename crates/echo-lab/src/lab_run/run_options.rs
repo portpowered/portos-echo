@@ -11,12 +11,15 @@ const ALLOWED: &[&str] = &[
     "--speech-endpoint",
     "--speech-model",
     "--cancel-file",
+    "--bridge",
 ];
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct Options {
+    pub sim: bool,
+    pub bridge: Option<PathBuf>,
     pub scenarios: Vec<String>,
     pub port: PathBuf,
     pub adb: PathBuf,
@@ -76,6 +79,12 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     if flags.keys().any(|key| !ALLOWED.contains(&key.as_str())) || scenarios.is_empty() {
         return Err("run: unknown option or missing scenario".into());
     }
+    if required(&flags, "--driver")? == "sim" {
+        return sim(scenarios, &flags);
+    }
+    if flags.contains_key("--bridge") {
+        return Err("run: --bridge requires --driver sim".into());
+    }
     if required(&flags, "--driver")? != "device" || required(&flags, "--bench")? != "ring" {
         return Err("run: only --driver device --bench ring is implemented".into());
     }
@@ -105,6 +114,8 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         PathBuf::from,
     );
     Ok(Options {
+        sim: false,
+        bridge: None,
         scenarios,
         port: explicit(required(&flags, "--port")?)?,
         adb: explicit(required(&flags, "--adb")?)?,
@@ -114,6 +125,66 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         out,
         keep_audio: flags.contains_key("--keep-audio"),
         speech,
+        cancel: flags.get("--cancel-file").map(PathBuf::from),
+    })
+}
+
+fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Options, String> {
+    if scenarios.len() != 1
+        || flags
+            .keys()
+            .any(|k| !["--driver", "--bridge", "--out", "--python", "--cancel-file"].contains(&k.as_str()))
+    {
+        return Err("sim: requires one scenario and sim options only".into());
+    }
+    let bridge =
+        explicit(required(flags, "--bridge")?).map_err(|_| "sim: --bridge requires an explicit executable path")?;
+    let scenario = crate::lab_validate::load(&scenarios[0])?;
+    let milestone = scenario["milestone"].as_str().ok_or("sim: missing milestone")?;
+    if !milestone
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+    {
+        return Err("sim: milestone must be a portable directory name".into());
+    }
+    let base = std::env::temp_dir()
+        .join("echo-lab-artifacts")
+        .join("artifacts")
+        .join(milestone);
+    if !flags.contains_key("--out") {
+        std::fs::create_dir_all(&base).map_err(|_| "sim: cannot create artifact parent")?;
+    }
+    let out = flags.get("--out").map_or_else(
+        || {
+            base.join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ))
+        },
+        PathBuf::from,
+    );
+    Ok(Options {
+        sim: true,
+        bridge: Some(bridge),
+        scenarios,
+        port: PathBuf::new(),
+        adb: PathBuf::new(),
+        stt: PathBuf::new(),
+        python: flags.get("--python").cloned().unwrap_or_else(|| {
+            if cfg!(windows) {
+                "python".into()
+            } else {
+                "python3".into()
+            }
+        }),
+        ring: String::new(),
+        out,
+        keep_audio: false,
+        speech: None,
         cancel: flags.get("--cancel-file").map(PathBuf::from),
     })
 }

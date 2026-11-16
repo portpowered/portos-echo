@@ -739,10 +739,16 @@ dependencies = [
 name = "echo-lab"
 version = "0.1.0"
 dependencies = [
+ "echo-contracts",
+ "echo-live",
+ "echo-screen-contract",
+ "echo-spoof-mcp",
+ "echo-wyoming",
  "jsonschema",
  "serde",
  "serde_json",
  "serde_norway",
+ "tokio",
 ]
 
 [[package]]
