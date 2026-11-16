@@ -12,11 +12,9 @@ use echo_live::{
 };
 use echo_wyoming::{EventStream, MicFrame, Run, WyomingClient};
 use serde_json::json;
-use std::{
-    num::NonZeroUsize,
-    time::{Duration, Instant},
-};
+use std::{num::NonZeroUsize, time::Duration};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 struct Source {
     mic: Option<Microphone>,
@@ -348,7 +346,7 @@ async fn produce(
                 Some(frame) => context.microphone(source, frame, call, lab.0).await?,
                 None => return Err(Error::Wyoming),
             },
-            event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(deadline)) => match event {
+            event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(deadline).into_std()) => match event {
                 Ok(event) => context.event(event, source, lab.0)?,
                 Err(CallError::Deadline) => (),
                 Err(error) => return Err(error.into()),
@@ -363,7 +361,7 @@ async fn produce(
 async fn send(call: &mut LiveCall, packets: Vec<AudioFrame>) -> Result<u64, Error> {
     let mut count = 0;
     for packet in packets {
-        call.send_audio(packet, Instant::now()).await?;
+        call.send_audio(packet, Instant::now().into_std()).await?;
         count += 1;
     }
     Ok(count)

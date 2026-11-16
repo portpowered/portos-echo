@@ -77,6 +77,7 @@ pub(super) struct Host {
     config: Option<(echo_config::AgentConfig, McpServer, echo_signin::Providers)>,
     model_url: Option<String>,
     budget: Arc<Budget>,
+    utc_day: Arc<dyn Fn() -> u64 + Send + Sync>,
     credentials: Option<Arc<Credentials>>,
     runner: Option<Runner>,
     pending: Option<JoinHandle<Completion>>,
@@ -87,7 +88,7 @@ pub(super) struct Host {
 }
 
 impl Host {
-    pub fn new(settings: &Settings) -> Self {
+    pub fn new(settings: &Settings, utc_day: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         let config = match (&settings.delegation, &settings.credential) {
             (Some((agent, server)), Provider::Resolved(providers)) => {
                 Some((agent.clone(), server.clone(), providers.clone()))
@@ -100,6 +101,7 @@ impl Host {
             config,
             model_url: settings.model_url.clone(),
             budget: Arc::new(Budget::new(cap)),
+            utc_day,
             credentials: None,
             runner: None,
             pending: None,
@@ -133,6 +135,7 @@ impl Host {
             budget: self.budget.clone(),
             limited: AtomicBool::new(false),
             authorization_failed: AtomicBool::new(false),
+            utc_day: self.utc_day.clone(),
         });
         let host = McpClient::new(
             server.clone(),

@@ -39,6 +39,7 @@ pub(super) struct Credentials {
     pub budget: Arc<Budget>,
     pub limited: AtomicBool,
     pub authorization_failed: AtomicBool,
+    pub utc_day: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 impl ModelCredential for Credentials {
@@ -46,11 +47,7 @@ impl ModelCredential for Credentials {
         let headers = self.providers.headers(mode).await.inspect_err(|_| {
             self.authorization_failed.store(true, Ordering::Relaxed);
         })?;
-        let day = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            / 86_400;
+        let day = (self.utc_day)();
         if self.budget.reserve(day).is_err() {
             self.limited.store(true, Ordering::Relaxed);
             return Err(CredentialError);

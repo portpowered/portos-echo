@@ -32,6 +32,13 @@ replacement sinks cannot attribute late observations to a new run. Host UTC-day
 request reservations survive replacement and never refund uncertain dispatch.
 Exhaustion returns fixed limit commentary without claiming an auth failure.
 
+The application owner accepts an explicit UTC-day source and shutdown receiver.
+The binary supplies real UTC and stdin EOF. Delegation reservations consult that
+same host source after credential acquisition; cancellation never refunds them.
+Monotonic call and journey deadlines use Tokio's clock, converted at the Live
+boundary, so component T3 can advance application time without changing system
+time. Shutdown abandons pending delegation before joining network cleanup.
+
 `mic.frames` records the first successfully sent microphone batch. Exact final
 packet/sample/drop totals are in `mic.completed`; `wyoming.mic_frames` stays
 compatible. `reply.started` follows the first forwarded PCM payload, so arming
