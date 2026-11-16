@@ -25,7 +25,7 @@ fn holds() -> Value {
 
 #[test]
 fn f08_rotate_before_ceiling_wait_exactly_25_seconds_without_chirp() {
-    let session = Session::new(&json!({"times":[0,0,659_000,684_000,684_000],"holds":holds()}));
+    let session = Session::new(&json!({"times":[0,0,600_000,625_000,625_000],"holds":holds()}));
     session.scenario("two.yaml", &json!([{"say":"utterance.wav"}]));
     let output = session.run(&["two.yaml"]);
     assert_eq!(
@@ -225,7 +225,7 @@ fn ordinary_failure_or_untrusted_preemption_status_never_retries() {
 #[test]
 fn renewal_and_retry_recheck_quiet_hours_without_repeating_chirp() {
     for fixture in [
-        json!({"times":[0,659_000,684_000],"hours":[9,9,8]}),
+        json!({"times":[0,600_000,625_000],"hours":[9,9,8]}),
         json!({"preemptions":1,"hours":[9,9,8]}),
     ] {
         let session = Session::new(&fixture);
@@ -239,7 +239,7 @@ fn renewal_and_retry_recheck_quiet_hours_without_repeating_chirp() {
 
 #[test]
 fn failed_rotation_release_never_reopens_or_claims_cleanup_success() {
-    let session = Session::new(&json!({"times":[0,659_000],"fail":"release"}));
+    let session = Session::new(&json!({"times":[0,600_000],"fail":"release"}));
     failed(&session.run(&[]), "release failed");
     assert_eq!(
         session.operations(),

@@ -133,26 +133,21 @@ fn b0_driver_fixes_file_frame_speech_waits_before_every_held_command() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(
-            session.operations(),
+            session
+                .operations()
+                .into_iter()
+                .filter(|op| op != "firmware")
+                .collect::<Vec<_>>(),
             [
                 "digest",
-                "firmware",
-                "firmware",
-                "firmware",
                 "clock",
                 "hold",
                 "clock",
                 "play",
-                "firmware",
-                "firmware",
-                "firmware",
                 "wait_until",
                 "snapshot",
                 "clock",
                 "record",
-                "firmware",
-                "firmware",
-                "firmware",
                 "wav",
                 "stt",
                 "release"
@@ -163,9 +158,21 @@ fn b0_driver_fixes_file_frame_speech_waits_before_every_held_command() {
 }
 
 fn assert_b0_ledger(session: &Session, end: &str) {
-    let ledger = session.ledger();
+    let all = session.ledger();
+    let properties: Vec<_> = all
+        .iter()
+        .filter(|v| v["operation"] == "firmware")
+        .map(|v| v["args"].clone())
+        .collect();
+    let expected: Vec<_> = (0..3)
+        .flat_map(|_| ["ro.build.version.incremental", "ro.bootmode", "sys.boot_completed"])
+        .map(|name| json!(["shell", "getprop", name]))
+        .collect();
+    assert_eq!(properties, expected);
+    // A pending record may enter its child ledger after the next adb process.
+    let ledger: Vec<_> = all.iter().filter(|v| v["operation"] != "firmware").cloned().collect();
     assert_eq!(
-        ledger[7]["args"],
+        ledger[4]["args"],
         json!([
             "message",
             "play-audio",
@@ -177,14 +184,14 @@ fn assert_b0_ledger(session: &Session, end: &str) {
             "--json"
         ])
     );
-    assert_eq!(ledger[11]["args"], json!(["-c", "<host-helper>", "wait_until", end]));
+    assert_eq!(ledger[5]["args"], json!(["-c", "<host-helper>", "wait_until", end]));
     let reached = if end.contains(".500") {
         1_794_733_200_500_i64
     } else {
         1_794_733_200_000_i64
     };
-    assert_eq!(ledger[7]["wall_ms"], 1_794_733_200_000_i64);
-    for i in [12, 14, 20] {
+    assert_eq!(ledger[4]["wall_ms"], 1_794_733_200_000_i64);
+    for i in [6, 8, 11] {
         assert_eq!(ledger[i]["wall_ms"], reached);
     }
     assert_capture_commands(session, &ledger);
@@ -197,12 +204,12 @@ fn assert_b0_ledger(session: &Session, end: &str) {
         fs::read(session.0.join("artifacts/frame.jpg")).unwrap(),
         include_bytes!("../../../../tests/goldens/lab-frame.jpg")
     );
-    print_ledger(session, ledger);
+    print_ledger(session, all);
 }
 
 fn assert_capture_commands(session: &Session, ledger: &[Value]) {
     assert_eq!(
-        ledger[12]["args"],
+        ledger[6]["args"],
         json!([
             "message",
             "snapshot",
@@ -215,7 +222,7 @@ fn assert_capture_commands(session: &Session, ledger: &[Value]) {
         ])
     );
     assert_eq!(
-        ledger[14]["args"],
+        ledger[8]["args"],
         json!([
             "message",
             "record",
@@ -231,7 +238,7 @@ fn assert_capture_commands(session: &Session, ledger: &[Value]) {
         ])
     );
     assert_eq!(
-        ledger[20]["args"],
+        ledger[11]["args"],
         json!(["session", "release", "fixture-hold", "--json"])
     );
 }
