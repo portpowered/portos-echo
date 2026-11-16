@@ -19,7 +19,11 @@ def main():
         env["PATH"] = str(Path(env["JAVA_HOME"]) / "bin") + os.pathsep + env["PATH"]
 
     def run(tool, *args):
-        result = subprocess.run([str(tools / tool), *args, str(apk)],
+        if os.name == "nt" and tool == "apksigner":
+            command = ["java", "-jar", str(tools / "lib" / "apksigner.jar")]
+        else:
+            command = [str(tools / (tool + ".exe" if os.name == "nt" else tool))]
+        result = subprocess.run([*command, *args, str(apk)],
                                 check=True, capture_output=True, text=True, env=env)
         print(result.stdout, end="")
         return result.stdout
@@ -27,7 +31,7 @@ def main():
     badging = run("aapt2", "dump", "badging")
     required = (
         r"^package: name='org\.portos\.echoscreen' ",
-        r"^sdkVersion:'28'$",
+        r"^(?:minSdkVersion|sdkVersion):'28'$",
         r"^targetSdkVersion:'28'$",
         r"^uses-permission: name='android\.permission\.INTERNET'$",
     )

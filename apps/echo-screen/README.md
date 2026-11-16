@@ -19,6 +19,8 @@ its password. Keep that key outside the repository. Losing the signing key means
 an existing installation cannot be updated with `install -r` using a new key.
 Build work directories and private tool logs also stay under `target/echo-screen/`.
 A failed build leaves the previously published APK intact.
+On Git Bash with the Windows SDK, the build invokes the SDK's d8/apksigner jars
+directly instead of their batch launchers; the SDK inputs and API level match CI.
 
 Launch component `org.portos.echoscreen/.MainActivity` with string extra `url`
 containing the entire paired page URL, including nested `events` and `actions`
@@ -39,3 +41,26 @@ and the page parser's origin rules without opening sockets. These tests do not
 prove Android rendering, real preference permissions, touch accuracy, boot or
 overlay coexistence. Those remain the operator's later M1 Android gate; factory
 workers must never install this APK on hardware.
+
+The coordinator uses `sh scripts/echo-screen-install.sh --url "$PAGE_URL"`
+after building the APK. It installs with `adb install -r`, writes hassmic's
+existing `screen_home` file (package plus LF, system:system, mode 644), and
+starts the Activity. Without `--url`, the Activity restores its saved URL.
+Only absolute HTTP(S) URLs without credentials or whitespace are accepted.
+The URL is quoted for adb's remote shell; adb output is private and removed
+after execution. Do not use shell tracing, which would disclose the URL.
+
+`sh scripts/echo-screen-install.sh --uninstall` removes `screen_home` before
+uninstalling the package. Each operation stops on the first failure. A failed
+home setup or launch can leave a partially configured installation; fix the
+cause and rerun, or uninstall. The script does not restore an unknown previous
+home app. On Git Bash it disables MSYS argument conversion for device paths
+and converts only the local APK path for native adb.
+
+`make test-echo-screen-install` builds the existing fake adb once and exercises
+the real installer with isolated per-case PATH, APK, fixture and argv ledger.
+These controlled CLI tests never execute an installed adb or contact hardware.
+`make check-echo-screen` builds the APK, runs the JVM, URL and installer tests,
+then inspects the prebuilt package with aapt2, zipalign and apksigner. The
+existing unconditional `build-host` CI job runs this same target; missing SDK
+inputs fail rather than installing packages or skipping checks.
