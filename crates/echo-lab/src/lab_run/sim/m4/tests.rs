@@ -330,7 +330,10 @@ async fn exercise(
 ) {
     let (mut peer, mut decoder) = register(listener, bridge).await;
     let mut screen = screen(root).await;
-    assert_eq!(state(&mut screen).await, json!({"state":"ready","message":"Ready"}));
+    assert_eq!(
+        state(&mut screen).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
     send(
         &mut peer,
         "run-pipeline",
@@ -368,5 +371,8 @@ async fn finish_reply(
     send(peer, "played", json!({})).await;
     send(peer, "audio-stop", json!({})).await;
     assert_eq!(bridge.expect("bridge.run_completed").await.unwrap()["run_id"], "run-1");
-    assert_eq!(state(screen).await, json!({"state":"ready","message":"Ready"}));
+    assert_eq!(
+        state(screen).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
 }
