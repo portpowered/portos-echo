@@ -14,7 +14,7 @@ impl Peer {
         let mut command = Command::new("python3");
         command
             .current_dir(trust.directory.path())
-            .arg(root().join("crates/echo-bridge/tests/bridge_muse_tests/tls_peer.py"))
+            .arg(root().join("crates/echo-bridge/tests/bridge_support/bridge_peer/bridge_muse_tests/tls_peer.py"))
             .arg(mode);
         let mut child = Process::spawn(&mut command);
         let port: u16 = child.line().await.parse().unwrap();

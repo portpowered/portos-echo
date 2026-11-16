@@ -1,7 +1,7 @@
 //! A controlled synthetic Live boundary, using the shipped public peer.
 use super::*;
 #[cfg(unix)]
-#[path = "../bridge_muse_tests/mod.rs"]
+#[path = "bridge_peer/bridge_muse_tests/mod.rs"]
 mod bridge_muse_tests;
 use echo_live::LivePeer;
 use tokio::{

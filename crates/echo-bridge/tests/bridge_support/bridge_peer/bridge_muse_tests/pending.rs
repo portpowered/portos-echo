@@ -10,7 +10,7 @@ async fn muse_empty_poll_remains_pending_before_progress_and_terminal() {
     let mut command = Command::new("python3");
     command
         .current_dir(muse.directory.path())
-        .arg(root().join("crates/echo-bridge/tests/bridge_muse_tests/tls_peer.py"));
+        .arg(root().join("crates/echo-bridge/tests/bridge_support/bridge_peer/bridge_muse_tests/tls_peer.py"));
     let mut peer = Process::spawn(&mut command);
     let port: u16 = peer.line().await.parse().unwrap();
     let origin = "https://127.0.0.1";
