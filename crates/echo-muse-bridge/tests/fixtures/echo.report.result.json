@@ -1,0 +1,1 @@
+{"description":"Report the result of a live Echo task. This is not user consent.","exec":["/opt/echo/bin/echo-muse-report"],"required":{"status":{"description":"completed or failed.","type":"string"},"summary":{"description":"A short result summary.","type":"string"},"task_id":{"description":"The live Echo task identifier.","type":"string"}},"timeout_ms":10000}
