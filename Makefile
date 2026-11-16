@@ -94,6 +94,7 @@ coverage: hassmic-host
 	mkdir -p target/llvm-cov
 	cargo +nightly-2026-11-05 llvm-cov --workspace --all-targets --locked --branch --no-report
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_HOST_T3) --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --test sim_bridge_cli --locked --branch --no-report -- --ignored --nocapture
 	cargo +nightly-2026-11-05 llvm-cov report --branch --no-default-ignore-filename-regex --ignore-filename-regex '$(COVERAGE_DEPENDENCY_SOURCES)' --fail-under-lines 80 --lcov --output-path target/llvm-cov/coverage.lcov
 	cargo xtask coverage-check target/llvm-cov/coverage.lcov "$(COVERAGE_BASE)"
 
