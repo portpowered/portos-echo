@@ -1,3 +1,4 @@
+pub(super) mod mcp;
 mod observers;
 mod process;
 mod production;

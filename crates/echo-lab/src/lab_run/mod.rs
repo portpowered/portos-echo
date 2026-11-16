@@ -241,7 +241,9 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
         .ok_or("scenario: invalid SHA-256 digest")?;
     let mut artifacts = Artifacts::create(root)?;
     artifacts.sim = options.sim;
-    let mut driver: Box<dyn Driver> = if options.sim {
+    let mut driver: Box<dyn Driver> = if options.sim && milestone == "M5" {
+        Box::new(sim::mcp::M5::new(&options)?)
+    } else if options.sim {
         Box::new(sim::Sim::new(&options)?)
     } else {
         Box::new(run_device::Device::new(&options))

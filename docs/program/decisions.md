@@ -64,7 +64,6 @@ one place.
 | 2026-11-13 | Muse is reached through a wrapper around the Muse gadget SDK, with one callback command for correlation | Owner | Plan section 7 |
 | 2026-11-13 | The bench drives a Ring camera through the Port OS CLI; `echo-lab` never carries its own Ring peer | Owner | Plan section 8.4 |
 | 2026-11-13 | CI gates for tests, coverage and lint are required checks from Phase F on; this repository is never merged with `--admin` | Owner | Plan section 11 |
-
 | 2026-11-16 | M5 may use one opt-in `AuthClient::open_at_epoch` constructor, replacing only the initial UTC sample. Only guarded bridge `--sim-clock` runs select it and share the fixture epoch with presentation. Normal open, elapsed Tokio time, storage, refresh, rotation and default mocks stay unchanged. Exact independent expiry/proof checks and epoch reuse across restart remain required; no tolerance or new dependency | Operator, mailbox answer to el-w2c-m5-link | [Bridge ADR amendment](../adr/0024-echo-bridge.md#m5-simulated-epoch-amendment-2026-11-16) |
 
 ## Open

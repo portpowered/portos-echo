@@ -1,0 +1,103 @@
+use std::path::Path;
+
+use serde_json::{Value, json};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
+    net::TcpStream,
+    process::Command,
+};
+
+pub type Screen = Lines<BufReader<TcpStream>>;
+const PAIR: &str = "synthetic-m5-screen";
+
+pub fn command(binary: &Path, root: &Path) -> Command {
+    let mut command = Command::new(binary);
+    command.current_dir(root).kill_on_drop(true);
+    for name in [
+        "ECHO_LAB_WYOMING_ADDR",
+        "ECHO_LAB_MCP_URL",
+        "ECHO_LAB_LIVE_URL",
+        "ECHO_LAB_TRACE_PATH",
+        "ECHO_LAB_UI_STATE_PATH",
+        "ECHO_LAB_SESSION_IDLE_SECONDS",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
+pub async fn screen(address: &str) -> Result<Screen, String> {
+    let mut socket = TcpStream::connect(address)
+        .await
+        .map_err(|_| "M5: screen connection failed")?;
+    socket
+        .write_all(format!("GET /events?token={PAIR} HTTP/1.1\r\nHost: local\r\n\r\n").as_bytes())
+        .await
+        .map_err(|_| "M5: screen request failed")?;
+    let mut lines = BufReader::new(socket).lines();
+    if lines
+        .next_line()
+        .await
+        .map_err(|_| "M5: screen response failed")?
+        .as_deref()
+        != Some("HTTP/1.1 200 OK")
+    {
+        return Err("M5: screen pairing refused".into());
+    }
+    Ok(lines)
+}
+
+pub async fn state(lines: &mut Screen) -> Result<Value, String> {
+    loop {
+        let line = lines
+            .next_line()
+            .await
+            .map_err(|_| "M5: screen stream failed")?
+            .ok_or("M5: screen stream closed")?;
+        if line.len() > 65536 {
+            return Err("M5: oversized screen event".into());
+        }
+        if let Some(data) = line.strip_prefix("data: ") {
+            let value: Value = serde_json::from_str(data).map_err(|_| "M5: malformed screen event")?;
+            return Ok(value["state"].clone());
+        }
+    }
+}
+
+pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str) -> Result<(), String> {
+    let template = include_str!("../../../../../../examples/bridge.example.toml");
+    let text = template
+        .replace("echo.example.invalid", "127.0.0.1")
+        .replace("wyoming_port = 16700", &format!("wyoming_port = {}", host.port()))
+        .replace("mode = \"chatgpt\"", "mode = 'api_key'")
+        .replace("credentials/live.json", "credential")
+        .replace("[agent]", "[agent]\nmodel = 'fixture-model'")
+        .replace(
+            "[[mcp.server]]",
+            "[mcp]\nstate_dir = 'portos'\nclient_id = 'echo-lab'\noperator_listen = '127.0.0.1:0'\n[[mcp.server]]",
+        )
+        .replace("http://127.0.0.1:18080/mcp", resource)
+        .replace("auth = \"none\"", "auth = 'portos_device_code'")
+        .replace(&format!("{}:16900", std::net::Ipv4Addr::UNSPECIFIED), "127.0.0.1:0");
+    std::fs::create_dir(root.join("credentials")).map_err(|_| "M5: cannot create pairing directory")?;
+    for (name, content) in [
+        ("bridge.toml", text.as_str()),
+        ("credential", "synthetic-api-key\n"),
+        ("credentials/screen-pairing.txt", PAIR),
+    ] {
+        std::fs::write(root.join(name), content).map_err(|_| "M5: cannot write private configuration")?;
+    }
+    Ok(())
+}
+
+pub fn completion(output: &std::process::Output, expected: &str) -> Result<(), String> {
+    if !output.status.success() || output.stdout != expected.as_bytes() || !output.stderr.is_empty() {
+        return Err("M5: operator completion mismatch".into());
+    }
+    Ok(())
+}
+
+pub fn link_code(epoch: u64, issuer: &str) -> Value {
+    json!({"state":"link_code","user_code":"TEST-CODE",
+        "verification_uri":format!("{issuer}/approve"),"expires_at_unix":epoch + 1800})
+}

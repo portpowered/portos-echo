@@ -126,8 +126,10 @@ requires both a reload observation and successful use in the new process.
 Repeated identical relink screen states count as one transition. Malformed or
 contradictory trace/model observations latch a fixed diagnostic across restarts.
 Pending/denied authorizations and uncertain rotations never infer completions.
-The strict delivered-bridge witness exercises this binding;
-the pinned-host driver and authored M5 scenario remain separate unfinished work.
+The strict delivered-bridge witness exercises this binding. The M5 pinned-host
+runner also consumes lifecycle and paired-screen observations for its mounted
+operator controls. Tool/restart/replay controls and the complete authored M5
+scenario remain unfinished.
 
 ## Device runner
 
@@ -243,15 +245,28 @@ expected count is zero. A mismatch prints the full expected and actual objects
 and fails the step. Finalization checks the counts again after driver cleanup
 so late duplicate outcomes fail the earlier assertion. Reports include optional
 `link_counts` only when measurements exist, preserving actual counts on failure.
-The existing generic drivers do not produce these measurements; the integrated
-M5 driver and scenario remain pending.
+The generic drivers do not produce these measurements. The M5 runner reports
+observed operator outcomes; its full eight-outcome scenario remains pending.
 
 The schema and shared parser accept `mcp: {action: link}` with actions `link`,
 `approve`, `refresh`, `restart`, `call`, `replay`, `probe` and `unlink`.
-Missing, unknown or extra control fields are invalid. Until the M5 driver is
-mounted, both generic drivers explicitly refuse these controls before starting
-a host, bridge or device operation. The failed report retains the failed step
-and omits unobserved counts; accepting the scenario syntax does not prove M5.
+Missing, unknown or extra control fields are invalid. Both generic drivers
+explicitly refuse these controls before starting a host, bridge or device
+operation. Sim scenarios with milestone `M5` select the production bridge
+beside `echo-lab` by default, including in `--all`; `--bridge` can override it.
+Prebuild both with `cargo build --locked -p echo-lab -p echo-bridge --bins`,
+and prepare the pinned host with `make hassmic-host`.
+
+The M5 runner mounts `link`, `approve`, `refresh` and `unlink`. It owns one
+private state directory outside git, the real bridge, pinned host, strict
+authorization fixture, signed-token spoof and local Live fixture. Link invokes
+the bridge CLI and independently checks the paired screen's code/URI/exact
+expiry. Approval advances the fixture and guarded bridge clock by five seconds;
+refresh and unlink use the CLI too. Lifecycle trace and screen transitions
+supply counts, rechecked after shutdown. EOF collects the owned processes and
+removes private state. Unimplemented M5 controls fail before lazy startup.
+This partial operator journey does not prove the retained tool, restart,
+replay, browser or complete M5 scenario criteria.
 
 Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
 `echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child
