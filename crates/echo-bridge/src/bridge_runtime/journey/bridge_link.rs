@@ -195,3 +195,40 @@ fn row(event: &str, elapsed: u64, fields: serde_json::Value) -> serde_json::Valu
 
 #[path = "bridge_link_cases.rs"]
 mod cases;
+
+#[tokio::test(start_paused = true)]
+async fn bridge_guard_rejects_microphone_even_when_a_neutral_source_yields_while_muted() {
+    let screen = Screen::bind(None).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut trace = Trace::open(&dir.path().join("trace"), "api_key").unwrap();
+    screen
+        .observe(&echo_link::LinkEvent::<()>::Mute(true), &mut trace)
+        .unwrap();
+    let mut source = Source::new().unwrap();
+    let mut live = Live::default();
+    for _ in 0..2 {
+        source
+            .microphone(
+                MicFrame {
+                    format: bridge_audio::format(16_000),
+                    payload: vec![0; 2048],
+                },
+                &mut live,
+                false,
+                &screen,
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(source.chunks, 2);
+    assert_eq!(source.sent, 0);
+    assert!(source.mic.is_none());
+    assert_eq!(live.sent.len(), 0);
+    screen
+        .observe(&echo_link::LinkEvent::<()>::Mute(false), &mut trace)
+        .unwrap();
+    let row: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.path().join("trace")).unwrap()).unwrap();
+    assert_eq!(row["received_frames"], 2);
+    assert_eq!(row["forwarded_frames"], 0);
+}

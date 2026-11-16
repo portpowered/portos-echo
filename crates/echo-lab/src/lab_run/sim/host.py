@@ -11,6 +11,7 @@ import queue
 import select
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -251,9 +252,13 @@ class Host:
         self.fixture = bytes(640)
         self.fed = 0
         self.fd = None
+        self.keys = None
+        self.keys_ready = False
+        self.muted = False
         self.threads = []
         self.error = False
         self.closed = False
+        self.port = None
 
     def logs(self):
         while not self.stop.is_set():
@@ -266,6 +271,7 @@ class Host:
                     self.condition.notify_all()
                     return
                 self.log.extend(data)
+                self.keys_ready = self.keys_ready or b"buttons: EVIOCGRAB" in self.log
                 self.condition.notify_all()
 
     def logged(self, marker):
@@ -293,14 +299,19 @@ class Host:
                 self.condition.notify_all()
 
     def start(self):
-        (self.folder / "state").mkdir()
+        (self.folder / "state").mkdir(exist_ok=True)
         (self.folder / "state/config").write_text("even_volume=off\n")
         (self.folder / "addrs").write_text("127.0.0.1\n")
+        (self.folder / "capture").unlink(missing_ok=True)
         os.mkfifo(self.folder / "capture")
         self.fd = os.open(self.folder / "capture", os.O_RDWR | os.O_NONBLOCK)
+        (self.folder / "keys").unlink(missing_ok=True)
+        os.mkfifo(self.folder / "keys")
+        self.keys = os.open(self.folder / "keys", os.O_RDWR | os.O_NONBLOCK)
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
-            port = reservation.getsockname()[1]
+            port = self.port or reservation.getsockname()[1]
+        self.port = port
         env = {k: v for k, v in os.environ.items() if not k.startswith("HASSMIC_")}
         env.update(HASSMIC_STATE=str(self.folder / "state"), HASSMIC_CAP=str(self.folder / "capture"),
                    HASSMIC_PLAY=str(self.folder / "play.raw"), HASSMIC_FAKE_LED=str(self.folder / "led"),
@@ -308,14 +319,31 @@ class Host:
                    HASSMIC_FAKE_ADDRS=str(self.folder / "addrs"), HASSMIC_MDNS_FILE=str(self.folder / "no-mdns"))
         self.proc = subprocess.Popen(
             ["sh", str(ROOT / "scripts/hassmic-host.sh"), "run", "-P", "wyoming", "-D", "-p", str(port),
-             "-n", "Lab Sim " + self.folder.name], cwd=self.folder, env=env,
+             "-b", str(self.folder / "keys"), "-n", "Lab Sim " + self.folder.name], cwd=self.folder, env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
         for target in [self.logs, self.feed]:
             thread = threading.Thread(target=target, daemon=True)
             thread.start()
             self.threads.append(thread)
         self.logged(b"wyoming on ")
+        with self.condition:
+            ready = self.condition.wait_for(
+                lambda: self.keys_ready or self.error or self.cancelled.is_set(), 20)
+            if not ready or self.error:
+                raise RuntimeError("host keypad readiness failed")
+            if self.cancelled.is_set():
+                raise HostCancelled("host command cancelled")
         emit({"event": "host.ready", "address": "127.0.0.1:" + str(port)})
+
+    def mute(self):
+        # Linux input_event uses the guest's native timeval, not the launcher's
+        # Windows ABI. KEY_MUTE toggles the host board's software fallback on up.
+        events = b"".join(struct.pack("@llHHi", 0, 0, 1, 113, value) for value in [1, 0])
+        if self.keys is None or os.write(self.keys, events) != len(events):
+            raise RuntimeError("host keypad write failed")
+        muted = not self.muted
+        self.logged(f"mic mute button: {int(muted)}\n".encode())
+        self.muted = muted
 
     def command(self, value):
         if self.cancelled.is_set():
@@ -323,8 +351,22 @@ class Host:
                 raise RuntimeError("host input failed")
             raise HostCancelled("host command cancelled")
         action = value.get("action")
+        if action == "restart":
+            previous = self.proc.pid
+            self.close()
+            self.stop = threading.Event()
+            self.threads, self.log = [], bytearray()
+            self.closed = self.error = self.keys_ready = self.muted = False
+            self.start()
+            emit({"event": "host.ack", "previous_pid": previous, "pid": self.proc.pid})
+            return
+        if action == "identity":
+            emit({"event": "host.ack", "pid": self.proc.pid})
+            return
         if action == "registered":
             self.logged(b"satellite: running")
+        elif action == "mute":
+            self.mute()
         else:
             if action == "say":
                 data = bytes(value["pcm"])
@@ -371,6 +413,9 @@ class Host:
             if self.fd is not None:
                 os.close(self.fd)
                 self.fd = None
+            if self.keys is not None:
+                os.close(self.keys)
+                self.keys = None
             if failed:
                 raise RuntimeError("host thread cleanup failed")
         self.closed = True

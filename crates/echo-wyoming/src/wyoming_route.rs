@@ -4,9 +4,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub(crate) struct Router {
+    pub(crate) generation: Arc<()>,
     pub(crate) current: Option<Arc<MicQueue>>,
     pub(crate) events: mpsc::Sender<ReceivedEvent>,
     pub(crate) capacity: usize,
+    pub(crate) muted: bool,
 }
 
 impl Router {
@@ -17,6 +19,9 @@ impl Router {
             WyomingEvent::RunPipeline(pipeline) => {
                 self.end(Ok(()));
                 let queue = Arc::new(MicQueue::new(self.capacity));
+                if self.muted {
+                    queue.mute();
+                }
                 self.current = Some(queue.clone());
                 run = Some(Run {
                     pipeline: pipeline.clone(),
@@ -31,11 +36,19 @@ impl Router {
                     });
                 }
             }
+            WyomingEvent::Other(name, data) if name == "hassmic-mute" => {
+                let muted = data["muted"].as_bool().ok_or(Error::Protocol)?;
+                self.muted = muted;
+                if muted && let Some(queue) = &self.current {
+                    queue.mute();
+                }
+            }
             WyomingEvent::AudioStop(_) => self.end(Ok(())),
             _ => {}
         }
         self.events
             .try_send(ReceivedEvent {
+                generation: self.generation.clone(),
                 event: event.clone(),
                 payload: frame.payload,
                 run,

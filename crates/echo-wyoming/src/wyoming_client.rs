@@ -13,6 +13,7 @@ use tokio::{
 
 /// Owns the reconnect supervisor. Drop aborts its current connection and reader.
 pub struct WyomingClient {
+    pub(crate) neutral_barrier: bool,
     commands: mpsc::Sender<Command>,
     events: Option<EventStream>,
     terminal: watch::Receiver<Option<Error>>,
@@ -52,6 +53,7 @@ impl WyomingClient {
         };
         let task = tokio::spawn(supervisor.serve(socket, connector));
         Self {
+            neutral_barrier: false,
             commands,
             events: Some(EventStream {
                 receiver: event_receiver,
@@ -72,6 +74,7 @@ impl WyomingClient {
         let deadline = opts.operation_timeout;
         let task = tokio::spawn(wyoming_session::serve(io, opts, receiver, events, end));
         Self {
+            neutral_barrier: false,
             commands,
             events: Some(EventStream {
                 receiver: event_receiver,

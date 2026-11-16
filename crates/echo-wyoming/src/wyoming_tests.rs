@@ -294,6 +294,8 @@ async fn pipeline_end_and_unscoped_microphone_do_not_mix_runs() {
     use serde_json::json;
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     let mut router = Router {
+        generation: std::sync::Arc::new(()),
+        muted: false,
         current: None,
         events: tx,
         capacity: 2,

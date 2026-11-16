@@ -6,6 +6,42 @@ use sim_support::{Session, records};
 
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host"]
+fn native_mute_roundtrip_uses_the_sim_control_path_and_next_wake_streams() {
+    let session = Session::new();
+    session.scenario(
+        json!([
+            {"press":"mute"}, {"press":{"key":"mute"}},
+            {"say":"fixture.pcm"},
+            {"expect_trace":["wyoming.run_started","wyoming.mic_frames {count_gte: 10}","wyoming.run_ended"]}
+        ]),
+        json!({}),
+    );
+    let output = session
+        .command(env!("CARGO_BIN_EXE_echo-lab-sim-bridge"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = session.report();
+    assert_eq!(report["result"], "pass");
+    assert_eq!(
+        report["checks"],
+        json!({"step_0":true,"step_1":true,"step_2":true,"step_3":true,"world_closed":true})
+    );
+    assert_eq!(report["observations"], observed_frames(&session).unwrap());
+    let observations = report["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0]["run_id"], "run-1");
+    assert!(observations[0]["count"].as_u64().unwrap() >= 10);
+    session.endpoints();
+}
+
+#[test]
+#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
 fn w1_fixture_pass_seeded_failure_and_action_use_the_same_runner() {
     for (steps, expected) in [
         (

@@ -75,3 +75,79 @@ fn abandoned_source_wakes_closed_sender_and_errors_have_fixed_messages() {
         assert_eq!(error.to_string(), message);
     }
 }
+
+#[test]
+fn mute_snapshot_and_scripted_boundary_preserve_exact_frames_and_counts() {
+    let observer = Observer::default();
+    observer.muted_at_connect(true);
+    let mut link = ready(FakeConnector::new(observer.clone()).connect()).unwrap();
+    let mut events = link.events().unwrap();
+    assert!(matches!(ready(events.recv()).unwrap(), Some(LinkEvent::Mute(true))));
+    let pcm = PcmFormat {
+        rate: 16000,
+        width: 2,
+        channels: 1,
+    };
+    observer.wake_with_mute(
+        "Computer",
+        (0..5)
+            .map(|n| MicFrame {
+                format: pcm,
+                payload: vec![n],
+            })
+            .collect(),
+        2,
+    );
+    let Some(LinkEvent::Wake(mut run)) = ready(events.recv()).unwrap() else {
+        unreachable!()
+    };
+    let mut mute = Box::pin(events.recv());
+    assert!(mute.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+    for n in 0..2 {
+        assert_eq!(ready(run.recv()).unwrap().unwrap().payload, [n]);
+    }
+    assert!(mute.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+    assert_eq!(ready(run.recv()), Ok(None));
+    assert_eq!(
+        run.stats(),
+        RunStats {
+            received: 5,
+            dropped: 3
+        }
+    );
+    assert!(matches!(ready(mute).unwrap(), Some(LinkEvent::Mute(true))));
+    assert!(matches!(
+        ready(events.recv()).unwrap(),
+        Some(LinkEvent::MicrophoneDropped(3))
+    ));
+    ready(link.close()).unwrap();
+    observer.muted_at_connect(false);
+    let mut fresh = ready(FakeConnector::new(observer).connect()).unwrap();
+    let mut fresh_events = fresh.events().unwrap();
+    assert!(
+        std::pin::pin!(fresh_events.recv())
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+}
+
+#[test]
+fn suppressed_idle_counts_are_payload_free_and_ordered() {
+    let observer = Observer::default();
+    let mut link = ready(FakeConnector::new(observer.clone()).connect()).unwrap();
+    let mut events = link.events().unwrap();
+    observer.mute(true);
+    observer.microphone_dropped(1);
+    observer.microphone_dropped(3);
+    observer.mute(false);
+    assert!(matches!(ready(events.recv()).unwrap(), Some(LinkEvent::Mute(true))));
+    assert!(matches!(
+        ready(events.recv()).unwrap(),
+        Some(LinkEvent::MicrophoneDropped(1))
+    ));
+    assert!(matches!(
+        ready(events.recv()).unwrap(),
+        Some(LinkEvent::MicrophoneDropped(3))
+    ));
+    assert!(matches!(ready(events.recv()).unwrap(), Some(LinkEvent::Mute(false))));
+}

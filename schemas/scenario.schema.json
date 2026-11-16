@@ -114,6 +114,32 @@
         },
         "touch": {
           "type": "object"
+        },
+        "restart": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "process",
+            "count",
+            "say"
+          ],
+          "properties": {
+            "process": {
+              "enum": [
+                "bridge",
+                "hassmic-host"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "say": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         }
       }
     },

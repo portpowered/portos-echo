@@ -53,7 +53,8 @@ impl Conversation {
         trace: &mut Trace,
         kill: &super::bridge_kill::Kill<'_>,
     ) -> Result<<L::Events as LinkEvents>::Run, Error> {
-        let mut backoff = Duration::from_millis(100);
+        let policy = echo_wyoming::ClientOptions::default();
+        let mut backoff = policy.reconnect_initial;
         let probe = probe_link(client, Duration::ZERO);
         tokio::pin!(probe);
         loop {
@@ -69,7 +70,7 @@ impl Conversation {
                 event = events.recv() => event?,
                 connected = &mut probe => {
                     observe_link(connected, health, trace)?;
-                    backoff = if connected { Duration::from_millis(100) } else { (backoff * 2).min(Duration::from_secs(2)) };
+                    backoff = probe_backoff(connected, backoff, &policy);
                     probe.set(probe_link(client, backoff));
                     continue;
                 }
@@ -81,7 +82,9 @@ impl Conversation {
                     continue;
                 }
             };
-            if let Some(run) = select_wake(event)? {
+            let event = event.ok_or(Error::Wyoming)?;
+            let muted = kill.screen.observe(&event, trace)?;
+            if let Some(run) = select_wake(Some(event))?.filter(|_| !muted) {
                 if self.expired() {
                     self.close("idle", trace)?;
                 }
@@ -107,6 +110,14 @@ impl Conversation {
             Ok(_) | Err(CallError::Deadline) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+}
+
+fn probe_backoff(connected: bool, previous: Duration, policy: &echo_wyoming::ClientOptions) -> Duration {
+    if connected {
+        policy.reconnect_initial
+    } else {
+        previous.saturating_mul(2).min(policy.reconnect_cap)
     }
 }
 
@@ -141,13 +152,39 @@ fn observe_link(connected: bool, health: &Health, trace: &mut Trace) -> Result<(
 pub(super) fn select_wake<R>(event: Option<LinkEvent<R>>) -> Result<Option<R>, Error> {
     match event.ok_or(Error::Wyoming)? {
         LinkEvent::Wake(run) => Ok(Some(run)),
-        LinkEvent::Played | LinkEvent::Other => Ok(None),
+        LinkEvent::Played | LinkEvent::Other | LinkEvent::Mute(_) | LinkEvent::MicrophoneDropped(_) => Ok(None),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_lifecycle_probe_backoff_uses_client_policy_and_resets_on_success() {
+        let policy = echo_wyoming::ClientOptions::default();
+        let mut next = policy.reconnect_initial;
+        let mut delays = vec![next.as_millis()];
+        for _ in 0..6 {
+            next = probe_backoff(false, next, &policy);
+            delays.push(next.as_millis());
+        }
+        assert_eq!(delays, [100, 200, 400, 800, 1600, 2000, 2000]);
+        assert_eq!(probe_backoff(true, next, &policy), Duration::from_millis(100));
+        let custom = echo_wyoming::ClientOptions {
+            reconnect_initial: Duration::from_millis(7),
+            reconnect_cap: Duration::from_millis(9),
+            ..policy
+        };
+        assert_eq!(
+            probe_backoff(false, Duration::from_millis(7), &custom),
+            Duration::from_millis(9)
+        );
+        assert_eq!(
+            probe_backoff(true, Duration::from_millis(9), &custom),
+            Duration::from_millis(7)
+        );
+    }
 
     #[tokio::test(start_paused = true)]
     async fn bridge_lifecycle_zero_expires_immediately_and_unrepresentable_idle_never_panics() {

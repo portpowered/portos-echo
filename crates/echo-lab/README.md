@@ -349,6 +349,39 @@ milestone behavior.
 
 ### Sim bridge contract
 
+M1 scenarios select the prebuilt production `echo-bridge` beside `echo-lab`;
+build both with `cargo build -p echo-lab -p echo-bridge --bins --locked`.
+W1 retains the bundled bridge, and an explicit `--bridge` still takes precedence.
+An executable named `echo-bridge` runs with an isolated configuration, synthetic
+credential files, and explicit loopback Live/model overrides. Its screen is
+observed through authenticated `/events` SSE. The first presentation must have
+sequence 1 and message exactly `Echo Live ready`; private configuration and
+pairing files are removed after the child is stopped and reaped.
+
+The committed `sim_host` M1 prefix test currently proves Ready and one wake only.
+It does not claim the complete M1 scenario, mute latch or restart counts.
+Its existing FakeLive boundary sends a synthetic `response.audio.done`; this
+proves Wyoming capture at the bridge, not provider behavior or a spoken reply.
+Mute steps use the real producer and bridge guard. The complete M1 scenario,
+reconnect generation handling, restart groups and aggregate report remain
+implementation work in this lane. The production sim configuration uses the
+existing zero-second session idle policy: each wake gets a fresh FakeLive call
+whose script emits one response completion. Call reuse has separate bridge
+component coverage.
+
+The bridge's component recovery tests also exercise a peer closing its idle
+Wyoming socket after either a streamed turn or a missing-credential refusal.
+After building `echo-bridge`, run them from a POSIX shell:
+
+```sh
+cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only \
+  --config-file .github/nextest.toml --profile ci -E 'test(idle_socket_close)' --no-capture
+```
+
+They restore the same loopback endpoint, retain the bridge process, check
+registration and health recovery, and exercise another wake. This socket-fault
+proof does not replace the real-host M1 scenario or its 10+10 process restarts.
+
 The runner replaces these variables for each child:
 
 | Variable | Value |
@@ -380,8 +413,12 @@ fail if still incomplete at shutdown. Complete malformed lines fail.
 samples), cycled through the host capture FIFO before SIGUSR1. The W1 fixture
 is a durable synthetic 400 Hz waveform, 320 samples at amplitude 2000, generated
 as `int(2000 * sin(2*pi*i/40))`; it contains no recorded voice.
-`press` accepts `wake`/SIGUSR1, `action`/SIGUSR2, `pair`/SIGWINCH and `stop`/SIGHUP,
-either as a string or `{key: action}`. Other controls fail.
+`press` accepts `wake`/SIGUSR1, `action`/SIGUSR2, `pair`/SIGWINCH, `stop`/SIGHUP and
+`mute`, either as a string or `{key: action}`. Mute sends native Linux KEY_MUTE
+down/up events through the pinned host's private `-b` keypad FIFO and waits for
+its button-state log before acknowledging. The real Wyoming mute event remains
+the observer's state barrier; a control acknowledgment alone proves no bridge
+privacy or screen state. Other controls fail.
 
 `expect_trace` is a nonempty ordered array of selectors: `EVENT {scalar: value}`.
 For example `wyoming.mic_frames {count_gte: 10}` checks the numeric frame payload;
@@ -389,6 +426,13 @@ For example `wyoming.mic_frames {count_gte: 10}` checks the numeric frame payloa
 `count` defaults to one occurrence. Matching remains within the current run;
 unrelated events may intervene. Finalization checks exact counts again, so a
 late duplicate fails its earlier step. Unknown operators and invalid types fail.
+`mic.mute_window {window_id: mute-1, received_frames: 0, forwarded_frames: 0}`
+checks a bridge measurement independent of the previous wake's run ID. Both
+explicit counts must be zero; missing, stale or duplicate windows fail. A seeded
+forwarded count of one fails with `forwarded_frames: expected 0, observed 1`.
+A `say` after observed Muted waits for native capture consumption without
+waiting for a nonexistent run. Only the bridge measurement, emitted on unmute,
+proves zero microphone traffic.
 
 `expect_screen: {state: speaking}` compares selected fields against the latest
 complete typed `echo_screen_contract::UiState`. Wrong, missing or malformed
@@ -408,3 +452,30 @@ outcomes and `executed`, `passed`, `failed`, `not_runnable` totals. A runnable
 failure or zero executed scenarios returns 1; M4 is never counted as passed.
 The test-only `echo-lab-sim-script` binary consumes explicit synthetic scripts
 at the child-process boundary; it is never the W1 acceptance bridge.
+
+M1 uses the production bridge by default:
+
+```sh
+make hassmic-host
+cargo build --locked -p echo-lab -p echo-bridge --bins
+cargo run --locked -p echo-lab -- run tests/scenarios/m1-hassmic-bridge.yaml --driver sim
+```
+
+The schema-valid report's `m1` measurements include one Ready presentation before the first wake,
+all 22 streamed wakes (each at least 10 microphone frames), the real native mute window
+(received and forwarded both zero), and 10 bridge plus 10 hassmic-host restarts. Run IDs are
+scoped by `bridge_generation`. Each restart stops and collects that process before replacement,
+checks the opposite process identity, reconnects on the same host endpoint, and runs the ordered
+wake oracle. The scenario has a 120 second ceiling; no real service, device or account is used.
+If the native latch acknowledges but the real screen stream does not show Muted within two
+seconds, the runner records the mute observation as unavailable. It skips only the dependent
+privacy checks, unlatches the host, and still runs the next wake and both full restart groups.
+The report returns `blocked`, omits `mute_window`, retains measured wake/restart counts, and
+the command exits 1. This does not diagnose the missing producer or prove privacy. Any other
+failed check, malformed screen event, faulty mute measurement or cleanup failure returns `fail`.
+Component coverage for one independent restart of each process is available with:
+
+```sh
+cargo nextest run --locked -p echo-lab --test sim_host --run-ignored only \
+  -E 'test(m1_independent_restart_steps)' --config-file .github/nextest.toml --profile ci --no-capture
+```

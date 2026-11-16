@@ -67,6 +67,7 @@ pub struct RunStats {
 
 /// A typed event, with a new microphone handle only on `run-pipeline`.
 pub struct ReceivedEvent {
+    pub(crate) generation: Arc<()>,
     pub event: WyomingEvent,
     pub payload: Vec<u8>,
     pub run: Option<Run>,
@@ -125,8 +126,21 @@ impl Run {
         self.queue.recv().await
     }
 
+    /// Consume microphone payloads through the ordered `EventStream` instead.
+    /// Retains run counts but releases the duplicate microphone queue. Select
+    /// this before reading audio; `recv` then waits only for the run to end.
+    pub fn use_event_audio(&self) {
+        self.queue.use_event_audio();
+    }
+
     #[must_use]
     pub fn stats(&self) -> RunStats {
         self.queue.stats()
+    }
+}
+
+impl Drop for Run {
+    fn drop(&mut self) {
+        self.queue.discard();
     }
 }

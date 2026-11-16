@@ -5,9 +5,12 @@ use echo_contracts::secret::Secret;
 use echo_screen_contract::UiState;
 use echo_screen_server::ScreenServer;
 use std::io::Read;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+mod mute;
 
 pub(super) struct Screen {
+    mute: Arc<Mutex<mute::Mute>>,
     server: Option<ScreenServer>,
     states: Option<mpsc::Sender<UiState>>,
     actions: Option<tokio::task::JoinHandle<()>>,
@@ -21,6 +24,7 @@ impl Screen {
     pub async fn bind(config: Option<&ScreenConfig>) -> Result<Self, Error> {
         let Some(config) = config else {
             return Ok(Self {
+                mute: Arc::default(),
                 server: None,
                 states: None,
                 actions: None,
@@ -46,24 +50,59 @@ impl Screen {
             .await
             .map_err(|_| Error::Screen)?;
         let screen = Self {
+            mute: Arc::default(),
             server: Some(server),
             states: Some(states),
             actions: None,
         };
-        screen.ready()?;
         Ok(screen)
     }
 
     pub fn publish(&self, state: UiState) -> Result<(), Error> {
+        if self.muted()? && state != UiState::Muted {
+            return Ok(());
+        }
         if let Some(states) = &self.states {
-            states.try_send(state).map_err(|_| Error::Screen)?;
+            states
+                .try_send(self.mute.lock().map_err(|_| Error::Screen)?.project(state))
+                .map_err(|_| Error::Screen)?;
         }
         Ok(())
     }
 
+    pub fn muted(&self) -> Result<bool, Error> {
+        Ok(self.mute.lock().map_err(|_| Error::Screen)?.muted)
+    }
+
+    pub fn received(&self) -> Result<(), Error> {
+        self.mute.lock().map_err(|_| Error::Screen)?.received();
+        Ok(())
+    }
+
+    pub fn sent(&self) -> Result<(), Error> {
+        self.mute.lock().map_err(|_| Error::Screen)?.sent();
+        Ok(())
+    }
+
+    pub fn observe<R>(
+        &self,
+        event: &echo_link::LinkEvent<R>,
+        trace: &mut crate::bridge_trace::Trace,
+    ) -> Result<bool, Error> {
+        let changed = self.mute.lock().map_err(|_| Error::Screen)?.event(event, trace)?;
+        if changed {
+            if self.muted()? {
+                self.publish(UiState::Muted)?;
+            } else {
+                self.ready()?;
+            }
+        }
+        self.muted()
+    }
+
     pub fn ready(&self) -> Result<(), Error> {
         self.publish(UiState::Ready {
-            message: "Ready".into(),
+            message: "Echo Live ready".into(),
         })
     }
 
@@ -73,11 +112,17 @@ impl Screen {
         };
         let mut actions = std::mem::replace(&mut server.actions, mpsc::channel(1).1);
         let states = states.clone();
+        let mute = self.mute.clone();
         self.actions = Some(tokio::spawn(async move {
             while let Some(action) = actions.recv().await {
                 if action == echo_screen_contract::UiAction::Relink && health.borrow().relink_required {
                     // This is an instruction, never an implicit sign-in request.
-                    if states.send(failure_state(true)).await.is_err() {
+                    let result = match mute.lock() {
+                        Ok(mute) if mute.muted => continue,
+                        Ok(mute) => states.try_send(mute.project(failure_state(true))),
+                        Err(_) => break,
+                    };
+                    if result.is_err() {
                         break;
                     }
                 }

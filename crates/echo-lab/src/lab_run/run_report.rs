@@ -8,8 +8,10 @@ use serde_json::{Value, json};
 
 pub struct Artifacts {
     pub sim: bool,
+    pub m1: Option<Value>,
     pub root: PathBuf,
     pub checks: BTreeMap<String, bool>,
+    pub blocked: BTreeMap<String, String>,
     pub sessions: Vec<String>,
     pub evidence: Vec<String>,
     observations: Vec<Value>,
@@ -23,9 +25,11 @@ impl Artifacts {
         let events = File::create(root.join("events.jsonl")).map_err(|_| "run output: cannot create events")?;
         Ok(Self {
             sim: false,
+            m1: None,
             observations: Vec::new(),
             root,
             checks: BTreeMap::new(),
+            blocked: BTreeMap::new(),
             sessions: Vec::new(),
             evidence: vec!["events.jsonl".into()],
             events,
@@ -77,19 +81,32 @@ impl Artifacts {
             }
         }
         self.events.sync_all().map_err(|_| "run output: cannot flush events")?;
-        let report = json!({
-            "milestone":milestone, "result":if error.is_none() { "pass" } else { "fail" },
+        let mut report = json!({
+            "milestone":milestone, "result":self.outcome(error),
             "placement":"bridge_pc", "build_commit":build_commit(), "device":null,
             "evidence":self.evidence, "checks":self.checks, "observations":self.observations,
-            "limitations":error.into_iter().chain(if self.sim { vec!["pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)", "T3 simulation does not prove a physical milestone or real-provider compatibility."] } else { vec!["Device edges require independent operator verification; no physical milestone is proved."] }).collect::<Vec<_>>(),
+            "limitations":error.into_iter().chain(self.blocked.values().map(String::as_str)).chain(if self.sim { vec!["pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)", "T3 simulation does not prove a physical milestone or real-provider compatibility."] } else { vec!["Device edges require independent operator verification; no physical milestone is proved."] }).collect::<Vec<_>>(),
             "tier":tier, "driver":if self.sim { "sim" } else { "device" }, "scenario_digest":digest,
             "hassmic_commit":if self.sim { include_str!("../../../../hassmic.pin").lines().find_map(|l| l.strip_prefix("commit=")) } else { None }, "bench_session_ids":self.sessions
         });
+        if let Some(m1) = &self.m1 {
+            report["m1"] = m1.clone();
+        }
         validate(&report)?;
         let text = serde_json::to_vec_pretty(&report).map_err(|_| "run output: cannot encode report")?;
         fs::write(self.root.join("report.pending"), text).map_err(|_| "run output: cannot write report")?;
         fs::rename(self.root.join("report.pending"), self.root.join("report.json"))
             .map_err(|_| "run output: cannot publish report".into())
+    }
+
+    pub fn outcome(&self, error: Option<&str>) -> &'static str {
+        if error.is_some() {
+            "fail"
+        } else if self.blocked.is_empty() {
+            "pass"
+        } else {
+            "blocked"
+        }
     }
 }
 

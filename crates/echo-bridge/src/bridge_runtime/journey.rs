@@ -9,7 +9,7 @@ use crate::{
 use bridge_live::LivePort;
 use echo_audio::FrameQueue;
 use echo_contracts::live::LiveEvent;
-use echo_link::{EchoLink, LinkEvents, MicFrame, MicrophoneRun, PlayOutcome, ReplySink};
+use echo_link::{EchoLink, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PlayOutcome, ReplySink};
 use echo_live::{AudioFrame, call::CallError};
 use serde_json::json;
 use std::{num::NonZeroUsize, time::Duration};
@@ -50,34 +50,85 @@ impl Source {
         })
     }
 
-    async fn microphone(&mut self, frame: MicFrame, call: &mut impl LivePort, lab: bool) -> Result<(), Error> {
+    async fn microphone(
+        &mut self,
+        frame: MicFrame,
+        call: &mut impl LivePort,
+        lab: bool,
+        screen: &super::bridge_screen::Screen,
+    ) -> Result<(), Error> {
         self.chunks += 1;
+        if screen.muted()? {
+            screen.received()?;
+            return Ok(());
+        }
         if self.finished {
             return Ok(());
         }
         let format = frame.format;
         if self.mic.is_none() {
             let mut mic = Microphone::new(format)?;
-            mic.packets = self.call_packets_base;
+            mic.packets = self.call_packets_base + self.sent;
             self.mic = Some(mic);
         }
         let mic = self.mic.as_mut().ok_or(Error::Audio)?;
         let packets = mic.process(&format, &frame.payload)?;
-        self.sent += send(call, packets).await?;
+        self.sent += send(call, packets, screen).await?;
         if lab && self.chunks == 10 {
-            self.finish_mic(call).await?;
+            self.finish_mic(call, screen).await?;
         }
         Ok(())
     }
 
-    async fn finish_mic(&mut self, call: &mut impl LivePort) -> Result<(), Error> {
+    async fn finish_mic(
+        &mut self,
+        call: &mut impl LivePort,
+        screen: &super::bridge_screen::Screen,
+    ) -> Result<(), Error> {
         if !self.finished {
             if let Some(mic) = &mut self.mic {
-                self.sent += send(call, mic.finish()?).await?;
+                self.sent += send(call, mic.finish()?, screen).await?;
             }
             self.finished = true;
         }
         Ok(())
+    }
+
+    fn record(&self, trace: &mut Trace, id: &str, stats: echo_link::RunStats) -> Result<(), Error> {
+        trace.record("wyoming.mic_frames", Some(id), json!({"count":stats.received}))?;
+        let (samples, tail) = self
+            .mic
+            .as_ref()
+            .map_or((0, 0), |m| (m.input_samples, m.tail_samples()));
+        trace.record(
+            "mic.completed",
+            Some(id),
+            json!({"count":self.sent,"received_chunks":stats.received,
+        "dropped_chunks":stats.dropped,"input_samples":samples,"tail_samples":tail}),
+        )?;
+        trace.record("wyoming.run_ended", Some(id), json!({}))?;
+        Ok(())
+    }
+
+    async fn completion(
+        &mut self,
+        completed: bool,
+        drained: bool,
+        echo_done: bool,
+        call: &mut impl LivePort,
+        screen: &super::bridge_screen::Screen,
+    ) -> Result<bool, Error> {
+        if completed || !drained || !(self.audio_done || echo_done) {
+            return Ok(completed);
+        }
+        self.finish_mic(call, screen).await?;
+        let bytes = self.reply.finish()?;
+        self.enqueue(&bytes);
+        Ok(true)
+    }
+
+    fn echo_done(&self, lab: (bool, u64)) -> bool {
+        lab.0 && self.finished && self.sent > 0 && self.received == self.sent && self.acknowledged == self.sent + lab.1
     }
 
     fn enqueue(&mut self, bytes: &[u8]) {
@@ -167,22 +218,27 @@ pub(super) async fn run<L: EchoLink>(
         screen: options.3,
         speaking: false,
         microphone: false,
+        played: false,
         deadline: Instant::now() + bridge_timing::RESPONSE,
         delegation: options.4,
         kill: options.5,
     };
     let mut failure = None;
-    let (acknowledged, acknowledgement) = tokio::sync::oneshot::channel();
     let producer = async {
-        let result = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context).await;
+        let result = produce(
+            &mut source,
+            &mut run,
+            events,
+            call,
+            tx,
+            (options.0, options.2),
+            &mut context,
+        )
+        .await;
         failure = stop_failed_producer(result, client, options.0).await?;
-        context.await_played(acknowledgement, &mut source, call).await
+        context.await_played(events, &mut run, &mut source, call).await
     };
-    let (outcome, (), ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer, async {
-        let result = super::played(events).await;
-        let _ = acknowledged.send(());
-        result
-    })?;
+    let (outcome, ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer)?;
     failure.map_or(Ok(()), Err)?;
     let abandoned = context.delegation.abandon();
     trace.record(
@@ -196,19 +252,7 @@ pub(super) async fn run<L: EchoLink>(
     })
     .await
     .map_err(|_| Error::Deadline)??;
-    let stats = run.stats();
-    trace.record("wyoming.mic_frames", Some(id), json!({"count":stats.received}))?;
-    let (samples, tail) = source
-        .mic
-        .as_ref()
-        .map_or((0, 0), |m| (m.input_samples, m.tail_samples()));
-    trace.record(
-        "mic.completed",
-        Some(id),
-        json!({"count":source.sent,"received_chunks":stats.received,
-        "dropped_chunks":stats.dropped,"input_samples":samples,"tail_samples":tail}),
-    )?;
-    trace.record("wyoming.run_ended", Some(id), json!({}))?;
+    source.record(trace, id, run.stats())?;
     Ok((source.sent, !source.cancelled && !abandoned))
 }
 
@@ -237,6 +281,7 @@ struct PlaybackContext<'a, L: EchoLink> {
     screen: &'a super::bridge_screen::Screen,
     speaking: bool,
     microphone: bool,
+    played: bool,
     deadline: Instant,
     delegation: &'a mut super::bridge_delegation::Host,
     kill: &'a super::bridge_kill::Kill<'a>,
@@ -245,15 +290,29 @@ struct PlaybackContext<'a, L: EchoLink> {
 impl<L: EchoLink> PlaybackContext<'_, L> {
     async fn await_played(
         &mut self,
-        mut acknowledgement: tokio::sync::oneshot::Receiver<()>,
+        events: &mut L::Events,
+        run: &mut <L::Events as LinkEvents>::Run,
         source: &mut Source,
         call: &mut impl LivePort,
     ) -> Result<(), Error> {
+        if self.played {
+            return Ok(());
+        }
         let deadline = Instant::now() + bridge_timing::CONTROL;
+        let mut ended = false;
         loop {
             tokio::select! {
                 biased;
-                _ = &mut acknowledgement => return Ok(()),
+                event = events.recv() => {
+                    let event = event?.ok_or(Error::Wyoming)?;
+                    self.screen.observe(&event, self.trace)?;
+                    match event {
+                        LinkEvent::Played => return Ok(()),
+                        LinkEvent::Wake(_) => return Err(Error::Wyoming),
+                        _ => (),
+                    }
+                },
+                frame = run.recv(), if !ended => { ended = frame?.is_none(); },
                 () = tokio::time::sleep_until(deadline) => return Err(Error::Deadline),
                 () = self.kill.wait(), if !source.cancelled => {
                     self.kill.sync(self.trace).await?;
@@ -284,11 +343,38 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         call: &mut impl LivePort,
         lab: bool,
     ) -> Result<(), Error> {
-        source.microphone(frame, call, lab).await?;
+        source.microphone(frame, call, lab, self.screen).await?;
         if !self.microphone && source.sent > 0 {
             self.trace
                 .record("mic.frames", Some(self.id), json!({"count":source.sent}))?;
             self.microphone = true;
+        }
+        Ok(())
+    }
+
+    async fn capture(
+        &mut self,
+        source: &mut Source,
+        frame: Option<MicFrame>,
+        call: &mut impl LivePort,
+        lab: bool,
+    ) -> Result<bool, Error> {
+        if let Some(frame) = frame {
+            self.microphone(source, frame, call, lab).await?;
+            Ok(false)
+        } else {
+            source.finished = true;
+            Ok(true)
+        }
+    }
+
+    fn device(&mut self, source: &mut Source, event: &LinkEvent<<L::Events as LinkEvents>::Run>) -> Result<(), Error> {
+        self.screen.observe(event, self.trace)?;
+        match event {
+            LinkEvent::Mute(true) => source.mic = None,
+            LinkEvent::Played => self.played = true,
+            LinkEvent::Wake(_) => return Err(Error::Wyoming),
+            _ => (),
         }
         Ok(())
     }
@@ -335,6 +421,7 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
 async fn produce<L: EchoLink>(
     source: &mut Source,
     run: &mut <L::Events as LinkEvents>::Run,
+    events: &mut L::Events,
     call: &mut impl LivePort,
     tx: L::ReplySink,
     lab: (bool, u64),
@@ -342,6 +429,7 @@ async fn produce<L: EchoLink>(
 ) -> Result<(), Error> {
     let mut pacer = LeadPacer::new(context.lead_ms);
     let mut completed = false;
+    let mut ended = false;
     let mut pressure_reported = false;
     loop {
         if context.cancelled(source, call).await? {
@@ -355,17 +443,10 @@ async fn produce<L: EchoLink>(
                 .record("reply.overflow", Some(context.id), json!({"capacity":128}))?;
             pressure_reported = true;
         }
-        let echo_done = lab.0
-            && source.finished
-            && source.sent > 0
-            && source.received == source.sent
-            && source.acknowledged == source.sent + lab.1;
-        if !completed && drained && (source.audio_done || echo_done) {
-            source.finish_mic(call).await?;
-            let bytes = source.reply.finish()?;
-            source.enqueue(&bytes);
-            completed = true;
-        }
+        let echo_done = source.echo_done(lab);
+        completed = source
+            .completion(completed, drained, echo_done, call, context.screen)
+            .await?;
         if completed && source.queue.is_empty() {
             return Ok(());
         }
@@ -373,10 +454,12 @@ async fn produce<L: EchoLink>(
             return Err(Error::Deadline);
         }
         tokio::select! {
-            frame = run.recv() => match frame? {
-                Some(frame) => context.microphone(source, frame, call, lab.0).await?,
-                None => return Err(Error::Wyoming),
+            biased;
+            event = events.recv() => {
+                let event = event?.ok_or(Error::Wyoming)?;
+                context.device(source, &event)?;
             },
+            frame = run.recv(), if !ended => { ended = context.capture(source, frame?, call, lab.0).await?; },
             event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()) => match event {
                 Ok(event) => context.event(event, source, lab.0)?,
                 Err(CallError::Deadline) => (),
@@ -389,103 +472,25 @@ async fn produce<L: EchoLink>(
     }
 }
 
-async fn send(call: &mut impl LivePort, packets: Vec<AudioFrame>) -> Result<u64, Error> {
+async fn send(
+    call: &mut impl LivePort,
+    packets: Vec<AudioFrame>,
+    screen: &super::bridge_screen::Screen,
+) -> Result<u64, Error> {
     let mut count = 0;
     for packet in packets {
+        if screen.muted()? {
+            break;
+        }
         call.send_audio(packet, Instant::now().into_std()).await?;
+        screen.sent()?;
         count += 1;
     }
     Ok(count)
 }
 
 #[cfg(test)]
-mod bridge_spine_tests {
-    use super::*;
-
-    #[test]
-    fn bridge_spine_only_explicit_completion_closes_audio() {
-        let mut source = Source::new().unwrap();
-        for value in [
-            json!({"type":"future.event"}),
-            json!({"type":"response.done"}),
-            json!({}),
-        ] {
-            source.event(LiveEvent::Other(value), false).unwrap();
-            assert!(!source.audio_done);
-        }
-        source
-            .event(LiveEvent::Other(json!({"type":"response.audio.done"})), false)
-            .unwrap();
-        assert!(source.audio_done);
-        assert_eq!(source.queue.len(), 0);
-        assert_eq!(source.reply.finish().unwrap(), Vec::<u8>::new());
-        assert_eq!(
-            source.event(
-                LiveEvent::Error {
-                    extra: std::collections::BTreeMap::default()
-                },
-                false
-            ),
-            Err(Error::Unavailable)
-        );
-    }
-
-    #[test]
-    fn bridge_spine_echo_acknowledgment_is_lab_only_and_validated() {
-        let mut source = Source::new().unwrap();
-        let event = LiveEvent::Other(json!({"type":"fake.audio.frames","count":3}));
-        source.event(event.clone(), false).unwrap();
-        assert_eq!(source.acknowledged, 0);
-        source.event(event, true).unwrap();
-        assert_eq!(source.acknowledged, 3);
-        for count in [json!(-1), json!("3"), json!(null)] {
-            assert_eq!(
-                source.event(
-                    LiveEvent::Other(json!({"type":"fake.audio.frames","count":count})),
-                    true
-                ),
-                Err(Error::Decode)
-            );
-        }
-        assert!(!source.audio_done);
-    }
-
-    #[test]
-    fn bridge_spine_reply_queue_keeps_newest_complete_frames_and_tail() {
-        let mut source = Source::new().unwrap();
-        for value in 0..130_u8 {
-            source.enqueue(&vec![value; 960]);
-        }
-        source.enqueue(&[255; 13]);
-        assert_eq!(source.partial, vec![255; 13]);
-        assert_eq!(source.queue.drop_count(), 2);
-        for value in 2..130_u8 {
-            assert_eq!(source.queue.pop(), Some(vec![value; 960]));
-        }
-        assert_eq!(source.queue.pop(), None);
-    }
-}
-
-#[cfg(test)]
-mod bridge_pacing_cut_tests {
-    use super::*;
-
-    #[test]
-    fn bridge_pacing_cut_excludes_prior_evictions_and_partial_tail() {
-        let mut source = Source::new().unwrap();
-        for value in 0..130_u8 {
-            source.enqueue(&vec![value; 960]);
-        }
-        source.enqueue(&[255; 13]);
-        assert_eq!(source.framed, 130);
-        assert_eq!(source.queue.drop_count(), 2);
-        assert_eq!(source.discard_reply(), 128);
-        assert_eq!(source.queue.drop_count(), 0); // FrameQueue::clear resets its interval statistics.
-        assert_eq!(source.queue.pop(), None);
-        assert_eq!(source.partial, Vec::<u8>::new());
-        assert_eq!(source.discard_reply(), 0);
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod bridge_link;

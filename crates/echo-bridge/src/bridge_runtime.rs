@@ -128,6 +128,16 @@ async fn connected<L: EchoLink>(
     client.probe().await?;
     health.state.send_modify(|state| state.wyoming = "connected");
     trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
+    loop {
+        let event = events.recv().await?.ok_or(Error::Wyoming)?;
+        screen.observe(&event, trace)?;
+        if matches!(event, LinkEvent::Other) {
+            break;
+        }
+    }
+    if !screen.muted()? {
+        screen.ready()?;
+    }
     publish("bridge.ready", None)?;
     let credential = settings.credential.clone();
     let factory = LiveCallFactory::new(&settings.live_url, settings.mode, credential)?;
@@ -305,15 +315,4 @@ fn publish(event: &str, run: Option<&str>) -> Result<(), Error> {
     writeln!(std::io::stdout(), "{value}")
         .and_then(|()| std::io::stdout().flush())
         .map_err(|_| Error::Control)
-}
-
-async fn played<E: LinkEvents>(events: &mut E) -> Result<(), Error> {
-    loop {
-        let event = events.recv().await?.ok_or(Error::Wyoming)?;
-        match event {
-            LinkEvent::Played => return Ok(()),
-            LinkEvent::Wake(_) => return Err(Error::Wyoming),
-            LinkEvent::Other => (),
-        }
-    }
 }

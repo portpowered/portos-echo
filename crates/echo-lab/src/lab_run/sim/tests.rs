@@ -2,12 +2,12 @@ use super::{observers, selectors, trace::Trace};
 
 #[test]
 fn only_supported_press_controls_are_mapped_and_fixture_reads_are_bounded() {
-    for action in ["wake", "action", "pair", "stop"] {
+    for action in ["wake", "action", "pair", "stop", "mute"] {
         for value in [json!({"press":action}), json!({"press":{"key":action}})] {
             assert!(matches!(super::parse(&value).unwrap(), super::Step::Press(actual) if actual == action));
         }
     }
-    assert!(super::parse(&json!({"press":"mute"})).is_err());
+    assert!(super::parse(&json!({"press":"unknown"})).is_err());
     let path = std::env::temp_dir().join(format!("lab-bounded-{}", std::process::id()));
     std::fs::write(&path, b"abcd").unwrap();
     assert_eq!(observers::bytes(&path, 4, "fixture"), Ok(b"abcd".to_vec()));
@@ -316,4 +316,92 @@ fn microphone_counts_are_unsigned_observations_and_invalidity_is_sticky() {
         assert_eq!(trace.finish(), Ok(()));
         assert_eq!(trace.records[0]["count"], count);
     }
+}
+
+#[test]
+fn muted_frame_oracle_accepts_only_measured_zero_and_rejects_one_missing_stale_or_duplicate() {
+    let selectors = selectors::parse(&[json!(
+        "mic.mute_window {window_id: mute-2, received_frames: 0, forwarded_frames: 0}"
+    )])
+    .unwrap();
+    let zero = json!({"event":"mic.mute_window","window_id":"mute-2","received_frames":0,"forwarded_frames":0});
+    assert_eq!(
+        selectors::check(std::slice::from_ref(&zero), &selectors, Some("previous-run")),
+        Ok(())
+    );
+    for field in ["received_frames", "forwarded_frames"] {
+        let mut one = zero.clone();
+        one[field] = json!(1);
+        let error = selectors::check(&[one], &selectors, None).unwrap_err();
+        assert!(
+            error.contains(field) && error.contains("expected 0, observed 1"),
+            "{error}"
+        );
+        let mut absent = zero.clone();
+        absent.as_object_mut().unwrap().remove(field);
+        assert!(
+            selectors::check(&[absent], &selectors, None)
+                .unwrap_err()
+                .contains("missing or invalid")
+        );
+    }
+    assert!(
+        selectors::check(&[], &selectors, None)
+            .unwrap_err()
+            .contains("observed 0")
+    );
+    let mut stale = zero.clone();
+    stale["window_id"] = json!("mute-1");
+    assert!(
+        selectors::check(&[stale], &selectors, None)
+            .unwrap_err()
+            .contains("observed 0")
+    );
+    assert!(
+        selectors::check(&[zero.clone(), zero], &selectors, None)
+            .unwrap_err()
+            .contains("observed 2")
+    );
+    for invalid in [
+        "mic.mute_window {}",
+        "mic.mute_window {window_id: mute-2, received_frames: 0}",
+        "mic.mute_window {window_id: mute-2, received_frames: 0, forwarded_frames: 1}",
+    ] {
+        assert!(selectors::Selector::parse(invalid).is_err());
+    }
+}
+
+#[test]
+fn restart_capability_bounds_count_process_and_fixture_before_launch() {
+    let scenario = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/scenarios/m1-hassmic-bridge.yaml"
+    );
+    for process in ["bridge", "hassmic-host"] {
+        let value = json!({"restart":{"process":process,"count":10,"say":"../fixtures/lab/w1-utterance.pcm"}});
+        assert!(matches!(
+            super::parse_step(&value, scenario).unwrap(),
+            super::Step::Restart { count: 10, .. }
+        ));
+        for count in [0, 11] {
+            let mut invalid = value.clone();
+            invalid["restart"]["count"] = json!(count);
+            assert_eq!(
+                super::parse_step(&invalid, scenario).err().unwrap(),
+                "restart: count must be 1..10"
+            );
+        }
+        let mut missing = value;
+        missing["restart"]["say"] = json!("missing.pcm");
+        assert_eq!(
+            super::parse_step(&missing, scenario).err().unwrap(),
+            "sim say: missing PCM fixture"
+        );
+    }
+    assert_eq!(
+        super::parse_step(&json!({"restart":{"process":"other"}}), scenario)
+            .err()
+            .unwrap(),
+        "restart: unsupported process"
+    );
 }

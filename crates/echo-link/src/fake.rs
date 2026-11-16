@@ -32,6 +32,8 @@ pub enum Command {
 #[derive(Default)]
 struct State {
     commands: Vec<Command>,
+    initial_mute: Option<()>,
+    mute_drain: Option<Arc<Mutex<bool>>>,
     events: VecDeque<LinkEvent<FakeRun>>,
     event_waker: Option<Waker>,
     play_waker: Option<Waker>,
@@ -59,7 +61,51 @@ impl Observer {
             },
             frames: frames.into(),
             observer: self.clone(),
+            mute_end: None,
         }));
+        if let Some(waker) = state.event_waker.take() {
+            waker.wake();
+        }
+    }
+    /// Set the device state sampled by the next connection.
+    pub fn muted_at_connect(&self, muted: bool) {
+        lock(&self.0).initial_mute = muted.then_some(());
+    }
+    /// Script an idle mute transition in event order.
+    pub fn mute(&self, muted: bool) {
+        let mut state = lock(&self.0);
+        state.initial_mute = muted.then_some(());
+        state.events.push_back(LinkEvent::Mute(muted));
+        if let Some(waker) = state.event_waker.take() {
+            waker.wake();
+        }
+    }
+    /// Script suppressed idle chunks without retaining their audio.
+    pub fn microphone_dropped(&self, count: u64) {
+        let mut state = lock(&self.0);
+        state.events.push_back(LinkEvent::MicrophoneDropped(count));
+        if let Some(waker) = state.event_waker.take() {
+            waker.wake();
+        }
+    }
+    /// Script a mute between frame positions; later frames are counted and dropped.
+    pub fn wake_with_mute(&self, phrase: &str, mut frames: Vec<MicFrame>, after: usize) {
+        let received = frames.len() as u64;
+        frames.truncate(after);
+        let dropped = received - frames.len() as u64;
+        let ended = Arc::new(Mutex::new(false));
+        let mut state = lock(&self.0);
+        state.mute_drain = Some(ended.clone());
+        state.initial_mute = Some(());
+        state.events.push_back(LinkEvent::Wake(FakeRun {
+            phrase: phrase.into(),
+            frames: frames.into(),
+            stats: RunStats { received, dropped },
+            observer: self.clone(),
+            mute_end: Some(ended),
+        }));
+        state.events.push_back(LinkEvent::Mute(true));
+        state.events.push_back(LinkEvent::MicrophoneDropped(dropped));
         if let Some(waker) = state.event_waker.take() {
             waker.wake();
         }
@@ -96,7 +142,13 @@ impl LinkConnector for FakeConnector {
     type Link = FakeLink;
     fn connect(&self) -> impl std::future::Future<Output = Result<FakeLink, Error>> + Send {
         std::future::ready({
-            lock(&self.0.0).commands.push(Command::Connect);
+            let mut state = lock(&self.0.0);
+            state.commands.push(Command::Connect);
+            state.closed = false;
+            if state.initial_mute.is_some() {
+                state.events.push_front(LinkEvent::Mute(true));
+            }
+            drop(state);
             Ok(FakeLink {
                 observer: self.0.clone(),
                 taken: false,
@@ -110,6 +162,17 @@ pub struct FakeRun {
     frames: VecDeque<MicFrame>,
     stats: RunStats,
     observer: Observer,
+    mute_end: Option<Arc<Mutex<bool>>>,
+}
+impl Drop for FakeRun {
+    fn drop(&mut self) {
+        if let Some(ended) = &self.mute_end {
+            *lock(ended) = true;
+            if let Some(waker) = lock(&self.observer.0).event_waker.take() {
+                waker.wake();
+            }
+        }
+    }
 }
 impl MicrophoneRun for FakeRun {
     fn wake_phrase(&self) -> &str {
@@ -118,6 +181,13 @@ impl MicrophoneRun for FakeRun {
     async fn recv(&mut self) -> Result<Option<MicFrame>, Error> {
         if let Some(frame) = self.frames.pop_front() {
             return Ok(Some(frame));
+        }
+        if let Some(ended) = &self.mute_end {
+            *lock(ended) = true;
+            if let Some(waker) = lock(&self.observer.0).event_waker.take() {
+                waker.wake();
+            }
+            return Ok(None);
         }
         poll_fn(|cx| {
             let mut state = lock(&self.observer.0);
@@ -140,6 +210,12 @@ impl LinkEvents for Events {
     async fn recv(&mut self) -> Result<Option<LinkEvent<FakeRun>>, Error> {
         poll_fn(|cx| {
             let mut state = lock(&self.0.0);
+            if matches!(state.events.front(), Some(LinkEvent::Mute(true)))
+                && state.mute_drain.as_ref().is_some_and(|ended| !*lock(ended))
+            {
+                state.event_waker = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
             if let Some(event) = state.events.pop_front() {
                 return Poll::Ready(Ok(Some(event)));
             }

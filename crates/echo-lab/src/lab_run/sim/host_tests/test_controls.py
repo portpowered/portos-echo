@@ -49,7 +49,7 @@ class Controls(unittest.TestCase):
         # Supply Unix signal names on Windows without starting the host backend.
         with mock.patch.multiple(CONTROLLER.signal, create=True, SIGUSR1=10, SIGUSR2=12, SIGWINCH=28, SIGHUP=1):
             with self.assertRaises(KeyError):
-                self.host.command({"action": "mute"})
+                self.host.command({"action": "unknown"})
             for pcm in [[], [1], [0] * 4098]:
                 with self.assertRaises(ValueError):
                     self.host.command({"action": "say", "pcm": pcm})

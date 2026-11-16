@@ -20,16 +20,33 @@ fn discover() -> Result<(PathBuf, Vec<PathBuf>), String> {
 }
 
 pub fn bundled_bridge() -> Result<PathBuf, String> {
+    prebuilt("echo-lab-sim-bridge")
+}
+
+pub fn default_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
+    prebuilt(if scenario["milestone"] == "M1" {
+        "echo-bridge"
+    } else {
+        "echo-lab-sim-bridge"
+    })
+}
+
+fn prebuilt(name: &str) -> Result<PathBuf, String> {
     let bridge = std::env::current_exe()
-        .map_err(|_| "sim: cannot locate prebuilt bridge; run cargo build -p echo-lab --bins --locked")?
+        .map_err(|_| "sim: cannot locate prebuilt bridge")?
         .with_file_name(if cfg!(windows) {
-            "echo-lab-sim-bridge.exe"
+            format!("{name}.exe")
         } else {
-            "echo-lab-sim-bridge"
+            name.into()
         });
     if !bridge.is_file() {
+        let packages = if name == "echo-bridge" {
+            "-p echo-lab -p echo-bridge"
+        } else {
+            "-p echo-lab"
+        };
         return Err(format!(
-            "sim: bundled bridge missing at {}; run cargo build -p echo-lab --bins --locked",
+            "sim: prebuilt bridge missing at {}; run cargo build {packages} --bins --locked",
             bridge.display()
         ));
     }
@@ -64,13 +81,12 @@ fn run_suite(
             unavailable += 1;
             continue;
         }
-        let mut command = vec![
-            name.into(),
-            "--driver".into(),
-            "sim".into(),
-            "--bridge".into(),
-            bridge.to_string_lossy().into_owned(),
-        ];
+        let selected = if scenario["milestone"] == "M1" {
+            default_bridge(&scenario)?
+        } else {
+            bridge.to_path_buf()
+        };
+        let mut command = scenario_command(name, &selected);
         command.extend_from_slice(extras);
         if let Some(root) = &root {
             let milestone = scenario["milestone"].as_str().ok_or("sim suite: missing milestone")?;
@@ -102,6 +118,16 @@ fn run_suite(
         return Err("sim suite: runnable failure or no executed T3 scenarios".into());
     }
     Ok(())
+}
+
+fn scenario_command(name: &str, bridge: &Path) -> Vec<String> {
+    vec![
+        name.into(),
+        "--driver".into(),
+        "sim".into(),
+        "--bridge".into(),
+        bridge.to_string_lossy().into_owned(),
+    ]
 }
 
 fn options(args: &[String]) -> Result<(Vec<String>, Option<PathBuf>), String> {

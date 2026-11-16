@@ -84,6 +84,8 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let mut session = Session {
         writer,
         router: Router {
+            generation: std::sync::Arc::new(()),
+            muted: false,
             current: None,
             events,
             capacity: opts.mic_capacity,
