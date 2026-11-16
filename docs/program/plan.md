@@ -293,9 +293,12 @@ What follows from it:
 - **It talks to Port OS directly.** The bridge is the Port OS OAuth client and the only MCP client. Section 9 says
   what it can use today and what waits for portos-backend.
 - **Crates** (declared in `lanes.toml`, section 10): `echo-contracts`, `echo-config`, `echo-wyoming`, `echo-audio`,
-  `echo-live`, `echo-chatgpt-auth`, `echo-agent-api`, `echo-agent-loop`, `echo-agent-muse`, `echo-mcp-auth`, `echo-mcp-client`,
-  `echo-screen-contract`, `echo-bridge`, `echo-lab`, `echo-spoof-mcp`, `echo-muse-bridge` and `xtask`. The screen
-  page lives in `web/screen/`; the `echo-screen` app's shape waits for spike S3.
+  `echo-live`, `echo-chatgpt-auth`, `echo-agent-api`, `echo-agent-loop`, `echo-agent-muse`, `echo-mcp-auth`,
+  `echo-mcp-client`, `echo-screen-contract`, `echo-bridge`, `echo-screen-server`, `echo-delegation`, `echo-signin`,
+  `echo-lab`, `echo-spoof-mcp`, `echo-muse-bridge` and `xtask`. The screen page lives in `web/screen/`; the
+  `echo-screen` app's shape waits for spike S3. `echo-screen-server` (the screen page and its `UiState`/`UiAction`
+  stream), `echo-delegation` (the agent turn) and `echo-signin` (the operator commands and credential modes) are
+  libraries that `echo-bridge` hosts; the binary only wires them together.
 
 ## 7. Muse: a wrapper around the gadget SDK
 
@@ -602,8 +605,10 @@ loopback (`docs/program/coordinator.md`), and fans out inside a phase only where
    the screen page and `echo-screen` (spike S3 first), `el-w1-wyoming-lockdown`, the `echo-lab` sim driver, spike
    S2. Done when `w1-wake-stream` passes with `--driver sim` and each piece passes against `hassmic-host` or its
    fake. `el-w1-wyoming-lockdown` and spike S3 need the device, so they run in W3 (`docs/program/decisions.md`).
-3. **W2 integration.** The agent loop, `echo-bridge`, the golden trace. Done when `m4-spoof-tool` passes with
-   `--driver sim`, then with `--driver cloud`, and M5's scenario with an authorization code token.
+3. **W2 integration.** The agent loop, `echo-bridge`, the golden trace. `echo-screen-server`, `echo-delegation` and
+   `echo-signin` build in parallel with `echo-bridge` as standalone libraries; `el-w2b-bridge-wire` mounts them. Done
+   when `m4-spoof-tool` passes with `--driver sim`, then with `--driver cloud`, and M5's scenario with an
+   authorization code token.
 4. **B0 bench** runs in parallel from W0: the `echo-lab` device driver over the Port OS CLI, the STT oracle,
    `echo-lab calibrate`, and the Ring frame of the light ring.
 5. **W3 device.** hassmic installed on the Echo (the owner's go-ahead), then M1, M3, M5 and M6 as operator-started
