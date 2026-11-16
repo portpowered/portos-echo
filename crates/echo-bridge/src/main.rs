@@ -26,7 +26,8 @@ fn main() -> ExitCode {
             return input_error(&error);
         }
     };
-    outcome(runtime().and_then(|runtime| runtime.block_on(bridge_runtime::execute(settings))))
+    let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
+    outcome(runtime().and_then(|runtime| runtime.block_on(bridge_runtime::execute(settings, connector))))
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, Error> {

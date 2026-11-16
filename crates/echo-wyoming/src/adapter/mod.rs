@@ -1,0 +1,151 @@
+//! Converts the neutral link to the existing Wyoming client without a second queue.
+use crate::{ClientOptions, EventStream, Run, WyomingClient};
+use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
+use echo_link::{
+    CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
+    ReplySink, RunStats,
+};
+use std::{net::SocketAddr, num::NonZeroUsize, time::Duration};
+use tokio::sync::mpsc;
+
+/// Configured transport selection; retry ownership remains in `WyomingClient`.
+#[must_use]
+pub fn connector(addr: SocketAddr, options: ClientOptions) -> impl LinkConnector {
+    Connector { addr, options }
+}
+struct Connector {
+    addr: SocketAddr,
+    options: ClientOptions,
+}
+impl LinkConnector for Connector {
+    type Link = WyomingClient;
+    async fn connect(&self) -> Result<Self::Link, Error> {
+        WyomingClient::connect(self.addr, self.options.clone())
+            .await
+            .map_err(error)
+    }
+}
+fn error(value: crate::Error) -> Error {
+    match value {
+        crate::Error::InvalidOptions => Error::InvalidOptions,
+        crate::Error::Disconnected => Error::Transport,
+        crate::Error::Protocol => Error::Protocol,
+        crate::Error::Capacity => Error::Capacity,
+        crate::Error::Timeout => Error::Timeout,
+        crate::Error::Busy => Error::Busy,
+        crate::Error::Closed => Error::Closed,
+    }
+}
+fn wire(value: PcmFormat) -> AudioFormat {
+    AudioFormat {
+        rate: value.rate,
+        width: value.width,
+        channels: value.channels,
+        extra: std::collections::BTreeMap::default(),
+    }
+}
+impl MicrophoneRun for Run {
+    fn wake_phrase(&self) -> &str {
+        &self.pipeline().wake_word_name
+    }
+    async fn recv(&mut self) -> Result<Option<MicFrame>, Error> {
+        Run::recv(self)
+            .await
+            .map(|frame| {
+                frame.map(|frame| MicFrame {
+                    format: PcmFormat {
+                        rate: frame.data.rate,
+                        width: frame.data.width,
+                        channels: frame.data.channels,
+                    },
+                    payload: frame.payload,
+                })
+            })
+            .map_err(error)
+    }
+    fn stats(&self) -> RunStats {
+        let stats = Run::stats(self);
+        RunStats {
+            received: stats.received,
+            dropped: stats.dropped,
+        }
+    }
+}
+impl LinkEvents for EventStream {
+    type Run = Run;
+    async fn recv(&mut self) -> Result<Option<LinkEvent<Run>>, Error> {
+        EventStream::recv(self)
+            .await
+            .map(|event| {
+                event.map(|event| {
+                    if let Some(run) = event.run {
+                        LinkEvent::Wake(run)
+                    } else if matches!(event.event, WyomingEvent::Played(_)) {
+                        LinkEvent::Played
+                    } else {
+                        LinkEvent::Other
+                    }
+                })
+            })
+            .map_err(error)
+    }
+}
+/// The existing bounded producer with neutral send errors.
+pub struct Sink(mpsc::Sender<Vec<u8>>);
+impl ReplySink for Sink {
+    async fn send(&self, frame: Vec<u8>) -> Result<(), Error> {
+        self.0.send(frame).await.map_err(|_| Error::Closed)
+    }
+}
+impl EchoLink for WyomingClient {
+    type Events = EventStream;
+    type ReplySink = Sink;
+    type ReplySource = mpsc::Receiver<Vec<u8>>;
+    fn events(&mut self) -> Result<EventStream, Error> {
+        Self::events(self).map_err(error)
+    }
+    fn reply_channel(&self, capacity: NonZeroUsize) -> (Self::ReplySink, Self::ReplySource) {
+        let (tx, rx) = mpsc::channel(capacity.get());
+        (Sink(tx), rx)
+    }
+    async fn enable_capture(&self) -> Result<(), Error> {
+        self.run_satellite().await.map_err(error)
+    }
+    async fn probe(&self) -> Result<(), Error> {
+        self.describe().await.map(|_| ()).map_err(error)
+    }
+    async fn play_with_timeout(
+        &self,
+        format: PcmFormat,
+        source: Self::ReplySource,
+        deadline: Duration,
+    ) -> Result<PlayOutcome, Error> {
+        Self::play_with_timeout(self, wire(format), source, deadline)
+            .await
+            .map(|outcome| match outcome {
+                crate::PlayOutcome::Played => PlayOutcome::Played,
+                crate::PlayOutcome::Cut => PlayOutcome::Cut,
+            })
+            .map_err(error)
+    }
+    async fn cut_with_stats(&self) -> Result<CutStats, Error> {
+        Self::cut_with_stats(self)
+            .await
+            .map(|stats| CutStats {
+                dropped_frames: stats.dropped_frames,
+            })
+            .map_err(error)
+    }
+    async fn pause(&self) -> Result<(), Error> {
+        Self::pause(self).await.map_err(error)
+    }
+    async fn close(&self) -> Result<(), Error> {
+        Self::close(self).await.map_err(error)
+    }
+}
+
+#[cfg(test)]
+mod echo_link_tests;
+
+#[cfg(test)]
+mod echo_link_recovery;

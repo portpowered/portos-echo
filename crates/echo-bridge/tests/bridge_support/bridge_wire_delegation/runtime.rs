@@ -38,12 +38,14 @@ impl Application {
         let day = Arc::new(AtomicU64::new(17));
         let source = day.clone();
         let (stop, shutdown) = oneshot::channel();
+        let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
         let worker = tokio::spawn(bridge_runtime::execute_controlled(
             settings,
             bridge_runtime::Control {
                 utc_day: Arc::new(move || source.load(Ordering::SeqCst)),
                 shutdown,
             },
+            connector,
         ));
         let mut satellite = listener.accept().await.unwrap().0;
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");

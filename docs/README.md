@@ -82,3 +82,5 @@ Add each new tracked documentation page to this index in the same change.
 - [Authenticated Muse service](adr/0022-muse-service.md)
 - [Maintained WebView screen client](adr/0023-echo-screen.md)
 - [Bridge audio orchestration](adr/0024-echo-bridge.md)
+
+- [Protocol-neutral Echo link](adr/0025-echo-link.md)

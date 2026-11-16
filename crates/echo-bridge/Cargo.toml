@@ -9,6 +9,7 @@ publish = false
 workspace = true
 
 [dependencies]
+echo-link = { version = "0.1.0", path = "../echo-link" }
 echo-agent-loop = { version = "0.1.0", path = "../echo-agent-loop" }
 echo-delegation = { version = "0.1.0", path = "../echo-delegation" }
 echo-mcp-client = { version = "0.1.0", path = "../echo-mcp-client" }
@@ -26,6 +27,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros", "io-util"] }
 
 [dev-dependencies]
+echo-link = { version = "0.1.0", path = "../echo-link", features = ["fake"] }
 echo-spoof-mcp = { version = "0.1.0", path = "../echo-spoof-mcp" }
 base64 = "0.23"
 echo-live = { version = "0.1.0", path = "../echo-live", features = ["fake"] }

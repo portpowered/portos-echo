@@ -38,10 +38,10 @@ impl From<echo_audio::AudioError> for Error {
         Self::Audio
     }
 }
-impl From<echo_wyoming::Error> for Error {
-    fn from(error: echo_wyoming::Error) -> Self {
+impl From<echo_link::Error> for Error {
+    fn from(error: echo_link::Error) -> Self {
         match error {
-            echo_wyoming::Error::Timeout => Self::Deadline,
+            echo_link::Error::Timeout => Self::Deadline,
             _ => Self::Wyoming,
         }
     }

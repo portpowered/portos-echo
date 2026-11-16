@@ -10,8 +10,8 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::Path,
-    time::Instant,
 };
+use tokio::time::Instant;
 
 pub struct Trace {
     writer: File,

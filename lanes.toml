@@ -99,3 +99,8 @@ kind = "lib"
 name = "echo-muse-bridge"
 path = "crates/echo-muse-bridge"
 kind = "lib"
+
+[[crate]]
+name = "echo-link"
+path = "crates/echo-link"
+kind = "lib"

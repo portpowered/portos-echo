@@ -1,8 +1,8 @@
 //! One owner retains a healthy call between wakes and drives its idle timers.
 use crate::{Error, bridge_health::Health, bridge_trace::Trace};
 use echo_contracts::live::LiveEvent;
+use echo_link::{EchoLink, LinkEvent, LinkEvents};
 use echo_live::call::{CallError, LiveCall};
-use echo_wyoming::{EventStream, Run, WyomingClient};
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -45,14 +45,14 @@ impl Conversation {
         Ok(())
     }
 
-    pub async fn wake(
+    pub async fn wake<L: EchoLink>(
         &mut self,
-        client: &WyomingClient,
-        events: &mut EventStream,
+        client: &L,
+        events: &mut L::Events,
         health: &Health,
         trace: &mut Trace,
         kill: &super::bridge_kill::Kill<'_>,
-    ) -> Result<Run, Error> {
+    ) -> Result<<L::Events as LinkEvents>::Run, Error> {
         let mut backoff = Duration::from_millis(100);
         let probe = probe_link(client, Duration::ZERO);
         tokio::pin!(probe);
@@ -81,7 +81,7 @@ impl Conversation {
                     continue;
                 }
             };
-            if let Some(run) = event.ok_or(Error::Wyoming)?.run {
+            if let Some(run) = select_wake(event)? {
                 if self.expired() {
                     self.close("idle", trace)?;
                 }
@@ -110,9 +110,9 @@ impl Conversation {
     }
 }
 
-async fn probe_link(client: &WyomingClient, delay: Duration) -> bool {
+async fn probe_link<L: EchoLink>(client: &L, delay: Duration) -> bool {
     tokio::time::sleep(delay).await;
-    client.describe().await.is_ok()
+    client.probe().await.is_ok()
 }
 
 fn observe_link(connected: bool, health: &Health, trace: &mut Trace) -> Result<(), Error> {
@@ -135,6 +135,14 @@ fn observe_link(connected: bool, health: &Health, trace: &mut Trace) -> Result<(
         )?;
     }
     Ok(())
+}
+
+// Shared by idle observation and the in-memory journey witness.
+pub(super) fn select_wake<R>(event: Option<LinkEvent<R>>) -> Result<Option<R>, Error> {
+    match event.ok_or(Error::Wyoming)? {
+        LinkEvent::Wake(run) => Ok(Some(run)),
+        LinkEvent::Played | LinkEvent::Other => Ok(None),
+    }
 }
 
 #[cfg(test)]

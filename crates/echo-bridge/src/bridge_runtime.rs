@@ -15,12 +15,12 @@ use crate::{
     bridge_input::{Provider, Settings},
     bridge_trace::Trace,
 };
-use echo_contracts::{ids::SessionId, wyoming::WyomingEvent};
+use echo_contracts::ids::SessionId;
+use echo_link::{EchoLink, LinkConnector, LinkEvent, LinkEvents};
 use echo_live::{
     LivePeer,
     call::{LiveAuthMode, LiveCall, LiveCallFactory, SessionOptions},
 };
-use echo_wyoming::{ClientOptions, EventStream, WyomingClient};
 use serde_json::json;
 use std::{
     io::{Read, Write},
@@ -37,13 +37,14 @@ pub struct Control {
 
 /// # Errors
 /// All failures use fixed categories. EOF closes owned tasks and sockets.
-pub async fn execute(settings: Settings) -> Result<(), Error> {
+pub async fn execute<C: LinkConnector>(settings: Settings, connector: C) -> Result<(), Error> {
     execute_controlled(
         settings,
         Control {
             utc_day: std::sync::Arc::new(utc_day),
             shutdown: control()?,
         },
+        connector,
     )
     .await
 }
@@ -59,7 +60,11 @@ fn utc_day() -> u64 {
 /// Runs the same application owner with an explicit host clock and stop receiver.
 /// # Errors
 /// Returns the same fixed operational failures as `execute`.
-pub async fn execute_controlled(settings: Settings, control: Control) -> Result<(), Error> {
+pub async fn execute_controlled<C: LinkConnector>(
+    settings: Settings,
+    control: Control,
+    connector: C,
+) -> Result<(), Error> {
     if let Some(path) = &settings.kill_path {
         bridge_kill::inspect(path)?;
     }
@@ -85,7 +90,7 @@ pub async fn execute_controlled(settings: Settings, control: Control) -> Result<
     let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day);
     let work = async {
         let mut client = tokio::select! {
-            result = WyomingClient::connect(settings.wyoming, ClientOptions::default()) => result?,
+            result = connector.connect() => result?,
             eof = &mut shutdown => return match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
         // Keep the receiver alive until the supervisor has closed. Cancelling
@@ -110,17 +115,17 @@ pub async fn execute_controlled(settings: Settings, control: Control) -> Result<
     result.and(report).and(cleanup)
 }
 
-async fn connected(
-    client: &WyomingClient,
-    events: &mut EventStream,
+async fn connected<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
     settings: Settings,
     health: &Health,
     trace: &mut Trace,
     screen: &bridge_screen::Screen,
     delegation: &mut bridge_delegation::Host,
 ) -> Result<(), Error> {
-    client.run_satellite().await?;
-    client.describe().await?;
+    client.enable_capture().await?;
+    client.probe().await?;
     health.state.send_modify(|state| state.wyoming = "connected");
     trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
     publish("bridge.ready", None)?;
@@ -129,9 +134,9 @@ async fn connected(
     observe(client, events, &factory, health, trace, &settings, (screen, delegation)).await
 }
 
-async fn observe(
-    client: &WyomingClient,
-    events: &mut EventStream,
+async fn observe<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
     factory: &LiveCallFactory<Provider>,
     health: &Health,
     trace: &mut Trace,
@@ -191,10 +196,10 @@ async fn observe(
     }
 }
 
-async fn turn(
-    client: &WyomingClient,
-    events: &mut EventStream,
-    run: echo_wyoming::Run,
+async fn turn<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
+    run: <L::Events as LinkEvents>::Run,
     factory: &LiveCallFactory<Provider>,
     conversation: &mut bridge_lifecycle::Conversation,
     trace: &mut Trace,
@@ -302,13 +307,13 @@ fn publish(event: &str, run: Option<&str>) -> Result<(), Error> {
         .map_err(|_| Error::Control)
 }
 
-async fn played(events: &mut EventStream) -> Result<(), Error> {
+async fn played<E: LinkEvents>(events: &mut E) -> Result<(), Error> {
     loop {
         let event = events.recv().await?.ok_or(Error::Wyoming)?;
-        match event.event {
-            WyomingEvent::Played(_) => return Ok(()),
-            WyomingEvent::RunPipeline(_) => return Err(Error::Wyoming),
-            _ => (),
+        match event {
+            LinkEvent::Played => return Ok(()),
+            LinkEvent::Wake(_) => return Err(Error::Wyoming),
+            LinkEvent::Other => (),
         }
     }
 }

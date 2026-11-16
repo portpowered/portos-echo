@@ -689,6 +689,7 @@ dependencies = [
  "echo-config",
  "echo-contracts",
  "echo-delegation",
+ "echo-link",
  "echo-live",
  "echo-mcp-client",
  "echo-screen-contract",
@@ -774,6 +775,10 @@ dependencies = [
  "serde_norway",
  "tokio",
 ]
+
+[[package]]
+name = "echo-link"
+version = "0.1.0"
 
 [[package]]
 name = "echo-live"
@@ -907,6 +912,7 @@ name = "echo-wyoming"
 version = "0.1.0"
 dependencies = [
  "echo-contracts",
+ "echo-link",
  "loom",
  "serde_json",
  "thiserror",

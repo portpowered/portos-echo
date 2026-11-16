@@ -1,12 +1,12 @@
 //! Fixed scratch, complete 20 ms packets and explicit partial-tail accounting.
 use echo_audio::{OpusDecoder, OpusEncoder, PcmResampler};
-use echo_contracts::wyoming::AudioFormat;
+use echo_link::PcmFormat;
 use echo_live::AudioFrame;
 
 use crate::Error;
 
 pub struct Microphone {
-    format: AudioFormat,
+    format: PcmFormat,
     resampler: PcmResampler,
     scratch: Vec<i16>,
     pending: Vec<i16>,
@@ -18,8 +18,8 @@ pub struct Microphone {
 impl Microphone {
     /// # Errors
     /// Rejects unsupported PCM formats or unavailable codec resources.
-    pub fn new(format: AudioFormat) -> Result<Self, Error> {
-        let resampler = PcmResampler::new(&format, 48_000)?;
+    pub fn new(format: PcmFormat) -> Result<Self, Error> {
+        let resampler = PcmResampler::new(&audio_format(format), 48_000)?;
         let scratch = vec![0; resampler.output_capacity()];
         Ok(Self {
             format,
@@ -35,7 +35,7 @@ impl Microphone {
     /// The wire parser already bounds payloads; cap one conversion too.
     /// # Errors
     /// Rejects format changes, malformed samples and codec errors.
-    pub fn process(&mut self, format: &AudioFormat, bytes: &[u8]) -> Result<Vec<AudioFrame>, Error> {
+    pub fn process(&mut self, format: &PcmFormat, bytes: &[u8]) -> Result<Vec<AudioFrame>, Error> {
         if format != &self.format || bytes.len() > 8192 || !bytes.len().is_multiple_of(2) {
             return Err(Error::Audio);
         }
@@ -102,12 +102,11 @@ pub struct Reply {
 }
 
 #[must_use]
-pub fn format(rate: u32) -> AudioFormat {
-    AudioFormat {
+pub fn format(rate: u32) -> PcmFormat {
+    PcmFormat {
         rate,
         width: 2,
         channels: 1,
-        extra: std::collections::BTreeMap::default(),
     }
 }
 
@@ -115,7 +114,7 @@ impl Reply {
     /// # Errors
     /// Reports codec or resampler initialization failures.
     pub fn new() -> Result<Self, Error> {
-        let resampler = PcmResampler::new(&format(48_000), 24_000)?;
+        let resampler = PcmResampler::new(&audio_format(format(48_000)), 24_000)?;
         Ok(Self {
             decoder: OpusDecoder::new()?,
             scratch: vec![0; resampler.output_capacity()],
@@ -147,5 +146,15 @@ impl Reply {
 
     fn bytes(&self, count: usize) -> Vec<u8> {
         self.scratch[..count].iter().flat_map(|s| s.to_le_bytes()).collect()
+    }
+}
+
+// Compatibility with echo-audio's unchanged descriptor stays at this boundary.
+fn audio_format(format: PcmFormat) -> echo_contracts::wyoming::AudioFormat {
+    echo_contracts::wyoming::AudioFormat {
+        rate: format.rate,
+        width: format.width,
+        channels: format.channels,
+        extra: std::collections::BTreeMap::default(),
     }
 }

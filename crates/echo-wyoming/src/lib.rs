@@ -9,6 +9,9 @@
 #[cfg(test)]
 extern crate self as echo_wyoming;
 
+#[path = "adapter/mod.rs"]
+pub mod adapter;
+
 mod wyoming_client;
 mod wyoming_options;
 mod wyoming_queue;
