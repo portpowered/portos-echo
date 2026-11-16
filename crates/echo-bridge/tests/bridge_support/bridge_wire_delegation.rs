@@ -9,6 +9,9 @@ use std::{
 };
 use tokio::net::{TcpListener, TcpStream};
 
+#[path = "bridge_wire_delegation/failures.rs"]
+mod failures;
+
 struct Request {
     start: String,
     headers: HashMap<String, String>,
