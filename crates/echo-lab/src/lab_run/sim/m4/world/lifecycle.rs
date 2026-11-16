@@ -1,6 +1,6 @@
 //! T3 lifecycle witnesses through prebuilt bridge and pinned host.
+use super::super::super::process::owners::{Completion, Host};
 use super::*;
-use tokio::net::TcpStream;
 
 fn root() -> PathBuf {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -11,11 +11,12 @@ fn root() -> PathBuf {
     ))
 }
 
-async fn start(world: &mut World, root: &Path) {
-    start_case(world, root, false).await;
+async fn start(world: &mut World, root: &Path) -> Owners {
+    start_case(world, root, false).await
 }
 
-async fn start_case(world: &mut World, root: &Path, negative: bool) {
+async fn start_case(world: &mut World, root: &Path, negative: bool) -> Owners {
+    let host = Host::new();
     let bridge = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/debug")
         .join(if cfg!(windows) {
@@ -23,15 +24,12 @@ async fn start_case(world: &mut World, root: &Path, negative: bool) {
         } else {
             "echo-bridge"
         });
-    world
-        .start(
-            if cfg!(windows) { "python" } else { "python3" },
-            &bridge,
-            root,
-            negative,
-        )
-        .await
-        .unwrap();
+    world.start(host.python(), &bridge, root, negative).await.unwrap();
+    Owners {
+        host,
+        host_child: world.host.as_mut().unwrap().observe_collection(),
+        bridge_child: world.bridge.as_mut().unwrap().observe_collection(),
+    }
 }
 
 #[tokio::test]
@@ -42,15 +40,14 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
         emotion: true,
         ..World::default()
     };
-    start_case(&mut world, &root, true).await;
-    let addresses = endpoints(&world);
+    let owners = start_case(&mut world, &root, true).await;
     let (completion, timing) = world.speak().await.unwrap();
     let observer = world.observer().unwrap();
     observer.wait_for(0, |call| call.reply_completed).await.unwrap();
     super::super::tests::assert_dialogue(&observer, FALLBACK);
     assert_eq!(completion, json!({"event":"bridge.run_completed","run_id":"run-1"}));
     assert_eq!(timing.played, 9600);
-    assert_eq!(world.close().await, Ok(()));
+    assert_eq!(close(&mut world).await, Ok(()));
     let states: Vec<_> = world.ui_states.iter().map(|f| f["state"].clone()).collect();
     let expected = super::super::emotion::sequence();
     assert_eq!(
@@ -73,7 +70,7 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
     assert_eq!(measurement["frame_count"], 0);
     assert_eq!(measurement["return_state"], json!({}));
     assert_eq!(measurement["host_pcm_bytes"], 9600);
-    closed(&addresses).await;
+    owners.assert_closed();
     assert!(!root.exists());
 }
 
@@ -85,10 +82,7 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
         emotion: true,
         ..World::default()
     };
-    start(&mut world, &root).await;
-    let addresses = endpoints(&world);
-    let host = world.host.as_mut().unwrap().observe_collection();
-    let bridge = world.bridge.as_mut().unwrap().observe_collection();
+    let owners = start(&mut world, &root).await;
     let mut screen = Screen::connect(&root).await.unwrap();
     world.observe(&mut screen, 0, "ready").await.unwrap();
     world.control(json!({"action":"finite","pcm":fixture()})).await.unwrap();
@@ -100,7 +94,7 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
     assert_eq!(partial["return_state"], json!({}));
     assert_eq!(partial["reply_pcm_bytes"], 0);
     assert_eq!(
-        world.close().await,
+        close(&mut world).await,
         Err("model: expected exactly two requests and verified tool output".into())
     );
     assert!(host.try_recv().unwrap().success());
@@ -119,7 +113,7 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
             .iter()
             .any(|e| e["event"] == "session.commentary.append")
     );
-    closed(&addresses).await;
+    owners.assert_closed();
     assert!(!root.exists());
     assert_eq!(world.close().await, Ok(()));
 }
@@ -131,7 +125,8 @@ fn endpoints(world: &World) -> Vec<String> {
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter_map(|v| v["address"].as_str().map(str::to_owned))
         .collect();
-    addresses.push(world.relay.as_ref().unwrap().address.to_string());
+    // The single-accept relay releases its listener before bridge readiness;
+    // its former address has no overlapping lifetime at this observation.
     for origin in [
         world.model.as_ref().unwrap().origin.as_str(),
         world.live.as_ref().unwrap().base_url(),
@@ -150,12 +145,38 @@ fn endpoints(world: &World) -> Vec<String> {
     addresses
 }
 
-async fn closed(addresses: &[String]) {
-    for address in addresses {
+// The close API awaits the real relay, DialogueLive, Model and Spoof task
+// joins even when another cleanup step fails. Retain that actual future;
+// observing a taken Option or a closed connection would not prove completion.
+async fn close(world: &mut World) -> Result<(), String> {
+    let mut owned = std::mem::take(world);
+    let mut completion = Completion::new("M4 bridge/relay/Live/model/spoof/host", async move {
+        let result = owned.close().await;
+        (owned, result)
+    });
+    completion.stop();
+    let (owned, result) = completion.assert_closed().await;
+    *world = owned;
+    result
+}
+
+struct Owners {
+    host: Host,
+    host_child: std::sync::mpsc::Receiver<std::process::ExitStatus>,
+    bridge_child: std::sync::mpsc::Receiver<std::process::ExitStatus>,
+}
+
+impl Owners {
+    fn assert_closed(self) {
         assert!(
-            TcpStream::connect(address).await.is_err(),
-            "listener survived: {address}"
+            self.host_child.try_recv().unwrap().success(),
+            "M4 host child not collected"
         );
+        assert!(
+            self.bridge_child.try_recv().unwrap().success(),
+            "M4 bridge child not collected"
+        );
+        self.host.assert_closed();
     }
 }
 
@@ -164,10 +185,7 @@ async fn closed(addresses: &[String]) {
 async fn t3_m4_cancel_active_reply_reaps_children_listeners_and_private_files() {
     let root = root();
     let mut world = World::default();
-    start(&mut world, &root).await;
-    let addresses = endpoints(&world);
-    let host = world.host.as_mut().unwrap().observe_collection();
-    let bridge = world.bridge.as_mut().unwrap().observe_collection();
+    let owners = start(&mut world, &root).await;
     let mut screen = Screen::connect(&root).await.unwrap();
     screen.expect("ready").await.unwrap();
     let cancel = root.join("cancel");
@@ -186,11 +204,9 @@ async fn t3_m4_cancel_active_reply_reaps_children_listeners_and_private_files() 
         cancelled,
     );
     assert_eq!(result.err(), Some("sim: cancelled".into()));
-    assert_eq!(world.close().await, Ok(()));
-    assert!(host.try_recv().unwrap().success());
-    assert!(bridge.try_recv().unwrap().success());
+    assert_eq!(close(&mut world).await, Ok(()));
     assert!(!root.exists());
-    closed(&addresses).await;
+    owners.assert_closed();
     assert_eq!(world.close().await, Ok(()));
 }
 
@@ -203,7 +219,7 @@ async fn cleanup_replaced_directory_is_reported_and_other_owners_still_close() {
         ..World::default()
     };
     assert_eq!(
-        world.close().await,
+        close(&mut world).await,
         Err("cleanup: private M4 directory removal failed".into())
     );
     assert_eq!(std::fs::read_to_string(&root).unwrap(), "replacement");
@@ -214,28 +230,33 @@ async fn cleanup_replaced_directory_is_reported_and_other_owners_still_close() {
 #[tokio::test]
 #[ignore = "T3 requires pinned hassmic-host and prebuilt echo-bridge"]
 async fn t3_m4_parallel_world_failure_does_not_borrow_success_or_leave_listeners() {
-    async fn case(fail: bool) -> (PathBuf, Vec<String>) {
-        let root = root();
-        let mut world = World::default();
-        start(&mut world, &root).await;
-        let addresses = endpoints(&world);
+    async fn case(mut world: World, root: PathBuf, owners: Owners, fail: bool) -> PathBuf {
         if fail {
             let live = world.live.take().unwrap();
             live.shutdown().await.unwrap();
             assert!(world.speak().await.is_err());
             assert!(world.speaking.is_none());
-            assert!(world.close().await.is_err());
+            assert!(close(&mut world).await.is_err());
         } else {
             assert_eq!(world.speak().await.unwrap().0["run_id"], "run-1");
-            assert_eq!(world.close().await, Ok(()));
+            assert_eq!(close(&mut world).await, Ok(()));
         }
         assert!(!root.exists());
-        closed(&addresses).await;
-        (root, addresses)
+        owners.assert_closed();
+        root
     }
-    let (failed, passed) = tokio::join!(case(true), case(false));
-    assert_ne!(failed.0, passed.0);
-    assert!(failed.1.iter().all(|a| !passed.1.contains(a)));
+    let (first_root, second_root) = (root(), root());
+    let (mut first, mut second) = (World::default(), World::default());
+    let (first_owners, second_owners) = tokio::join!(start(&mut first, &first_root), start(&mut second, &second_root));
+    // Both worlds still own their endpoints at this comparison. Historical
+    // addresses may be reused after either world releases them.
+    let (a, b) = (endpoints(&first), endpoints(&second));
+    assert!(a.iter().all(|address| !b.contains(address)));
+    let (failed, passed) = tokio::join!(
+        case(first, first_root, first_owners, true),
+        case(second, second_root, second_owners, false),
+    );
+    assert_ne!(failed, passed);
 }
 
 #[tokio::test]
@@ -244,10 +265,7 @@ async fn t3_m4_teardown_failure_surfaces_after_collecting_all_peers() {
     let root = root();
     let retained = root.with_extension("retained");
     let mut world = World::default();
-    start(&mut world, &root).await;
-    let addresses = endpoints(&world);
-    let host = world.host.as_mut().unwrap().observe_collection();
-    let bridge = world.bridge.as_mut().unwrap().observe_collection();
+    let owners = start(&mut world, &root).await;
     assert_eq!(world.speak().await.unwrap().0["run_id"], "run-1");
     // Replace the owned destination after the bridge has closed its trace.
     // This deterministically exercises a real filesystem cleanup failure on
@@ -256,12 +274,10 @@ async fn t3_m4_teardown_failure_surfaces_after_collecting_all_peers() {
     std::fs::rename(&root, &retained).unwrap();
     std::fs::write(&root, "replacement").unwrap();
     assert_eq!(
-        world.close().await,
+        close(&mut world).await,
         Err("cleanup: private M4 directory removal failed".into())
     );
-    assert!(host.try_recv().unwrap().success());
-    assert!(bridge.try_recv().unwrap().success());
-    closed(&addresses).await;
+    owners.assert_closed();
     assert_eq!(std::fs::read_to_string(&root).unwrap(), "replacement");
     std::fs::remove_file(&root).unwrap();
     std::fs::remove_dir_all(retained).unwrap();

@@ -5,6 +5,11 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
+#[cfg(test)]
+pub(super) mod owners {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/sim_support/owners.rs"));
+}
+
 pub struct Process {
     child: Child,
     input: Option<ChildStdin>,
