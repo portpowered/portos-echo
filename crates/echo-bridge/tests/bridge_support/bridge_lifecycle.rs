@@ -54,7 +54,7 @@ async fn idle_failure(path: &Path) {
                 );
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
     })
     .await
@@ -121,7 +121,7 @@ async fn bridge_lifecycle_expiry_closes_once_and_next_wake_creates_fresh_call() 
                     assert!(closes.iter().all(|e| e["reason"] == "idle"));
                     break;
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
         })
         .await
@@ -188,7 +188,7 @@ async fn link(address: &str, expected: &str) {
             if body["wyoming"] == expected {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(POLL_INTERVAL).await;
         }
     })
     .await

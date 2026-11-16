@@ -35,6 +35,9 @@ mod bridge_wire_screen;
 
 // Observation ceiling for slow instrumented loopback runs; product deadlines stay unchanged.
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(30);
+/// Gap between re-reads of a trace file or health endpoint while waiting for the bridge.  A bare `yield_now` loop
+/// re-read the whole file thousands of times a second and starved the coverage-instrumented bridge it was waiting on.
+const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 struct Process {
     name: &'static str,
