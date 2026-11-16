@@ -141,6 +141,9 @@ size and upload require the matching hosted artifact evidence; configuration alo
 
 The every-PR `build-echo` job logs the installed NDK revision and compiler versions. When echo-bridge exists,
 it checks ELF32, ARM, EABI5, `/system/bin/linker` and dynamic dependencies (rejecting OpenSSL), prints its size
-and uploads the release binary. Measured crate results, NDK revision, size and CI run ID belong in the
-[el-w4-echo-cross-build PR](https://github.com/portpowered/portos-echo/pull/103)
-evidence comment under this heading. This configuration establishes no device-runtime or T5 result.
+and uploads the release binary.
+
+Measured on main at e8fb346, CI run 43827230421 (all jobs green). All 15 packages above compiled for
+`armv7-linux-androideabi` (release), with NDK r27d (13750724). `echo-bridge` is an ELF 32-bit LSB PIE executable,
+ARM EABI5, interpreter `/system/bin/linker`, for Android 24, unstripped, 10,440,840 bytes. The artifact was
+downloaded and checked independently. This establishes no device-runtime or T5 result.
