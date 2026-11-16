@@ -274,7 +274,10 @@ async fn send(
         // bridge reply before its audio receiver admits even the first frame.
         let next = now() + Duration::from_millis(20);
         while now() < next {
-            drive(peer, next).await?;
+            match drive(peer, next).await {
+                Ok(()) | Err(CallError::Deadline) => {}
+                Err(error) => return Err(error),
+            }
         }
     }
     Ok(())
