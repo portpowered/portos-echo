@@ -1,6 +1,7 @@
 //! One Live call owner drives WebRTC while Wyoming owns its bounded wire queues.
 mod bridge_budget;
 mod bridge_delegation;
+pub(crate) mod bridge_kill;
 mod bridge_lifecycle;
 mod bridge_pacing;
 mod bridge_relink;
@@ -58,6 +59,9 @@ fn utc_day() -> u64 {
 /// # Errors
 /// Returns the same fixed operational failures as `execute`.
 pub async fn execute_controlled(settings: Settings, control: Control) -> Result<(), Error> {
+    if let Some(path) = &settings.kill_path {
+        bridge_kill::inspect(path)?;
+    }
     let mut trace = Trace::open(
         &settings.trace,
         match settings.mode {
@@ -134,14 +138,23 @@ async fn observe(
     context: (&bridge_screen::Screen, &mut bridge_delegation::Host),
 ) -> Result<(), Error> {
     let (screen, delegation) = context;
+    let kill = bridge_kill::Kill {
+        settings: options,
+        health,
+        screen,
+    };
     let mut conversation = bridge_lifecycle::Conversation::new(options.session_idle_seconds);
     let mut sequence = 0_u64;
     loop {
-        let run = conversation.wake(client, events, health, trace).await?;
+        let run = conversation.wake(client, events, health, trace, &kill).await?;
         sequence += 1;
         let id = format!("run-{sequence}");
         trace.record("wyoming.run_started", Some(&id), json!({}))?;
         trace.record("run.started", Some(&id), json!({}))?;
+        if kill.sync(trace).await? {
+            trace.record("run.refused", Some(&id), json!({"reason":"kill"}))?;
+            continue;
+        }
         if health.state.borrow().relink_required {
             trace.record("run.refused", Some(&id), json!({"reason":"relink_required"}))?;
             continue;
@@ -154,9 +167,14 @@ async fn observe(
             factory,
             &mut conversation,
             trace,
-            (health, options, screen, &id, delegation),
+            (health, options, screen, &id, delegation, &kill),
         )
         .await;
+        if kill.sync(trace).await? {
+            delegation.abandon();
+            conversation.close("kill", trace)?;
+            continue;
+        }
         if result.is_err() {
             health.state.send_modify(|state| state.live = "error");
         }
@@ -185,13 +203,19 @@ async fn turn(
         &bridge_screen::Screen,
         &str,
         &mut bridge_delegation::Host,
+        &bridge_kill::Kill<'_>,
     ),
 ) -> Result<Option<(u64, bool)>, Error> {
-    let (health, options, screen, id, delegation) = context;
+    let (health, options, screen, id, delegation, kill) = context;
     if conversation.call.is_none() {
         delegation.new_call();
         health.state.send_modify(|state| state.live = "connecting");
-        conversation.call = match create(factory, options, id).await {
+        let created = tokio::select! {
+            biased;
+            () = kill.wait() => { kill.sync(trace).await?; return Ok(None); },
+            result = create(factory, options, id) => result,
+        };
+        conversation.call = match created {
             Ok(call) => Some(call),
             Err(error) => {
                 bridge_relink::failure(error, options.lab, health, trace, screen, id)?;
@@ -214,6 +238,7 @@ async fn turn(
             conversation.sent,
             screen,
             &mut *delegation,
+            kill,
         ),
     )
     .await;
@@ -221,6 +246,10 @@ async fn turn(
         Ok(outcome) => Ok(Some(outcome)),
         Err(error) => {
             delegation.abandon();
+            if kill.sync(trace).await? {
+                conversation.close("kill", trace)?;
+                return Ok(None);
+            }
             conversation.close("failed", trace)?;
             bridge_relink::failure(error, options.lab, health, trace, screen, id)?;
             Ok(None)

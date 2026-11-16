@@ -157,6 +157,7 @@ pub(super) async fn run(
         u64,
         &super::bridge_screen::Screen,
         &mut super::bridge_delegation::Host,
+        &super::bridge_kill::Kill<'_>,
     ),
 ) -> Result<(u64, bool), Error> {
     let mut source = Source::new()?;
@@ -172,19 +173,21 @@ pub(super) async fn run(
         speaking: false,
         microphone: false,
         delegation: options.4,
+        kill: options.5,
     };
     let mut failure = None;
+    let (acknowledged, acknowledgement) = tokio::sync::oneshot::channel();
     let producer = async {
         let result = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context).await;
         failure = stop_failed_producer(result, client, options.0).await?;
-        Ok(())
+        context.await_played(acknowledgement, &mut source, call).await
     };
     let (outcome, (), ()) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::try_join!(
-            async { play.await.map_err(Error::from) },
-            producer,
-            super::played(events)
-        )
+        tokio::try_join!(async { play.await.map_err(Error::from) }, producer, async {
+            let result = super::played(events).await;
+            let _ = acknowledged.send(());
+            result
+        })
     })
     .await
     .map_err(|_| Error::Deadline)??;
@@ -243,9 +246,42 @@ struct PlaybackContext<'a> {
     speaking: bool,
     microphone: bool,
     delegation: &'a mut super::bridge_delegation::Host,
+    kill: &'a super::bridge_kill::Kill<'a>,
 }
 
 impl PlaybackContext<'_> {
+    async fn await_played(
+        &mut self,
+        mut acknowledgement: tokio::sync::oneshot::Receiver<()>,
+        source: &mut Source,
+        call: &mut LiveCall,
+    ) -> Result<(), Error> {
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut acknowledgement => return Ok(()),
+                () = self.kill.wait(), if !source.cancelled => {
+                    self.kill.sync(self.trace).await?;
+                    source.cancelled = true;
+                    self.delegation.abandon();
+                    call.close();
+                }
+            }
+        }
+    }
+
+    async fn cancelled(&mut self, source: &mut Source, call: &mut LiveCall) -> Result<bool, Error> {
+        if self.kill.sync(self.trace).await? {
+            source.cancelled = true;
+            call.close();
+        }
+        if source.cancelled {
+            self.delegation.abandon();
+            self.cut(source).await?;
+        }
+        Ok(source.cancelled)
+    }
+
     async fn microphone(
         &mut self,
         source: &mut Source,
@@ -311,9 +347,7 @@ async fn produce(
     let mut completed = false;
     let mut pressure_reported = false;
     loop {
-        if source.cancelled {
-            context.delegation.abandon();
-            context.cut(source).await?;
+        if context.cancelled(source, call).await? {
             return Ok(());
         }
         context.delegation.service(call, context.trace).await?;

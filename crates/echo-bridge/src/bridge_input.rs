@@ -8,6 +8,7 @@ use std::{
 };
 
 pub struct Settings {
+    pub kill_path: Option<PathBuf>,
     pub delegation: Option<(echo_config::AgentConfig, echo_config::McpServer)>,
     pub screen: Option<echo_config::ScreenConfig>,
     pub wyoming: SocketAddr,
@@ -143,6 +144,7 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
             return Err(Error::Input);
         };
         return Ok(Some(Settings {
+            kill_path: None,
             delegation: None,
             screen: None,
             wyoming: loopback(&wyoming, false)?,
@@ -182,6 +184,7 @@ fn configured(
         echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth.clone()).map_err(|_| Error::Input)?,
     );
     Ok(Some(Settings {
+        kill_path: Some(config.audit.log_dir.join("bridge-kill")),
         delegation: config.mcp.server.first().cloned().map(|server| (config.agent, server)),
         screen: Some(config.screen),
         wyoming: loopback(&format!("{}:{}", config.echo.host, config.echo.wyoming_port), false)?,

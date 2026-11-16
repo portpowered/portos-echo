@@ -7,11 +7,13 @@ use std::{io::Write, path::PathBuf};
 pub const HELP: &str = "echo-bridge --config PATH --trace PATH [--health-listen 127.0.0.1:PORT] [--live-loopback ORIGIN --model-loopback ORIGIN]\n\
 echo-bridge signin --config PATH [--browser]\n\
 echo-bridge import-codex --config PATH --path PATH\n\
-echo-bridge status --config PATH";
+echo-bridge status --config PATH\n\
+echo-bridge kill --config PATH [--clear]";
 
 pub struct Command {
     config: PathBuf,
     operation: OperatorCommand,
+    kill_path: Option<PathBuf>,
 }
 
 /// Recognizes operator verbs without loading config, reading credentials or dialing.
@@ -21,7 +23,7 @@ pub fn parse(args: &[String], lab_present: bool) -> Result<Option<Command>, Erro
     let Some(verb) = args.first().map(String::as_str) else {
         return Ok(None);
     };
-    if !["signin", "import-codex", "status"].contains(&verb) {
+    if !["signin", "import-codex", "status", "kill"].contains(&verb) {
         return Ok(None);
     }
     if lab_present {
@@ -30,12 +32,14 @@ pub fn parse(args: &[String], lab_present: bool) -> Result<Option<Command>, Erro
     let mut config = None;
     let mut path = None;
     let mut browser = false;
+    let mut clear = false;
     let mut flags = args[1..].iter();
     while let Some(flag) = flags.next() {
         match flag.as_str() {
             "--config" => value(&mut config, flags.next())?,
             "--path" if verb == "import-codex" => value(&mut path, flags.next())?,
             "--browser" if verb == "signin" && !browser => browser = true,
+            "--clear" if verb == "kill" && !clear => clear = true,
             _ => return Err(Error::Input),
         }
     }
@@ -44,11 +48,13 @@ pub fn parse(args: &[String], lab_present: bool) -> Result<Option<Command>, Erro
         "import-codex" => OperatorCommand::ImportCodex {
             path: path.ok_or(Error::Input)?.into(),
         },
+        "kill" => OperatorCommand::KillSwitch { enabled: !clear },
         _ => OperatorCommand::Status,
     };
     Ok(Some(Command {
         config: config.ok_or(Error::Input)?.into(),
         operation,
+        kill_path: None,
     }))
 }
 
@@ -64,20 +70,27 @@ impl Command {
     /// Validate configuration before entering the async runtime.
     /// # Errors
     /// Returns only fixed categories, without paths or credential contents.
-    pub fn prepare(self) -> Result<(Providers, OperatorCommand), Error> {
-        let config = BridgeConfig::load(self.config).map_err(|_| Error::Input)?;
+    pub fn prepare(mut self) -> Result<(Providers, Self), Error> {
+        let config = BridgeConfig::load(&self.config).map_err(|_| Error::Input)?;
+        self.kill_path = Some(config.audit.log_dir.join("bridge-kill"));
         let providers = echo_signin::resolve_mode(config.live, config.chatgpt_auth).map_err(|_| Error::Input)?;
-        Ok((providers, self.operation))
+        Ok((providers, self))
     }
 }
 
 /// # Errors
 /// Reports a fixed authorization or output category; auth internals remain private.
-pub async fn execute(providers: Providers, operation: OperatorCommand, writer: &mut impl Write) -> Result<(), Error> {
-    providers.execute(operation, writer).await.map_err(|error| match error {
-        echo_signin::SigninError::Output => Error::Control,
-        _ => Error::Authorization,
-    })
+pub async fn execute(providers: Providers, command: Command, writer: &mut impl Write) -> Result<(), Error> {
+    if let OperatorCommand::KillSwitch { enabled } = command.operation {
+        crate::bridge_runtime::bridge_kill::mutate(command.kill_path.as_deref().ok_or(Error::Control)?, enabled)?;
+    }
+    providers
+        .execute(command.operation, writer)
+        .await
+        .map_err(|error| match error {
+            echo_signin::SigninError::Output => Error::Control,
+            _ => Error::Authorization,
+        })
 }
 
 #[cfg(test)]
@@ -124,9 +137,23 @@ mod tests {
             "import-codex --config x",
             "import-codex --config x --path y --path z",
             "signin --config x --path y",
+            "kill --config x --clear --clear",
+            "kill --config x --browser",
+            "kill --config x --path y",
+            "kill --clear",
+            "status --config x --clear",
         ] {
             assert_eq!(parse(&args(text), false).err(), Some(Error::Input));
         }
         assert_eq!(parse(&args("status --config absent"), true).err(), Some(Error::Input));
+    }
+
+    #[test]
+    fn kill_flags_select_exact_state_without_reading_a_credential() {
+        for (text, enabled) in [("kill --config absent", true), ("kill --clear --config absent", false)] {
+            let command = parse(&args(text), false).unwrap().unwrap();
+            assert!(matches!(command.operation, OperatorCommand::KillSwitch { enabled: actual } if actual == enabled));
+            assert_eq!(parse(&args(text), true).err(), Some(Error::Input));
+        }
     }
 }

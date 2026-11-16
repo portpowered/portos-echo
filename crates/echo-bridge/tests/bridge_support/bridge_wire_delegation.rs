@@ -11,6 +11,8 @@ use tokio::net::{TcpListener, TcpStream};
 
 #[path = "bridge_wire_delegation/failures.rs"]
 mod failures;
+#[path = "bridge_wire_delegation/kill.rs"]
+mod kill;
 #[path = "bridge_wire_delegation/runtime.rs"]
 mod runtime;
 

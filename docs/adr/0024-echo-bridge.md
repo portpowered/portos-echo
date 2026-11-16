@@ -93,8 +93,23 @@ for the satellite's Played acknowledgment before publishing the safe error.
 They close the failed call and abandon delegation without recording successful
 commentary or playback. Ordinary model outages retain fixed failure commentary;
 request-cap refusal remains distinct from relink.
-The health schema also reserves the `kill_switch` boolean, initially false;
-durable kill control remains the next retained story.
+`echo-bridge kill --config PATH` atomically creates and syncs a zero-byte
+`bridge-kill` marker inside the configured `audit.log_dir`. Repeating it is
+idempotent. `kill --clear` removes the marker; an absent marker is success.
+Non-regular, nonempty or inaccessible marker paths produce the fixed `control`
+diagnostic without success output. Invalid startup inspection prevents readiness;
+inspection failures during operation refuse work. No mutation HTTP endpoint exists.
+
+The call owner checks the marker before wake admission and on bounded 20 ms
+control ticks, including idle, call setup, reply production and waiting for Played.
+The shared signin Providers receive the observed kill state. Kill abandons pending
+delegation, closes Live, discards unsent reply audio and uses the existing paced
+Wyoming cut; already transmitted audio remains the host's responsibility. Played
+is still required for playback evidence. Health exposes `kill_switch=true` and
+`live=error`; the screen displays a fixed clear instruction without relink.
+`kill.enabled`, `kill.cleared`, `live.closed` with reason `kill`, and `run.refused`
+with reason `kill` contain no credential or provider data. Restart retains the
+marker. Clear permits a fresh call and never resumes abandoned work.
 
 The optional `[audio]` table sets `reply_lead_ms`, default 200, as a positive
 multiple of 20 that fits `u16`. Existing configurations keep the default. The
