@@ -26,6 +26,8 @@ mod bridge_short;
 mod bridge_spine_edges;
 
 struct Process {
+    name: &'static str,
+    expected: String,
     child: Child,
     input: Option<ChildStdin>,
     lines: Lines<BufReader<ChildStdout>>,
@@ -33,6 +35,20 @@ struct Process {
 
 impl Process {
     fn spawn(command: &mut Command) -> Self {
+        let name = if Path::new(command.as_std().get_program())
+            .file_stem()
+            .is_some_and(|name| name == "echo-bridge")
+        {
+            "echo-bridge"
+        } else {
+            "host controller"
+        };
+        let expected = if name == "echo-bridge" {
+            "bridge.ready"
+        } else {
+            "host port"
+        }
+        .into();
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -42,13 +58,27 @@ impl Process {
             .unwrap();
         let input = child.stdin.take();
         let lines = BufReader::new(child.stdout.take().unwrap()).lines();
-        Self { child, input, lines }
+        Self {
+            name,
+            expected,
+            child,
+            input,
+            lines,
+        }
     }
     async fn line(&mut self) -> String {
-        let line = tokio::time::timeout(Duration::from_secs(12), self.lines.next_line())
-            .await
-            .unwrap()
-            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(12), self.lines.next_line()).await;
+        assert!(
+            response.is_ok(),
+            "{} pid {:?}: timed out after 12s waiting for {}",
+            self.name,
+            self.child.id(),
+            self.expected
+        );
+        let line = response.unwrap().unwrap();
+        if self.name == "echo-bridge" {
+            self.expected = "bridge.run_completed".into();
+        }
         if line.is_none() {
             let mut error = String::new();
             self.child
@@ -63,6 +93,7 @@ impl Process {
         line.unwrap()
     }
     async fn command(&mut self, command: &str) -> String {
+        self.expected = format!("host command reply: {command}");
         self.input
             .as_mut()
             .unwrap()
