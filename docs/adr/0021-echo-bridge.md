@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: accepted
 ---
 
-# Bridge audio orchestration
+# ADR 0021: Bridge audio orchestration
 
 `echo-bridge` owns the Wyoming to Live journey, using the existing `echo-audio`,
 `echo-config`, `echo-contracts`, `echo-live` and `echo-wyoming` public APIs.
