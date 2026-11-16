@@ -3,6 +3,35 @@ use super::*;
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_lifecycle_eof_with_idle_probe_response_closes_without_false_capacity_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let mut process = Process::spawn(&mut bridge(&port, "http://127.0.0.1:1", &path));
+    let (mut satellite, _) = listener.accept().await.unwrap();
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
+    bridge_short::send(&mut satellite, "info", json!({})).await;
+    assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+    // Synchronize on an outstanding idle probe, then race its response with
+    // EOF. Neither a real provider nor a wake is needed for this lifecycle edge.
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
+    drop(process.input.take());
+    bridge_short::send(&mut satellite, "info", json!({})).await;
+    process.finish(0).await;
+    let entries = trace(&path);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "bridge.error").count(), 0);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "run.started").count(), 0);
+    let address = entries[0]["health_addr"].as_str().unwrap();
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    let mut remaining = Vec::new();
+    satellite.read_to_end(&mut remaining).await.unwrap();
+    assert_eq!(remaining, Vec::<u8>::new());
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_spine_eof_cancels_registration_before_describe_deadline() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace");

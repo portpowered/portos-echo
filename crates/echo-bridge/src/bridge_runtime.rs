@@ -44,8 +44,13 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
             result = WyomingClient::connect(settings.wyoming, ClientOptions::default()) => result?,
             eof = &mut shutdown => return match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
+        // Keep the receiver alive until the supervisor has closed. Cancelling
+        // connected drops its pending probe, but a final info/mic event can
+        // still arrive before Close; dropping the receiver turns that into a
+        // terminal capacity failure and races otherwise successful EOF cleanup.
+        let mut events = client.events()?;
         let result = tokio::select! {
-            result = connected(&mut client, settings, &health, &mut trace) => result,
+            result = connected(&client, &mut events, settings, &health, &mut trace) => result,
             eof = &mut shutdown => match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
         let cleanup = client.close().await.map_err(Error::from);
@@ -60,12 +65,12 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
 }
 
 async fn connected(
-    client: &mut WyomingClient,
+    client: &WyomingClient,
+    events: &mut EventStream,
     mut settings: Settings,
     health: &Health,
     trace: &mut Trace,
 ) -> Result<(), Error> {
-    let mut events = client.events()?;
     client.run_satellite().await?;
     client.describe().await?;
     health.state.send_modify(|state| state.wyoming = "connected");
@@ -73,7 +78,7 @@ async fn connected(
     publish("bridge.ready", None)?;
     let credential = std::mem::replace(&mut settings.credential, Provider::Unavailable);
     let factory = LiveCallFactory::new(&settings.live_url, settings.mode, credential)?;
-    observe(client, &mut events, &factory, health, trace, &settings).await
+    observe(client, events, &factory, health, trace, &settings).await
 }
 
 async fn observe(
