@@ -3,6 +3,8 @@ import tempfile
 import importlib.util
 import time
 import signal
+import os
+import select
 from pathlib import Path
 
 from wyoming_host import Host
@@ -16,10 +18,20 @@ def playback(folder):
     return module.Playback(folder)
 
 
-def cut_ready(sink):
+def cut_ready(sink, host):
     with sink.condition:
         if not sink.condition.wait_for(lambda: sink.start is not None, 5):
-            raise TimeoutError("sink did not start")
+            logs = bytearray(host.log[-8192:])
+            for _ in range(8):
+                if not select.select([host.proc.stderr], [], [], 0)[0]:
+                    break
+                part = os.read(host.proc.stderr.fileno(), 8192)
+                if not part:
+                    break
+                logs.extend(part)
+            raise TimeoutError(
+                f"sink did not start: host_exit={host.proc.poll()} "
+                f"sink_bytes={len(sink.data)} host_log={logs[-8192:].decode(errors='replace')}")
         deadline = sink.start + 1
         while time.monotonic() < deadline:
             sink.condition.wait(timeout=deadline - time.monotonic())
@@ -56,7 +68,7 @@ def main():
                     sink = playback(folder)
                     print("armed", flush=True)
                 elif command.strip() == "cut-ready":
-                    cut = cut_ready(sink)
+                    cut = cut_ready(sink, host)
                     print("cut-ready", flush=True)
                 elif command.strip() == "cut-result":
                     print(result(sink, cut), flush=True)
