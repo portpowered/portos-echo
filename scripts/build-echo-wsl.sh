@@ -17,17 +17,35 @@ guest_path() {
   esac
 }
 command -v cygpath >/dev/null || fail 'installed Git for Windows cygpath required'
-root=$(guest_path "$(cygpath -am .)")
-ndk=${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}
-if [ -n "$ndk" ]; then
-  ndk=$(guest_path "$ndk")
-fi
 target=${CARGO_TARGET_DIR:-}
 if [ -n "$target" ]; then
   case $target in
     [A-Za-z]:* | /* | \\*) target=$(guest_path "$target") ;;
     *) ;; # Relative Cargo target directories remain relative to the checkout.
   esac
+fi
+# Invalidate the actual guest artifact before unrelated checkout/NDK probes.
+root=''
+case ${target:-target} in
+  /*) ;;
+  *) root=$(guest_path "$(cygpath -am .)") ;;
+esac
+cleanup_guest=$(
+  cat <<'CLEANUP'
+  set -eu
+  case ${2:-target} in /*) ;; *) cd -- "$1" ;; esac
+  binary=${2:-target}/armv7-linux-androideabi/release/echo-bridge
+  shift 2
+  for package; do
+    if [ "$package" = echo-bridge ]; then rm -f -- "$binary"; fi
+  done
+CLEANUP
+)
+wsl -d Ubuntu --exec sh -c "$cleanup_guest" sh "$root" "$target" "$@" || fail 'WSL Ubuntu output cleanup failed; check selected target directory'
+root=${root:-$(guest_path "$(cygpath -am .)")}
+ndk=${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}
+if [ -n "$ndk" ]; then
+  ndk=$(guest_path "$ndk")
 fi
 # Constant shell program: caller paths and packages are positional data only.
 # Guest login supplies its provisioned Rust PATH; Windows Rust homes never win.

@@ -64,10 +64,12 @@ elif name == 'wsl':
               json.loads(os.environ.get('PATH_TRANSLATIONS', '{}')).get(args[5], args[5]))
     else:
         import subprocess
-        assert args[3:5] == ['sh', '-lc'], args
+        assert args[3] == 'sh' and args[4] in ('-lc', '-c'), args
         child = dict(os.environ, TEST_PLATFORM='Linux', HOME=os.environ['GUEST_HOME'])
         guest_args = args[5:]
         guest_args[3] = json.loads(os.environ.get('PATH_TRANSLATIONS', '{}')).get(guest_args[3], guest_args[3])
+        target_index = 3 if args[4] == '-c' else 4
+        guest_args[target_index] = json.loads(os.environ.get('GUEST_PATHS', '{}')).get(guest_args[target_index], guest_args[target_index])
         # The controlled guest uses the same shell, without host login startup files.
         sys.exit(subprocess.run(['sh', '-c', *guest_args], env=child).returncode)
 else:
@@ -93,7 +95,8 @@ class BuildEchoTests(unittest.TestCase):
         for name in ('ANDROID_NDK_HOME', 'ANDROID_NDK_LATEST_HOME', 'MAKEFLAGS',
                      'MFLAGS', 'MAKELEVEL', 'CARGO_FAILURE', 'NO_BINARY',
                      'HEADERS', 'INSPECT_FAILURE', 'COMPILER_FAILURE', 'TEST_PLATFORM',
-                     'WSL_FAILURE', 'PATH_FAILURE', 'PATH_TRANSLATIONS', 'PARTIAL_BINARY'):
+                     'WSL_FAILURE', 'PATH_FAILURE', 'PATH_TRANSLATIONS', 'PARTIAL_BINARY',
+                     'GUEST_PATHS'):
             self.env.pop(name, None)
         self.env.update(COMMAND_LOG=str(self.log), WITNESS=self.witness.as_posix(),
                         GUEST_HOME=self.root.as_posix(),
@@ -144,6 +147,8 @@ class BuildEchoTests(unittest.TestCase):
     def stale_binary(self):
         self.optional('echo-bridge')
         binary = Path(self.env['CARGO_TARGET_DIR']) / 'armv7-linux-androideabi/release/echo-bridge'
+        if not binary.is_absolute():
+            binary = self.root / binary
         binary.parent.mkdir(parents=True, exist_ok=True)
         binary.write_bytes(b'stale')
         return binary
@@ -172,10 +177,11 @@ class BuildEchoTests(unittest.TestCase):
         cargo, = [c for c in self.commands() if c['name'] == 'cargo']
         self.assertEqual(cargo['args'][7::2], packages)
         self.assertFalse((self.root / 'sentinel').exists())
-        dispatch, = [c for c in self.commands() if c['name'] == 'wsl' and 'sh' in c['args']]
+        dispatch, = [c for c in self.commands() if c['name'] == 'wsl' and '-lc' in c['args']]
         self.assertEqual(dispatch['args'][-len(packages):], packages)
 
     def test_windows_explicit_invalid_and_tool_failures_remove_stale(self):
+        self.env['CARGO_TARGET_DIR'] = 'output with spaces'
         self.make_ndk('android/android-ndk-r27d')
         for fault, diagnostic in [
                 ({'ANDROID_NDK_HOME': (self.root / 'missing').as_posix()}, 'does not exist'),
@@ -190,6 +196,20 @@ class BuildEchoTests(unittest.TestCase):
                 self.assertIn(diagnostic, result.stderr)
                 self.assertFalse(binary.exists())
                 self.assertNotIn('binary size', result.stdout)
+
+    def test_windows_ndk_translation_failure_cleans_distinct_guest_output(self):
+        guest_target = '/guest-only/output with spaces'
+        binary = self.root / 'guest filesystem/armv7-linux-androideabi/release/echo-bridge'
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b'stale guest artifact')
+        result = self.run_helper(['echo-bridge'], TEST_PLATFORM='MINGW64_NT',
+            CARGO_TARGET_DIR=guest_target, ANDROID_NDK_HOME='Z:/missing NDK',
+            PATH_FAILURE='1', GUEST_PATHS=json.dumps({guest_target: binary.parents[2].as_posix()}))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('could not translate', result.stderr)
+        self.assertFalse(binary.exists())
+        self.assertNotIn('binary size', result.stdout)
+        self.assertNotIn('cargo', [c['name'] for c in self.commands()])
 
     def test_windows_drive_unc_and_guest_paths_translate_without_evaluation(self):
         for selected in ('Z:/NDK with spaces', '//host/share/NDK with spaces',
@@ -219,6 +239,7 @@ class BuildEchoTests(unittest.TestCase):
                 self.assertEqual(sum(c['name'] == 'cargo' for c in commands), int(accepted))
 
     def test_missing_wsl_reports_prerequisite_and_cleans_reachable_output(self):
+        self.env['CARGO_TARGET_DIR'] = 'output with spaces'
         (self.bin / 'wsl').unlink()
         path = os.pathsep.join(entry for entry in self.env['PATH'].split(os.pathsep)
                                if not any((Path(entry) / name).is_file() for name in ('wsl', 'wsl.exe')))
