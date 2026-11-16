@@ -1,6 +1,17 @@
 //! Component T3: the prebuilt executable's public health/control/startup edges.
 use super::*;
 
+// Read a satellite socket to its close. When the bridge closes with peer
+// bytes still unread (a late frame racing stdin EOF), Linux answers with RST
+// instead of FIN; both forms are a clean close. Returns the bytes received.
+pub(super) async fn read_to_close(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if let Err(error) = stream.read_to_end(&mut bytes).await {
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset, "{error}");
+    }
+    bytes
+}
+
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_lifecycle_eof_with_idle_probe_response_closes_without_false_capacity_failure() {
@@ -26,7 +37,7 @@ async fn bridge_lifecycle_eof_with_idle_probe_response_closes_without_false_capa
     let address = entries[0]["health_addr"].as_str().unwrap();
     assert!(tokio::net::TcpStream::connect(address).await.is_err());
     // The late info can still be unread when the bridge closes.
-    assert_eq!(bridge_short::read_to_close(&mut satellite).await, Vec::<u8>::new());
+    assert_eq!(read_to_close(&mut satellite).await, Vec::<u8>::new());
 }
 
 #[tokio::test]
