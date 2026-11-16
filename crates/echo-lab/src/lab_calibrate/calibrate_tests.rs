@@ -1,4 +1,4 @@
-//! T1/T2 values and T3 local synthetic adb processes; no network or hardware.
+// T1/T2 values and T3 local synthetic adb processes; no network or hardware.
 use super::calibrate_options::{Clock, Deadline};
 use super::*;
 use serde_json::{Value, json};
@@ -259,12 +259,13 @@ fn t3_stream_drop_reaps_and_joins_after_a_readiness_signal() {
     let session = Session::new("ready\n", true, 0);
     let mut command = probe_command::command(&Session::fake(), None, &["getevent", "-lt"]);
     session.configure(&mut command);
+    command.env("ECHO_LAB_FAKE_PID", session.0.join("child.pid"));
     let stream = Stream::start(&mut command).unwrap();
     assert_eq!(
         stream.next(Duration::from_secs(10), 0).unwrap(),
         Some(b"ready\n".to_vec())
     );
-    let id = stream.id();
+    let id: u32 = std::fs::read_to_string(session.0.join("child.pid")).unwrap().parse().unwrap();
     drop(stream);
     // A reaped child cannot be waited on again by another process. The platform
     // check also proves this particular child is gone, without a timing sleep.

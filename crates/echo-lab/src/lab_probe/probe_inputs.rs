@@ -69,14 +69,12 @@ fn events(text: &str, devices: &mut BTreeMap<String, BTreeSet<String>>) -> Resul
 }
 
 #[derive(Debug, serde::Serialize)]
-#[cfg(test)]
 pub(crate) struct AxisRange {
     pub min: i64,
     pub max: i64,
 }
 
 #[derive(Debug, serde::Serialize)]
-#[cfg(test)]
 pub(crate) struct TouchDevice {
     pub node: String,
     pub name: String,
@@ -84,7 +82,6 @@ pub(crate) struct TouchDevice {
     pub y: AxisRange,
 }
 
-#[cfg(test)]
 pub(crate) fn touch_devices(text: &str) -> Result<Vec<TouchDevice>, String> {
     // Apply the same inventory validation used by probe before retaining nodes.
     parse(text, "")?;

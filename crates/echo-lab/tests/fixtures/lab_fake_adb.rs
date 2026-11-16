@@ -25,6 +25,9 @@ fn execute() -> Result<u8, Box<dyn std::error::Error>> {
         .get(&key)
         .or_else(|| defaults.get(&key))
         .ok_or("fake adb: unexpected command")?;
+    if let Some(path) = std::env::var_os("ECHO_LAB_FAKE_PID") {
+        std::fs::write(path, std::process::id().to_string())?;
+    }
     io::stdout()
         .lock()
         .write_all(response["stdout"].as_str().ok_or("missing stdout")?.as_bytes())?;

@@ -20,6 +20,8 @@ status: active; documentation index
 
 ## Architecture decisions
 
+- [Five-target touch calibration](adr/0019-touch-calibration.md)
+
 - [Port OS OAuth client dependencies](adr/0010-mcp-auth.md)
 - [Provisional Live call adapter](adr/0011-live-call.md)
 - [Provisional Responses agent loop](adr/0013-echo-agent-loop.md)

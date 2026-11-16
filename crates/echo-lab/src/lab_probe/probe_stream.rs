@@ -83,10 +83,6 @@ impl Stream {
             std::thread::yield_now();
         }
     }
-
-    pub fn id(&self) -> u32 {
-        self.child.id()
-    }
 }
 
 impl Drop for Stream {

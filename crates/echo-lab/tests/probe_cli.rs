@@ -1,7 +1,11 @@
 #[cfg(test)]
+mod calibrate_cli {
+    include!("probe_support/calibrate.rs");
+}
+#[cfg(test)]
 mod probe_support;
 // Component T3 calibration cases share this prebuilt-fake test binary and its
-// existing nextest process-heavy concurrency group. No production dispatch yet.
+// existing nextest process-heavy concurrency group.
 mod lab_probe {
     pub(crate) mod probe_command {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_command.rs"));
@@ -15,8 +19,18 @@ mod lab_probe {
         }
     }
 }
+mod lab_gate {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_gate.rs"));
+}
 mod lab_calibrate {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_calibrate/mod.rs"));
+    #[cfg(test)]
+    mod calibrate_tests {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/lab_calibrate/calibrate_tests.rs"
+        ));
+    }
 }
 #[cfg(test)]
 mod tests {

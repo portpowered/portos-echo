@@ -1,11 +1,6 @@
+mod lab_calibrate;
 mod lab_check;
-// Story 002 enables production dispatch only after the shared firmware gate lands.
-#[cfg(test)]
-#[path = "lab_calibrate/calibrate_decode.rs"]
-mod lab_calibrate_decode;
-#[cfg(test)]
-#[path = "lab_calibrate/calibrate_fit.rs"]
-mod lab_calibrate_fit;
+mod lab_gate;
 mod lab_probe;
 mod lab_run;
 mod lab_validate;
@@ -13,7 +8,7 @@ mod lab_validate;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "echo-lab validate [paths...]\necho-lab check --milestone M0\necho-lab probe --adb <path-to-adb> --out <dir>\necho-lab run <scenario>... --driver device --bench ring --port <path> --adb <path> --stt <command> [--ring <id>] [--out <fresh-dir>] [--python <path>] [--keep-audio] [--cancel-file <path>] [--speech-endpoint <id> --speech-model <model>]\necho-lab run <scenario> --driver sim --bridge <executable-path> [--out <fresh-dir>] [--python <path>] [--cancel-file <path>]\necho-lab run --all --driver sim [--out <fresh-root>] [--python <path>] [--cancel-file <path>]\necho-lab --help";
+const USAGE: &str = "echo-lab validate [paths...]\necho-lab check --milestone M0\necho-lab probe --adb <path-to-adb> --out <dir>\necho-lab calibrate --adb <path> [--serial <s>] --out <dir> [--timeout-secs 120]\necho-lab run <scenario>... --driver device --bench ring --port <path> --adb <path> --stt <command> [--ring <id>] [--out <fresh-dir>] [--python <path>] [--keep-audio] [--cancel-file <path>] [--speech-endpoint <id> --speech-model <model>]\necho-lab run <scenario> --driver sim --bridge <executable-path> [--out <fresh-dir>] [--python <path>] [--cancel-file <path>]\necho-lab run --all --driver sim [--out <fresh-root>] [--python <path>] [--cancel-file <path>]\necho-lab --help";
 
 fn dispatch(args: &[String], output: &mut impl Write) -> io::Result<bool> {
     match args {
@@ -43,6 +38,13 @@ fn main() -> ExitCode {
     }
     if args.first().is_some_and(|arg| arg == "probe") {
         return ExitCode::from(lab_probe::run(
+            &args[1..],
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        ));
+    }
+    if args.first().is_some_and(|arg| arg == "calibrate") {
+        return ExitCode::from(lab_calibrate::execute(
             &args[1..],
             &mut io::stdout().lock(),
             &mut io::stderr().lock(),

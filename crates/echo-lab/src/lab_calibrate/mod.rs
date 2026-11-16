@@ -2,8 +2,6 @@ mod calibrate_decode;
 mod calibrate_fit;
 pub(crate) mod calibrate_options;
 mod calibrate_report;
-#[cfg(test)]
-mod calibrate_tests;
 
 use crate::lab_probe::{probe_command, probe_parse::probe_inputs, probe_stream::Stream};
 use calibrate_decode::Decoder;
@@ -72,8 +70,7 @@ fn capture(
     }
 }
 
-// Gate injection is crate-private. No production dispatch exists until story 002
-// wires the single firmware/boot predicate shared with the device driver.
+// Keep process/clock injection crate-private; the CLI always uses the shared gate.
 pub(crate) fn run(
     args: &[String],
     deadline: &mut impl Deadline,
@@ -119,4 +116,25 @@ pub(crate) fn run(
     writeln!(output, "calibrate: glass={} max_residual_px={residual}", report.glass)
         .map_err(|_| "calibrate: stdout write failed")?;
     capture_result.and(fit_result)
+}
+
+/// Production entry point: explicit adb selection and one host-monotonic deadline.
+pub(crate) fn execute(args: &[String], output: &mut impl Write, errors: &mut impl Write) -> u8 {
+    let result = Options::parse(args).and_then(|options| {
+        let mut clock = calibrate_options::Clock::new(options.timeout);
+        run(
+            args,
+            &mut clock,
+            |_, read| crate::lab_gate::firmware(|name| read(&["getprop", name]).map(|text| text.trim().to_owned())),
+            |_| {},
+            output,
+        )
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            let _ = writeln!(errors, "{error}");
+            1
+        }
+    }
 }
