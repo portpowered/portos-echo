@@ -9,6 +9,47 @@ fn frames() -> Vec<Value> {
 }
 
 #[test]
+fn m6_partial_measurements_do_not_invent_return_and_validate_native_state_types() {
+    let mut world = super::super::world::World::default();
+    for count in 0..=6 {
+        world.ui_states = frames().into_iter().take(count).collect();
+        let measured = measurement(&world);
+        assert_eq!(measured["ui_states"], json!(world.ui_states));
+        assert_eq!(measured["frame_count"], if count >= 3 { 2 } else { 0 });
+        assert_eq!(
+            measured["return_state"],
+            if count >= 4 {
+                json!({"state":"listening"})
+            } else {
+                json!({})
+            }
+        );
+        assert_eq!(validate_measurement(&measured), Ok(()));
+    }
+    let original = measurement(&world);
+    for invalid in [
+        json!({}),
+        json!({"state":"future"}),
+        json!({"state":"emotion","frame_ms":80}),
+    ] {
+        let mut measured = original.clone();
+        measured["ui_states"][0]["state"] = invalid.clone();
+        assert_eq!(
+            validate_measurement(&measured),
+            Err("m6: malformed measured screen frame".into())
+        );
+        measured = original.clone();
+        measured["return_state"] = invalid.clone();
+        if invalid != json!({}) {
+            assert_eq!(
+                validate_measurement(&measured),
+                Err("m6: malformed measured return state".into())
+            );
+        }
+    }
+}
+
+#[test]
 fn m6_ordered_oracle_requires_exact_values_and_increasing_native_sequences() {
     let expected = json!({"sequence":sequence()});
     assert_eq!(ordered(&frames(), &expected), Ok(()));

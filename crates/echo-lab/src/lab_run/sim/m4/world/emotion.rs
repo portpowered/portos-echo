@@ -38,6 +38,10 @@ impl World {
             return Err("m6: clock acknowledgment mismatch".into());
         }
         self.observe(screen, 3, "listening").await?;
+        self.release_result()
+    }
+
+    pub(super) fn release_result(&mut self) -> Result<(), String> {
         self.result_gate
             .take()
             .ok_or("m6: missing result gate")?

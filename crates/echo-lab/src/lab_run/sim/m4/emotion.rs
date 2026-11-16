@@ -67,11 +67,28 @@ pub fn measurement(world: &super::world::World) -> Value {
         .and_then(|frame| frame["state"]["frames"].as_array())
         .map_or(0, Vec::len);
     let playback = world.playback.as_ref();
+    let returned = world
+        .ui_states
+        .iter()
+        .position(|f| f["state"]["state"] == "emotion")
+        .and_then(|index| world.ui_states.get(index + 1));
     json!({"ui_states":world.ui_states,"frame_count":frame_count,"frame_ms":frame_ms,
-        "return_state":world.ui_states.get(3).map_or(json!({}), |f| f["state"].clone()),
+        "return_state":returned.map_or(json!({}), |f| f["state"].clone()),
         "reply_pcm_bytes":world.reply_pcm_bytes,
         "host_pcm_bytes":playback.and_then(|p| p["pcm_bytes"].as_u64()).unwrap_or(0),
         "host_nonzero_bytes":playback.and_then(|p| p["nonzero_bytes"].as_u64()).unwrap_or(0)})
+}
+
+pub fn validate_measurement(value: &Value) -> Result<(), String> {
+    for frame in value["ui_states"].as_array().ok_or("m6: missing measured states")? {
+        serde_json::from_value::<ScreenFrame>(frame.clone()).map_err(|_| "m6: malformed measured screen frame")?;
+    }
+    // An empty object means no return was observed before failure/cancellation.
+    if value["return_state"] != json!({}) {
+        serde_json::from_value::<UiState>(value["return_state"].clone())
+            .map_err(|_| "m6: malformed measured return state")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

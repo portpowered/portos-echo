@@ -27,6 +27,11 @@ pub struct Model {
 
 impl Model {
     #[cfg(test)]
+    pub async fn wait_for_result_request(&self) {
+        self.observed.clone().wait_for(|o| o.requests == 2).await.unwrap();
+    }
+
+    #[cfg(test)]
     pub async fn bind(negative: bool) -> Result<Self, String> {
         Self::bind_after(negative, async { Ok(()) }).await
     }
@@ -109,8 +114,8 @@ async fn serve(
     for index in 0..3 {
         let result = tokio::time::timeout(std::time::Duration::from_secs(20), async {
             let (mut socket, _) = listener.accept().await.map_err(|_| "model: accept failed")?;
-            observed.send_modify(|o| o.requests += 1);
             let request = read(&mut socket).await?;
+            observed.send_modify(|o| o.requests += 1);
             if index == 1 && let Some(gate) = result_gate.take() {
                 gate.await.map_err(|_| "model: animation observation abandoned")?;
             }
@@ -181,10 +186,10 @@ fn response_for(request: &Value, index: usize, negative: bool, emotion: bool) ->
     }
     let output: Value = serde_json::from_str(input[3]["output"].as_str().ok_or("model: missing tool output")?)
         .map_err(|_| "model: malformed tool output")?;
-    let expected = if emotion {
-        json!({"content":[{"type":"text","text":super::emotion::state().to_string()}],"is_error":false})
-    } else if negative {
+    let expected = if negative {
         json!({"content":{"error":"server error: http_status:500"},"is_error":true}) // lint-rules: allow-literal inert tool error text, not a network address
+    } else if emotion {
+        json!({"content":[{"type":"text","text":super::emotion::state().to_string()}],"is_error":false})
     } else {
         json!({"content":[{"type":"text","text":"delegated echo"}],"is_error":false})
     };
@@ -192,7 +197,7 @@ fn response_for(request: &Value, index: usize, negative: bool, emotion: bool) ->
         return Err("model: exact tool output mismatch");
     }
     Ok(
-        json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":if emotion { super::emotion::REPLY } else if negative { FALLBACK } else { SUCCESS }}]}),
+        json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":if negative { FALLBACK } else if emotion { super::emotion::REPLY } else { SUCCESS }}]}),
     )
 }
 

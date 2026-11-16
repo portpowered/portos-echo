@@ -18,6 +18,7 @@ use super::{
 #[derive(Default)]
 pub struct World {
     pub emotion: bool,
+    negative: bool,
     pub ui_states: Vec<Value>,
     pub playback: Option<Value>,
     pub reply_pcm_bytes: usize,
@@ -53,6 +54,7 @@ impl World {
     pub async fn start(&mut self, python: &str, bridge: &Path, root: &Path, negative: bool) -> Result<(), String> {
         std::fs::create_dir(root).map_err(|_| "m4: cannot own private directory")?;
         self.root = root.into();
+        self.negative = negative;
         self.host = Some(Process::start(process::host(python).arg("--finite"))?);
         let ready = self.host.as_mut().ok_or("m4: missing host")?.expect("host.ready");
         let address = process::admit_host(&mut vec![], ready, process::readiness_deadline(), process::connect).await?;
@@ -116,10 +118,10 @@ impl World {
     }
 
     async fn start_live(&mut self, negative: bool) -> Result<(), String> {
-        let text = if self.emotion {
-            super::emotion::REPLY
-        } else if negative {
+        let text = if negative {
             FALLBACK
+        } else if self.emotion {
+            super::emotion::REPLY
         } else {
             SUCCESS
         };
@@ -158,7 +160,11 @@ impl World {
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
         self.observe(&mut screen, 1, "listening").await?;
         if self.emotion {
-            self.animate(&mut screen).await?;
+            if self.negative {
+                self.release_result()?;
+            } else {
+                self.animate(&mut screen).await?;
+            }
         }
         self.speaking = Some(self.observe(&mut screen, 4, "speaking").await?);
         let completion = self
@@ -171,12 +177,13 @@ impl World {
         let host = self.host.as_mut().ok_or("m4: missing host")?;
         host.send(&json!({"action":"playback"})).await?;
         let playback = host.expect("host.ack").await?;
-        if playback != json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0}) {
-            return Err("m4: expected exact decoded host playback PCM".into());
-        }
+        let exact_playback = playback == json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0});
         self.playback = Some(playback);
         let timing = self.relay.as_ref().ok_or("m4: missing relay")?.timing();
         self.reply_pcm_bytes = timing.played;
+        if !exact_playback {
+            return Err("m4: expected exact decoded host playback PCM".into());
+        }
         if self.emotion && timing.played != 9600 {
             return Err(format!("m6: forwarded PCM bytes {}; expected 9600", timing.played));
         }

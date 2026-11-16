@@ -12,6 +12,10 @@ fn root() -> PathBuf {
 }
 
 async fn start(world: &mut World, root: &Path) {
+    start_case(world, root, false).await;
+}
+
+async fn start_case(world: &mut World, root: &Path, negative: bool) {
     let bridge = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/debug")
         .join(if cfg!(windows) {
@@ -20,9 +24,102 @@ async fn start(world: &mut World, root: &Path) {
             "echo-bridge"
         });
     world
-        .start(if cfg!(windows) { "python" } else { "python3" }, &bridge, root, false)
+        .start(
+            if cfg!(windows) { "python" } else { "python3" },
+            &bridge,
+            root,
+            negative,
+        )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires pinned hassmic-host and prebuilt echo-bridge"]
+async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
+    let root = root();
+    let mut world = World {
+        emotion: true,
+        ..World::default()
+    };
+    start_case(&mut world, &root, true).await;
+    let addresses = endpoints(&world);
+    let (completion, timing) = world.speak().await.unwrap();
+    let observer = world.observer().unwrap();
+    observer.wait_for(0, |call| call.reply_completed).await.unwrap();
+    super::super::tests::assert_dialogue(&observer, FALLBACK);
+    assert_eq!(completion, json!({"event":"bridge.run_completed","run_id":"run-1"}));
+    assert_eq!(timing.played, 9600);
+    assert_eq!(world.close().await, Ok(()));
+    let states: Vec<_> = world.ui_states.iter().map(|f| f["state"].clone()).collect();
+    let expected = super::super::emotion::sequence();
+    assert_eq!(
+        states,
+        vec![
+            expected[0].clone(),
+            expected[1].clone(),
+            expected[4].clone(),
+            expected[5].clone()
+        ]
+    );
+    assert!(
+        world
+            .ui_states
+            .windows(2)
+            .all(|pair| pair[0]["seq"].as_u64() < pair[1]["seq"].as_u64())
+    );
+    let measurement = super::super::emotion::measurement(&world);
+    assert_eq!(measurement["frame_count"], 0);
+    assert_eq!(measurement["return_state"], json!({}));
+    assert_eq!(measurement["host_pcm_bytes"], 9600);
+    closed(&addresses).await;
+    assert!(!root.exists());
+}
+
+#[tokio::test]
+#[ignore = "T3 requires pinned hassmic-host and prebuilt echo-bridge"]
+async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners() {
+    let root = root();
+    let mut world = World {
+        emotion: true,
+        ..World::default()
+    };
+    start(&mut world, &root).await;
+    let addresses = endpoints(&world);
+    let host = world.host.as_mut().unwrap().observe_collection();
+    let bridge = world.bridge.as_mut().unwrap().observe_collection();
+    let mut screen = Screen::connect(&root).await.unwrap();
+    world.observe(&mut screen, 0, "ready").await.unwrap();
+    world.control(json!({"action":"finite","pcm":fixture()})).await.unwrap();
+    world.observe(&mut screen, 1, "listening").await.unwrap();
+    world.observe(&mut screen, 2, "emotion").await.unwrap();
+    world.model.as_ref().unwrap().wait_for_result_request().await;
+    let partial = super::super::emotion::measurement(&world);
+    assert_eq!(partial["return_state"], json!({}));
+    assert_eq!(partial["reply_pcm_bytes"], 0);
+    assert_eq!(
+        world.close().await,
+        Err("model: expected exactly two requests and verified tool output".into())
+    );
+    assert!(host.try_recv().unwrap().success());
+    assert!(bridge.try_recv().unwrap().success());
+    world.observe(&mut screen, 3, "listening").await.unwrap();
+    let measurement = super::super::emotion::measurement(&world);
+    assert_eq!(measurement["frame_count"], 2);
+    assert_eq!(measurement["frame_ms"], 80);
+    assert_eq!(measurement["return_state"], json!({"state":"listening"}));
+    assert_eq!(measurement["reply_pcm_bytes"], 0);
+    assert_eq!(screen.next().await, Err("screen: EOF before observation".into()));
+    assert!(
+        !world
+            .trace
+            .records
+            .iter()
+            .any(|e| e["event"] == "session.commentary.append")
+    );
+    closed(&addresses).await;
+    assert!(!root.exists());
+    assert_eq!(world.close().await, Ok(()));
 }
 
 fn endpoints(world: &World) -> Vec<String> {

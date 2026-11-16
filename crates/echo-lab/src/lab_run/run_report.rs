@@ -182,6 +182,9 @@ fn validate(report: &Value) -> Result<(), String> {
     if !validator.is_valid(report) {
         return Err("run report: schema validation failed".into());
     }
+    if let Some(m6) = report.get("m6") {
+        super::sim::m4::emotion::validate_measurement(m6)?;
+    }
     Ok(())
 }
 
@@ -189,6 +192,41 @@ fn validate(report: &Value) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::lab_run::{Driver, Step, dispatch, run_oracles};
+
+    #[test]
+    fn m6_report_publication_rejects_malformed_native_states_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let mut artifacts = Artifacts::create(root.path().join("run")).unwrap();
+        let measured = json!({"ui_states":[{"seq":1,"state":{"state":"listening"}}],
+            "frame_count":0,"frame_ms":0,"return_state":{},
+            "reply_pcm_bytes":0,"host_pcm_bytes":0,"host_nonzero_bytes":0});
+        artifacts.m6 = Some(measured.clone());
+        artifacts
+            .publish("M6", "T3", "fixture", Some("cancelled"), false)
+            .unwrap();
+        let published = fs::read(artifacts.root.join("report.json")).unwrap();
+        let report: Value = serde_json::from_slice(&published).unwrap();
+        assert_eq!(report["m6"], measured);
+        assert_eq!(report["result"], "fail");
+        for (key, expected) in [
+            ("ui_states", "m6: malformed measured screen frame"),
+            ("return_state", "m6: malformed measured return state"),
+        ] {
+            let mut invalid = measured.clone();
+            invalid[key] = if key == "ui_states" {
+                json!([{"seq":1,"state":{"state":"emotion","name":"happy"}}])
+            } else {
+                json!({"state":"unknown"})
+            };
+            artifacts.m6 = Some(invalid);
+            assert_eq!(
+                artifacts.publish("M6", "T3", "fixture", Some("cancelled"), false),
+                Err(expected.into())
+            );
+            assert_eq!(fs::read(artifacts.root.join("report.json")).unwrap(), published);
+            assert!(!artifacts.root.join("report.pending").exists());
+        }
+    }
 
     fn counts() -> Value {
         json!({"link":1,"tools_list":1,"tool_call":1,"forced_refresh":2,
