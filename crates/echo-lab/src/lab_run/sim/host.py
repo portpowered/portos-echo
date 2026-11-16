@@ -29,6 +29,10 @@ class LauncherError(RuntimeError):
     """Only fixed, sanitized launcher-stage diagnostics belong here."""
 
 
+class HostCancelled(RuntimeError):
+    """Caller EOF interrupts work; the cleanup result still comes from close."""
+
+
 class LauncherChild:
     """Keep the handle until collection, including setup/forwarding failures.
 
@@ -89,7 +93,7 @@ def launcher_input(events):
                 if pending:
                     raise ValueError("invalid command")
                 events.put(("eof", None))
-                return
+                return True
             pending += data
             while b"\n" in pending:
                 line, pending = pending.split(b"\n", 1)
@@ -100,6 +104,7 @@ def launcher_input(events):
                 raise ValueError("invalid command")
     except (OSError, ValueError):
         events.put(("error", None))
+        return False
 
 
 def launcher_translation(proc, events):
@@ -267,8 +272,10 @@ class Host:
         with self.condition:
             ready = self.condition.wait_for(
                 lambda: marker in self.log or self.error or self.cancelled.is_set(), 20)
-            if not ready or self.error or self.cancelled.is_set():
+            if not ready or self.error:
                 raise RuntimeError("host readiness failed")
+            if self.cancelled.is_set():
+                raise HostCancelled("host command cancelled")
             self.log = self.log[self.log.index(marker) + len(marker):]
 
     def feed(self):
@@ -312,7 +319,9 @@ class Host:
 
     def command(self, value):
         if self.cancelled.is_set():
-            raise RuntimeError("host command cancelled")
+            if self.error:
+                raise RuntimeError("host input failed")
+            raise HostCancelled("host command cancelled")
         action = value.get("action")
         if action == "registered":
             self.logged(b"satellite: running")
@@ -327,8 +336,10 @@ class Host:
                     target = self.fed + fcntl.fcntl(self.fd, fcntl.F_GETPIPE_SZ) + 8192
                     ready = self.condition.wait_for(
                         lambda: self.fed >= target or self.error or self.cancelled.is_set(), 20)
-                    if not ready or self.error or self.cancelled.is_set():
+                    if not ready or self.error:
                         raise RuntimeError("fixture consumption failed")
+                    if self.cancelled.is_set():
+                        raise HostCancelled("host command cancelled")
                 action = "wake"
             signals = {"wake": signal.SIGUSR1, "action": signal.SIGUSR2,
                        "pair": signal.SIGWINCH, "stop": signal.SIGHUP}
@@ -369,10 +380,12 @@ def host_input(host, events):
     # Read EOF independently of log/FIFO waits. Only the main owner closes the
     # host: interrupt its wait, then let its finally stop and collect the group
     # before the Windows client's retained four-second deadline expires.
+    clean = False
     try:
-        launcher_input(events)
+        clean = launcher_input(events)
     finally:
         with host.condition:
+            host.error = host.error or not clean
             host.cancelled.set()
             host.condition.notify_all()
 
@@ -392,6 +405,8 @@ def main():
                 if action != "input":
                     raise ValueError("invalid command")
                 host.command(json.loads(line))
+        except HostCancelled:
+            pass
         except (OSError, ValueError, KeyError, RuntimeError):
             failed = True
             emit({"event": "host.failed"})

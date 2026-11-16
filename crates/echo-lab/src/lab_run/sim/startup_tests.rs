@@ -403,7 +403,7 @@ async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
         );
         drop(process);
     }
-    assert_eq!(fixture.collected.try_recv().unwrap().code(), Some(i32::from(busy)));
+    assert_eq!(fixture.collected.try_recv().unwrap().code(), Some(0));
     let (witness, exit) = guest_cleanup_witness(&fixture, &identity);
     let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
     assert_endpoint_closed(address).await;

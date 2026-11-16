@@ -37,14 +37,19 @@ class Controls(unittest.TestCase):
     def test_eof_interrupts_readiness_and_rejects_further_commands(self):
         events = CONTROLLER.queue.Queue()
         with mock.patch.object(CONTROLLER, "launcher_input") as reader:
+            reader.return_value = True
             CONTROLLER.host_input(self.host, events)
             reader.assert_called_once_with(events)
         for marker in [b"wyoming on ", b"satellite: running"]:
-            with self.assertRaisesRegex(RuntimeError, "host readiness failed"):
+            with self.assertRaises(CONTROLLER.HostCancelled):
                 self.host.logged(marker)
         with self.assertRaisesRegex(RuntimeError, "host command cancelled"):
             self.host.command({"action": "wake"})
         self.host.proc.send_signal.assert_not_called()
+        with mock.patch.object(CONTROLLER, "launcher_input", return_value=False):
+            CONTROLLER.host_input(self.host, events)
+        with self.assertRaisesRegex(RuntimeError, "host input failed"):
+            self.host.command({"action": "wake"})
 
     def test_unsupported_controls_and_invalid_pcm_cannot_signal(self):
         # Supply Unix signal names on Windows without starting the host backend.
@@ -193,12 +198,7 @@ class LauncherOwnership(unittest.TestCase):
 
 
 def real_wsl_launcher_fixture(audit):
-    """Real WSL and pinned Host, with a test-owned guest collection observer.
-
-    The guest observer writes only after Host.close has waited the acquired
-    process. A missing record cannot be replaced by a reaped Windows client.
-    No downloads or builds are performed here.
-    """
+    """Prebuilt real WSL Host with retained guest collection/exit observers."""
     import subprocess
     import sys
     popen = subprocess.Popen
