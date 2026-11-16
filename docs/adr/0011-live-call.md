@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: accepted for the provisional local adapter; actual provider validation remains M2
 ---
 
-# 0006: Provisional Live call adapter and synthetic server
+# 0011: Provisional Live call adapter and synthetic server
 
 Use reqwest 0.12 with default features disabled, JSON and native-root Rustls TLS,
 plus existing serde, serde_json, Tokio and echo-contracts. No OAuth dependency

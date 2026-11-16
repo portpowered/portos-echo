@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: accepted
 ---
 
-# 0003: Checked screen messages
+# 0004: Checked screen messages
 
 ## Context
 

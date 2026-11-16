@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: accepted
 ---
 
-# 0002: Local milestone schema validation
+# 0003: Local milestone schema validation
 
 ## Status
 

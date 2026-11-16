@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: provisional; standalone library, bridge mounting and real provider proof pending
 ---
 
-# 0007: Bridge-hosted delegation runner
+# 0017: Bridge-hosted delegation runner
 
 ## Decision
 

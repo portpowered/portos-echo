@@ -5,7 +5,7 @@ last modified: 2026, november, 15
 status: accepted
 ---
 
-# 0005: Runtime-free delegated-task seam
+# 0007: Runtime-free delegated-task seam
 
 ## Context
 
