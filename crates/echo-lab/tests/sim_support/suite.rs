@@ -10,8 +10,10 @@ fn scenario(session: &Session, name: &str, tiers: &[&str], steps: Value) {
 }
 
 fn command(session: &Session) -> std::process::Command {
-    let mut command = session.cli();
-    command.current_dir(&session.0).args(["--all", "--driver", "sim"]);
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_echo-lab"));
+    command
+        .current_dir(&session.0)
+        .args(["run", "--all", "--driver", "sim"]);
     command
 }
 
