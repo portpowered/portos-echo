@@ -383,3 +383,39 @@ fn assert_m4_seed(output: &std::process::Output, seeded: bool) {
         assert!(error.contains("expected 2 occurrences, observed 1"));
     }
 }
+
+#[test]
+#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
+fn m4_partial_startup_and_explicit_cancellation_fail_and_remove_private_worlds() {
+    for cancelled in [false, true] {
+        let session = Session::new();
+        std::fs::write(
+            session.0.join("scenario.yaml"),
+            include_str!("../../../tests/scenarios/m4-spoof-tool.yaml"),
+        )
+        .unwrap();
+        // The incompatible prebuilt helper fails configured-bridge readiness.
+        let mut command = session.command(env!("CARGO_BIN_EXE_echo-lab-sim-bridge"));
+        if cancelled {
+            std::fs::write(session.0.join("cancel"), "cancel").unwrap();
+            command.args(["--cancel-file", "cancel"]);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let report = session.report();
+        assert_eq!(report["result"], "fail");
+        assert_eq!(report["checks"]["step_0"], false);
+        assert_eq!(report["checks"]["world_closed"], true);
+        assert_eq!(report["observations"], json!([]));
+        assert!(!session.0.join("artifacts/private-success").exists());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains(if cancelled {
+                "cancelled"
+            } else {
+                "exited before observation"
+            }),
+            "{error}"
+        );
+    }
+}
