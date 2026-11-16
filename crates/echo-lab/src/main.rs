@@ -1,4 +1,11 @@
 mod lab_check;
+// Story 002 enables production dispatch only after the shared firmware gate lands.
+#[cfg(test)]
+#[path = "lab_calibrate/calibrate_decode.rs"]
+mod lab_calibrate_decode;
+#[cfg(test)]
+#[path = "lab_calibrate/calibrate_fit.rs"]
+mod lab_calibrate_fit;
 mod lab_probe;
 mod lab_run;
 mod lab_validate;

@@ -1,7 +1,7 @@
 use super::probe_adb::Observation;
 use serde_json::{Value, json};
 #[path = "probe_inputs.rs"]
-mod probe_inputs;
+pub(crate) mod probe_inputs;
 
 const PIN: &str = include_str!("../../data/athena-7080.md5");
 const MIXER: &str = "Master TAS5805m Playback Volume";

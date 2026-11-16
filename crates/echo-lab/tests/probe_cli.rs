@@ -1,5 +1,22 @@
 #[cfg(test)]
 mod probe_support;
+// Component T3 calibration cases share this prebuilt-fake test binary and its
+// existing nextest process-heavy concurrency group. No production dispatch yet.
+#[path = "../src/lab_probe/probe_command.rs"]
+pub(crate) mod calibrate_command;
+#[path = "../src/lab_probe/probe_inputs.rs"]
+pub(crate) mod calibrate_inputs;
+#[path = "../src/lab_probe/probe_stream.rs"]
+pub(crate) mod calibrate_stream;
+mod lab_probe {
+    pub(crate) use crate::calibrate_command as probe_command;
+    pub(crate) use crate::calibrate_stream as probe_stream;
+    pub(crate) mod probe_parse {
+        pub(crate) use crate::calibrate_inputs as probe_inputs;
+    }
+}
+#[path = "../src/lab_calibrate/mod.rs"]
+mod lab_calibrate;
 #[cfg(test)]
 mod tests {
     use super::probe_support;
@@ -110,6 +127,17 @@ mod tests {
         ["shell","wm","size"], ["shell","wm","density"], ["shell","ls","/system/local/models/keyword"]
     ]"#).unwrap();
         assert_eq!(session.ledger(), reads.iter().map(|r| json!(r)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn complete_probe_ledger_is_unchanged_by_calibration_reuse() {
+        let session = Session::new(&json!({}));
+        let output = session.run();
+        assert_eq!(
+            manifest(&session, &output)["display"],
+            json!({"width":1280,"height":800,"density":213})
+        );
+        check_reads(&session);
     }
 
     #[test]
