@@ -208,7 +208,7 @@ pub fn parse(value: &Value) -> Result<Step, String> {
                 .and_then(Value::as_str)
         });
         return match action {
-            Some(action @ ("wake" | "action" | "pair" | "stop")) => Ok(Step::Press(action.into())),
+            Some(action @ ("wake" | "action" | "pair" | "stop" | "mute")) => Ok(Step::Press(action.into())),
             _ => Err("sim: unsupported press control".into()),
         };
     }

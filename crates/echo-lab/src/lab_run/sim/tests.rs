@@ -2,12 +2,12 @@ use super::{observers, selectors, trace::Trace};
 
 #[test]
 fn only_supported_press_controls_are_mapped_and_fixture_reads_are_bounded() {
-    for action in ["wake", "action", "pair", "stop"] {
+    for action in ["wake", "action", "pair", "stop", "mute"] {
         for value in [json!({"press":action}), json!({"press":{"key":action}})] {
             assert!(matches!(super::parse(&value).unwrap(), super::Step::Press(actual) if actual == action));
         }
     }
-    assert!(super::parse(&json!({"press":"mute"})).is_err());
+    assert!(super::parse(&json!({"press":"unknown"})).is_err());
     let path = std::env::temp_dir().join(format!("lab-bounded-{}", std::process::id()));
     std::fs::write(&path, b"abcd").unwrap();
     assert_eq!(observers::bytes(&path, 4, "fixture"), Ok(b"abcd".to_vec()));

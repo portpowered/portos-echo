@@ -395,8 +395,12 @@ fail if still incomplete at shutdown. Complete malformed lines fail.
 samples), cycled through the host capture FIFO before SIGUSR1. The W1 fixture
 is a durable synthetic 400 Hz waveform, 320 samples at amplitude 2000, generated
 as `int(2000 * sin(2*pi*i/40))`; it contains no recorded voice.
-`press` accepts `wake`/SIGUSR1, `action`/SIGUSR2, `pair`/SIGWINCH and `stop`/SIGHUP,
-either as a string or `{key: action}`. Other controls fail.
+`press` accepts `wake`/SIGUSR1, `action`/SIGUSR2, `pair`/SIGWINCH, `stop`/SIGHUP and
+`mute`, either as a string or `{key: action}`. Mute sends native Linux KEY_MUTE
+down/up events through the pinned host's private `-b` keypad FIFO and waits for
+its button-state log before acknowledging. The real Wyoming mute event remains
+the observer's state barrier; a control acknowledgment alone proves no bridge
+privacy or screen state. Other controls fail.
 
 `expect_trace` is a nonempty ordered array of selectors: `EVENT {scalar: value}`.
 For example `wyoming.mic_frames {count_gte: 10}` checks the numeric frame payload;

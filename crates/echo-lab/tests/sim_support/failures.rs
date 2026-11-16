@@ -25,7 +25,7 @@ fn unlaunchable_bridge_closes_the_world_and_a_fresh_run_ignores_old_artifacts() 
 #[test]
 fn sim_preflight_refuses_unsupported_controls_setups_and_missing_executables() {
     for step in [
-        json!({"press":"mute"}),
+        json!({"press":"unknown"}),
         json!({"press":{"key":"action","extra":true}}),
         json!({"expect_trace":[]}),
         json!({"say":"missing.pcm"}),
