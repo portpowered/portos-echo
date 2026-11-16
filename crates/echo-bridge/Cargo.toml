@@ -13,6 +13,8 @@ echo-audio = { version = "0.1.0", path = "../echo-audio" }
 echo-config = { version = "0.1.0", path = "../echo-config" }
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
 echo-live = { version = "0.1.0", path = "../echo-live" }
+echo-screen-contract = { version = "0.1.0", path = "../echo-screen-contract" }
+echo-screen-server = { version = "0.1.0", path = "../echo-screen-server" }
 echo-signin = { version = "0.1.0", path = "../echo-signin" }
 echo-wyoming = { version = "0.1.0", path = "../echo-wyoming" }
 serde_json = "1"

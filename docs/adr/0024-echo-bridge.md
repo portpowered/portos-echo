@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 16
 status: accepted
 ---
 
@@ -29,9 +29,23 @@ means 120 seconds. Invalid values and any override in configured mode fail
 offline. This permits delivered-binary expiry proof within the T3 time budget
 without changing configured TOML behavior, credentials or the lab stdout protocol.
 
-Configured API-key mode reads only its nominated key file. ChatGPT mode reports
-authorization unavailable until the separately owned sign-in integration mounts
-its provider. No home-directory credential discovery is used.
+Configured runs use `echo-signin` providers for Live credentials in both modes.
+Operator commands dispatch before run initialization; import requires an explicit
+source and leaves it unchanged. No home-directory credential discovery is used.
+
+Configured runs host the existing `echo-screen-server` page and authenticated
+stream on literal IPv4 loopback. The nominated pairing file is bounded to 16 KiB,
+UTF-8, nonblank and free of control characters after removing one LF or CRLF
+terminator. Token or bind failure prevents readiness and Wyoming connection.
+The token never appears in stdout or trace; `screen.listening` records only the
+bound address. The synthetic lab route does not require a screen or pairing file.
+
+The bridge publishes Ready initially, Listening on wake, Speaking after the first
+forwarded PCM payload, and Ready after the acknowledged run completes. A bounded
+32-state channel feeds the screen library; capacity or closed-input failure is
+fatal rather than silently losing activity updates. EOF shuts down the screen
+with the other owned resources. Relink and delegated activity remain part of the
+same bridge assembly, using the existing screen contract.
 
 The optional `[audio]` table sets `reply_lead_ms`, default 200, as a positive
 multiple of 20 that fits `u16`. Existing configurations keep the default. The

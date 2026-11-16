@@ -688,6 +688,8 @@ dependencies = [
  "echo-config",
  "echo-contracts",
  "echo-live",
+ "echo-screen-contract",
+ "echo-screen-server",
  "echo-signin",
  "echo-wyoming",
  "serde_json",

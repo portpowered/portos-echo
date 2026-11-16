@@ -10,7 +10,7 @@ fn token() -> String {
     format!("e30.{}.synthetic", URL_SAFE_NO_PAD.encode(claims.to_string()))
 }
 
-fn config(directory: &Path, mode: &str, auth: &str) -> PathBuf {
+pub(super) fn config(directory: &Path, mode: &str, auth: &str) -> PathBuf {
     let template = include_str!("../../../../examples/bridge.example.toml")
         .replace("echo.example.invalid", "127.0.0.1")
         .replace("0.0.0.0:16900", "127.0.0.1:0") // lint-rules: allow-literal replace inert example listener with loopback
@@ -21,7 +21,7 @@ fn config(directory: &Path, mode: &str, auth: &str) -> PathBuf {
     path
 }
 
-fn command(directory: &Path, args: &[&str]) -> Command {
+pub(super) fn command(directory: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_echo-bridge"));
     command.current_dir(directory).args(args).kill_on_drop(true);
     for name in [
@@ -234,6 +234,12 @@ async fn bridge_wire_auth_configured_live_uses_selected_provider() {
         let origin = "http://127.0.0.1:1";
         let auth = format!("[chatgpt_auth]\ntoken_endpoint = '{origin}/token'");
         let path = config(directory.path(), mode, &auth);
+        std::fs::create_dir(directory.path().join("credentials")).unwrap();
+        std::fs::write(
+            directory.path().join("credentials/screen-pairing.txt"),
+            "synthetic-screen-pair\n",
+        )
+        .unwrap();
         prepare_configured_credential(directory.path(), mode).await;
         let fake = FakeLive::bind(FakeScript {
             events: vec![],

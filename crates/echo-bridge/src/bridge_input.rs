@@ -8,6 +8,7 @@ use std::{
 };
 
 pub struct Settings {
+    pub screen: Option<echo_config::ScreenConfig>,
     pub wyoming: SocketAddr,
     pub live_url: String,
     pub model_url: Option<String>,
@@ -140,6 +141,7 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
             return Err(Error::Input);
         };
         return Ok(Some(Settings {
+            screen: None,
             wyoming: loopback(&wyoming, false)?,
             live_url: lab_origin(&url)?,
             model_url: None,
@@ -177,6 +179,7 @@ fn configured(
         echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth.clone()).map_err(|_| Error::Input)?,
     );
     Ok(Some(Settings {
+        screen: Some(config.screen),
         wyoming: loopback(&format!("{}:{}", config.echo.host, config.echo.wyoming_port), false)?,
         live_url,
         model_url,

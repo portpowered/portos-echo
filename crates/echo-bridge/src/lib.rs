@@ -27,6 +27,8 @@ pub enum Error {
     Trace,
     #[error("health")]
     Health,
+    #[error("screen")]
+    Screen,
     #[error("control")]
     Control,
 }

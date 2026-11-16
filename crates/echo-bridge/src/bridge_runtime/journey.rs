@@ -153,7 +153,7 @@ pub(super) async fn run(
     call: &mut LiveCall,
     trace: &mut Trace,
     id: &str,
-    options: (bool, u16, u64),
+    options: (bool, u16, u64, &super::bridge_screen::Screen),
 ) -> Result<(u64, bool), Error> {
     let mut source = Source::new()?;
     source.call_packets_base = options.2;
@@ -165,6 +165,8 @@ pub(super) async fn run(
         trace,
         id,
         lead_ms: options.1,
+        screen: options.3,
+        speaking: false,
     };
     let producer = produce(&mut source, &mut run, call, tx, (options.0, options.2), &mut context);
     let (outcome, (), ()) = tokio::time::timeout(Duration::from_secs(10), async {
@@ -208,9 +210,20 @@ struct PlaybackContext<'a> {
     trace: &'a mut Trace,
     id: &'a str,
     lead_ms: u16,
+    screen: &'a super::bridge_screen::Screen,
+    speaking: bool,
 }
 
 impl PlaybackContext<'_> {
+    async fn forward(&mut self, tx: &mpsc::Sender<Vec<u8>>, frame: Vec<u8>) -> Result<(), Error> {
+        tx.send(frame).await.map_err(|_| Error::Wyoming)?;
+        if !self.speaking {
+            self.screen.publish(echo_screen_contract::UiState::Speaking)?;
+            self.speaking = true;
+        }
+        Ok(())
+    }
+
     async fn cut(&mut self, source: &mut Source) -> Result<(), Error> {
         let bridge_evicted = source.queue.drop_count();
         let bridge_dropped = source.discard_reply();
@@ -281,7 +294,7 @@ async fn produce(
                 Err(error) => return Err(error.into()),
             },
             frame = pacer.next_frame(&mut source.queue), if !source.queue.is_empty() => {
-                if let Some(frame) = frame { tx.send(frame).await.map_err(|_| Error::Wyoming)?; }
+                if let Some(frame) = frame { context.forward(&tx, frame).await?; }
             }
         }
     }

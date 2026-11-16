@@ -1,6 +1,7 @@
 //! One Live call owner drives WebRTC while Wyoming owns its bounded wire queues.
 mod bridge_lifecycle;
 mod bridge_pacing;
+mod bridge_screen;
 mod journey;
 
 use crate::{
@@ -32,12 +33,16 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
             LiveAuthMode::ApiKey => "api_key",
         },
     )?;
+    let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
     let health = Health::bind(settings.health).await?;
     trace.record(
         "bridge.started",
         None,
         json!({"health_addr":health.address.to_string()}),
     )?;
+    if let Some(address) = screen.address() {
+        trace.record("screen.listening", None, json!({"address":address.to_string()}))?;
+    }
     let mut shutdown = control()?;
     let work = async {
         let mut client = tokio::select! {
@@ -50,7 +55,7 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
         // terminal capacity failure and races otherwise successful EOF cleanup.
         let mut events = client.events()?;
         let result = tokio::select! {
-            result = connected(&client, &mut events, settings, &health, &mut trace) => result,
+            result = connected(&client, &mut events, settings, &health, &mut trace, &screen) => result,
             eof = &mut shutdown => match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
         let cleanup = client.close().await.map_err(Error::from);
@@ -61,7 +66,8 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
         trace.record("bridge.error", None, json!({"reason":error.to_string()}))
     });
     health.close().await;
-    result.and(report)
+    let cleanup = screen.close().await;
+    result.and(report).and(cleanup)
 }
 
 async fn connected(
@@ -70,6 +76,7 @@ async fn connected(
     mut settings: Settings,
     health: &Health,
     trace: &mut Trace,
+    screen: &bridge_screen::Screen,
 ) -> Result<(), Error> {
     client.run_satellite().await?;
     client.describe().await?;
@@ -78,7 +85,7 @@ async fn connected(
     publish("bridge.ready", None)?;
     let credential = std::mem::replace(&mut settings.credential, Provider::Unavailable);
     let factory = LiveCallFactory::new(&settings.live_url, settings.mode, credential)?;
-    observe(client, events, &factory, health, trace, &settings).await
+    observe(client, events, &factory, health, trace, &settings, screen).await
 }
 
 async fn observe(
@@ -88,11 +95,13 @@ async fn observe(
     health: &Health,
     trace: &mut Trace,
     options: &Settings,
+    screen: &bridge_screen::Screen,
 ) -> Result<(), Error> {
     let mut conversation = bridge_lifecycle::Conversation::new(options.session_idle_seconds);
     let mut sequence = 0_u64;
     loop {
         let run = conversation.wake(client, events, health, trace).await?;
+        screen.publish(echo_screen_contract::UiState::Listening)?;
         sequence += 1;
         let id = format!("run-{sequence}");
         trace.record("wyoming.run_started", Some(&id), json!({}))?;
@@ -110,7 +119,7 @@ async fn observe(
             call,
             trace,
             &id,
-            (options.lab, options.reply_lead_ms, conversation.sent),
+            (options.lab, options.reply_lead_ms, conversation.sent, screen),
         )
         .await;
         health
@@ -122,6 +131,7 @@ async fn observe(
         } else {
             conversation.close("cut", trace)?;
         }
+        screen.ready()?;
         publish("bridge.run_completed", Some(&id))?;
     }
 }

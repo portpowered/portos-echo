@@ -26,6 +26,8 @@ mod bridge_short;
 mod bridge_spine_edges;
 #[path = "bridge_support/bridge_wire_auth.rs"]
 mod bridge_wire_auth;
+#[path = "bridge_support/bridge_wire_screen.rs"]
+mod bridge_wire_screen;
 
 struct Process {
     name: &'static str,
@@ -168,7 +170,7 @@ fn trace(path: &Path) -> Vec<Value> {
 async fn health(address: &str, method: &str, path: &str) -> String {
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
     stream
-        .write_all(format!("{method} {path} HTTP/1.1\r\nHost: local\r\n\r\n").as_bytes())
+        .write_all(format!("{method} {path} HTTP/1.1\r\nHost: local\r\nConnection: close\r\n\r\n").as_bytes())
         .await
         .unwrap();
     let mut response = String::new();
