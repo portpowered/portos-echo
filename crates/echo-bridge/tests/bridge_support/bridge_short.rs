@@ -35,12 +35,25 @@ pub(super) async fn read(stream: &mut TcpStream) -> (Value, Vec<u8>) {
     (header, payload)
 }
 
+pub(super) async fn read_reply(stream: &mut TcpStream) -> (Value, Vec<u8>) {
+    loop {
+        let event = read(stream).await;
+        if event.0["type"] != "describe" {
+            return event;
+        }
+        // An idle probe can already be on the wire when the wake arrives.
+        // Answer that control request without hiding any unexpected audio.
+        assert_eq!(event.1, Vec::<u8>::new());
+        send(stream, "info", json!({"satellite":{"name":"synthetic"}})).await;
+    }
+}
+
 async fn short_reply(acknowledge: bool, frames: u16) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace");
     let live = bridge_peer::Live::bind_frames(frames).await;
     let (mut stream, mut bridge) = satellite(&live.url, &path).await;
-    assert_eq!(read(&mut stream).await.0["type"], "audio-start");
+    assert_eq!(read_reply(&mut stream).await.0["type"], "audio-start");
     receive_short(&mut stream, &live, &path, frames).await;
     complete(&mut stream, &mut bridge, &path, acknowledge).await;
 }
@@ -74,7 +87,7 @@ async fn receive_short(stream: &mut TcpStream, live: &bridge_peer::Live, path: &
     // Observe admission of the first two frames before closing the source.
     // This barrier tests completion after short audio without RTP/control races.
     for _ in 0..2 {
-        let (header, payload) = read(stream).await;
+        let (header, payload) = read_reply(stream).await;
         assert_eq!(header["type"], "audio-chunk");
         bytes.extend(payload);
     }
@@ -84,7 +97,7 @@ async fn receive_short(stream: &mut TcpStream, live: &bridge_peer::Live, path: &
         .unwrap();
     let mut chunks = 2;
     loop {
-        let (header, payload) = read(stream).await;
+        let (header, payload) = read_reply(stream).await;
         if header["type"] == "audio-stop" {
             break;
         }

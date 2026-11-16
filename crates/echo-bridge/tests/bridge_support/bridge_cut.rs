@@ -1,5 +1,5 @@
 //! T3: delivered bridge and codec/WebRTC path, controlled loopback peers.
-use super::bridge_short::{read, satellite, send};
+use super::bridge_short::{read_reply as read, satellite, send};
 use super::*;
 use std::io::Write;
 
