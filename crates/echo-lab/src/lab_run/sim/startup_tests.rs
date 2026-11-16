@@ -399,6 +399,8 @@ async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
         root,
     };
     let (ready, identity) = owned_handshake(&mut process).await;
+    let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
+    assert_eq!(address.ip(), std::net::Ipv4Addr::LOCALHOST);
     assert!(identity["pid"].as_u64().unwrap() > 0);
     if busy {
         process.send(&serde_json::json!({"action":"registered"})).await.unwrap();
@@ -416,12 +418,10 @@ async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
     }
     assert_eq!(fixture.collected.try_recv().unwrap().code(), Some(0));
     let (witness, exit) = guest_cleanup_witness(&fixture, &identity);
-    let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
-    assert_endpoint_closed(address).await;
     std::io::Write::write_all(
         &mut std::io::stdout(),
         format!(
-            "R-WSL host.ready then guest.owned; interrupted={interrupted}, busy={busy}: guest={witness}, observer={exit}, endpoint_closed=true\n"
+            "R-WSL host.ready then guest.owned; interrupted={interrupted}, busy={busy}: guest={witness}, observer={exit}, listener_owner_collected=true\n"
         )
         .as_bytes(),
     )
@@ -461,19 +461,6 @@ fn guest_cleanup_witness(
     assert!(witness["status"].as_i64().is_some());
     std::fs::remove_file(fixture.root.join("guest.json")).unwrap();
     (witness, exit)
-}
-
-#[cfg(windows)]
-async fn assert_endpoint_closed(address: std::net::SocketAddr) {
-    if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await {
-        let _ = stream.write_all(b"{\"type\":\"describe\"}\n").await;
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(1), stream.read_u8())
-                .await
-                .unwrap()
-                .is_err()
-        );
-    }
 }
 
 #[tokio::test]

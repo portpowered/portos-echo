@@ -56,6 +56,26 @@ fn trace(path: &PathBuf, records: &Value, append: bool) -> Result<(), Box<dyn st
     Ok(())
 }
 
+// Test coordinator holds all three real owners live until both worlds have
+// announced their endpoints. No endpoint is compared after it can be reused.
+async fn ready_barrier(script: &Value) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    if let Some(address) = script["ready_barrier"].as_str() {
+        let address: SocketAddr = address.parse()?;
+        if address.ip() != Ipv4Addr::LOCALHOST {
+            return Err("invalid coordinator target".into());
+        }
+        let mut control = tokio::net::TcpStream::connect(address).await?;
+        let mut endpoints = std::fs::read(env("ECHO_LAB_SIM_ENDPOINTS")?)?;
+        endpoints.push(b'\n');
+        control.write_all(&endpoints).await?;
+        if control.read_u8().await? != b'G' {
+            return Err("invalid coordinator release".into());
+        }
+    }
+    Ok(())
+}
+
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let script: Value = serde_json::from_slice(&std::fs::read(env("ECHO_LAB_SIM_SCRIPT")?)?)?;
     let client = endpoints().await?;
@@ -69,6 +89,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if script["block_report"] == true {
         std::fs::create_dir(path.parent().ok_or("missing parent")?.join("report.pending"))?;
     }
+    ready_barrier(&script).await?;
     if script["no_ready"] != true {
         writeln!(io::stdout(), "{}", json!({"event":"bridge.ready"}))?;
     }
