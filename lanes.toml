@@ -76,6 +76,11 @@ path = "crates/echo-chatgpt-auth"
 kind = "lib"
 
 [[crate]]
+name = "echo-delegation"
+path = "crates/echo-delegation"
+kind = "lib"
+
+[[crate]]
 name = "echo-screen-server"
 path = "crates/echo-screen-server"
 kind = "lib"
