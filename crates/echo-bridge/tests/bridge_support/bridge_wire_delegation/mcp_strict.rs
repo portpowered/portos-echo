@@ -38,10 +38,7 @@ struct Harness {
 impl Harness {
     async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let epoch = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let epoch = 1_800_000_000;
         let fixture = Fixture::bind(epoch).await.unwrap();
         let committed = Arc::new(Mutex::new(Vec::new()));
         let validator = Arc::new(Durable {
@@ -77,6 +74,7 @@ impl Harness {
             self.spoof.url().strip_suffix("/mcp").unwrap(),
             first,
             Some((&self.live.url, &self.model.origin)),
+            Some(self.epoch),
         )
         .await
     }
@@ -87,7 +85,7 @@ impl Harness {
         assert_eq!(state["state"], "link_code");
         assert_eq!(state["user_code"], "TEST-CODE");
         assert_eq!(state["verification_uri"], format!("{}/approve", self.fixture.base()));
-        assert!(state["expires_at_unix"].as_u64().unwrap().abs_diff(self.epoch + 1800) <= 1);
+        assert_eq!(state["expires_at_unix"], self.epoch + 1800);
         assert_eq!(self.spoof.snapshot().unwrap().requests, vec![]);
         assert_eq!(bridge_short::read(&mut session.satellite).await.0["type"], "describe");
         bridge_short::send(

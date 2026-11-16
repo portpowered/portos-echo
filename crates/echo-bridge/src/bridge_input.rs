@@ -9,6 +9,7 @@ use std::{
 
 pub struct Settings {
     pub sim_clock: bool,
+    pub sim_epoch: Option<u64>,
     pub mcp: Option<crate::bridge_mcp::Settings>,
     pub kill_path: Option<PathBuf>,
     pub delegation: Option<(echo_config::AgentConfig, echo_config::McpServer)>,
@@ -127,6 +128,7 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
     let mut health = None;
     let mut live = None;
     let mut model = None;
+    let mut epoch = None;
     let (pairs, remainder) = args.as_chunks::<2>();
     for pair in pairs {
         let target = match pair[0].as_str() {
@@ -135,6 +137,7 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
             "--health-listen" => &mut health,
             "--live-loopback" => &mut live,
             "--model-loopback" => &mut model,
+            "--sim-epoch" if sim_clock != 0 => &mut epoch,
             _ => return Err(Error::Input),
         };
         if target.replace(pair[1].clone()).is_some() {
@@ -158,6 +161,7 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
     )?;
     if let Some(settings) = &mut settings {
         settings.sim_clock = sim_clock != 0;
+        settings.sim_epoch = epoch.map(|value| parse_epoch(&value)).transpose()?;
     }
     Ok(settings)
 }
@@ -168,6 +172,7 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
     };
     Ok(Settings {
         sim_clock: false,
+        sim_epoch: None,
         mcp: None,
         kill_path: None,
         delegation: None,
@@ -203,6 +208,7 @@ fn configured(
     );
     Ok(Some(Settings {
         sim_clock: false,
+        sim_epoch: None,
         mcp: crate::bridge_mcp::Settings::configured(&config)?,
         kill_path: Some(config.audit.log_dir.join("bridge-kill")),
         delegation: config.mcp.server.first().cloned().map(|server| (config.agent, server)),
@@ -275,4 +281,11 @@ fn loopback_endpoint(url: &str) -> Result<(), Error> {
     let authority = rest.split('/').next().ok_or(Error::Input)?;
     loopback(authority, false)?;
     Ok(())
+}
+
+fn parse_epoch(value: &str) -> Result<u64, Error> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(Error::Input);
+    }
+    value.parse().map_err(|_| Error::Input)
 }

@@ -168,3 +168,21 @@ cancels probes and closes the owned call, client and health listener.
 The remaining lifecycle failure matrix and final quality proof stay
 in this lane. Until final assembly and quality proof are complete the lane is
 not ready for acceptance.
+
+## M5 simulated epoch amendment (2026-11-16)
+
+The operator approved a bounded clock hook for M5's exact independent expiry
+oracle. Two wall-clock samples (auth and presentation) can straddle a second;
+pausing Tokio alone cannot synchronize them. `AuthClient::open_at_epoch` replaces
+only the initial UTC sample with the fixture's plain unsigned epoch value.
+Normal `AuthClient::open` and elapsed-Tokio arithmetic are unchanged, as are
+storage, rotation, refresh and the default mock.
+
+Only the guarded bridge `--sim-clock --sim-epoch UNIX_SECONDS` route selects the
+hook. It requires the existing explicit loopback Live/model overrides, rejects
+lab environment mixing, and supplies the same epoch to MCP presentation without
+a second wall sample. An epoch without the guard is refused before startup.
+The fixture records the epoch independently, reuses it across child restarts,
+and resumes elapsed fake time before another operation. Exact expiry and proof
+checks use that fixture UTC; bridge output never supplies expected values.
+No dependency is added. The integrated M5 scenario remains required separately.

@@ -16,6 +16,7 @@ struct Session {
     satellite: TcpStream,
     screen: Lines<BufReader<TcpStream>>,
     control: String,
+    wall_epoch: (u64, u64),
 }
 
 impl Session {
@@ -24,10 +25,16 @@ impl Session {
     }
 
     async fn start_with(directory: &Path, mock: &Mock, first: bool, peers: Option<(&str, &str)>) -> Self {
-        Self::start_resource(directory, &mock.base, first, peers).await
+        Self::start_resource(directory, &mock.base, first, peers, None).await
     }
 
-    async fn start_resource(directory: &Path, resource: &str, first: bool, peers: Option<(&str, &str)>) -> Self {
+    async fn start_resource(
+        directory: &Path,
+        resource: &str,
+        first: bool,
+        peers: Option<(&str, &str)>,
+        epoch: Option<u64>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         configure(directory, resource, first, listener.local_addr().unwrap().port());
         let path = directory.join("bridge.toml");
@@ -37,17 +44,15 @@ impl Session {
                 .replace("[agent]", "[agent]\nmodel = 'fixture-model'");
             std::fs::write(&path, text).unwrap();
         }
-        let mut command = match peers {
-            Some((live, model)) => run_command(directory, live, model),
-            None => bridge_wire_screen::run_command(directory, resource),
-        };
-        command.arg("--sim-clock");
+        let mut command = clock_command(directory, resource, peers, epoch);
+        let before = wall_now();
         let mut process = Process::spawn(&mut command);
         let mut satellite = listener.accept().await.unwrap().0;
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
         bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
         assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+        let wall_epoch = (before, wall_now());
         let events = trace(&directory.join("trace"));
         let address = |event: &str| {
             events.iter().rev().find(|e| e["event"] == event).unwrap()["address"]
@@ -72,6 +77,7 @@ impl Session {
             satellite,
             screen,
             control,
+            wall_epoch,
         }
     }
 
@@ -90,11 +96,10 @@ impl Session {
         assert_eq!(state["user_code"], "TEST-CODE");
         assert_eq!(state["verification_uri"], format!("{}/approve", mock.base));
         let expiry = state["expires_at_unix"].as_u64().unwrap();
-        let epoch = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        assert!(expiry.abs_diff(epoch + 1800) <= 1);
+        // Normal mode samples wall UTC during startup, not when this observer
+        // later receives the screen. Bound that sample independently; exact
+        // fixture-epoch assertions live in the strict guarded journey.
+        assert!((self.wall_epoch.0 + 1800..=self.wall_epoch.1 + 1800).contains(&expiry));
         assert_eq!(bridge_short::read(&mut self.satellite).await.0["type"], "describe");
         bridge_short::send(&mut self.satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
     }
@@ -343,4 +348,23 @@ async fn mcp_link_control_auth_busy_and_cancellation_do_not_duplicate_mutations(
         }
         session.process.finish(0).await;
     }).await;
+}
+
+fn clock_command(directory: &Path, resource: &str, peers: Option<(&str, &str)>, epoch: Option<u64>) -> Command {
+    let mut command = match peers {
+        Some((live, model)) => run_command(directory, live, model),
+        None => bridge_wire_screen::run_command(directory, resource),
+    };
+    command.arg("--sim-clock");
+    if let Some(epoch) = epoch {
+        command.args(["--sim-epoch", &epoch.to_string()]);
+    }
+    command
+}
+
+fn wall_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }

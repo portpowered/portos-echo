@@ -168,3 +168,28 @@ async fn t3_overlapping_refresh_then_revoke_cannot_resurrect_grant() {
     assert_eq!(h.record()["grant"], json!(null));
     assert_eq!(drive(h.mock.resource("access-2")).await, 401);
 }
+
+#[tokio::test(start_paused = true)]
+async fn t3_explicit_epoch_preserves_elapsed_clock_and_normal_open_wall_sample() {
+    let mock = Mock::start().await;
+    let directory = tempfile::tempdir().unwrap();
+    let epoch = 1_800_000_000;
+    let client = drive(AuthClient::open_at_epoch(options(&mock, directory.path()), epoch))
+        .await
+        .unwrap();
+    assert_eq!(client.now(), epoch);
+    advance(Duration::from_secs(37)).await;
+    assert_eq!(client.now(), epoch + 37);
+    // Normal open must still sample wall UTC after discovery/storage, regardless
+    // of an earlier explicit epoch or this runtime's already-advanced clock.
+    let normal_dir = tempfile::tempdir().unwrap();
+    let before = wire::unix_now().unwrap();
+    let normal = drive(AuthClient::open(options(&mock, normal_dir.path())))
+        .await
+        .unwrap();
+    let after = wire::unix_now().unwrap();
+    assert!((before..=after).contains(&normal.now()));
+    advance(Duration::from_secs(5)).await;
+    assert_eq!(client.now(), epoch + 42);
+    assert_eq!(normal.now(), normal.epoch + 5);
+}

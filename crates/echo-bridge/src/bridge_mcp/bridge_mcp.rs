@@ -75,6 +75,7 @@ impl Runtime {
         settings: Settings,
         presentation: Presentation,
         trace: crate::bridge_trace::Trace,
+        epoch: Option<u64>,
     ) -> Result<Self, Error> {
         let token = bridge_control::pairing(&settings.pairing_file)?;
         let listener = tokio::net::TcpListener::bind(settings.listen)
@@ -82,14 +83,21 @@ impl Runtime {
             .map_err(|_| Error::Control)?;
         let address = listener.local_addr().map_err(|_| Error::Control)?;
         let grant = Arc::new(Grant {
-            client: AuthClient::open(settings.options).await.map_err(Error::Mcp)?,
+            client: match epoch {
+                Some(epoch) => AuthClient::open_at_epoch(settings.options, epoch).await,
+                None => AuthClient::open(settings.options).await,
+            }
+            .map_err(Error::Mcp)?,
             rejected: AtomicBool::new(false),
             presentation,
             failed: AtomicBool::new(false),
-            epoch: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|_| Error::Control)?
-                .as_secs(),
+            epoch: match epoch {
+                Some(epoch) => epoch,
+                None => std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|_| Error::Control)?
+                    .as_secs(),
+            },
             started: tokio::time::Instant::now(),
             trace: Mutex::new(trace),
             trace_failed: AtomicBool::new(false),

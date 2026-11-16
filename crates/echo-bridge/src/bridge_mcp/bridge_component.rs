@@ -105,7 +105,7 @@ async fn linked(mock: &Mock, directory: &std::path::Path) -> (Runtime, tokio::sy
     };
     let (send, screen) = tokio::sync::mpsc::channel(32);
     let trace = crate::bridge_trace::Trace::open(&directory.join("trace"), "api_key").unwrap();
-    let owner = Runtime::open(settings, Presentation::new(Some(send)), trace)
+    let owner = Runtime::open(settings, Presentation::new(Some(send)), trace, None)
         .await
         .unwrap();
     let link = owner.grant.client.begin_link().await.unwrap();
