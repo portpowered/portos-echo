@@ -3,6 +3,75 @@ use super::Session;
 use serde_json::{Value, json};
 
 #[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host"]
+fn m5_authored_scenario_measures_all_eight_outcomes_and_isolates_a_failed_count_oracle() {
+    // Run independent sessions in parallel. The seeded failed oracle must not
+    // contaminate the healthy grant, screen, endpoints or report.
+    std::thread::scope(|scope| {
+        let healthy = scope.spawn(|| authored(false));
+        let seeded = scope.spawn(|| authored(true));
+        healthy.join().unwrap();
+        seeded.join().unwrap();
+    });
+}
+
+fn authored(seed: bool) {
+    let session = Session::new();
+    let mut scenario: Value =
+        serde_norway::from_str(include_str!("../../../../tests/scenarios/m5-port-os-link.yaml")).unwrap();
+    let last = scenario["steps"].as_array().unwrap().len() - 1;
+    let mut actual = scenario["steps"][last]["expect_link_counts"].clone();
+    actual["tool_call"] = json!(1);
+    if seed {
+        scenario["steps"][last]["expect_link_counts"]["tool_call"] = json!(2);
+    }
+    std::fs::write(session.0.join("scenario.yaml"), scenario.to_string()).unwrap();
+    let output = run(&session);
+    assert_eq!(
+        output.status.code(),
+        Some(i32::from(seed)),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = session.report();
+    assert_eq!(report["result"], if seed { "fail" } else { "pass" });
+    assert_eq!(report["link_counts"], actual);
+    assert_eq!(report["checks"]["world_closed"], true);
+    assert_eq!(report["checks"][format!("step_{last}")], !seed);
+    if seed {
+        assert!(String::from_utf8_lossy(&output.stderr).contains("link counts: expected"));
+    } else {
+        assert_eq!(output.stderr, [] as [u8; 0]);
+    }
+    assert!(!session.0.join("artifacts/mcp.private").exists());
+    authored_cleanup(&session, &report, &output);
+}
+
+fn authored_cleanup(session: &Session, report: &Value, output: &std::process::Output) {
+    let events = std::fs::read_to_string(session.0.join("artifacts/events.jsonl")).unwrap();
+    for private in [
+        "synthetic-refresh-",
+        "synthetic-api-key",
+        "private_key_jwk",
+        "synthetic-m5-screen",
+    ] {
+        assert!(!events.contains(private));
+        assert!(!report.to_string().contains(private));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(private));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(private));
+    }
+    let endpoints = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["event"] == "sim.endpoint")
+        .collect::<Vec<_>>();
+    assert_eq!(endpoints.len(), 10);
+    for endpoint in &endpoints[1..] {
+        assert!(std::net::TcpStream::connect(endpoint["address"].as_str().unwrap()).is_err());
+    }
+}
+
+#[test]
 fn m5_restart_without_a_running_bridge_fails_before_launch() {
     let session = Session::new();
     scenario(&session, json!([{"mcp":{"action":"restart"}}]));
@@ -76,7 +145,7 @@ fn run(session: &Session) -> std::process::Output {
 }
 
 #[test]
-fn m5_unimplemented_controls_fail_before_host_or_bridge_launch() {
+fn m5_resource_controls_require_a_link_before_host_or_bridge_launch() {
     for action in ["call", "probe"] {
         let session = Session::new();
         session.scenario(json!([{"mcp":{"action":action}}]), json!({}));
@@ -91,7 +160,7 @@ fn m5_unimplemented_controls_fail_before_host_or_bridge_launch() {
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
-            format!("echo-lab: scenario.yaml: step 0: M5: MCP {action} control is not implemented\n")
+            "echo-lab: scenario.yaml: step 0: M5: resource control requires a running linked bridge\n"
         );
         let report = session.report();
         assert_eq!(report["result"], "fail");

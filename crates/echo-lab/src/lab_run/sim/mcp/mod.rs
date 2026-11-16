@@ -1,4 +1,6 @@
 //! M5 owns the production bridge, pinned host and strict loopback grant peers.
+mod mcp_journey;
+mod mcp_peers;
 mod mcp_replay;
 mod mcp_session;
 mod mcp_wire;
@@ -48,7 +50,7 @@ impl<'a> M5<'a> {
             )
             | Step::Ui(_)
             | Step::Trace(_) => {}
-            Step::Mcp(action) => return Err(format!("M5: MCP {} control is not implemented", action.name())),
+            Step::Mcp(McpAction::Call | McpAction::Probe) => session.admit_call()?,
             _ => return Err("M5: unsupported step capability".into()),
         }
         if !session.started() {
@@ -61,10 +63,9 @@ impl<'a> M5<'a> {
             Step::Mcp(McpAction::Unlink) => session.operator("unlink", "MCP unlinked\n").await?,
             Step::Mcp(McpAction::Restart) => session.restart().await?,
             Step::Mcp(McpAction::Replay) => session.replay().await?,
-            Step::Ui(expected) => super::observers::screen(
-                &serde_json::to_vec(&session.screen).map_err(|_| "M5: screen encoding")?,
-                expected,
-            )?,
+            Step::Mcp(McpAction::Call) => session.call().await?,
+            Step::Mcp(McpAction::Probe) => session.probe().await?,
+            Step::Ui(expected) => session.expect_screen(expected)?,
             Step::Trace(values) => {
                 session.observe()?;
                 super::selectors::check(&session.trace.records, &super::selectors::parse(values)?, None)?;

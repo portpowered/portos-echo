@@ -128,8 +128,9 @@ contradictory trace/model observations latch a fixed diagnostic across restarts.
 Pending/denied authorizations and uncertain rotations never infer completions.
 The strict delivered-bridge witness exercises this binding. The M5 pinned-host
 runner also consumes lifecycle and paired-screen observations for its mounted
-operator controls and external refresh replay. Tool/probe controls and the complete authored M5
-scenario remain unfinished. Restart alone never counts as live grant reuse.
+operator controls, external refresh replay and delivered model outputs. The authored
+`m5-port-os-link` scenario uses the same binding. Restart alone never counts as
+live grant reuse.
 
 ## Device runner
 
@@ -257,7 +258,7 @@ beside `echo-lab` by default, including in `--all`; `--bridge` can override it.
 Prebuild both with `cargo build --locked -p echo-lab -p echo-bridge --bins`,
 and prepare the pinned host with `make hassmic-host`.
 
-The M5 runner mounts `link`, `approve`, `refresh`, `restart`, `replay` and `unlink`. It owns one
+The M5 runner mounts all eight MCP controls. It owns one
 private state directory outside git, the real bridge, pinned host, strict
 authorization fixture, signed-token spoof and local Live fixture. Link invokes
 the bridge CLI and independently checks the paired screen's code/URI/exact
@@ -274,10 +275,22 @@ grant. It refuses before rotation, while linking, after unlink or after replay;
 no automatic refresh or replay retry runs. No replay credential reaches reports.
 Lifecycle trace and screen transitions
 supply counts, rechecked after shutdown. EOF collects the owned processes and
-removes private state. Unimplemented M5 controls fail before lazy startup.
-This partial operator journey proves restart followed by a successful refresh;
-resource use after restart, tools, probe, browser and the complete M5 scenario
-remain unproved. Only successful resource use can count `restart_grant_kept`.
+removes private state. Resource controls require a running linked bridge before
+lazy startup. `call` wakes the pinned host and dispatches a controlled Live
+client delegation through the production bridge. The local model requests one
+`test.echo({"text":"m5-linked"})` and returns its result; the runner observes
+both exact function output and delivered Live commentary. `probe` sends a
+second delegation after replay, requiring one rejected resource request and
+the exact MCP relink screen, with no extra tool dispatch. The independently
+known verification URI and expiry bind the scenario's `mcp_field` operands;
+the complete expected link screen is compared exactly.
+
+After prebuilding, run `echo-lab run tests/scenarios/m5-port-os-link.yaml --driver sim`.
+The report requires exactly one link, list, successful call, rejected replay,
+relink transition, proven live restart and unlink, plus two forced refreshes.
+Parallel isolated journeys protect the healthy outcome while a seeded count
+mismatch produces a failed report. T4/T5 and physical screen proof remain
+operator-owned; this T3 scenario does not declare M5 complete.
 
 Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
 `echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child

@@ -1,0 +1,41 @@
+id: m5-port-os-link
+milestone: M5
+tiers: [T3, T4, T5]
+setup:
+  mcp: spoof
+  backend: client
+steps:
+  - mcp: {action: link}
+  - expect_screen:
+      state: link_code
+      user_code: TEST-CODE
+      verification_uri: {mcp_field: verification_uri}
+      expires_at_unix: {mcp_field: expires_at_unix}
+  - mcp: {action: approve}
+  - expect_screen: {state: ready, message: Echo Live ready}
+  - mcp: {action: refresh}
+  - mcp: {action: restart}
+  - mcp: {action: refresh}
+  - mcp: {action: call}
+  - mcp: {action: replay}
+  - mcp: {action: probe}
+  - expect_screen:
+      state: error
+      relink: true
+      message: Run echo-bridge link with your config to relink Port OS MCP.
+  - mcp: {action: unlink}
+  - expect_screen:
+      state: error
+      relink: true
+      message: Run echo-bridge link with your config to relink Port OS MCP.
+  - expect_link_counts:
+      link: 1
+      tools_list: 1
+      tool_call: 1
+      forced_refresh: 2
+      replay_rejected: 1
+      relink_error: 1
+      restart_grant_kept: 1
+      unlink: 1
+budgets: {}
+negative: []

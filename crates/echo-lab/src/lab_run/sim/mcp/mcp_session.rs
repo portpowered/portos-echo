@@ -5,7 +5,6 @@ use std::{
 
 use echo_contracts::secret::Secret;
 use echo_lab::lab_mcp::{Approval, Fixture, LinkCounts, Observations};
-use echo_live::fake::{FakeLive, FakeResponse, FakeScript};
 use echo_spoof_mcp::{Options as SpoofOptions, Spoof};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -20,27 +19,27 @@ use super::{
 use crate::lab_run::run_options::Options;
 
 type Pending = JoinHandle<std::io::Result<std::process::Output>>;
-const EPOCH: u64 = 1_800_000_000;
+pub(super) const EPOCH: u64 = 1_800_000_000;
 
 #[derive(Default)]
 pub struct Session {
-    host: Option<Process>,
-    bridge: Option<Process>,
-    fixture: Option<Fixture>,
-    spoof: Option<Spoof>,
-    live: Option<FakeLive>,
-    pending: Option<Pending>,
-    stream: Option<mcp_wire::Screen>,
+    pub(super) host: Option<Process>,
+    pub(super) bridge: Option<Process>,
+    pub(super) fixture: Option<Fixture>,
+    pub(super) spoof: Option<Spoof>,
+    pub(super) live: Option<super::mcp_peers::Peers>,
+    pub(super) pending: Option<Pending>,
+    pub(super) stream: Option<mcp_wire::Screen>,
     pub screen: Value,
     pub trace: Trace,
-    observations: Observations,
+    pub(super) observations: Observations,
     offset: usize,
-    directory: PathBuf,
+    pub(super) directory: PathBuf,
     binary: PathBuf,
     measured: Option<LinkCounts>,
-    elapsed_ms: u64,
-    initial: Option<Secret<Value>>,
-    replayed: bool,
+    pub(super) elapsed_ms: u64,
+    pub(super) initial: Option<Secret<Value>>,
+    pub(super) replayed: bool,
     pub endpoints: Vec<SocketAddr>,
 }
 
@@ -128,13 +127,7 @@ impl Session {
         }
         self.trace.restarted()?;
         self.observations.restarted();
-        let origin = self
-            .live
-            .as_ref()
-            .ok_or("M5: missing Live fixture")?
-            .base_url()
-            .trim_end_matches('/')
-            .to_owned();
+        let origin = self.live.as_ref().ok_or("M5: missing Live fixture")?.origin.clone();
         self.launch(&origin).await?;
         // Reuse the recorded epoch, restoring elapsed time without advancing AS
         // UTC a second time. No AuthClient/store writer exists in the driver.
@@ -154,7 +147,7 @@ impl Session {
         Ok(())
     }
 
-    fn grant(&self) -> Result<Secret<Value>, String> {
+    pub(super) fn grant(&self) -> Result<Secret<Value>, String> {
         let bytes = Secret::new(super::super::observers::bytes(
             &self.directory.join("portos/grant.json"),
             65536,
@@ -165,7 +158,7 @@ impl Session {
             .map_err(|_| "M5: invalid private grant".into())
     }
 
-    async fn advance_bridge(&mut self, milliseconds: u64) -> Result<(), String> {
+    pub(super) async fn advance_bridge(&mut self, milliseconds: u64) -> Result<(), String> {
         let bridge = self.bridge.as_mut().ok_or("M5: missing bridge")?;
         bridge
             .send(&json!({"action":"advance_clock", "milliseconds":milliseconds}))
@@ -195,15 +188,8 @@ impl Session {
             .map_err(|_| "M5: resource binding failed")?;
         self.endpoints.push(endpoint(fixture.base())?);
         self.endpoints.push(endpoint(spoof.url())?);
-        self.live = Some(
-            FakeLive::bind(FakeScript {
-                events: vec![],
-                response: FakeResponse::Answer,
-            })
-            .await
-            .map_err(|_| "M5: Live startup failed")?,
-        );
-        let origin = self.live.as_ref().ok_or("M5: missing Live fixture")?.base_url();
+        self.live = Some(super::mcp_peers::Peers::bind().await?);
+        let origin = self.live.as_ref().ok_or("M5: missing Live fixture")?.origin.clone();
         self.endpoints.push(endpoint(&origin)?);
         mcp_wire::configure(&self.directory, address, spoof.url())?;
         Ok(origin.trim_end_matches('/').into())
@@ -360,7 +346,7 @@ impl Session {
         Ok(())
     }
 
-    async fn receive_screen(&mut self) -> Result<(), String> {
+    pub(super) async fn receive_screen(&mut self) -> Result<(), String> {
         self.screen = mcp_wire::state(self.stream.as_mut().ok_or("M5: missing paired screen")?).await?;
         let state = serde_json::from_value(self.screen.clone()).map_err(|_| "M5: invalid screen state")?;
         self.observations.screen(&state);
