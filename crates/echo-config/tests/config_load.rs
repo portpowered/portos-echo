@@ -67,6 +67,7 @@ fn committed_example_loads_with_all_expected_values() {
                 bearer_file: None,
                 allow_tools: vec!["test.echo".into()],
             }],
+            ..McpConfig::default()
         },
         screen: ScreenConfig {
             listen: "0.0.0.0:16900".parse().unwrap(), // lint-rules: allow-literal configuration loader expected value fixture

@@ -17,6 +17,63 @@ struct Provider {
     value: Arc<Mutex<String>>,
     uses: Arc<AtomicUsize>,
 }
+
+struct LatchingProvider {
+    rejected: Arc<AtomicUsize>,
+    uses: Arc<AtomicUsize>,
+    value: String,
+}
+
+impl TokenProvider for LatchingProvider {
+    fn token(&self) -> impl Future<Output = Result<Secret<String>, TokenError>> {
+        if self.rejected.load(Ordering::Acquire) != 0 {
+            return std::future::ready(Err(TokenError::Unavailable));
+        }
+        self.uses.fetch_add(1, Ordering::Relaxed);
+        std::future::ready(Ok(Secret::new(self.value.clone())))
+    }
+
+    fn unauthorized(&self) {
+        self.rejected.fetch_add(1, Ordering::Release);
+    }
+}
+
+#[tokio::test]
+async fn t3_mcp_link_rejection_notifies_owner_before_next_acquisition() {
+    let spoof = Spoof::start(Options {
+        expected_bearer: Some(Secret::new(synthetic())),
+        ..Options::default()
+    })
+    .await
+    .unwrap();
+    let rejected = Arc::new(AtomicUsize::new(0));
+    let uses = Arc::new(AtomicUsize::new(0));
+    let host = McpClient::new(
+        config(spoof.url(), &TOOLS),
+        LatchingProvider {
+            rejected: rejected.clone(),
+            uses: uses.clone(),
+            value: synthetic(),
+        },
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_eq!(host.list().await, Err(echo_mcp_client::McpError::HttpStatus(401)));
+    assert_eq!(rejected.load(Ordering::Acquire), 1);
+    assert_eq!(host.list_tools().await, Err(ToolError::Unauthorized));
+    assert_eq!(
+        host.call_tool("test.echo", json!({"text":"blocked"}), "k").await,
+        Err(ToolError::Unauthorized)
+    );
+    assert_eq!(uses.load(Ordering::Relaxed), 1);
+    assert_eq!(rejected.load(Ordering::Acquire), 1);
+    let snapshot = spoof.snapshot().unwrap();
+    assert_eq!(snapshot.requests.len(), 1);
+    assert_eq!(snapshot.requests[0].method, "initialize");
+    assert_eq!(snapshot.calls.len(), 0);
+    assert!(!snapshot.requests[0].dpop_header);
+    spoof.shutdown().await.unwrap();
+}
 impl TokenProvider for Provider {
     fn token(&self) -> impl Future<Output = Result<Secret<String>, TokenError>> {
         self.uses.fetch_add(1, Ordering::Relaxed);

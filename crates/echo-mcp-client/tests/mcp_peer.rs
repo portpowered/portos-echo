@@ -8,6 +8,61 @@ use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tracing::instrument::WithSubscriber;
 
+#[derive(Clone)]
+struct RejectionObserver(Arc<std::sync::atomic::AtomicUsize>);
+impl echo_mcp_client::TokenProvider for RejectionObserver {
+    fn token(
+        &self,
+    ) -> impl Future<Output = Result<echo_contracts::secret::Secret<String>, echo_mcp_client::TokenError>> {
+        std::future::ready(Ok(echo_contracts::secret::Secret::new("synthetic-observer".into())))
+    }
+
+    fn unauthorized(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[tokio::test]
+async fn t3_mcp_link_owner_observes_only_401_on_notification_list_and_call() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for status in [401, 403, 500] {
+        for stage in ["notification", "list", "call"] {
+            let rejection = || Reply::Raw(status, "application/json", b"private server body".to_vec());
+            let (replies, notification, expected_requests) = match stage {
+                "notification" => (vec![], Some(rejection()), 2),
+                "list" => (vec![rejection()], None, 3),
+                _ => (vec![Reply::Result(json!({"tools":[]})), rejection()], None, 4),
+            };
+            let peer = Peer::with_notification(replies, token(), notification).await;
+            let observer = RejectionObserver(Arc::new(AtomicUsize::new(0)));
+            let host = echo_mcp_client::McpClient::new(
+                echo_config::McpServer {
+                    name: "observer".into(),
+                    url: peer.url.clone(),
+                    auth: echo_config::McpAuth::None,
+                    bearer_file: None,
+                    allow_tools: vec!["test.echo".into()],
+                },
+                observer.clone(),
+                std::time::Duration::from_secs(3),
+            )
+            .unwrap();
+            let result = if stage == "call" {
+                assert_eq!(host.list().await.unwrap(), vec![]);
+                host.call("test.echo", json!({})).await.map(|_| ())
+            } else {
+                host.list().await.map(|_| ())
+            };
+            assert_eq!(result, Err(McpError::HttpStatus(status)));
+            assert_eq!(observer.0.load(Ordering::Relaxed), usize::from(status == 401));
+            let records = peer.observations.lock().unwrap().clone();
+            assert_eq!(records.len(), expected_requests);
+            assert!(records.iter().all(|r| r.forbidden_headers == [false; 2]));
+            peer.shutdown().await;
+        }
+    }
+}
+
 fn token() -> Arc<Mutex<String>> {
     Arc::new(Mutex::new(format!(
         "local-{}",

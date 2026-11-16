@@ -63,7 +63,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         "echo" => &["host", "wyoming_port"],
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
         "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap", "model"],
-        "mcp" => &["server"],
+        "mcp" => &["server", "state_dir", "client_id", "scopes", "operator_listen"],
         "screen" => &["listen", "pairing_token_file"],
         "audit" => &["log_dir"],
         p if p.starts_with("mcp.server[") && p.ends_with(']') => &["name", "url", "auth", "bearer_file", "allow_tools"],
@@ -87,6 +87,7 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
     config.chatgpt_auth.validate()?;
+    validate_mcp(&config.mcp)?;
     if config.audio.reply_lead_ms == 0 || !config.audio.reply_lead_ms.is_multiple_of(20) {
         return Err(ConfigError::new(
             "audio.reply_lead_ms",
@@ -126,6 +127,34 @@ pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
                 "required for bearer_file auth",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_mcp(config: &crate::McpConfig) -> Result<(), ConfigError> {
+    if config.operator_listen.ip() != std::net::Ipv4Addr::LOCALHOST {
+        return Err(ConfigError::new(
+            "mcp.operator_listen",
+            "expected literal IPv4 loopback",
+        ));
+    }
+    if config.client_id.trim().is_empty() || config.client_id.chars().any(char::is_control) {
+        return Err(ConfigError::new("mcp.client_id", "expected nonblank text"));
+    }
+    if config.scopes.is_empty()
+        || config
+            .scopes
+            .iter()
+            .any(|scope| scope.is_empty() || scope.chars().any(|c| c.is_whitespace() || c.is_control()))
+    {
+        return Err(ConfigError::new("mcp.scopes", "expected nonempty scope names"));
+    }
+    if config
+        .state_dir
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
+        return Err(ConfigError::new("mcp.state_dir", "expected nonempty path"));
     }
     Ok(())
 }

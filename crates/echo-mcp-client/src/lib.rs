@@ -29,6 +29,11 @@ pub enum TokenError {
 
 pub trait TokenProvider: Send + Sync {
     fn token(&self) -> impl Future<Output = Result<Secret<String>, TokenError>> + Send + '_;
+
+    /// Called before returning an HTTP 401, without retrying the request.
+    /// Grant owners can latch rejection before another token acquisition.
+    /// Implementations must not block or log credential contents.
+    fn unauthorized(&self) {}
 }
 
 pub struct McpClient<P> {

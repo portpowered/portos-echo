@@ -149,8 +149,21 @@ fn mcp(value: Value<'_>) -> Result<McpConfig, ConfigError> {
         .enumerate()
         .map(|(i, value)| server(value.into_inner(), i))
         .collect::<Result<_, _>>()?;
+    let defaults = McpConfig::default();
+    let listen: String = f
+        .optional("operator_listen")?
+        .unwrap_or_else(|| defaults.operator_listen.to_string());
+    let result = McpConfig {
+        server,
+        state_dir: f.optional("state_dir")?,
+        client_id: f.optional("client_id")?.unwrap_or(defaults.client_id),
+        scopes: f.optional("scopes")?.unwrap_or(defaults.scopes),
+        operator_listen: listen
+            .parse()
+            .map_err(|_| ConfigError::new("mcp.operator_listen", "expected socket address"))?,
+    };
     f.finish()?;
-    Ok(McpConfig { server })
+    Ok(result)
 }
 
 fn server(value: Value<'_>, index: usize) -> Result<McpServer, ConfigError> {

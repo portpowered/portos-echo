@@ -3,6 +3,64 @@ use std::fmt::Write;
 const MINIMAL: &str = "[echo]\nhost='local'\n[live]\ncredential_file='missing'\n[agent]\n[mcp]\n[screen]\npairing_token_file='missing'\n[audit]\nlog_dir='missing'\n";
 
 #[test]
+fn mcp_link_defaults_and_explicit_overrides_remain_offline() {
+    let old = BridgeConfig::from_toml_str(MINIMAL).unwrap().mcp;
+    assert_eq!(old, echo_config::McpConfig::default());
+    assert_eq!(old.state_dir, None);
+    assert_eq!(old.client_id, "port1/systems/zero/oauth-clients/command-line-interface");
+    assert_eq!(old.scopes, ["endpoint:read"]);
+    assert_eq!(old.operator_listen.to_string(), "127.0.0.1:16902");
+    let input = MINIMAL.replace("[mcp]", "[mcp]\nstate_dir='absent/mcp-state'\nclient_id='public-test-client'\nscopes=['endpoint:read','other:read']\noperator_listen='127.0.0.1:0'");
+    let config = BridgeConfig::from_toml_str(&input).unwrap().mcp;
+    assert_eq!(config.state_dir, Some("absent/mcp-state".into()));
+    assert_eq!(config.client_id, "public-test-client");
+    assert_eq!(config.scopes, ["endpoint:read", "other:read"]);
+    assert_eq!(config.operator_listen.to_string(), "127.0.0.1:0");
+    // A legacy device-code config still decodes without creating a grant store.
+    let legacy =
+        format!("{MINIMAL}\n[[mcp.server]]\nname='portos'\nurl='http://127.0.0.1:1/mcp'\nauth='portos_device_code'");
+    let config = BridgeConfig::from_toml_str(&legacy).unwrap().mcp;
+    assert_eq!(config.state_dir, None);
+    assert_eq!(config.server[0].auth, echo_config::McpAuth::PortosDeviceCode);
+}
+
+#[test]
+fn mcp_link_rejects_invalid_fields_without_echoing_values() {
+    for (field, input, message) in [
+        ("client_id", "''", "expected nonblank text"),
+        ("client_id", "'  '", "expected nonblank text"),
+        ("client_id", "\"private\\nvalue\"", "expected nonblank text"),
+        ("scopes", "[]", "expected nonempty scope names"),
+        ("scopes", "['']", "expected nonempty scope names"),
+        (
+            "scopes",
+            "['endpoint:read other:read']",
+            "expected nonempty scope names",
+        ),
+        ("scopes", "[1]", "invalid type or value"),
+        ("state_dir", "''", "expected nonempty path"),
+        ("state_dir", "4", "invalid type or value"),
+        ("operator_listen", "'localhost:1'", "expected socket address"),
+        ("operator_listen", "'0.0.0.0:1'", "expected literal IPv4 loopback"), // lint-rules: allow-literal rejected offline configuration
+        ("operator_listen", "'[::1]:1'", "expected literal IPv4 loopback"), // lint-rules: allow-literal rejected offline configuration
+        ("operator_listen", "'127.0.0.2:1'", "expected literal IPv4 loopback"), // lint-rules: allow-literal rejected offline configuration
+    ] {
+        let input = MINIMAL.replace("[mcp]", &format!("[mcp]\n{field}={input}"));
+        assert_eq!(
+            BridgeConfig::from_toml_str(&input).unwrap_err().to_string(),
+            format!("mcp.{field}: {message}")
+        );
+    }
+    for field in ["state_dir", "client_id", "scopes", "operator_listen"] {
+        let input = MINIMAL.replace("[mcp]", &format!("[mcp]\n{field}={{secret='private'}}"));
+        assert_eq!(
+            BridgeConfig::from_toml_str(&input).unwrap_err().to_string(),
+            format!("mcp.{field}.secret: secrets go in files, not config")
+        );
+    }
+}
+
+#[test]
 fn auth_defaults_and_every_override_are_offline() {
     let old = BridgeConfig::from_toml_str(MINIMAL).unwrap();
     let d = old.chatgpt_auth;
