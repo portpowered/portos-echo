@@ -8,6 +8,9 @@ mod gadget;
 mod report;
 mod store;
 
+#[cfg(unix)]
+pub mod service;
+
 pub use backend::{MuseBackend, compose_task_message};
 pub use clock::{Clock, EpochClock};
 pub use gadget::{CliGadget, Gadget, GadgetError, Reply, SideChat};

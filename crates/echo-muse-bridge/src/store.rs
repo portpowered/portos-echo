@@ -138,6 +138,8 @@ fn replace(path: &Path, snapshot: &Snapshot) -> Result<(), StoreError> {
     serde_json::to_writer(file.as_file_mut(), snapshot)?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|error| StoreError::Io(error.error))?;
+    #[cfg(unix)]
+    std::fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 

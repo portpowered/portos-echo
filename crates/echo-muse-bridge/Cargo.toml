@@ -17,13 +17,36 @@ thiserror = "2"
 getrandom = "0.4"
 uuid = "1"
 tempfile = "3"
-tokio = { version = "1", features = ["process", "sync", "time", "rt", "macros"] }
+tokio = { version = "1", features = ["process", "sync", "time", "rt", "macros", "rt-multi-thread", "net", "io-util", "io-std", "signal"] }
+[target.'cfg(unix)'.dependencies]
+axum = "0.8"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+subtle = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "test-util"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "aws_lc_rs"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
+
 [[bin]]
 name = "echo-muse-fake-gadget"
 path = "tests/support/fake_gadget.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "echo-muse-daemon"
+path = "src/bin/echo-muse-daemon.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "echo-muse-report"
+path = "src/bin/echo-muse-report.rs"
 test = false
 bench = false

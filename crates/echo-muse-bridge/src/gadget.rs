@@ -1,7 +1,7 @@
 use std::{future::Future, path::PathBuf, process::Stdio};
 
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
+use tokio::{io::AsyncReadExt, process::Command};
 use uuid::Uuid;
 
 /// A dedicated UUID per task, reused only for that task's cancellation.
@@ -87,7 +87,7 @@ impl Gadget for CliGadget {
         if !(1..=600).contains(&wait) {
             return Err(GadgetError::Wait);
         }
-        let output = Command::new(&self.program)
+        let mut child = Command::new(&self.program)
             .args([
                 "send-user-msg",
                 "--session-id",
@@ -97,9 +97,11 @@ impl Gadget for CliGadget {
                 text,
             ])
             .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
-            .output()
-            .await?;
+            .spawn()?;
+        let output = bounded_output(&mut child).await?;
         match output.status.code().ok_or(GadgetError::Signal)? {
             code @ (0 | 3) => Ok(Reply {
                 text: String::from_utf8(output.stdout).map_err(|_| GadgetError::Encoding)?,
@@ -115,5 +117,39 @@ impl Gadget for CliGadget {
                     .into(),
             }),
         }
+    }
+}
+
+async fn bounded_output(child: &mut tokio::process::Child) -> Result<std::process::Output, GadgetError> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("missing stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| std::io::Error::other("missing stderr"))?;
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let mut stdout = stdout.take(98305);
+    let mut stderr = stderr.take(98305);
+    let operation = async {
+        let (status, _, _) =
+            tokio::try_join!(child.wait(), stdout.read_to_end(&mut out), stderr.read_to_end(&mut err))?;
+        if out.len() > 98304 || err.len() > 98304 {
+            return Err(std::io::Error::other("gadget output limit"));
+        }
+        Ok(std::process::Output {
+            status,
+            stdout: out,
+            stderr: err,
+        })
+    };
+    if let Ok(Ok(output)) = tokio::time::timeout(std::time::Duration::from_secs(2), operation).await {
+        Ok(output)
+    } else {
+        let _killed = child.kill().await;
+        let _reaped = child.wait().await;
+        Err(std::io::Error::other("gadget transport failed").into())
     }
 }

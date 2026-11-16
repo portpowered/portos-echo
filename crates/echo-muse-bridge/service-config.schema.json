@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Echo Muse daemon configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "listen",
+    "tls_certificate_der",
+    "tls_private_key_der",
+    "client_credential_file",
+    "store",
+    "report_socket",
+    "gadget_program"
+  ],
+  "properties": {
+    "listen": {
+      "type": "string",
+      "description": "Explicit numeric IPv4/IPv6 SocketAddr. No default. Port zero permits an ephemeral listener. No plaintext mode."
+    },
+    "tls_certificate_der": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute operator-owned DER X.509 certificate path outside repository."
+    },
+    "tls_private_key_der": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute private PKCS#8 DER key path; owner-only file. Key/certificate must match."
+    },
+    "client_credential_file": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute private regular file outside repository. 32..256 ASCII non-whitespace bytes; one optional trailing LF. Secret<String> in memory; no Debug/Display."
+    },
+    "store": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute version-1 task JSON path in owner-only directory. Canonicalize parent; refuse symlinks. Hold companion .lock OS lease until exit."
+    },
+    "report_socket": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute Unix socket path in owner-only (0700) directory; socket 0600. Explicit path only."
+    },
+    "gadget_program": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute operator-configured executable. Only fixed send-user-msg argv; never selected from a request."
+    },
+    "clock": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source"
+          ],
+          "properties": {
+            "source": {
+              "const": "system"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "initial_unix_seconds"
+          ],
+          "properties": {
+            "source": {
+              "const": "controlled_stdin"
+            },
+            "initial_unix_seconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709552000
+            }
+          },
+          "description": "Explicit T3 seam; allowed only with --control-stdin and listen IP exactly 127.0.0.1. Never accepted for LAN binding. No HTTP or callback clock control."
+        }
+      ],
+      "default": {
+        "source": "system"
+      }
+    }
+  },
+  "examples": [
+    {
+      "listen": "127.0.0.1:0",
+      "tls_certificate_der": "/private/echo/server.der",
+      "tls_private_key_der": "/private/echo/server-key.der",
+      "client_credential_file": "/private/echo/client.credential",
+      "store": "/private/echo/tasks.json",
+      "report_socket": "/private/echo/report.sock",
+      "gadget_program": "/private/echo/musegadget",
+      "clock": {
+        "source": "system"
+      }
+    }
+  ]
+}
