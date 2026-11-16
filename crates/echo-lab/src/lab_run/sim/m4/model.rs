@@ -13,6 +13,7 @@ pub const FALLBACK: &str = "I couldn't call test echo.";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Observation {
+    pub accepted_connections: usize,
     pub requests: usize,
     pub output_verified: bool,
     pub failure: Option<String>,
@@ -114,6 +115,7 @@ async fn serve(
     for index in 0..3 {
         let result = tokio::time::timeout(std::time::Duration::from_secs(20), async {
             let (mut socket, _) = listener.accept().await.map_err(|_| "model: accept failed")?;
+            observed.send_modify(|o| o.accepted_connections += 1);
             let request = read(&mut socket).await?;
             observed.send_modify(|o| o.requests += 1);
             if index == 1 && let Some(gate) = result_gate.take() {

@@ -202,7 +202,9 @@ async fn t3_model_wrong_result_never_emits_commentary_and_stalled_body_is_collec
         .await
         .unwrap();
     let mut observed = model.observed.clone();
-    observed.wait_for(|v| v.requests == 1).await.unwrap();
+    observed.wait_for(|v| v.accepted_connections == 1).await.unwrap();
+    assert_eq!(observed.borrow().requests, 0);
+    assert!(!observed.borrow().output_verified);
     model.close().await.unwrap();
     assert!(observed.has_changed().is_err());
     match socket.read(&mut [0]).await {

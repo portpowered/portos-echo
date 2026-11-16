@@ -260,7 +260,12 @@ async fn t3_f09_f10_f11_f13_exact_results_and_explicit_repeats() {
     for (name, args, expected, is_error) in [
         ("test.wait", json!({"ms":0}), "waited 0 ms", false),
         ("test.requires_approval", json!({}), "approval_required", true),
-        ("ui.show_emotion", json!({"name":"happy"}), "happy", false),
+        (
+            "ui.show_emotion",
+            json!({"name":"happy"}),
+            r#"{"frame_ms":80,"frames":["(^_^)","(^o^)"],"name":"happy","state":"emotion"}"#,
+            false,
+        ),
         ("test.echo", json!({"text":"repeat"}), "repeat", false),
         ("test.echo", json!({"text":"repeat"}), "repeat", false),
     ] {
