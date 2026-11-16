@@ -76,6 +76,14 @@ async fn t3_screen_connect_rejects_unauthorized_and_truncated_handshakes() {
             }
             assert_eq!(request, b"GET /events?token=test-pair HTTP/1.1\r\nHost: local\r\n\r\n");
             socket.write_all(reply).await.unwrap();
+            // End the response while retaining our socket to observe the client's cleanup.
+            socket.shutdown().await.unwrap();
+            assert_eq!(
+                socket.read_u8().await.unwrap_err().kind(),
+                std::io::ErrorKind::UnexpectedEof
+            );
+            drop(socket);
+            drop(listener);
         });
         let error = Screen::connect(&root).await.err().unwrap();
         assert_eq!(
@@ -88,6 +96,5 @@ async fn t3_screen_connect_rejects_unauthorized_and_truncated_handshakes() {
         );
         task.await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
-        assert!(TcpStream::connect(address).await.is_err());
     }
 }
