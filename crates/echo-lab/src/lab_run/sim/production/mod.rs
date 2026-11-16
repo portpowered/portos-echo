@@ -1,4 +1,5 @@
 //! Configured production child and authenticated screen observation for M1.
+pub mod mute;
 pub mod report;
 pub mod restart;
 use std::{net::SocketAddr, path::Path};
@@ -63,6 +64,7 @@ pub fn configure(command: &mut Command, root: &Path, address: SocketAddr, live: 
 pub struct Screen {
     socket: TcpStream,
     current: ScreenFrame,
+    pending: Vec<u8>,
 }
 
 impl Screen {
@@ -74,10 +76,11 @@ impl Screen {
             .write_all(b"GET /events?token=synthetic-local-screen HTTP/1.1\r\nHost: local\r\n\r\n")
             .await
             .map_err(|_| "screen: request failed")?;
-        if line(&mut socket).await? != "HTTP/1.1 200 OK\r" {
+        let mut pending = Vec::new();
+        if line(&mut socket, &mut pending).await? != "HTTP/1.1 200 OK\r" {
             return Err("screen: authentication failed".into());
         }
-        let current = frame(&mut socket).await?;
+        let current = frame(&mut socket, &mut pending).await?;
         if initial
             && (current.seq != 1
                 || current.state
@@ -87,7 +90,11 @@ impl Screen {
         {
             return Err("screen: expected exactly one initial Echo Live ready presentation".into());
         }
-        Ok(Self { socket, current })
+        Ok(Self {
+            socket,
+            current,
+            pending,
+        })
     }
 
     pub fn sequence(&self) -> u64 {
@@ -104,7 +111,7 @@ impl Screen {
             if super::observers::screen(&bytes, expected).is_ok() {
                 return Ok(());
             }
-            let next = frame(&mut self.socket).await?;
+            let next = frame(&mut self.socket, &mut self.pending).await?;
             if next.seq <= self.current.seq {
                 return Err("screen: stale presentation".into());
             }
@@ -113,20 +120,19 @@ impl Screen {
     }
 }
 
-async fn frame(socket: &mut TcpStream) -> Result<ScreenFrame, String> {
+async fn frame(socket: &mut TcpStream, pending: &mut Vec<u8>) -> Result<ScreenFrame, String> {
     loop {
-        if let Some(data) = line(socket).await?.strip_prefix("data: ") {
+        if let Some(data) = line(socket, pending).await?.strip_prefix("data: ") {
             return serde_json::from_str(data).map_err(|_| "screen: malformed presentation".into());
         }
     }
 }
 
-async fn line(socket: &mut TcpStream) -> Result<String, String> {
-    let mut bytes = Vec::new();
+async fn line(socket: &mut TcpStream, bytes: &mut Vec<u8>) -> Result<String, String> {
     loop {
         let byte = socket.read_u8().await.map_err(|_| "screen: stream ended")?;
         if byte == b'\n' {
-            return String::from_utf8(bytes).map_err(|_| "screen: invalid UTF-8".into());
+            return String::from_utf8(std::mem::take(bytes)).map_err(|_| "screen: invalid UTF-8".into());
         }
         if bytes.len() == 65_536 {
             return Err("screen: oversized line".into());

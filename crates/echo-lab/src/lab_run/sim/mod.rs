@@ -22,6 +22,7 @@ pub struct Sim<'a> {
     budgets: Vec<(usize, String, f64, Option<String>, u64)>,
     deadline: tokio::time::Instant,
     m1: bool,
+    mute: production::mute::Probe,
 }
 
 impl<'a> Sim<'a> {
@@ -37,6 +38,7 @@ impl<'a> Sim<'a> {
                 .iter()
                 .any(|path| crate::lab_validate::load(path).is_ok_and(|s| s["id"] == "m1-hassmic-bridge")),
             options,
+            mute: production::mute::Probe::default(),
             runtime,
             world: World::default(),
             launched: false,
@@ -59,7 +61,12 @@ impl<'a> Sim<'a> {
                         )
                         .await?;
                 }
-                execute_step(&mut self.world, step, self.options, &artifacts.root).await
+                if self.m1 && (self.mute.skipped(step) || self.mute.observe(&mut self.world, step).await?) {
+                    return Ok(());
+                }
+                execute_step(&mut self.world, step, self.options, &artifacts.root).await?;
+                self.mute.pressed(step);
+                Ok(())
             };
             controlled(work, self.options.cancel.as_deref(), self.deadline).await
         })
@@ -188,6 +195,12 @@ impl Driver for Sim<'_> {
         artifacts: &mut Artifacts,
     ) -> Result<(), String> {
         self.attempt(step, artifacts)?;
+        if self.m1 && self.mute.skipped(step) {
+            artifacts
+                .blocked
+                .insert(format!("step_{index}"), production::mute::LIMITATION.into());
+            return Ok(());
+        }
         if let Step::Trace(values) = step {
             self.expectations.push((
                 index,
@@ -235,7 +248,9 @@ impl Driver for Sim<'_> {
         if self.m1 && self.world.initial_ready.is_some() {
             let m1 = production::report::collect(&self.world);
             let checked = production::report::check(&self.world, &m1);
-            artifacts.checks.insert("m1_counts".into(), checked.is_ok());
+            artifacts
+                .checks
+                .insert("m1_counts".into(), checked.is_ok() && m1["mute_status"] == "pass");
             failures.extend(checked.err());
             artifacts.m1 = Some(m1);
         }

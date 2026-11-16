@@ -467,6 +467,12 @@ all 22 streamed wakes (each at least 10 microphone frames), the real native mute
 scoped by `bridge_generation`. Each restart stops and collects that process before replacement,
 checks the opposite process identity, reconnects on the same host endpoint, and runs the ordered
 wake oracle. The scenario has a 120 second ceiling; no real service, device or account is used.
+If the native latch acknowledges but the real screen stream does not show Muted within two
+seconds, the runner records the mute observation as unavailable. It skips only the dependent
+privacy checks, unlatches the host, and still runs the next wake and both full restart groups.
+The report returns `blocked`, omits `mute_window`, retains measured wake/restart counts, and
+the command exits 1. This does not diagnose the missing producer or prove privacy. Any other
+failed check, malformed screen event, faulty mute measurement or cleanup failure returns `fail`.
 Component coverage for one independent restart of each process is available with:
 
 ```sh

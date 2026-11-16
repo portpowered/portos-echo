@@ -27,6 +27,7 @@ pub struct World {
     pub history: Vec<Trace>,
     pub restarts: Vec<Value>,
     pub initial_ready: Option<u64>,
+    pub mute_blocked: bool,
     pub address: Option<std::net::SocketAddr>,
     pub run: Option<String>,
     pub endpoints: Vec<std::net::SocketAddr>,

@@ -25,9 +25,11 @@ pub fn collect(world: &World) -> Value {
     if let [window] = windows.as_slice() {
         result["mute_window"] =
             json!({"received_frames":window["received_frames"],"forwarded_frames":window["forwarded_frames"]});
-        if window["received_frames"] == 0 && window["forwarded_frames"] == 0 {
+        if !world.mute_blocked && window["received_frames"] == 0 && window["forwarded_frames"] == 0 {
             result["mute_status"] = json!("pass");
         }
+    } else if windows.is_empty() && world.mute_blocked {
+        result["mute_status"] = json!("blocked");
     }
     result
 }
@@ -36,7 +38,7 @@ pub fn check(world: &World, measured: &Value) -> Result<(), String> {
     if measured["ready_before_first_wake"] != 1
         || measured["bridge_restarts"] != 10
         || measured["hassmic_host_restarts"] != 10
-        || measured["mute_status"] != "pass"
+        || !(measured["mute_status"] == "pass" || world.mute_blocked && measured["mute_status"] == "blocked")
     {
         return Err("M1: expected Ready=1, mute received=0/forwarded=0, bridge restarts=10, host restarts=10".into());
     }
@@ -163,5 +165,33 @@ mod tests {
         world.history[2].records.clear();
         assert_eq!(collect(&world)["streamed_wakes"].as_array().unwrap().len(), 21);
         assert!(check(&world, &collect(&world)).unwrap_err().contains("observed 21"));
+    }
+
+    #[test]
+    fn blocked_mute_omits_unmeasured_counts_but_requires_every_independent_wake() {
+        let mut world = observed();
+        world.history[0].records.pop();
+        // Missing evidence alone must fail; only an explicit unavailable
+        // observation can classify the mute segment as blocked.
+        assert_eq!(collect(&world)["mute_status"], "fail");
+        assert!(check(&world, &collect(&world)).is_err());
+        world.mute_blocked = true;
+        let measured = collect(&world);
+        assert_eq!(measured["mute_status"], "blocked");
+        assert!(measured.get("mute_window").is_none());
+        assert_eq!(check(&world, &measured), Ok(()));
+        assert_eq!(measured["bridge_restarts"], 10);
+        assert_eq!(measured["hassmic_host_restarts"], 10);
+        world.trace.records[1]["count"] = json!(9);
+        assert!(check(&world, &collect(&world)).is_err());
+        world.trace.records[1]["count"] = json!(10);
+        world.restarts.pop();
+        assert!(check(&world, &collect(&world)).is_err());
+        // Late faulty evidence cannot hide behind an earlier timeout.
+        world
+            .trace
+            .records
+            .push(json!({"event":"mic.mute_window", "received_frames":0,"forwarded_frames":1}));
+        assert_eq!(collect(&world)["mute_status"], "fail");
     }
 }

@@ -146,7 +146,10 @@ fn dispatch(driver: &mut dyn Driver, steps: &[Step], artifacts: &mut Artifacts) 
     for (index, step) in steps.iter().enumerate() {
         artifacts.event("step_started", Some(index), None)?;
         let result = driver.execute(step, index, steps.get(index + 1), artifacts);
-        artifacts.checks.insert(format!("step_{index}"), result.is_ok());
+        let key = format!("step_{index}");
+        artifacts
+            .checks
+            .insert(key.clone(), result.is_ok() && !artifacts.blocked.contains_key(&key));
         if let Err(message) = result {
             artifacts.event("step_failed", Some(index), Some(&message))?;
             return Err(if artifacts.sim {
@@ -155,9 +158,30 @@ fn dispatch(driver: &mut dyn Driver, steps: &[Step], artifacts: &mut Artifacts) 
                 message
             });
         }
-        artifacts.event("step_completed", Some(index), None)?;
+        let blocked = artifacts.blocked.get(&key).cloned();
+        artifacts.event(
+            if blocked.is_some() {
+                "step_blocked"
+            } else {
+                "step_completed"
+            },
+            Some(index),
+            blocked.as_deref(),
+        )?;
     }
     Ok(())
+}
+
+fn completed(result: Result<(), String>, artifacts: &Artifacts, scenario: Option<&str>) -> Result<(), String> {
+    result
+        .and_then(|()| {
+            if artifacts.blocked.is_empty() {
+                Ok(())
+            } else {
+                Err("M1: mute evidence blocked; see report limitations".into())
+            }
+        })
+        .map_err(|e| scenario.map_or_else(|| e.clone(), |path| format!("{path}: {e}")))
 }
 
 fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
@@ -208,16 +232,10 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
         output,
         "{}: {}",
         artifacts.root.display(),
-        if result.is_ok() { "pass" } else { "fail" }
+        artifacts.outcome(result.as_ref().err().map(String::as_str))
     )
     .map_err(|_| "run stdout: write failed")?;
-    result.map_err(|e| {
-        if options.sim {
-            format!("{}: {e}", options.scenarios[0])
-        } else {
-            e
-        }
-    })
+    completed(result, &artifacts, options.sim.then(|| options.scenarios[0].as_str()))
 }
 
 pub fn run(args: &[String], output: &mut impl Write, errors: &mut impl Write) -> u8 {
