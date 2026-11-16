@@ -14,6 +14,11 @@ fn pattern(value: &str) -> Result<jsonschema::Validator, String> {
 }
 
 pub fn parse(value: &Value) -> Result<Step, String> {
+    if let Some(control) = value.get("mcp") {
+        return serde_json::from_value::<super::McpControl>(control.clone())
+            .map(|control| Step::Mcp(control.action))
+            .map_err(|_| "mcp: expected one supported action without extra fields".into());
+    }
     if let Some(counts) = value.get("expect_link_counts") {
         return serde_json::from_value(counts.clone())
             .map(Step::LinkCounts)
@@ -137,6 +142,45 @@ pub fn frame_destination(root: &Path, name: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_control_parser_preserves_actions_and_refuses_malformed_controls() {
+        use super::super::McpAction;
+        for (name, expected) in [
+            ("link", McpAction::Link),
+            ("approve", McpAction::Approve),
+            ("refresh", McpAction::Refresh),
+            ("restart", McpAction::Restart),
+            ("call", McpAction::Call),
+            ("replay", McpAction::Replay),
+            ("probe", McpAction::Probe),
+            ("unlink", McpAction::Unlink),
+        ] {
+            for parsed in [
+                parse(&json!({"mcp":{"action":name}})),
+                super::super::sim::parse(&json!({"mcp":{"action":name}})),
+            ] {
+                assert!(matches!(parsed.unwrap(), Step::Mcp(actual) if actual == expected));
+            }
+            assert_eq!(expected.name(), name);
+        }
+        for invalid in [
+            Value::Null,
+            json!([]),
+            json!("link"),
+            json!({}),
+            json!({"action":null}),
+            json!({"action":1}),
+            json!({"action":"unknown"}),
+            json!({"action":"Link"}),
+            json!({"action":"link","extra":true}),
+        ] {
+            assert_eq!(
+                parse(&json!({"mcp":invalid})).err().unwrap(),
+                "mcp: expected one supported action without extra fields"
+            );
+        }
+    }
 
     #[test]
     fn link_count_parser_rejects_incomplete_or_non_integer_measurements() {

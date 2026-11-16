@@ -227,6 +227,13 @@ so late duplicate outcomes fail the earlier assertion. Reports include optional
 The existing generic drivers do not produce these measurements; the integrated
 M5 driver and scenario remain pending.
 
+The schema and shared parser accept `mcp: {action: link}` with actions `link`,
+`approve`, `refresh`, `restart`, `call`, `replay`, `probe` and `unlink`.
+Missing, unknown or extra control fields are invalid. Until the M5 driver is
+mounted, both generic drivers explicitly refuse these controls before starting
+a host, bridge or device operation. The failed report retains the failed step
+and omits unobserved counts; accepting the scenario syntax does not prove M5.
+
 Build once with `cargo build -p echo-lab --bins --locked`. T3 tests use prebuilt
 `echo-lab` and `echo-lab-fake-run`, isolated temporary directories, and per-child
 `ECHO_LAB_RUN_FIXTURE` / `ECHO_LAB_RUN_LEDGER`. The latter executable implements

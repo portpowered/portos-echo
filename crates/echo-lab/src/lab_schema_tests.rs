@@ -39,6 +39,36 @@ fn scenario_shapes_and_pointer_diagnostics() {
 }
 
 #[test]
+fn mcp_controls_round_trip_and_reject_unknown_or_ambiguous_operations() {
+    let validator = schema().unwrap();
+    let mut value = scenario();
+    for action in [
+        "link", "approve", "refresh", "restart", "call", "replay", "probe", "unlink",
+    ] {
+        value["steps"] = json!([{"mcp":{"action":action}}]);
+        assert!(validator.is_valid(&value));
+        let encoded = serde_norway::to_string(&value).unwrap();
+        assert_eq!(serde_norway::from_str::<Value>(&encoded).unwrap(), value);
+    }
+    for control in [
+        Value::Null,
+        json!([]),
+        json!("link"),
+        json!({}),
+        json!({"action":null}),
+        json!({"action":1}),
+        json!({"action":"unknown"}),
+        json!({"action":"Link"}),
+        json!({"action":"link","extra":true}),
+    ] {
+        value["steps"] = json!([{"mcp":control}]);
+        assert!(!validator.is_valid(&value));
+    }
+    value["steps"] = json!([{"mcp":{"action":"link"},"press":"wake"}]);
+    assert!(!validator.is_valid(&value));
+}
+
+#[test]
 fn all_step_forms_and_negative_assertions_validate() {
     let example: Value = serde_norway::from_str(include_str!("../tests/lab_m4.yaml")).unwrap();
     assert!(schema().unwrap().is_valid(&example));

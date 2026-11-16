@@ -14,6 +14,40 @@ use run_options::Options;
 use run_report::Artifacts;
 pub use run_report::LinkCounts;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpAction {
+    Link,
+    Approve,
+    Refresh,
+    Restart,
+    Call,
+    Replay,
+    Probe,
+    Unlink,
+}
+
+impl McpAction {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Link => "link",
+            Self::Approve => "approve",
+            Self::Refresh => "refresh",
+            Self::Restart => "restart",
+            Self::Call => "call",
+            Self::Replay => "replay",
+            Self::Probe => "probe",
+            Self::Unlink => "unlink",
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpControl {
+    action: McpAction,
+}
+
 /// One step representation and dispatcher, shared by future drivers.
 pub enum Step {
     SayFile(PathBuf),
@@ -27,6 +61,7 @@ pub enum Step {
     Budget(String, f64),
     Restart { process: String, count: u64, say: PathBuf },
     LinkCounts(LinkCounts),
+    Mcp(McpAction),
     Unsupported,
 }
 

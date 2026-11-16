@@ -188,6 +188,27 @@
               "minimum": 0
             }
           }
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action"
+          ],
+          "properties": {
+            "action": {
+              "enum": [
+                "link",
+                "approve",
+                "refresh",
+                "restart",
+                "call",
+                "replay",
+                "probe",
+                "unlink"
+              ]
+            }
+          }
         }
       }
     },

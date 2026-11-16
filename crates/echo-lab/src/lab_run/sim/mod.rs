@@ -49,6 +49,12 @@ impl<'a> Sim<'a> {
     }
 
     fn attempt(&mut self, step: &Step, artifacts: &Artifacts) -> Result<(), String> {
+        if let Step::Mcp(action) = step {
+            return Err(format!(
+                "sim: MCP {} control requires the M5 bridge driver",
+                action.name()
+            ));
+        }
         self.runtime.block_on(async {
             let work = async {
                 if !self.launched {
