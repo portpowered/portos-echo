@@ -15,8 +15,8 @@ struct Request {
     body: Value,
 }
 
-struct Model {
-    origin: String,
+pub(super) struct Model {
+    pub(super) origin: String,
     requests: Arc<Mutex<Vec<Request>>>,
     worker: tokio::task::JoinHandle<()>,
 }
@@ -28,7 +28,7 @@ impl Drop for Model {
 }
 
 impl Model {
-    async fn start(outage: bool, allowed: bool) -> Self {
+    pub(super) async fn start(outage: bool, allowed: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = "http://127.0.0.1";
         let origin = format!("{base}:{}", listener.local_addr().unwrap().port());
@@ -99,11 +99,11 @@ async fn read(socket: &mut TcpStream) -> Request {
     }
 }
 
-fn event(id: &str, target: &str) -> String {
+pub(super) fn event(id: &str, target: &str) -> String {
     json!({"type":"session.delegation.created","delegation":{"id":id,"target":target,"input":"echo"}}).to_string()
 }
 
-async fn configure(directory: &Path, port: u16, mode: &str, spoof: &Spoof, allowed: bool) {
+pub(super) async fn configure(directory: &Path, port: u16, mode: &str, spoof: &Spoof, allowed: bool) {
     bridge_wire_screen::setup(directory, port);
     let path = directory.join("bridge.toml");
     let content = std::fs::read_to_string(&path)
@@ -265,7 +265,7 @@ async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() 
     spoof.shutdown().await.unwrap();
 }
 
-fn run_command(directory: &Path, origin: &str, model: &str) -> Command {
+pub(super) fn run_command(directory: &Path, origin: &str, model: &str) -> Command {
     bridge_wire_auth::command(
         directory,
         &[
@@ -470,4 +470,11 @@ async fn bridge_wire_delegation_eof_cancels_inflight_model_without_commentary() 
     );
     live.shutdown().await;
     spoof.shutdown().await.unwrap();
+}
+
+pub(super) fn check_journey(model: &Model, spoof: &Spoof) {
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    check_headers(&requests, "api_key", "synthetic-api-key");
+    check_tools(&requests, spoof, true, false);
 }
