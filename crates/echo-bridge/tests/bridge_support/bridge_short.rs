@@ -17,6 +17,16 @@ pub(super) async fn send(stream: &mut (impl tokio::io::AsyncWrite + Unpin), kind
         .await
         .unwrap();
 }
+// Read a satellite socket to its close. When the bridge closes with peer
+// bytes still unread (a late frame racing stdin EOF), Linux answers with RST
+// instead of FIN; both forms are a clean close. Returns the bytes received.
+pub(super) async fn read_to_close(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if let Err(error) = stream.read_to_end(&mut bytes).await {
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset, "{error}");
+    }
+    bytes
+}
 pub(super) async fn read(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> (Value, Vec<u8>) {
     let (header, bytes) = frame(stream).await.unwrap().unwrap();
     let length = usize::try_from(header["payload_length"].as_u64().unwrap_or(0)).unwrap();

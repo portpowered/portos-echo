@@ -25,14 +25,8 @@ async fn bridge_lifecycle_eof_with_idle_probe_response_closes_without_false_capa
     assert_eq!(entries.iter().filter(|e| e["event"] == "run.started").count(), 0);
     let address = entries[0]["health_addr"].as_str().unwrap();
     assert!(tokio::net::TcpStream::connect(address).await.is_err());
-    // The late info can still sit unread in the bridge's socket when it
-    // closes; Linux then answers with RST. Either close form is clean as long
-    // as the bridge wrote nothing after stdin EOF.
-    let mut remaining = Vec::new();
-    if let Err(error) = satellite.read_to_end(&mut remaining).await {
-        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset, "{error}");
-    }
-    assert_eq!(remaining, Vec::<u8>::new());
+    // The late info can still be unread when the bridge closes.
+    assert_eq!(bridge_short::read_to_close(&mut satellite).await, Vec::<u8>::new());
 }
 
 #[tokio::test]

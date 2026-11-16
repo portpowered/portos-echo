@@ -266,8 +266,7 @@ async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() 
     assert_eq!(model.requests.lock().unwrap().len(), 0);
     assert_eq!(spoof.snapshot().unwrap().calls.len(), 0);
     bridge.finish(0).await;
-    let mut remaining = Vec::new();
-    satellite.read_to_end(&mut remaining).await.unwrap();
+    let remaining = bridge_short::read_to_close(&mut satellite).await;
     assert_eq!(remaining, Vec::<u8>::new()); // No duplicate error, audio or replay after the two refusals.
     failures::check_credential_refusals(&path);
     spoof.shutdown().await.unwrap();
