@@ -9,6 +9,7 @@ publish = false
 workspace = true
 
 [dependencies]
+echo-agent-api = { version = "0.1.0", path = "../echo-agent-api" }
 echo-link = { version = "0.1.0", path = "../echo-link" }
 echo-agent-loop = { version = "0.1.0", path = "../echo-agent-loop" }
 echo-delegation = { version = "0.1.0", path = "../echo-delegation" }

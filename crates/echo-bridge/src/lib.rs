@@ -4,6 +4,8 @@ pub mod bridge_health;
 pub mod bridge_input;
 #[path = "bridge_mcp/bridge_mcp.rs"]
 pub mod bridge_mcp;
+#[path = "bridge_muse/bridge_muse.rs"]
+pub mod bridge_muse;
 pub mod bridge_operator;
 pub mod bridge_runtime;
 pub mod bridge_trace;
