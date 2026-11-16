@@ -48,6 +48,11 @@ fn job(name: &str, target: &str) -> String {
             "        env:\n          COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}\n",
         );
     }
+    if name == "coverage" {
+        block.push_str(
+            "      - name: Detect quarantined coverage profiles\n        id: quarantine\n        if: always()\n        run: |\n          present=false\n          if [ -d target/llvm-cov/quarantine ]; then\n            if [ -n \"$(find target/llvm-cov/quarantine -type f -name '*.profraw' -print -quit)\" ]; then\n              present=true\n            fi\n          fi\n          echo \"present=$present\" >> \"$GITHUB_OUTPUT\"\n      - name: Retain quarantined coverage profiles\n        if: ${{ always() && steps.quarantine.outputs.present == 'true' }}\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: coverage-quarantine-${{ github.run_id }}-${{ github.run_attempt }}\n          path: target/llvm-cov/quarantine/\n          retention-days: 3\n          if-no-files-found: error\n",
+        );
+    }
     if name == "test-unit" {
         block.push_str("      - name: Publish screen screenshot evidence\n        if: always()\n        id: screen-evidence\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: screen-evidence-${{ github.sha }}\n          path: |\n            web/screen/test-results/screenshots/**\n            web/screen/test-results/summary.txt\n          if-no-files-found: error\n");
     }
@@ -294,6 +299,39 @@ mod tests {
         ] {
             assert!(evaluate(&makefile, &workflow.replace(from, to)).is_err());
         }
+    }
+
+    #[test]
+    fn coverage_quarantine_requires_exact_reviewed_tail() {
+        let (makefile, workflow) = fixture();
+        let coverage = job("coverage", "coverage");
+        for (from, to) in [
+            ("if: always()", "if: success()"),
+            ("steps.quarantine.outputs.present == 'true'", "true"),
+            ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4"),
+            ("retention-days: 3", "retention-days: 90"),
+            ("path: target/llvm-cov/quarantine/", "path: target/"),
+            ("if-no-files-found: error", "if-no-files-found: ignore"),
+            ("present=false", "present=true"),
+            ("run: make coverage\n", "run: make coverage || true\n"),
+        ] {
+            let changed = workflow.replace(&coverage, &coverage.replace(from, to));
+            assert_ne!(changed, workflow);
+            assert!(
+                evaluate(&makefile, &changed)
+                    .unwrap_err()
+                    .contains("unsupported job coverage")
+            );
+        }
+        let removed = workflow.replace(
+            &coverage,
+            &coverage[..coverage.find("      - name: Detect quarantined").unwrap()],
+        );
+        assert!(
+            evaluate(&makefile, &removed)
+                .unwrap_err()
+                .contains("unsupported job coverage")
+        );
     }
 
     #[test]
