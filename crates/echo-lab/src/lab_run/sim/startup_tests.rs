@@ -157,3 +157,288 @@ async fn t3_cancelled_stop_keeps_its_deadline_and_collects_forced_exit() {
     #[cfg(windows)]
     assert_eq!(status.code(), Some(1));
 }
+
+#[cfg(windows)]
+struct WindowsLauncher {
+    process: Option<super::process::Process>,
+    observers: Vec<std::process::Child>,
+    collected: std::sync::mpsc::Receiver<std::process::ExitStatus>,
+    root: std::path::PathBuf,
+}
+
+#[cfg(windows)]
+impl WindowsLauncher {
+    fn command(function: &str) -> std::process::Command {
+        let mut command = std::process::Command::new("python");
+        command.args(["-u", "-c", &format!(
+            "import sys; sys.path.insert(0,sys.argv[1]); from test_controls import {function}; {function}(*sys.argv[2:])"
+        )]);
+        command.arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/host_tests"));
+        command
+    }
+
+    async fn start(mode: &str) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "lab-win-owner-{}-{}",
+            std::process::id(),
+            listener.local_addr().unwrap().port()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut command = Self::command("native_launcher_fixture");
+        command
+            .arg(mode)
+            .arg(listener.local_addr().unwrap().port().to_string())
+            .arg(root.join("owned.log"));
+        let mut process = super::process::Process::start(&mut command.into()).unwrap();
+        let collected = process.observe_collection();
+        let mut fixture = Self {
+            process: Some(process),
+            observers: vec![],
+            collected,
+            root,
+        };
+        let phases = if mode == "translation-stall" { 1 } else { 2 };
+        for _ in 0..phases {
+            let (control, _) = tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut reader = tokio::io::BufReader::new(control);
+            let mut line = String::new();
+            tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line)
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let mut command = Self::command("native_handle_observer");
+            command.arg(value["pid"].to_string());
+            let mut observer = command
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            assert_eq!(Self::observation(&mut observer)["event"], "observer.ready");
+            fixture.observers.push(observer);
+            reader.get_mut().write_all(b"G").await.unwrap();
+        }
+        fixture
+    }
+
+    fn observation(observer: &mut std::process::Child) -> serde_json::Value {
+        let mut line = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(observer.stdout.as_mut().unwrap()),
+            &mut line,
+        )
+        .unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+
+    fn verify(&mut self, forced: bool) {
+        assert_eq!(self.collected.try_recv().unwrap().code(), Some(i32::from(forced)));
+        let last = self.observers.len() - 1;
+        for (index, observer) in self.observers.iter_mut().enumerate() {
+            std::io::Write::write_all(observer.stdin.as_mut().unwrap(), b"collect\n").unwrap();
+            let value = Self::observation(observer);
+            assert_eq!(value["event"], "observer.collected");
+            assert_eq!(value["owned_survivors"], 0);
+            assert_eq!(value["status"], u32::from(forced && index == last));
+            assert!(observer.wait().unwrap().success());
+        }
+        let audit = std::fs::read_to_string(self.root.join("owned.log")).unwrap();
+        assert_eq!(
+            audit.lines().filter(|line| line.ends_with(" force")).count(),
+            usize::from(forced)
+        );
+        std::io::Write::write_all(
+            &mut std::io::stdout(),
+            format!(
+                "N-WIN Rust Drop: wrapper/descendant statuses collected, owned_survivors=0, force_requests={}\n",
+                usize::from(forced)
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsLauncher {
+    fn drop(&mut self) {
+        drop(self.process.take());
+        for observer in &mut self.observers {
+            drop(observer.stdin.take());
+            let _ = observer.wait();
+        }
+        let _ = std::fs::remove_file(self.root.join("owned.log"));
+        let _ = std::fs::remove_dir(&self.root);
+    }
+}
+
+#[cfg(windows)]
+fn windows_launcher_drop(mode: &str, cancelled: bool, runtime_gone: bool) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut fixture = runtime.block_on(WindowsLauncher::start(mode));
+    if cancelled {
+        runtime.block_on(async {
+            let mut close = Box::pin(fixture.process.as_mut().unwrap().close());
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(close.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+        });
+    }
+    if runtime_gone {
+        drop(runtime);
+        drop(fixture.process.take());
+        fixture.verify(mode.ends_with("stall"));
+    } else {
+        runtime.block_on(async {
+            drop(fixture.process.take());
+            fixture.verify(mode.ends_with("stall"));
+        });
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn t3_windows_translation_drop_after_runtime_teardown() {
+    windows_launcher_drop("translation-stall", false, true);
+}
+
+#[test]
+#[cfg(windows)]
+fn t3_windows_running_cancelled_close_then_drop_on_runtime() {
+    windows_launcher_drop("running-stall", true, false);
+}
+
+#[test]
+#[cfg(windows)]
+fn t3_windows_normal_drop_after_runtime_teardown() {
+    windows_launcher_drop("normal", false, true);
+}
+
+#[test]
+#[cfg(windows)]
+fn t3_windows_running_cancelled_close_drop_after_runtime_teardown() {
+    windows_launcher_drop("running-stall", true, true);
+}
+
+#[tokio::test]
+#[cfg(windows)]
+async fn t3_windows_translation_cancelled_close_resumes_and_collects() {
+    let mut fixture = WindowsLauncher::start("translation-stall").await;
+    let process = fixture.process.as_mut().unwrap();
+    {
+        let mut close = Box::pin(process.close());
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(close.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+    }
+    assert_eq!(process.close().await, Err("cleanup: owned child exited nonzero".into()));
+    assert_eq!(process.close().await, Err("cleanup: owned child exited nonzero".into()));
+    drop(fixture.process.take());
+    fixture.verify(true);
+}
+
+#[cfg(windows)]
+fn require_prebuilt_host() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let pin = std::fs::read_to_string(repo.join("hassmic.pin")).unwrap();
+    let commit = pin.lines().find_map(|line| line.strip_prefix("commit=")).unwrap();
+    assert!(
+        repo.join(".cache/hassmic-host")
+            .join(commit)
+            .join("hassmic-host")
+            .is_file(),
+        "BLOCKED R-WSL: prebuilt pinned host is unavailable; do not build inside the test"
+    );
+}
+
+#[cfg(windows)]
+async fn real_wsl_cleanup(interrupted: bool) {
+    require_prebuilt_host();
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "lab-real-wsl-{}-{}",
+        std::process::id(),
+        reservation.local_addr().unwrap().port()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let mut command = WindowsLauncher::command("real_wsl_launcher_fixture");
+    command.arg(root.join("guest.json"));
+    let mut process = super::process::Process::start(&mut command.into()).unwrap();
+    let collected = process.observe_collection();
+    let fixture = WindowsLauncher {
+        process: None,
+        observers: vec![],
+        collected,
+        root,
+    };
+    let ready = process.expect("host.ready").await.unwrap();
+    let identity = process.expect("guest.owned").await.unwrap();
+    assert!(identity["pid"].as_u64().unwrap() > 0);
+    if interrupted {
+        drop(process);
+    } else {
+        assert_eq!(process.close().await, Ok(()));
+        assert_eq!(
+            process.expect("host.closed").await.unwrap(),
+            serde_json::json!({"event":"host.closed"})
+        );
+        drop(process);
+    }
+    assert_eq!(fixture.collected.try_recv().unwrap().code(), Some(0));
+    let witness: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.root.join("guest.json")).unwrap()).unwrap();
+    assert_eq!(witness["pid"], identity["pid"]);
+    assert_eq!(witness["closed"], true);
+    assert!(witness["status"].as_i64().is_some());
+    let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
+    assert_endpoint_closed(address).await;
+    std::fs::remove_file(fixture.root.join("guest.json")).unwrap();
+    std::io::Write::write_all(
+        &mut std::io::stdout(),
+        format!("R-WSL interrupted={interrupted}: guest={witness}, wrapper_status=0, endpoint_closed=true\n")
+            .as_bytes(),
+    )
+    .unwrap();
+}
+
+#[cfg(windows)]
+async fn assert_endpoint_closed(address: std::net::SocketAddr) {
+    if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await {
+        let _ = stream.write_all(b"{\"type\":\"describe\"}\n").await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), stream.read_u8())
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+#[cfg(windows)]
+#[ignore = "T3 requires prebuilt pinned hassmic-host and native WSL guest observer"]
+async fn t3_windows_wsl_owned_cleanup_normal() {
+    real_wsl_cleanup(false).await;
+}
+
+#[tokio::test]
+#[cfg(windows)]
+#[ignore = "T3 requires prebuilt pinned hassmic-host and native WSL guest observer"]
+async fn t3_windows_wsl_owned_cleanup_interrupted() {
+    real_wsl_cleanup(true).await;
+}

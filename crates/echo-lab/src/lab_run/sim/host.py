@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import queue
 import select
 import signal
 import socket
@@ -24,11 +25,214 @@ def emit(value):
     print(json.dumps(value), flush=True)
 
 
+class LauncherError(RuntimeError):
+    """Only fixed, sanitized launcher-stage diagnostics belong here."""
+
+
+class LauncherChild:
+    """Keep the handle until collection, including setup/forwarding failures.
+
+    Four seconds includes the guest Host's three-second group grace and stays
+    inside the Rust owner's five seconds. Closing stdin requests guest cleanup;
+    terminating a wsl client alone is never evidence of guest collection.
+    """
+    def __init__(self, proc):
+        self.proc = proc
+        self.deadline = None
+        self.status = None
+        self.forced = False
+        self.failure = None
+
+    def exited(self):
+        try:
+            return self.proc.poll() is not None
+        except OSError:
+            raise LauncherError("cleanup: cannot observe launcher child") from None
+
+    def close(self):
+        if self.status is not None:
+            if self.failure:
+                raise LauncherError(self.failure)
+            return self.status
+        if self.deadline is None:
+            self.deadline = time.monotonic() + 4
+            try:
+                self.proc.stdin.close()
+            except (OSError, ValueError):
+                self.failure = "cleanup: cannot close launcher input"
+        try:
+            self.status = self.proc.wait(timeout=max(0, self.deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            if not self.forced:
+                try:
+                    self.proc.kill()
+                except OSError:
+                    raise LauncherError("cleanup: cannot force launcher child") from None
+                self.forced = True
+            try:
+                self.status = self.proc.wait()
+            except OSError:
+                raise LauncherError("cleanup: cannot collect launcher child") from None
+        except OSError:
+            raise LauncherError("cleanup: cannot collect launcher child") from None
+        if self.failure:
+            raise LauncherError(self.failure)
+        return self.status
+
+
+def launcher_input(events):
+    try:
+        pending = b""
+        while True:
+            data = os.read(sys.stdin.fileno(), 4096)
+            if not data:
+                if pending:
+                    raise ValueError("invalid command")
+                events.put(("eof", None))
+                return
+            pending += data
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                if len(line) >= LIMIT:
+                    raise ValueError("invalid command")
+                events.put(("input", line + b"\n"))
+            if len(pending) >= LIMIT:
+                raise ValueError("invalid command")
+    except (OSError, ValueError):
+        events.put(("error", None))
+
+
+def launcher_translation(proc, events):
+    try:
+        data = proc.stdout.read(LIMIT + 1)
+        if len(data) > LIMIT or proc.wait() != 0:
+            raise ValueError("translation failed")
+        path = data.decode("utf-8").strip()
+        if not path or "\n" in path:
+            raise ValueError("invalid translated path")
+        events.put(("translated", path))
+    except (OSError, ValueError, UnicodeError):
+        events.put(("error", None))
+
+
+def launcher_write(proc, commands, events):
+    # Raw pipes avoid a buffered-writer lock in the cleanup owner. A blocked
+    # write must not prevent the supervisor from observing caller EOF.
+    try:
+        while True:
+            data = commands.get()
+            if data is None:
+                proc.stdin.close()
+                return
+            while data:
+                count = proc.stdin.write(data)
+                if not count:
+                    raise OSError("launcher write failed")
+                data = data[count:]
+    except (OSError, ValueError):
+        events.put(("error", None))
+
+
 def launch_windows():
-    translated = subprocess.run(
-        ["wsl", "-d", "Ubuntu", "--exec", "wslpath", "-u", str(Path(__file__).resolve())],
-        capture_output=True, check=True, text=True).stdout.strip()
-    return subprocess.call(["wsl", "-d", "Ubuntu", "--exec", "python3", "-u", translated])
+    events = queue.Queue()
+    owner = None
+    owners = []
+    reader = None
+    try:
+        owner = LauncherChild(subprocess.Popen(
+            ["wsl", "-d", "Ubuntu", "--exec", "wslpath", "-u", str(Path(__file__).resolve())],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
+        owners.append(owner)
+        reader = threading.Thread(target=launcher_translation, args=(owner.proc, events), daemon=True)
+        reader.start()
+        threading.Thread(target=launcher_input, args=(events,), daemon=True).start()
+        return launcher_forward(events, owner, owners)
+    except LauncherError as error:
+        sys.stderr.write(str(error) + "\n")
+        emit({"event": "host.failed"})
+        return 1
+    except (OSError, ValueError, RuntimeError, queue.Full):
+        emit({"event": "host.failed"})
+        return 1
+    finally:
+        cleanup_failed = False
+        for acquired in reversed(owners):
+            try:
+                acquired.close()
+            except (OSError, ValueError, LauncherError):
+                sys.stderr.write("cleanup: cannot collect launcher child\n")
+                cleanup_failed = True
+        if reader and reader.ident is not None:
+            reader.join(timeout=1)
+            if reader.is_alive():
+                sys.stderr.write("cleanup: launcher reader did not stop\n")
+                cleanup_failed = True
+        if owner and owner.proc.stdout and (reader is None or not reader.is_alive()):
+            try:
+                owner.proc.stdout.close()
+            except (OSError, ValueError):
+                sys.stderr.write("cleanup: cannot close launcher output\n")
+                cleanup_failed = True
+        if cleanup_failed:
+            emit({"event": "host.failed"})
+            return 1
+
+
+def launcher_forward(events, translation, owners):
+    owner = translation
+    pending = []
+    commands = queue.Queue(maxsize=16)
+    writer = None
+    translated = False
+    startup = time.monotonic() + 20
+    try:
+        while True:
+            if translated and owner.exited():
+                return owner.close()
+            if not translated and time.monotonic() >= startup:
+                raise RuntimeError("launch: translation timed out")
+            try:
+                action, value = events.get(timeout=0.01)
+            except queue.Empty:
+                continue
+            if action == "eof":
+                if writer:
+                    # Retain one deadline while the writer drains commands and
+                    # closes the pipe. A stalled writer is forced at that same
+                    # deadline, rather than blocking EOF detection or cleanup.
+                    commands.put_nowait(None)
+                    owner.deadline = time.monotonic() + 4
+                status = owner.close()
+                return status if translated else 1
+            if action == "error":
+                raise RuntimeError("launch: launcher input or translation failed")
+            if action == "translated":
+                if translation.close() != 0:
+                    return 1
+                owner = LauncherChild(subprocess.Popen(
+                    ["wsl", "-d", "Ubuntu", "--exec", "python3", "-u", value],
+                    stdin=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0))
+                owners.append(owner)
+                writer = threading.Thread(target=launcher_write, args=(owner.proc, commands, events), daemon=True)
+                writer.start()
+                translated = True
+                for line in pending:
+                    commands.put_nowait(line)
+                pending.clear()
+            elif translated:
+                commands.put_nowait(value)
+            elif sum(map(len, pending)) + len(value) <= LIMIT:
+                pending.append(value)
+            else:
+                raise ValueError("launch: startup input exceeded limit")
+    finally:
+        try:
+            owner.close()
+        finally:
+            if writer and writer.ident is not None:
+                with contextlib.suppress(queue.Full):
+                    commands.put_nowait(None)
+                writer.join(timeout=0.5)
 
 
 class Host:
