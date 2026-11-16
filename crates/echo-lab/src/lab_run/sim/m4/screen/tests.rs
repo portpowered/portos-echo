@@ -78,10 +78,11 @@ async fn t3_screen_connect_rejects_unauthorized_and_truncated_handshakes() {
             socket.write_all(reply).await.unwrap();
             // End the response while retaining our socket to observe the client's cleanup.
             socket.shutdown().await.unwrap();
-            assert_eq!(
+            // Closing with unread response bytes may reset TCP instead of sending FIN.
+            assert!(matches!(
                 socket.read_u8().await.unwrap_err().kind(),
-                std::io::ErrorKind::UnexpectedEof
-            );
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+            ));
             drop(socket);
             drop(listener);
         });
