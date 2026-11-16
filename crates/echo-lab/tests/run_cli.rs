@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn f05_audio_failure_and_malformed_hold_release_without_child_output() {
         for (fixture, message, release) in [
-            (json!({"fail":"play"}), "play:", true),
+            (json!({"fail":"play"}), "play:", false),
             (json!({"malformed":"play"}), "play:", false),
             (json!({"hold":{"holdId":"fixture-hold"}}), "missing lease", true),
             (

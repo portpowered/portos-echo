@@ -174,11 +174,28 @@ fn ledger(op: &str, args: &[String]) -> Result<usize, Box<dyn std::error::Error>
     Ok(count)
 }
 
+// A completed play response with no recording permits a safe status probe.
+fn completed_without_recording() -> Result<u8, Box<dyn std::error::Error>> {
+    writeln!(
+        io::stdout(),
+        "{}",
+        json!({"held":true,"playEndedAt":"2026-11-15T09:00:00.500Z"})
+    )?;
+    Ok(0)
+}
+
 fn run() -> Result<u8, Box<dyn std::error::Error>> {
     let fixture: Value = serde_json::from_slice(&fs::read(std::env::var("ECHO_LAB_RUN_FIXTURE")?)?)?;
     let args: Vec<_> = std::env::args().skip(1).collect();
     let op = operation(&args);
     let count = ledger(op, &args)?;
+    if op == "play" {
+        fs::write("play-queued", b"synthetic queued playback")?;
+    }
+    if fixture["oversized"] == op {
+        io::stdout().write_all(&vec![b'x'; 1024 * 1024 + 1])?;
+        return Ok(0);
+    }
     if fixture["cancel_on"] == op && (fixture["cancel_once"] != true || count == 0) {
         fs::write("cancel.signal", b"cancel")?;
         // Explicit fixture notification, then remain blocked until killed.
@@ -187,7 +204,7 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
         }
     }
     if op == "play" && u64::try_from(count).unwrap_or(u64::MAX) < fixture["preemptions"].as_u64().unwrap_or(0) {
-        return Ok(1);
+        return completed_without_recording();
     }
     if fixture["fail"] == op {
         io::stderr().write_all(b"fixture-private-child-output")?;

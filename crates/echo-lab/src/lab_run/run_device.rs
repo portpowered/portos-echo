@@ -119,10 +119,6 @@ impl<'a> Device<'a> {
     fn port(&self, operation: &str, values: &[(&str, &str)], cleanup: bool) -> Result<serde_json::Value, String> {
         let output = self.start_port(operation, values, cleanup)?.finish()?;
         let playing = matches!(operation, "file" | "text" | "file_only" | "text_only");
-        if playing {
-            // Unknown completion fails closed, including malformed acknowledgements.
-            self.playback_end.borrow_mut().pending = Some(String::new());
-        }
         let value: serde_json::Value = serde_json::from_slice(&output).map_err(|_| "port: malformed JSON")?;
         if playing {
             if value["held"] != true {
@@ -144,6 +140,9 @@ impl<'a> Device<'a> {
     ) -> Result<super::run_command::Pending, String> {
         let pending = self.playback_end.borrow().pending.clone();
         if let Some(end) = pending.as_ref() {
+            if end.is_empty() {
+                return Err("playback completion unknown; coordinator recovery required".into());
+            }
             let args = vec![
                 "-c".into(),
                 super::run_command::HOST.into(),
@@ -162,12 +161,17 @@ impl<'a> Device<'a> {
             self.playback_end.borrow_mut().acknowledge(value["reached"] == true)?;
         }
         self.playback_end.borrow_mut().pending = None;
-        super::run_command::Pending::start(
+        let child = super::run_command::Pending::start(
             &self.options.port,
             &argv(operation, values)?,
             self.clock.deadline(cleanup),
             if cleanup { None } else { self.options.cancel.as_deref() },
-        )
+        )?;
+        if matches!(operation, "file" | "text" | "file_only" | "text_only") {
+            // Launch can queue remote audio even if waiting for the CLI later fails.
+            self.playback_end.borrow_mut().pending = Some(String::new());
+        }
+        Ok(child)
     }
 
     fn rotate(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
@@ -209,7 +213,7 @@ impl<'a> Device<'a> {
             .port(operation, &values, false)
             .map_err(|error| self.play_error(&error))?;
         if result["held"] != true || !path.is_file() {
-            return Err("play: missing held recording".into());
+            return Err(self.play_error("missing held recording"));
         }
         let mut trim = vec![output.to_owned()];
         for key in ["playStartedAt", "playEndedAt", "recordStartedAt", "recordEndedAt"] {

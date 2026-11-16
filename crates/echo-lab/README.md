@@ -72,6 +72,10 @@ command (including status, release or a pending recording launch) can interrupt
 that playback. The helper parses RFC 3339 offsets as instants and rechecks wall
 time after each wait. Invalid timing or an unsuccessful wait fails closed;
 cleanup reports an unconfirmed release if it cannot establish eligibility.
+A launched play whose response is lost, cancelled, nonzero or oversized retains
+unknown completion: no status, release, snapshot, record or new play is sent,
+and `session_released=false` requires coordinator recovery. Reaping the local
+CLI does not establish that remote audio stopped.
 The speech oracle joins/checks the pending child before STT. Other utterances
 use combined play/listen timestamps and trim the WAV at playback end.
 Finalization and the next utterance join/check pending recordings before
@@ -95,7 +99,8 @@ shortened by the remaining monotonic lease budget. A hold lasts at most 11
 minutes, reserving 90 seconds for playback, WAV processing and release. Rotation
 releases, waits 25 seconds and reopens. The fixture clock advances without
 sleeping.
-After failed playback, `session status <hold> --json` must confirm the same
+After a completed playback response with a missing recording, the command gate
+first waits for `playEndedAt`. Then `session status <hold> --json` must confirm the same
 hold ended with reason `preempted` before the interrupted step is reopened and
 retried once. A second preemption fails. Status/release JSON and argv follow
 the same pinned CLI source, including `cli/internal/host/server.go`.
