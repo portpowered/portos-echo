@@ -68,7 +68,7 @@ Echo Show (stock firmware + hassmic)            echo-bridge (Rust, operator's PC
 
 | Component | Runs on | Holds | Does |
 | --- | --- | --- | --- |
-| `hassmic` (echo-dot-assist, pinned) | The Echo | Nothing of ours | Wake word, echo canceller, capture and playback, mute latch, keys, light band. `PROTO=wyoming`, `ARGS` with `-D`. Installed by echo-dot-assist's `scripts/install-system.sh` |
+| `hassmic` (our fork of echo-dot-assist, `portpowered/echo-dot-assist`, pinned) | The Echo | Nothing of ours | Wake word, echo canceller, capture and playback, mute latch, keys, light band. `PROTO=wyoming`, `ARGS` with `-D`. Installed by echo-dot-assist's `scripts/install-system.sh` |
 | `echo-screen` | The Echo, as hassmic's home app | A pairing token for the bridge's screen page | Shows the bridge's screen page full screen; touches go back to the bridge as `UiAction`s |
 | `echo-bridge` and its crates | The operator's PC first (section 6) | The GPT-Live credential; the Port OS grant (DPoP key, refresh token, access token) | Wyoming client; the GPT-Live session; the delegated agent loop; every MCP call; `session.commentary.append`; the screen server; caps, audit log, kill switch |
 | `echo-lab` | The operator's workstation and CI | Bench session leases (never committed) | Runs scenario files with the `sim`, `cloud` or `device` driver and writes reports |
@@ -77,8 +77,8 @@ Echo Show (stock firmware + hassmic)            echo-bridge (Rust, operator's PC
 
 **Trust boundary.** Wyoming is plaintext and unauthenticated. hassmic's firewall admits inbound TCP 16384–32767
 from the LAN, which includes Wyoming's 16700, so anyone on the LAN who connects gets the microphone stream of a
-run. Item `el-w1-wyoming-lockdown` restricts 16700 to the bridge's address (an upstream hassmic option, or a rule
-in our install step), and a T5 check proves that a second host is refused.
+run. Our fork's `LISTEN_FROM` setting in `hassmic.conf` admits the protocol port from the bridge's address only.
+A T5 check proved that a second host is refused, including after a reboot (`docs/program/decisions.md`).
 
 ## 3. The bridge runs the conversation and the tools
 
