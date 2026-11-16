@@ -116,7 +116,7 @@ impl Bench {
                 "--bridge",
             ])
             .arg(bridge)
-            .args(["--bridge-config", "./bridge.toml"]);
+            .args(["--bridge-config", "bridge.toml"]);
         command
     }
 

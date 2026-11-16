@@ -47,6 +47,8 @@ def project(path):
     for name in ["echo", "live", "agent", "mcp", "screen", "audit"]:
         if not isinstance(config[name], dict):
             raise ValueError("missing table")
+    if "muse" in config:
+        raise ValueError("Muse credentials are outside the local M1 journey")
     local_socket(str(config["echo"]["host"]) + ":" + str(config["echo"].get("wyoming_port", 16700)))
     local_socket(config["screen"].get("listen", ""), True)
     local_socket(config["mcp"].get("operator_listen", "127.0.0.1:0"), True)

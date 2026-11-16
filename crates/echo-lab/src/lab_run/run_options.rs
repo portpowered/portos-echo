@@ -115,7 +115,10 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     Ok(Options {
         sim: false,
         bridge: device_bridge(&flags)?,
-        bridge_config: flags.get("--bridge-config").map(|v| explicit(v)).transpose()?,
+        bridge_config: flags
+            .get("--bridge-config")
+            .map(|v| configuration_path(v))
+            .transpose()?,
         scenarios,
         port: explicit(required(&flags, "--port")?)?,
         adb: explicit(required(&flags, "--adb")?)?,
@@ -197,6 +200,15 @@ fn device_bridge(flags: &BTreeMap<String, String>) -> Result<Option<PathBuf>, St
             .map_err(|_| "device: --bridge requires an explicit existing executable".into()),
         _ => Err("device: supply --bridge and --bridge-config together".into()),
     }
+}
+
+fn configuration_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if !path.is_file() {
+        return Err("device: --bridge-config requires a readable TOML file".into());
+    }
+    path.canonicalize()
+        .map_err(|_| "device: cannot resolve --bridge-config".into())
 }
 
 pub fn destination(path: &Path) -> Result<PathBuf, String> {

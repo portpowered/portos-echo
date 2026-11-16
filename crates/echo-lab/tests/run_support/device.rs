@@ -13,6 +13,7 @@ fn device_unsafe_or_unreadable_config_never_invokes_bench_tools() {
         Some(original.replace("127.0.0.1", "localhost")),
         Some(original.replace("http://127.0.0.1:18080/mcp", "https://mcp.example.invalid/mcp")),
         Some(original.replace("auth = \"none\"", "auth = \"bearer_file\"")),
+        Some(format!("{original}\n[muse]\n")),
     ] {
         let session = Session::new(&json!({}));
         if let Some(template) = template {
