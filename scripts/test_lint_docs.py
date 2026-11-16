@@ -52,6 +52,100 @@ class MetadataTests(unittest.TestCase):
                          ["docs/a.md", "AGENTS.md"])
 
 
+class AdrTests(unittest.TestCase):
+    def test_valid_names_and_readme(self):
+        self.assertEqual(lint.adr_findings([
+            ("0000-a.md", "# 0000: A"), ("0001-b.md", "# B"),
+            ("README.md", "# 9999: Index")]), [])
+
+    def test_duplicate_pair_sorted(self):
+        self.assertEqual(lint.adr_findings([("0003-b.md", ""), ("0003-a.md", "")]),
+                         ["docs/adr: ADR number 0003 used by 0003-a.md, 0003-b.md"])
+
+    def test_duplicate_triple(self):
+        self.assertEqual(lint.adr_findings([
+            ("0005-c.md", ""), ("0005-a.md", ""), ("0005-b.md", "")]),
+            ["docs/adr: ADR number 0005 used by 0005-a.md, 0005-b.md, 0005-c.md"])
+
+    def test_malformed_names(self):
+        self.assertEqual(lint.adr_findings([
+            ("el-f4-thing.md", ""), ("12-x.md", ""), ("0004-Upper.md", "")]), [
+                "docs/adr/0004-Upper.md: ADR file name must be NNNN-<slug>.md",
+                "docs/adr/12-x.md: ADR file name must be NNNN-<slug>.md",
+                "docs/adr/el-f4-thing.md: ADR file name must be NNNN-<slug>.md"])
+
+    def test_heading_mismatch(self):
+        self.assertEqual(lint.adr_findings([("0007-x.md", HEADER + "# 0005: Title")]),
+                         ["docs/adr/0007-x.md: heading number 0005 does not match file number 0007"])
+
+    def test_only_first_literal_heading_counts(self):
+        for text in ["# 0007: Title", "# Title\n# 0005: Later", "## 0005: Sub\n# 0007: Title",
+                     " # 0005: Indented\n# Title", "# 0005 Title", "# 00005: Title",
+                     "# ０００５: Title"]:
+            with self.subTest(text=text):
+                self.assertEqual(lint.adr_findings([("0007-x.md", text)]), [])
+
+    def test_boundaries(self):
+        self.assertEqual(lint.adr_findings([]), [])
+        self.assertEqual(lint.adr_findings([("0000-a.md", "no heading"), ("9999-z9.md", "")]), [])
+        for name in ["0004-.md", "00004-x.md", "0004-x.txt", "０００４-x.md", "readme.md"]:
+            with self.subTest(name=name):
+                self.assertEqual(lint.adr_findings([(name, "# 0005: Ignored")]),
+                                 [f"docs/adr/{name}: ADR file name must be NNNN-<slug>.md"])
+
+    def test_all_findings_collected(self):
+        files = [(name, "") for name in ["0005-c.md", "0003-b.md", "0005-a.md", "0003-a.md",
+                                        "0005-b.md", "el-f4-thing.md", "12-x.md", "0004-Upper.md"]]
+        files += [("0007-x.md", "# 0005: X"), ("0008-y.md", "# 0006: Y")]
+        self.assertEqual(lint.adr_findings(files), [
+            "docs/adr/0004-Upper.md: ADR file name must be NNNN-<slug>.md",
+            "docs/adr/0007-x.md: heading number 0005 does not match file number 0007",
+            "docs/adr/0008-y.md: heading number 0006 does not match file number 0008",
+            "docs/adr/12-x.md: ADR file name must be NNNN-<slug>.md",
+            "docs/adr/el-f4-thing.md: ADR file name must be NNNN-<slug>.md",
+            "docs/adr: ADR number 0003 used by 0003-a.md, 0003-b.md",
+            "docs/adr: ADR number 0005 used by 0005-a.md, 0005-b.md, 0005-c.md"])
+
+
+class AdrDirectoryTests(unittest.TestCase):
+    def check_directory(self, files, expected_error=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adr = root / "docs/adr"
+            adr.mkdir(parents=True)
+            (adr / "nested").mkdir()
+            (adr / "nested/invalid.md").write_text("", encoding="utf-8")
+            for name, text in files:
+                (adr / name).write_text(text, encoding="utf-8")
+            (root / "docs/README.md").write_text(
+                HEADER + "\n[Self](README.md)\n", encoding="utf-8")
+            output = io.StringIO()
+            with patch.object(lint, "manifest", return_value=["docs/README.md"]), \
+                    patch.object(lint, "run") as launch, redirect_stdout(output):
+                if expected_error:
+                    with self.assertRaises(ValueError) as caught:
+                        lint.check(root)
+                    self.assertEqual(str(caught.exception), expected_error)
+                    launch.assert_not_called()
+                else:
+                    lint.check(root)
+                    self.assertEqual([call.args[0] for call in launch.call_args_list], [
+                        ["npx", "--yes", lint.MARKDOWNLINT, "docs/README.md"],
+                        ["lychee", "--config", "lychee.toml", "--offline", "docs/README.md"]])
+                    self.assertEqual(output.getvalue().splitlines()[-1], "lint-docs: passed")
+
+    def test_valid_directory_reaches_tools(self):
+        self.check_directory([("0003-a.md", "# 0003: A"), ("README.md", "# Index")])
+
+    def test_untracked_duplicate_stops_before_tools(self):
+        self.check_directory([("0003-a.md", ""), ("0003-b.md", "")],
+                             "docs/adr: ADR number 0003 used by 0003-a.md, 0003-b.md")
+
+    def test_non_markdown_file_is_not_filtered_out(self):
+        self.check_directory([("notes.txt", "")],
+                             "docs/adr/notes.txt: ADR file name must be NNNN-<slug>.md")
+
+
 class FenceTests(unittest.TestCase):
     def test_nested_example_and_real_fence(self):
         text = "````markdown\n```mermaid\nexample\n```\n````\n~~~mermaid\nreal\n~~~\n"

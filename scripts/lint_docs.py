@@ -122,6 +122,30 @@ def check_index(root, docs):
         raise ValueError("docs/README.md: missing index entries: " + ", ".join(missing))
 
 
+def adr_findings(files):
+    """Return every ADR identity violation, independent of directory discovery."""
+    findings = []
+    numbers = {}
+    for name, text in sorted(files):
+        if name == "README.md":
+            continue
+        match = re.fullmatch(r"([0-9]{4})-[a-z0-9-]+\.md", name)
+        if not match:
+            findings.append(f"docs/adr/{name}: ADR file name must be NNNN-<slug>.md")
+            continue
+        number = match[1]
+        numbers.setdefault(number, []).append(name)
+        heading = next((line for line in text.splitlines() if line.startswith("# ")), "")
+        heading_number = re.match(r"# ([0-9]{4}):", heading)
+        if heading_number and heading_number[1] != number:
+            findings.append(f"docs/adr/{name}: heading number {heading_number[1]} "
+                            f"does not match file number {number}")
+    for number, names in sorted(numbers.items()):
+        if len(names) > 1:
+            findings.append(f"docs/adr: ADR number {number} used by {', '.join(names)}")
+    return findings
+
+
 def compile_mermaid(blocks, temp):
     for index, (path, line, body) in enumerate(blocks):
         source = temp / f"diagram-{index}.mmd"
@@ -152,6 +176,15 @@ def check(root, online=False):
     print(f"Frontmatter: {len(docs)} documents", flush=True)
     check_index(root, docs)
     print("Index: all tracked docs listed", flush=True)
+    adr_directory = root / "docs/adr"
+    try:
+        adr_files = list(adr_directory.iterdir())
+    except FileNotFoundError:
+        adr_files = []
+    findings = adr_findings([(path.name, path.read_text(encoding="utf-8"))
+                             for path in adr_files if path.is_file()])
+    if findings:
+        raise ValueError("\n".join(findings))
     print("Markdown style", flush=True)
     run(["npx", "--yes", MARKDOWNLINT, *selected], cwd=root)
     print("Links: " + ("online" if online else "offline"), flush=True)
