@@ -2,64 +2,119 @@
 use crate::Error;
 use echo_screen_contract::UiState;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, time::Instant};
 
 pub(crate) const RELINK: &str = "Run echo-bridge link with your config to relink Port OS MCP.";
 
 #[derive(Clone)]
 pub(crate) struct Presentation {
     states: Option<mpsc::Sender<UiState>>,
-    current: Arc<Mutex<(UiState, Option<UiState>, bool)>>,
+    current: Arc<Mutex<Projection>>,
+}
+
+struct Projection {
+    activity: UiState,
+    overlay: Option<UiState>,
+    muted: bool,
+    emotion: Option<(UiState, Instant)>,
+}
+
+impl Projection {
+    fn visible(&self) -> UiState {
+        if self.muted {
+            UiState::Muted
+        } else if let Some(overlay) = &self.overlay {
+            overlay.clone()
+        } else if let Some((emotion, _)) = &self.emotion {
+            emotion.clone()
+        } else {
+            self.activity.clone()
+        }
+    }
 }
 
 impl Presentation {
     pub fn new(states: Option<mpsc::Sender<UiState>>) -> Self {
         Self {
             states,
-            current: Arc::new(Mutex::new((
-                UiState::Ready {
+            current: Arc::new(Mutex::new(Projection {
+                activity: UiState::Ready {
                     message: "Ready".into(),
                 },
-                None,
-                false,
-            ))),
+                overlay: None,
+                muted: false,
+                emotion: None,
+            })),
         }
     }
 
     pub fn publish(&self, state: UiState) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
-        current.0 = state;
-        self.send(if current.2 {
-            UiState::Muted
-        } else {
-            current.1.as_ref().unwrap_or(&current.0).clone()
-        })
+        current.activity = state;
+        current.emotion = None;
+        self.send(current.visible())
     }
 
     pub fn overlay(&self, state: Option<UiState>) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
-        current.1 = state;
-        self.send(if current.2 {
-            UiState::Muted
-        } else {
-            current.1.as_ref().unwrap_or(&current.0).clone()
-        })
+        current.overlay = state;
+        current.emotion = None;
+        self.send(current.visible())
     }
 
     pub fn muted(&self, muted: bool) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
-        current.2 = muted;
+        current.muted = muted;
+        current.emotion = None;
         if !muted {
             // Muting ends the run; restore idle before exposing activity again.
-            current.0 = UiState::Ready {
+            current.activity = UiState::Ready {
                 message: "Echo Live ready".into(),
             };
         }
-        self.send(if muted {
-            UiState::Muted
-        } else {
-            current.1.as_ref().unwrap_or(&current.0).clone()
-        })
+        self.send(current.visible())
+    }
+
+    pub fn emotion(&self, state: UiState, deadline: Instant) -> Result<(), Error> {
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        if current.muted || current.overlay.is_some() {
+            return Ok(());
+        }
+        current.emotion = Some((state, deadline));
+        self.send(current.visible())
+    }
+
+    pub fn clear_emotion(&self) -> Result<(), Error> {
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        if current.emotion.take().is_some() {
+            self.send(current.visible())?;
+        }
+        Ok(())
+    }
+
+    pub fn expire_emotion(&self) -> Result<(), Error> {
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        if current
+            .emotion
+            .as_ref()
+            .is_some_and(|(_, deadline)| *deadline <= Instant::now())
+        {
+            current.emotion = None;
+            self.send(current.visible())?;
+        }
+        Ok(())
+    }
+
+    pub async fn emotion_deadline(&self) {
+        let deadline = self
+            .current
+            .lock()
+            .ok()
+            .and_then(|current| current.emotion.as_ref().map(|(_, deadline)| *deadline));
+        match deadline {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => std::future::pending().await,
+        }
     }
 
     fn send(&self, state: UiState) -> Result<(), Error> {
@@ -78,17 +133,113 @@ impl Presentation {
 
     pub fn refresh(&self) -> Result<(), Error> {
         let current = self.current.lock().map_err(|_| Error::Screen)?;
-        self.send(if current.2 {
-            UiState::Muted
-        } else {
-            current.1.as_ref().unwrap_or(&current.0).clone()
-        })
+        self.send(current.visible())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn emotion() -> UiState {
+        UiState::Emotion {
+            name: "happy".into(),
+            frame_ms: 80,
+            frames: vec!["(^_^)".into(), "(^o^)".into()],
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn m6_animation_expires_at_equality_without_overwriting_current_activity() {
+        let (send, mut receive) = mpsc::channel(16);
+        let screen = Presentation::new(Some(send));
+        screen.publish(UiState::Listening).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_millis(160);
+        screen.emotion(emotion(), deadline).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        assert_eq!(receive.try_recv().unwrap(), emotion());
+        tokio::time::advance(std::time::Duration::from_millis(159)).await;
+        screen.expire_emotion().unwrap();
+        assert!(receive.try_recv().is_err());
+        screen.emotion_deadline().await;
+        assert_eq!(Instant::now(), deadline);
+        screen.expire_emotion().unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        screen.expire_emotion().unwrap();
+        assert!(receive.try_recv().is_err());
+        screen
+            .emotion(emotion(), Instant::now() + std::time::Duration::from_millis(160))
+            .unwrap();
+        screen.publish(UiState::Speaking).unwrap();
+        tokio::time::advance(std::time::Duration::from_millis(160)).await;
+        screen.expire_emotion().unwrap();
+        assert_eq!(receive.try_recv().unwrap(), emotion());
+        assert_eq!(receive.try_recv().unwrap(), UiState::Speaking);
+        assert!(receive.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn m6_mute_and_mcp_overlays_discard_animation_without_replay() {
+        let (send, mut receive) = mpsc::channel(32);
+        let screen = Presentation::new(Some(send));
+        let deadline = Instant::now() + std::time::Duration::from_millis(160);
+        let prompt = UiState::Error {
+            message: RELINK.into(),
+            relink: true,
+        };
+        screen.publish(UiState::Listening).unwrap();
+        screen.emotion(emotion(), deadline).unwrap();
+        screen.overlay(Some(prompt.clone())).unwrap();
+        screen.emotion(emotion(), deadline).unwrap();
+        screen.publish(UiState::Speaking).unwrap();
+        screen.overlay(None).unwrap();
+        screen.emotion(emotion(), deadline).unwrap();
+        screen.muted(true).unwrap();
+        screen.emotion(emotion(), deadline).unwrap();
+        screen.muted(false).unwrap();
+        tokio::time::advance(std::time::Duration::from_millis(160)).await;
+        screen.expire_emotion().unwrap();
+        screen.clear_emotion().unwrap();
+        let actual: Vec<_> = std::iter::from_fn(|| receive.try_recv().ok()).collect();
+        assert_eq!(
+            actual,
+            vec![
+                UiState::Listening,
+                emotion(),
+                prompt.clone(),
+                prompt,
+                UiState::Speaking,
+                emotion(),
+                UiState::Muted,
+                UiState::Ready {
+                    message: "Echo Live ready".into()
+                }
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn m6_cancel_and_replacement_clear_timer_and_queue_failures_stay_bounded() {
+        let (send, mut receive) = mpsc::channel(1);
+        let screen = Presentation::new(Some(send));
+        screen.publish(UiState::Listening).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_millis(160);
+        assert_eq!(screen.emotion(emotion(), deadline), Err(Error::Screen));
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        screen.clear_emotion().unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        screen.emotion(emotion(), deadline).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), emotion());
+        screen.clear_emotion().unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        screen.publish(UiState::Thinking).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Thinking);
+        tokio::time::advance(std::time::Duration::from_millis(160)).await;
+        screen.expire_emotion().unwrap();
+        assert!(receive.try_recv().is_err());
+        drop(receive);
+        assert_eq!(screen.emotion(emotion(), deadline), Err(Error::Screen));
+    }
 
     #[test]
     fn unmute_emits_only_restored_idle_or_the_active_overlay() {

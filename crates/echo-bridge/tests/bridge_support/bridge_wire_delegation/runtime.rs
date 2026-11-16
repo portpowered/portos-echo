@@ -5,6 +5,9 @@ use echo_bridge::{bridge_input, bridge_runtime};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
 
+#[path = "runtime/emotion.rs"]
+mod emotion;
+
 struct Application {
     directory: tempfile::TempDir,
     stop: oneshot::Sender<bool>,
@@ -24,6 +27,10 @@ impl Application {
     }
 
     async fn idle(cap: u64, deadline: u64) -> Self {
+        Self::idle_with_emotion(cap, deadline, false).await
+    }
+
+    async fn idle_with_emotion(cap: u64, deadline: u64, emotion: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let model = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -38,6 +45,9 @@ impl Application {
         .await;
         let live = bridge_peer::Live::bind_frames(0).await;
         let mut settings = settings(directory.path(), &live.url, model.local_addr().unwrap().port());
+        if emotion {
+            settings.delegation.as_mut().unwrap().1.allow_tools = vec!["ui.show_emotion".into()];
+        }
         let agent = &mut settings.delegation.as_mut().unwrap().0;
         agent.daily_request_cap = cap;
         agent.task_deadline_seconds = deadline;

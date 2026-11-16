@@ -6,6 +6,7 @@ mod cases {
     mod lifecycle;
     mod limits;
     mod model;
+    mod results;
 }
 
 use echo_agent_loop::{CredentialError, ModelCredential};

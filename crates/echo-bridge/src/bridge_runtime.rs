@@ -114,7 +114,7 @@ pub async fn execute_controlled<C: LinkConnector>(
             eof = &mut shutdown => match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
         delegation.abandon();
-        let cleanup = client.close().await.map_err(Error::from);
+        let cleanup = stop_link(&client, &screen).await;
         result.and(cleanup)
     };
     let result = work.await;
@@ -127,6 +127,11 @@ pub async fn execute_controlled<C: LinkConnector>(
     health.close().await;
     let cleanup = screen.close().await;
     result.and(report).and(cleanup)
+}
+
+async fn stop_link<L: EchoLink>(client: &L, screen: &bridge_screen::Screen) -> Result<(), Error> {
+    let cleanup = client.close().await.map_err(Error::from);
+    cleanup.and(screen.presentation.clear_emotion())
 }
 
 async fn mount_mcp(

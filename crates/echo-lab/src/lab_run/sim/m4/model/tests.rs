@@ -1,5 +1,63 @@
 use super::*;
 
+fn emotion_followup() -> Value {
+    let mut request = request();
+    let input = request["input"].as_array_mut().unwrap();
+    input.push(super::super::emotion::call());
+    let output =
+        json!({"content":[{"type":"text","text":super::super::emotion::state().to_string()}],"is_error":false});
+    input.push(json!({"type":"function_call_output","call_id":"call-1","output":output.to_string()}));
+    request
+}
+
+#[test]
+fn m6_model_requires_the_exact_actual_emotion_result_and_catalog_identity() {
+    assert_eq!(
+        response_for(&request(), 0, false, true),
+        Ok(super::super::emotion::call())
+    );
+    let message = response_for(&emotion_followup(), 1, false, true).unwrap();
+    assert_eq!(message["content"][0]["text"], super::super::emotion::REPLY);
+    for output in [
+        json!({"content":[],"is_error":false}),
+        json!({"content":[],"is_error":true}),
+    ] {
+        let mut wrong = emotion_followup();
+        wrong["input"][3]["output"] = json!(output.to_string());
+        assert_eq!(
+            response_for(&wrong, 1, false, true),
+            Err("model: exact tool output mismatch")
+        );
+    }
+    assert_eq!(
+        response_for(&followup(false), 1, false, true),
+        Err("model: function call identity mismatch")
+    );
+}
+
+#[tokio::test]
+#[ignore = "T3 loopback controlled Responses peer"]
+async fn m6_t3_model_holds_terminal_and_validation_until_native_animation_observer_releases() {
+    let (release, held) = oneshot::channel();
+    let model = Model::bind_controlled(false, async { Ok(()) }, Some(held))
+        .await
+        .unwrap();
+    let first = post(&model.origin, request()).await;
+    assert!(first.contains("tool_3"));
+    let origin = model.origin.clone();
+    let terminal = tokio::spawn(async move { post(&origin, emotion_followup()).await });
+    let mut observed = model.observed.clone();
+    observed.wait_for(|o| o.requests == 2).await.unwrap();
+    assert!(!terminal.is_finished());
+    assert!(!observed.borrow().output_verified);
+    release.send(()).unwrap();
+    let reply = terminal.await.unwrap();
+    assert!(reply.contains(super::super::emotion::REPLY));
+    observed.wait_for(|o| o.output_verified).await.unwrap();
+    assert_eq!(model.check(), Ok(()));
+    model.close().await.unwrap();
+}
+
 fn request() -> Value {
     json!({"model":"fixture-model","stream":true,"store":false,"parallel_tool_calls":false,
         "tools":tools().unwrap(),"input":[{"role":"developer"},{"role":"user"}]})
@@ -144,7 +202,9 @@ async fn t3_model_wrong_result_never_emits_commentary_and_stalled_body_is_collec
         .await
         .unwrap();
     let mut observed = model.observed.clone();
-    observed.wait_for(|v| v.requests == 1).await.unwrap();
+    observed.wait_for(|v| v.accepted_connections == 1).await.unwrap();
+    assert_eq!(observed.borrow().requests, 0);
+    assert!(!observed.borrow().output_verified);
     model.close().await.unwrap();
     assert!(observed.has_changed().is_err());
     match socket.read(&mut [0]).await {

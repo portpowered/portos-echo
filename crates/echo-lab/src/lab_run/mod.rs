@@ -80,8 +80,10 @@ pub trait Driver {
 
 fn say(value: &str, scenario: &str, options: &Options) -> Result<Step, String> {
     if options.sim {
-        if crate::lab_validate::load(scenario)?["id"] == "m4-spoof-tool" {
-            return sim::m4::utterance(value);
+        match crate::lab_validate::load(scenario)?["id"].as_str() {
+            Some("m4-spoof-tool") => return sim::m4::utterance(value),
+            Some("m6-emotion") => return sim::m4::emotion_utterance(value),
+            _ => {}
         }
         return Ok(Step::SayFile(sim::fixture(value, scenario)?));
     }
@@ -312,7 +314,7 @@ fn driver(options: &Options) -> Result<Box<dyn Driver + '_>, String> {
     if scenario["milestone"] == "M5" {
         return Ok(Box::new(sim::mcp::M5::new(options)?));
     }
-    if scenario["id"] == "m4-spoof-tool" {
+    if matches!(scenario["id"].as_str(), Some("m4-spoof-tool" | "m6-emotion")) {
         Ok(Box::new(sim::m4::M4::new(options)?))
     } else {
         Ok(Box::new(sim::Sim::new(options)?))
