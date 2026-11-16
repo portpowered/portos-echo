@@ -10,6 +10,7 @@ use std::{
 pub struct Settings {
     pub wyoming: SocketAddr,
     pub live_url: String,
+    pub model_url: Option<String>,
     pub trace: PathBuf,
     pub health: SocketAddr,
     pub mode: LiveAuthMode,
@@ -37,13 +38,17 @@ impl Settings {
 
 pub enum Provider {
     Synthetic,
+    Resolved(echo_signin::Providers),
     ApiKey(PathBuf),
     Unavailable,
 }
 
 impl CredentialProvider for Provider {
-    fn credential(&self) -> impl Future<Output = Result<LiveCredential, CallError>> + Send {
-        std::future::ready(self.acquire())
+    async fn credential(&self) -> Result<LiveCredential, CallError> {
+        match self {
+            Self::Resolved(providers) => providers.credential().await,
+            _ => self.acquire(),
+        }
     }
 }
 
@@ -74,7 +79,7 @@ impl Provider {
                     key: Secret::new(key.into()),
                 })
             }
-            Self::Unavailable => Err(CallError::Authorization),
+            Self::Unavailable | Self::Resolved(_) => Err(CallError::Authorization),
         }
     }
 }
@@ -108,23 +113,27 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
     let mut config = None;
     let mut trace = None;
     let mut health = None;
+    let mut live = None;
+    let mut model = None;
     let (pairs, remainder) = args.as_chunks::<2>();
     for pair in pairs {
         let target = match pair[0].as_str() {
             "--config" => &mut config,
             "--trace" => &mut trace,
             "--health-listen" => &mut health,
+            "--live-loopback" => &mut live,
+            "--model-loopback" => &mut model,
             _ => return Err(Error::Input),
         };
         if target.replace(pair[1].clone()).is_some() {
             return Err(Error::Input);
         }
     }
-    if !remainder.is_empty() {
+    if !remainder.is_empty() || live.is_some() != model.is_some() {
         return Err(Error::Input);
     }
     if lab.iter().any(Option::is_some) {
-        if config.is_some() || trace.is_some() {
+        if config.is_some() || trace.is_some() || live.is_some() {
             return Err(Error::Input);
         }
         let [Some(wyoming), Some(url), Some(path)] = lab else {
@@ -133,6 +142,7 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
         return Ok(Some(Settings {
             wyoming: loopback(&wyoming, false)?,
             live_url: lab_origin(&url)?,
+            model_url: None,
             trace: path.into(),
             health: loopback(health.as_deref().unwrap_or("127.0.0.1:0"), true)?,
             mode: LiveAuthMode::Chatgpt,
@@ -147,22 +157,29 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
         config.ok_or(Error::Input)?,
         trace.ok_or(Error::Input)?,
         health.as_deref(),
+        live.as_deref().zip(model.as_deref()),
     )
 }
 
-fn configured(config: String, trace: String, health: Option<&str>) -> Result<Option<Settings>, Error> {
+fn configured(
+    config: String,
+    trace: String,
+    health: Option<&str>,
+    origins: Option<(&str, &str)>,
+) -> Result<Option<Settings>, Error> {
     let config = echo_config::BridgeConfig::load(config).map_err(|_| Error::Input)?;
     let mode = match config.live.mode {
         echo_config::LiveMode::Chatgpt => LiveAuthMode::Chatgpt,
         echo_config::LiveMode::ApiKey => LiveAuthMode::ApiKey,
     };
-    let (live_url, credential) = match mode {
-        LiveAuthMode::Chatgpt => ("https://chatgpt.com", Provider::Unavailable),
-        LiveAuthMode::ApiKey => ("https://api.openai.com", Provider::ApiKey(config.live.credential_file)),
-    };
+    let (live_url, model_url) = configured_origins(&config, origins)?;
+    let credential = Provider::Resolved(
+        echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth.clone()).map_err(|_| Error::Input)?,
+    );
     Ok(Some(Settings {
         wyoming: loopback(&format!("{}:{}", config.echo.host, config.echo.wyoming_port), false)?,
-        live_url: live_url.into(),
+        live_url,
+        model_url,
         trace: trace.into(),
         health: loopback(health.unwrap_or("127.0.0.1:16901"), true)?,
         mode,
@@ -172,4 +189,39 @@ fn configured(config: String, trace: String, health: Option<&str>) -> Result<Opt
         reply_lead_ms: config.audio.reply_lead_ms,
         session_idle_seconds: config.live.session_idle_seconds,
     }))
+}
+
+fn configured_origins(
+    config: &echo_config::BridgeConfig,
+    origins: Option<(&str, &str)>,
+) -> Result<(String, Option<String>), Error> {
+    let Some((live, model)) = origins else {
+        let base = match config.live.mode {
+            echo_config::LiveMode::Chatgpt => "https://chatgpt.com",
+            echo_config::LiveMode::ApiKey => "https://api.openai.com",
+        };
+        return Ok((base.into(), None));
+    };
+    // Overrides must be origins, not endpoint URLs (including a trailing slash).
+    for origin in [live, model] {
+        let address = origin.strip_prefix("http://").ok_or(Error::Input)?;
+        loopback(address, false)?;
+    }
+    loopback(&format!("{}:{}", config.echo.host, config.echo.wyoming_port), false)?;
+    loopback(&config.screen.listen.to_string(), true)?;
+    for server in &config.mcp.server {
+        loopback_endpoint(&server.url)?;
+    }
+    // A configured run can refresh credentials, but never starts signin itself.
+    if config.live.mode == echo_config::LiveMode::Chatgpt {
+        loopback_endpoint(&config.chatgpt_auth.token_endpoint)?;
+    }
+    Ok((live.into(), Some(model.into())))
+}
+
+fn loopback_endpoint(url: &str) -> Result<(), Error> {
+    let rest = url.strip_prefix("http://").ok_or(Error::Input)?;
+    let authority = rest.split('/').next().ok_or(Error::Input)?;
+    loopback(authority, false)?;
+    Ok(())
 }

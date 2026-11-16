@@ -225,3 +225,110 @@ async fn request(stream: &mut tokio::net::TcpStream) -> String {
     stream.read_exact(&mut vec![0; length]).await.unwrap();
     header
 }
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_wire_auth_configured_live_uses_selected_provider() {
+    for mode in ["chatgpt", "api_key"] {
+        let directory = tempfile::tempdir().unwrap();
+        let origin = "http://127.0.0.1:1";
+        let auth = format!("[chatgpt_auth]\ntoken_endpoint = '{origin}/token'");
+        let path = config(directory.path(), mode, &auth);
+        prepare_configured_credential(directory.path(), mode).await;
+        let fake = FakeLive::bind(FakeScript {
+            events: vec![],
+            response: FakeResponse::Http {
+                status: 401,
+                body: "synthetic private body".into(),
+                location: None,
+            },
+        })
+        .await
+        .unwrap();
+        let observer = fake.observer();
+        let mut host = Process::spawn(&mut host());
+        let port = host.line().await;
+        let content = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("wyoming_port = 16700", &format!("wyoming_port = {port}"));
+        std::fs::write(&path, content).unwrap();
+        let base = fake.base_url().trim_end_matches('/').to_owned();
+        let mut cmd = command(
+            directory.path(),
+            &[
+                "--config",
+                "bridge.toml",
+                "--trace",
+                "trace",
+                "--health-listen",
+                "127.0.0.1:0",
+                "--live-loopback",
+                &base,
+                "--model-loopback",
+                &base,
+            ],
+        );
+        let mut bridge = Process::spawn(&mut cmd);
+        assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
+        assert_eq!(host.command("wake").await, "wake");
+        tokio::time::timeout(Duration::from_secs(10), observer.wait_for_calls(1))
+            .await
+            .unwrap()
+            .unwrap();
+        bridge.finish(1).await;
+        assert_configured_headers(&observer, mode, directory.path());
+        host.finish(0).await;
+        fake.shutdown().await;
+    }
+}
+
+fn assert_configured_headers(observer: &echo_live::fake::FakeObserver, mode: &str, directory: &Path) {
+    let calls = observer.calls().unwrap();
+    assert_eq!(calls.len(), 1);
+    let expected = if mode == "chatgpt" {
+        token()
+    } else {
+        "synthetic-api-key".into()
+    };
+    assert!(
+        calls[0]
+            .request
+            .header_matches("authorization", &format!("Bearer {expected}")),
+        "credential header mismatch"
+    );
+    assert_eq!(calls[0].request.has_header("chatgpt-account-id"), mode == "chatgpt");
+    if mode == "chatgpt" {
+        assert!(
+            calls[0]
+                .request
+                .header_matches("chatgpt-account-id", "synthetic-account-1234"),
+            "account header mismatch"
+        );
+    }
+    let path = directory.join("trace");
+    let entries = super::trace(&path);
+    assert_eq!(entries.last().unwrap()["reason"], "authorization");
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.started").count(), 0);
+    let trace = std::fs::read_to_string(path).unwrap();
+    assert!(
+        !trace.contains(&expected) && !trace.contains("synthetic-account-1234"),
+        "trace credential disclosure"
+    );
+}
+
+async fn prepare_configured_credential(directory: &Path, mode: &str) {
+    if mode == "chatgpt" {
+        let source = json!({"tokens":{"access_token":token(),"refresh_token":"synthetic-refresh",
+                "account_id":"synthetic-account-1234"},"last_refresh":"2096-01-01T00:00:00Z"});
+        std::fs::write(directory.join("source"), source.to_string()).unwrap();
+        invoke(
+            directory,
+            &["import-codex", "--config", "bridge.toml", "--path", "source"],
+            0,
+            "imported\n",
+        )
+        .await;
+    } else {
+        std::fs::write(directory.join("credential"), "synthetic-api-key\r\n").unwrap();
+    }
+}
