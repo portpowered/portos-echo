@@ -1,4 +1,5 @@
 //! T3 component proof: real transports with synthetic providers on 127.0.0.1.
+#![cfg(test)]
 #[cfg(test)]
 mod cases {
     mod journey;
@@ -19,7 +20,7 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, net::TcpStream};
 #[derive(Default)]
-pub struct Credentials(pub AtomicUsize);
+pub(crate) struct Credentials(pub(crate) AtomicUsize);
 impl ModelCredential for Credentials {
     fn headers(
         &self,
@@ -35,7 +36,7 @@ impl ModelCredential for Credentials {
     }
 }
 
-pub fn config() -> AgentConfig {
+pub(crate) fn config() -> AgentConfig {
     AgentConfig {
         model: Some("fixture-model".into()),
         max_tool_calls: 8,
@@ -43,7 +44,7 @@ pub fn config() -> AgentConfig {
         daily_request_cap: 500,
     }
 }
-pub fn sse(items: &[Value]) -> String {
+pub(crate) fn sse(items: &[Value]) -> String {
     let mut stream = String::new();
     for (index, item) in items.iter().enumerate() {
         write!(
@@ -57,12 +58,12 @@ pub fn sse(items: &[Value]) -> String {
     stream
 }
 
-pub struct Request {
-    pub start: String,
-    pub headers: HashMap<String, String>,
-    pub body: Value,
+pub(crate) struct Request {
+    pub(crate) start: String,
+    pub(crate) headers: HashMap<String, String>,
+    pub(crate) body: Value,
 }
-pub async fn read(socket: &mut TcpStream) -> Request {
+pub(crate) async fn read(socket: &mut TcpStream) -> Request {
     let mut bytes = Vec::new();
     let end = loop {
         let mut buffer = [0; 1024];
