@@ -126,7 +126,78 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// A private copy beside the prebuilt CLI forwards to the selected real binary.
+// Inherited standard pipes preserve the runner's EOF/readiness protocol.
+fn collected_child() -> Option<std::process::ExitCode> {
+    let executable = std::env::current_exe().ok()?;
+    let selection = executable.with_extension("target");
+    if !selection.is_file() {
+        return None;
+    }
+    Some(collect_selected(&executable, &selection).unwrap_or(std::process::ExitCode::FAILURE))
+}
+
+fn collect_selected(executable: &std::path::Path, selection: &std::path::Path) -> io::Result<std::process::ExitCode> {
+    let root = executable
+        .parent()
+        .ok_or_else(|| io::Error::other("missing adapter directory"))?;
+    let receipt = receipt(root)?;
+    let target = std::fs::read_to_string(selection)?;
+    let status = std::process::Command::new(target)
+        .args(std::env::args_os().skip(1))
+        .status()?;
+    std::fs::write(
+        receipt.with_extension("collected"),
+        json!({"owner_completed":true,"status":status.code()}).to_string(),
+    )?;
+    Ok(std::process::ExitCode::from(
+        u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
+    ))
+}
+
+fn receipt(root: &std::path::Path) -> io::Result<PathBuf> {
+    for generation in 0_u64.. {
+        let path = root.join(format!("{}-{generation}", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path.with_extension("started"))
+        {
+            Ok(_) => return Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::other("owner receipt generations exhausted"))
+}
+
+// The CLI's --python boundary also carries multiline -c helpers. Forward
+// those as argv, without a command shell interpreting their contents.
+fn python_adapter() -> Option<std::process::ExitCode> {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if !arguments.first().is_some_and(|arg| arg == "-c" || arg == "-u") {
+        return None;
+    }
+    let mut command = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    if arguments[0] == "-u" {
+        command
+            .arg("-u")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/lab_run/sim/host_tests/owner.py"
+            ))
+            .arg(std::env::var_os("ECHO_LAB_TEST_HOST_DIRECTORY")?);
+    }
+    let status = command.args(arguments).status().ok()?;
+    Some(std::process::ExitCode::from(
+        u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
+    ))
+}
+
 fn main() -> std::process::ExitCode {
+    if let Some(status) = collected_child().or_else(python_adapter) {
+        return status;
+    }
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

@@ -41,8 +41,9 @@ def instrument(namespace, audit):
                     self.proc.wait(timeout=4)
                 os.close(fd)
                 self.owner_fd = None
-                audit.write_text(json.dumps({"owner_completed": completed,
-                                             "pid": self.proc.pid}))
+                observations = json.loads(audit.read_text()) if audit.exists() else []
+                observations.append({"owner_completed": completed, "pid": self.proc.pid})
+                audit.write_text(json.dumps(observations))
 
     start.__globals__["emit"] = capture
     host.start, host.close = observed_start, observed_close
@@ -60,6 +61,9 @@ def main():
     arguments = [arg for arg in arguments if arg != "-u"]
     script, *flags = arguments
     sys.argv = [script, *flags]
+    if Path(script).name != "host.py":
+        runpy.run_path(script, run_name="__main__")
+        return 0
     if os.name != "nt":
         return guest(script, directory)
     namespace = runpy.run_path(script)

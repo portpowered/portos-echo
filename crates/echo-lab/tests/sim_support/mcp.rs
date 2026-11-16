@@ -76,7 +76,7 @@ fn m5_restart_without_a_running_bridge_fails_before_launch() {
     let session = Session::new();
     scenario(&session, json!([{"mcp":{"action":"restart"}}]));
     let output = session
-        .command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
+        .raw_command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -154,7 +154,7 @@ fn m5_resource_controls_require_a_link_before_host_or_bridge_launch() {
         scenario["milestone"] = json!("M5");
         std::fs::write(path, scenario.to_string()).unwrap();
         let output = session
-            .command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
+            .raw_command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(1));
@@ -177,7 +177,7 @@ fn m5_replay_without_a_running_rotated_grant_fails_before_launch() {
     let session = Session::new();
     scenario(&session, json!([{"mcp":{"action":"replay"}}]));
     let output = session
-        .command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
+        .raw_command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));

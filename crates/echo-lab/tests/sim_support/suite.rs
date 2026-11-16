@@ -10,10 +10,8 @@ fn scenario(session: &Session, name: &str, tiers: &[&str], steps: Value) {
 }
 
 fn command(session: &Session) -> std::process::Command {
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_echo-lab"));
-    command
-        .current_dir(&session.0)
-        .args(["run", "--all", "--driver", "sim"]);
+    let mut command = session.cli();
+    command.current_dir(&session.0).args(["--all", "--driver", "sim"]);
     command
 }
 
@@ -115,15 +113,10 @@ fn w1_copy(session: &Session, threshold: u64) {
 }
 
 fn single(session: &Session) -> std::process::Command {
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_echo-lab"));
-    command.current_dir(&session.0).args([
-        "run",
-        "tests/scenarios/w1.yaml",
-        "--driver",
-        "sim",
-        "--out",
-        "artifacts",
-    ]);
+    let mut command = session.cli();
+    command
+        .current_dir(&session.0)
+        .args(["tests/scenarios/w1.yaml", "--driver", "sim", "--out", "artifacts"]);
     command
 }
 

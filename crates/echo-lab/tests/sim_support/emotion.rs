@@ -11,9 +11,10 @@ fn m6_cli_orders_animation_return_and_exact_later_host_playback() {
     )
     .unwrap();
     // Omit --bridge to protect the customer's production artifact selection.
-    let output = Command::new(env!("CARGO_BIN_EXE_echo-lab"))
+    let output = session
+        .cli()
         .current_dir(&session.0)
-        .args(["run", "scenario.yaml", "--driver", "sim", "--out", "artifacts"])
+        .args(["scenario.yaml", "--driver", "sim", "--out", "artifacts"])
         .output()
         .unwrap();
     assert_eq!(
