@@ -27,7 +27,7 @@ pub fn default_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
     if scenario["milestone"] == "M5" {
         return production_bridge();
     }
-    prebuilt(if scenario["milestone"] == "M1" {
+    prebuilt(if scenario["milestone"] == "M1" || scenario["id"] == "m4-spoof-tool" {
         "echo-bridge"
     } else {
         "echo-lab-sim-bridge"
@@ -79,7 +79,7 @@ fn run_suite(
 ) -> Result<(), String> {
     let mut passed = 0;
     let mut failed = 0;
-    let mut unavailable = 0;
+    let unavailable = 0;
     for path in paths {
         let name = path.to_str().ok_or("sim suite: invalid scenario path")?;
         let scenario = crate::lab_validate::load(name)?;
@@ -87,15 +87,6 @@ fn run_suite(
             .as_array()
             .is_some_and(|tiers| tiers.iter().any(|t| t == "T3"))
         {
-            continue;
-        }
-        if scenario["id"] == "m4-spoof-tool" {
-            writeln!(
-                output,
-                "m4-spoof-tool: not-runnable (requires W2 assembled bridge/agent integration)"
-            )
-            .map_err(|_| "sim suite: stdout failed")?;
-            unavailable += 1;
             continue;
         }
         let mut command = scenario_command(bridge, name, &scenario)?;
@@ -134,7 +125,7 @@ fn run_suite(
 
 fn scenario_command(bridge: &Path, name: &str, scenario: &serde_json::Value) -> Result<Vec<String>, String> {
     let production;
-    let selected = if matches!(scenario["milestone"].as_str(), Some("M1" | "M5")) {
+    let selected = if matches!(scenario["milestone"].as_str(), Some("M1" | "M5")) || scenario["id"] == "m4-spoof-tool" {
         production = default_bridge(scenario)?;
         production.as_path()
     } else {
@@ -201,4 +192,22 @@ pub fn destination(root: &Path, milestone: &str) -> Result<PathBuf, String> {
     let parent = root.join("artifacts").join(milestone);
     std::fs::create_dir_all(&parent).map_err(|_| "sim suite: cannot create artifact tree")?;
     Ok(parent)
+}
+
+/// M4 consumes the delivered bridge; earlier scenarios retain their helper.
+pub fn scenario_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
+    if scenario["id"] != "m4-spoof-tool" {
+        return default_bridge(scenario);
+    }
+    let bridge = std::env::current_exe()
+        .map_err(|_| "m4: cannot locate prebuilt bridge")?
+        .with_file_name(if cfg!(windows) {
+            "echo-bridge.exe"
+        } else {
+            "echo-bridge"
+        });
+    if !bridge.is_file() {
+        return Err("m4: missing prebuilt echo-bridge; run cargo build -p echo-bridge --bins --locked".into());
+    }
+    Ok(bridge)
 }

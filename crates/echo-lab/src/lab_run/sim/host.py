@@ -216,7 +216,8 @@ def launcher_forward(events, translation, owners):
                 if translation.close() != 0:
                     return 1
                 owner = LauncherChild(subprocess.Popen(
-                    ["wsl", "-d", "Ubuntu", "--exec", "python3", "-u", value],
+                    ["wsl", "-d", "Ubuntu", "--exec", "python3", "-u", value,
+                     *(["--finite"] if "--finite" in sys.argv[1:] else [])],
                     stdin=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0))
                 owners.append(owner)
                 writer = threading.Thread(target=launcher_write, args=(owner.proc, commands, events), daemon=True)
@@ -242,14 +243,17 @@ def launcher_forward(events, translation, owners):
 
 
 class Host:
-    def __init__(self, folder):
+    def __init__(self, folder, finite_mode=False):
         self.folder = Path(folder)
+        self.finite_mode = finite_mode
         self.proc = None
         self.stop = threading.Event()
         self.cancelled = threading.Event()
         self.condition = threading.Condition()
         self.log = bytearray()
         self.fixture = bytes(640)
+        self.pending = b""
+        self.finite = False
         self.fed = 0
         self.fd = None
         self.keys = None
@@ -286,21 +290,29 @@ class Host:
 
     def feed(self):
         while not self.stop.is_set():
+            with self.condition:
+                if self.finite_mode and not self.pending:
+                    self.condition.wait_for(lambda: self.pending or self.stop.is_set(), 0.1)
+                    continue
             if not select.select([], [self.fd], [], 0.1)[1]:
                 continue
             with self.condition:
-                data = self.fixture
-            try:
-                count = os.write(self.fd, data)
-            except BlockingIOError:
-                continue
-            with self.condition:
+                data = self.pending or self.fixture
+                try:
+                    count = os.write(self.fd, data)
+                except BlockingIOError:
+                    continue
+                if self.pending:
+                    self.pending = self.pending[count:]
                 self.fed += count
                 self.condition.notify_all()
 
     def start(self):
         (self.folder / "state").mkdir(exist_ok=True)
-        (self.folder / "state/config").write_text("even_volume=off\n")
+        config = "even_volume=off\n"
+        if self.finite_mode:
+            config += "wake_sound=off\nwake_sound_removal=off\n"
+        (self.folder / "state/config").write_text(config)
         (self.folder / "addrs").write_text("127.0.0.1\n")
         (self.folder / "capture").unlink(missing_ok=True)
         os.mkfifo(self.folder / "capture")
@@ -308,6 +320,9 @@ class Host:
         (self.folder / "keys").unlink(missing_ok=True)
         os.mkfifo(self.folder / "keys")
         self.keys = os.open(self.folder / "keys", os.O_RDWR | os.O_NONBLOCK)
+        if self.finite_mode:
+            import fcntl
+            fcntl.fcntl(self.fd, fcntl.F_SETPIPE_SZ, 4096)
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             port = self.port or reservation.getsockname()[1]
@@ -367,6 +382,25 @@ class Host:
             self.logged(b"satellite: running")
         elif action == "mute":
             self.mute()
+        elif action == "playback" and self.finite_mode:
+            with (self.folder / "play.raw").open("rb") as recording:
+                data = recording.read(LIMIT + 1)
+            if len(data) > LIMIT or len(data) % 2:
+                raise ValueError("invalid playback observation")
+            emit({"event": "host.ack", "pcm_bytes": len(data),
+                  "nonzero_bytes": sum(byte != 0 for byte in data)})
+            return
+        elif action == "finite":
+            data = bytes(value["pcm"])
+            if not self.finite_mode or not data or len(data) > 4096 or len(data) % 1600:
+                raise ValueError("invalid finite fixture")
+            with self.condition:
+                if self.finite:
+                    raise ValueError("finite fixture already sent")
+                self.finite = True
+                self.proc.send_signal(signal.SIGUSR1)
+                self.pending = data
+                self.condition.notify_all()
         else:
             if action == "say":
                 data = bytes(value["pcm"])
@@ -438,7 +472,7 @@ def host_input(host, events):
 def main():
     failed = False
     with tempfile.TemporaryDirectory(prefix="echo-lab-sim-") as folder:
-        host = Host(folder)
+        host = Host(folder, "--finite" in sys.argv[1:])
         events = queue.Queue()
         try:
             threading.Thread(target=host_input, args=(host, events), daemon=True).start()

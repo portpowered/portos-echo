@@ -1,3 +1,4 @@
+pub mod m4;
 pub(super) mod mcp;
 mod observers;
 mod process;

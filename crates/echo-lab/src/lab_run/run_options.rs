@@ -138,11 +138,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
         return Err("sim: requires one scenario and sim options only".into());
     }
     let scenario = crate::lab_validate::load(&scenarios[0])?;
-    let bridge = match flags.get("--bridge") {
-        Some(value) => explicit(value)
-            .map_err(|_| format!("sim: --bridge requires an explicit executable path to an existing file: {value}"))?,
-        None => super::sim::suite::default_bridge(&scenario)?,
-    };
+    let bridge = selected_bridge(flags, &scenario)?;
     let milestone = scenario["milestone"].as_str().ok_or("sim: missing milestone")?;
     if !milestone
         .bytes()
@@ -233,4 +229,13 @@ pub fn destination(path: &Path) -> Result<PathBuf, String> {
         return Err("run output: artifacts must be outside git".into());
     }
     Ok(target)
+}
+
+fn selected_bridge(flags: &BTreeMap<String, String>, scenario: &serde_json::Value) -> Result<PathBuf, String> {
+    Ok(if let Some(value) = flags.get("--bridge") {
+        explicit(value)
+            .map_err(|_| format!("sim: --bridge requires an explicit executable path to an existing file: {value}"))?
+    } else {
+        super::sim::suite::scenario_bridge(scenario)?
+    })
 }

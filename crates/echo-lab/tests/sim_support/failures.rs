@@ -74,25 +74,51 @@ fn sim_preflight_refuses_unsupported_controls_setups_and_missing_executables() {
     assert!(!session.0.join("artifacts").exists());
 }
 
-#[test]
-#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
-fn missing_wrong_and_unsupported_observations_fail_without_following_steps() {
-    for (step, script, budgets) in [
+fn observation_failures() -> [(serde_json::Value, serde_json::Value, serde_json::Value, &'static str); 6] {
+    [
         (
             json!({"expect_screen":{"state":"speaking"}}),
             json!({"ui":{"state":"listening"}}),
             json!({}),
+            "step 0: screen expectation: latest UiState did not match",
         ),
-        (json!({"expect_screen":{"state":"speaking"}}), json!({}), json!({})),
-        (json!({"expect_speech_contains":["missing"]}), json!({}), json!({})),
-        (json!({"touch":{"target":"missing"}}), json!({}), json!({})),
-        (json!({"expect_frame":"frame.jpg"}), json!({}), json!({})),
+        (
+            json!({"expect_screen":{"state":"speaking"}}),
+            json!({}),
+            json!({}),
+            "step 0: screen expectation: missing observation file",
+        ),
+        (
+            json!({"expect_speech_contains":["missing"]}),
+            json!({}),
+            json!({}),
+            "step 0: speech expectation: recorded reply did not match",
+        ),
+        (
+            json!({"touch":{"target":"missing"}}),
+            json!({}),
+            json!({}),
+            "step 0: sim: unsupported step capability",
+        ),
+        (
+            json!({"expect_frame":"frame.jpg"}),
+            json!({}),
+            json!({}),
+            "step 0: sim: unsupported step capability",
+        ),
         (
             json!({"expect_trace":["wyoming.run_ended"]}),
             json!({}),
             json!({"unknown":5}),
+            "step 1: budget: unsupported metric",
         ),
-    ] {
+    ]
+}
+
+#[test]
+#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
+fn missing_wrong_and_unsupported_observations_fail_without_following_steps() {
+    for (step, script, budgets, error) in observation_failures() {
         let session = Session::new();
         let has_budget = budgets.as_object().unwrap().len() == 1;
         session.scenario(
@@ -110,6 +136,8 @@ fn missing_wrong_and_unsupported_observations_fail_without_following_steps() {
             .extend(script.as_object().unwrap().clone());
         let output = session.script(&fixture);
         assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.trim(), format!("echo-lab: scenario.yaml: {error}"));
         let report = session.report();
         assert_eq!(report["result"], "fail");
         assert_eq!(report["checks"][if has_budget { "step_1" } else { "step_0" }], false);

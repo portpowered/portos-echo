@@ -24,6 +24,47 @@ uses no network. `--help` prints the command grammar.
 
 ## Sim test bridge
 
+The M4 component witnesses use the prebuilt configured `echo-bridge` binary,
+the pinned host, synthetic Live and Responses peers, and the spoof MCP:
+
+```sh
+cargo test -p echo-lab --bin echo-lab t3_m4_pinned_host --locked -- --ignored --nocapture
+```
+
+Each fresh world sends one finite 100 ms synthetic capture through the host.
+Its explicit `--finite` owner disables wake sounds and their removal, sends
+the fixture once, and stops feeding the FIFO afterward. The transparent Wyoming
+observer matches the complete sample-sign sequence across frames, preserving
+the endpoint through the host's microphone gain. It measures the interval from
+the successful socket write containing that endpoint to the first reply PCM
+write. These are host-boundary observations, not DAC or acoustic timings.
+The paired screen SSE must show ready, listening, speaking, and ready in order.
+Success and HTTP 500 use independent worlds, exact model results, and checked
+cleanup. The public M4 scenario uses these same owned worlds:
+
+```sh
+cargo build -p echo-bridge -p echo-lab --bins --locked
+target/debug/echo-lab run tests/scenarios/m4-spoof-tool.yaml --driver sim
+```
+
+The unchanged utterance maps to the finite synthetic capture. The sim driver
+selects the sibling production `echo-bridge`; `--bridge` explicitly overrides it.
+W1 retains its helper. Discovery executes M4 too, and `make test-sim` repeats
+both cases ten times without retries. Each case uses fresh peers and private
+configuration; cleanup failures fail the run. `report.json` records actual
+sent transcript, paired screen state, counts, PCM bytes and socket latency.
+The p95 budget covers the positive and fresh HTTP 500 samples together.
+
+`tests/golden/m4-success.jsonl` and `m4-http500.jsonl` were recorded from these
+configured bridge worlds. The runner normalizes only incidental timestamps,
+IDs and ephemeral endpoints, then compares every line. A difference fails and
+prints expected/actual lines. There is no automatic update option. Normalized
+actual traces are retained beside the report for inspection; private raw traces,
+keys, configuration and PCM are removed. The explicit dialogue capture gate
+orders the first microphone observation before delegation without sorting or
+filtering the trace. Golden changes require a separately observed run and
+review of each semantic difference.
+
 `cargo build -p echo-lab --bin echo-lab-sim-bridge --locked` builds the
 test-purpose Wyoming bridge. It has no model or tool execution. Supply
 `ECHO_LAB_WYOMING_ADDR=127.0.0.1:<port>` and an absolute native

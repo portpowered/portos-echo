@@ -96,6 +96,8 @@ pub fn check(records: &[Value], selectors: &[Selector], run: Option<&str>) -> Re
     }
     let mut cursor = 0;
     let mut correlated = run.map(str::to_owned);
+    let mut delegation = None;
+    let delegated = selectors.iter().any(|s| s.event == "session.delegation.created");
     for (index, selector) in selectors.iter().enumerate() {
         let mute_window = selector.event == "mic.mute_window";
         if mute_window {
@@ -123,6 +125,11 @@ pub fn check(records: &[Value], selectors: &[Selector], run: Option<&str>) -> Re
                 "trace expectation {index} ({}): wrong event order",
                 selector.event
             ));
+        }
+        if delegated {
+            for (_, record) in &candidates {
+                correlate(record, &mut delegation)?;
+            }
         }
         if let Some((position, last)) = candidates.last() {
             cursor = position + 1;
@@ -155,5 +162,26 @@ fn muted_frame_oracle(records: &[Value], window: &Value) -> Result<(), String> {
             return Err(format!("mute window {window} {field}: expected 0, observed {count}"));
         }
     }
+    Ok(())
+}
+
+fn correlate<'a>(record: &'a Value, delegation: &mut Option<&'a str>) -> Result<(), String> {
+    if !matches!(
+        record["event"].as_str(),
+        Some("session.delegation.created" | "tools/call" | "session.commentary.append")
+    ) {
+        return Ok(());
+    }
+    if record["run_id"].as_str().is_none_or(str::is_empty) {
+        return Err("trace expectation: missing run ID in delegation sequence".into());
+    }
+    let id = record["delegation_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("trace expectation: missing delegation ID")?;
+    if delegation.is_some_and(|expected| expected != id) {
+        return Err("trace expectation: mismatched delegation ID".into());
+    }
+    *delegation = Some(id);
     Ok(())
 }
