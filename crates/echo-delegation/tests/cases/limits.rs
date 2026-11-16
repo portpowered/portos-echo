@@ -2,7 +2,7 @@ use super::{
     journey::*,
     model::{Model, Reply, final_item},
 };
-use crate::support::{config, sse};
+use crate::{config, sse};
 use echo_config::LiveMode;
 
 #[tokio::test]

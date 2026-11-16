@@ -2,7 +2,7 @@ use super::{
     journey::*,
     model::{Model, Reply},
 };
-use crate::support::{config, sse};
+use crate::{config, sse};
 use echo_config::LiveMode;
 use echo_delegation::TraceEvent;
 use serde_json::json;

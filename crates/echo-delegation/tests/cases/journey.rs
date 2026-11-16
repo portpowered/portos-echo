@@ -1,5 +1,5 @@
 use super::model::{Model, Reply, final_item};
-use crate::support::{Credentials, Request, config, sse};
+use crate::{Credentials, Request, config, sse};
 use echo_config::{AgentConfig, LiveMode, McpServer};
 use echo_contracts::{
     ids::{DelegationId, SessionId},
