@@ -28,7 +28,12 @@ pub fn default_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
         return production_bridge();
     }
     prebuilt(
-        if scenario["milestone"] == "M1" || matches!(scenario["id"].as_str(), Some("m4-spoof-tool" | "m6-emotion")) {
+        if scenario["milestone"] == "M1"
+            || matches!(
+                scenario["id"].as_str(),
+                Some("m4-spoof-tool" | "m6-emotion" | "m7-muse")
+            )
+        {
             "echo-bridge"
         } else {
             "echo-lab-sim-bridge"
@@ -128,8 +133,10 @@ fn run_suite(
 fn scenario_command(bridge: &Path, name: &str, scenario: &serde_json::Value) -> Result<Vec<String>, String> {
     let production;
     let selected = if matches!(scenario["milestone"].as_str(), Some("M1" | "M5"))
-        || matches!(scenario["id"].as_str(), Some("m4-spoof-tool" | "m6-emotion"))
-    {
+        || matches!(
+            scenario["id"].as_str(),
+            Some("m4-spoof-tool" | "m6-emotion" | "m7-muse")
+        ) {
         production = default_bridge(scenario)?;
         production.as_path()
     } else {

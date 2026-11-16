@@ -1,0 +1,28 @@
+id: m7-muse
+milestone: M7
+tiers: [T3, T4, T5]
+setup:
+  mcp: spoof
+  backend: muse
+steps:
+  - say: "Computer, ask Muse to run the test job"
+  - expect_trace:
+      - session.delegation.created
+      - muse.submit
+      - muse.progress
+      - "muse.terminal {status: completed}"
+      - session.commentary.append
+  - expect_speech_contains: ["Muse test job completed"]
+  - expect_screen: {state: speaking}
+budgets: {}
+negative:
+  - inject: {muse: no_report}
+    expect_trace:
+      - session.delegation.created
+      - muse.submit
+      - muse.progress
+      - "muse.terminal {status: failed, retryable: false}"
+      - session.commentary.append
+    expect_speech_contains: ["Muse did not report a result in time"]
+    expect_trace_absent:
+      - "muse.terminal {status: completed}"

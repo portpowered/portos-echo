@@ -41,7 +41,7 @@ impl Session {
         host.send(&json!({"action":"wake"})).await?;
         host.expect("host.ack").await?;
         self.dispatch("m5-linked").await?;
-        self.reach("session.commentary.append").await?;
+        self.reach("session.commentary.append", 20).await?;
         let live = self.live.as_mut().ok_or("M5: missing Live fixture")?;
         let text = live.commentary.recv().await.ok_or("M5: missing delivered commentary")?;
         let actual: Value = serde_json::from_str(&text).map_err(|_| "M5: malformed commentary")?;
@@ -64,7 +64,10 @@ impl Session {
             return Err("M5: probe requires a completed tool call and rejected replay".into());
         }
         self.dispatch("m5-replayed").await?;
-        self.reach("mcp.run.failed").await?;
+        // This is an I/O-only probe on the already established call. Keep its
+        // clock fixed while the rejected request and the real host's Played
+        // acknowledgment settle; polling must not consume the control deadline.
+        self.reach("mcp.run.failed", 0).await?;
         loop {
             self.receive_screen().await?;
             if self.screen["state"] == "error" {
@@ -109,7 +112,7 @@ impl Session {
             .map_err(|_| "M5: delegation control failed".into())
     }
 
-    async fn reach(&mut self, event: &str) -> Result<(), String> {
+    async fn reach(&mut self, event: &str, milliseconds: u64) -> Result<(), String> {
         loop {
             self.observe()?;
             if self.trace.records.iter().any(|r| r["event"] == event) {
@@ -118,11 +121,11 @@ impl Session {
             if self.bridge.as_mut().ok_or("M5: missing bridge")?.exited()? {
                 return Err("M5: bridge exited before resource observation".into());
             }
-            // Each acknowledged tick drives the paused production owner. Poll
-            // real loopback peers between ticks; the outer scenario owns timeout.
-            self.advance_bridge(20).await?;
-            self.elapsed_ms += 20;
-            if self.elapsed_ms.is_multiple_of(1000) {
+            // A zero tick polls the owner without manufacturing elapsed time.
+            // The outer scenario retains its wall-clock timeout for stalled I/O.
+            self.advance_bridge(milliseconds).await?;
+            self.elapsed_ms += milliseconds;
+            if milliseconds != 0 && self.elapsed_ms.is_multiple_of(1000) {
                 self.fixture
                     .as_ref()
                     .ok_or("M5: missing authorization fixture")?

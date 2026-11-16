@@ -2,10 +2,10 @@
 //! scenario; the production driver will use these same external-boundary fakes.
 pub(crate) mod emotion;
 mod golden;
-mod model;
-mod screen;
-mod wire;
-mod world;
+pub(super) mod model;
+pub(super) mod screen;
+pub(super) mod wire;
+pub(super) mod world;
 
 #[cfg(test)]
 mod tests;

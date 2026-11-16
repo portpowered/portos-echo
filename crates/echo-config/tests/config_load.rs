@@ -41,6 +41,8 @@ impl Drop for Directory {
 #[test]
 fn committed_example_loads_with_all_expected_values() {
     let expected = BridgeConfig {
+        agent_backend: echo_config::AgentBackend::Client,
+        muse: None,
         chatgpt_auth: echo_config::ChatGptAuthConfig::default(),
         audio: echo_config::AudioConfig::default(),
         echo: EchoConfig {
@@ -102,6 +104,25 @@ fn minimal_config_defaults_match_both_loaders() {
     );
     assert_eq!(config.mcp.server, vec![]);
     assert_eq!(config.screen.listen.to_string(), "0.0.0.0:16900"); // lint-rules: allow-literal configuration loader expected value fixture
+}
+
+#[test]
+fn muse_loaders_preserve_literal_paths_and_never_create_credential_files() {
+    let directory = Directory::new().unwrap();
+    let input = format!(
+        "{}\n[muse]\nurl='https://127.0.0.1:7448/'\nca_file='absent/ca.der'\ncredential_file='~/absent/muse'\n",
+        MINIMAL.replace("[agent]", "[agent]\nbackend='muse'")
+    );
+    let path = directory.write(&input).unwrap();
+    let expected = BridgeConfig::from_toml_str(&input).unwrap();
+    for _ in 0..2 {
+        assert_eq!(BridgeConfig::load(&path).unwrap(), expected);
+    }
+    let muse = expected.muse.unwrap();
+    assert_eq!(muse.ca_file, PathBuf::from("absent/ca.der"));
+    assert_eq!(muse.credential_file, PathBuf::from("~/absent/muse"));
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    assert!(!directory.0.join("absent").exists());
 }
 
 #[test]

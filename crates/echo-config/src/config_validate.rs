@@ -53,6 +53,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "live",
             "audio",
             "agent",
+            "muse",
             "mcp",
             "screen",
             "audit",
@@ -62,7 +63,14 @@ fn schema_field(path: &str, key: &str) -> bool {
         "chatgpt_auth" => crate::config_auth::FIELDS,
         "echo" => &["host", "wyoming_port"],
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
-        "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap", "model"],
+        "agent" => &[
+            "backend",
+            "max_tool_calls",
+            "task_deadline_seconds",
+            "daily_request_cap",
+            "model",
+        ],
+        "muse" => &["url", "ca_file", "credential_file"],
         "mcp" => &["server", "state_dir", "client_id", "scopes", "operator_listen"],
         "screen" => &["listen", "pairing_token_file"],
         "audit" => &["log_dir"],
@@ -86,6 +94,7 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
+    crate::config_muse::validate(config)?;
     config.chatgpt_auth.validate()?;
     validate_mcp(&config.mcp)?;
     if config.audio.reply_lead_ms == 0 || !config.audio.reply_lead_ms.is_multiple_of(20) {

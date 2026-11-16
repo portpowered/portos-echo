@@ -27,6 +27,12 @@ pub struct Model {
 }
 
 impl Model {
+    pub fn requests(&self) -> usize {
+        let observed = self.observed.borrow();
+        // Even an incomplete/rejected accepted request violates Muse isolation.
+        observed.requests.max(observed.accepted_connections)
+    }
+
     #[cfg(test)]
     pub async fn wait_for_result_request(&self) {
         self.observed.clone().wait_for(|o| o.requests == 2).await.unwrap();

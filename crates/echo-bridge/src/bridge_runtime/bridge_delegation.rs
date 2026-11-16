@@ -1,4 +1,7 @@
 //! The active call owner alone delivers prepared commentary. Workers own no Live socket.
+mod bridge_host;
+mod bridge_muse_host;
+mod bridge_muse_work;
 use super::bridge_budget::{Budget, Credentials};
 use super::journey::bridge_live::LivePort;
 use crate::bridge_mcp::{Grant, Token};
@@ -7,6 +10,7 @@ use crate::{
     bridge_input::{Provider, Settings},
     bridge_trace::Trace,
 };
+pub(super) use bridge_host::Host;
 use echo_config::McpServer;
 use echo_contracts::live::{DelegationTarget, LiveEvent};
 use echo_delegation::{DelegationRunner, TraceEvent, TraceSink};
@@ -54,7 +58,7 @@ pub(super) const MAX_DELEGATIONS: u32 = 1024;
 type Runner = DelegationRunner<Token, Credentials, Sink>;
 type Completion = (Runner, Result<Option<LiveEvent>, echo_delegation::DelegationError>);
 
-pub(super) struct Host {
+pub(in crate::bridge_runtime) struct Client {
     grant: Option<Arc<Grant>>,
     config: Option<(echo_config::AgentConfig, McpServer, echo_signin::Providers)>,
     model_url: Option<String>,
@@ -71,7 +75,7 @@ pub(super) struct Host {
     active: Option<(String, String)>,
 }
 
-impl Host {
+impl Client {
     pub fn new(settings: &Settings, utc_day: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         let config = match (&settings.delegation, &settings.credential) {
             (Some((agent, server)), Provider::Resolved(providers)) => {
@@ -308,7 +312,7 @@ impl Host {
     }
 }
 
-impl Drop for Host {
+impl Drop for Client {
     fn drop(&mut self) {
         self.abandon();
     }

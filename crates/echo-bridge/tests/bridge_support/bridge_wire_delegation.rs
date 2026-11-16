@@ -8,7 +8,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::net::{TcpListener, TcpStream};
-
 #[path = "bridge_wire_delegation/failures.rs"]
 mod failures;
 #[path = "bridge_wire_delegation/kill.rs"]
@@ -23,7 +22,6 @@ struct Request {
     headers: HashMap<String, String>,
     body: Value,
 }
-
 pub(super) struct Model {
     pub(super) origin: String,
     requests: Arc<Mutex<Vec<Request>>>,
@@ -37,6 +35,11 @@ impl Drop for Model {
 }
 
 impl Model {
+    #[cfg(unix)]
+    pub(super) fn request_count(&self) -> usize {
+        self.requests.lock().unwrap().len()
+    }
+
     pub(super) async fn start(outage: bool, allowed: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = "http://127.0.0.1";
@@ -214,7 +217,6 @@ fn expected(allowed: bool, outage: bool) -> &'static str {
         "tool denied"
     }
 }
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() {
@@ -403,7 +405,6 @@ fn check_trace(path: &Path, outage: bool, token: &str) {
         assert!(!text.contains(private), "trace disclosure");
     }
 }
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_wire_delegation_credentials_duplicate_target_and_exact_tool_result() {
@@ -411,14 +412,12 @@ async fn bridge_wire_delegation_credentials_duplicate_target_and_exact_tool_resu
         delegated(mode, true, false).await;
     }
 }
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_wire_delegation_denial_and_model_outage_do_not_replay() {
     delegated("api_key", false, false).await;
     delegated("api_key", true, true).await;
 }
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_wire_delegation_eof_cancels_inflight_model_without_commentary() {

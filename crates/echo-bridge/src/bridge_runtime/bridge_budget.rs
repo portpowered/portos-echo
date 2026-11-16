@@ -21,7 +21,7 @@ impl Budget {
         }
     }
 
-    fn reserve(&self, day: u64) -> Result<(), CredentialError> {
+    pub(super) fn reserve(&self, day: u64) -> Result<(), CredentialError> {
         let mut state = self.state.lock().map_err(|_| CredentialError)?;
         if state.0 != day {
             *state = (day, 0);
