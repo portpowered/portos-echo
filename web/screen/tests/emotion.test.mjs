@@ -7,21 +7,26 @@ import { states, frame } from "./fixtures.mjs";
 
 test("F12 F18: Emotion a,a,b,a at 0/79/80/160ms; Dismiss awaits authoritative replacement", async (t) => {
     const page = await pageFor(t);
+    assert.equal(await page.evaluate(() => Date.now()), 0);
     await emit(page, frame(1, states[9]));
     const shown = () =>
         page.locator('[aria-label="Animation frame"]').textContent();
     assert.equal(await shown(), "frame-a");
     const first = await snapshot(page, "emotion");
     await bounds(page);
+    assert.equal(await page.evaluate(() => Date.now()), 0);
     await page.clock.runFor(79);
+    assert.equal(await page.evaluate(() => Date.now()), 79);
     assert.equal(await shown(), "frame-a");
     await page.clock.runFor(1);
+    assert.equal(await page.evaluate(() => Date.now()), 80);
     assert.equal(await shown(), "frame-b");
     assert.notEqual(await snapshot(page, "emotion-b"), first);
     await page.getByRole("button", { name: "Dismiss" }).click();
     assert.equal((await calls(page))[0].body, '{"action":"dismiss"}');
     assert.equal(await shown(), "frame-b");
     await page.clock.runFor(80);
+    assert.equal(await page.evaluate(() => Date.now()), 160);
     assert.equal(await shown(), "frame-a");
     await emit(page, frame(2));
     assert.equal(await page.evaluate(() => window.timers.size), 0);
