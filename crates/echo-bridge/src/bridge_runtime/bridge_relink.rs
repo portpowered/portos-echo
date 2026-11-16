@@ -13,7 +13,7 @@ pub(super) fn failure(
 ) -> Result<(), Error> {
     if let Error::Mcp(reason) = &error {
         trace.record(
-            "mcp.relink_required",
+            "mcp.run.failed",
             Some(id),
             json!({"reason":crate::bridge_mcp::category(reason)}),
         )?;

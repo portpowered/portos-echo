@@ -31,6 +31,7 @@ impl Token {
                 if grant.blocked() {
                     return Err(TokenError::Unavailable);
                 }
+                grant.used().map_err(|_| TokenError::Unavailable)?;
                 Ok(token)
             }
         }
@@ -44,7 +45,7 @@ impl TokenProvider for Token {
 
     fn unauthorized(&self) {
         if let Some(grant) = &self.grant {
-            grant.reject(super::bridge_presentation::RELINK);
+            grant.unauthorized();
         }
     }
 }

@@ -61,10 +61,32 @@ async fn t3_grant_resource_401_latches_before_return_and_blocks_token_and_refres
             response.json::<serde_json::Value>().await.unwrap(),
             serde_json::json!({"error":"relink_required"})
         );
+        assert_eq!(
+            screen.try_recv().unwrap(),
+            UiState::Error {
+                message: bridge_presentation::RELINK.into(),
+                relink: true
+            }
+        );
+        client_provider_rejection(&owner, directory.path());
         assert_blocked(&mock);
         owner.close().await;
     })
     .await;
+}
+
+fn client_provider_rejection(owner: &Runtime, directory: &std::path::Path) {
+    // Repeated callbacks cannot duplicate the grant's first rejection event.
+    owner.grant.unauthorized();
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(directory.join("trace"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let rejected: Vec<_> = entries.iter().filter(|e| e["event"] == "mcp.relink_required").collect();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0]["reason"], "unauthorized");
+    assert_eq!(rejected[0]["provider_auth_mode"], "api_key");
 }
 
 async fn linked(mock: &Mock, directory: &std::path::Path) -> (Runtime, tokio::sync::mpsc::Receiver<UiState>) {
@@ -82,7 +104,10 @@ async fn linked(mock: &Mock, directory: &std::path::Path) -> (Runtime, tokio::sy
         pairing_file,
     };
     let (send, screen) = tokio::sync::mpsc::channel(32);
-    let owner = Runtime::open(settings, Presentation::new(Some(send))).await.unwrap();
+    let trace = crate::bridge_trace::Trace::open(&directory.join("trace"), "api_key").unwrap();
+    let owner = Runtime::open(settings, Presentation::new(Some(send)), trace)
+        .await
+        .unwrap();
     let link = owner.grant.client.begin_link().await.unwrap();
     let grant = owner.grant.clone();
     let approval = tokio::spawn(async move { grant.client.await_approval(link).await });

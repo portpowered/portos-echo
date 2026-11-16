@@ -3,6 +3,7 @@ pub mod bridge_clock;
 #[cfg(test)]
 mod bridge_component;
 mod bridge_control;
+mod bridge_events;
 mod bridge_http;
 mod bridge_operations;
 pub(crate) mod bridge_presentation;
@@ -18,8 +19,8 @@ use echo_mcp_auth::{AuthClient, AuthError};
 use std::{
     net::SocketAddr,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -31,6 +32,10 @@ pub(crate) struct Grant {
     failed: AtomicBool,
     epoch: u64,
     started: tokio::time::Instant,
+    trace: Mutex<crate::bridge_trace::Trace>,
+    trace_failed: AtomicBool,
+    operation: AtomicU64,
+    reloaded: AtomicBool,
 }
 
 impl Grant {
@@ -49,7 +54,9 @@ impl Grant {
     }
 
     pub fn check(&self) -> Result<(), Error> {
-        if self.failed.load(Ordering::Acquire) {
+        if self.trace_failed.load(Ordering::Acquire) {
+            Err(Error::Trace)
+        } else if self.failed.load(Ordering::Acquire) {
             Err(Error::Screen)
         } else {
             Ok(())
@@ -64,7 +71,11 @@ pub(crate) struct Runtime {
 }
 
 impl Runtime {
-    pub async fn open(settings: Settings, presentation: Presentation) -> Result<Self, Error> {
+    pub async fn open(
+        settings: Settings,
+        presentation: Presentation,
+        trace: crate::bridge_trace::Trace,
+    ) -> Result<Self, Error> {
         let token = bridge_control::pairing(&settings.pairing_file)?;
         let listener = tokio::net::TcpListener::bind(settings.listen)
             .await
@@ -80,6 +91,10 @@ impl Runtime {
                 .map_err(|_| Error::Control)?
                 .as_secs(),
             started: tokio::time::Instant::now(),
+            trace: Mutex::new(trace),
+            trace_failed: AtomicBool::new(false),
+            operation: AtomicU64::new(0),
+            reloaded: AtomicBool::new(true),
         });
         let (send, receive) = mpsc::channel(1);
         let tasks = vec![

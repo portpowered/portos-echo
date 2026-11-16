@@ -71,6 +71,8 @@ impl Session {
             .unwrap()
             .as_secs();
         assert!(expiry.abs_diff(epoch + 1800) <= 1);
+        assert_eq!(bridge_short::read(&mut self.satellite).await.0["type"], "describe");
+        bridge_short::send(&mut self.satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
     }
 }
 
@@ -168,9 +170,81 @@ async fn mcp_link_cli_screen_rotation_reload_and_healthy_unlink() {
         assert!(state.requests.iter().filter(|r| r.path == "/custom/end").all(|r| !r.headers.contains_key("dpop")));
         }
         restarted.process.finish(0).await;
+        let lifecycle: Vec<_> = trace(&directory.path().join("trace")).into_iter()
+            .filter(|e| matches!(e["event"].as_str(), Some("mcp.link.started" | "mcp.link.approved" | "mcp.refresh.committed" | "mcp.unlink.completed" | "mcp.grant.reloaded")))
+            .map(|e| json!({"event":e["event"],"operation_id":e["operation_id"]})).collect();
+        assert_eq!(lifecycle, json!([
+            {"event":"mcp.link.started","operation_id":1},
+            {"event":"mcp.link.approved","operation_id":1},
+            {"event":"mcp.refresh.committed","operation_id":2},
+            {"event":"mcp.refresh.committed","operation_id":3},
+            {"event":"mcp.unlink.completed","operation_id":1},
+            {"event":"mcp.unlink.completed","operation_id":2}
+        ]).as_array().unwrap().clone());
         let text = std::fs::read_to_string(directory.path().join("trace")).unwrap();
         for private in ["access-1", "refresh-3", "synthetic-device", "synthetic-screen-pair"] { assert!(!text.contains(private)); }
     }).await;
+}
+
+#[tokio::test(start_paused = true)]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn mcp_link_crash_after_rotation_reloads_durable_generation_before_use() {
+    drive(async {
+        let directory = tempfile::tempdir().unwrap();
+        let mock = Mock::bind().await.unwrap();
+        let mut session = Session::start(directory.path(), &mock, true).await;
+        let link = operator(directory.path(), "link");
+        session.prompt(&mock).await;
+        tokio::time::advance(Duration::from_secs(5)).await;
+        session.advance(5000).await;
+        completed(&link.await.unwrap(), 0, "MCP linked\n", "");
+        let initial = record(directory.path());
+        completed(
+            &operator(directory.path(), "--refresh-now").await.unwrap(),
+            0,
+            "MCP refreshed\n",
+            "",
+        );
+        let rotated = record(directory.path());
+        assert_eq!(rotated["grant"]["refresh_token"], "refresh-2");
+        assert_eq!(rotated["private_key_jwk"], initial["private_key_jwk"]);
+        // CLI completion is the public post-persistence barrier. No wake has
+        // occurred: terminate abruptly before any MCP use, without EOF cleanup.
+        session.process.child.kill().await.unwrap();
+        assert!(!session.process.child.wait().await.unwrap().success());
+        drop(session);
+        assert_eq!(record(directory.path()), rotated);
+        let mut restarted = Session::start(directory.path(), &mock, false).await;
+        // Resume the new process at the fixture's elapsed fake time before
+        // requesting another proof. AuthClient itself keeps its existing clock.
+        restarted.advance(5000).await;
+        completed(
+            &operator(directory.path(), "--refresh-now").await.unwrap(),
+            0,
+            "MCP refreshed\n",
+            "",
+        );
+        let recovered = record(directory.path());
+        assert_eq!(recovered["grant"]["refresh_token"], "refresh-3");
+        assert_eq!(recovered["private_key_jwk"], initial["private_key_jwk"]);
+        assert_crash_requests(&mock);
+        restarted.process.finish(0).await;
+    })
+    .await;
+}
+
+fn assert_crash_requests(mock: &Mock) {
+    let state = mock.state.lock().unwrap();
+    assert_eq!(state.requests.iter().filter(|r| r.path == "/custom/link").count(), 1);
+    let refreshes: Vec<_> = state
+        .requests
+        .iter()
+        .filter(|r| r.form.get("grant_type").map(String::as_str) == Some("refresh_token"))
+        .map(|r| r.form["refresh_token"].as_str())
+        .collect();
+    assert_eq!(refreshes, ["refresh-1", "refresh-2"]);
+    assert_eq!(state.requests.iter().filter(|r| r.path == "/mcp").count(), 0);
+    assert!(!state.revoked);
 }
 
 #[tokio::test(start_paused = true)]

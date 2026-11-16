@@ -128,7 +128,7 @@ async fn mount_mcp(
     let Some(settings) = settings else {
         return Ok(None);
     };
-    let runtime = crate::bridge_mcp::Runtime::open(settings, screen.presentation.clone()).await?;
+    let runtime = crate::bridge_mcp::Runtime::open(settings, screen.presentation.clone(), trace.clone()).await?;
     delegation.grant(runtime.grant.clone());
     trace.record(
         "mcp.operator.listening",
