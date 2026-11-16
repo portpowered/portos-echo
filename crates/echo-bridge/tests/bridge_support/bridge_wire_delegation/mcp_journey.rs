@@ -39,7 +39,7 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
         // Advancing here can expire a probe before instrumented I/O is serviced.
         event_without_clock_advance(&path, "delegation.refused").await;
         session.process.finish(0).await;
-        satellite.await.unwrap();
+        assert_eq!(satellite.await.unwrap(), 1);
         rejected_once(&mock, &model, &path);
         assert_eq!(live.observer().calls().unwrap().len(), 2);
         live.shutdown().await;
@@ -154,20 +154,27 @@ pub(super) async fn wake(writer: &mut (impl tokio::io::AsyncWrite + Unpin)) {
     .await;
 }
 
-pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::Receiver<()>) {
+pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::Receiver<()>) -> usize {
     let (reader, mut writer) = socket.into_split();
     let mut lines = BufReader::new(reader).lines();
+    let mut errors = 0;
     loop {
         // next_line is cancellation safe when a wake arrives mid-header.
         let line = tokio::select! {
-            line = lines.next_line() => match line.unwrap() { Some(line) => line, None => return },
+            line = lines.next_line() => match line.unwrap() { Some(line) => line, None => return errors },
             Some(()) = next_wake.recv() => { wake(&mut writer).await; continue; }
         };
         let header: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(header["payload_length"].as_u64().unwrap_or(0), 0);
         match header["type"].as_str().unwrap() {
             "describe" => bridge_short::send(&mut writer, "info", json!({"satellite":{"name":"synthetic"}})).await,
-
+            "error" => {
+                assert_eq!(
+                    header["data"],
+                    json!({"code":"echo-unavailable","text":"Live unavailable."})
+                );
+                errors += 1;
+            }
             "audio-stop" => {
                 bridge_short::send(&mut writer, "played", json!({})).await;
                 bridge_short::send(&mut writer, "audio-stop", json!({})).await;
