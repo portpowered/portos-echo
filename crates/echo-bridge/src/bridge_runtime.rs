@@ -42,35 +42,43 @@ pub async fn execute(settings: Settings) -> Result<(), Error> {
             result = WyomingClient::connect(settings.wyoming, ClientOptions::default()) => result?,
             eof = &mut shutdown => return match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
-        let mut events = client.events()?;
-        client.run_satellite().await?;
-        client.describe().await?;
-        health.state.send_modify(|state| state.wyoming = "connected");
-        trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
-        publish("bridge.ready", None)?;
-        let factory = LiveCallFactory::new(&settings.live_url, settings.mode, settings.credential)?;
-        let work = observe(
-            &client,
-            &mut events,
-            &factory,
-            &health,
-            &mut trace,
-            (settings.mode, settings.voice, settings.lab),
-        );
         let result = tokio::select! {
-            result = work => result,
+            result = connected(&mut client, settings, &health, &mut trace) => result,
             eof = &mut shutdown => match eof { Ok(true) => Ok(()), _ => Err(Error::Control) },
         };
         let cleanup = client.close().await.map_err(Error::from);
         result.and(cleanup)
     };
     let result = work.await;
-    if let Err(error) = &result {
-        health.state.send_modify(|state| state.live = "error");
-        trace.record("bridge.error", None, json!({"reason":error.to_string()}))?;
-    }
+    let report = result.as_ref().err().map_or(Ok(()), |error| {
+        trace.record("bridge.error", None, json!({"reason":error.to_string()}))
+    });
     health.close().await;
-    result
+    result.and(report)
+}
+
+async fn connected(
+    client: &mut WyomingClient,
+    settings: Settings,
+    health: &Health,
+    trace: &mut Trace,
+) -> Result<(), Error> {
+    let mut events = client.events()?;
+    client.run_satellite().await?;
+    client.describe().await?;
+    health.state.send_modify(|state| state.wyoming = "connected");
+    trace.record("wyoming.connected", Some("connection-1"), json!({}))?;
+    publish("bridge.ready", None)?;
+    let factory = LiveCallFactory::new(&settings.live_url, settings.mode, settings.credential)?;
+    observe(
+        client,
+        &mut events,
+        &factory,
+        health,
+        trace,
+        (settings.mode, settings.voice, settings.lab),
+    )
+    .await
 }
 
 async fn observe(

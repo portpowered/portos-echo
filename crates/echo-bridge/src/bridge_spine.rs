@@ -146,3 +146,87 @@ fn bridge_spine_trace_preserves_aliases_counters_and_safe_mode() {
         Some(Error::Trace)
     );
 }
+
+#[test]
+fn bridge_spine_configured_modes_preserve_paths_and_never_read_credentials_at_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bridge.toml");
+    let template = include_str!("../../../examples/bridge.example.toml").replace("echo.example.invalid", "127.0.0.1");
+    let args = vec![
+        "--config".into(),
+        path.to_string_lossy().into_owned(),
+        "--trace".into(),
+        "trace.jsonl".into(),
+    ];
+    for mode in ["chatgpt", "api_key"] {
+        std::fs::write(
+            &path,
+            template.replace("mode = \"chatgpt\"", &format!("mode = \"{mode}\"")),
+        )
+        .unwrap();
+        let settings = parse(&args, [None, None, None]).unwrap().unwrap();
+        assert_eq!(settings.wyoming.to_string(), "127.0.0.1:16700");
+        assert_eq!(settings.health.to_string(), "127.0.0.1:16901");
+        assert_eq!(settings.trace, std::path::PathBuf::from("trace.jsonl"));
+        assert_eq!(settings.voice, "default");
+        assert!(!settings.lab);
+        assert_configured_provider(settings, mode);
+    }
+}
+
+fn assert_configured_provider(settings: bridge_input::Settings, mode: &str) {
+    if mode == "chatgpt" {
+        assert_eq!(settings.mode, echo_live::call::LiveAuthMode::Chatgpt);
+        assert_eq!(settings.live_url, "https://chatgpt.com");
+        assert!(matches!(settings.credential, Provider::Unavailable));
+    } else {
+        assert_eq!(settings.mode, echo_live::call::LiveAuthMode::ApiKey);
+        assert_eq!(settings.live_url, "https://api.openai.com");
+        match settings.credential {
+            Provider::ApiKey(key) => assert_eq!(key, std::path::Path::new("credentials/live.json")),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn bridge_spine_config_errors_and_duplicate_flags_are_offline() {
+    assert!(parse(&["--help".into()], [None, None, None]).unwrap().is_none());
+    for args in [
+        vec![],
+        vec!["--config", "missing"],
+        vec!["--trace"],
+        vec!["--trace", "one", "--trace", "two"],
+        vec!["--health-listen", "127.0.0.1:0", "--health-listen", "127.0.0.1:0"],
+    ] {
+        let args: Vec<_> = args.into_iter().map(String::from).collect();
+        assert_eq!(parse(&args, [None, None, None]).err(), Some(Error::Input));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "malformed [").unwrap();
+    assert_eq!(
+        parse(
+            &["--config".into(), path.to_string_lossy().into_owned()],
+            [None, None, None]
+        )
+        .err(),
+        Some(Error::Input)
+    );
+}
+
+#[tokio::test]
+async fn bridge_spine_credential_bytes_are_bounded_and_utf8_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("synthetic");
+    let provider = Provider::ApiKey(path.clone());
+    for bytes in [vec![255], vec![b'x'; 16_385], vec![b'x', 0]] {
+        std::fs::write(&path, bytes).unwrap();
+        assert!(matches!(provider.credential().await, Err(CallError::Authorization)));
+    }
+    std::fs::write(&path, vec![b'x'; 16_384]).unwrap();
+    match provider.credential().await.unwrap() {
+        LiveCredential::ApiKey { key } => assert_eq!(key.expose(), &"x".repeat(16_384)),
+        LiveCredential::Chatgpt { .. } => unreachable!(),
+    }
+}

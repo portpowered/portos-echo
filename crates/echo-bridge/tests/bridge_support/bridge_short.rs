@@ -3,7 +3,7 @@ use super::*;
 use echo_contracts::wyoming::{Event, Header, encode};
 use tokio::net::{TcpListener, TcpStream};
 
-async fn send(stream: &mut TcpStream, kind: &str, data: Value) {
+pub(super) async fn send(stream: &mut TcpStream, kind: &str, data: Value) {
     stream
         .write_all(&encode(&Event {
             header: Header {
@@ -19,7 +19,7 @@ async fn send(stream: &mut TcpStream, kind: &str, data: Value) {
         .unwrap();
 }
 
-async fn read(stream: &mut TcpStream) -> (Value, Vec<u8>) {
+pub(super) async fn read(stream: &mut TcpStream) -> (Value, Vec<u8>) {
     let mut header = Vec::new();
     loop {
         let byte = stream.read_u8().await.unwrap();
