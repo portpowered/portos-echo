@@ -4,6 +4,72 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::{io::duplex, sync::mpsc};
 
+#[tokio::test(start_paused = true)]
+async fn missing_played_deadline_retires_failed_run_and_serves_next_run() {
+    let (io, mut stream) = duplex(4096);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = client.events().unwrap();
+    let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+    let (tx, rx) = mpsc::channel(1);
+    drop(tx);
+    let mut play = Box::pin(client.play(format, rx));
+    let stop = async {
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
+    };
+    tokio::select! { biased; result = &mut play => unreachable!("unexpected {result:?}"), () = stop => () }
+    // Model the journey's control deadline, not the client's transport timeout.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut play)
+            .await
+            .is_err()
+    );
+    drop(play);
+    let caller = async {
+        client
+            .send_error("echo-unavailable", "Live unavailable.")
+            .await
+            .unwrap();
+        let mut run = events.recv().await.unwrap().unwrap().run.unwrap();
+        assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![1, 2]);
+        let (tx, rx) = mpsc::channel(1);
+        tx.send(vec![3, 4]).await.unwrap();
+        drop(tx);
+        let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+        assert_eq!(client.play(format, rx).await, Ok(PlayOutcome::Played));
+        client.close().await.unwrap();
+    };
+    let server = async {
+        let error = peer::receive(&mut stream).await;
+        assert_eq!(error.header.r#type, "error");
+        assert_eq!(
+            error.header.data.unwrap(),
+            json!({"code":"echo-unavailable","text":"Live unavailable."})
+        );
+        peer::send(
+            &mut stream,
+            "run-pipeline",
+            json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"alexa"}),
+            vec![],
+        )
+        .await;
+        peer::send(
+            &mut stream,
+            "audio-chunk",
+            json!({"rate":16000,"width":2,"channels":1}),
+            vec![1, 2],
+        )
+        .await;
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
+        assert_eq!(peer::receive(&mut stream).await.payload, vec![3, 4]);
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
+        peer::send(&mut stream, "played", json!({}), vec![]).await;
+        // Keep the duplex peer alive until the caller has consumed Played.
+        assert_eq!(tokio::io::AsyncReadExt::read(&mut stream, &mut [0]).await.unwrap(), 0);
+    };
+    tokio::join!(caller, server);
+}
+
 #[tokio::test]
 async fn exact_cut_before_first_send_drops_every_frame_once() {
     use std::{future::Future, task::Poll};

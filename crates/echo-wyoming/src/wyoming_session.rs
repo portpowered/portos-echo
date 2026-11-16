@@ -150,9 +150,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 .map(|play| play.frames.clone());
             let result = tokio::select! {
                 biased;
+                () = cancelled(&mut self.play) => self.cancel_playback(),
                 command = commands.recv() => self.command(command).await,
                 frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))),
-                () = cancelled(&mut self.play) => Err(Error::Closed),
                 frame = async { match frames { Some(queue) => queue.recv().await, None => std::future::pending().await } } => match frame {
                     Ok(frame) => self.audio(frame).await,
                     Err(error) => Err(error),
@@ -162,6 +162,21 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 return error;
             }
         }
+    }
+
+    fn cancel_playback(&mut self) -> Result<(), Error> {
+        // A missing Played can expire the run's control deadline after the
+        // complete stop was written. Retire that failed run without claiming
+        // playback success or invalidating the connection for its error frame.
+        // Cancellation before audio-stop still invalidates transport ownership.
+        if !self.play.as_ref().is_some_and(|play| play.stopped) {
+            return Err(Error::Closed);
+        }
+        if let Some(play) = self.play.take() {
+            play.finish(Err(Error::Closed));
+        }
+        self.router.end(Ok(()));
+        Ok(())
     }
 
     fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
