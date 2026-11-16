@@ -36,7 +36,12 @@ impl Muse {
     pub async fn start(&mut self, python: &str, root: &Path, binaries: &Path) -> Result<(), String> {
         self.root = root.into();
         std::fs::create_dir(root).map_err(|_| "m7: cannot own Muse directory")?;
-        private_directory(root)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "m7: private directory permissions")?;
+        }
         self.helper = Some(Process::start(
             tokio::process::Command::new(python)
                 .arg("-c")
@@ -119,15 +124,4 @@ impl Muse {
             Err(failures.join("; "))
         }
     }
-}
-
-fn private_directory(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-            .map_err(|_| "m7: private directory permissions")?;
-    }
-    let _ = path;
-    Ok(())
 }
