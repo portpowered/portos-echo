@@ -39,6 +39,19 @@ Monotonic call and journey deadlines use Tokio's clock, converted at the Live
 boundary, so component T3 can advance application time without changing system
 time. Shutdown abandons pending delegation before joining network cleanup.
 
+Each admitted delegation extends the existing ten-second production budget by its
+configured task window. Duplicate or refused events add no time. Wyoming's playback
+ceiling covers the existing bounded 1024-id call capacity plus fifteen seconds for
+cut, Played and transport completion, using the additive per-playback timeout API.
+Ordinary Wyoming operations keep their original timer and reconnect reset. Playback
+cannot apply its default
+five-second request limit to a model/tool task. The delegated runner still owns
+its exact configured task deadline and safe timeout commentary. Production expiry
+cuts playback before reporting failure. Registration, describe, cut and close
+retain independent five-second control limits. Once production ends, Played has
+its own five-second limit rather than inheriting the longer task window. Kill
+and shutdown remain selectable throughout the task and cleanup.
+
 `mic.frames` records the first successfully sent microphone batch. Exact final
 packet/sample/drop totals are in `mic.completed`; `wyoming.mic_frames` stays
 compatible. `reply.started` follows the first forwarded PCM payload, so arming

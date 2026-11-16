@@ -170,31 +170,12 @@ async fn assert_no_request(listener: &TcpListener) {
 #[tokio::test]
 #[ignore = "T3 controlled application and loopback peers"]
 async fn bridge_wire_runtime_deadline_stops_model_without_tool_or_replay() {
-    let mut app = Application::start(3, 1).await;
+    let mut app = Application::start(3, 60).await;
     let mut stalled = app.request("deadline").await;
-    // Keep loopback I/O runnable: paused Tokio must not auto-jump to the
-    // outer playback timeout while the OS delivers the deadline commentary.
-    let active = tokio::spawn(async {
-        loop {
-            tokio::task::yield_now().await;
-        }
-    });
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(1)).await;
-    // The call owner polls completed workers on its bounded event tick.
-    // Advance that tick explicitly while allowing the socket tasks to run.
-    for _ in 0..50 {
-        tokio::time::advance(Duration::from_millis(20)).await;
-        tokio::task::yield_now().await;
-        if trace(&app.path())
-            .iter()
-            .any(|e| e["event"] == "session.commentary.append")
-        {
-            break;
-        }
-    }
-    tokio::time::resume();
-    active.abort();
+    elapse(Duration::from_secs(59)).await;
+    assert!(app.live.commentary.try_recv().is_err());
+    assert!(!trace(&app.path()).iter().any(|e| e["event"] == "run.failed"));
+    elapse(Duration::from_secs(1)).await;
     app.commentary("deadline", "task timed out").await;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(5), stalled.read(&mut [0]))
@@ -219,6 +200,7 @@ async fn bridge_wire_runtime_deadline_stops_model_without_tool_or_replay() {
 async fn bridge_wire_runtime_abandon_replacement_retains_budget_and_discards_late_result() {
     let mut app = Application::start(1, 60).await;
     let mut old = app.request("old").await;
+    elapse(Duration::from_secs(12)).await;
     app.cancel("run-1").await;
     assert_eq!(old.read(&mut [0]).await.unwrap(), 0);
     app.wake().await;
@@ -288,4 +270,123 @@ async fn bridge_wire_runtime_failed_commentary_append_cuts_and_closes_without_su
     app.commentary("recovered", "fresh result").await;
     assert_eq!(app.live.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     app.finish().await;
+}
+
+// Prevent Tokio auto-advance while the OS delivers loopback packets. The ready
+// spinner is owned and aborted before returning to the real I/O clock.
+async fn elapse(duration: Duration) {
+    let active = tokio::spawn(async {
+        loop {
+            tokio::task::yield_now().await;
+        }
+    });
+    tokio::time::pause();
+    tokio::time::advance(duration).await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::resume();
+    active.abort();
+}
+
+#[tokio::test]
+#[ignore = "T3 controlled application and loopback peers"]
+async fn bridge_wire_runtime_long_delegation_plays_on_same_call_and_requires_played() {
+    let mut app = Application::start(3, 60).await;
+    elapse(Duration::from_secs(8)).await;
+    let mut model = app.request("slow").await;
+    elapse(Duration::from_secs(12)).await;
+    respond(&mut model, "slow result").await.unwrap();
+    app.commentary("slow", "slow result").await;
+    app.live.events.send("synthetic.more_audio".into()).await.unwrap();
+    let path = app.path();
+    bridge_short::receive_short(&mut app.satellite, &app.live, &path, 32).await;
+    bridge_short::send(&mut app.satellite, "played", json!({})).await;
+    bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
+    bridge_wire_auth_failure::wait_event(&app.path(), "reply.played").await;
+    let entries = trace(&app.path());
+    assert!(!entries.iter().any(|e| e["event"] == "run.failed"));
+    let edges: Vec<_> = entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e["event"].as_str(),
+                Some("session.commentary.append" | "reply.started" | "reply.played")
+            )
+        })
+        .map(|e| (e["event"].clone(), e["run_id"].clone()))
+        .collect();
+    assert_eq!(
+        edges,
+        vec![
+            (json!("session.commentary.append"), json!("run-1")),
+            (json!("reply.started"), json!("run-1")),
+            (json!("reply.played"), json!("run-1")),
+        ]
+    );
+    assert_eq!(app.live.calls.load(Ordering::SeqCst), 1);
+    assert_no_request(&app.model).await;
+    app.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "T3 controlled application and loopback peers"]
+async fn bridge_wire_runtime_long_delegation_missing_played_is_bounded_failure() {
+    let mut app = Application::start(3, 60).await;
+    let mut model = app.request("slow").await;
+    elapse(Duration::from_secs(12)).await;
+    respond(&mut model, "slow result").await.unwrap();
+    app.commentary("slow", "slow result").await;
+    app.live
+        .events
+        .send(json!({"type":"response.audio.done"}).to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        bridge_short::read_reply(&mut app.satellite).await.0["type"],
+        "audio-stop"
+    );
+    elapse(Duration::from_secs(5)).await;
+    bridge_wire_auth_failure::wait_event(&app.path(), "run.failed").await;
+    let entries = trace(&app.path());
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 0);
+    assert_eq!(
+        entries.iter().find(|e| e["event"] == "run.failed").unwrap()["reason"],
+        "deadline"
+    );
+    app.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "T3 controlled application and loopback peers"]
+async fn bridge_wire_runtime_long_delegation_kill_abandons_and_shutdown_remains_responsive() {
+    let mut app = Application::start(3, 60).await;
+    let mut model = app.request("killed").await;
+    elapse(Duration::from_secs(12)).await;
+    std::fs::create_dir_all(app.directory.path().join("audit")).unwrap();
+    std::fs::write(app.directory.path().join("audit/bridge-kill"), []).unwrap();
+    assert_eq!(
+        bridge_short::read_reply(&mut app.satellite).await.0["type"],
+        "audio-stop"
+    );
+    assert_eq!(model.read(&mut [0]).await.unwrap(), 0);
+    bridge_short::send(&mut app.satellite, "played", json!({})).await;
+    bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
+    bridge_wire_auth_failure::wait_event(&app.path(), "live.closed").await;
+    let entries = trace(&app.path());
+    assert_eq!(
+        entries.iter().find(|e| e["event"] == "live.closed").unwrap()["reason"],
+        "kill"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| e["event"] == "session.commentary.append")
+            .count(),
+        0
+    );
+    assert!(app.live.commentary.try_recv().is_err());
+    tokio::time::timeout(Duration::from_secs(1), app.finish())
+        .await
+        .unwrap();
 }

@@ -1,4 +1,5 @@
 use super::bridge_pacing::LeadPacer;
+use super::bridge_timing;
 use crate::{
     Error,
     bridge_audio::{self, Microphone, Reply},
@@ -163,7 +164,8 @@ pub(super) async fn run(
     let mut source = Source::new()?;
     source.call_packets_base = options.2;
     let (tx, rx) = mpsc::channel(1);
-    let play = client.play(bridge_audio::format(24_000), rx);
+    let budget = bridge_timing::playback(options.5.settings);
+    let play = client.play_with_timeout(bridge_audio::format(24_000), rx, budget);
     let mut context = PlaybackContext {
         client,
         trace,
@@ -172,6 +174,7 @@ pub(super) async fn run(
         screen: options.3,
         speaking: false,
         microphone: false,
+        deadline: Instant::now() + bridge_timing::RESPONSE,
         delegation: options.4,
         kill: options.5,
     };
@@ -182,15 +185,11 @@ pub(super) async fn run(
         failure = stop_failed_producer(result, client, options.0).await?;
         context.await_played(acknowledgement, &mut source, call).await
     };
-    let (outcome, (), ()) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::try_join!(async { play.await.map_err(Error::from) }, producer, async {
-            let result = super::played(events).await;
-            let _ = acknowledged.send(());
-            result
-        })
-    })
-    .await
-    .map_err(|_| Error::Deadline)??;
+    let (outcome, (), ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer, async {
+        let result = super::played(events).await;
+        let _ = acknowledged.send(());
+        result
+    })?;
     failure.map_or(Ok(()), Err)?;
     let abandoned = context.delegation.abandon();
     trace.record(
@@ -245,6 +244,7 @@ struct PlaybackContext<'a> {
     screen: &'a super::bridge_screen::Screen,
     speaking: bool,
     microphone: bool,
+    deadline: Instant,
     delegation: &'a mut super::bridge_delegation::Host,
     kill: &'a super::bridge_kill::Kill<'a>,
 }
@@ -256,10 +256,12 @@ impl PlaybackContext<'_> {
         source: &mut Source,
         call: &mut LiveCall,
     ) -> Result<(), Error> {
+        let deadline = Instant::now() + bridge_timing::CONTROL;
         loop {
             tokio::select! {
                 biased;
                 _ = &mut acknowledgement => return Ok(()),
+                () = tokio::time::sleep_until(deadline) => return Err(Error::Deadline),
                 () = self.kill.wait(), if !source.cancelled => {
                     self.kill.sync(self.trace).await?;
                     source.cancelled = true;
@@ -300,7 +302,10 @@ impl PlaybackContext<'_> {
 
     fn event(&mut self, event: LiveEvent, source: &mut Source, lab: bool) -> Result<(), Error> {
         if matches!(event, LiveEvent::DelegationCreated { .. }) {
-            self.delegation.dispatch(event, self.id, self.trace)
+            if self.delegation.dispatch(event, self.id, self.trace)? {
+                self.deadline += bridge_timing::task(self.kill.settings);
+            }
+            Ok(())
         } else {
             source.event(event, lab)
         }
@@ -342,7 +347,6 @@ async fn produce(
     lab: (bool, u64),
     context: &mut PlaybackContext<'_>,
 ) -> Result<(), Error> {
-    let deadline = Instant::now() + Duration::from_secs(10);
     let mut pacer = LeadPacer::new(context.lead_ms);
     let mut completed = false;
     let mut pressure_reported = false;
@@ -372,7 +376,7 @@ async fn produce(
         if completed && source.queue.is_empty() {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= context.deadline {
             return Err(Error::Deadline);
         }
         tokio::select! {
@@ -380,7 +384,7 @@ async fn produce(
                 Some(frame) => context.microphone(source, frame, call, lab.0).await?,
                 None => return Err(Error::Wyoming),
             },
-            event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(deadline).into_std()) => match event {
+            event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()) => match event {
                 Ok(event) => context.event(event, source, lab.0)?,
                 Err(CallError::Deadline) => (),
                 Err(error) => return Err(error.into()),

@@ -66,7 +66,8 @@ async fn eof_partial_and_malformed_generations_reconnect_without_replay() {
             let mut run = events.recv().await.unwrap().unwrap().run.unwrap();
             assert_eq!(run.stats().received, 0);
             let (_source, frames) = mpsc::channel(1);
-            let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+            let format: echo_contracts::wyoming::AudioFormat =
+                serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
             let result = client.play(format, frames).await;
             let error = if failure == 0 {
                 Error::Disconnected
@@ -109,20 +110,24 @@ async fn eof_partial_and_malformed_generations_reconnect_without_replay() {
 
 #[tokio::test(start_paused = true)]
 async fn timeout_invalidates_then_recovers_with_fresh_describe() {
-    for play in [false, true] {
+    for mode in 0..3 {
+        let play = mode != 0;
         let (mut client, mut server, connections) = pair();
         let mut events = client.events().unwrap();
         let caller = async {
             let error = if play {
                 let (tx, rx) = mpsc::channel(1);
                 drop(tx);
-                client
-                    .play(
-                        serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap(),
-                        rx,
-                    )
-                    .await
-                    .map(|_| ())
+                let format: echo_contracts::wyoming::AudioFormat =
+                    serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+                if mode == 2 {
+                    let start = Instant::now();
+                    let result = client.play_with_timeout(format, rx, Duration::from_secs(60)).await;
+                    assert_eq!(Instant::now() - start, Duration::from_secs(60));
+                    result.map(|_| ())
+                } else {
+                    client.play(format, rx).await.map(|_| ())
+                }
             } else {
                 client.describe().await.map(|_| ())
             };
@@ -177,7 +182,8 @@ fn disconnected_commands_fail_without_retaining_audio() {
     }
     let (reply, rx) = oneshot::channel();
     let (tx, frames) = mpsc::channel(1);
-    let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+    let format: echo_contracts::wyoming::AudioFormat =
+        serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
     assert!(!reject(Some(Command::Play(format, frames, reply))));
     assert_eq!(rx.blocking_recv().unwrap(), Err(Error::Disconnected));
     assert!(tx.is_closed());
@@ -291,4 +297,36 @@ async fn paused_next_generation(
         result.unwrap();
     }
     next
+}
+
+#[tokio::test(start_paused = true)]
+async fn playback_override_survives_twelve_seconds_without_extending_describe_timeout() {
+    let (client, mut server, _connections) = pair();
+    let caller = async {
+        let format: echo_contracts::wyoming::AudioFormat =
+            serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+        let (_send, frames) = mpsc::channel(1);
+        assert_eq!(
+            client.play_with_timeout(format.clone(), frames, Duration::ZERO).await,
+            Err(Error::InvalidOptions)
+        );
+        let (send, frames) = mpsc::channel(1);
+        drop(send);
+        assert_eq!(
+            client.play_with_timeout(format, frames, Duration::from_secs(60)).await,
+            Ok(crate::PlayOutcome::Played)
+        );
+        let start = Instant::now();
+        assert_eq!(client.describe().await, Err(Error::Timeout));
+        assert_eq!(Instant::now() - start, Duration::from_secs(5));
+    };
+    let server = async {
+        assert_eq!(peer::receive(&mut server).await.header.r#type, "audio-start");
+        assert_eq!(peer::receive(&mut server).await.header.r#type, "audio-stop");
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        peer::send(&mut server, "played", json!({}), vec![]).await;
+        assert_eq!(peer::receive(&mut server).await.header.r#type, "describe");
+        assert_eq!(tokio::io::AsyncReadExt::read(&mut server, &mut [0]).await.unwrap(), 0);
+    };
+    tokio::join!(caller, server);
 }

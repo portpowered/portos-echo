@@ -70,6 +70,8 @@ impl TraceSink for Sink {
     }
 }
 
+pub(super) const MAX_DELEGATIONS: u32 = 1024;
+
 type Runner = DelegationRunner<Token, Credentials, Sink>;
 type Completion = (Runner, Result<Option<LiveEvent>, echo_delegation::DelegationError>);
 
@@ -156,27 +158,28 @@ impl Host {
         Ok(runner)
     }
 
-    pub fn dispatch(&mut self, event: LiveEvent, run: &str, trace: &mut Trace) -> Result<(), Error> {
+    pub fn dispatch(&mut self, event: LiveEvent, run: &str, trace: &mut Trace) -> Result<bool, Error> {
         let LiveEvent::DelegationCreated { delegation, .. } = &event else {
-            return Ok(());
+            return Ok(false);
         };
         let id = delegation.id.to_string();
         if id.len() > 256 || id.chars().any(char::is_control) {
             return Err(Error::Decode);
         }
         if self.seen.contains(&id) {
-            return Ok(());
+            return Ok(false);
         }
-        if self.seen.len() >= 1024 {
+        if self.seen.len() >= MAX_DELEGATIONS as usize {
             return Err(Error::Unavailable);
         }
         self.seen.insert(id.clone());
         if delegation.target != DelegationTarget::Client || self.pending.is_some() {
-            return trace.record(
+            trace.record(
                 "delegation.refused",
                 Some(run),
                 json!({"delegation_id":id,"reason":"target_or_busy"}),
-            );
+            )?;
+            return Ok(false);
         }
         let mut runner = match self.runner.take() {
             Some(runner) => runner,
@@ -196,7 +199,7 @@ impl Host {
                 .await;
             (runner, output)
         }));
-        Ok(())
+        Ok(true)
     }
 
     pub async fn service(&mut self, call: &mut LiveCall, trace: &mut Trace) -> Result<(), Error> {
