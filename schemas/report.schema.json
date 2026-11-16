@@ -127,6 +127,33 @@
         }
       },
       "additionalProperties": false
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event",
+          "run_id",
+          "count"
+        ],
+        "properties": {
+          "event": {
+            "const": "wyoming.mic_frames"
+          },
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
     }
   },
   "allOf": [
