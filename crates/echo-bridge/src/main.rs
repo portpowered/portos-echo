@@ -1,36 +1,60 @@
-use echo_bridge::{bridge_input, bridge_runtime};
+use echo_bridge::{Error, bridge_input, bridge_operator, bridge_runtime};
 use std::{io::Write, process::ExitCode};
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let lab = ["ECHO_LAB_WYOMING_ADDR", "ECHO_LAB_LIVE_URL", "ECHO_LAB_TRACE_PATH"].map(|key| std::env::var(key).ok());
+    let lab_idle = std::env::var("ECHO_LAB_SESSION_IDLE_SECONDS").ok();
+    match bridge_operator::parse(&args, lab.iter().any(Option::is_some) || lab_idle.is_some()) {
+        Ok(Some(command)) => return operator(command),
+        Err(error) => return input_error(&error),
+        Ok(None) => (),
+    }
     let settings = match bridge_input::parse(&args, lab).and_then(|settings| {
         settings
             .map(|mut settings| {
-                settings.lab_idle(std::env::var("ECHO_LAB_SESSION_IDLE_SECONDS").ok().as_deref())?;
+                settings.lab_idle(lab_idle.as_deref())?;
                 Ok(settings)
             })
             .transpose()
     }) {
         Ok(Some(settings)) => settings,
         Ok(None) => {
-            let _ = writeln!(
-                std::io::stdout(),
-                "echo-bridge --config PATH --trace PATH [--health-listen 127.0.0.1:PORT]"
-            );
-            return ExitCode::SUCCESS;
+            return outcome(writeln!(std::io::stdout(), "{}", bridge_operator::HELP).map_err(|_| Error::Control));
         }
         Err(error) => {
-            let _ = writeln!(std::io::stderr(), "echo-bridge: {error}");
-            return ExitCode::from(2);
+            return input_error(&error);
         }
     };
-    let result = tokio::runtime::Builder::new_multi_thread()
+    outcome(runtime().and_then(|runtime| runtime.block_on(bridge_runtime::execute(settings))))
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime, Error> {
+    tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
-        .map_err(|_| echo_bridge::Error::Unavailable)
-        .and_then(|runtime| runtime.block_on(bridge_runtime::execute(settings)));
+        .map_err(|_| Error::Unavailable)
+}
+
+fn operator(command: bridge_operator::Command) -> ExitCode {
+    let (providers, operation) = match command.prepare() {
+        Ok(prepared) => prepared,
+        Err(error) => return input_error(&error),
+    };
+    outcome(
+        runtime().and_then(|runtime| {
+            runtime.block_on(bridge_operator::execute(providers, operation, &mut std::io::stdout()))
+        }),
+    )
+}
+
+fn input_error(error: &Error) -> ExitCode {
+    let _ = writeln!(std::io::stderr(), "echo-bridge: {error}");
+    ExitCode::from(2)
+}
+
+fn outcome(result: Result<(), Error>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

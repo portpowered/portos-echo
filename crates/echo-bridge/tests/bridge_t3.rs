@@ -24,6 +24,8 @@ mod bridge_peer;
 mod bridge_short;
 #[path = "bridge_support/bridge_spine_edges.rs"]
 mod bridge_spine_edges;
+#[path = "bridge_support/bridge_wire_auth.rs"]
+mod bridge_wire_auth;
 
 struct Process {
     name: &'static str,

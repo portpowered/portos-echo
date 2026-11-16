@@ -683,10 +683,12 @@ dependencies = [
 name = "echo-bridge"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "echo-audio",
  "echo-config",
  "echo-contracts",
  "echo-live",
+ "echo-signin",
  "echo-wyoming",
  "serde_json",
  "tempfile",
