@@ -800,6 +800,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-muse-bridge"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-api",
+ "echo-contracts",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "echo-screen-contract"
 version = "0.1.0"
 dependencies = [
