@@ -3,7 +3,7 @@
 //! auto-advance cannot mistake socket readiness for an expired HTTP deadline.
 mod failures;
 mod lifecycle;
-mod mock;
+use crate::mock;
 mod protocol;
 mod storage;
 

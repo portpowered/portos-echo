@@ -148,6 +148,8 @@ fn settings(directory: &Path, live: &str, port: u16) -> bridge_input::Settings {
     let providers = echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth).unwrap();
     let origin = "http://127.0.0.1";
     bridge_input::Settings {
+        sim_clock: false,
+        mcp: None,
         kill_path: Some(directory.join("audit/bridge-kill")),
         delegation: Some((config.agent, config.mcp.server.remove(0))),
         screen: Some(config.screen),

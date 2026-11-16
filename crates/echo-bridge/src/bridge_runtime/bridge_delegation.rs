@@ -1,18 +1,16 @@
 //! The active call owner alone delivers prepared commentary. Workers own no Live socket.
 use super::bridge_budget::{Budget, Credentials};
 use super::journey::bridge_live::LivePort;
+use crate::bridge_mcp::{Grant, Token};
 use crate::{
     Error,
     bridge_input::{Provider, Settings},
     bridge_trace::Trace,
 };
-use echo_config::{McpAuth, McpServer};
-use echo_contracts::{
-    live::{DelegationTarget, LiveEvent},
-    secret::Secret,
-};
+use echo_config::McpServer;
+use echo_contracts::live::{DelegationTarget, LiveEvent};
 use echo_delegation::{DelegationRunner, TraceEvent, TraceSink};
-use echo_mcp_client::{McpClient, TokenError, TokenProvider};
+use echo_mcp_client::McpClient;
 use serde_json::json;
 use std::{
     collections::HashSet,
@@ -23,39 +21,6 @@ use std::{
     time::Duration,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
-
-struct Token(McpServer);
-impl TokenProvider for Token {
-    fn token(&self) -> impl Future<Output = Result<Secret<String>, TokenError>> + Send {
-        std::future::ready(self.acquire())
-    }
-}
-impl Token {
-    fn acquire(&self) -> Result<Secret<String>, TokenError> {
-        match self.0.auth {
-            // The existing MCP client always sends a Bearer header. An empty
-            // bearer carries no authority; unauthenticated spoof servers ignore it.
-            McpAuth::None => Ok(Secret::new(String::new())),
-            McpAuth::BearerFile => {
-                let path = self.0.bearer_file.as_ref().ok_or(TokenError::Unavailable)?;
-                let file = std::fs::File::open(path).map_err(|_| TokenError::Unavailable)?;
-                let mut bytes = Vec::new();
-                std::io::Read::read_to_end(&mut std::io::Read::take(file, 16_385), &mut bytes)
-                    .map_err(|_| TokenError::Unavailable)?;
-                let text = String::from_utf8(bytes).map_err(|_| TokenError::Unavailable)?;
-                let key = text
-                    .strip_suffix("\r\n")
-                    .or_else(|| text.strip_suffix('\n'))
-                    .unwrap_or(&text);
-                if key.len() > 16_384 || key.trim().is_empty() || key.chars().any(char::is_control) {
-                    return Err(TokenError::Unavailable);
-                }
-                Ok(Secret::new(key.into()))
-            }
-            McpAuth::PortosDeviceCode => Err(TokenError::Unavailable),
-        }
-    }
-}
 
 struct Sink {
     send: mpsc::Sender<TraceEvent>,
@@ -76,6 +41,7 @@ type Runner = DelegationRunner<Token, Credentials, Sink>;
 type Completion = (Runner, Result<Option<LiveEvent>, echo_delegation::DelegationError>);
 
 pub(super) struct Host {
+    grant: Option<Arc<Grant>>,
     config: Option<(echo_config::AgentConfig, McpServer, echo_signin::Providers)>,
     model_url: Option<String>,
     budget: Arc<Budget>,
@@ -100,6 +66,7 @@ impl Host {
         let cap = config.as_ref().map_or(0, |(agent, _, _)| agent.daily_request_cap);
         let (send, receive) = mpsc::channel(32);
         Self {
+            grant: None,
             config,
             model_url: settings.model_url.clone(),
             budget: Arc::new(Budget::new(cap)),
@@ -122,6 +89,10 @@ impl Host {
         self.seen.clear();
     }
 
+    pub fn grant(&mut self, grant: Arc<Grant>) {
+        self.grant = Some(grant);
+    }
+
     fn build(&mut self) -> Result<Runner, Error> {
         // Give replacements their own sink: even a cancellation racing a
         // synchronous tool observation cannot attribute an old edge to a new run.
@@ -141,7 +112,7 @@ impl Host {
         });
         let host = McpClient::new(
             server.clone(),
-            Token(server.clone()),
+            Token::new(server.clone(), self.grant.clone()),
             Duration::from_secs(config.task_deadline_seconds),
         )
         .map_err(|_| Error::Input)?;
@@ -159,6 +130,13 @@ impl Host {
     }
 
     pub fn dispatch(&mut self, event: LiveEvent, run: &str, trace: &mut Trace) -> Result<bool, Error> {
+        if let Some(grant) = &self.grant {
+            grant.check()?;
+            if grant.blocked() {
+                trace.record("delegation.refused", Some(run), json!({"reason":"mcp_relink_required"}))?;
+                return Ok(false);
+            }
+        }
         let LiveEvent::DelegationCreated { delegation, .. } = &event else {
             return Ok(false);
         };
@@ -211,6 +189,12 @@ impl Host {
         let (runner, result) = pending.await.map_err(|_| Error::Unavailable)?;
         self.runner = Some(runner);
         self.flush(trace)?;
+        if let Some(grant) = &self.grant {
+            grant.check()?;
+            if grant.blocked() {
+                return Err(Error::Mcp(echo_mcp_auth::AuthError::RelinkRequired));
+            }
+        }
         if self
             .credentials
             .as_ref()

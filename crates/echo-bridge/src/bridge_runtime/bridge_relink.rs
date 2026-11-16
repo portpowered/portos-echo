@@ -11,6 +11,14 @@ pub(super) fn failure(
     screen: &Screen,
     id: &str,
 ) -> Result<(), Error> {
+    if let Error::Mcp(reason) = &error {
+        trace.record(
+            "mcp.relink_required",
+            Some(id),
+            json!({"reason":crate::bridge_mcp::category(reason)}),
+        )?;
+        return Ok(());
+    }
     health.state.send_modify(|state| state.live = "error");
     // The synthetic lab caller retains its existing fatal-error protocol.
     if lab

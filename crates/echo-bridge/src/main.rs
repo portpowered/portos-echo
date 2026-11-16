@@ -1,10 +1,15 @@
-use echo_bridge::{Error, bridge_input, bridge_operator, bridge_runtime};
+use echo_bridge::{Error, bridge_input, bridge_mcp, bridge_operator, bridge_runtime};
 use std::{io::Write, process::ExitCode};
 
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let lab = ["ECHO_LAB_WYOMING_ADDR", "ECHO_LAB_LIVE_URL", "ECHO_LAB_TRACE_PATH"].map(|key| std::env::var(key).ok());
     let lab_idle = std::env::var("ECHO_LAB_SESSION_IDLE_SECONDS").ok();
+    match bridge_mcp::parse(&args, lab.iter().any(Option::is_some) || lab_idle.is_some()) {
+        Ok(Some(command)) => return mcp_operator(command),
+        Err(error) => return input_error(&error),
+        Ok(None) => (),
+    }
     match bridge_operator::parse(&args, lab.iter().any(Option::is_some) || lab_idle.is_some()) {
         Ok(Some(command)) => return operator(command),
         Err(error) => return input_error(&error),
@@ -26,8 +31,19 @@ fn main() -> ExitCode {
             return input_error(&error);
         }
     };
+    if settings.sim_clock {
+        return outcome(bridge_mcp::bridge_clock::execute(settings));
+    }
     let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
     outcome(runtime().and_then(|runtime| runtime.block_on(bridge_runtime::execute(settings, connector))))
+}
+
+fn mcp_operator(command: bridge_mcp::Command) -> ExitCode {
+    let command = match command.prepare() {
+        Ok(command) => command,
+        Err(error) => return input_error(&error),
+    };
+    outcome(runtime().and_then(|runtime| runtime.block_on(command.execute(&mut std::io::stdout()))))
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, Error> {

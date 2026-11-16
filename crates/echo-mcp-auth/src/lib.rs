@@ -11,6 +11,11 @@ mod proof;
 mod store;
 mod wire;
 
+/// Loopback-only authorization fixture; never enabled by the production bridge.
+#[cfg(any(test, feature = "mock"))]
+#[path = "auth_tests/mock.rs"]
+pub mod mock;
+
 pub use auth::{AuthClient, LinkInstructions};
 use echo_contracts::secret::Secret;
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};

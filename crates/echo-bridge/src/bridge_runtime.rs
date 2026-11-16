@@ -61,7 +61,7 @@ fn utc_day() -> u64 {
 /// # Errors
 /// Returns the same fixed operational failures as `execute`.
 pub async fn execute_controlled<C: LinkConnector>(
-    settings: Settings,
+    mut settings: Settings,
     control: Control,
     connector: C,
 ) -> Result<(), Error> {
@@ -88,6 +88,7 @@ pub async fn execute_controlled<C: LinkConnector>(
     }
     let mut shutdown = control.shutdown;
     let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day);
+    let mut mcp = mount_mcp(settings.mcp.take(), &screen, &mut delegation, &mut trace).await?;
     let work = async {
         let mut client = tokio::select! {
             result = connector.connect() => result?,
@@ -107,12 +108,34 @@ pub async fn execute_controlled<C: LinkConnector>(
         result.and(cleanup)
     };
     let result = work.await;
+    if let Some(mcp) = &mut mcp {
+        mcp.close().await;
+    }
     let report = result.as_ref().err().map_or(Ok(()), |error| {
         trace.record("bridge.error", None, json!({"reason":error.to_string()}))
     });
     health.close().await;
     let cleanup = screen.close().await;
     result.and(report).and(cleanup)
+}
+
+async fn mount_mcp(
+    settings: Option<crate::bridge_mcp::Settings>,
+    screen: &bridge_screen::Screen,
+    delegation: &mut bridge_delegation::Host,
+    trace: &mut Trace,
+) -> Result<Option<crate::bridge_mcp::Runtime>, Error> {
+    let Some(settings) = settings else {
+        return Ok(None);
+    };
+    let runtime = crate::bridge_mcp::Runtime::open(settings, screen.presentation.clone()).await?;
+    delegation.grant(runtime.grant.clone());
+    trace.record(
+        "mcp.operator.listening",
+        None,
+        json!({"address":runtime.address.to_string()}),
+    )?;
+    Ok(Some(runtime))
 }
 
 async fn connected<L: EchoLink>(

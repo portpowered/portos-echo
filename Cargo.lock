@@ -691,6 +691,7 @@ dependencies = [
  "echo-delegation",
  "echo-link",
  "echo-live",
+ "echo-mcp-auth",
  "echo-mcp-client",
  "echo-screen-contract",
  "echo-screen-server",
