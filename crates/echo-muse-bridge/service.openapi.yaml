@@ -1,0 +1,115 @@
+openapi: 3.1.0
+info: {title: Echo Muse service, version: 1.0.0}
+servers: [{url: 'https://localhost:7448'}]
+security: [{clientCredential: []}]
+x-transport:
+  tls: required
+  bind: explicit-config-only
+  authenticate: before-routing-task-lookup-body-decoding-or-mutation
+  http: HTTP/1.1
+  header_bytes_max: 8192
+  request_body_bytes_max: 65536
+  response_body_bytes_max: 1048576
+  tls_handshake_timeout_ms: 2000
+  header_body_timeout_ms: 2000
+  operation_timeout_ms: 4000
+  event_poll_timeout_ms: 1000
+  write_timeout_ms: 2000
+  connections_max: 32
+  gadget_children_max: 4
+  gadget_stdout_bytes_max: 98304
+  gadget_stderr_bytes_max: 98304
+  store_bytes_max: 16777216
+  store_records_max: 4096
+  requests_per_connection: 1
+  cache_control: no-store
+  redirects: forbidden
+paths:
+  /v1/tasks:
+    post:
+      operationId: submit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Task'}
+            example: {delegation_id: delegation-test, instructions: Read light, context: {target: test-light}, deadline_seconds: 60, max_tool_calls: 8}
+      responses:
+        '201':
+          description: Task admitted durably; chat outcome is consumed as an event, never completion inferred from chat.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: false, required: [task_id], properties: {task_id: {$ref: '#/components/schemas/TaskId'}}}
+              example: {task_id: task-11111111-1111-4111-8111-111111111111}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/tasks/{task_id}/events:
+    parameters: [{$ref: '#/components/parameters/TaskId'}]
+    get:
+      operationId: nextEvent
+      description: Consume one persisted event. A live empty queue waits at most 1000ms. A terminal/cancelled empty queue returns immediately. Persist dequeue before response; no replay cursor or automatic retry.
+      responses:
+        '200':
+          description: One unchanged TaskEvent.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TaskEvent'}
+              examples:
+                progress: {value: {type: progress, task_id: task-11111111-1111-4111-8111-111111111111, message: 'Done! The job completed successfully.'}}
+                completed: {value: {type: completed, task_id: task-11111111-1111-4111-8111-111111111111, summary: light is on}}
+                expired: {value: {type: failed, task_id: task-11111111-1111-4111-8111-111111111111, retryable: false, message: Muse did not report a result in time}}
+        '204': {description: No event; empty body. Does not certify task success or distinguish a live polling interval from an exhausted queue.}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/tasks/{task_id}/cancel:
+    parameters: [{$ref: '#/components/parameters/TaskId'}]
+    post:
+      operationId: cancel
+      description: Empty request body. Commit cancellation and clear queued events before the original-chat advisory. Preserve existing repeated-cancel behavior.
+      responses:
+        '204': {description: Cancellation committed. Empty body; no terminal event is synthesized and advisory failure does not resurrect the task.}
+        default: {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    clientCredential: {type: http, scheme: bearer, description: Exact credential loaded privately from a file; never in URL, argv or logs.}
+  parameters:
+    TaskId: {name: task_id, in: path, required: true, schema: {$ref: '#/components/schemas/TaskId'}}
+  schemas:
+    TaskId: {type: string, minLength: 1, description: Unchanged echo_contracts::ids::TaskId serialization.}
+    Task:
+      type: object
+      description: Unchanged echo_agent_api::Task; preserve its existing serde behavior, including ignored unknown fields. Unknown fields cannot select programs, commands or consent.
+      required: [delegation_id, instructions, context, deadline_seconds, max_tool_calls]
+      properties:
+        delegation_id: {type: string, minLength: 1}
+        instructions: {type: string}
+        context: {}
+        deadline_seconds: {type: integer, minimum: 0, maximum: 18446744073709551615}
+        max_tool_calls: {type: integer, minimum: 0, maximum: 4294967295}
+    TaskEvent:
+      oneOf:
+        - {type: object, required: [type, task_id, message], properties: {type: {const: progress}, task_id: {$ref: '#/components/schemas/TaskId'}, message: {type: string}}}
+        - {type: object, required: [type, task_id, summary], properties: {type: {const: completed}, task_id: {$ref: '#/components/schemas/TaskId'}, summary: {type: string}}}
+        - {type: object, required: [type, task_id, retryable, message], properties: {type: {const: failed}, task_id: {$ref: '#/components/schemas/TaskId'}, retryable: {type: boolean}, message: {type: string}}}
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          enum: [invalid_request, unauthorized, unknown_task, not_found, method_not_allowed, request_timeout, payload_too_large, unsupported_media_type, service_busy, storage_unavailable, operation_timeout, shutting_down, response_too_large, internal_error]
+  responses:
+    Error:
+      description: >-
+        Exact body {"error":"CODE"} with no task data, secret or underlying I/O diagnostic.
+        400 invalid_request (syntax/type/ID/empty-body violation);
+        401 unauthorized (missing/wrong/duplicate/malformed Authorization; before all lookup and mutation);
+        404 unknown_task (authorized unknown ID), 404 not_found (unknown path, including every report-intake path);
+        405 method_not_allowed; 408 request_timeout; 413 payload_too_large;
+        415 unsupported_media_type; 503 service_busy (capacity), storage_unavailable (latched store fault),
+        shutting_down or response_too_large; 504 operation_timeout; 500 internal_error.
+        HTTP parse failure before a request can be authenticated closes the connection without a body.
+        TLS failure or exhaustion before TLS completes closes the connection without an HTTP response.
+        Authorized lookup/operation failures never imply completion; an interrupted mutation may already be durable.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {error: unauthorized}
