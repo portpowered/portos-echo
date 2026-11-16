@@ -14,8 +14,9 @@ steps:
       sequence:
         - {state: ready, message: "Echo Live ready"}
         - {state: listening}
+        - {state: connected}
         - {state: emotion, name: happy, frame_ms: 80, frames: ["(^_^)", "(^o^)"]}
-        - {state: listening}
+        - {state: connected}
         - {state: speaking}
         - {state: ready, message: "Echo Live ready"}
   - expect_speech_contains: ["happy", "face"]

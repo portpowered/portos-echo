@@ -287,8 +287,7 @@ async fn turn<L: EchoLink>(
             }
         };
     }
-    health.state.send_modify(|state| state.live = "connected");
-    let call = conversation.call.as_mut().ok_or(Error::Unavailable)?;
+    let call = connected_call(&mut conversation.call, health, screen)?;
     let result = journey::run(
         client,
         events,
@@ -325,6 +324,17 @@ async fn turn<L: EchoLink>(
             Ok(None)
         }
     }
+}
+
+fn connected_call<'a>(
+    call: &'a mut Option<LiveCall>,
+    health: &Health,
+    screen: &bridge_screen::Screen,
+) -> Result<&'a mut LiveCall, Error> {
+    let call = call.as_mut().ok_or(Error::Unavailable)?;
+    health.state.send_modify(|state| state.live = "connected");
+    screen.publish(echo_screen_contract::UiState::Connected)?;
+    Ok(call)
 }
 
 async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &str) -> Result<LiveCall, Error> {

@@ -49,21 +49,18 @@ async fn retained_failure(credential: Option<&str>, status: u16) {
     let observer = fake.observer();
     let origin = fake.base_url().trim_end_matches('/').to_owned();
     let mut bridge = Process::spawn(&mut bridge_wire_screen::run_command(directory.path(), &origin));
-    let mut satellite = listener.accept().await.unwrap().0;
-    bridge_short::register(&mut satellite, &mut bridge).await;
-    let mut satellite = bridge_short::Satellite::new(satellite);
+    let satellite = listener.accept().await.unwrap().0;
     let path = directory.path().join("trace");
+    let (mut satellite, mut frames) = stream::observe_before_wake(satellite, &mut bridge, &path).await;
     let relink = status == 401;
     wait_event(&path, if relink { "auth.relink_required" } else { "run.failed" }).await;
+    stream::assert_failure_frame(&mut frames, relink).await;
     bridge_refusal::error(&mut satellite, relink).await;
     let screen = assert_surfaces(&path, relink).await;
     if relink {
         assert_refused(directory.path(), &mut satellite, &path, &observer, credential).await;
     }
-    bridge.finish(0).await;
-    assert!(tokio::net::TcpStream::connect(&screen).await.is_err());
-    assert_private_trace(&path);
-    fake.shutdown().await;
+    stream::finish_failure(bridge, &screen, &path, fake).await;
 }
 async fn assert_refused(
     directory: &Path,

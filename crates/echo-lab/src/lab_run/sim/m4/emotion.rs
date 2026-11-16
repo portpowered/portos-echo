@@ -17,8 +17,9 @@ pub fn sequence() -> Vec<Value> {
     vec![
         json!({"state":"ready","message":"Echo Live ready"}),
         json!({"state":"listening"}),
+        json!({"state":"connected"}),
         state(),
-        json!({"state":"listening"}),
+        json!({"state":"connected"}),
         json!({"state":"speaking"}),
         json!({"state":"ready","message":"Echo Live ready"}),
     ]

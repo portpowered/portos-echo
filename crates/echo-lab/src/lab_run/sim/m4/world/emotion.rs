@@ -28,7 +28,7 @@ impl World {
     }
 
     pub(super) async fn animate(&mut self, screen: &mut Screen) -> Result<(), String> {
-        self.observe(screen, 2, "emotion").await?;
+        self.observe(screen, 3, "emotion").await?;
         let bridge = self.bridge.as_mut().ok_or("m6: missing bridge")?;
         bridge
             .send(&serde_json::json!({"action":"advance_clock","milliseconds":160}))
@@ -37,7 +37,7 @@ impl World {
         if advanced["milliseconds"] != 160 {
             return Err("m6: clock acknowledgment mismatch".into());
         }
-        self.observe(screen, 3, "listening").await?;
+        self.observe(screen, 4, "connected").await?;
         self.release_result()
     }
 

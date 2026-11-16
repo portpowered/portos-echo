@@ -58,8 +58,9 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
         vec![
             expected[0].clone(),
             expected[1].clone(),
-            expected[4].clone(),
-            expected[5].clone()
+            expected[2].clone(),
+            expected[5].clone(),
+            expected[6].clone()
         ]
     );
     assert!(
@@ -171,6 +172,7 @@ async fn t3_m4_cancel_active_reply_reaps_children_listeners_and_private_files() 
     let cancel = root.join("cancel");
     let cancelled = async {
         screen.expect("listening").await.unwrap();
+        screen.expect("connected").await.unwrap();
         screen.expect("speaking").await.unwrap();
         std::fs::write(&cancel, "cancel").unwrap();
     };

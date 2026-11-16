@@ -14,6 +14,7 @@ use super::{
 
 #[derive(Default)]
 pub struct World {
+    pub m2: Option<(String, String)>,
     pub host: Option<Process>,
     pub bridge: Option<Process>,
     spoof: Option<Spoof>,
@@ -128,6 +129,9 @@ impl World {
                 &self.live.as_ref().ok_or("launch: missing fake Live")?.base_url(),
                 self.spoof.as_ref().ok_or("launch: missing spoof")?.url(),
             )?;
+            if let Some((case, auth)) = &self.m2 {
+                super::m2::auth::configure(&mut command, bridge, root, case, auth).await?;
+            }
         }
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
@@ -195,6 +199,13 @@ impl World {
                 .get(usize::try_from(generation.saturating_sub(1)).unwrap_or(usize::MAX))
                 .map_or(&[], |t| t.records.as_slice())
         }
+    }
+
+    pub fn live_observer(&self) -> Result<echo_live::fake::FakeObserver, String> {
+        self.live
+            .as_ref()
+            .map(echo_live::fake::FakeLive::observer)
+            .ok_or("m2: missing provider".into())
     }
 
     pub async fn control(&mut self, value: &Value) -> Result<(), String> {
