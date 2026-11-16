@@ -4,10 +4,12 @@ Run explicitly with python3 -m unittest discover -s tests -p 'test_host_teardown
 No build, hardware, real credentials, retries, or non-loopback clients.
 """
 import contextlib
+import hashlib
 import io
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -130,13 +132,21 @@ class PinnedHost(unittest.TestCase):
     def test_actual_identity_collect_restart_and_socket_closure(self):
         self.host.start()
         proc = self.host.proc
-        self.assertEqual(Path(f'/proc/{proc.pid}/exe').resolve().name, 'hassmic-host')
+        executable = Path(f'/proc/{proc.pid}/exe').resolve()
+        self.assertEqual(executable.name, 'hassmic-host')
+        self.assertNotIn(Path('/mnt'), executable.parents)
+        self.assertEqual(Path(f'/proc/{proc.pid}/cwd').resolve(), executable.parent)
+        pinned = subprocess.check_output(
+            ['sh', str(ROOT / 'scripts/hassmic-host.sh'), 'path'], text=True).strip()
+        self.assertEqual(hashlib.sha256(executable.read_bytes()).digest(),
+                         hashlib.sha256(Path(pinned).read_bytes()).digest())
         self.assertEqual(os.getpgid(proc.pid), proc.pid)
         self.assertEqual(os.getsid(proc.pid), proc.pid)
         conn = self.connect()
         self.host.stop()
         self.assertEqual(proc.returncode, -signal.SIGKILL)
         self.assertTrue(proc.stderr.closed)
+        self.assertFalse(executable.parent.exists())
         self.assertEqual(conn.recv(65536), b'')
         with self.assertRaises(OSError):
             socket.create_connection(('127.0.0.1', self.host.port), timeout=2)
@@ -146,7 +156,44 @@ class PinnedHost(unittest.TestCase):
         self.host.deadline = 0
         self.host.start()
         self.assertNotEqual(self.host.proc.pid, proc.pid)
+        self.assertNotEqual(Path(f'/proc/{self.host.proc.pid}/exe').resolve(), executable)
         self.connect()
+
+    def test_staged_copy_mismatch_refuses_launch_and_removes_private_directory(self):
+        original = shutil.copy2
+        destinations = []
+
+        def corrupt(source, destination):
+            original(source, destination)
+            destination.write_bytes(b'corrupt staged artifact')
+            destinations.append(destination)
+
+        with mock.patch('wyoming_host.shutil.copy2', side_effect=corrupt):
+            with mock.patch('wyoming_host.subprocess.Popen', wraps=subprocess.Popen) as launch:
+                with self.assertRaisesRegex(RuntimeError, 'differs from pinned'):
+                    self.host.start()
+        self.assertEqual(launch.call_count, 1)  # Only the pin resolver; no host.
+        self.assertEqual(launch.call_args.args[0][-1], 'path')
+        self.assertIsNone(self.host.proc)
+        self.assertIsNone(self.host.staged)
+        self.assertFalse(destinations[0].parent.exists())
+
+    def test_failed_exec_removes_private_directory(self):
+        original = subprocess.Popen
+        directories = []
+
+        def reject_host(args, **kwargs):
+            if args[-1] == 'path':
+                return original(args, **kwargs)
+            directories.append(Path(args[0]).parent)
+            raise PermissionError('launch rejected')
+
+        with mock.patch('wyoming_host.subprocess.Popen', side_effect=reject_host):
+            with self.assertRaisesRegex(PermissionError, 'launch rejected'):
+                self.host.start()
+        self.assertIsNone(self.host.proc)
+        self.assertIsNone(self.host.staged)
+        self.assertFalse(directories[0].exists())
 
     def test_eof_and_intentional_startup_failure_exact_transcripts(self):
         for arguments, marker in [([], 'cleaned'),
@@ -301,6 +348,8 @@ import wyoming_host
 original = wyoming_host.subprocess.Popen
 children = []
 def rejected(args, **kwargs):
+    if args[-1] == 'path':
+        return original(args, **kwargs)
     proc = original([*args, '--invalid-test-option'], **kwargs)
     children.append(proc)
     return proc
