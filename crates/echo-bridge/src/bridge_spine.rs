@@ -6,6 +6,34 @@ use echo_live::call::{CallError, CredentialProvider, LiveCredential};
 use serde_json::json;
 
 #[test]
+fn bridge_lifecycle_lab_idle_is_explicit_validated_and_never_changes_configured_mode() {
+    let mut settings = parse(
+        &[],
+        [
+            Some("127.0.0.1:1".into()),
+            Some("http://127.0.0.1:2".into()),
+            Some("trace".into()),
+        ],
+    )
+    .unwrap()
+    .unwrap();
+    settings.lab_idle(None).unwrap();
+    assert_eq!(settings.session_idle_seconds, 120);
+    for value in ["0", "1", "18446744073709551615"] {
+        settings.lab_idle(Some(value)).unwrap();
+        assert_eq!(settings.session_idle_seconds, value.parse::<u64>().unwrap());
+    }
+    for value in ["", "-1", "+1", "1.0", " 1", "18446744073709551616"] {
+        assert_eq!(settings.lab_idle(Some(value)), Err(Error::Input));
+        assert_eq!(settings.session_idle_seconds, u64::MAX);
+    }
+    settings.lab = false;
+    assert_eq!(settings.lab_idle(Some("1")), Err(Error::Input));
+    settings.lab_idle(None).unwrap();
+    assert_eq!(settings.session_idle_seconds, u64::MAX);
+}
+
+#[test]
 fn bridge_spine_ten_wire_chunks_are_32_packets_and_exact_silence() {
     let mut mic = Microphone::new(format(16_000)).unwrap();
     let mut packets = Vec::new();

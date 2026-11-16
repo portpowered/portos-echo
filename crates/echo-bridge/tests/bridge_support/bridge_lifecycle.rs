@@ -2,6 +2,83 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_lifecycle_invalid_idle_override_exits_offline_without_trace() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    for seconds in ["-1", "18446744073709551616", "private-invalid-value"] {
+        let output = bridge("1", "http://127.0.0.1:1", &path)
+            .env("ECHO_LAB_SESSION_IDLE_SECONDS", seconds)
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.stdout, b"");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap().trim(),
+            "echo-bridge: invalid input"
+        );
+        assert!(!path.exists());
+    }
+}
+
+#[tokio::test]
+#[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
+async fn bridge_lifecycle_expiry_closes_once_and_next_wake_creates_fresh_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let fake = FakeLive::bind(FakeScript {
+        events: vec![],
+        response: FakeResponse::Answer,
+    })
+    .await
+    .unwrap();
+    let mut host = Process::spawn(&mut host());
+    let port = host.line().await;
+    let mut command = bridge(&port, &fake.base_url(), &path);
+    command.env("ECHO_LAB_SESSION_IDLE_SECONDS", "1");
+    let mut process = Process::spawn(&mut command);
+    let pid = process.child.id();
+    assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+    for run in 1..=2 {
+        assert_eq!(host.command("wake").await, "wake");
+        assert_eq!(
+            serde_json::from_str::<Value>(&process.line().await).unwrap(),
+            json!({"event":"bridge.run_completed","run_id":format!("run-{run}")})
+        );
+        assert_eq!(process.child.id(), pid);
+        assert_eq!(host.command("pcm").await, format!("{} 0", run * 30720));
+        let calls = fake.observer().calls().unwrap();
+        assert_eq!(calls.len(), run);
+        assert_eq!(calls[run - 1].frames.len(), 32);
+        assert_eq!(calls[run - 1].frames[0].sequence, 0);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let entries = trace(&path);
+                let closes: Vec<_> = entries.iter().filter(|e| e["event"] == "live.closed").collect();
+                if closes.len() >= run {
+                    assert_eq!(closes.len(), run);
+                    assert!(closes.iter().all(|e| e["reason"] == "idle"));
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let entries = trace(&path);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 2);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "bridge.error").count(), 0);
+    process.finish(0).await;
+    assert_eq!(trace(&path).iter().filter(|e| e["event"] == "live.closed").count(), 2);
+    let address = entries[0]["health_addr"].as_str().unwrap();
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    host.finish(0).await;
+    fake.shutdown().await;
+}
+
+#[tokio::test]
 #[ignore = "T3 requires make hassmic-host and prebuilt echo-bridge"]
 async fn bridge_lifecycle_wake_during_playback_stays_in_the_existing_run() {
     let dir = tempfile::tempdir().unwrap();

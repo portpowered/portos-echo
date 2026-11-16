@@ -20,6 +20,21 @@ pub struct Settings {
     pub session_idle_seconds: u64,
 }
 
+impl Settings {
+    /// Selects a shorter local-fake idle interval without reading credentials.
+    /// # Errors
+    /// Rejects an override outside lab mode or an invalid unsigned duration.
+    pub fn lab_idle(&mut self, seconds: Option<&str>) -> Result<(), Error> {
+        if let Some(seconds) = seconds {
+            if !self.lab || seconds.is_empty() || !seconds.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(Error::Input);
+            }
+            self.session_idle_seconds = seconds.parse().map_err(|_| Error::Input)?;
+        }
+        Ok(())
+    }
+}
+
 pub enum Provider {
     Synthetic,
     ApiKey(PathBuf),

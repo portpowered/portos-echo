@@ -23,6 +23,12 @@ have been converted, all packets echoed and their count acknowledged. This
 adapter does not establish real provider completion vocabulary. Unknown events
 never imply success. The coordinator's M2 gate owns real provider compatibility.
 
+Optional `ECHO_LAB_SESSION_IDLE_SECONDS` selects the idle interval only when all
+three lab inputs are present. Its decimal `u64` grammar includes zero; absent
+means 120 seconds. Invalid values and any override in configured mode fail
+offline. This permits delivered-binary expiry proof within the T3 time budget
+without changing configured TOML behavior, credentials or the lab stdout protocol.
+
 Configured API-key mode reads only its nominated key file. ChatGPT mode reports
 authorization unavailable until the separately owned sign-in integration mounts
 its provider. No home-directory credential discovery is used.
@@ -68,6 +74,6 @@ bridge never creates a competing dial loop. Health and fixed trace events show
 loss and recovery. Registration remains the supervisor's responsibility. EOF
 cancels probes and closes the owned call, client and health listener.
 
-Delivered-artifact idle-expiry and the remaining lifecycle failure matrix stay
+The remaining lifecycle failure matrix and final quality proof stay
 in this lane. Until final assembly and quality proof are complete the lane is
 not ready for acceptance.
