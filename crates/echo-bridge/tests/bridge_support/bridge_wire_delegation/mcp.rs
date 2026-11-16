@@ -4,6 +4,9 @@ use super::*;
 use echo_mcp_auth::mock::Mock;
 use std::{future::Future, task::Poll};
 
+#[path = "mcp_journey.rs"]
+mod journey;
+
 struct Session {
     process: Process,
     satellite: TcpStream,
@@ -13,10 +16,23 @@ struct Session {
 
 impl Session {
     async fn start(directory: &Path, mock: &Mock, first: bool) -> Self {
+        Self::start_with(directory, mock, first, None).await
+    }
+
+    async fn start_with(directory: &Path, mock: &Mock, first: bool, peers: Option<(&str, &str)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         configure(directory, mock, first, listener.local_addr().unwrap().port());
         let path = directory.join("bridge.toml");
-        let mut command = bridge_wire_screen::run_command(directory, &mock.base);
+        if peers.is_some() && first {
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("[agent]", "[agent]\nmodel = 'fixture-model'");
+            std::fs::write(&path, text).unwrap();
+        }
+        let mut command = match peers {
+            Some((live, model)) => run_command(directory, live, model),
+            None => bridge_wire_screen::run_command(directory, &mock.base),
+        };
         command.arg("--sim-clock");
         let mut process = Process::spawn(&mut command);
         let mut satellite = listener.accept().await.unwrap().0;
