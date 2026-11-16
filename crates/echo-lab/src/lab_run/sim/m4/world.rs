@@ -80,7 +80,10 @@ impl World {
                 commentary: text.into(),
                 transcript: text.into(),
                 audio_frames: 10,
-                initial_after_audio_frames: 1,
+                // 14,400 captured samples produce 44 complete packets before
+                // the resampler tail is flushed. Wait for actual receipt so
+                // audio.done cannot race the final queued capture chunk.
+                initial_after_audio_frames: 44,
             })
             .await
             .map_err(|_| "m4: Live startup failed")?,
