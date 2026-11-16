@@ -270,11 +270,11 @@ async fn register(listener: &TcpListener, bridge: &mut Process) -> (TcpStream, D
 }
 
 async fn receive_reply(peer: &mut TcpStream, decoder: &mut Decoder) {
-    assert_eq!(receive(peer, decoder).await.header.r#type, "audio-start");
+    assert_eq!(receive_playback(peer, decoder).await.header.r#type, "audio-start");
     let mut bytes = Vec::new();
     let mut chunks = 0;
     loop {
-        let event = receive(peer, decoder).await;
+        let event = receive_playback(peer, decoder).await;
         if event.header.r#type == "audio-stop" {
             break;
         }
@@ -285,6 +285,45 @@ async fn receive_reply(peer: &mut TcpStream, decoder: &mut Decoder) {
     }
     assert_eq!(chunks, 10);
     assert_eq!(bytes, vec![0; 9600]);
+}
+
+async fn receive_playback(peer: &mut TcpStream, decoder: &mut Decoder) -> Event {
+    loop {
+        let event = receive(peer, decoder).await;
+        if event.header.r#type != "describe" {
+            return event;
+        }
+        // An idle health probe can already be queued when the wake arrives.
+        // Serve control traffic without discarding or reordering reply frames.
+        assert_eq!(event.payload, Vec::<u8>::new());
+        send(peer, "info", json!({"satellite":{"name":"synthetic"}})).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "T3 loopback Wyoming probe during playback"]
+async fn t3_m4_playback_answers_queued_probe_without_losing_audio_order() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut sender = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+    let (mut peer, _) = listener.accept().await.unwrap();
+    let task = tokio::spawn(async move {
+        send(&mut sender, "describe", Value::Null).await;
+        let info = receive(&mut sender, &mut Decoder::new()).await;
+        assert_eq!(info.header.r#type, "info");
+        assert_eq!(info.header.data, Some(json!({"satellite":{"name":"synthetic"}})));
+        send(&mut sender, "audio-start", json!({"rate":24000,"width":2,"channels":1})).await;
+        send(&mut sender, "audio-stop", Value::Null).await;
+    });
+    let mut decoder = Decoder::new();
+    assert_eq!(
+        receive_playback(&mut peer, &mut decoder).await.header.r#type,
+        "audio-start"
+    );
+    assert_eq!(
+        receive_playback(&mut peer, &mut decoder).await.header.r#type,
+        "audio-stop"
+    );
+    task.await.unwrap();
 }
 
 type Screen = tokio::io::Lines<tokio::io::BufReader<TcpStream>>;
