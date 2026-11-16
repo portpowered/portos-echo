@@ -35,13 +35,13 @@ pub(super) async fn read(stream: &mut TcpStream) -> (Value, Vec<u8>) {
     (header, payload)
 }
 
-async fn short_reply(acknowledge: bool) {
+async fn short_reply(acknowledge: bool, frames: u16) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace");
-    let live = bridge_peer::Live::bind().await;
+    let live = bridge_peer::Live::bind_frames(frames).await;
     let (mut stream, mut bridge) = satellite(&live.url, &path).await;
     assert_eq!(read(&mut stream).await.0["type"], "audio-start");
-    receive_short(&mut stream, &live, &path).await;
+    receive_short(&mut stream, &live, &path, frames).await;
     complete(&mut stream, &mut bridge, &path, acknowledge).await;
 }
 
@@ -69,7 +69,7 @@ async fn register(stream: &mut TcpStream, bridge: &mut Process) {
     send(stream, "run-pipeline", row["header"]["data"].clone()).await;
 }
 
-async fn receive_short(stream: &mut TcpStream, live: &bridge_peer::Live, path: &Path) {
+async fn receive_short(stream: &mut TcpStream, live: &bridge_peer::Live, path: &Path, frames: u16) {
     let mut bytes = Vec::new();
     // Observe admission of the first two frames before closing the source.
     // This barrier tests completion after short audio without RTP/control races.
@@ -92,8 +92,8 @@ async fn receive_short(stream: &mut TcpStream, live: &bridge_peer::Live, path: &
         chunks += 1;
         bytes.extend(payload);
     }
-    assert_eq!(chunks, 3);
-    assert_eq!(bytes, vec![0; 2880]);
+    assert_eq!(chunks, frames);
+    assert_eq!(bytes, vec![0; usize::from(frames) * 960]);
     assert_eq!(trace(path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
 }
 
@@ -124,7 +124,7 @@ async fn complete(stream: &mut TcpStream, bridge: &mut Process, path: &Path, ack
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_spine_short_reply_requires_real_played() {
-    tokio::time::timeout(Duration::from_secs(20), short_reply(true))
+    tokio::time::timeout(Duration::from_secs(20), short_reply(true, 3))
         .await
         .unwrap();
 }
@@ -132,7 +132,15 @@ async fn bridge_spine_short_reply_requires_real_played() {
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_spine_missing_played_is_deadline_not_success() {
-    tokio::time::timeout(Duration::from_secs(20), short_reply(false))
+    tokio::time::timeout(Duration::from_secs(20), short_reply(false, 3))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_spine_burst_completion_drains_all_decode_batches_before_stop() {
+    tokio::time::timeout(Duration::from_secs(20), short_reply(true, 32))
         .await
         .unwrap();
 }

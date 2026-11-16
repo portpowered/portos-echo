@@ -106,13 +106,19 @@ impl Source {
         retained
     }
 
-    fn receive(&mut self, call: &mut LiveCall) -> Result<(), Error> {
-        while let Some(frame) = call.pop_audio() {
+    fn receive(&mut self, call: &mut LiveCall) -> Result<bool, Error> {
+        // Leave time for the playback and Wyoming event futures in try_join!.
+        // A provider burst must not monopolize the owner with synchronous
+        // decoding/resampling while the bounded control queue fills up.
+        for _ in 0..8 {
+            let Some(frame) = call.pop_audio() else {
+                return Ok(true);
+            };
             self.received += 1;
             let bytes = self.reply.process(&frame)?;
             self.enqueue(&bytes);
         }
-        Ok(())
+        Ok(false)
     }
 
     fn event(&mut self, event: LiveEvent, lab: bool) -> Result<(), Error> {
@@ -239,7 +245,7 @@ async fn produce(
             context.cut(source).await?;
             return Ok(());
         }
-        source.receive(call)?;
+        let drained = source.receive(call)?;
         if !pressure_reported && source.queue.drop_count() > 0 {
             context
                 .trace
@@ -251,7 +257,7 @@ async fn produce(
             && source.sent > 0
             && source.received == source.sent
             && source.acknowledged == source.sent + lab.1;
-        if !completed && (source.audio_done || echo_done) {
+        if !completed && drained && (source.audio_done || echo_done) {
             source.finish_mic(call).await?;
             let bytes = source.reply.finish()?;
             source.enqueue(&bytes);
