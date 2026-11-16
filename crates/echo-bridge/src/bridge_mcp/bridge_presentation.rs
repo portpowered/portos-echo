@@ -47,8 +47,19 @@ impl Presentation {
     }
 
     pub fn muted(&self, muted: bool) -> Result<(), Error> {
-        self.current.lock().map_err(|_| Error::Screen)?.2 = muted;
-        self.refresh()
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        current.2 = muted;
+        if !muted {
+            // Muting ends the run; restore idle before exposing activity again.
+            current.0 = UiState::Ready {
+                message: "Echo Live ready".into(),
+            };
+        }
+        self.send(if muted {
+            UiState::Muted
+        } else {
+            current.1.as_ref().unwrap_or(&current.0).clone()
+        })
     }
 
     fn send(&self, state: UiState) -> Result<(), Error> {
@@ -78,6 +89,37 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmute_emits_only_restored_idle_or_the_active_overlay() {
+        let ready = UiState::Ready {
+            message: "Echo Live ready".into(),
+        };
+        let error = UiState::Error {
+            message: RELINK.into(),
+            relink: true,
+        };
+        for base in [None, Some(UiState::Listening), Some(UiState::Speaking)] {
+            for overlay in [None, Some(error.clone())] {
+                let (send, mut receive) = mpsc::channel(8);
+                let screen = Presentation::new(Some(send));
+                if let Some(base) = base.clone() {
+                    screen.publish(base.clone()).unwrap();
+                    assert_eq!(receive.try_recv().unwrap(), base);
+                }
+                screen.muted(true).unwrap();
+                assert_eq!(receive.try_recv().unwrap(), UiState::Muted);
+                screen.overlay(overlay.clone()).unwrap();
+                assert_eq!(receive.try_recv().unwrap(), UiState::Muted);
+                screen.muted(false).unwrap();
+                assert_eq!(receive.try_recv().unwrap(), overlay.unwrap_or(ready.clone()));
+                assert!(receive.try_recv().is_err());
+                screen.overlay(None).unwrap();
+                assert_eq!(receive.try_recv().unwrap(), ready);
+                assert!(receive.try_recv().is_err());
+            }
+        }
+    }
 
     #[test]
     fn mcp_prompts_and_actions_preserve_the_mute_screen_until_unmuted() {

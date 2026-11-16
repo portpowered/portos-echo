@@ -89,9 +89,6 @@ impl Screen {
         let changed = self.mute.lock().map_err(|_| Error::Screen)?.event(event, trace)?;
         if changed {
             self.presentation.muted(self.muted()?)?;
-            if !self.muted()? {
-                self.ready()?;
-            }
         }
         self.muted()
     }
