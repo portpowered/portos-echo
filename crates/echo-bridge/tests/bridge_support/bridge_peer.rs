@@ -22,51 +22,75 @@ impl Drop for Live {
 
 impl Live {
     pub async fn bind() -> Self {
+        Self::bind_frames(3).await
+    }
+
+    pub async fn bind_frames(frames: u16) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = "http://127.0.0.1";
         let url = format!("{origin}:{}", listener.local_addr().unwrap().port());
         let (events, mut receive) = mpsc::channel::<String>(8);
         let task = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let body = request(&mut stream).await;
-            let mut peer = Box::pin(LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now()))
-                .await
-                .unwrap();
-            let answer = peer.answer(body["sdp"].as_str().unwrap()).await.unwrap();
-            stream
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
-                        answer.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            drop(stream);
-            while !peer.ready() {
-                drive(&mut peer).await.unwrap();
-            }
-            short_audio(&mut peer).await;
+            let mut stream = listener.accept().await.unwrap().0;
             loop {
-                tokio::select! {
-                    event = receive.recv() => match event {
-                        Some(event) => peer.send_text(&event).await.unwrap(),
-                        None => break,
-                    },
-                    result = drive(&mut peer) => if result.is_err() { break; },
-                }
-                while peer.pop_audio().is_some() {}
+                stream = serve(&listener, stream, &mut receive, frames).await;
             }
         });
         Self { url, events, task }
     }
 }
 
-async fn short_audio(peer: &mut LivePeer) {
+async fn serve(
+    listener: &TcpListener,
+    mut stream: TcpStream,
+    receive: &mut mpsc::Receiver<String>,
+    frames: u16,
+) -> TcpStream {
+    let body = request(&mut stream).await;
+    let mut peer = Box::pin(LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now()))
+        .await
+        .unwrap();
+    let answer = peer.answer(body["sdp"].as_str().unwrap()).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                answer.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    drop(stream);
+    while !peer.ready() {
+        drive(&mut peer).await.unwrap();
+    }
+    short_audio(&mut peer, frames).await;
+    next_connection(listener, receive, &mut peer).await
+}
+
+async fn next_connection(
+    listener: &TcpListener,
+    receive: &mut mpsc::Receiver<String>,
+    peer: &mut LivePeer,
+) -> TcpStream {
+    loop {
+        tokio::select! {
+            next = listener.accept() => return next.unwrap().0,
+            event = receive.recv() => match event {
+                Some(event) => peer.send_text(&event).await.unwrap(),
+                None => return listener.accept().await.unwrap().0,
+            },
+            result = drive(peer) => if result.is_err() { return listener.accept().await.unwrap().0; },
+        }
+        while peer.pop_audio().is_some() {}
+    }
+}
+
+async fn short_audio(peer: &mut LivePeer, frames: u16) {
     let mut encoder = echo_audio::OpusEncoder::new().unwrap();
     let mut bytes = [0; 1275];
-    for sequence in 0..3 {
+    for sequence in 0..frames {
         let size = encoder.encode(&[0; 960], &mut bytes).unwrap();
         peer.send_audio(
             echo_live::AudioFrame {

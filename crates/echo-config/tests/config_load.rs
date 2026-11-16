@@ -42,6 +42,7 @@ impl Drop for Directory {
 fn committed_example_loads_with_all_expected_values() {
     let expected = BridgeConfig {
         chatgpt_auth: echo_config::ChatGptAuthConfig::default(),
+        audio: echo_config::AudioConfig::default(),
         echo: EchoConfig {
             host: "echo.example.invalid".into(),
             wyoming_port: 16700,

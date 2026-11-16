@@ -19,6 +19,44 @@ fn change(key: &str, old: &str, new: &str) -> String {
 }
 
 #[test]
+fn audio_lead_defaults_boundaries_and_safe_errors() {
+    for suffix in ["", "\n[audio]\n"] {
+        assert_eq!(
+            BridgeConfig::from_toml_str(&format!("{EXAMPLE}{suffix}"))
+                .unwrap()
+                .audio
+                .reply_lead_ms,
+            200
+        );
+    }
+    for value in [20, 200, 65520] {
+        let input = format!("{EXAMPLE}\n[audio]\nreply_lead_ms={value}\n");
+        assert_eq!(BridgeConfig::from_toml_str(&input).unwrap().audio.reply_lead_ms, value);
+    }
+    for value in [
+        "0",
+        "1",
+        "201",
+        "65535",
+        "65536",
+        "-20",
+        "1.0",
+        "true",
+        "'SYNTHETIC_VALUE'",
+    ] {
+        error(
+            &format!("{EXAMPLE}\n[audio]\nreply_lead_ms={value}\n"),
+            "audio.reply_lead_ms",
+        );
+    }
+    error(&format!("{EXAMPLE}\n[audio]\nSYNTHETIC_VALUE=1\n"), "audio");
+    error(
+        &format!("{EXAMPLE}\n[audio]\nreply_lead_ms={{secret='SYNTHETIC_VALUE'}}\n"),
+        "audio.reply_lead_ms.secret",
+    );
+}
+
+#[test]
 fn wyoming_port_nonzero_and_u16_boundaries() {
     for value in ["0", "-1", "65536", "\"SYNTHETIC_VALUE\""] {
         error(&change("wyoming_port", "16700", value), "echo.wyoming_port");

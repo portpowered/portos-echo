@@ -12,6 +12,10 @@ use tokio::{
     process::{Child, ChildStdin, ChildStdout, Command},
 };
 
+#[path = "bridge_support/bridge_cut.rs"]
+mod bridge_cut;
+#[path = "bridge_support/bridge_latency.rs"]
+mod bridge_latency;
 #[path = "bridge_support/bridge_peer.rs"]
 mod bridge_peer;
 #[path = "bridge_support/bridge_short.rs"]

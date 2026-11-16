@@ -16,6 +16,7 @@ pub struct Settings {
     pub voice: String,
     pub credential: Provider,
     pub lab: bool,
+    pub reply_lead_ms: u16,
 }
 
 pub enum Provider {
@@ -122,6 +123,7 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
             voice: "alloy".into(),
             credential: Provider::Synthetic,
             lab: true,
+            reply_lead_ms: 200,
         }));
     }
     let config = echo_config::BridgeConfig::load(config.ok_or(Error::Input)?).map_err(|_| Error::Input)?;
@@ -142,5 +144,6 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
         voice: config.live.voice.unwrap_or_else(|| "alloy".into()),
         credential,
         lab: false,
+        reply_lead_ms: config.audio.reply_lead_ms,
     }))
 }

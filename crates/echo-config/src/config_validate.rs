@@ -48,7 +48,17 @@ pub(super) fn reject_secrets(value: &toml::de::DeValue<'_>, path: &str) -> Resul
 // still scanned, but their keys and array positions are rejected input values.
 fn schema_field(path: &str, key: &str) -> bool {
     let fields: &[&str] = match path {
-        "" => &["echo", "live", "agent", "mcp", "screen", "audit", "chatgpt_auth"],
+        "" => &[
+            "echo",
+            "live",
+            "audio",
+            "agent",
+            "mcp",
+            "screen",
+            "audit",
+            "chatgpt_auth",
+        ],
+        "audio" => &["reply_lead_ms"],
         "chatgpt_auth" => crate::config_auth::FIELDS,
         "echo" => &["host", "wyoming_port"],
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
@@ -77,6 +87,12 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
     config.chatgpt_auth.validate()?;
+    if config.audio.reply_lead_ms == 0 || !config.audio.reply_lead_ms.is_multiple_of(20) {
+        return Err(ConfigError::new(
+            "audio.reply_lead_ms",
+            "must be a positive multiple of 20",
+        ));
+    }
     if config.echo.wyoming_port == 0 {
         return Err(ConfigError::new("echo.wyoming_port", "must be nonzero"));
     }

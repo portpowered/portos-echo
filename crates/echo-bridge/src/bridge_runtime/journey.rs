@@ -1,9 +1,10 @@
+use super::bridge_pacing::LeadPacer;
 use crate::{
     Error,
     bridge_audio::{self, Microphone, Reply},
     bridge_trace::Trace,
 };
-use echo_audio::{FrameQueue, Pacer};
+use echo_audio::FrameQueue;
 use echo_contracts::live::LiveEvent;
 use echo_live::{
     AudioFrame,
@@ -25,6 +26,7 @@ struct Source {
     acknowledged: u64,
     finished: bool,
     audio_done: bool,
+    cancelled: bool,
     reply: Reply,
     queue: FrameQueue<Vec<u8>>,
     partial: Vec<u8>,
@@ -40,6 +42,7 @@ impl Source {
             acknowledged: 0,
             finished: false,
             audio_done: false,
+            cancelled: false,
             reply: Reply::new()?,
             queue: FrameQueue::new(NonZeroUsize::new(128).ok_or(Error::Audio)?),
             partial: Vec::with_capacity(960),
@@ -101,6 +104,12 @@ impl Source {
     fn event(&mut self, event: LiveEvent, lab: bool) -> Result<(), Error> {
         match event {
             LiveEvent::Error { .. } => Err(Error::Unavailable),
+            LiveEvent::Other(value)
+                if value["type"] == "response.done" && value["response"]["status"] == "cancelled" =>
+            {
+                self.cancelled = true;
+                Ok(())
+            }
             // Provisional passthrough vocabulary selected by the packet. M2 owns
             // captured provider compatibility; unknown events never close audio.
             LiveEvent::Other(value) if value["type"] == "response.audio.done" => {
@@ -123,14 +132,20 @@ pub(super) async fn run(
     call: &mut LiveCall,
     trace: &mut Trace,
     id: &str,
-    lab: bool,
+    options: (bool, u16),
 ) -> Result<(), Error> {
     let mut source = Source::new()?;
     let (tx, rx) = mpsc::channel(1);
     trace.record("reply.started", Some(id), json!({}))?;
     let play = client.play(bridge_audio::format(24_000), rx);
-    let producer = produce(&mut source, &mut run, call, tx, lab);
-    tokio::time::timeout(Duration::from_secs(10), async {
+    let mut context = PlaybackContext {
+        client,
+        trace,
+        id,
+        lead_ms: options.1,
+    };
+    let producer = produce(&mut source, &mut run, call, tx, options.0, &mut context);
+    let (outcome, (), ()) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::try_join!(
             async { play.await.map_err(Error::from) },
             producer,
@@ -139,7 +154,11 @@ pub(super) async fn run(
     })
     .await
     .map_err(|_| Error::Deadline)??;
-    trace.record("reply.played", Some(id), json!({"outcome":"played"}))?;
+    trace.record(
+        "reply.played",
+        Some(id),
+        json!({"outcome":if outcome == echo_wyoming::PlayOutcome::Cut { "cut" } else { "played" }}),
+    )?;
     tokio::time::timeout(Duration::from_secs(1), async {
         while run.recv().await?.is_some() {}
         Ok::<_, Error>(())
@@ -161,17 +180,48 @@ pub(super) async fn run(
     trace.record("wyoming.run_ended", Some(id), json!({}))
 }
 
+struct PlaybackContext<'a> {
+    client: &'a WyomingClient,
+    trace: &'a mut Trace,
+    id: &'a str,
+    lead_ms: u16,
+}
+
+impl PlaybackContext<'_> {
+    async fn cut(&mut self, source: &mut Source) -> Result<(), Error> {
+        let bridge_dropped = source.queue.len() as u64;
+        source.queue.clear();
+        source.partial.clear();
+        // Keep the source sender alive through this request: EOF must not race
+        // the cut and turn its acknowledgment into normal completion.
+        let stats = self.client.cut_with_stats().await?;
+        self.trace.record(
+            "reply.cut",
+            Some(self.id),
+            json!({
+                "bridge_dropped":bridge_dropped, "transport_dropped":stats.dropped_frames,
+                "dropped_frames":bridge_dropped + stats.dropped_frames
+            }),
+        )
+    }
+}
+
 async fn produce(
     source: &mut Source,
     run: &mut Run,
     call: &mut LiveCall,
     tx: mpsc::Sender<Vec<u8>>,
     lab: bool,
+    context: &mut PlaybackContext<'_>,
 ) -> Result<(), Error> {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut pacer = Pacer::new();
+    let mut pacer = LeadPacer::new(context.lead_ms);
     let mut completed = false;
     loop {
+        if source.cancelled {
+            context.cut(source).await?;
+            return Ok(());
+        }
         source.receive(call)?;
         let echo_done = lab
             && source.finished

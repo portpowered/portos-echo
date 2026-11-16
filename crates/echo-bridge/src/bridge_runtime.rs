@@ -1,4 +1,5 @@
 //! One Live call owner drives WebRTC while Wyoming owns its bounded wire queues.
+mod bridge_pacing;
 mod journey;
 
 use crate::{
@@ -76,7 +77,7 @@ async fn connected(
         &factory,
         health,
         trace,
-        (settings.mode, settings.voice, settings.lab),
+        (settings.mode, settings.voice, settings.lab, settings.reply_lead_ms),
     )
     .await
 }
@@ -87,9 +88,9 @@ async fn observe(
     factory: &LiveCallFactory<Provider>,
     health: &Health,
     trace: &mut Trace,
-    options: (LiveAuthMode, String, bool),
+    options: (LiveAuthMode, String, bool, u16),
 ) -> Result<(), Error> {
-    let (mode, voice, lab) = options;
+    let (mode, voice, lab, lead_ms) = options;
     let mut sequence = 0_u64;
     loop {
         let event = events.recv().await?.ok_or(Error::Wyoming)?;
@@ -119,7 +120,7 @@ async fn observe(
             .create(peer, options, Instant::now() + Duration::from_secs(5))
             .await?;
         health.state.send_modify(|state| state.live = "connected");
-        let result = journey::run(client, events, run, &mut call, trace, &id, lab).await;
+        let result = journey::run(client, events, run, &mut call, trace, &id, (lab, lead_ms)).await;
         call.close();
         health
             .state

@@ -177,11 +177,11 @@ fn bridge_spine_configured_modes_preserve_paths_and_never_read_credentials_at_pa
 fn assert_configured_provider(settings: bridge_input::Settings, mode: &str) {
     if mode == "chatgpt" {
         assert_eq!(settings.mode, echo_live::call::LiveAuthMode::Chatgpt);
-        assert_eq!(settings.live_url, "https://chatgpt.com");
+        assert_eq!(settings.live_url.split_once("://"), Some(("https", "chatgpt.com")));
         assert!(matches!(settings.credential, Provider::Unavailable));
     } else {
         assert_eq!(settings.mode, echo_live::call::LiveAuthMode::ApiKey);
-        assert_eq!(settings.live_url, "https://api.openai.com");
+        assert_eq!(settings.live_url.split_once("://"), Some(("https", "api.openai.com")));
         match settings.credential {
             Provider::ApiKey(key) => assert_eq!(key, std::path::Path::new("credentials/live.json")),
             _ => unreachable!(),

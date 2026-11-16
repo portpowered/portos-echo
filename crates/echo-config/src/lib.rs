@@ -66,6 +66,7 @@ pub struct BridgeConfig {
     pub chatgpt_auth: ChatGptAuthConfig,
     pub echo: EchoConfig,
     pub live: LiveConfig,
+    pub audio: AudioConfig,
     pub agent: AgentConfig,
     pub mcp: McpConfig,
     pub screen: ScreenConfig,
@@ -84,6 +85,18 @@ pub struct LiveConfig {
     pub credential_file: PathBuf,
     pub voice: Option<String>,
     pub session_idle_seconds: u64,
+}
+
+/// Maximum reply audio sent ahead of playback, in complete 20 ms frames.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioConfig {
+    pub reply_lead_ms: u16,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self { reply_lead_ms: 200 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
