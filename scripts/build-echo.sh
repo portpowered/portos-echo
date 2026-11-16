@@ -1,6 +1,30 @@
 #!/bin/sh
 # Build only with installed tools/cached dependencies. Provisioning belongs to CI setup.
 set -eu
+binary="${CARGO_TARGET_DIR:-target}/armv7-linux-androideabi/release/echo-bridge"
+has_binary=false
+for package; do
+  if [ "$package" = echo-bridge ]; then
+    has_binary=true
+  fi
+done
+# Clean before provisioning probes as well as after any failed build/inspection.
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && "$has_binary"; then
+    rm -f -- "$binary"
+  fi
+}
+trap cleanup 0
+if "$has_binary"; then
+  rm -f -- "$binary"
+fi
+case $(uname -s) in
+  MINGW* | MSYS* | CYGWIN*)
+    sh "$(dirname -- "$0")/build-echo-wsl.sh" "$@"
+    exit $?
+    ;;
+esac
 fail() {
   printf 'build-echo: %s\n' "$1" >&2
   exit 1
@@ -26,34 +50,26 @@ export CXX_armv7_linux_androideabi="$cxx"
 export AR_armv7_linux_androideabi="$ar"
 # opusic-sys's existing bundled build reads these Android CMake definitions.
 export ANDROID_PLATFORM=android-24
+export RUSTUP_AUTO_INSTALL=0
 cat "$ANDROID_NDK_HOME/source.properties"
-"$cc" --version
-rustc --version
+"$cc" --version || fail 'selected API-24 compiler failed; check installed NDK'
+rustc --version || fail 'installed pinned Rust toolchain unavailable; no install attempted'
 
-binary="${CARGO_TARGET_DIR:-target}/armv7-linux-androideabi/release/echo-bridge"
-has_binary=false
+# The for-list is captured before modifying argv; preserve each package literally.
 for package; do
-  if [ "$package" = echo-bridge ]; then
-    has_binary=true
-  fi
-done
-# A failed build must never leave a stale binary available for publication.
-if "$has_binary"; then
-  rm -f -- "$binary"
-fi
-packages=$*
-set -- build --offline --locked --release --target armv7-linux-androideabi
-for package in $packages; do
   set -- "$@" -p "$package"
+  shift
 done
-cargo "$@"
-for package in $packages; do
-  printf 'build-echo: built %s for armv7-linux-androideabi (release)\n' "$package"
+cargo build --offline --locked --release --target armv7-linux-androideabi "$@" || fail 'offline locked Cargo build failed; check installed target/cache and compiler diagnostic above'
+for argument; do
+  if [ "$argument" != -p ]; then
+    printf 'build-echo: built %s for armv7-linux-androideabi (release)\n' "$argument"
+  fi
 done
 if "$has_binary"; then
   [ -f "$binary" ] || fail 'expected echo-bridge release binary is missing'
   file "$binary"
-  headers=$("$tools/llvm-readelf" -h -l -d "$binary")
+  headers=$("$tools/llvm-readelf" -h -l -d "$binary") || fail 'NDK ELF inspection failed'
   printf '%s\n' "$headers"
   printf '%s\n' "$headers" | grep -Eq 'Class:[[:space:]]+ELF32' || fail 'expected ELF32 class'
   printf '%s\n' "$headers" | grep -Eq 'Machine:[[:space:]]+ARM[[:space:]]*$' || fail 'expected ARM machine'
