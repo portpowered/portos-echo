@@ -36,6 +36,14 @@ impl Live {
         mut gate: Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>,
     ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Self::bind_listener(listener, frames, gate.take())
+    }
+
+    pub(super) fn bind_listener(
+        listener: TcpListener,
+        frames: u16,
+        mut gate: Option<(tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>,
+    ) -> Self {
         let origin = "http://127.0.0.1";
         let url = format!("{origin}:{}", listener.local_addr().unwrap().port());
         let (events, mut receive) = mpsc::channel::<String>(8);

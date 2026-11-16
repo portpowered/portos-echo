@@ -1,7 +1,7 @@
 //! In-memory link with bounded reply flow and explicit acknowledgment/failure injection.
 use crate::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
-    ReplySink, RunStats,
+    ReplySink, RunFailure, RunStats,
 };
 use std::{
     collections::VecDeque,
@@ -26,6 +26,7 @@ pub enum Command {
     Frame(Vec<u8>),
     Stop,
     Cut(u64),
+    FailRun(RunFailure),
     Pause,
     Close,
 }
@@ -401,6 +402,18 @@ impl EchoLink for FakeLink {
             lock(&self.observer.0).commands.push(Command::Pause);
             Ok(())
         })
+    }
+    fn fail_run(&self, code: RunFailure) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        let mut state = lock(&self.observer.0);
+        if state.closed {
+            return std::future::ready(Err(Error::Closed));
+        }
+        state.commands.push(Command::FailRun(code));
+        state.stopped = true;
+        if let Some(waker) = state.play_waker.take() {
+            waker.wake();
+        }
+        std::future::ready(Ok(()))
     }
     fn close(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         std::future::ready({

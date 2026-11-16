@@ -26,6 +26,13 @@ pub enum PlayOutcome {
     Played,
     Cut,
 }
+/// Closed, secret-free reason for ending an unserved device run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunFailure {
+    RelinkRequired,
+    KillSwitch,
+    Unavailable,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidOptions,
@@ -98,6 +105,10 @@ pub trait EchoLink: Send + Sync {
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.
     fn cut_with_stats(&self) -> impl Future<Output = Result<CutStats, Error>> + Send;
+    /// End the current run on the device; the connection stays up.
+    /// # Errors
+    /// Returns a fixed category on failure; no peer data enters diagnostics.
+    fn fail_run(&self, code: RunFailure) -> impl Future<Output = Result<(), Error>> + Send;
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.
     fn pause(&self) -> impl Future<Output = Result<(), Error>> + Send;

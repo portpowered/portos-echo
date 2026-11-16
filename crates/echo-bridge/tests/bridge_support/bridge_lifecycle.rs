@@ -317,6 +317,7 @@ async fn idle_turn(
         } else {
             "run.refused"
         };
+        bridge_refusal::error(satellite, true).await;
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if trace(path).iter().any(|e| e["event"] == event && e["run_id"] == id) {

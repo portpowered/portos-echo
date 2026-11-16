@@ -113,7 +113,7 @@ fn reject(command: Option<Command>) -> bool {
         Some(Command::Cut(reply)) => {
             let _ = reply.send(Err(Error::Disconnected));
         }
-        Some(Command::Register(reply) | Command::Pause(reply)) => {
+        Some(Command::Register(reply) | Command::Pause(reply) | Command::Error(_, _, reply)) => {
             let _ = reply.send(Err(Error::Disconnected));
         }
         None => return true,

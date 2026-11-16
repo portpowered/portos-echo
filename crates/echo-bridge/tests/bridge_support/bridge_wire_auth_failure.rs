@@ -57,6 +57,7 @@ async fn retained_failure(credential: Option<&str>, status: u16) {
     let path = directory.path().join("trace");
     let relink = status == 401;
     wait_event(&path, if relink { "auth.relink_required" } else { "run.failed" }).await;
+    bridge_refusal::error(&mut satellite, relink).await;
     let screen = assert_surfaces(&path, relink).await;
     if relink {
         assert_refused(directory.path(), &mut satellite, &path, &observer, credential).await;
@@ -78,6 +79,7 @@ async fn assert_refused(
     std::fs::write(directory.join("credential"), "synthetic-repaired-key").unwrap();
     wake(satellite).await;
     wait_event(path, "run.refused").await;
+    bridge_refusal::error(satellite, true).await;
     assert_eq!(
         observer.calls().unwrap().len(),
         usize::from(credential.is_some_and(|s| !s.contains('\0')))

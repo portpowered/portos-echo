@@ -266,6 +266,7 @@ async fn bridge_wire_runtime_failed_commentary_append_cuts_and_closes_without_su
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
     bridge_wire_auth_failure::wait_event(&app.path(), "run.failed").await;
+    bridge_refusal::error(&mut app.satellite, false).await;
     bridge_wire_auth_failure::assert_surfaces(&app.path(), false).await;
     let entries = trace(&app.path());
     for event in [

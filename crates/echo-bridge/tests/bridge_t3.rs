@@ -37,6 +37,10 @@ const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Gap between re-reads of a trace file or health endpoint while waiting for the bridge.  A bare `yield_now` loop
 /// re-read the whole file thousands of times a second and starved the coverage-instrumented bridge it was waiting on.
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+#[path = "bridge_refusal/mod.rs"]
+mod bridge_refusal;
+
 struct Process {
     name: &'static str,
     expected: String,
@@ -135,24 +139,7 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 fn host() -> Command {
-    let shell = if cfg!(windows) {
-        let result = std::process::Command::new("python")
-            .arg(root().join("scripts/make-posix.py"))
-            .output()
-            .unwrap();
-        assert!(result.status.success());
-        PathBuf::from(String::from_utf8(result.stdout).unwrap().trim()).join("sh.exe")
-    } else {
-        "sh".into()
-    };
-    let mut command = Command::new(&shell);
-    if cfg!(windows) {
-        let inherited = std::env::var_os("PATH").unwrap();
-        let paths = std::iter::once(shell.parent().unwrap().to_path_buf()).chain(std::env::split_paths(&inherited));
-        command.env("PATH", std::env::join_paths(paths).unwrap());
-    }
-    command.arg("tests/bridge_host.sh").current_dir(root());
-    command
+    bridge_refusal::host_script("tests/bridge_host.sh")
 }
 fn bridge(port: &str, url: &str, trace: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_echo-bridge"));

@@ -87,6 +87,9 @@ impl Rig {
                 kind => assert_eq!(kind, "audio-chunk"),
             }
         }
+        if chunks == 0 {
+            assert_kill_error(&mut self.satellite).await;
+        }
         bridge_short::send(&mut self.satellite, "played", json!({})).await;
         bridge_short::send(&mut self.satellite, "audio-stop", json!({})).await;
         bridge_wire_auth_failure::wait_event(&self.path(), "live.closed").await;
@@ -95,6 +98,7 @@ impl Rig {
 
     async fn refused(&mut self, run: &str) {
         self.wake().await;
+        assert_kill_error(&mut self.satellite).await;
         bridge_wire_auth_failure::wait_event(&self.path(), "run.refused").await;
         assert!(
             trace(&self.path())
@@ -110,6 +114,16 @@ impl Rig {
         self.bridge.unwrap().finish(0).await;
         self.spoof.shutdown().await.unwrap();
     }
+}
+
+async fn assert_kill_error(satellite: &mut bridge_short::Satellite) {
+    let (header, payload) = bridge_short::read_reply(satellite).await;
+    assert_eq!(header["type"], "error");
+    assert_eq!(
+        header["data"],
+        json!({"code":"echo-kill-switch","text":"Kill switch enabled."})
+    );
+    assert_eq!(payload, Vec::<u8>::new());
 }
 
 async fn register(satellite: &mut TcpStream, bridge: &mut Process) {
@@ -313,10 +327,13 @@ async fn bridge_wire_kill_during_call_setup_cancels_http_and_refuses_another_req
     bridge_wire_auth_failure::wait_event(&path, "kill.enabled").await;
     assert_eq!(pending.read(&mut [0]).await.unwrap(), 0);
     assert_killed(&path).await;
+    assert_kill_error(&mut satellite).await;
     wake_socket(&mut satellite).await;
+    assert_kill_error(&mut satellite).await;
     bridge_wire_auth_failure::wait_event(&path, "run.refused").await;
     assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(live.poll_accept(cx).is_pending())).await);
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.started").count(), 0);
+    bridge_refusal::setup_clear_and_reply(directory.path(), &mut satellite, live, &mut bridge).await;
     bridge.finish(0).await;
 }
 
@@ -439,6 +456,7 @@ async fn bridge_wire_kill_waiting_for_played_abandons_pending_model_before_ack()
     bridge_short::send(&mut rig.satellite, "played", json!({})).await;
     bridge_short::send(&mut rig.satellite, "audio-stop", json!({})).await;
     bridge_wire_auth_failure::wait_event(&rig.path(), "live.closed").await;
+    assert_kill_error(&mut rig.satellite).await;
     rig.refused("run-2").await;
     assert!(rig.live.commentary.try_recv().is_err());
     rig.finish().await;

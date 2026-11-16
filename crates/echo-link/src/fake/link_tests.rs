@@ -151,3 +151,37 @@ fn suppressed_idle_counts_are_payload_free_and_ordered() {
     ));
     assert!(matches!(ready(events.recv()).unwrap(), Some(LinkEvent::Mute(false))));
 }
+
+#[test]
+fn run_failure_records_cause_ends_capture_and_keeps_connection() {
+    let observer = Observer::default();
+    let mut link = ready(FakeConnector::new(observer.clone()).connect()).unwrap();
+    let mut events = link.events().unwrap();
+    for cause in [
+        RunFailure::RelinkRequired,
+        RunFailure::KillSwitch,
+        RunFailure::Unavailable,
+    ] {
+        observer.wake("Computer", vec![]);
+        let Some(LinkEvent::Wake(mut run)) = ready(events.recv()).unwrap() else {
+            unreachable!()
+        };
+        ready(link.fail_run(cause)).unwrap();
+        assert_eq!(ready(run.recv()), Ok(None));
+        ready(link.probe()).unwrap();
+    }
+    assert_eq!(
+        observer.commands(),
+        vec![
+            Command::Connect,
+            Command::FailRun(RunFailure::RelinkRequired),
+            Command::Probe,
+            Command::FailRun(RunFailure::KillSwitch),
+            Command::Probe,
+            Command::FailRun(RunFailure::Unavailable),
+            Command::Probe
+        ]
+    );
+    ready(link.close()).unwrap();
+    assert_eq!(ready(link.fail_run(RunFailure::Unavailable)), Err(Error::Closed));
+}

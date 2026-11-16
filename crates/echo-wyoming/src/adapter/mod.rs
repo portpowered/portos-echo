@@ -3,7 +3,7 @@ use crate::{ClientOptions, EventStream, Run, WyomingClient};
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
 use echo_link::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
-    ReplySink, RunStats,
+    ReplySink, RunFailure, RunStats,
 };
 use std::{net::SocketAddr, num::NonZeroUsize, time::Duration};
 use tokio::sync::mpsc;
@@ -124,6 +124,14 @@ impl EchoLink for WyomingClient {
     }
     async fn pause(&self) -> Result<(), Error> {
         Self::pause(self).await.map_err(error)
+    }
+    async fn fail_run(&self, code: RunFailure) -> Result<(), Error> {
+        let (code, text) = match code {
+            RunFailure::RelinkRequired => ("echo-relink-required", "Relink required."),
+            RunFailure::KillSwitch => ("echo-kill-switch", "Kill switch enabled."),
+            RunFailure::Unavailable => ("echo-unavailable", "Live unavailable."),
+        };
+        self.send_error(code, text).await.map_err(error)
     }
     async fn close(&self) -> Result<(), Error> {
         Self::close(self).await.map_err(error)

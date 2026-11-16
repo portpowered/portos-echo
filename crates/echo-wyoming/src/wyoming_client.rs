@@ -195,6 +195,14 @@ impl WyomingClient {
         self.request(Command::Pause(tx), rx).await
     }
 
+    /// Send one device-visible error through the session writer, keeping the connection.
+    /// # Errors
+    /// Connection failure, capacity limit, or operation timeout.
+    pub async fn send_error(&self, code: &str, text: &str) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Error(code.into(), text.into(), tx), rx).await
+    }
+
     /// Close and reap this connection's tasks.
     /// # Errors
     /// Returns Closed if the connection task already stopped.
