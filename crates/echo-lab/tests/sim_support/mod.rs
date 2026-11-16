@@ -70,7 +70,11 @@ impl Session {
         assert!(value["limitations"].as_array().unwrap().contains(&json!(
             "pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)"
         )));
-        assert_eq!(value["hassmic_commit"], "f68e39537420fdae8805795d8950e1daab35a203");
+        let pinned = include_str!("../../../../hassmic.pin")
+            .lines()
+            .find_map(|line| line.strip_prefix("commit="))
+            .unwrap();
+        assert_eq!(value["hassmic_commit"], pinned);
         assert!(!self.0.join("artifacts/bridge.private.jsonl").exists());
         assert!(!self.0.join("artifacts/ui.private.json").exists());
         value
