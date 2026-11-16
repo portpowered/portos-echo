@@ -98,9 +98,11 @@ def main():
                     host.command(command.strip())
                     awake = awake or command.strip() == "wake"
         finally:
-            host.stop()
-            if sink is not None:
-                sink.close()
+            try:
+                host.stop()
+            finally:
+                if sink is not None:
+                    sink.close()
     print("cleaned", flush=True)
 
 

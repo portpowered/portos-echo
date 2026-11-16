@@ -40,6 +40,9 @@ class Host:
         self.log = self.log[self.log.index(marker) + len(marker):]
 
     def start(self):
+        if self.proc is not None:
+            raise RuntimeError("host still owned; stop before restart")
+        self.deadline = time.monotonic() + 20
         env = {k: v for k, v in os.environ.items() if not k.startswith("HASSMIC_")}
         env.update(HASSMIC_STATE=str(self.folder / "state"),
                    HASSMIC_PLAY=str(self.folder / "play.raw"),
@@ -59,11 +62,37 @@ class Host:
     def stop(self):
         if self.proc is None:
             return
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(self.proc.pid, signal.SIGKILL)
-        self.proc.wait(timeout=2)
-        self.proc.stderr.close()
+        proc = self.proc
+        deadline = time.monotonic() + 2
+        try:
+            # A collected child no longer owns its PID (or group number).
+            if proc.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            self.stop_status(proc)
+            raise
+        finally:
+            # Keep failed collection distinguishable from a stopped host, but
+            # release the pipe even when signaling or waiting fails.
+            proc.stderr.close()
         self.proc = None
+
+    def stop_status(self, proc):
+        # Preserve kernel evidence of a missed reap without reading command
+        # lines, environment, paths, or any unbounded stream from the child.
+        print(f"host reap timeout: pid={proc.pid} returncode={proc.returncode}",
+              file=sys.stderr, flush=True)
+        with contextlib.suppress(OSError):
+            print(f"pgid={os.getpgid(proc.pid)} sid={os.getsid(proc.pid)}",
+                  file=sys.stderr, flush=True)
+            for task in Path(f"/proc/{proc.pid}/task").iterdir():
+                status = (task / "status").read_text().splitlines()
+                fields = [line for line in status if line.split(':')[0] in
+                          ('State', 'Pid', 'PPid', 'SigPnd', 'ShdPnd')]
+                print(f"task={task.name} wchan={(task / 'wchan').read_text()} "
+                      + ' '.join(fields), file=sys.stderr, flush=True)
 
     def command(self, command):
         if command == "size":
