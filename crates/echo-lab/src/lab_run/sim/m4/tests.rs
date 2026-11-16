@@ -406,6 +406,7 @@ async fn finish_reply(
     assert_dialogue(observer, text);
     receive_reply(peer, decoder).await;
     assert_eq!(state(screen).await, json!({"state":"listening"}));
+    assert_eq!(state(screen).await, json!({"state":"connected"}));
     assert_eq!(state(screen).await, json!({"state":"speaking"}));
     send(peer, "played", json!({})).await;
     send(peer, "audio-stop", json!({})).await;
