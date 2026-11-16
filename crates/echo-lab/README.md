@@ -644,14 +644,3 @@ Component coverage for one independent restart of each process is available with
 cargo nextest run --locked -p echo-lab --test sim_host --run-ignored only \
   -E 'test(m1_independent_restart_steps)' --config-file .github/nextest.toml --profile ci --no-capture
 ```
-The ignored `lab_run::sim::m4` component tests consume a prebuilt real
-`target/debug/echo-bridge` (with `.exe` on Windows), configured with fresh
-synthetic credentials and loopback Live, Responses and spoof MCP peers. Both
-success and HTTP 500 require the exact model function-call output before the
-fake releases its matching commentary/transcript and paced Opus reply. They
-assert one correlated tool journey, ten decoded PCM chunks (9600 bytes), and
-paired screen SSE transitions from ready through listening/speaking to ready.
-The bounded Responses peer rejects wrong results, call identities and retries;
-explicit shutdown collects its listener and active request. These tests use a
-controlled Wyoming peer and do not replace the still-unavailable M4 pinned-host
-scenario, endpoint budget, recorded golden or repeatability evidence.
