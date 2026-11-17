@@ -631,3 +631,22 @@ artifact inside the test or uses a real account. This is an executable T3
 interoperability witness, not the hassmic-host M2 scenario, ChatGPT invalid/expired
 proof, direct browser verification or OS-enforced network confinement. Those
 retained gates remain unsatisfied.
+
+### M2 runner provider ownership
+
+M2's success case now configures the delivered bridge with a fresh private
+external Codex home and the verified offline pin. Its stdlib Python provider
+owns call HTTP and the V3 sideband; a single Rust owner answers with real SDP
+from the existing local LivePeer and echoes Opus. The bridge uses echo-media.
+The runner advances the explicit bridge clock on remote protocol progress,
+releases assistant transcript completion only after Speaking, and waits for
+the bridge's played settlement before driving idle closure. The remote media
+driver quiesces before bridge shutdown and retains its socket until cleanup.
+Provider shutdown before an offer also has an explicit joined ownership path.
+
+Success uses only the nominated inert API-key login. Its report identifies
+that mode; it does not establish ChatGPT credential acceptance or refresh.
+The two credential-negative cases still require migration from the legacy
+fixture. The exact success screen sequence gains Speaking and the final Ready
+after idle closure, preserving both intervening Ready publications. The full
+M2 milestone remains gated on the native host scenario and both negatives.

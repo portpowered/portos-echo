@@ -57,7 +57,7 @@ fn m2_unknown_injections_are_rejected_before_effects() {
     }
 }
 
-fn options() -> crate::lab_run::run_options::Options {
+pub(super) fn options() -> crate::lab_run::run_options::Options {
     let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/debug")
         .join(if cfg!(windows) {
@@ -78,7 +78,7 @@ fn options() -> crate::lab_run::run_options::Options {
     .unwrap()
 }
 
-fn utterance() -> std::path::PathBuf {
+pub(super) fn utterance() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/lab/w1-utterance.pcm")
 }
 

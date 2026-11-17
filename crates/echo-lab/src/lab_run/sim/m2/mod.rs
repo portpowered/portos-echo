@@ -1,5 +1,6 @@
 //! M2 owns a fresh production world per credential outcome.
 pub mod auth;
+mod codex;
 mod journey;
 mod oracle;
 #[cfg(test)]
