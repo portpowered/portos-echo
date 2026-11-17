@@ -85,6 +85,64 @@ Add each new tracked documentation page to this index in the same change.
 - [Bridge audio orchestration](adr/0024-echo-bridge.md)
 
 - [Protocol-neutral Echo link](adr/0025-echo-link.md)
+- [Pinned Codex Android ARM build](adr/0028-codex-armv7.md)
 - [Pinned Codex app-server client](adr/0026-codex-client.md)
 - [Codex local fake: S5](spikes/codex-local-fake.md)
 - [Frame-based Codex media peer](adr/0027-echo-media.md)
+
+## Windows WSL helpers
+
+Windows helpers select one guest with `ECHO_WSL_DISTRO`. Unset or empty selects
+Ubuntu; a nonempty value must contain only ASCII letters, digits, `.`, `_` or `-`.
+Names preserve case. Invalid input fails before WSL runs and names the variable.
+WSL failures name the resolved distro on stderr; there is no fallback or install.
+Linux uses native tools and ignores this setting, including invalid values.
+
+Select the provisioned replacement from PowerShell:
+
+~~~powershell
+$env:ECHO_WSL_DISTRO = 'pe-ci'
+~~~
+
+For POSIX shells use `export ECHO_WSL_DISTRO=pe-ci`. Never probe the damaged
+default guest. Unset/empty refusal tests use only the deny-only WSL substitute
+in `python scripts/test_build_echo.py -v`; they prove selection and error
+propagation, not the damaged guest's behavior.
+
+Every build/test using pe-ci holds `/var/tmp/pe-ci.lock` without a timeout.
+First verify interop (this starts only the selected replacement):
+
+~~~powershell
+wsl -d pe-ci -u root -- flock /var/tmp/pe-ci.lock `
+  /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Write-Output WSL_INTEROP_OK"
+~~~
+
+Require exit 0 and `WSL_INTEROP_OK`; stop and report if unavailable. Save this
+native validation script outside the checkout, replacing the worktree path:
+
+~~~powershell
+Set-Location '<worktree>'
+$env:ECHO_WSL_DISTRO = 'pe-ci'
+$env:PATH = (python scripts/make-posix.py) + ';' + $env:PATH
+sh tests/hassmic_host_smoke.sh
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+python scripts/test_build_echo.py -v
+exit $LASTEXITCODE
+~~~
+
+Run that script under the same lock, using its absolute Windows path:
+
+~~~powershell
+wsl -d pe-ci -u root -- flock /var/tmp/pe-ci.lock `
+  /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -File '<validation.ps1>'
+~~~
+
+Do not nest lock acquisition inside the Windows script. The bridge refusal
+helper `sh crates/echo-bridge/tests/bridge_refusal/host.sh` uses the same setting:
+retain its stdin, require a numeric port on stdout, close stdin, require
+`cleaned` and exit 0, and collect the launcher. Use prebuilt native echo-lab
+binaries for the W1 sim scenario; the runner never builds them.
+For Linux quality, source `/opt/pe-ci-env.sh` from a guest script, change to the
+worktree, and run `make ci` while holding the same lock. Long runs launch with
+`setsid -f`; print `QUALITY_LOCK_ACQUIRED` after acquiring the lock and capture
+the actual `QUALITY_EXIT` status alongside the tested HEAD. Keep logs outside git.

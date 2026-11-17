@@ -2,8 +2,9 @@
 //! Resource admission and the milestone scenario are separate retained witnesses.
 use super::*;
 use echo_mcp_auth::mock::Mock;
+use journey::{assert_restart_deadline, fresh_probe};
 use std::{future::Future, task::Poll, time::Instant};
-use strict::{assert_restart_deadline, observe_restart, wait_probe};
+use strict::{observe_restart, wait_probe};
 #[path = "mcp_failures.rs"]
 mod faults;
 #[path = "mcp_journey.rs"]
@@ -104,6 +105,17 @@ impl Session {
         assert_eq!(bridge_short::read(&mut self.satellite).await.0["type"], "describe");
         self.answer_probe().await;
     }
+    async fn answer_recovery_probe(&mut self) {
+        let cursor = std::fs::read(&self.trace_path).unwrap().len();
+        self.send_probe_reply().await;
+        strict::wait_records(
+            || tokio::fs::read(&self.trace_path),
+            cursor,
+            true,
+            Instant::now() + OBSERVATION_TIMEOUT,
+        )
+        .await;
+    }
     async fn answer_probe(&mut self) {
         // Receiving this describe orders the cursor after the preceding probe's
         // flushed success. Each Session owns one child and one trace generation.
@@ -112,21 +124,6 @@ impl Session {
         self.release_at_probe_wait(cursor).await;
         wait_probe(&self.trace_path, cursor).await;
     }
-}
-fn fresh_probe(bytes: &[u8], cursor: usize) -> bool {
-    (cursor == 0 || bytes.get(cursor - 1) == Some(&b'\n'))
-        && bytes.get(cursor..).is_some_and(|tail| {
-            tail.split_inclusive(|byte| *byte == b'\n')
-                .filter(|line| line.ends_with(b"\n"))
-                .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
-                .any(|record| {
-                    record["event"] == "wyoming.probe_ok"
-                        && record["run_id"] == "connection-1"
-                        && record["elapsed_ms"].as_u64().is_some()
-                        && record["provider_auth_mode"] == "api_key"
-                        && record.as_object().is_some_and(|fields| fields.len() == 4)
-                })
-        })
 }
 impl Session {
     async fn restart_probe(&mut self) {
@@ -175,32 +172,6 @@ async fn restart_probe_observation_deadline() {
     let mut socket = listener.accept().await.unwrap().0;
     assert_restart_deadline(bridge_short::read(&mut socket), deadline, "missing describe", cursor).await;
     assert_restart_deadline(wait_probe(&path, cursor), deadline, "fresh complete idle probe", cursor).await;
-}
-#[test]
-fn probe_barrier_requires_fresh_complete_connection_record() {
-    let record = b"{\"event\":\"wyoming.probe_ok\",\"run_id\":\"connection-1\",\"elapsed_ms\":0,\"provider_auth_mode\":\"api_key\"}\n";
-    assert!(fresh_probe(record, 0));
-    assert!(!fresh_probe(record, record.len()));
-    assert!(!fresh_probe(&record[..record.len() - 1], 0));
-    assert!(!fresh_probe(record, record.len() + 1));
-    for (key, value) in [
-        ("event", json!("wyoming.connected")),
-        ("run_id", json!("run-1")),
-        ("elapsed_ms", json!(null)),
-        ("payload", json!("not approved")),
-    ] {
-        let mut changed: Value = serde_json::from_slice(record).unwrap();
-        changed[key] = value;
-        assert!(!fresh_probe(format!("{changed}\n").as_bytes(), 0));
-    }
-    let mut bytes = record.to_vec();
-    let cursor = bytes.len();
-    bytes.extend_from_slice(record);
-    assert!(fresh_probe(&bytes, cursor));
-    assert!(!fresh_probe(&bytes, cursor - 1));
-    assert!(!fresh_probe(&bytes, cursor + 1));
-    assert!(!fresh_probe(&bytes[..bytes.len() - 1], cursor));
-    assert!(fresh_probe(&bytes, 0));
 }
 fn configure(directory: &Path, resource: &str, first: bool, port: u16) {
     if first {

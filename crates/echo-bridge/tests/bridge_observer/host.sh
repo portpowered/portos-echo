@@ -4,8 +4,11 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/../../../.." && pwd)
 adapter="$root/crates/echo-bridge/tests/bridge_observer/host.py"
 case $(uname -s) in
   MINGW* | MSYS* | CYGWIN*)
-    adapter=$(MSYS_NO_PATHCONV=1 wsl -d Ubuntu --exec wslpath -u "$(cygpath -am "$adapter")")
-    MSYS_NO_PATHCONV=1 exec wsl -d Ubuntu --exec python3 "$adapter" "$@"
+    # shellcheck source=scripts/wsl-distro.sh
+    . "$root/scripts/wsl-distro.sh"
+    distro=$(echo_wsl_distro)
+    adapter=$(echo_wsl_run "$distro" wslpath -u "$(cygpath -am "$adapter")")
+    echo_wsl_exec "$distro" python3 "$adapter" "$@"
     ;;
 esac
 exec python3 "$adapter" "$@"

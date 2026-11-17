@@ -5,12 +5,16 @@ fail() {
   printf 'build-echo: %s\n' "$1" >&2
   exit 1
 }
-command -v wsl >/dev/null || fail 'installed WSL Ubuntu required; no install attempted'
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+# shellcheck source=scripts/wsl-distro.sh
+. "$root/scripts/wsl-distro.sh"
+distro=$(echo_wsl_distro)
+command -v wsl >/dev/null || fail "installed WSL distro '$distro' required; no install attempted"
 export MSYS_NO_PATHCONV=1
 guest_path() {
   case $1 in
     [A-Za-z]:* | //?* | \\*)
-      wsl -d Ubuntu --exec wslpath -u "$1" || fail 'WSL wslpath could not translate selected path'
+      echo_wsl_run "$distro" wslpath -u "$1" || fail 'WSL wslpath could not translate selected path'
       ;;
     /*) printf '%s\n' "$1" ;;
     *) fail 'select an absolute guest, Windows drive or UNC path' ;;
@@ -41,7 +45,7 @@ cleanup_guest=$(
   done
 CLEANUP
 )
-wsl -d Ubuntu --exec sh -c "$cleanup_guest" sh "$root" "$target" "$@" || fail 'WSL Ubuntu output cleanup failed; check selected target directory'
+echo_wsl_run "$distro" sh -c "$cleanup_guest" sh "$root" "$target" "$@" || fail "WSL distro '$distro' output cleanup failed; check selected target directory"
 root=${root:-$(guest_path "$(cygpath -am .)")}
 ndk=${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}
 if [ -n "$ndk" ]; then
@@ -61,4 +65,4 @@ guest=$(
   exec sh scripts/build-echo.sh "$@"
 GUEST
 )
-wsl -d Ubuntu --exec sh -lc "$guest" sh "$root" "$ndk" "$target" "$@" || fail 'WSL Ubuntu build failed; check guest provisioning and diagnostic above (no install attempted)'
+echo_wsl_run "$distro" sh -lc "$guest" sh "$root" "$ndk" "$target" "$@" || fail "WSL distro '$distro' build failed; check guest provisioning (no install attempted)"

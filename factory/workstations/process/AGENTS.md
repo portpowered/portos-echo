@@ -32,6 +32,23 @@ review.
   the run URL. Use pe-ci (under `/var/tmp/pe-ci.lock`) only when the PRD asks
   for what hosted CI cannot do: repeated or discriminating runs of named tests,
   a Windows-native run through WSL interop, or a measurement on that machine.
+- Linux host: the `pe-ci` WSL distro is the only supported Linux host. Never use,
+  start, repair or wait for any other distro (the default `Ubuntu` distro is
+  unavailable). Run Linux-side witnesses (pinned `hassmic-host`, T3 tests, sim
+  scenarios) natively inside pe-ci: `wsl -d pe-ci -u root -- sh <script>.sh`
+  from a script file with LF line endings that sources `/opt/pe-ci-env.sh`,
+  holds `/var/tmp/pe-ci.lock` for every build or test, and builds into its own
+  `/var/tmp` target deleted by an EXIT trap. Inside pe-ci, git cannot follow a
+  worktree's absolute Windows `gitdir: C:/...` link. Rewrite your worktree's
+  `.git` file to the relative form `gitdir: ../../../.git/worktrees/<name>`
+  (Windows git reads it too) and pass `-c safe.directory='*'`. Never export
+  `GIT_DIR` or `GIT_WORK_TREE` in a script: `scripts/hassmic-host.sh` runs its
+  own `git init`, `fetch`, `sparse-checkout` and `checkout`, and an exported
+  `GIT_DIR` points them at the repository, which rewrites its config and your
+  worktree.
+  Detached (`setsid`) pe-ci runners lose Windows interop and can die: for a run
+  that outlives your visit, write the script, then park naming it so the
+  coordinator runs it attached and relays the markers.
 - Never run against the Echo Show, the Ring camera, GPT-Live with a real
   credential, the Port OS pilot or any real account. Tiers T0-T4 only, and T4
   only when the PRD explicitly authorizes it. Stop and report a hardware

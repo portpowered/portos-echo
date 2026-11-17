@@ -2,6 +2,42 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn m1_optional_clip_provenance_is_closed_and_preserves_legacy_reports() {
+    let schema: Value = serde_json::from_str(include_str!("../../../schemas/report.schema.json")).unwrap();
+    let validator = jsonschema::validator_for(&schema["properties"]["m1"]).unwrap();
+    let mut report = json!({"ready_before_first_wake":1,"streamed_wakes":[],
+        "bridge_restarts":0,"hassmic_host_restarts":0,"mute_status":"blocked"});
+    assert!(validator.is_valid(&report));
+    let hash = "a".repeat(64);
+    let source = json!({"kind":"wake_clip","sha256":hash});
+    report["wake_clip"] = json!({"sha256":hash,"sample_rate_hz":16000,"duration_ms":1000});
+    report["plays"] = json!([{"step":1,"iteration":0,"source":source}]);
+    report["streamed_wakes"] =
+        json!([{"bridge_generation":1,"run_id":"run-1","mic_frames":10,"source":source,"play_index":0}]);
+    assert!(validator.is_valid(&report));
+    for (field, value) in [
+        ("sha256", json!("bad")),
+        ("sample_rate_hz", json!(44100)),
+        ("duration_ms", json!(499)),
+        ("audio", json!([])),
+        ("path", json!("private.wav")),
+    ] {
+        let mut invalid = report.clone();
+        invalid["wake_clip"][field] = value;
+        assert!(!validator.is_valid(&invalid));
+    }
+    let mut invalid = report.clone();
+    invalid["plays"][0]["source"]["kind"] = json!("fixture");
+    assert!(!validator.is_valid(&invalid));
+    invalid = report.clone();
+    invalid["streamed_wakes"][0]["play_index"] = json!(-1);
+    assert!(!validator.is_valid(&invalid));
+    invalid = report;
+    invalid["mute_status"] = json!("pass");
+    assert!(!validator.is_valid(&invalid));
+}
+
+#[test]
 fn m6_report_extension_is_optional_complete_and_strictly_typed() {
     let source: Value = serde_json::from_str(include_str!("../../../schemas/report.schema.json")).unwrap();
     let validator = jsonschema::validator_for(&source["properties"]["m6"]).unwrap();

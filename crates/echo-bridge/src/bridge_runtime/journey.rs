@@ -1,5 +1,6 @@
 pub(super) mod bridge_live;
 use super::bridge_pacing::LeadPacer;
+use super::bridge_refusal::{Arbiter, Work};
 use super::bridge_timing;
 use crate::{
     Error,
@@ -359,7 +360,13 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             }
             Ok(())
         } else {
-            source.event(event, lab)
+            source.event(event, lab)?;
+            // Lab echo has one fixed input, never an interrupting question.
+            // Fairly interleaved packets after reply start are still that input.
+            if lab && source.cancelled {
+                self.microphone_at_reply = None;
+            }
+            Ok(())
         }
     }
     async fn forward(&mut self, tx: &L::ReplySink, frame: Vec<u8>) -> Result<(), Error> {
@@ -418,10 +425,23 @@ async fn produce<L: EchoLink>(
     lab: (bool, u64),
     context: &mut PlaybackContext<'_, L>,
 ) -> Result<(), Error> {
+    // Keep the rotating owner future boxed without changing response lifecycle.
+    Box::pin(produce_turns(source, run, events, call, tx, lab, context)).await
+}
+async fn produce_turns<L: EchoLink>(
+    source: &mut Source,
+    run: &mut <L::Events as LinkEvents>::Run,
+    events: &mut L::Events,
+    call: &mut impl LivePort,
+    tx: &L::ReplySink,
+    lab: (bool, u64),
+    context: &mut PlaybackContext<'_, L>,
+) -> Result<(), Error> {
     let mut pacer = LeadPacer::new(context.lead_ms);
     let mut completed = false;
     let mut ended = false;
     let mut pressure_reported = false;
+    let mut arbiter = Arbiter::default();
     loop {
         if context.cancelled(source, call).await? {
             return Ok(());
@@ -441,20 +461,25 @@ async fn produce<L: EchoLink>(
         bridge_timing::check_deadline(context.deadline)?;
         tokio::select! {
             biased;
-            event = events.recv() => {
-                let event = event?.ok_or(Error::Wyoming)?;
-                context.device(source, &event)?;
-            },
-            frame = run.recv(), if !ended => { ended = context.capture(source, frame?, call, lab.0).await?; },
             () = context.delegation.ready() => (),
             () = context.screen.presentation.emotion_deadline() => (),
-            event = call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()) => match event {
+            work = arbiter.next(
+                async { if ended { std::future::pending().await } else { run.recv().await } },
+                call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()),
+                async { if source.queue.is_empty() { std::future::pending().await } else { pacer.next_frame(&mut source.queue).await } },
+                events.recv(),
+            ) => match work {
+                Work::Device(event) => {
+                    let event = event?.ok_or(Error::Wyoming)?;
+                    context.device(source, &event)?;
+                },
+                Work::Microphone(frame) => { ended = context.capture(source, frame?, call, lab.0).await?; },
+                Work::Control(event) => match event {
                 Ok(event) => context.event(event, source, lab.0)?,
                 Err(CallError::Deadline) => (),
                 Err(error) => return Err(error.into()),
-            },
-            frame = pacer.next_frame(&mut source.queue), if !source.queue.is_empty() => {
-                context.forward_available(tx, frame, source.sent).await?;
+                },
+                Work::Reply(frame) => context.forward_available(tx, frame, source.sent).await?,
             }
         }
     }

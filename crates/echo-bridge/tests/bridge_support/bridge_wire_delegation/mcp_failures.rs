@@ -155,7 +155,7 @@ async fn idle_probe_failed_and_timed_out_emit_no_success_then_recover() {
                     .0["type"],
                 "describe"
             );
-            session.answer_probe().await;
+            session.answer_recovery_probe().await;
             let records = trace(&session.trace_path);
             assert_eq!(records.iter().filter(|r| r["event"] == "wyoming.probe_ok").count(), 1);
             assert_eq!(records.iter().filter(|r| r["event"] == "wyoming.connected").count(), 2);

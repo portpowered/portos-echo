@@ -1,0 +1,41 @@
+name: Build Codex ARMv7
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  build-codex-armv7:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: '4'
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
+      CODEX_ARMV7_WORK_DIR: ${{ runner.temp }}/codex-armv7-work
+      CODEX_ARMV7_OUTPUT_DIR: ${{ runner.temp }}/codex-armv7-output
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Provision compiler and NDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3
+          sdkmanager "ndk;27.3.13750724"
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup target add --toolchain 1.100.0 armv7-linux-androideabi
+      - name: Build-helper unit checks
+        run: python3 third_party/codex/test_build.py
+      - name: Build pinned Codex
+        run: make build-codex-armv7
+      - name: Upload Codex and CA bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: codex-app-server-armv7-android-${{ github.sha }}
+          path: ${{ runner.temp }}/codex-armv7-output/
+          if-no-files-found: error
+          retention-days: 7

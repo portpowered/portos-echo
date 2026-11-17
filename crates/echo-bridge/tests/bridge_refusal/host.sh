@@ -4,8 +4,11 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/../../../.." && pwd)
 script="$root/crates/echo-bridge/tests/bridge_refusal/host.py"
 case $(uname -s) in
   MINGW* | MSYS* | CYGWIN*)
-    script=$(MSYS_NO_PATHCONV=1 wsl -d Ubuntu --exec wslpath -u "$(cygpath -am "$script")")
-    MSYS_NO_PATHCONV=1 exec wsl -d Ubuntu --exec python3 "$script"
+    # shellcheck source=scripts/wsl-distro.sh
+    . "$root/scripts/wsl-distro.sh"
+    distro=$(echo_wsl_distro)
+    script=$(echo_wsl_run "$distro" wslpath -u "$(cygpath -am "$script")")
+    echo_wsl_exec "$distro" python3 "$script"
     ;;
 esac
 exec python3 "$script"

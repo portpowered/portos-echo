@@ -29,63 +29,9 @@ def emit(value):
     print(json.dumps(value), flush=True)
 
 
-class LauncherError(RuntimeError):
-    """Only fixed, sanitized launcher-stage diagnostics belong here."""
-
-
-class HostCancelled(RuntimeError):
-    """Caller EOF interrupts work; the cleanup result still comes from close."""
-
-
-class LauncherChild:
-    """Keep the handle until collection, including setup/forwarding failures.
-
-    Four seconds includes the guest Host's three-second group grace and stays
-    inside the Rust owner's five seconds. Closing stdin requests guest cleanup;
-    terminating a wsl client alone is never evidence of guest collection.
-    """
-    def __init__(self, proc):
-        self.proc = proc
-        self.deadline = None
-        self.status = None
-        self.forced = False
-        self.failure = None
-
-    def exited(self):
-        try:
-            return self.proc.poll() is not None
-        except OSError:
-            raise LauncherError("cleanup: cannot observe launcher child") from None
-
-    def close(self):
-        if self.status is not None:
-            if self.failure:
-                raise LauncherError(self.failure)
-            return self.status
-        if self.deadline is None:
-            self.deadline = time.monotonic() + 4
-            try:
-                self.proc.stdin.close()
-            except (OSError, ValueError):
-                self.failure = "cleanup: cannot close launcher input"
-        try:
-            self.status = self.proc.wait(timeout=max(0, self.deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            if not self.forced:
-                try:
-                    self.proc.kill()
-                except OSError:
-                    raise LauncherError("cleanup: cannot force launcher child") from None
-                self.forced = True
-            try:
-                self.status = self.proc.wait()
-            except OSError:
-                raise LauncherError("cleanup: cannot collect launcher child") from None
-        except OSError:
-            raise LauncherError("cleanup: cannot collect launcher child") from None
-        if self.failure:
-            raise LauncherError(self.failure)
-        return self.status
+sys.path.insert(0, str(ROOT / "scripts"))
+from wsl_distro import resolve_wsl_distro
+from wsl_host import LauncherError, LauncherChild, HostCancelled
 
 
 def launcher_input(events):
@@ -147,20 +93,26 @@ def launch_windows():
     owner = None
     owners = []
     reader = None
+    distro = None
     try:
+        distro = resolve_wsl_distro()
         owner = LauncherChild(subprocess.Popen(
-            ["wsl", "-d", "Ubuntu", "--exec", "wslpath", "-u", str(Path(__file__).resolve())],
+            ["wsl", "-d", distro, "--exec", "wslpath", "-u", str(Path(__file__).resolve())],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
         owners.append(owner)
         reader = threading.Thread(target=launcher_translation, args=(owner.proc, events), daemon=True)
         reader.start()
         threading.Thread(target=launcher_input, args=(events,), daemon=True).start()
-        return launcher_forward(events, owner, owners)
+        status = launcher_forward(events, owner, owners, distro)
+        if status:
+            sys.stderr.write(f"WSL distro '{distro}': operation failed\n")
+        return status
     except LauncherError as error:
-        sys.stderr.write(str(error) + "\n")
+        sys.stderr.write(f"WSL distro '{distro}': {error}\n")
         emit({"event": "host.failed"})
         return 1
-    except (OSError, ValueError, RuntimeError, queue.Full):
+    except (OSError, ValueError, RuntimeError, queue.Full) as error:
+        sys.stderr.write((f"WSL distro '{distro}': operation failed" if distro else str(error)) + "\n")
         emit({"event": "host.failed"})
         return 1
     finally:
@@ -183,11 +135,12 @@ def launch_windows():
                 sys.stderr.write("cleanup: cannot close launcher output\n")
                 cleanup_failed = True
         if cleanup_failed:
+            sys.stderr.write(f"WSL distro '{distro}': cleanup failed\n")
             emit({"event": "host.failed"})
             return 1
 
 
-def launcher_forward(events, translation, owners):
+def launcher_forward(events, translation, owners, distro=None):
     owner = translation
     pending = []
     commands = queue.Queue(maxsize=16)
@@ -219,7 +172,7 @@ def launcher_forward(events, translation, owners):
                 if translation.close() != 0:
                     return 1
                 owner = LauncherChild(subprocess.Popen(
-                    ["wsl", "-d", "Ubuntu", "--exec", "python3", "-u", value,
+                    ["wsl", "-d", distro or resolve_wsl_distro(), "--exec", "python3", "-u", value,
                      *(["--finite"] if "--finite" in sys.argv[1:] else [])],
                     stdin=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0))
                 owners.append(owner)

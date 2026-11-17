@@ -2,7 +2,9 @@
 use super::*;
 use std::io::Write;
 use tokio::net::TcpListener;
+pub(crate) mod continuous;
 mod journeys;
+mod loaded_microphone;
 
 async fn refusal(cause: &str) {
     let directory = tempfile::tempdir().unwrap();

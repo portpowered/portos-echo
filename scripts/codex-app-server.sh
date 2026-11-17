@@ -54,6 +54,18 @@ def checkout_roots(root):
     return (root,)
 
 
+def verified_binary(published, archive_name, expected, target):
+    archive = published / archive_name
+    binary = published / ('codex-' + target)
+    if digest(archive) != expected or digest(binary) != (published / 'binary.sha256').read_text().strip():
+        raise ValueError('SHA-256 mismatch')
+    if not os.access(binary, os.X_OK):
+        raise ValueError('invalid cached executable')
+    if not all((published / name).is_file() for name in ('LICENSE', 'NOTICE')):
+        raise ValueError('cached attribution missing')
+    return binary
+
+
 def main():
     root = pathlib.Path(sys.argv[1]).resolve()
     pin = tomllib.loads((root / 'codex.pin').read_text())
@@ -79,23 +91,19 @@ def main():
     parent.mkdir(parents=True, exist_ok=True)
     published = parent / expected
     lock = parent / (expected + '.lock')
+    if published.exists():
+        print(verified_binary(published, asset['name'], expected, target))
+        return
+    if os.environ.get('ECHO_CODEX_OFFLINE') == '1':
+        raise ValueError('binary missing; provision before testing')
     try:
         lock.mkdir()
     except FileExistsError as error:
         raise ValueError('another fetch owns this pin; lock retained') from error
     try:
         if published.exists():
-            archive = published / asset['name']
-            binary = published / ('codex-' + target)
-            if digest(archive) != expected or digest(binary) != (published / 'binary.sha256').read_text().strip():
-                raise ValueError('SHA-256 mismatch')
-            if not os.access(binary, os.X_OK):
-                raise ValueError('invalid cached executable')
-            if not all((published / name).is_file() for name in ('LICENSE', 'NOTICE')):
-                raise ValueError('cached attribution missing')
+            binary = verified_binary(published, asset['name'], expected, target)
         else:
-            if os.environ.get('ECHO_CODEX_OFFLINE') == '1':
-                raise ValueError('binary missing; provision before testing')
             with tempfile.TemporaryDirectory(prefix='fetch-', dir=parent) as stage:
                 stage = pathlib.Path(stage)
                 archive = stage / asset['name']

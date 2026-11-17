@@ -16,12 +16,14 @@ pub struct Live {
     pub commentary: mpsc::Receiver<String>,
     pub microphone_frames: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    event_sent: std::sync::Arc<tokio::sync::Notify>,
     task: JoinHandle<()>,
 }
 
 // Immutable packets are local to one fixture. Every call still offers the
 // same freshly encoded sequence; preparation is paid once, outside each cut.
 struct Audio {
+    sent: std::sync::Arc<tokio::sync::Notify>,
     initial: Vec<Vec<u8>>,
     more: Vec<Vec<u8>>,
     muse: Vec<Vec<u8>>,
@@ -34,6 +36,13 @@ impl Drop for Live {
 }
 
 impl Live {
+    /// Single-injection barrier: receipt means send and transport flush completed.
+    pub async fn send_acknowledged(&self, event: String) {
+        self.events.send(event).await.unwrap();
+        tokio::time::timeout(OBSERVATION_TIMEOUT, self.event_sent.notified())
+            .await
+            .unwrap();
+    }
     pub async fn bind() -> Self {
         Self::bind_frames(3).await
     }
@@ -63,7 +72,9 @@ impl Live {
         let observed = calls.clone();
         let microphone_frames = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let microphone = microphone_frames.clone();
+        let event_sent = std::sync::Arc::new(tokio::sync::Notify::new());
         let audio = Audio {
+            sent: event_sent.clone(),
             initial: encode(frames),
             more: encode(32),
             muse: encode(10),
@@ -81,6 +92,7 @@ impl Live {
             commentary,
             microphone_frames,
             calls,
+            event_sent,
             task,
         }
     }
@@ -148,7 +160,11 @@ async fn next_connection(
         tokio::select! {
             next = listener.accept() => return next.unwrap().0,
             event = receive.recv() => match event {
-                Some(event) => send_event(peer, &event, audio, sequence).await,
+                Some(event) => {
+                    send_event(peer, &event, audio, sequence).await;
+                    peer.flush().await.unwrap();
+                    audio.sent.notify_one();
+                },
                 None => return listener.accept().await.unwrap().0,
             },
             result = drive(peer) => if result.is_err() { return listener.accept().await.unwrap().0; },
