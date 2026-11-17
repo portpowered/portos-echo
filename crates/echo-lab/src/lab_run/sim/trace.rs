@@ -99,3 +99,33 @@ impl Trace {
         !self.pending.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::selectors;
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn periodic_probe_records_remain_raw_without_changing_journey_selectors() {
+        let mut reader = Trace::default();
+        let mut expected = Vec::new();
+        for record in [
+            json!({"event":"wyoming.run_started", "elapsed_ms":0, "run_id":"one"}),
+            json!({"event":"wyoming.run_ended", "elapsed_ms":1, "run_id":"one"}),
+        ] {
+            let probe = json!({"event":"wyoming.probe_ok", "elapsed_ms":record["elapsed_ms"],
+            "run_id":"connection-1", "provider_auth_mode":"api_key"});
+            expected.extend([probe, record]);
+        }
+        for record in &expected {
+            let bytes = format!("{record}\n").into_bytes();
+            reader.append(&bytes[..bytes.len() - 1]).unwrap();
+            assert!(reader.partial());
+            reader.append(b"\n").unwrap();
+        }
+        let oracle = selectors::parse(&[json!("wyoming.run_started"), json!("wyoming.run_ended")]).unwrap();
+        reader.finish().unwrap();
+        assert_eq!(reader.records, expected);
+        assert_eq!(selectors::check(&reader.records, &oracle, Some("one")), Ok(()));
+    }
+}

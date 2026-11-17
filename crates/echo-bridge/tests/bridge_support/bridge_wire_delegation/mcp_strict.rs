@@ -88,12 +88,7 @@ impl Harness {
         assert_eq!(state["expires_at_unix"], self.epoch + 1800);
         assert_eq!(self.spoof.snapshot().unwrap().requests, vec![]);
         assert_eq!(bridge_short::read(&mut session.satellite).await.0["type"], "describe");
-        bridge_short::send(
-            &mut session.satellite,
-            "info",
-            json!({"satellite":{"name":"synthetic"}}),
-        )
-        .await;
+        session.answer_probe().await;
         self.fixture.approve(Approval::Approved).unwrap();
         self.fixture.advance(5).unwrap();
         tokio::time::advance(Duration::from_secs(5)).await;

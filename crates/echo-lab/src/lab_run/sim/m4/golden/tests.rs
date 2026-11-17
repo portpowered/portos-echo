@@ -31,6 +31,34 @@ fn recorded(records: &[Value]) -> Vec<u8> {
 }
 
 #[test]
+fn periodic_payload_free_probes_do_not_change_golden_or_identity_assignment() {
+    let original = journey();
+    let expected = recorded(&original);
+    let probe = json!({"event":"wyoming.probe_ok", "elapsed_ms":0,
+        "run_id":"connection-1", "provider_auth_mode":"api_key"});
+    let mut interleaved = vec![probe.clone()];
+    for record in &original {
+        interleaved.push(record.clone());
+        let mut probe = probe.clone();
+        probe["elapsed_ms"] = record["elapsed_ms"].clone();
+        interleaved.push(probe);
+    }
+    assert_eq!(compare(&trace(&interleaved), &expected), Ok(()));
+    for (key, value) in [
+        ("extra", json!(1)),
+        ("event", json!("wyoming.unknown")),
+        ("run_id", json!("other")),
+        ("provider_auth_mode", json!("unknown")),
+    ] {
+        let mut changed = interleaved.clone();
+        changed[0][key] = value;
+        assert!(compare(&trace(&changed), &expected).is_err());
+    }
+    interleaved[5]["count"] = json!(2);
+    assert!(compare(&trace(&interleaved), &expected).is_err());
+}
+
+#[test]
 fn normalizes_only_incidental_values_and_keeps_measurements_and_relationships() {
     let mut records = journey();
     records.push(

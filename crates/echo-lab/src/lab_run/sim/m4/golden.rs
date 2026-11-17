@@ -70,6 +70,7 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
     trace
         .records
         .iter()
+        .filter(|record| !incidental_probe(record))
         .map(|record| {
             let mut record = record.clone();
             names.nested(&mut record)?;
@@ -77,6 +78,14 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
             serde_json::to_string(&record).map_err(|_| "golden: cannot encode record".into())
         })
         .collect()
+}
+
+fn incidental_probe(record: &Value) -> bool {
+    record["event"] == "wyoming.probe_ok"
+        && record["run_id"] == "connection-1"
+        && record["elapsed_ms"].as_u64().is_some()
+        && matches!(record["provider_auth_mode"].as_str(), Some("api_key" | "chatgpt"))
+        && record.as_object().is_some_and(|fields| fields.len() == 4)
 }
 
 pub fn compare(trace: &Trace, expected: &[u8]) -> Result<(), String> {

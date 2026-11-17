@@ -17,6 +17,7 @@ struct Session {
     screen: Lines<BufReader<TcpStream>>,
     control: String,
     wall_epoch: (u64, u64),
+    trace_path: PathBuf,
 }
 
 impl Session {
@@ -78,6 +79,7 @@ impl Session {
             screen,
             control,
             wall_epoch,
+            trace_path: directory.join("trace"),
         }
     }
 
@@ -101,8 +103,68 @@ impl Session {
         // fixture-epoch assertions live in the strict guarded journey.
         assert!((self.wall_epoch.0 + 1800..=self.wall_epoch.1 + 1800).contains(&expiry));
         assert_eq!(bridge_short::read(&mut self.satellite).await.0["type"], "describe");
-        bridge_short::send(&mut self.satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
+        self.answer_probe().await;
     }
+
+    async fn answer_probe(&mut self) {
+        // Receiving this describe orders the cursor after the preceding probe's
+        // flushed success. Each Session owns one child and one trace generation.
+        let cursor = std::fs::read(&self.trace_path).unwrap().len();
+        bridge_short::send(&mut self.satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
+        wait_probe(&self.trace_path, cursor).await;
+    }
+}
+
+fn fresh_probe(bytes: &[u8], cursor: usize) -> bool {
+    bytes.get(cursor..).is_some_and(|tail| {
+        tail.split_inclusive(|byte| *byte == b'\n')
+            .filter(|line| line.ends_with(b"\n"))
+            .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+            .any(|record| {
+                record["event"] == "wyoming.probe_ok"
+                    && record["run_id"] == "connection-1"
+                    && record["elapsed_ms"].as_u64().is_some()
+                    && record["provider_auth_mode"] == "api_key"
+                    && record.as_object().is_some_and(|fields| fields.len() == 4)
+            })
+    })
+}
+
+async fn wait_probe(path: &Path, cursor: usize) {
+    let started = std::time::Instant::now();
+    loop {
+        let bytes = tokio::fs::read(path).await.unwrap();
+        if fresh_probe(&bytes, cursor) {
+            return;
+        }
+        assert!(
+            started.elapsed() < OBSERVATION_TIMEOUT,
+            "did not observe fresh complete idle probe"
+        );
+    }
+}
+
+#[test]
+fn probe_barrier_requires_fresh_complete_connection_record() {
+    let record = b"{\"event\":\"wyoming.probe_ok\",\"run_id\":\"connection-1\",\"elapsed_ms\":0,\"provider_auth_mode\":\"api_key\"}\n";
+    assert!(fresh_probe(record, 0));
+    assert!(!fresh_probe(record, record.len()));
+    assert!(!fresh_probe(&record[..record.len() - 1], 0));
+    assert!(!fresh_probe(record, record.len() + 1));
+    for (key, value) in [
+        ("event", json!("wyoming.connected")),
+        ("run_id", json!("run-1")),
+        ("elapsed_ms", json!(null)),
+        ("payload", json!("not approved")),
+    ] {
+        let mut changed: Value = serde_json::from_slice(record).unwrap();
+        changed[key] = value;
+        assert!(!fresh_probe(format!("{changed}\n").as_bytes(), 0));
+    }
+    let mut bytes = record.to_vec();
+    let cursor = bytes.len();
+    bytes.extend_from_slice(record);
+    assert!(fresh_probe(&bytes, cursor));
 }
 
 fn configure(directory: &Path, resource: &str, first: bool, port: u16) {
@@ -367,4 +429,45 @@ fn wall_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+#[tokio::test(start_paused = true)]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn idle_probe_success_is_once_per_completion_and_pending_eof_is_not_success() {
+    drive(async {
+        let directory = tempfile::tempdir().unwrap();
+        let mock = Mock::bind().await.unwrap();
+        let mut session = Session::start(directory.path(), &mock, true).await;
+        for count in 1..=2 {
+            assert_eq!(bridge_short::read(&mut session.satellite).await.0["type"], "describe");
+            let cursor = std::fs::read(&session.trace_path).unwrap().len();
+            bridge_short::send(
+                &mut session.satellite,
+                "info",
+                json!({"satellite":{"name":"synthetic"}}),
+            )
+            .await;
+            wait_probe(&session.trace_path, cursor).await;
+            let records = trace(&session.trace_path);
+            assert_eq!(
+                records.iter().filter(|r| r["event"] == "wyoming.probe_ok").count(),
+                count
+            );
+            assert_eq!(records.iter().filter(|r| r["event"] == "wyoming.connected").count(), 1);
+            session.advance(100).await;
+        }
+        // The third describe is genuinely outstanding when EOF cancels its owner.
+        assert_eq!(bridge_short::read(&mut session.satellite).await.0["type"], "describe");
+        session.process.finish(0).await;
+        let records = trace(&session.trace_path);
+        assert_eq!(records.iter().filter(|r| r["event"] == "wyoming.probe_ok").count(), 2);
+        assert_eq!(
+            records.iter().filter(|r| r["event"] == "wyoming.reconnecting").count(),
+            0
+        );
+        let mut byte = [0];
+        assert_eq!(session.satellite.read(&mut byte).await.unwrap(), 0);
+        assert!(TcpStream::connect(&session.control).await.is_err());
+    })
+    .await;
 }
