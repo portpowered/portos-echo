@@ -203,5 +203,5 @@ fn media_error(error: echo_media::Error) -> Error {
 }
 
 #[cfg(test)]
-#[path = "call_media_tests.rs"]
+#[path = "call_media_tests/call_media_tests.rs"]
 mod tests;

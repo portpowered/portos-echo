@@ -114,10 +114,10 @@ async fn media_call_ready_drain_is_nonblocking_ordered_and_distinguishes_eof() {
     assert_eq!(state.closes.load(Ordering::SeqCst), 1);
 }
 
-#[path = "../bridge_voice/voice_media_cases.rs"]
+#[path = "voice_media_cases.rs"]
 mod voice;
 
-#[path = "../bridge_voice/voice_session_cases.rs"]
+#[path = "voice_session_cases.rs"]
 mod session;
 
 #[tokio::test(start_paused = true)]
