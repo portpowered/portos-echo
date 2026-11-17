@@ -41,6 +41,7 @@ fn runtime_options<'a>(
         trace,
         delegation: None,
         utc_day: std::sync::Arc::new(|| 10),
+        mcp_epoch: None,
     }
 }
 

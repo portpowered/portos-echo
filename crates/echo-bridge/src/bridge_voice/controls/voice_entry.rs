@@ -10,14 +10,19 @@ pub(crate) async fn execute<C: LinkConnector>(
     control: Control,
     connector: C,
 ) -> Result<(), Error> {
-    if settings.sim_epoch.is_some() || settings.lab || (settings.sim_clock && settings.model_url.is_none()) {
+    if settings.lab
+        || (settings.sim_clock && settings.model_url.is_none())
+        || (settings.sim_epoch.is_some() && !settings.sim_clock)
+    {
         return Err(Error::Input);
     }
     let config = settings.config.take().ok_or(Error::Input)?;
     let media = media_config(settings.model_url.is_some());
     let configured = Configured::new(config, settings.trace, settings.health)?.with_clock(control.utc_day);
     let configured = match settings.model_url {
-        Some(model) => configured.with_routes(crate::bridge_operator::LocalRoutes::new(&settings.live_url, &model)?),
+        Some(model) => configured
+            .with_routes(crate::bridge_operator::LocalRoutes::new(&settings.live_url, &model)?)
+            .with_mcp_epoch(settings.sim_epoch),
         None => configured,
     };
     let clean_stop = Cell::new(true);

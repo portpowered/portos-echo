@@ -62,10 +62,16 @@ impl Tools {
         }
     }
 
-    pub async fn open(&mut self, config: &BridgeConfig, screen: &Screen, trace: &mut Trace) -> Result<(), Error> {
+    pub async fn open(
+        &mut self,
+        config: &BridgeConfig,
+        screen: &Screen,
+        trace: &mut Trace,
+        epoch: Option<u64>,
+    ) -> Result<(), Error> {
         if let Some(settings) = bridge_mcp::Settings::configured(config)? {
             self.runtime =
-                Some(bridge_mcp::Runtime::open(settings, screen.presentation.clone(), trace.clone(), None).await?);
+                Some(bridge_mcp::Runtime::open(settings, screen.presentation.clone(), trace.clone(), epoch).await?);
             trace.record(
                 "mcp.operator.listening",
                 None,

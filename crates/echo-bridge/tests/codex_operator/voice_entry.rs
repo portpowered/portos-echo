@@ -313,7 +313,7 @@ fn recovered_process(fixture: &Fixture) {
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge and local Python"]
-async fn codex_voice_entry_binary_unmigrated_epoch_never_falls_back_to_legacy() {
+async fn codex_voice_entry_binary_epoch_without_sim_clock_never_falls_back_to_legacy() {
     let fixture = Fixture::new("chatgpt");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     configure(&fixture, listener.local_addr().unwrap().port());
@@ -323,7 +323,6 @@ async fn codex_voice_entry_binary_unmigrated_epoch_never_falls_back_to_legacy() 
         "http://127.0.0.1:1",
         "--model-loopback",
         "http://127.0.0.1:1",
-        "--sim-clock",
         "--sim-epoch",
         "1800000000",
     ]);

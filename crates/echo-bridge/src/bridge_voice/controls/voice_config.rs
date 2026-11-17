@@ -18,6 +18,7 @@ pub struct Configured {
     health: SocketAddr,
     routes: Option<crate::bridge_operator::LocalRoutes>,
     utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
+    mcp_epoch: Option<u64>,
 }
 
 impl Configured {
@@ -37,6 +38,7 @@ impl Configured {
             trace,
             health,
             routes: None,
+            mcp_epoch: None,
             utc_day: std::sync::Arc::new(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -55,6 +57,11 @@ impl Configured {
     #[must_use]
     pub fn with_clock(mut self, utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         self.utc_day = utc_day;
+        self
+    }
+
+    pub(crate) fn with_mcp_epoch(mut self, epoch: Option<u64>) -> Self {
+        self.mcp_epoch = epoch;
         self
     }
 
@@ -129,6 +136,7 @@ impl Configured {
             trace: &self.trace,
             delegation: Some(&self.config),
             utc_day: self.utc_day.clone(),
+            mcp_epoch: self.mcp_epoch,
         }
     }
 }
@@ -161,6 +169,7 @@ mod tests {
             input_schema: serde_json::json!({"type":"object"}),
         };
         let options = prepared.options(None, vec![tool.clone()]);
+        assert_eq!(options.mcp_epoch, None);
         assert_eq!(options.voice.call.voice, Some("cedar"));
         assert_eq!(options.voice.call.model, Some("configured-model"));
         assert_eq!(options.voice.call.instructions, "configured instructions");
@@ -178,6 +187,8 @@ mod tests {
         prepared.config.agent.model = None;
         assert_eq!(prepared.options(None, vec![]).voice.call.voice, None);
         assert_eq!(prepared.options(None, vec![]).voice.call.model, None);
+        let prepared = prepared.with_mcp_epoch(Some(1_800_000_000));
+        assert_eq!(prepared.options(None, vec![]).mcp_epoch, Some(1_800_000_000));
     }
 
     #[test]

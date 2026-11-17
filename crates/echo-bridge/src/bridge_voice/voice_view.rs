@@ -18,8 +18,9 @@ impl<'a> View<'a> {
         &mut self,
         tools: &mut super::voice_tools::Tools,
         config: &echo_config::BridgeConfig,
+        epoch: Option<u64>,
     ) -> Result<(), Error> {
-        tools.open(config, self.screen, self.trace).await
+        tools.open(config, self.screen, self.trace, epoch).await
     }
 
     pub fn startup(&mut self) -> Result<(), Error> {

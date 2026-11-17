@@ -15,6 +15,7 @@ pub struct RuntimeOptions<'a> {
     pub trace: &'a Path,
     pub delegation: Option<&'a echo_config::BridgeConfig>,
     pub utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
+    pub mcp_epoch: Option<u64>,
 }
 
 /// Compose the Codex voice service with the existing screen, health and trace
@@ -81,7 +82,7 @@ async fn work<C: LinkConnector, P: MediaPeer>(
             let mut tools = options.delegation.map(|config| super::voice_tools::Tools::new(config, options.utc_day));
             let setup = async {
                 if let (Some(config), Some(tools)) = (options.delegation, &mut tools) {
-                    view.open_tools(tools, config).await?;
+                    view.open_tools(tools, config, options.mcp_epoch).await?;
                 }
                 Ok::<_, Error>(())
             };
