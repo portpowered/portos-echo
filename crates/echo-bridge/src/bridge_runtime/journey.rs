@@ -345,7 +345,11 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             self.microphone(source, frame, call, lab).await?;
             Ok(false)
         } else {
-            source.finish_mic(call, self.screen).await?;
+            // A cancelled reply without new admitted input has no replacement
+            // response. Keep its partial microphone packet unflushed.
+            if !source.cancelled || self.continuing(source) {
+                source.finish_mic(call, self.screen).await?;
+            }
             Ok(true)
         }
     }

@@ -64,11 +64,11 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
     }
     tokio::time::timeout(Duration::from_secs(1), async {
         while let Some(frame) = run.recv().await? {
-            if context.cancellation == Cancellation::Response {
+            if !source.cancelled && context.cancellation == Cancellation::Response {
                 source.microphone(frame, call, false, context.screen).await?;
             }
         }
-        if context.cancellation == Cancellation::Response {
+        if !source.cancelled && context.cancellation == Cancellation::Response {
             source.finish_mic(call, context.screen).await?;
         }
         Ok::<_, Error>(())
