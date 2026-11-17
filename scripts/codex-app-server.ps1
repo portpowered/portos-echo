@@ -7,6 +7,16 @@ function Get-Digest([string] $Path) {
     try { return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
     finally { $hasher.Dispose(); $stream.Dispose() }
 }
+function Get-VerifiedBinary([string] $Published, [string] $ArchiveName, [string] $Expected, [string] $BinaryName) {
+    $binary = Join-Path $Published $BinaryName
+    $archive = Join-Path $Published $ArchiveName
+    if ((Get-Digest $archive) -ne $Expected -or
+        (Get-Digest $binary) -ne (Get-Content -LiteralPath (Join-Path $Published 'binary.sha256') -Raw).Trim()) { throw 'SHA-256 mismatch' }
+    foreach ($notice in @('LICENSE', 'NOTICE')) {
+        if (!(Test-Path -LiteralPath (Join-Path $Published $notice) -PathType Leaf)) { throw 'cached attribution missing' }
+    }
+    return $binary
+}
 try {
     if ($args.Count -ne 0) { throw 'takes no arguments' }
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
@@ -49,20 +59,19 @@ try {
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     $published = Join-Path $parent $expected
     $lock = $published + '.lock'
+    $binaryName = "codex-$target.exe"
+    if (Test-Path -LiteralPath $published) {
+        Write-Output (Get-VerifiedBinary $published $archiveName $expected $binaryName)
+        exit 0
+    }
+    if ($env:ECHO_CODEX_OFFLINE -eq '1') { throw 'binary missing; provision before testing' }
     # CreateNew owns the lock; another writer's lock is never removed.
     $lease = [IO.File]::Open($lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     try {
-        $binaryName = "codex-$target.exe"
         $binary = Join-Path $published $binaryName
         if (Test-Path -LiteralPath $published) {
-            $archive = Join-Path $published $archiveName
-            if ((Get-Digest $archive) -ne $expected -or
-                (Get-Digest $binary) -ne (Get-Content -LiteralPath (Join-Path $published 'binary.sha256') -Raw).Trim()) { throw 'SHA-256 mismatch' }
-            foreach ($notice in @('LICENSE', 'NOTICE')) {
-                if (!(Test-Path -LiteralPath (Join-Path $published $notice) -PathType Leaf)) { throw 'cached attribution missing' }
-            }
+            $binary = Get-VerifiedBinary $published $archiveName $expected $binaryName
         } else {
-            if ($env:ECHO_CODEX_OFFLINE -eq '1') { throw 'binary missing; provision before testing' }
             $stage = Join-Path $parent ('fetch-' + [Guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Path $stage | Out-Null
             try {
