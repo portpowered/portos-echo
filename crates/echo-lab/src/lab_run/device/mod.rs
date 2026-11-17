@@ -17,21 +17,25 @@ pub struct Configured<'a> {
     executor: tokio::runtime::Runtime,
     state: runtime::Runtime,
     config: String,
+    iteration: u64,
 }
 
 impl<'a> Configured<'a> {
     pub fn new(options: &'a Options, config: String, errors: &'a mut dyn std::io::Write) -> Result<Self, String> {
+        let mut state = runtime::Runtime::default();
+        state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
         Ok(Self {
             options,
             errors,
             presses: 0,
+            iteration: 0,
             bench: Device::new(options),
             executor: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
                 .build()
                 .map_err(|_| "device: cannot start runtime")?,
-            state: runtime::Runtime::default(),
+            state,
             config,
         })
     }
@@ -87,18 +91,7 @@ impl Driver for Configured<'_> {
                 self.options.cancel.as_deref(),
             )),
             Step::Trace(values) => self.state.expect_trace(values, index),
-            Step::SayFile(path) => {
-                let path = pcm::adapt(path, &artifacts.root, index)?;
-                self.state.arm_wake()?;
-                self.bench.execute(&Step::SayFile(path), index, next, artifacts)?;
-                if self.state.muted() {
-                    return Ok(());
-                }
-                self.executor.block_on(runtime::controlled(
-                    self.state.complete(index),
-                    self.options.cancel.as_deref(),
-                ))
-            }
+            Step::SayFile(path) => self.play(path, index, next, artifacts),
             _ => self.bench.execute(step, index, next, artifacts),
         }
     }
@@ -111,7 +104,20 @@ impl Driver for Configured<'_> {
     }
 }
 
-pub fn step(value: &serde_json::Value, scenario: &str) -> Result<Step, String> {
+pub fn step(value: &serde_json::Value, scenario: &str, options: &Options) -> Result<Step, String> {
+    if options.wake_clip.is_some() && value.get("restart").is_some() {
+        let restart = &value["restart"];
+        let process = restart["process"].as_str().ok_or("device: unsupported restart")?;
+        let count = restart["count"].as_u64().ok_or("device: unsupported restart")?;
+        if !matches!(process, "bridge" | "hassmic-host") || !(1..=10).contains(&count) {
+            return Err("device: unsupported restart".into());
+        }
+        return Ok(Step::Restart {
+            process: process.into(),
+            count,
+            say: std::path::PathBuf::new(),
+        });
+    }
     if value["expect_screen"].get("state").is_some()
         || value.get("expect_trace").is_some()
         || value.get("press").is_some()

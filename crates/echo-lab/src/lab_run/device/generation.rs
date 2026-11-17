@@ -62,6 +62,11 @@ impl Runtime {
         if let Some(window) = &self.window {
             artifacts.m1.as_mut().ok_or("device: missing summary")?["mute_window"] = window.clone();
         }
+        if let Some(clip) = &self.clip {
+            let summary = artifacts.m1.as_mut().ok_or("device: missing summary")?;
+            summary["wake_clip"] = clip.clone();
+            summary["plays"] = json!(self.plays);
+        }
         observations::append(
             artifacts,
             &json!({"event":"device.summary","step":null,
@@ -79,6 +84,29 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn device_no_clip_summary_preserves_exact_serialization() {
+        let root = tempfile::tempdir().unwrap();
+        let mut artifacts = Artifacts::create(root.path().join("out")).unwrap();
+        let mut runtime = Runtime::default();
+        runtime.started = true;
+        runtime.generation = 1;
+        runtime.ready = 1;
+        runtime.began = Some(std::time::Instant::now());
+        runtime.summary(&mut artifacts).unwrap();
+        let encoded = serde_json::to_string(artifacts.m1.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"bridge_restarts":0,"hassmic_host_restarts":0,"mute_status":"blocked","ready_before_first_wake":1,"streamed_wakes":[]}"#
+        );
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../../schemas/report.schema.json")).unwrap();
+        assert!(
+            jsonschema::validator_for(&schema["properties"]["m1"])
+                .unwrap()
+                .is_valid(artifacts.m1.as_ref().unwrap())
+        );
+    }
     #[test]
     fn device_invalid_later_generation_revokes_prior_zero_error_claim() {
         let root = tempfile::tempdir().unwrap();

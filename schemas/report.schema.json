@@ -353,6 +353,29 @@
               "mic_frames": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "source": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "sha256"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "wake_clip"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                }
+              },
+              "play_index": {
+                "type": "integer",
+                "minimum": 0
               }
             }
           }
@@ -387,6 +410,76 @@
             "forwarded_frames": {
               "type": "integer",
               "minimum": 0
+            }
+          }
+        },
+        "wake_clip": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sha256",
+            "sample_rate_hz",
+            "duration_ms"
+          ],
+          "properties": {
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "sample_rate_hz": {
+              "enum": [
+                16000,
+                48000
+              ]
+            },
+            "duration_ms": {
+              "type": "number",
+              "minimum": 500,
+              "maximum": 10000
+            }
+          }
+        },
+        "plays": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "step",
+              "iteration",
+              "source"
+            ],
+            "properties": {
+              "step": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "iteration": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10
+              },
+              "source": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "sha256"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "wake_clip"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                }
+              }
             }
           }
         }

@@ -18,6 +18,10 @@ fn device_m1_complete_unchanged_scenario_recovers_ten_plus_ten() {
     }
     full.arg(&args[0]).arg(&scenario).args(&args[2..]);
     full.args(["--operator-confirm", "confirm"]);
+    let clip = bench.root.path().join("wake.wav");
+    let bytes = wake_clip();
+    fs::write(&clip, &bytes).unwrap();
+    full.arg("--wake-clip").arg(&clip).arg("--keep-audio");
     let (status, prompts, errors) = mute::operator(&bench, full, "mute");
     assert_eq!(errors, Vec::<String>::new());
     assert_eq!(status.code(), Some(0));
@@ -28,6 +32,56 @@ fn device_m1_complete_unchanged_scenario_recovers_ten_plus_ten() {
     assert_eq!(report["checks"]["bridge_errors_absent"], true);
     assert_measurements(&report);
     assert_recoveries(&bench);
+    assert_clip_sources(&report);
+    assert_eq!(fs::read(clip).unwrap(), bytes);
+    assert!(!bench.root.path().join("artifacts/configured.private").exists());
+}
+
+fn wake_clip() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend(b"RIFF");
+    bytes.extend(32036_u32.to_le_bytes());
+    bytes.extend(b"WAVEfmt ");
+    bytes.extend(16_u32.to_le_bytes());
+    bytes.extend(1_u16.to_le_bytes());
+    bytes.extend(1_u16.to_le_bytes());
+    bytes.extend(16000_u32.to_le_bytes());
+    bytes.extend(32000_u32.to_le_bytes());
+    bytes.extend(2_u16.to_le_bytes());
+    bytes.extend(16_u16.to_le_bytes());
+    bytes.extend(b"data");
+    bytes.extend(32000_u32.to_le_bytes());
+    bytes.resize(32044, 0);
+    bytes
+}
+
+fn assert_clip_sources(report: &Value) {
+    let hash = "643f8a8dc8bd9c19225afffad2becfec5426180b3749cb208abdf1a6c8354efc";
+    let m1 = &report["m1"];
+    assert_eq!(
+        m1["wake_clip"],
+        json!({"sha256":hash,"sample_rate_hz":16000,"duration_ms":1000})
+    );
+    let plays = m1["plays"].as_array().unwrap();
+    assert_eq!(plays.len(), 23);
+    let source = json!({"kind":"wake_clip","sha256":hash});
+    let expected = [(1, 0), (5, 0), (9, 0)]
+        .into_iter()
+        .chain((1..=10).map(|iteration| (11, iteration)))
+        .chain((1..=10).map(|iteration| (12, iteration)));
+    for (play, (step, iteration)) in plays.iter().zip(expected) {
+        assert_eq!(play["step"], step);
+        assert_eq!(play["iteration"], iteration);
+        assert_eq!(play["source"], source);
+    }
+    assert_eq!(plays.iter().filter(|p| p["iteration"] == 0).count(), 3);
+    for (position, wake) in m1["streamed_wakes"].as_array().unwrap().iter().enumerate() {
+        let index = usize::try_from(wake["play_index"].as_u64().unwrap()).unwrap();
+        assert_eq!(index, if position == 0 { 0 } else { position + 1 });
+        assert_eq!(wake["source"], source);
+        assert_eq!(plays[index]["source"], source);
+    }
+    writeln!(std::io::stderr(), "wake-clip witness: {m1}").unwrap();
 }
 
 fn assert_measurements(report: &Value) {

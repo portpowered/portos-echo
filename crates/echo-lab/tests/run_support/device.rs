@@ -13,7 +13,7 @@ fn device_unsafe_or_unreadable_config_never_invokes_bench_tools() {
         Some(original.replace("max_tool_calls = 8", "max_tool_calls = 0")),
         Some(original.replace("max_tool_calls = 8", "unexpected_field = 8")),
         Some(original.replace("max_tool_calls = 8", "max_tool_calls = \"invalid\"")),
-        Some(original.replace("127.0.0.1", "localhost")),
+        Some(original.replace("host = \"127.0.0.1\"", "host = \"localhost\"")),
         Some(original.replace("http://127.0.0.1:18080/mcp", "https://mcp.example.invalid/mcp")), // lint-rules: allow-literal inert rejected config; no tool is invoked
         Some(original.replace("auth = \"none\"", "auth = \"bearer_file\"")),
         Some(format!("{original}\n[muse]\n")),
@@ -21,6 +21,8 @@ fn device_unsafe_or_unreadable_config_never_invokes_bench_tools() {
         let session = Session::new(&json!({}));
         let expected = if template.is_none() {
             "echo-lab: device: --bridge-config requires a readable TOML file\n"
+        } else if template.as_ref().is_some_and(|s| s.contains("host = \"localhost\"")) {
+            "echo-lab: device: echo.host must be 127.0.0.1; forward the Echo's Wyoming port with adb forward\n"
         } else {
             "echo-lab: device: invalid or unsafe nominated bridge configuration\n"
         };
@@ -58,6 +60,23 @@ fn device_unsafe_or_unreadable_config_never_invokes_bench_tools() {
         assert_eq!(session.operations(), Vec::<String>::new());
         assert!(!session.0.join("artifacts").exists());
     }
+}
+
+#[test]
+fn wake_clip_sim_refusal_precedes_path_and_tool_resolution() {
+    let session = Session::new(&json!({}));
+    let result = session
+        .command()
+        .args(["run", "missing.yaml", "--driver", "sim", "--wake-clip", "missing.wav"])
+        .output()
+        .unwrap();
+    failed(&result, "run: --wake-clip is only supported with --driver device");
+    assert_eq!(
+        String::from_utf8_lossy(&result.stderr),
+        "echo-lab: run: --wake-clip is only supported with --driver device\n"
+    );
+    assert_eq!(session.operations(), Vec::<String>::new());
+    assert!(!session.0.join("artifacts").exists());
 }
 
 #[test]
@@ -190,5 +209,154 @@ fn device_wake_never_uses_stale_run_or_hides_late_duplicate_without_explicit_tra
         assert_eq!(report["checks"]["session_released"], fault == "stale_wake");
         assert_eq!(session.operations().iter().filter(|op| *op == "play").count(), 1);
         assert!(!session.0.join("artifacts/configured.private").exists());
+    }
+}
+
+fn wake_wav(rate: u32, samples: usize) -> Vec<u8> {
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend(u32::try_from(samples * 2 + 36).unwrap().to_le_bytes());
+    bytes.extend(b"WAVEfmt ");
+    bytes.extend(16_u32.to_le_bytes());
+    bytes.extend(1_u16.to_le_bytes());
+    bytes.extend(1_u16.to_le_bytes());
+    bytes.extend(rate.to_le_bytes());
+    bytes.extend((rate * 2).to_le_bytes());
+    bytes.extend(2_u16.to_le_bytes());
+    bytes.extend(16_u16.to_le_bytes());
+    bytes.extend(b"data");
+    bytes.extend(u32::try_from(samples * 2).unwrap().to_le_bytes());
+    bytes.resize(samples * 2 + 44, 0);
+    bytes
+}
+
+#[test]
+fn wake_clip_admission_rejects_invalid_wav_before_bench_effects() {
+    let original = wake_wav(16000, 16000);
+    let mut cases = vec![
+        vec![],
+        b"not WAV".to_vec(),
+        original[..32043].to_vec(),
+        wake_wav(16000, 7999),
+        wake_wav(16000, 160_001),
+        wake_wav(48000, 23999),
+        wake_wav(48000, 480_001),
+        wake_wav(44100, 44100),
+    ];
+    for (offset, value) in [
+        (0, b'X'),
+        (8, b'X'),
+        (12, b'X'),
+        (16, 15),
+        (20, 3),
+        (22, 2),
+        (28, 1),
+        (32, 4),
+        (34, 8),
+        (36, b'X'),
+        (40, 255),
+    ] {
+        let mut invalid = original.clone();
+        invalid[offset] = value;
+        cases.push(invalid);
+    }
+    for bytes in cases {
+        let session = Session::new(&json!({"real_config":true}));
+        std::fs::write(session.0.join("wake.wav"), bytes).unwrap();
+        let result = session.run(&["--wake-clip", "wake.wav"]);
+        failed(
+            &result,
+            "device: invalid wake clip; expected 16-bit PCM mono WAV at 16000 or 48000 Hz, 0.5-10 s",
+        );
+        // The nominated Python helper is an offline preflight; no bench command runs.
+        assert!(session.operations().iter().all(|op| op == "wake.wav"));
+        assert!(!session.0.join("artifacts").exists());
+    }
+}
+
+#[test]
+fn wake_clip_accepts_both_rates_and_duration_endpoints_without_mutating_input() {
+    for (rate, samples) in [
+        (16000, 8000),
+        (16000, 16000),
+        (16000, 160_000),
+        (48000, 24000),
+        (48000, 48000),
+        (48000, 480_000),
+    ] {
+        let session = Session::new(&json!({"real_config":true}));
+        let bytes = wake_wav(rate, samples);
+        std::fs::write(session.0.join("wake.wav"), &bytes).unwrap();
+        let result = session.run(&["--wake-clip", "wake.wav", "--keep-audio"]);
+        assert_eq!(
+            result.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let report = session.report();
+        assert_eq!(report["m1"]["wake_clip"]["sample_rate_hz"], rate);
+        if samples == usize::try_from(rate).unwrap() {
+            let expected = if rate == 16000 {
+                "643f8a8dc8bd9c19225afffad2becfec5426180b3749cb208abdf1a6c8354efc"
+            } else {
+                "0a8f76d89c709043814cb74f331a4578d17ff61256303bd0019a263d053f86e8"
+            };
+            assert_eq!(report["m1"]["wake_clip"]["sha256"], expected);
+        }
+        assert_eq!(
+            report["m1"]["wake_clip"]["duration_ms"].as_f64().unwrap(),
+            f64::from(u32::try_from(samples).unwrap()) * 1000.0 / f64::from(rate)
+        );
+        assert_eq!(report["m1"]["plays"].as_array().unwrap().len(), 1);
+        assert_eq!(std::fs::read(session.0.join("wake.wav")).unwrap(), bytes);
+        assert!(!session.0.join("artifacts/configured.private").exists());
+        assert!(!report.to_string().contains("wake.wav"));
+    }
+}
+
+#[test]
+fn wake_clip_unreadable_and_repository_inputs_fail_closed() {
+    for path in ["missing.wav", ".", env!("CARGO_MANIFEST_DIR")] {
+        let session = Session::new(&json!({"real_config":true}));
+        let result = session.run(&["--wake-clip", path]);
+        failed(
+            &result,
+            "device: invalid wake clip; expected 16-bit PCM mono WAV at 16000 or 48000 Hz, 0.5-10 s",
+        );
+        assert!(!session.0.join("artifacts").exists());
+        assert!(
+            session
+                .operations()
+                .iter()
+                .all(|op| !["firmware", "hold", "play"].contains(&op.as_str()))
+        );
+    }
+}
+
+#[test]
+fn wake_clip_failures_keep_caller_input_and_remove_staging_with_audio_retention() {
+    for fixture in [
+        json!({"real_config":true,"hour":8}),
+        json!({"real_config":true,"fail":"play"}),
+        json!({"real_config":true,"cancel_on":"play"}),
+    ] {
+        let session = Session::new(&fixture);
+        let bytes = wake_wav(16000, 16000);
+        std::fs::write(session.0.join("wake.wav"), &bytes).unwrap();
+        let result = session.run(&[
+            "--wake-clip",
+            "wake.wav",
+            "--keep-audio",
+            "--cancel-file",
+            "cancel.signal",
+        ]);
+        assert_eq!(result.status.code(), Some(1));
+        assert_eq!(std::fs::read(session.0.join("wake.wav")).unwrap(), bytes);
+        assert!(!session.0.join("artifacts/configured.private").exists());
+        assert_eq!(session.report()["m1"]["plays"], json!([]));
+        if fixture["hour"] == 8 {
+            failed(&result, "quiet hours: audio refused before 09:00 local time");
+            assert!(session.operations().iter().all(|op| op != "play"));
+        }
     }
 }

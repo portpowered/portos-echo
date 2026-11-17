@@ -13,6 +13,8 @@ use super::super::{
 
 #[derive(Default)]
 pub struct Runtime {
+    pub(super) plays: Vec<Value>,
+    pub(super) clip: Option<Value>,
     pub(super) bridge: Option<Process>,
     live: Option<FakeLive>,
     pub(super) screen: Option<Screen>,
