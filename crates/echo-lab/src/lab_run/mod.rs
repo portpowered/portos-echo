@@ -260,9 +260,20 @@ fn completed(result: Result<(), String>, artifacts: &Artifacts, scenario: Option
 }
 
 fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
+    execute_with_errors(args, output, &mut std::io::sink())
+}
+
+fn execute_with_errors(args: &[String], output: &mut impl Write, errors: &mut impl Write) -> Result<(), String> {
     let options = run_options::parse(args)?;
     let (milestone, tier, steps) = load(&options)?;
-    if !options.sim && options.bridge.is_none() && steps.iter().any(|step| matches!(step, Step::Ui(_) | Step::Trace(_)))
+    if !options.sim
+        && options.bridge.is_none()
+        && steps.iter().any(|step| {
+            matches!(
+                step,
+                Step::Ui(_) | Step::Trace(_) | Step::Press(_) | Step::Restart { .. }
+            )
+        })
     {
         return Err("device: trace and UiState steps require --bridge and --bridge-config".into());
     }
@@ -276,7 +287,7 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
         .ok_or("scenario: invalid SHA-256 digest")?;
     let mut artifacts = Artifacts::create(root)?;
     artifacts.sim = options.sim;
-    let mut driver = driver(&options, configuration)?;
+    let mut driver = driver(&options, configuration, errors)?;
     let result = dispatch(driver.as_mut(), &steps, &mut artifacts);
     let cleanup = driver.close(&mut artifacts);
     let final_counts = artifacts.finalize_link_counts();
@@ -316,7 +327,7 @@ pub fn run(args: &[String], output: &mut impl Write, errors: &mut impl Write) ->
     let result = if args.iter().any(|s| s == "--all") {
         sim::suite::execute(args, output)
     } else {
-        execute(args, output)
+        execute_with_errors(args, output, errors)
     };
     match result {
         Ok(()) => 0,
@@ -327,10 +338,14 @@ pub fn run(args: &[String], output: &mut impl Write, errors: &mut impl Write) ->
     }
 }
 
-fn driver(options: &Options, configuration: Option<String>) -> Result<Box<dyn Driver + '_>, String> {
+fn driver<'a>(
+    options: &'a Options,
+    configuration: Option<String>,
+    errors: &'a mut dyn Write,
+) -> Result<Box<dyn Driver + 'a>, String> {
     if !options.sim {
         if let Some(config) = configuration {
-            return Ok(Box::new(device::Configured::new(options, config)?));
+            return Ok(Box::new(device::Configured::new(options, config, errors)?));
         }
         return Ok(Box::new(run_device::Device::new(options)));
     }

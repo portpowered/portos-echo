@@ -13,6 +13,7 @@ const ALLOWED: &[&str] = &[
     "--cancel-file",
     "--bridge",
     "--bridge-config",
+    "--operator-confirm",
 ];
 
 use std::collections::BTreeMap;
@@ -32,6 +33,7 @@ pub struct Options {
     pub keep_audio: bool,
     pub speech: Option<(String, String)>,
     pub cancel: Option<PathBuf>,
+    pub operator_confirm: Option<PathBuf>,
 }
 
 fn required<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str, String> {
@@ -114,6 +116,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     );
     Ok(Options {
         sim: false,
+        operator_confirm: flags.get("--operator-confirm").map(PathBuf::from),
         bridge: device_bridge(&flags)?,
         bridge_config: flags
             .get("--bridge-config")
@@ -171,6 +174,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
     );
     Ok(Options {
         sim: true,
+        operator_confirm: None,
         bridge: Some(bridge),
         bridge_config: None,
         scenarios,

@@ -91,6 +91,21 @@ fn response(socket: &mut TcpStream, fault: &str) -> io::Result<()> {
         "eof" => Ok(()),
         "malformed" => socket.write_all(b"data: fixture-private-child-output\n\n"),
         "oversized" => socket.write_all(&vec![b'x'; 65_537]),
+        "missing_window" | "missing_muted" => {
+            let states = if fault == "missing_window" {
+                vec![
+                    json!({"state":"ready","message":"Echo Live ready"}),
+                    json!({"state":"muted"}),
+                    json!({"state":"ready","message":"Echo Live ready"}),
+                ]
+            } else {
+                vec![json!({"state":"ready","message":"Echo Live ready"})]
+            };
+            for (index, state) in states.into_iter().enumerate() {
+                writeln!(socket, "data: {}\n", json!({"seq":index+1,"state":state}))?;
+            }
+            Ok(())
+        }
         _ => writeln!(
             socket,
             "data: {}\n",

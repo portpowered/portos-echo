@@ -1,5 +1,4 @@
 use std::{
-    io::Write,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -20,8 +19,9 @@ pub struct Runtime {
     trace: Trace,
     trace_path: PathBuf,
     offset: usize,
+    mute_offset: usize,
     pub run: Option<String>,
-    expectations: Vec<(usize, Vec<selectors::Selector>, Option<String>)>,
+    expectations: Vec<(usize, Vec<selectors::Selector>, Option<String>, usize)>,
     pub started: bool,
     began: Option<std::time::Instant>,
 }
@@ -125,8 +125,16 @@ impl Runtime {
     pub fn expect_trace(&mut self, values: &[Value], index: usize) -> Result<(), String> {
         self.observe()?;
         let parsed = selectors::parse(values)?;
-        selectors::check(&self.trace.records, &parsed, self.run.as_deref())?;
-        self.expectations.push((index, parsed, self.run.clone()));
+        let offset = if values
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| s.starts_with("mic.mute_window")))
+        {
+            self.mute_offset
+        } else {
+            0
+        };
+        selectors::check(&self.trace.records[offset..], &parsed, self.run.as_deref())?;
+        self.expectations.push((index, parsed, self.run.clone(), offset));
         Ok(())
     }
 
@@ -144,16 +152,29 @@ impl Runtime {
         };
         let value = json!({"event":"device.ui","step":index,"bridge_generation":1,
             "seq":screen.sequence(),"elapsed_ms":self.began.ok_or("device: missing start time")?.elapsed().as_millis(),"state":state});
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(artifacts.root.join("device-steps.jsonl"))
-            .map_err(|_| "device: cannot open observations")?;
-        writeln!(file, "{value}").map_err(|_| "device: cannot write observations")?;
-        if !artifacts.evidence.iter().any(|s| s == "device-steps.jsonl") {
-            artifacts.evidence.push("device-steps.jsonl".into());
+        super::observations::append(artifacts, &value)?;
+        Ok(())
+    }
+
+    pub fn arm_mute(&mut self) -> Result<(), String> {
+        if !self.muted() {
+            self.observe()?;
+            self.mute_offset = self.trace.records.len();
         }
         Ok(())
+    }
+
+    pub fn muted(&self) -> bool {
+        self.screen.as_ref().is_some_and(Screen::muted)
+    }
+
+    pub fn confirmed(&self, index: usize, press: u64, after: u64, artifacts: &mut Artifacts) -> Result<(), String> {
+        super::observations::append(
+            artifacts,
+            &json!({"event":"device.operator_confirmed",
+            "step":index,"elapsed_ms":self.began.ok_or("device: missing start time")?.elapsed().as_millis(),
+            "press":press,"confirmed_after_ms":after}),
+        )
     }
 
     pub async fn close(&mut self, root: &Path, artifacts: &mut Artifacts) -> Result<(), String> {
@@ -162,11 +183,11 @@ impl Runtime {
         if let Some(mut child) = self.bridge.take() {
             failures.extend(child.close().await.err());
             let trace = self.observe().and_then(|()| self.trace.finish());
-            for (index, selectors, run) in &self.expectations {
+            for (index, selectors, run, offset) in &self.expectations {
                 if let Err(error) = trace
                     .as_ref()
                     .map_err(Clone::clone)
-                    .and_then(|()| selectors::check(&self.trace.records, selectors, run.as_deref()))
+                    .and_then(|()| selectors::check(&self.trace.records[*offset..], selectors, run.as_deref()))
                 {
                     artifacts.checks.insert(format!("step_{index}"), false);
                     failures.push(error);
@@ -175,6 +196,7 @@ impl Runtime {
             if trace.is_ok() {
                 for record in &self.trace.records {
                     failures.extend(artifacts.observation(record).err());
+                    failures.extend(super::observations::mute_window(artifacts, record).err());
                 }
                 let errors = self
                     .trace
@@ -228,5 +250,33 @@ pub async fn controlled<T>(
         biased;
         () = cancellation => Err("run cancelled".into()),
         result = tokio::time::timeout(Duration::from_secs(20), work) => result.map_err(|_| "device: observation timed out")?,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn device_mute_measurement_must_be_fresh_not_an_earlier_window() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("trace");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"event":"mic.mute_window","window_id":"mute-1",
+            "received_frames":0,"forwarded_frames":0,"elapsed_ms":1})
+            ),
+        )
+        .unwrap();
+        let mut runtime = Runtime {
+            trace_path: path,
+            ..Runtime::default()
+        };
+        runtime.arm_mute().unwrap();
+        let selector = [json!(
+            "mic.mute_window {window_id: mute-1, received_frames: 0, forwarded_frames: 0}"
+        )];
+        assert!(runtime.expect_trace(&selector, 0).unwrap_err().contains("observed 0"));
     }
 }

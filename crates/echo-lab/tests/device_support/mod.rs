@@ -1,4 +1,5 @@
 //! T3 device bench: only loopback tools and the real prebuilt bridge/host.
+mod mute;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -28,7 +29,7 @@ impl Bench {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let mut input = host.stdin.take().unwrap();
+        let input = host.stdin.take().unwrap();
         let mut output = BufReader::new(host.stdout.take().unwrap());
         let mut line = String::new();
         output.read_line(&mut line).unwrap();
@@ -37,32 +38,7 @@ impl Bench {
         let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
         let control = TcpListener::bind("127.0.0.1:0").unwrap();
         let socket = control.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            for stream in control.incoming() {
-                let mut stream = stream.unwrap();
-                let mut line = String::new();
-                BufReader::new(stream.try_clone().unwrap())
-                    .read_line(&mut line)
-                    .unwrap();
-                let value: Value = serde_json::from_str(&line).unwrap();
-                if value["stop"] == true {
-                    break;
-                }
-                for command in [
-                    json!({"action":"registered"}),
-                    json!({"action":"say","pcm":value["pcm"]}),
-                ] {
-                    writeln!(input, "{command}").unwrap();
-                    input.flush().unwrap();
-                    line.clear();
-                    output.read_line(&mut line).unwrap();
-                    assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["event"], "host.ack");
-                }
-                writeln!(stream, "ok").unwrap();
-            }
-            drop(input);
-            assert!(host.wait().unwrap().success());
-        });
+        let server = std::thread::spawn(move || serve(&control, input, output, host));
         prepare(root.path(), address);
         let bench = Self {
             root,
@@ -206,4 +182,45 @@ fn device_m1_startup_failure_collects_private_inputs_without_playback() {
     let ledger = fs::read_to_string(bench.root.path().join("ledger.jsonl")).unwrap();
     let operations: Vec<Value> = ledger.lines().map(|s| serde_json::from_str(s).unwrap()).collect();
     assert_eq!(operations.iter().filter(|v| v["operation"] == "play").count(), 0);
+}
+
+fn serve(
+    control: &TcpListener,
+    mut input: std::process::ChildStdin,
+    mut output: BufReader<std::process::ChildStdout>,
+    mut host: std::process::Child,
+) {
+    let mut registered = false;
+    for stream in control.incoming() {
+        let mut stream = stream.unwrap();
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let value: Value = serde_json::from_str(&line).unwrap();
+        if value["stop"] == true {
+            break;
+        }
+        let commands = if value["action"] == "mute" {
+            vec![json!({"action":"mute"})]
+        } else {
+            let mut commands = Vec::new();
+            if !registered {
+                commands.push(json!({"action":"registered"}));
+                registered = true;
+            }
+            commands.push(json!({"action":"say","pcm":value["pcm"]}));
+            commands
+        };
+        for command in commands {
+            writeln!(input, "{command}").unwrap();
+            input.flush().unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["event"], "host.ack");
+        }
+        writeln!(stream, "ok").unwrap();
+    }
+    drop(input);
+    assert!(host.wait().unwrap().success());
 }
