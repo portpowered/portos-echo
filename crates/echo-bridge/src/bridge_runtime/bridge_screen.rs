@@ -70,6 +70,10 @@ impl Screen {
 
     pub async fn publish_confirmed(&self, state: UiState) -> Result<(), Error> {
         self.publish(state)?;
+        self.flush().await
+    }
+
+    pub(crate) async fn flush(&self) -> Result<(), Error> {
         if let Some(server) = &self.server {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
             server.flush(deadline).await.map_err(|_| Error::Screen)?;
@@ -156,7 +160,7 @@ impl Drop for Screen {
     }
 }
 
-pub(super) fn failure_state(relink: bool) -> UiState {
+pub(crate) fn failure_state(relink: bool) -> UiState {
     UiState::Error {
         message: if relink {
             "Run echo-bridge signin with your config, then restart the bridge."

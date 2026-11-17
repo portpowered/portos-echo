@@ -463,3 +463,29 @@ and cancellation. No process or socket is created by these tests. Canonical
 executable selection, UI/relink/kill projection and real-pin M2 remain retained
 work; this component proof does not satisfy those edges. No new dependency,
 shared contract or credential path is introduced.
+
+## Voice presentation lifetime amendment (2026-11-17)
+
+The bridge voice library composes its authenticated device host and first-wake
+service with the existing screen, health and trace owners. Presentation remains
+owned until call/media stop, device close and child reaping finish. Failed
+authorization publishes the existing sign-in instruction as an overlay, retains
+the screen and health endpoint until host cancellation, and never dials the
+device or attempts implicit sign-in. The overlay survives mute and unmute. The
+reaped process no longer holds its home lease while that instruction is shown.
+
+Only the service's negotiated-media observation publishes Connected. Initial
+Listening precedes negotiation; subsequent wakes within a retained call publish
+Listening without another Connected. Transcript completion and the played
+notice alone do not publish Ready: the run owner must also report completed
+capture, accepted-media drain and both played witnesses. Completion emits run
+counters and Ready; idle stop emits one live.closed. Traces omit transcript
+bodies and all provider payloads. Publication errors prevent completion claims.
+
+Component tests exercise that projection through its bounded state queue and
+trace output. Controlled-process T3 tests exercise authenticated readiness,
+paired screen state, cancellation/reaping, persistent relink and missing-binary
+refusal without a wake. These are library composition witnesses, not canonical
+CLI or real-pin M2 evidence. Executable selection, kill-file policy, delegated
+tools, per-chunk mute accounting and real-pin transcript/media ordering remain
+retained work before the cutover can pass. No dependency or contract changes.

@@ -11,6 +11,181 @@ use echo_link::{
 };
 use tokio::time::Instant;
 
+fn runtime_options<'a>(
+    config: &'a CodexConfig,
+    screen: Option<&'a echo_config::ScreenConfig>,
+    trace: &'a Path,
+) -> echo_bridge::bridge_voice::RuntimeOptions<'a> {
+    use echo_bridge::{bridge_codex, bridge_voice};
+    bridge_voice::RuntimeOptions {
+        host: options(config),
+        voice: bridge_voice::ServeOptions {
+            call: bridge_codex::Options {
+                voice: "alloy",
+                instructions: "synthetic fixture",
+                model: None,
+            },
+            tools: vec![],
+            session: bridge_voice::SessionOptions {
+                idle: std::time::Duration::from_secs(1),
+                response_timeout: OBSERVATION_TIMEOUT,
+                played_timeout: OBSERVATION_TIMEOUT,
+                reply_lead_ms: 200,
+                muted: false,
+            },
+            connect_timeout: OBSERVATION_TIMEOUT,
+        },
+        screen,
+        health: ([127, 0, 0, 1], 0).into(),
+        trace,
+    }
+}
+
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn codex_voice_runtime_prewake_ready_and_cancel_reap_before_presentation_closes() {
+    let fixture = Fixture::new("chatgpt");
+    let config = config(&fixture);
+    let screen_config = echo_config::BridgeConfig::load(fixture.directory.path().join("bridge.toml"))
+        .unwrap()
+        .screen;
+    let observer = Observer::default();
+    let path = fixture.directory.path().join("runtime-trace");
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let work = echo_bridge::bridge_voice::execute(
+        runtime_options(&config, Some(&screen_config), &path),
+        Connector {
+            fixture: &fixture,
+            observer: observer.clone(),
+            fail: false,
+        },
+        async || -> Result<echo_media::Peer, Error> { unreachable!("no wake admits no peer") },
+        async {
+            stopping.await.unwrap();
+        },
+    );
+    let inspect = async {
+        let _control = fixture.control().await;
+        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        loop {
+            let state = bridge_wire_screen::state(&mut screen).await;
+            assert_eq!(state["state"], "ready");
+            if state["message"] == "Echo Live ready" {
+                break;
+            }
+        }
+        assert_eq!(
+            observer.commands(),
+            [Command::Connect, Command::Capture, Command::Probe]
+        );
+        stop.send(()).unwrap();
+    };
+    let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        tokio::join!(work, inspect)
+    }))
+    .await
+    .unwrap();
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        observer.commands(),
+        [Command::Connect, Command::Capture, Command::Probe, Command::Close]
+    );
+    super::host::released(&fixture).await;
+    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    assert_eq!(
+        trace(&path).iter().filter(|row| row["event"] == "bridge.ready").count(),
+        1
+    );
+    assert_eq!(
+        trace(&path).iter().filter(|row| row["event"] == "run.started").count(),
+        0
+    );
+}
+
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn codex_voice_runtime_relink_stays_visible_without_device_or_lease_until_stop() {
+    let fixture = Fixture::new("chatgpt");
+    std::fs::write(fixture.home.join("mode"), "rejected-account").unwrap();
+    let config = config(&fixture);
+    let screen_config = echo_config::BridgeConfig::load(fixture.directory.path().join("bridge.toml"))
+        .unwrap()
+        .screen;
+    let observer = Observer::default();
+    let path = fixture.directory.path().join("runtime-trace");
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let work = echo_bridge::bridge_voice::execute(
+        runtime_options(&config, Some(&screen_config), &path),
+        FakeConnector::new(observer.clone()),
+        async || -> Result<echo_media::Peer, Error> { unreachable!() },
+        async {
+            stopping.await.unwrap();
+        },
+    );
+    let inspect = async {
+        let _control = fixture.control().await;
+        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        loop {
+            let state = bridge_wire_screen::state(&mut screen).await;
+            if state["relink"] == true {
+                assert_eq!(state["state"], "error");
+                assert_eq!(
+                    state["message"],
+                    "Run echo-bridge signin with your config, then restart the bridge."
+                );
+                break;
+            }
+        }
+        super::host::released(&fixture).await;
+        assert_eq!(observer.commands(), []);
+        stop.send(()).unwrap();
+    };
+    let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        tokio::join!(work, inspect)
+    }))
+    .await
+    .unwrap();
+    assert_eq!(result, Err(Error::Authorization));
+    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    let rows = trace(&path);
+    assert_eq!(
+        rows.iter().filter(|row| row["event"] == "auth.relink_required").count(),
+        1
+    );
+    assert_eq!(rows.iter().filter(|row| row["event"] == "bridge.ready").count(), 0);
+    assert!(
+        !std::fs::read_to_string(path)
+            .unwrap()
+            .contains("synthetic private error")
+    );
+}
+
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn codex_voice_runtime_missing_binary_has_zero_child_device_and_call_effects() {
+    let fixture = Fixture::new("chatgpt");
+    let mut config = config(&fixture);
+    config.binary = Some(fixture.directory.path().join("absent-binary"));
+    let observer = Observer::default();
+    let path = fixture.directory.path().join("runtime-trace");
+    let result = Box::pin(echo_bridge::bridge_voice::execute(
+        runtime_options(&config, None, &path),
+        FakeConnector::new(observer.clone()),
+        async || -> Result<echo_media::Peer, Error> { unreachable!() },
+        std::future::pending(),
+    ))
+    .await;
+    assert_eq!(result, Err(Error::CodexBinary));
+    assert_eq!(observer.commands(), []);
+    assert!(!fixture.home.join("launches").exists());
+    assert_eq!(
+        trace(&path).iter().filter(|row| row["event"] == "bridge.ready").count(),
+        0
+    );
+    let health_address = trace(&path)[0]["health_addr"].as_str().unwrap().to_owned();
+    assert!(tokio::net::TcpStream::connect(health_address).await.is_err());
+}
+
 fn config(fixture: &Fixture) -> CodexConfig {
     CodexConfig {
         binary: Some(fixture.binary.clone()),
