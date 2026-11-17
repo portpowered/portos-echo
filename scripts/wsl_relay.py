@@ -129,7 +129,8 @@ class Connection:
                 if not data:
                     return
         except (OSError, ValueError):
-            pass  # Teardown or peer disconnect; receive propagates guest EOF.
+            with contextlib.suppress(OSError, ValueError):
+                self.frame(None)  # A native reset must release the guest host socket.
 
     def receive(self):
         def read_exact(size):

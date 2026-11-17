@@ -5,7 +5,9 @@ import json
 import os
 from pathlib import Path
 import queue
+import select
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -124,28 +126,43 @@ class NumericRelayTests(unittest.TestCase):
             sentinel.stdin.close()
             self.assertEqual(sentinel.wait(timeout=5), 0)
 
-    def test_t3_generation_replacement_reaps_active_child_and_threads(self):
+    def test_t3_ten_native_resets_release_single_client_host_and_collect_guests(self):
         with socket.socket() as host:
             host.bind(('127.0.0.1', 0))
             host.listen()
+            host.settimeout(5)
             argv = [sys.executable, '-u', str(ROOT / 'wsl_relay.py'), '--guest',
                     str(host.getsockname()[1])]
             relay = wsl_relay.Relay(argv)
             try:
                 port = int(relay.address.rsplit(':', 1)[1])
-                with socket.create_connection(('127.0.0.1', port), timeout=5) as client:
-                    with host.accept()[0] as guest:
-                        client.sendall(b'active')
-                        self.assertEqual(guest.recv(6), b'active')
-                        old = list(relay.connections)
-                        generation = relay.generation
-                        relay.replace(argv)
-                        self.assertGreater(relay.generation, generation)
-                        self.assertEqual(relay.address, '127.0.0.1:' + str(port))
-                        for connection in old:
-                            self.assertEqual(connection.proc.poll(), 0)
-                            self.assertFalse(connection.writer.is_alive())
-                            self.assertFalse(connection.reader.is_alive())
+                for cycle in range(10):
+                    with socket.create_connection(('127.0.0.1', port), timeout=5) as client:
+                        with host.accept()[0] as guest:
+                            guest.settimeout(5)
+                            guest.sendall(b'unread reply')
+                            self.assertEqual(select.select([client], [], [], 5)[0], [client])
+                            linger = struct.pack('HH' if sys.platform == 'win32' else 'ii', 1, 0)
+                            client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)
+                            client.close()  # RST with unread bytes, rather than a clean FIN.
+                            self.assertEqual(guest.recv(1), b'')
+                    # Serve only one client at a time, just like hassmic.
+                    with socket.create_connection(('127.0.0.1', port), timeout=5) as client:
+                        with host.accept()[0] as guest:
+                            guest.settimeout(5)
+                            payload = str(cycle).encode()
+                            guest.sendall(payload)
+                            self.assertEqual(client.recv(len(payload)), payload)
+                            old = list(relay.connections)
+                            generation = relay.generation
+                            relay.replace(argv)
+                            self.assertEqual(guest.recv(1), b'')
+                    self.assertGreater(relay.generation, generation)
+                    self.assertEqual(relay.address, '127.0.0.1:' + str(port))
+                    for connection in old:
+                        self.assertEqual(connection.proc.poll(), 0)
+                        self.assertFalse(connection.writer.is_alive())
+                        self.assertFalse(connection.reader.is_alive())
             finally:
                 relay.close()
             self.assertFalse(relay.thread.is_alive())
