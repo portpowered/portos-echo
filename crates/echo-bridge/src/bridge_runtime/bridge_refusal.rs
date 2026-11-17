@@ -89,6 +89,33 @@ mod tests {
             Work::Microphone(4)
         ));
     }
+
+    #[tokio::test]
+    async fn ready_input_allows_background_control_delivery() {
+        let mut arbiter = Arbiter::default();
+        let (send, mut receive) = tokio::sync::oneshot::channel();
+        let delivery = tokio::spawn(async move { send.send("delegation").unwrap() });
+        let mut frames = 0;
+        let mut delivered = false;
+        for _ in 0..8 {
+            match arbiter.next(ready(960), &mut receive, pending::<()>()).await {
+                Work::Microphone(samples) => frames += samples,
+                Work::Control(value) => {
+                    assert_eq!(value.unwrap(), "delegation");
+                    delivered = true;
+                    break;
+                }
+                Work::Reply(()) => unreachable!(),
+            }
+        }
+        assert!(delivered, "ready capture monopolized the control task's executor");
+        assert!(frames > 0);
+        delivery.await.unwrap();
+        assert!(matches!(
+            arbiter.next(ready(960), pending::<()>(), pending::<()>()).await,
+            Work::Microphone(960)
+        ));
+    }
 }
 
 #[derive(Default)]
@@ -101,6 +128,9 @@ impl Arbiter {
         control: C,
         reply: R,
     ) -> Work<M::Output, C::Output, R::Output> {
+        // Ready audio must also share the executor with delegation and socket
+        // tasks, rather than spend an entire cooperative budget converting PCM.
+        tokio::task::yield_now().await;
         let mut microphone = std::pin::pin!(microphone);
         let mut control = std::pin::pin!(control);
         let mut reply = std::pin::pin!(reply);

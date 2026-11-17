@@ -210,6 +210,7 @@ async fn stop_failed_producer<L: EchoLink>(
 enum Cancellation {
     Response,
     Shutdown,
+
 }
 struct PlaybackContext<'a, L: EchoLink> {
     client: &'a L,
@@ -425,7 +426,6 @@ async fn produce<L: EchoLink>(
     let mut pressure_reported = false;
     let mut arbiter = Arbiter::default();
     loop {
-        tokio::task::consume_budget().await;
         if context.cancelled(source, call).await? {
             return Ok(());
         }
