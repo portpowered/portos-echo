@@ -248,9 +248,14 @@ async fn io_failure_is_payload_free_and_earlier_completion_survives_close() -> R
     let (mut io, mut peer) = session(4096, Limits::default())?;
     let a = io.begin_request("a", &())?;
     let b = io.begin_request("b", &())?;
-    peer.write_all(b"{\"id\":1,\"error\":{\"code\":-9,\"message\":\"sensitive text\"}}\n")
-        .await?;
-    io.progress().await?;
+    peer.write_all(
+        b"{\"id\":1,\"error\":{\"code\":-9,\"message\":\"sensitive text\"}}\n{\"method\":\"reply-observed\"}\n",
+    )
+    .await?;
+    let Message::Notification { method, .. } = io.next_event().await? else {
+        return Err("reply barrier expected".into());
+    };
+    assert_eq!(method, "reply-observed");
     io.close(RpcError::Disconnected);
     io.close(RpcError::Malformed);
     assert_eq!(io.wait_reply(&a).await, Err(RpcError::Remote(-9)));
