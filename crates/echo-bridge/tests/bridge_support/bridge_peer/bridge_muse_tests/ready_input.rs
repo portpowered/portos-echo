@@ -40,6 +40,21 @@ async fn muse_continuously_ready_input_delivers_delegation_and_failed_callback()
     assert!(after > at_progress);
     assert_eq!(muse.calls().len(), 1);
     check_gadget(&muse.calls()[0], id);
+    report_failure(&muse, &mut live, id).await;
+    check_failure_trace(&path, id).await;
+    assert_eq!(model.request_count(), 0);
+    evidence(&format!(
+        "continuous Muse: mic_before={before} mic_at_progress={at_progress} mic_after={after} submissions=1 failed=1 retryable=false commentary=1 model_requests=0"
+    ));
+    live.send_acknowledged(json!({"type":"error"}).to_string()).await;
+    wait(&path, "run.failed").await;
+    stop.send(true).unwrap();
+    assert_eq!(runtime.await.unwrap(), Ok(()));
+    assert_eq!(muse.calls().len(), 1);
+    muse.stop().await;
+}
+
+async fn report_failure(muse: &Muse, live: &mut bridge_peer::Live, id: &str) {
     let output = muse.report_output(id, "failed", "Muse test job failed").await;
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
@@ -59,20 +74,13 @@ async fn muse_continuously_ready_input_delivers_delegation_and_failed_callback()
     let duplicate = muse.report_output(id, "failed", "duplicate").await;
     assert_eq!(duplicate.status.code(), Some(1));
     assert!(live.commentary.try_recv().is_err());
-    let terminal = wait(&path, "muse.terminal").await;
+}
+
+async fn check_failure_trace(path: &Path, id: &str) {
+    let terminal = wait(path, "muse.terminal").await;
     assert_eq!(terminal["status"], "failed");
     assert_eq!(terminal["retryable"], false);
     assert_eq!(terminal["task_id"], id);
-    assert_eq!(trace(&path).iter().filter(|e| e["event"] == "muse.terminal").count(), 1);
-    assert_eq!(trace(&path).iter().filter(|e| e["event"] == "tools/call").count(), 0);
-    assert_eq!(model.request_count(), 0);
-    evidence(&format!(
-        "continuous Muse: mic_before={before} mic_at_progress={at_progress} mic_after={after} submissions=1 failed=1 retryable=false commentary=1 model_requests=0"
-    ));
-    live.send_acknowledged(json!({"type":"error"}).to_string()).await;
-    wait(&path, "run.failed").await;
-    stop.send(true).unwrap();
-    assert_eq!(runtime.await.unwrap(), Ok(()));
-    assert_eq!(muse.calls().len(), 1);
-    muse.stop().await;
+    assert_eq!(trace(path).iter().filter(|e| e["event"] == "muse.terminal").count(), 1);
+    assert_eq!(trace(path).iter().filter(|e| e["event"] == "tools/call").count(), 0);
 }
