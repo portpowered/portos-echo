@@ -123,8 +123,8 @@ where
 
 /// Drive a connected call through the same run and idle owner with tool dispatch.
 /// Advertise `catalog.tools()` when starting `call`; the supplied host owns MCP
-/// authorization, confirmation and durable effect policy. Daily model admission
-/// remains the caller's responsibility before a delegated model request starts.
+/// authorization, confirmation and durable effect policy. The supplied daily
+/// budget survives calls; the caller checks it before opening a new call.
 /// Pending dispatch is cancelled before awaited call/media cleanup on every exit.
 /// # Errors
 /// Invalid dispatcher/session configuration, tool transport, device, observation,
@@ -132,7 +132,12 @@ where
 pub async fn tool_conversation<L, R, W, P, H>(
     device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
     call: &mut MediaCall<'_, R, W, P>,
-    tools: (H, echo_delegation::codex_dispatch::Catalog, echo_config::AgentConfig),
+    tools: (
+        H,
+        echo_delegation::codex_dispatch::Catalog,
+        echo_config::AgentConfig,
+        crate::bridge_codex::ToolBudget,
+    ),
     mut options: SessionOptions,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
@@ -146,8 +151,8 @@ where
 {
     let work = async {
         validate(&options)?;
-        let (host, catalog, config) = tools;
-        let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, config)?;
+        let (host, catalog, config, budget) = tools;
+        let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, config, budget)?;
         drive(device, &mut session, &mut options, cancelled, &mut observe).await
     };
     let result = work.await;

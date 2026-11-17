@@ -4,9 +4,15 @@ use crate::{Error, bridge_voice::VoicePort};
 use echo_agent_api::ToolHost;
 use echo_codex::codex_protocol::{RequestId, ToolContent, ToolResult};
 use echo_config::AgentConfig;
-use echo_delegation::codex_dispatch::{Catalog, Dispatcher, Outcome};
+use echo_delegation::codex_dispatch::{Catalog, DailyBudget, Dispatcher, Outcome};
 use echo_media::{MediaPeer, PcmFrame};
-use std::{collections::VecDeque, future::Future, pin::Pin, time::Duration};
+use std::{
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::oneshot,
@@ -15,12 +21,53 @@ use tokio::{
 
 type Work<H> = Pin<Box<dyn Future<Output = (Dispatcher<H>, Option<Outcome>)>>>;
 
+/// Process-owned accounting shared across call and supervisor generations.
+#[derive(Clone)]
+pub struct ToolBudget {
+    counter: Arc<Mutex<DailyBudget>>,
+    utc_day: fn() -> Result<u64, Error>,
+}
+
+impl ToolBudget {
+    #[must_use]
+    pub fn new(cap: u32, utc_day: fn() -> Result<u64, Error>) -> Self {
+        Self {
+            counter: Arc::new(Mutex::new(DailyBudget::new(cap))),
+            utc_day,
+        }
+    }
+
+    /// Check before opening a Live call, without spending a turn allowance.
+    /// # Errors
+    /// Clock failure, poisoned ownership or exhausted UTC-day allowance.
+    pub fn check_call(&self) -> Result<(), Error> {
+        let day = (self.utc_day)()?;
+        self.counter
+            .lock()
+            .map_err(|_| Error::Unavailable)?
+            .check(day)
+            .map_err(|_| Error::Unavailable)
+    }
+
+    /// Admit before a bridge-initiated turn, or interrupt an observed automatic turn.
+    /// # Errors
+    /// Clock failure, poisoned ownership or exhausted UTC-day allowance.
+    pub fn admit_turn(&self) -> Result<(), Error> {
+        let day = (self.utc_day)()?;
+        self.counter
+            .lock()
+            .map_err(|_| Error::Unavailable)?
+            .admit(day)
+            .map_err(|_| Error::Unavailable)
+    }
+}
+
 /// One connected thread, one dispatcher and one bounded pending attempt.
 /// The future is retained across cancelled `next` polls; no task is detached.
 /// Turn completion cancels unfinished work before admitting the next turn.
 /// Confirmation and MCP authorization remain exclusively at the supplied host.
-/// The caller must admit the daily cap before model work and advertise this
-/// catalog when starting the call. This owner cannot undo model admission.
+/// The caller checks daily admission before opening the call and advertises
+/// this catalog. Automatic model routing before notification cannot be undone.
 pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H> {
     port: &'p mut MediaCall<'a, R, W, P>,
     dispatcher: Option<Dispatcher<H>>,
@@ -29,6 +76,7 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     cancel: Option<oneshot::Sender<()>>,
     active: Option<(String, String)>,
     deferred: VecDeque<Event>,
+    budget: ToolBudget,
 }
 
 impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static>
@@ -42,6 +90,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         host: H,
         catalog: Catalog,
         config: AgentConfig,
+        budget: ToolBudget,
     ) -> Result<Self, Error> {
         let thread = port.thread_id().ok_or(Error::Input)?.to_owned();
         let dispatcher = Dispatcher::new(host, catalog, thread, config).map_err(|_| Error::Input)?;
@@ -53,6 +102,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             cancel: None,
             active: None,
             deferred: VecDeque::new(),
+            budget,
         })
     }
 
@@ -108,18 +158,27 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             }
             return Ok(());
         }
-        let dispatcher = self.dispatcher.as_mut().ok_or(Error::Unavailable)?;
         match event {
             Event::TurnStarted { thread, turn } => {
-                dispatcher.start_turn(&thread, &turn).map_err(|_| Error::Unavailable)?;
-                self.active = Some((thread, turn));
+                self.start_turn(&thread, &turn)?;
             }
             Event::TurnCompleted { thread, turn } => {
+                let dispatcher = self.dispatcher.as_mut().ok_or(Error::Unavailable)?;
                 if dispatcher.finish_turn(&thread, &turn).is_ok() {
                     self.active = None;
                 }
             }
             Event::Tool { id, call } => {
+                if self.active.is_none()
+                    && self
+                        .dispatcher
+                        .as_mut()
+                        .ok_or(Error::Unavailable)?
+                        .start_turn(&call.thread_id, &call.turn_id)
+                        .is_ok()
+                {
+                    self.admit_turn(&call.thread_id, &call.turn_id)?;
+                }
                 let mut dispatcher = self.dispatcher.take().ok_or(Error::Unavailable)?;
                 let (cancel, cancelled) = oneshot::channel();
                 self.request = Some(id);
@@ -134,6 +193,30 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 }));
             }
             _ => return Err(Error::Input),
+        }
+        Ok(())
+    }
+
+    fn start_turn(&mut self, thread: &str, turn: &str) -> Result<(), Error> {
+        // A first tool request may precede the matching lifecycle notification.
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.0 == thread && active.1 == turn)
+        {
+            return Ok(());
+        }
+        let dispatcher = self.dispatcher.as_mut().ok_or(Error::Unavailable)?;
+        dispatcher.start_turn(thread, turn).map_err(|_| Error::Unavailable)?;
+        self.admit_turn(thread, turn)
+    }
+
+    fn admit_turn(&mut self, thread: &str, turn: &str) -> Result<(), Error> {
+        self.active = Some((thread.into(), turn.into()));
+        if self.budget.admit_turn().is_err()
+            && let Some(params) = self.dispatcher.as_mut().and_then(Dispatcher::refuse_budget)
+        {
+            self.port.interrupt(&params, Instant::now() + Duration::from_secs(2))?;
         }
         Ok(())
     }

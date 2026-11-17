@@ -34,7 +34,8 @@ pub enum DispatchError {
 }
 
 /// Retain this counter across call generations. The owner supplies UTC day.
-/// Admission must precede model work; tool dispatch alone cannot prevent it.
+/// Check admission before bridge-owned model work. App-server-owned turns also
+/// need a correlated interrupt when their observed admission is refused.
 pub struct DailyBudget {
     cap: u32,
     day: Option<u64>,
@@ -54,6 +55,15 @@ impl DailyBudget {
     /// # Errors
     /// Refuses an exhausted day or a clock moving to an earlier day.
     pub fn admit(&mut self, day: u64) -> Result<(), DispatchError> {
+        self.check(day)?;
+        self.used += 1;
+        Ok(())
+    }
+
+    /// Check new-call admission without spending a delegated-turn allowance.
+    /// # Errors
+    /// Refuses an exhausted day or a clock moving to an earlier day.
+    pub fn check(&mut self, day: u64) -> Result<(), DispatchError> {
         if self.day.is_some_and(|previous| day < previous) {
             return Err(DispatchError::Budget);
         }
@@ -64,7 +74,6 @@ impl DailyBudget {
         if self.used >= self.cap {
             return Err(DispatchError::Budget);
         }
-        self.used += 1;
         Ok(())
     }
 }
@@ -116,7 +125,7 @@ impl<H: ToolHost> Dispatcher<H> {
     }
 
     /// Bind a matching turn once, without resetting its deadline on tool calls.
-    /// The IO owner must admit its daily budget before allowing model work.
+    /// The IO owner must check daily admission and interrupt a refused turn.
     /// # Errors
     /// Invalid/foreign/duplicate turns, unfinished work or generation capacity.
     pub fn start_turn(&mut self, thread: &str, turn: &str) -> Result<(), DispatchError> {
@@ -148,6 +157,19 @@ impl<H: ToolHost> Dispatcher<H> {
         }
         self.active = None;
         Ok(())
+    }
+
+    /// Refuse the active turn before any tool effect and interrupt it once.
+    pub fn refuse_budget(&mut self) -> Option<TurnInterrupt> {
+        let turn = self.active.as_mut()?;
+        if turn.terminal {
+            return None;
+        }
+        turn.terminal = true;
+        Some(TurnInterrupt {
+            thread_id: self.thread.clone(),
+            turn_id: turn.id.clone(),
+        })
     }
 
     /// The IO owner schedules this deadline even when no tool request arrives.

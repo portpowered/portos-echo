@@ -126,6 +126,7 @@ async fn tools_conversation_dispatches_during_run_and_idle_then_reuses_call() {
                 },
                 catalog(),
                 config(8),
+                budget(),
             ),
             settings(),
             std::future::pending(),
@@ -181,6 +182,7 @@ async fn tools_conversation_cancels_pending_effect_before_stop_without_result_re
                 },
                 catalog(),
                 config(8),
+                budget(),
             ),
             settings(),
             host.entered.notified(),
@@ -227,6 +229,7 @@ async fn tools_conversation_invalid_dispatch_or_observer_still_stops_media() {
                     },
                     catalog(),
                     config(if invalid { 0 } else { 8 }),
+                    budget(),
                 ),
                 settings(),
                 std::future::pending(),
@@ -244,4 +247,88 @@ async fn tools_conversation_invalid_dispatch_or_observer_still_stops_media() {
         );
         assert_eq!(media.closes.load(Ordering::SeqCst), 1);
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn tools_daily_budget_survives_generations_interrupts_without_effect_and_resumes_next_day() {
+    static DAY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(10);
+    let budget = ToolBudget::new(1, || Ok(DAY.load(Ordering::SeqCst)));
+    let state = Arc::new(HostState::default());
+    for (day, early_tool, admitted, calls) in [
+        (10, false, true, 1),
+        (10, false, false, 1),
+        (10, true, false, 1),
+        (11, false, true, 2),
+        (12, true, true, 3),
+    ] {
+        DAY.store(day, Ordering::SeqCst);
+        assert_eq!(
+            budget.check_call(),
+            if admitted { Ok(()) } else { Err(Error::Unavailable) }
+        );
+        let (mut io, mut server) = fixture();
+        let (peer, media, _tx) = peer(true, None);
+        let client = async {
+            let mut call = MediaCall::new(&mut io, peer);
+            call.start(&options(), catalog().tools().to_vec(), deadline())
+                .await
+                .unwrap();
+            let host = Host {
+                state: state.clone(),
+                stalled: false,
+                error: false,
+            };
+            let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget.clone()).unwrap();
+            finish(&mut session).await;
+            drop(session);
+            call.close(deadline()).await.unwrap();
+        };
+        let remote = daily_turn(&mut server, early_tool, admitted);
+        tokio::join!(client, remote);
+        assert_eq!(media.closes.load(Ordering::SeqCst), 1);
+        assert_eq!(state.calls.lock().unwrap().len(), calls);
+    }
+}
+
+async fn daily_turn(server: &mut Server, early_tool: bool, admitted: bool) {
+    start(server).await;
+    if !early_tool {
+        turn(server, "turn/started", "turn-1").await;
+        if !admitted {
+            acknowledge_interrupt(server).await;
+        }
+    }
+    tool(server, json!("daily"), "turn-1", "call-1").await;
+    if early_tool {
+        if !admitted {
+            acknowledge_interrupt(server).await;
+        }
+        // The late matching notification must not consume admission twice.
+        turn(server, "turn/started", "turn-1").await;
+    }
+    daily_result(server, admitted).await;
+    turn(server, "turn/completed", "turn-1").await;
+    done(server).await;
+    stop(server).await;
+}
+
+async fn daily_result(server: &mut Server, admitted: bool) {
+    let text = if admitted {
+        "{\"text\":\"echo\"}"
+    } else {
+        "stale or duplicate tool request"
+    };
+    assert_eq!(
+        read(server).await,
+        json!({"id":"daily","result":{
+            "contentItems":[{"type":"inputText","text":text}],"success":admitted
+        }})
+    );
+    tool(server, json!("repeat"), "turn-1", "call-1").await;
+    assert_eq!(
+        read(server).await,
+        json!({"id":"repeat","result":{
+            "contentItems":[{"type":"inputText","text":"stale or duplicate tool request"}],"success":false
+        }})
+    );
 }

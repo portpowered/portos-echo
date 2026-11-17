@@ -810,3 +810,22 @@ settlement, cancellation without fabricated results, and bounded cleanup on
 configuration or observation errors. Executable policy selection, real-pin M4,
 full goldens and the dropped-result seed remain unproved. This introduces no
 shared protocol change, external dependency or credential route.
+
+### Daily admission at the bridge boundary (2026-11-17)
+
+The coordinator's 17:44Z F24 amendment distinguishes bridge-owned admission from
+the app server's automatic model routing. `ToolBudget` retains one UTC-day
+counter across call and supervisor generations. A new call checks availability
+without spending a delegated-turn allowance; a bridge-initiated turn spends one
+before routing. `ToolSession` spends one on the first matching turn notification
+or tool request, refuses effects and queues a correlated interrupt when that
+admission fails. A later matching notification cannot charge the same turn twice.
+An old queued request cannot reopen a completed turn. Forward UTC-day movement
+resets the allowance; backward movement fails closed.
+
+Memory-port tests observe exact interrupt and result envelopes, zero additional
+host calls after exhaustion, shared accounting across call generations and
+next-day recovery. This cannot prove the number of model requests made before
+the pin publishes a turn. Canonical host admission/policy wiring and that exact
+actual-pin request observer remain required for F24; no pre-model automatic-turn
+guarantee is claimed. The limitation is recorded in the authorized decision row.

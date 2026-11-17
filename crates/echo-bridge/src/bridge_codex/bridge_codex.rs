@@ -8,7 +8,7 @@ mod call_tools;
 pub use call_audio::{CaptureAudio, ReplyAudio};
 pub use call_host::{HostOptions, with_host, with_host_options};
 pub use call_media::{MediaCall, MediaEvent};
-pub use call_tools::ToolSession;
+pub use call_tools::{ToolBudget, ToolSession};
 #[cfg(test)]
 mod call_failure_tests;
 #[cfg(test)]

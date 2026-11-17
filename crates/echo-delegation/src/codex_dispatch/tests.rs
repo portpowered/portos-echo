@@ -242,12 +242,34 @@ async fn cancellation_and_error_results_cannot_replay_or_leak_remote_diagnostics
 #[test]
 fn daily_budget_resets_only_on_forward_day_and_retains_cap_across_calls() {
     let mut budget = DailyBudget::new(1);
+    assert_eq!(budget.check(10), Ok(()));
+    assert_eq!(budget.check(10), Ok(()));
     assert_eq!(budget.admit(10), Ok(()));
+    assert_eq!(budget.check(10), Err(DispatchError::Budget));
     assert_eq!(budget.admit(10), Err(DispatchError::Budget));
     assert_eq!(budget.admit(9), Err(DispatchError::Budget));
     assert_eq!(budget.admit(11), Ok(()));
     assert_eq!(budget.admit(11), Err(DispatchError::Budget));
     assert_eq!(DailyBudget::new(0).admit(10), Err(DispatchError::Budget));
+}
+
+#[tokio::test(start_paused = true)]
+async fn daily_refusal_interrupts_once_and_prevents_every_tool_effect() {
+    let host = Host::default();
+    let mut owner = dispatcher(host.clone(), 8);
+    let interrupt = owner.refuse_budget().unwrap();
+    assert_eq!(
+        (interrupt.thread_id.as_str(), interrupt.turn_id.as_str()),
+        ("thread-1", "turn-1")
+    );
+    assert!(owner.refuse_budget().is_none());
+    assert_eq!(owner.deadline(), None);
+    for index in 0..2 {
+        let outcome = owner.dispatch(&call(index)).await;
+        assert!(!outcome.result.success);
+        assert!(outcome.interrupt.is_none());
+    }
+    assert!(host.calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test(start_paused = true)]

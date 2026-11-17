@@ -1,6 +1,9 @@
 //! T1: single-reader tool scheduling with memory JSONL, controlled PCM and time.
 use super::*;
-use crate::{bridge_codex::ToolSession, bridge_voice::VoicePort};
+use crate::{
+    bridge_codex::{ToolBudget, ToolSession},
+    bridge_voice::VoicePort,
+};
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::AgentConfig;
 use echo_delegation::codex_dispatch::Catalog;
@@ -59,6 +62,9 @@ fn config(limit: u32) -> AgentConfig {
         task_deadline_seconds: 5,
         daily_request_cap: 1,
     }
+}
+fn budget() -> ToolBudget {
+    ToolBudget::new(100, || Ok(10))
 }
 async fn turn(server: &mut Server, method: &str, id: &str) {
     notification(server, method, json!({"threadId":"thread-1","turn":{"id":id}})).await;
@@ -121,7 +127,7 @@ async fn tools_correlate_original_ids_no_replay_and_sanitize_host_failure() {
                 stalled: false,
                 error,
             };
-            let mut session = ToolSession::new(&mut call, host, catalog(), config(8)).unwrap();
+            let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
             finish(&mut session).await;
             drop(session);
             call.close(deadline()).await.unwrap();
@@ -181,7 +187,7 @@ async fn tools_deadline_interrupts_matching_turn_without_blocking_pcm_or_transcr
             stalled: true,
             error: false,
         };
-        let mut session = ToolSession::new(&mut call, host, catalog(), config(8)).unwrap();
+        let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
         let began = Instant::now();
         let mut transcripts = Vec::new();
         loop {
@@ -246,7 +252,7 @@ async fn tools_silent_turn_expires_and_budget_refuses_extra_effects() {
                 stalled: false,
                 error: false,
             };
-            let mut session = ToolSession::new(&mut call, host, catalog(), config(1)).unwrap();
+            let mut session = ToolSession::new(&mut call, host, catalog(), config(1), budget()).unwrap();
             finish(&mut session).await;
             drop(session);
             call.close(deadline()).await.unwrap();
@@ -290,7 +296,7 @@ async fn tools_completed_turn_cancels_pending_and_queued_work_before_new_turn() 
             stalled: true,
             error: false,
         };
-        let mut session = ToolSession::new(&mut call, host, catalog(), config(8)).unwrap();
+        let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
         finish(&mut session).await;
         drop(session);
         call.close(deadline()).await.unwrap();
@@ -335,7 +341,7 @@ async fn tools_queued_distinct_calls_execute_once_and_new_turn_resets_only_turn_
             stalled: false,
             error: false,
         };
-        let mut session = ToolSession::new(&mut call, host, catalog(), config(2)).unwrap();
+        let mut session = ToolSession::new(&mut call, host, catalog(), config(2), budget()).unwrap();
         finish(&mut session).await;
         drop(session);
         call.close(deadline()).await.unwrap();
@@ -388,7 +394,7 @@ async fn tools_pending_queue_overflow_fails_and_cleanup_reaps_media_without_extr
             stalled: true,
             error: false,
         };
-        let mut session = ToolSession::new(&mut call, host, catalog(), config(8)).unwrap();
+        let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
         loop {
             match session.next().await {
                 Ok(MediaEvent::Control(Event::Other)) => (),
