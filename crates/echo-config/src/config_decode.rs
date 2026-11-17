@@ -72,6 +72,12 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
     let mut root = Fields::new(value, "config")?;
     let agent_backend;
     let result = BridgeConfig {
+        codex: root
+            .table
+            .remove("codex")
+            .map(|v| crate::config_codex::decode(v.into_inner()))
+            .transpose()?
+            .unwrap_or_default(),
         chatgpt_auth: root
             .table
             .remove("chatgpt_auth")

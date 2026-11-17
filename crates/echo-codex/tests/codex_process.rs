@@ -25,16 +25,16 @@ struct Fixture {
 }
 impl Fixture {
     fn new(mode: &str) -> Result<Self> {
-        let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
-            .args(["-c", "import sys; print(sys.executable)"])
-            .output()?;
-        assert!(output.status.success());
-        let binary = PathBuf::from(String::from_utf8(output.stdout)?.trim());
-        let home = std::env::temp_dir().join(format!(
+        let binary = python_binary()?;
+        let parent = std::env::temp_dir().join(format!(
             "echo codex process-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
+        fs::create_dir(&parent)?;
+        #[cfg(windows)]
+        private_test_parent(&parent, false)?;
+        let home = parent.join("home");
         let mut config = SupervisorConfig::new(binary, home.clone());
         config.request_timeout = Duration::from_secs(5);
         config.max_line_bytes = 4096;
@@ -77,8 +77,39 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.supervisor.take();
-        let _ = fs::remove_dir_all(&self.home);
+        if let Some(parent) = self.home.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
     }
+}
+
+#[cfg(windows)]
+fn private_test_parent(path: &std::path::Path, public: bool) -> Result {
+    let script = r"
+$ErrorActionPreference = 'Stop'
+$sidType = [System.Security.Principal.SecurityIdentifier]
+$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetOwner($user)
+$acl.SetAccessRuleProtection($true, $false)
+$identities = @($user.Value, 'S-1-5-18', 'S-1-5-32-544')
+if ($env:ECHO_CODEX_TEST_PUBLIC -eq 'true') { $identities += 'S-1-1-0' }
+foreach ($sid in $identities) {
+    $identity = New-Object $sidType $sid
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $acl.AddAccessRule($rule)
+}
+Set-Acl -LiteralPath $env:ECHO_CODEX_TEST_PARENT -AclObject $acl
+";
+    let status = Command::new("powershell.exe")
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+        .env_remove("PSModulePath")
+        .env("ECHO_CODEX_TEST_PARENT", path)
+        .env("ECHO_CODEX_TEST_PUBLIC", public.to_string())
+        .status()?;
+    assert!(status.success());
+    Ok(())
 }
 
 #[tokio::test]
@@ -314,15 +345,148 @@ async fn t3_drop_kills_active_child_releases_port_and_preserves_other_session() 
 fn t3_rejects_existing_repository_and_relative_homes_before_spawn() -> Result {
     let fixture = Fixture::new("normal")?;
     let binary = std::env::current_exe()?;
+    let unmarked = fixture.home.join("unmarked");
+    fs::create_dir(&unmarked)?;
     for home in [
         fixture.home.clone(),
+        unmarked,
         PathBuf::from("relative-home"),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("uncreated-home"),
+        fixture.home.join("../unsafe-home"),
+        fixture.home.ancestors().last().ok_or("expected root")?.to_path_buf(),
     ] {
         assert!(matches!(
             Supervisor::new(SupervisorConfig::new(binary.clone(), home)),
             Err(ProcessError::PrivateHome)
         ));
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_clean_shutdown_reopens_home_without_mutating_auth_or_work() -> Result {
+    let mut fixture = Fixture::new("normal")?;
+    let binary = python_binary()?;
+    let auth = b"{\"synthetic\":\"local-only\"}\n";
+    fs::write(fixture.home.join("auth.json"), auth)?;
+    let marker = fixture.home.join(".echo-codex-owner");
+    fixture.server()?.start().await?;
+    assert_eq!(fixture.inspect("inspect").await?["initialized"], true);
+    fixture.server()?.shutdown().await?;
+    assert!(matches!(
+        Supervisor::new(SupervisorConfig::new(binary.clone(), fixture.home.clone())),
+        Err(ProcessError::PrivateHome)
+    ));
+    drop(fixture.supervisor.take());
+    // A retained marker is opened without truncating or replacing its bytes.
+    fs::write(&marker, b"retained-marker")?;
+    fixture.supervisor = Some(Supervisor::new(SupervisorConfig::new(binary, fixture.home.clone()))?);
+    fixture.server()?.start().await?;
+    assert_eq!(fixture.inspect("inspect").await?["initialized"], true);
+    assert_eq!(fs::read(fixture.home.join("auth.json"))?, auth);
+    assert_eq!(fs::read_to_string(fixture.home.join("work/mode"))?, "normal");
+    fixture.server()?.shutdown().await?;
+    drop(fixture.supervisor.take());
+    assert_eq!(fs::read(marker)?, b"retained-marker");
+    Ok(())
+}
+
+fn python_binary() -> Result<PathBuf> {
+    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .args(["-c", "import sys; print(sys.executable)"])
+        .output()?;
+    assert!(output.status.success());
+    Ok(PathBuf::from(String::from_utf8(output.stdout)?.trim()))
+}
+
+#[tokio::test]
+async fn t3_live_owner_rejects_second_supervisor_without_disturbing_first() -> Result {
+    let mut fixture = Fixture::new("normal")?;
+    fixture.server()?.start().await?;
+    assert!(matches!(
+        Supervisor::new(SupervisorConfig::new(python_binary()?, fixture.home.clone())),
+        Err(ProcessError::PrivateHome)
+    ));
+    assert_eq!(fixture.inspect("inspect").await?["initialized"], true);
+    fixture.server()?.shutdown().await?;
+    drop(fixture.supervisor.take());
+    fixture.supervisor = Some(Supervisor::new(SupervisorConfig::new(
+        python_binary()?,
+        fixture.home.clone(),
+    ))?);
+    fixture.server()?.start().await?;
+    assert_eq!(fixture.inspect("inspect").await?["initialized"], true);
+    fixture.server()?.shutdown().await?;
+    Ok(())
+}
+
+#[test]
+fn t3_rejects_nonregular_marker_work_and_repository_pointer() -> Result {
+    let mut fixture = Fixture::new("normal")?;
+    drop(fixture.supervisor.take());
+    let marker = fixture.home.join(".echo-codex-owner");
+    fs::remove_file(&marker)?;
+    fs::create_dir(&marker)?;
+    let rejected = || -> Result {
+        assert!(matches!(
+            Supervisor::new(SupervisorConfig::new(std::env::current_exe()?, fixture.home.clone())),
+            Err(ProcessError::PrivateHome)
+        ));
+        Ok(())
+    };
+    rejected()?;
+    fs::remove_dir(&marker)?;
+    fs::write(&marker, b"")?;
+    fs::write(fixture.home.join(".git"), "gitdir: missing")?;
+    rejected()?;
+    fs::remove_file(fixture.home.join(".git"))?;
+    fs::remove_file(fixture.home.join("work/mode"))?;
+    fs::remove_file(fixture.home.join("work/app-server"))?;
+    fs::remove_dir(fixture.home.join("work"))?;
+    fs::write(fixture.home.join("work"), "not a directory")?;
+    rejected()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn t3_rejects_public_or_redirected_home_and_marker() -> Result {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let mut fixture = Fixture::new("normal")?;
+    drop(fixture.supervisor.take());
+    let rejected = |home| -> Result {
+        assert!(matches!(
+            Supervisor::new(SupervisorConfig::new(std::env::current_exe()?, home)),
+            Err(ProcessError::PrivateHome)
+        ));
+        Ok(())
+    };
+    fs::set_permissions(&fixture.home, fs::Permissions::from_mode(0o755))?;
+    rejected(fixture.home.clone())?;
+    fs::set_permissions(&fixture.home, fs::Permissions::from_mode(0o700))?;
+    let marker = fixture.home.join(".echo-codex-owner");
+    fs::remove_file(&marker)?;
+    symlink("work/mode", &marker)?;
+    rejected(fixture.home.clone())?;
+    assert_eq!(fs::read_to_string(fixture.home.join("work/mode"))?, "normal");
+    let redirect = fixture.home.join("redirect");
+    symlink(&fixture.home, &redirect)?;
+    rejected(redirect.clone())?;
+    rejected(redirect.join("new-home"))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn t3_rejects_public_windows_acl_without_mutating_auth() -> Result {
+    let mut fixture = Fixture::new("normal")?;
+    drop(fixture.supervisor.take());
+    fs::write(fixture.home.join("auth.json"), b"synthetic-local-only")?;
+    private_test_parent(&fixture.home, true)?;
+    assert!(matches!(
+        Supervisor::new(SupervisorConfig::new(std::env::current_exe()?, fixture.home.clone())),
+        Err(ProcessError::PrivateHome)
+    ));
+    assert_eq!(fs::read(fixture.home.join("auth.json"))?, b"synthetic-local-only");
     Ok(())
 }

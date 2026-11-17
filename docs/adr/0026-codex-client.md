@@ -113,3 +113,44 @@ The later bridge cutover owns the tool host, MCP, caps and milestone scenarios.
 This component does not claim M2, M4, real authentication, media or hardware
 proof. Reverting this additive lane removes its crate, registration and helper
 provisioning; there is no product state migration.
+
+## Private-home reopen amendment (2026-11-17)
+
+The coordinator's binding mailbox option A authorizes the bridge-cutover lane
+to reopen a retained home, enabling separate sign-in and bridge processes to
+use the same app-server state. This supersedes the fresh-only restriction
+above. It does not authorize copying credentials, importing another home,
+changing shared contracts or adding a dependency.
+
+The existing `.echo-codex-owner` file is the ownership mechanism. A fresh home
+creates it with `create_new`; a retained home opens that same regular file for
+read/write without creation or truncation. `File::try_lock` takes an exclusive,
+nonblocking lock. The returned file stays in `Supervisor._lease` throughout
+shutdown and restart until supervisor drop. A second owner fails with the
+existing payload-free `ProcessError::PrivateHome`. Normal shutdown reaps the
+child before the owner drops. Abrupt owner death with a surviving child is
+outside this amendment's proof; callers use awaited shutdown.
+
+Preparation rejects relative, root, parent-traversing and redirected paths,
+repository `.git` directories and worktree pointers in every ancestor,
+unmarked retained homes, nonregular markers and redirected working directories.
+It canonicalizes the parent and checks both the supplied and resolved ancestor
+chains without invoking Git or depending on the source checkout. Existing work
+directories and marker files are retained. Preparation never opens, writes,
+copies or deletes `auth.json`.
+
+Unix homes require mode 0700. On Windows, inherited ACLs must be verifiable
+through the built-in, noninteractive PowerShell `Get-Acl` command. The owner
+and every allowed identity must be the current user, SYSTEM or Administrators.
+The script and argv are fixed; the target path is passed as environment data.
+Output is discarded and unverifiable privacy fails closed. The helper removes
+an inherited `PSModulePath` so PowerShell loads its own built-in security
+module. It does not modify production ACLs. Controlled-process fixtures create
+private parent directories to avoid depending on the host temp directory's ACL.
+
+The public supervisor tests exercise clean reopen with byte-identical synthetic
+authorization and retained marker/work bytes, rejection while the live owner
+or a shut-down supervisor retains its lease, admission after drop, and the
+existing fresh-home and unsafe-path cases. Platform cases reject public Unix
+permissions, symlink redirection and public Windows ACLs. These are local
+controlled-process checks, not real sign-in or milestone proof.

@@ -41,6 +41,7 @@ impl Drop for Directory {
 #[test]
 fn committed_example_loads_with_all_expected_values() {
     let expected = BridgeConfig {
+        codex: echo_config::CodexConfig::default(),
         agent_backend: echo_config::AgentBackend::Client,
         muse: None,
         chatgpt_auth: echo_config::ChatGptAuthConfig::default(),
@@ -82,6 +83,88 @@ fn committed_example_loads_with_all_expected_values() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/bridge.example.toml");
     assert_eq!(BridgeConfig::load(path).unwrap(), expected);
     assert_eq!(BridgeConfig::from_toml_str(EXAMPLE).unwrap(), expected);
+}
+
+#[test]
+fn codex_defaults_and_override_precedence_are_offline() {
+    let directory = Directory::new().unwrap();
+    let home = directory.0.join("uncreated-home");
+    let binary = directory.0.join("missing-binary");
+    let original = BridgeConfig::from_toml_str(MINIMAL).unwrap();
+    assert_eq!(original.codex, echo_config::CodexConfig::default());
+    assert_eq!(original.codex_voice(), None);
+    assert_eq!(original.codex_model(), None);
+    let input = MINIMAL
+        .replace("[live]", "[live]\nvoice='legacy-voice'")
+        .replace("[agent]", "[agent]\nmodel='legacy-model'");
+    let legacy = BridgeConfig::from_toml_str(&input).unwrap();
+    assert_eq!(legacy.codex_voice(), Some("legacy-voice"));
+    assert_eq!(legacy.codex_model(), Some("legacy-model"));
+    let input = format!(
+        "{input}\n[codex]\nhome='{}'\nbinary='{}'\nvoice='codex-voice'\nmodel='thread-model'\ninstructions='Local instructions'\n",
+        home.display(),
+        binary.display()
+    );
+    let path = directory.write(&input).unwrap();
+    let config = BridgeConfig::load(&path).unwrap();
+    assert_eq!(config, BridgeConfig::from_toml_str(&input).unwrap());
+    assert_eq!(config.codex.home, Some(home.clone()));
+    assert_eq!(config.codex.binary, Some(binary.clone()));
+    assert_eq!(config.codex_voice(), Some("codex-voice"));
+    assert_eq!(config.codex_model(), Some("thread-model"));
+    assert_eq!(config.codex.instructions, "Local instructions");
+    assert!(!home.exists());
+    assert!(!binary.exists());
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+}
+
+#[test]
+fn codex_rejects_bad_paths_blank_fields_types_and_inline_secrets_safely() {
+    for field in ["home", "binary"] {
+        for value in ["''", "'relative/path'", "'~/path'", "false"] {
+            let input = format!("{MINIMAL}\n[codex]\n{field}={value}");
+            let error = BridgeConfig::from_toml_str(&input).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "codex.{field}: {}",
+                    if value == "false" {
+                        "invalid type or value"
+                    } else {
+                        "expected nonempty absolute path"
+                    }
+                )
+            );
+        }
+    }
+    for field in ["voice", "model", "instructions"] {
+        for value in ["''", "'   '", "false"] {
+            let input = format!("{MINIMAL}\n[codex]\n{field}={value}");
+            let error = BridgeConfig::from_toml_str(&input).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "codex.{field}: {}",
+                    if value == "false" {
+                        "invalid type or value"
+                    } else {
+                        "must be nonblank"
+                    }
+                )
+            );
+        }
+    }
+    for (setting, expected) in [
+        (
+            "api_key='DISCARDED_VALUE'",
+            "codex.api_key: secrets go in files, not config",
+        ),
+        ("DISCARDED_VALUE='private'", "codex: unknown field"),
+    ] {
+        let error = BridgeConfig::from_toml_str(&format!("{MINIMAL}\n[codex]\n{setting}")).unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert!(!format!("{error:?}").contains("DISCARDED_VALUE"));
+    }
 }
 
 #[test]

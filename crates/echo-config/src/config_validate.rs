@@ -58,8 +58,10 @@ fn schema_field(path: &str, key: &str) -> bool {
             "screen",
             "audit",
             "chatgpt_auth",
+            "codex",
         ],
         "audio" => &["reply_lead_ms"],
+        "codex" => &["home", "binary", "voice", "instructions", "model"],
         "chatgpt_auth" => crate::config_auth::FIELDS,
         "echo" => &["host", "wyoming_port"],
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
@@ -94,6 +96,7 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
+    crate::config_codex::validate(&config.codex)?;
     crate::config_muse::validate(config)?;
     config.chatgpt_auth.validate()?;
     validate_mcp(&config.mcp)?;
