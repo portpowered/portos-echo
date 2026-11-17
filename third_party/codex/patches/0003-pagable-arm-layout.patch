@@ -1,0 +1,16 @@
+Why: coordinator mailbox answer 1 (2026-11-16) authorizes this assertion-only
+portability fix for locked pagable 0.4.1. ARM32 AtomicU64 alignment gives ten
+words, while wasm32 retains twelve. The coordinator checked that no runtime
+code depends on this size: no size_of/transmute/offset_of/from_raw_parts in
+src/, and these assertions are its only [usize; N] mentions. Keep both checks;
+change no runtime algorithm or dependency version. Applied to checksum-verified
+external crate source, never the shared registry cache.
+
+--- a/src/pagable_arc.rs
++++ b/src/pagable_arc.rs
+@@ -739,2 +739,4 @@
+-#[cfg(target_pointer_width = "32")]
++#[cfg(all(target_pointer_width = "32", not(target_arch = "arm")))]
+ static_assertions::assert_eq_size!(PagableArcInner<[usize; 4]>, [usize; 12]);
++#[cfg(all(target_pointer_width = "32", target_arch = "arm"))]
++static_assertions::assert_eq_size!(PagableArcInner<[usize; 4]>, [usize; 10]);

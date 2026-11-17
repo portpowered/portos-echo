@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import runpy
 import select
 import signal
 import socket
@@ -17,6 +18,8 @@ import sys
 import tempfile
 import threading
 import time
+
+finite_input = runpy.run_path(str(Path(__file__).with_name("m3") / "host_input.py"))["finite_input"]
 
 ROOT = Path(__file__).resolve().parents[5]
 LIMIT = 65536
@@ -390,17 +393,8 @@ class Host:
             emit({"event": "host.ack", "pcm_bytes": len(data),
                   "nonzero_bytes": sum(byte != 0 for byte in data)})
             return
-        elif action == "finite":
-            data = bytes(value["pcm"])
-            if not self.finite_mode or not data or len(data) > 4096 or len(data) % 1600:
-                raise ValueError("invalid finite fixture")
-            with self.condition:
-                if self.finite:
-                    raise ValueError("finite fixture already sent")
-                self.finite = True
-                self.proc.send_signal(signal.SIGUSR1)
-                self.pending = data
-                self.condition.notify_all()
+        elif action in ("finite", "inject", "muted"):
+            finite_input(self, value, signal.SIGUSR1)
         else:
             if action == "say":
                 data = bytes(value["pcm"])

@@ -61,8 +61,9 @@ pub async fn cut_duplex<T: AsyncRead + AsyncWrite + Unpin>(mut client: WyomingCl
         );
         assert_eq!(play.await, Ok(PlayOutcome::Cut));
         assert_eq!(run.recv().await.unwrap().unwrap().payload, [6]);
+        assert_eq!(run.recv().await.unwrap().unwrap().payload, [7]);
         assert_eq!(run.recv().await.unwrap(), None);
-        assert_eq!(run.stats().received, 6);
+        assert_eq!(run.stats().received, 7);
         client.cut().await.unwrap();
         client.close().await.unwrap();
     };
@@ -79,6 +80,7 @@ async fn cut_server<T: AsyncRead + AsyncWrite + Unpin>(mut peer: T) {
     )
     .await;
     mic_five(&mut peer).await;
+    assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-continue");
     assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
     assert_eq!(receive(&mut peer).await.header.r#type, "describe");
     send(&mut peer, "info", json!({"cut":true}), vec![]).await;
@@ -89,7 +91,19 @@ async fn cut_server<T: AsyncRead + AsyncWrite + Unpin>(mut peer: T) {
         vec![6],
     )
     .await;
+    continued_tail(&mut peer).await;
+}
+
+async fn continued_tail<T: AsyncRead + AsyncWrite + Unpin>(mut peer: T) {
     send(&mut peer, "played", Value::Null, vec![]).await;
+    send(
+        &mut peer,
+        "audio-chunk",
+        json!({"rate":16000,"width":2,"channels":1}),
+        vec![7],
+    )
+    .await;
+    send(&mut peer, "audio-stop", Value::Null, vec![]).await;
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
 }
 

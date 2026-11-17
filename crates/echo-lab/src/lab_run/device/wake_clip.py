@@ -20,7 +20,6 @@ def admit(path, repository):
     with path.open("rb") as source:
         data = source.read(1000001)
     metadata = validate(data)
-    metadata["sha256"] = hashlib.sha256(data).hexdigest()
     return metadata, data
 
 
@@ -57,6 +56,7 @@ def validate(data):
         raise ValueError("PCM format or duration")
     duration = samples * 500 / rate
     return {"sample_rate_hz": rate,
+            "sha256": hashlib.sha256(data).hexdigest(),
             "duration_ms": int(duration) if duration.is_integer() else duration}
 
 

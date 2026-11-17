@@ -169,9 +169,9 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
             .await
             .unwrap();
         observations.screen(&assert_relink(&mut restarted.screen).await);
-        journey::reach(&mut restarted.process, &h.path(), "mcp.run.failed")
-            .await
-            .unwrap();
+        // Relink is observable before the cut/Played handshake settles. Hold
+        // both clocks fixed so instrumented I/O cannot consume the run deadline.
+        journey::failed_without_clock_advance(&h.path()).await;
         completed(
             &operator(h.directory.path(), "--refresh-now").await.unwrap(),
             1,

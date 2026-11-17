@@ -231,58 +231,22 @@ fn wake_wav(rate: u32, samples: usize) -> Vec<u8> {
 
 #[test]
 fn wake_clip_admission_rejects_invalid_wav_before_bench_effects() {
-    let original = wake_wav(16000, 16000);
-    let mut cases = vec![
-        vec![],
-        b"not WAV".to_vec(),
-        original[..32043].to_vec(),
-        wake_wav(16000, 7999),
-        wake_wav(16000, 160_001),
-        wake_wav(48000, 23999),
-        wake_wav(48000, 480_001),
-        wake_wav(44100, 44100),
-    ];
-    for (offset, value) in [
-        (0, b'X'),
-        (8, b'X'),
-        (12, b'X'),
-        (16, 15),
-        (20, 3),
-        (22, 2),
-        (28, 1),
-        (32, 4),
-        (34, 8),
-        (36, b'X'),
-        (40, 255),
-    ] {
-        let mut invalid = original.clone();
-        invalid[offset] = value;
-        cases.push(invalid);
-    }
-    for bytes in cases {
-        let session = Session::new(&json!({"real_config":true}));
-        std::fs::write(session.0.join("wake.wav"), bytes).unwrap();
-        let result = session.run(&["--wake-clip", "wake.wav"]);
-        failed(
-            &result,
-            "device: invalid wake clip; expected 16-bit PCM mono WAV at 16000 or 48000 Hz, 0.5-10 s",
-        );
-        // The nominated Python helper is an offline preflight; no bench command runs.
-        assert!(session.operations().iter().all(|op| op == "wake.wav"));
-        assert!(!session.0.join("artifacts").exists());
-    }
+    // Detailed format and duration branches use direct calls in device/clip_tests.
+    let session = Session::new(&json!({"real_config":true}));
+    std::fs::write(session.0.join("wake.wav"), b"not WAV").unwrap();
+    let result = session.run(&["--wake-clip", "wake.wav"]);
+    failed(
+        &result,
+        "device: invalid wake clip; expected 16-bit PCM mono WAV at 16000 or 48000 Hz, 0.5-10 s",
+    );
+    // The nominated Python helper is an offline preflight; no bench command runs.
+    assert!(session.operations().iter().all(|op| op == "wake.wav"));
+    assert!(!session.0.join("artifacts").exists());
 }
 
 #[test]
-fn wake_clip_accepts_both_rates_and_duration_endpoints_without_mutating_input() {
-    for (rate, samples) in [
-        (16000, 8000),
-        (16000, 16000),
-        (16000, 160_000),
-        (48000, 24000),
-        (48000, 48000),
-        (48000, 480_000),
-    ] {
+fn wake_clip_accepts_both_rates_without_mutating_input() {
+    for (rate, samples) in [(16000, 16000), (48000, 48000)] {
         let session = Session::new(&json!({"real_config":true}));
         let bytes = wake_wav(rate, samples);
         std::fs::write(session.0.join("wake.wav"), &bytes).unwrap();
