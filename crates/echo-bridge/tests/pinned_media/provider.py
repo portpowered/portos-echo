@@ -9,12 +9,14 @@ import socket
 import struct
 import sys
 import threading
+import tools_provider
 
 answers = queue.Queue()
 transcript_input, transcript_output = socket.socketpair()
 transcript_count = 0
 observed = {'calls': [], 'sidebands': 0, 'external': 0}
 output_lock = threading.Lock()
+delegation = None
 
 
 def emit(value):
@@ -50,6 +52,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+        if self.path == '/v1/responses' and delegation is not None:
+            try:
+                data = delegation.respond(body)
+                self.respond(200, data, 'text/event-stream')
+            except AssertionError as error:
+                delegation.failure = str(error)
+                emit({'failure': delegation.failure})
+                self.respond(400, b'{"error":{"message":"fixture contract mismatch"}}')
+            return
         if self.path == '/token':
             assert body['grant_type'] == 'refresh_token'
             assert body['refresh_token'] == 'synthetic-refresh'
@@ -87,18 +98,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 readable, _, _ = select.select([self.connection, transcript_input], [], [], 20)
                 if not readable:
                     raise AssertionError('sideband control deadline')
-                if self.connection in readable and not self.connection.recv(4096):
-                    break
+                if self.connection in readable:
+                    opcode, data = tools_provider.read_frame(self.connection)
+                    if opcode == 8:
+                        break
+                    if opcode == 1 and delegation is not None:
+                        value = json.loads(data)
+                        if value.get('type') == 'delegation.context.append':
+                            delegation.append(value)
+                            self.transcripts(delegation.reply)
                 if transcript_input in readable:
                     assert transcript_input.recv(1) == b't'
-                    for role, text in [('user', 'ping'), ('assistant', 'echo-ok')]:
-                        kind = 'input' if role == 'user' else 'output'
-                        frame(self.connection, {'type': kind + '_transcript.added', 'item': {'text': text}})
-                        frame(self.connection, {'type': 'turn.done', 'turn': {'role': role, 'transcript': text}})
+                    if delegation is None:
+                        self.transcripts('echo-ok')
+                    else:
+                        frame(self.connection, delegation.begin())
                     transcript_count += 1
-        except OSError:
+        except (OSError, EOFError):
             pass
         self.close_connection = True
+
+    def transcripts(self, reply):
+        for role, text in [('user', 'ping'), ('assistant', reply)]:
+            kind = 'input' if role == 'user' else 'output'
+            frame(self.connection, {'type': kind + '_transcript.added', 'item': {'text': text}})
+            frame(self.connection, {'type': 'turn.done', 'turn': {'role': role, 'transcript': text}})
 
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -110,12 +134,15 @@ try:
         command = json.loads(line)
         if 'answer' in command:
             answers.put(command['answer'])
+        elif 'tools' in command:
+            assert delegation is None
+            delegation = tools_provider.Delegation(command['tools'], command['negative'])
         elif command == {'transcripts': True}:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:
             emit({'transcripts': transcript_count})
         elif command == {'snapshot': True}:
-            emit(observed)
+            emit(observed if delegation is None else {**observed, **delegation.snapshot()})
         else:
             raise AssertionError('unknown fixture command')
 finally:

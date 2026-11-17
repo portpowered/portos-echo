@@ -9,6 +9,7 @@ use echo_contracts::secret::Secret;
 use std::{path::Path, process::Stdio};
 use tokio::{process::Command, sync::mpsc};
 mod auth;
+mod tools;
 mod voice;
 
 #[tokio::test]
@@ -155,14 +156,13 @@ async fn remote(
         .unwrap();
     let mut echoed = 0;
     loop {
-        if peer.ready() {
-            while let Some(frame) = peer.pop_audio() {
-                peer.send_audio(frame, Instant::now().into_std()).await.unwrap();
-                echoed += 1;
-            }
-        }
+        echoed += echo_ready(&mut peer).await;
         tokio::select! {
             () = step(&mut peer) => (),
+            observation = output.next_line() => {
+                assert_eq!(observation.unwrap(), None, "provider rejected the pinned request");
+                return (peer, echoed);
+            },
             command = commands.recv() => match command {
                 Some(true) => input.write_all(b"{\"transcripts\":true}\n").await.unwrap(),
                 command => {
@@ -172,6 +172,17 @@ async fn remote(
             },
         }
     }
+}
+
+async fn echo_ready(peer: &mut LivePeer) -> usize {
+    let mut echoed = 0;
+    if peer.ready() {
+        while let Some(frame) = peer.pop_audio() {
+            peer.send_audio(frame, Instant::now().into_std()).await.unwrap();
+            echoed += 1;
+        }
+    }
+    echoed
 }
 
 fn binary() -> std::path::PathBuf {

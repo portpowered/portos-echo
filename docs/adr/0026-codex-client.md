@@ -868,3 +868,31 @@ and awaited cleanup. Memory tests localize consent, ambiguous cancellation,
 ledger corruption/exclusion and overlay preservation. They do not prove the
 real pin's delegated model turn, native four-stage M4 trace, full goldens,
 latency or the dropped-result seed; story 002 retains those obligations.
+
+### Pinned delegated-tool component witness (2026-11-17)
+
+The existing pinned media fixture now admits an explicitly selected local
+Responses/delegation observer. After a real PCM round trip it sends one native
+`delegation.created`. The unmodified app server requests the discovered aliases
+`tool_0` through `tool_3` (respectively test.echo, test.wait,
+test.requires_approval and ui.show_emotion). Both model requests must contain
+exactly that catalog, including descriptions and the pin's lowered schemas:
+rust-v0.160.0 closes object properties and drops test.wait's numeric minimum.
+No built-in tool is permitted by the oracle.
+
+The production media owner and tool scheduler dispatch the actual
+`item/tool/call` through the real MCP client to a loopback spoof server. The
+second model request must carry exactly one matching function-call output;
+success content is compared as complete JSON, failure text exactly. Only then
+can the fixture emit the final model message. It observes the app server's
+native `delegation.context.append`, checks its delegation identity and complete
+content, and releases the role-aware transcript. Both success and HTTP 500
+require one MCP attempt, two model requests and one append, without retry.
+Call/media/provider shutdown and immediate home reacquisition are checked.
+
+This component test uses the real pinned binary and media, isolated temporary
+homes and loopback ports, the existing explicit clock and readiness barriers.
+It does not exercise configured approval/ledger policy or pinned hassmic-host,
+and cannot replace M4's scenario, full golden, latency, daily-cap interruption
+measurement or reverted dropped-result seed. Those remain retained story 002
+work; no remote account, new dependency or shared contract is involved.
