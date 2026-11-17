@@ -1,5 +1,5 @@
 //! One connected call spans wakes; every return awaits signaling/media cleanup.
-use super::{Notice, Options, Stats, run};
+use super::{Notice, Options, Stats, VoicePort, run};
 use crate::{
     Error,
     bridge_codex::{Event, MediaCall, MediaEvent},
@@ -121,6 +121,41 @@ where
     settled(result, cleanup)
 }
 
+/// Drive a connected call through the same run and idle owner with tool dispatch.
+/// Advertise `catalog.tools()` when starting `call`; the supplied host owns MCP
+/// authorization, confirmation and durable effect policy. Daily model admission
+/// remains the caller's responsibility before a delegated model request starts.
+/// Pending dispatch is cancelled before awaited call/media cleanup on every exit.
+/// # Errors
+/// Invalid dispatcher/session configuration, tool transport, device, observation,
+/// cancellation and bounded cleanup failures retain the voice owner's categories.
+pub async fn tool_conversation<L, R, W, P, H>(
+    device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
+    call: &mut MediaCall<'_, R, W, P>,
+    tools: (H, echo_delegation::codex_dispatch::Catalog, echo_config::AgentConfig),
+    mut options: SessionOptions,
+    cancelled: impl Future<Output = ()>,
+    mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
+) -> Result<u64, Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+    H: echo_agent_api::ToolHost + 'static,
+{
+    let work = async {
+        validate(&options)?;
+        let (host, catalog, config) = tools;
+        let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, config)?;
+        drive(device, &mut session, &mut options, cancelled, &mut observe).await
+    };
+    let result = work.await;
+    // Drop the retained dispatch borrower before stopping its call generation.
+    let cleanup = call.close(Instant::now() + Duration::from_secs(2)).await;
+    settled(result, cleanup)
+}
+
 fn settled(result: Result<u64, Error>, cleanup: Result<(), Error>) -> Result<u64, Error> {
     // A kill may resume only after successful cleanup. Preserve other original
     // failures, but never normalize cancellation over an unsuccessful stop.
@@ -142,19 +177,13 @@ pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
     Ok(())
 }
 
-async fn drive<L, R, W, P>(
+async fn drive<L: EchoLink>(
     device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
-    call: &mut MediaCall<'_, R, W, P>,
+    call: &mut impl VoicePort,
     options: &mut SessionOptions,
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(SessionNotice) -> Result<(), Error>,
-) -> Result<u64, Error>
-where
-    L: EchoLink,
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-    P: MediaPeer,
-{
+) -> Result<u64, Error> {
     let (client, events, mut microphone) = device;
     tokio::pin!(cancelled);
     let mut completed = 0_u64;
@@ -204,20 +233,14 @@ where
     }
 }
 
-async fn wait<E, R, W, P>(
+async fn wait<E: LinkEvents>(
     events: &mut E,
-    call: &mut MediaCall<'_, R, W, P>,
+    call: &mut impl VoicePort,
     expires: Option<Instant>,
     muted: &mut bool,
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(SessionNotice) -> Result<(), Error>,
-) -> Result<Option<E::Run>, Error>
-where
-    E: LinkEvents,
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-    P: MediaPeer,
-{
+) -> Result<Option<E::Run>, Error> {
     tokio::pin!(cancelled);
     loop {
         tokio::select! {
@@ -233,18 +256,12 @@ where
     }
 }
 
-async fn idle_step<E, R, W, P>(
+async fn idle_step<E: LinkEvents>(
     events: &mut E,
-    call: &mut MediaCall<'_, R, W, P>,
+    call: &mut impl VoicePort,
     muted: &mut bool,
     observe: &mut impl FnMut(SessionNotice) -> Result<(), Error>,
-) -> Result<Option<E::Run>, Error>
-where
-    E: LinkEvents,
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-    P: MediaPeer,
-{
+) -> Result<Option<E::Run>, Error> {
     // Device traffic must not starve the app-server pipes or media worker.
     tokio::select! {
         event = events.recv() => match event?.ok_or(Error::Wyoming)? {
@@ -274,9 +291,7 @@ async fn expiry(deadline: Option<Instant>) {
     }
 }
 
-async fn clear_idle<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer>(
-    call: &mut MediaCall<'_, R, W, P>,
-) -> Result<(), Error> {
+async fn clear_idle(call: &mut impl VoicePort) -> Result<(), Error> {
     while call.ready_audio().await?.is_some() {
         tokio::task::yield_now().await;
     }

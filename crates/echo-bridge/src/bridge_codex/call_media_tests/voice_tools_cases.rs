@@ -416,3 +416,6 @@ async fn tools_pending_queue_overflow_fails_and_cleanup_reaps_media_without_extr
     assert_eq!(state.calls.lock().unwrap().len(), 1);
     assert_eq!(media.closes.load(Ordering::SeqCst), 1);
 }
+
+#[path = "voice_tool_session_cases.rs"]
+mod conversation;

@@ -15,7 +15,9 @@ pub use voice_admission::{ServeNotice, ServeOptions, serve};
 pub use voice_config::Configured;
 pub use voice_host::{HostOptions, with_device};
 pub use voice_runtime::{RuntimeOptions, execute};
-pub use voice_session::{ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation};
+pub use voice_session::{
+    ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation, tool_conversation,
+};
 #[cfg(test)]
 mod voice_tests;
 

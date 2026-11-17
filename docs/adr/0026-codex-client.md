@@ -793,3 +793,20 @@ overflow, safe failures and cleanup. These are component observations. Canonical
 MCP/approval and daily-cap admission wiring, actual-pin M4, full goldens and the
 dropped-result seed remain required for story 002. No shared protocol change or
 new dependency is introduced by this scheduling adapter.
+
+### Tool dispatch across conversation runs and idle (2026-11-17)
+
+The conversation driver now consumes its existing `VoicePort` boundary during
+both microphone runs and idle waits. `tool_conversation` retains a `ToolSession`
+across successive wakes on one media call. Dispatch therefore continues while
+the device is idle, and does not reset turn reservations with each reply.
+Every exit drops pending dispatch before awaiting signaling/media cleanup;
+failed construction and observers use the same cleanup path. The original
+conversation entry point still uses the raw media call and its existing rules.
+
+Memory-only component tests observe exact result envelopes during a run and
+idle, one media negotiation for two wakes, unchanged microphone frames, played
+settlement, cancellation without fabricated results, and bounded cleanup on
+configuration or observation errors. Executable policy selection, real-pin M4,
+full goldens and the dropped-result seed remain unproved. This introduces no
+shared protocol change, external dependency or credential route.
