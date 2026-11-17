@@ -56,11 +56,11 @@ async fn retained_failure(credential: Option<&str>, status: u16) {
     wait_event(&path, if relink { "auth.relink_required" } else { "run.failed" }).await;
     stream::assert_failure_frame(&mut frames, relink).await;
     bridge_refusal::error(&mut satellite, relink).await;
-    let screen = assert_surfaces(&path, relink).await;
+    assert_surfaces(&path, relink).await;
     if relink {
         assert_refused(directory.path(), &mut satellite, &path, &observer, credential).await;
     }
-    stream::finish_failure(bridge, &screen, &path, fake).await;
+    stream::finish_failure(bridge, &path, fake).await;
 }
 async fn assert_refused(
     directory: &Path,

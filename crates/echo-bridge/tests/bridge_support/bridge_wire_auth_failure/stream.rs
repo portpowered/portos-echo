@@ -181,9 +181,9 @@ pub(super) async fn assert_failure_frame(frames: &mut Lines<BufReader<tokio::net
     assert_eq!(failed["relink"], relink);
 }
 
-pub(super) async fn finish_failure(mut bridge: Process, screen: &str, path: &Path, fake: FakeLive) {
+pub(super) async fn finish_failure(mut bridge: Process, path: &Path, fake: FakeLive) {
     bridge.finish(0).await;
-    assert!(tokio::net::TcpStream::connect(screen).await.is_err());
+    bridge.assert_collected();
     assert_private_trace(path);
     fake.shutdown().await;
 }

@@ -131,3 +131,33 @@ async fn m7_private_cleanup_failure_is_propagated() {
     std::fs::remove_file(root).unwrap();
     assert_eq!(close(&mut world).await, Ok(()));
 }
+
+#[tokio::test]
+async fn m7_missing_daemon_owner_is_cleanup_failure() {
+    let mut muse = super::super::muse::Muse::default();
+    muse.url = "https://127.0.0.1:12345".into();
+    assert_eq!(
+        muse.close().await,
+        Err("m7: missing daemon owner during cleanup".into())
+    );
+}
+
+#[tokio::test]
+#[ignore = "T3 starts a local child process"]
+async fn m7_daemon_collection_failure_is_propagated() {
+    let mut command = tokio::process::Command::new("python3");
+    command.args([
+        "-c",
+        "import json,socket,threading,sys; listener=socket.socket(); listener.bind((sys.argv[1],0)); listener.listen(); print(json.dumps({'port':listener.getsockname()[1]}),flush=True); threading.Event().wait()",
+        "127.0.0.1",
+    ]);
+    let mut muse = super::super::muse::Muse::default();
+    muse.daemon = Some(super::super::super::process::Process::start(&mut command).unwrap());
+    let ready = muse.daemon.as_mut().unwrap().line().await.unwrap();
+    let daemon = muse.daemon.as_mut().unwrap().observe_collection();
+    let origin = "https://127.0.0.1";
+    muse.url = format!("{origin}:{}", ready["port"]);
+    assert_eq!(muse.close().await, Err("cleanup: owned child exited nonzero".into()));
+    assert!(!daemon.try_recv().unwrap().success());
+    assert_eq!(muse.close().await, Ok(()));
+}

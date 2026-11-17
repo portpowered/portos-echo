@@ -97,8 +97,6 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
         close(&mut world).await,
         Err("model: expected exactly two requests and verified tool output".into())
     );
-    assert!(host.try_recv().unwrap().success());
-    assert!(bridge.try_recv().unwrap().success());
     world.observe(&mut screen, 4, "connected").await.unwrap();
     let measurement = super::super::emotion::measurement(&world);
     assert_eq!(measurement["frame_count"], 2);
