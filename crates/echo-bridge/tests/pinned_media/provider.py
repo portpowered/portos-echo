@@ -50,6 +50,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+        if self.path == '/token':
+            assert body['grant_type'] == 'refresh_token'
+            assert body['refresh_token'] == 'synthetic-refresh'
+            observed['refreshes'] = observed.get('refreshes', 0) + 1
+            self.close_connection = True
+            self.respond(401, b'{"error":{"code":"refresh_token_expired"}}')
+            return
         if not self.path.startswith('/backend-api/codex/realtime/calls?'):
             observed['external'] += 1
             self.respond(403, b'{}')

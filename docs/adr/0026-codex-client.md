@@ -650,3 +650,26 @@ The two credential-negative cases still require migration from the legacy
 fixture. The exact success screen sequence gains Speaking and the final Ready
 after idle closure, preserving both intervening Ready publications. The full
 M2 milestone remains gated on the native host scenario and both negatives.
+
+### Local refresh routing amendment (2026-11-17)
+
+The binding coordinator answer at 15:11Z additionally admits one process-local
+`CODEX_REFRESH_TOKEN_URL_OVERRIDE` through `Supervisor::set_environment` before
+first launch. It accepts only an explicit nonzero port on `http://127.0.0.1` or
+`http://[::1]`, with the exact `/token` path. Duplicate settings, external hosts,
+other schemes, paths, queries and fragments fail closed. The existing cleared
+child environment remains in place. No credential is passed through this key.
+
+Only bridge-owned `LocalRoutes::environment` supplies this setting, pointing at
+the nominated fake Live origin. Ordinary configured launches never set it, even
+when the parent environment contains it. No production configuration field,
+bridge refresh client, shared contract or dependency is added.
+
+The component fixture provisions its private home through the public supervisor
+and writes only inert synthetic auth in the pin's existing store representation.
+It exercises actual pinned-server account rejection and the local refresh
+endpoint, checks no session admission or call/sideband/external request, retains
+identical synthetic auth bytes and reacquires ownership after cleanup. This is
+component evidence; it does not migrate or satisfy the M2 scenario's negative
+cases, exact refresh counter, screen sequence or post-rejection wake behavior.
+Those scenario obligations remain open.

@@ -15,7 +15,8 @@ for index, argument in enumerate(sys.argv):
         assert key not in overrides
         overrides[key] = tomllib.loads("value=" + value)["value"]
 routing_keys = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-                "http_proxy", "https_proxy", "all_proxy", "no_proxy")
+                "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+                "CODEX_REFRESH_TOKEN_URL_OVERRIDE")
 home.joinpath("routing.json").write_text(json.dumps({
     "config": overrides, "proxy": {key: os.environ[key] for key in routing_keys if key in os.environ}}))
 assert "OPENAI_API_KEY" not in os.environ

@@ -15,10 +15,8 @@ use std::{
     time::Duration,
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
-
 type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
 static NEXT: AtomicU64 = AtomicU64::new(0);
-
 struct Fixture {
     supervisor: Option<Supervisor>,
     home: PathBuf,
@@ -82,7 +80,6 @@ impl Drop for Fixture {
         }
     }
 }
-
 #[cfg(windows)]
 fn private_test_parent(path: &std::path::Path, public: bool) -> Result {
     let script = r"
@@ -111,7 +108,6 @@ Set-Acl -LiteralPath $env:ECHO_CODEX_TEST_PARENT -AclObject $acl
     assert!(status.success());
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_handshake_private_environment_argv_and_shutdown() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -138,19 +134,9 @@ async fn t3_handshake_private_environment_argv_and_shutdown() -> Result {
         result["argv"],
         json!(["--listen", "stdio://", "-c", "test.argument=\"space ; $literal\""])
     );
-    let allowed = [
-        "SYSTEMROOT",
-        "WINDIR",
-        "PATH",
-        "TEMP",
-        "TMP",
-        "COMSPEC",
-        "HOME",
-        "USERPROFILE",
-        "CODEX_HOME",
-        "NO_PROXY",
-        "LC_CTYPE",
-    ];
+    let allowed = "SYSTEMROOT WINDIR PATH TEMP TMP COMSPEC HOME USERPROFILE CODEX_HOME NO_PROXY LC_CTYPE"
+        .split_whitespace()
+        .collect::<Vec<_>>();
     for key in result["environment"].as_array().ok_or("expected array")? {
         assert!(
             allowed.contains(&key.as_str().ok_or("expected text")?),
@@ -163,7 +149,6 @@ async fn t3_handshake_private_environment_argv_and_shutdown() -> Result {
     fixture.server()?.shutdown().await?;
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_refused_handshake_and_eof_never_expose_io() -> Result {
     for (mode, expected) in [("refuse", RpcError::Remote(-32600)), ("eof", RpcError::Disconnected)] {
@@ -174,7 +159,6 @@ async fn t3_refused_handshake_and_eof_never_expose_io() -> Result {
     }
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_cancelled_initialize_keeps_child_private_until_restart() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -202,7 +186,6 @@ async fn t3_cancelled_initialize_keeps_child_private_until_restart() -> Result {
     assert_eq!(fixture.server()?.pid(), None);
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_stalled_initialize_expires_and_reaps_without_publishing_io() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -230,7 +213,6 @@ async fn t3_stalled_initialize_expires_and_reaps_without_publishing_io() -> Resu
     fixture.server()?.shutdown().await?;
     Ok(())
 }
-
 async fn observe_exit(
     pid: u32,
 ) -> Result<(
@@ -248,7 +230,6 @@ async fn observe_exit(
     assert_eq!(lines.next_line().await?.as_deref(), Some("WATCHING"));
     Ok((observer, lines))
 }
-
 #[tokio::test]
 async fn t3_crash_restart_reinitializes_without_replaying_pending_work() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -272,7 +253,6 @@ async fn t3_crash_restart_reinitializes_without_replaying_pending_work() -> Resu
     assert_eq!(fixture.server()?.pid(), None);
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_protocol_fault_closes_pipes_and_explicit_shutdown_reaps_child() -> Result {
     for (method, expected) in [("malformed", RpcError::Malformed), ("oversize", RpcError::LineTooLong)] {
@@ -286,7 +266,6 @@ async fn t3_protocol_fault_closes_pipes_and_explicit_shutdown_reaps_child() -> R
     }
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_held_process_request_expires_once_on_the_client_clock() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -304,7 +283,6 @@ async fn t3_held_process_request_expires_once_on_the_client_clock() -> Result {
     assert_eq!(fixture.server()?.pid(), None);
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_sessions_are_independent_across_restart_and_cleanup() -> Result {
     let (mut first, mut second) = (Fixture::new("normal")?, Fixture::new("normal")?);
@@ -318,7 +296,6 @@ async fn t3_sessions_are_independent_across_restart_and_cleanup() -> Result {
     second.server()?.shutdown().await?;
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_drop_kills_active_child_releases_port_and_preserves_other_session() -> Result {
     let (mut first, mut second) = (Fixture::new("normal")?, Fixture::new("normal")?);
@@ -340,7 +317,6 @@ async fn t3_drop_kills_active_child_releases_port_and_preserves_other_session() 
     second.server()?.shutdown().await?;
     Ok(())
 }
-
 #[test]
 fn t3_rejects_existing_repository_and_relative_homes_before_spawn() -> Result {
     let fixture = Fixture::new("normal")?;
@@ -362,7 +338,6 @@ fn t3_rejects_existing_repository_and_relative_homes_before_spawn() -> Result {
     }
     Ok(())
 }
-
 #[tokio::test]
 async fn t3_clean_shutdown_reopens_home_without_mutating_auth_or_work() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -390,7 +365,6 @@ async fn t3_clean_shutdown_reopens_home_without_mutating_auth_or_work() -> Resul
     assert_eq!(fs::read(marker)?, b"retained-marker");
     Ok(())
 }
-
 fn python_binary() -> Result<PathBuf> {
     let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
         .args(["-c", "import sys; print(sys.executable)"])
@@ -398,7 +372,6 @@ fn python_binary() -> Result<PathBuf> {
     assert!(output.status.success());
     Ok(PathBuf::from(String::from_utf8(output.stdout)?.trim()))
 }
-
 #[tokio::test]
 async fn t3_live_owner_rejects_second_supervisor_without_disturbing_first() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -419,7 +392,6 @@ async fn t3_live_owner_rejects_second_supervisor_without_disturbing_first() -> R
     fixture.server()?.shutdown().await?;
     Ok(())
 }
-
 #[test]
 fn t3_rejects_nonregular_marker_work_and_repository_pointer() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -447,7 +419,6 @@ fn t3_rejects_nonregular_marker_work_and_repository_pointer() -> Result {
     rejected()?;
     Ok(())
 }
-
 #[cfg(unix)]
 #[test]
 fn t3_rejects_public_or_redirected_home_and_marker() -> Result {
@@ -475,7 +446,6 @@ fn t3_rejects_public_or_redirected_home_and_marker() -> Result {
     rejected(redirect.join("new-home"))?;
     Ok(())
 }
-
 #[cfg(windows)]
 #[test]
 fn t3_rejects_public_windows_acl_without_mutating_auth() -> Result {
@@ -488,5 +458,43 @@ fn t3_rejects_public_windows_acl_without_mutating_auth() -> Result {
         Err(ProcessError::PrivateHome)
     ));
     assert_eq!(fs::read(fixture.home.join("auth.json"))?, b"synthetic-local-only");
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_refresh_override_accepts_only_single_prelaunch_numeric_loopback_token_route() -> Result {
+    let key = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+    for accepted in ["http://127.0.0.1:1234/token", "http://[::1]:1234/token"] {
+        let mut fixture = Fixture::new("normal")?;
+        for refused in [
+            "http://localhost:1234/token",
+            "https://example.invalid:1234/token", // lint-rules: allow-literal inert rejected refresh URL; never dialed
+            "http://127.0.0.1/token",
+            "http://127.0.0.1:1234/other",
+            "http://127.0.0.1:0/token",
+            "http://127.0.0.1:65536/token", // lint-rules: allow-literal inert invalid-port rejection; never dialed
+            "http://127.0.0.1:80/token?query",
+            "http://user@127.0.0.1:80/token",
+        ] {
+            assert_eq!(
+                fixture.server()?.set_environment(key, refused.into()),
+                Err(ProcessError::InvalidConfig)
+            );
+        }
+        fixture.server()?.set_environment(key, accepted.into())?;
+        assert_eq!(
+            fixture.server()?.set_environment(key, accepted.into()),
+            Err(ProcessError::InvalidConfig)
+        );
+        fixture.server()?.start().await?;
+        let observed = fixture.inspect("inspect").await?;
+        let environment = observed["environment"].as_array().ok_or("expected array")?;
+        assert!(environment.contains(&json!(key)));
+        assert_eq!(
+            fixture.server()?.set_environment(key, accepted.into()),
+            Err(ProcessError::InvalidConfig)
+        );
+        fixture.server()?.shutdown().await?;
+    }
     Ok(())
 }

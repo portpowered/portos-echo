@@ -53,6 +53,9 @@ impl LocalRoutes {
     }
 
     pub(super) fn environment(&self, supervisor: &mut Supervisor) -> Result<(), Error> {
+        supervisor
+            .set_environment("CODEX_REFRESH_TOKEN_URL_OVERRIDE", format!("{}/token", self.live))
+            .map_err(super::codex_host::process_error)?;
         // The fake also rejects proxy attempts to external origins. Set both
         // spellings because the pin's HTTP and websocket clients differ.
         for key in [

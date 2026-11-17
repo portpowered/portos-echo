@@ -75,11 +75,24 @@ impl Supervisor {
     /// # Errors
     /// Only routing/certificate keys are accepted, and only before first launch.
     pub fn set_environment(&mut self, key: &str, value: String) -> Result<(), ProcessError> {
+        let refresh = key == "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+        let refresh_target = value
+            .strip_prefix("http://")
+            .and_then(|url| url.strip_suffix("/token"))
+            .and_then(|authority| {
+                authority
+                    .strip_prefix("127.0.0.1:")
+                    .or_else(|| authority.strip_prefix("[::1]:"))
+            })
+            .filter(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|port| port.parse::<u16>().ok())
+            .is_some_and(|port| port != 0);
         let allowed = matches!(
             key.to_ascii_uppercase().as_str(),
             "HTTP_PROXY" | "HTTPS_PROXY" | "ALL_PROXY" | "NO_PROXY" | "SSL_CERT_FILE"
         );
-        if self.launched || !allowed || value.contains('\0') {
+        let duplicate = self.environment.iter().any(|(name, _)| name == key);
+        if self.launched || !(allowed || refresh && refresh_target && !duplicate) || value.contains('\0') {
             return Err(ProcessError::InvalidConfig);
         }
         self.environment.push((key.into(), value));

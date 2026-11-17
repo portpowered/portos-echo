@@ -38,7 +38,11 @@ async fn codex_voice_entry_binary_authenticates_before_ready_and_reaps_after_eof
         } else {
             std::fs::create_dir(fixture.directory.path().join("credential")).unwrap();
         }
-        let mut process = Process::spawn(command(&fixture).env("HTTP_PROXY", "http://127.0.0.1:1"));
+        let mut process = Process::spawn(
+            command(&fixture)
+                .env("HTTP_PROXY", "http://127.0.0.1:1")
+                .env("CODEX_REFRESH_TOKEN_URL_OVERRIDE", "http://127.0.0.1:1/token"),
+        );
         let mut satellite = tokio::time::timeout(OBSERVATION_TIMEOUT, listener.accept())
             .await
             .unwrap()
@@ -368,7 +372,8 @@ fn assert_local_routes(observed: &Value, live: &str, model: &str) {
         expected[key] = json!(false);
     }
     assert_eq!(observed["config"], expected);
-    let mut proxy = json!({"NO_PROXY":"127.0.0.1", "no_proxy":"127.0.0.1"});
+    let mut proxy = json!({"NO_PROXY":"127.0.0.1", "no_proxy":"127.0.0.1",
+        "CODEX_REFRESH_TOKEN_URL_OVERRIDE":format!("{live}/token")});
     for key in [
         "HTTP_PROXY",
         "HTTPS_PROXY",
