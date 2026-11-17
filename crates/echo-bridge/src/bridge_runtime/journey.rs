@@ -360,7 +360,13 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             }
             Ok(())
         } else {
-            source.event(event, lab)
+            source.event(event, lab)?;
+            // Lab echo has one fixed input, never an interrupting question.
+            // Fairly interleaved packets after reply start are still that input.
+            if lab && source.cancelled {
+                self.microphone_at_reply = None;
+            }
+            Ok(())
         }
     }
     async fn forward(&mut self, tx: &L::ReplySink, frame: Vec<u8>) -> Result<(), Error> {
