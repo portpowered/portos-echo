@@ -8,7 +8,7 @@ case $(uname -s) in
     . "$root/scripts/wsl-distro.sh"
     distro=$(echo_wsl_distro)
     adapter=$(echo_wsl_run "$distro" wslpath -u "$(cygpath -am "$adapter")")
-    echo_wsl_exec "$distro" python3 "$adapter" "$@"
+    echo_wsl_relay "$root" "$distro" "$adapter" --observer -- "$@"
     ;;
 esac
 exec python3 "$adapter" "$@"

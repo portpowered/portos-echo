@@ -428,7 +428,8 @@ class BuildEchoTests(unittest.TestCase):
                 self.assertNotIn('binary size', result.stdout)
 
 
-from test_wsl_distro import SelectorTests, DispatchTests, PythonDispatchTests
+from test_wsl_distro import (SelectorTests, DispatchTests, PythonDispatchTests,
+                            NumericRelayTests, ControllerFailureTests)
 
 
 if __name__ == '__main__':

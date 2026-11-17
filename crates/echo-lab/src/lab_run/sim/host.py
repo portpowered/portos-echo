@@ -34,8 +34,7 @@ from wsl_distro import resolve_wsl_distro
 from wsl_host import LauncherError, LauncherChild, HostCancelled
 
 # Both T3 launchers share the native transport; the Linux Host stays direct.
-sys.path.insert(0, str(ROOT / "crates/echo-lab/tests/device_support"))
-from relay import observations, guest
+from wsl_relay import observations, guest
 
 
 def launcher_input(events):

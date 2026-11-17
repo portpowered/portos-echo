@@ -88,13 +88,23 @@ def guest(port):
 class Connection:
     def __init__(self, peer, argv):
         self.peer = peer
-        self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, bufsize=0)
+        self.stop_read, self.stop_write = socket.socketpair()
+        try:
+            self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL, bufsize=0)
+        except BaseException:
+            self.stop_read.close()
+            self.stop_write.close()
+            raise
         self.lock = threading.Lock()
         self.reader = threading.Thread(target=self.receive)
         self.writer = threading.Thread(target=self.send)
-        self.reader.start()
-        self.writer.start()
+        try:
+            self.reader.start()
+            self.writer.start()
+        except BaseException:
+            self.close()
+            raise
 
     def frame(self, data=None):
         with self.lock:
@@ -108,6 +118,9 @@ class Connection:
     def send(self):
         try:
             while True:
+                ready, _, _ = select.select([self.peer, self.stop_read], [], [])
+                if self.stop_read in ready:
+                    return
                 data = self.peer.recv(65536)
                 self.frame(data)
                 if not data:
@@ -141,9 +154,11 @@ class Connection:
                 self.peer.shutdown(socket.SHUT_WR)
 
     def close(self):
+        self.stop_write.sendall(b'x')
         with contextlib.suppress(OSError):
             self.peer.shutdown(socket.SHUT_RDWR)
-        self.writer.join(timeout=1)
+        if self.writer.ident is not None:
+            self.writer.join(timeout=1)
         with contextlib.suppress(OSError, ValueError):
             self.proc.stdin.close()
         try:
@@ -153,9 +168,12 @@ class Connection:
             self.proc.wait()
             raise RuntimeError('relay guest did not collect') from None
         finally:
-            self.reader.join(timeout=1)
+            if self.reader.ident is not None:
+                self.reader.join(timeout=1)
             self.peer.close()
             self.proc.stdout.close()
+            self.stop_read.close()
+            self.stop_write.close()
         if self.writer.is_alive() or self.reader.is_alive():
             raise RuntimeError('relay stream did not collect')
 
@@ -164,14 +182,27 @@ class Relay:
     def __init__(self, argv):
         self.argv = argv
         self.connections = []
+        self.guard = threading.Lock()
+        self.generation = 1
         self.listener = socket.socket()
-        self.listener.bind(('127.0.0.1', 0))
-        self.listener.listen()
+        try:
+            self.listener.bind(('127.0.0.1', 0))
+            self.listener.listen()
+        except BaseException:
+            self.listener.close()
+            raise
         self.address = '127.0.0.1:' + str(self.listener.getsockname()[1])
-        self.stop_read, self.stop_write = socket.socketpair()
         self.failure = None
         self.thread = threading.Thread(target=self.accept)
-        self.thread.start()
+        try:
+            self.stop_read, self.stop_write = socket.socketpair()
+            self.thread.start()
+        except BaseException:
+            self.listener.close()
+            if hasattr(self, 'stop_read'):
+                self.stop_read.close()
+                self.stop_write.close()
+            raise
 
     def accept(self):
         try:
@@ -181,12 +212,32 @@ class Relay:
                     return
                 peer, _ = self.listener.accept()
                 try:
-                    self.connections.append(Connection(peer, self.argv))
+                    with self.guard:
+                        if self.argv is None:
+                            peer.close()
+                        else:
+                            self.connections.append(Connection(peer, self.argv))
                 except BaseException:
                     peer.close()
                     raise
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RuntimeError) as error:
             self.failure = error
+
+    def replace(self, argv):
+        """Collect the old generation even when the guest reuses its port."""
+        with self.guard:
+            self.argv = None
+            connections, self.connections = self.connections, []
+            failures = []
+            for connection in connections:
+                try:
+                    connection.close()
+                except (OSError, ValueError, RuntimeError) as error:
+                    failures.append(error)
+            if failures:
+                raise RuntimeError('relay cleanup failed')
+            self.generation += 1
+            self.argv = argv
 
     def close(self):
         self.stop_write.sendall(b'x')
@@ -204,19 +255,36 @@ class Relay:
             raise RuntimeError('relay cleanup failed')
 
 
+def rewrite_ready(value, relay_argv, relays):
+    if value.get('event') == 'host.ready':
+        port = int(value['address'].rsplit(':', 1)[1])
+        argv = [*relay_argv, str(port)]
+        if not relays:
+            relay = Relay(argv)
+            relays.append(relay)
+        else:
+            relay = relays[0]
+            relay.replace(argv)
+        value['address'] = relay.address
+
+
+def close_relays(relays):
+    failures = []
+    for relay in relays:
+        try:
+            relay.close()
+        except (OSError, ValueError, RuntimeError) as error:
+            failures.append(error)
+    if failures:
+        raise RuntimeError('relay cleanup failed') from None
+
+
 def observations(proc, relay_argv, relays, emit, events):
     """Publish a listening native endpoint, retaining every relay until cleanup."""
     try:
         for line in proc.stdout:
             value = json.loads(line)
-            if value.get('event') == 'host.ready':
-                port = int(value['address'].rsplit(':', 1)[1])
-                argv = [*relay_argv, str(port)]
-                relay = next((owned for owned in relays if owned.argv == argv), None)
-                if relay is None:
-                    relay = Relay(argv)
-                    relays.append(relay)
-                value['address'] = relay.address
+            rewrite_ready(value, relay_argv, relays)
             emit(value)
     except (OSError, ValueError, RuntimeError):
         events.put(('error', None))
@@ -247,11 +315,7 @@ def forward(argv, relay_argv):
     try:
         for line in proc.stdout:
             value = json.loads(line)
-            if value.get('event') == 'host.ready':
-                port = int(value['address'].rsplit(':', 1)[1])
-                relay = Relay([*relay_argv, str(port)])
-                relays.append(relay)
-                value['address'] = relay.address
+            rewrite_ready(value, relay_argv, relays)
             print(json.dumps(value), flush=True)
         return proc.wait()
     finally:
@@ -267,11 +331,12 @@ def forward(argv, relay_argv):
             raise RuntimeError('relay controller did not collect') from None
         finally:
             proc.stdout.close()
-            failures = []
-            for relay in relays:
-                try:
-                    relay.close()
-                except (OSError, ValueError, RuntimeError) as error:
-                    failures.append(error)
-            if failures:
-                raise RuntimeError('relay cleanup failed') from None
+            close_relays(relays)
+
+
+if __name__ == '__main__':
+    if len(sys.argv) == 3 and sys.argv[1] == '--guest':
+        guest(int(sys.argv[2]))
+    else:
+        from wsl_controller import main
+        sys.exit(main())

@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 from wsl_distro import DEFAULT_WSL_DISTRO, resolve_wsl_distro
+from test_wsl_relay import NumericRelayTests, ControllerFailureTests
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTERS = ('scripts/hassmic-host.sh', 'scripts/build-echo-wsl.sh',
@@ -40,6 +41,8 @@ else:
             print(args[-1])
         else:
             sys.exit(int(os.environ.get('GUEST_STATUS', '0')))
+    elif name == 'python':
+        sys.exit(int(os.environ.get('GUEST_STATUS', '0')))
 '''
 
 
@@ -89,7 +92,7 @@ class DispatchTests(unittest.TestCase):
         tool.write_text(TOOL)
         self.env = shell_env()
         python = Path(sys.executable).as_posix()
-        for name in ('uname', 'cygpath', 'wsl', 'python3'):
+        for name in ('uname', 'cygpath', 'wsl', 'python3', 'python'):
             path = self.bin / name
             path.write_text(f'#!/bin/sh\nexec "{python}" "{tool.as_posix()}" {name} "$@"\n')
             path.chmod(0o755)
@@ -137,8 +140,11 @@ class DispatchTests(unittest.TestCase):
                     records = self.records()
                     self.assertTrue(records)
                     for name, args in records:
-                        self.assertEqual(name, 'wsl')
-                        self.assertEqual(args[:3], ['-d', 'pe-ci', '--exec'])
+                        self.assertIn(name, ('wsl', 'python'))
+                        if name == 'wsl':
+                            self.assertEqual(args[:3], ['-d', 'pe-ci', '--exec'])
+                        else:
+                            self.assertEqual(args[1:4], ['--distro', 'pe-ci', '--controller'])
                     if status:
                         self.assertNotEqual(result.returncode, 0)
                         self.assertIn("WSL distro 'pe-ci'", result.stderr)
@@ -182,7 +188,7 @@ class PythonDispatchTests(unittest.TestCase):
         import threading
         cls.socket, cls.threading = socket, threading
         spec = importlib.util.spec_from_file_location('device_relay',
-            ROOT / 'crates/echo-lab/tests/device_support/relay.py')
+            ROOT / 'scripts/wsl_relay.py')
         cls.relay = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.relay)
 
@@ -296,10 +302,11 @@ class PythonDispatchTests(unittest.TestCase):
             b'{"event":"host.ready","address":"127.0.0.1:12345"}\n'
             b'{"event":"host.ack","pid":17}\n'
             b'{"event":"host.ready","address":"127.0.0.1:12345"}\n'))
-        relay = types.SimpleNamespace(address='127.0.0.1:23456', argv=['guest', '--relay', '12345'])
+        relay = types.SimpleNamespace(address='127.0.0.1:23456', argv=['guest', '--relay', '12345'], replace=mock.Mock())
         with mock.patch.object(self.relay, 'Relay', return_value=relay) as bind:
             self.relay.observations(proc, ['guest', '--relay'], relays, emitted.append, events)
         bind.assert_called_once_with(['guest', '--relay', '12345'])
+        relay.replace.assert_called_once_with(['guest', '--relay', '12345'])
         self.assertEqual(relays, [relay])
         self.assertEqual(emitted, [{'event': 'host.ready', 'address': '127.0.0.1:23456'},
                                    {'event': 'host.ack', 'pid': 17},
@@ -328,10 +335,14 @@ class PythonDispatchTests(unittest.TestCase):
                     '{"event":"host.ready","address":"127.0.0.1:12345"}\n'
                     '{"event":"host.ready","address":"127.0.0.1:12346"}\n'))
                 proc.wait.return_value = 0
+                owners = iter([first, second])
+
+                def acquire(value, argv, relays):
+                    relays.append(next(owners))
+
                 with mock.patch.object(self.relay.subprocess, 'Popen', return_value=proc), \
-                        mock.patch.object(self.relay, 'Relay', side_effect=[first, second]), \
-                        mock.patch.object(self.relay.threading, 'Thread'), \
-                        mock.patch('builtins.print'):
+                        mock.patch.object(self.relay, 'rewrite_ready', side_effect=acquire), \
+                        mock.patch.object(self.relay.threading, 'Thread'), mock.patch('builtins.print'):
                     with self.assertRaisesRegex(RuntimeError, '^relay cleanup failed$'):
                         self.relay.forward(['controller'], ['guest', '--relay'])
                 first.close.assert_called_once_with()
@@ -343,6 +354,7 @@ class PythonDispatchTests(unittest.TestCase):
         socket = self.socket
         errors = []
         received = []
+        active = self.threading.Event()
         payload = bytes(range(256)) * 1024
         reply = payload[::-1]
         with socket.socket() as host:
@@ -364,6 +376,8 @@ class PythonDispatchTests(unittest.TestCase):
                             if not chunk:
                                 break
                             data.extend(chunk)
+                            if cancel and len(data) == len(payload):
+                                active.set()
                         received.append(bytes(data))
                         if not remote_first and not cancel:
                             peer.sendall(reply)
@@ -371,16 +385,20 @@ class PythonDispatchTests(unittest.TestCase):
                     errors.append(error)
 
             server = self.threading.Thread(target=serve)
-            server.start()
             argv = [sys.executable, '-u', '-c',
-                    'import sys; sys.path.insert(0, sys.argv[1]); from relay import guest; guest(int(sys.argv[2]))',
-                    str(ROOT / 'crates/echo-lab/tests/device_support'), str(port)]
-            relay = self.relay.Relay(argv)
+                    'import sys; sys.path.insert(0, sys.argv[1]); from wsl_relay import guest; guest(int(sys.argv[2]))',
+                    str(ROOT / 'scripts'), str(port)]
+            relay = None
+            server.start()
             try:
+                relay = self.relay.Relay(argv)
                 with socket.create_connection(('127.0.0.1', int(relay.address.split(':')[1])), timeout=5) as client:
                     if cancel:
                         client.sendall(payload)
-                        # A response is unnecessary: close must collect an active guest.
+                        # Wait for the guest to deliver all bytes before cancellation.
+                        self.assertTrue(active.wait(timeout=5), 'guest did not deliver payload')
+                        self.assertEqual(len(relay.connections), 1)
+                        self.assertIsNone(relay.connections[0].proc.poll())
                     elif remote_first:
                         data = bytearray()
                         while chunk := client.recv(65536):
@@ -398,12 +416,14 @@ class PythonDispatchTests(unittest.TestCase):
                 if not cancel:
                     server.join(timeout=5)
             finally:
-                relay.close()
-                server.join(timeout=5)
+                try:
+                    if relay is not None:
+                        relay.close()
+                finally:
+                    server.join(timeout=5)
             self.assertFalse(server.is_alive())
             self.assertEqual(errors, [])
-            if not cancel:
-                self.assertEqual(received, [payload])
+            self.assertEqual(received, [payload])
             self.assertEqual(len(relay.connections), 1)
             for connection in relay.connections:
                 self.assertIsNotNone(connection.proc.poll())
