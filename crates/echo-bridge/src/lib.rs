@@ -11,6 +11,8 @@ pub mod bridge_muse;
 pub mod bridge_operator;
 pub mod bridge_runtime;
 pub mod bridge_trace;
+#[path = "bridge_voice/bridge_voice.rs"]
+pub mod bridge_voice;
 
 /// Fixed diagnostics never contain input, credentials, audio or provider bodies.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]

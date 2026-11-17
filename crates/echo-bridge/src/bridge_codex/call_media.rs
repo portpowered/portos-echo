@@ -149,6 +149,25 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         self.peer.dropped_frames()
     }
 
+    /// Take one already accepted PCM frame without waiting for future media.
+    /// A pending receive is a local queue boundary, never remote audio EOF.
+    /// # Errors
+    /// Closed/failed media is not a successful drain. The host must close on error.
+    pub async fn ready_audio(&mut self) -> Result<Option<PcmFrame>, Error> {
+        if !self.active {
+            return Err(Error::Unavailable);
+        }
+        let receive = self.peer.recv();
+        tokio::pin!(receive);
+        std::future::poll_fn(|cx| match std::future::Future::poll(receive.as_mut(), cx) {
+            std::task::Poll::Pending => std::task::Poll::Ready(Ok(None)),
+            std::task::Poll::Ready(Ok(Some(frame))) => std::task::Poll::Ready(Ok(Some(frame))),
+            std::task::Poll::Ready(Ok(None)) => std::task::Poll::Ready(Err(Error::Unavailable)),
+            std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(media_error(error))),
+        })
+        .await
+    }
+
     /// Await both stop acknowledgement/closed and peer worker/socket release.
     /// # Errors
     /// Cleanup of either side still runs when the other fails.

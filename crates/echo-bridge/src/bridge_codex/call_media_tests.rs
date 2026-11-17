@@ -83,6 +83,38 @@ impl MediaPeer for Controlled {
 }
 
 #[tokio::test(start_paused = true)]
+async fn media_call_ready_drain_is_nonblocking_ordered_and_distinguishes_eof() {
+    let (mut io, mut server) = fixture();
+    let (peer, state, tx) = peer(true, None);
+    let client = async {
+        let mut call = MediaCall::new(&mut io, peer);
+        assert_eq!(call.ready_audio().await, Err(Error::Unavailable));
+        call.start(&options(), vec![], deadline()).await.unwrap();
+        let start = Instant::now();
+        assert_eq!(call.ready_audio().await.unwrap(), None);
+        tx.send([1; 320]).await.unwrap();
+        tx.send([2; 320]).await.unwrap();
+        assert_eq!(call.ready_audio().await.unwrap(), Some([1; 320]));
+        assert_eq!(call.ready_audio().await.unwrap(), Some([2; 320]));
+        assert_eq!(call.ready_audio().await.unwrap(), None);
+        assert_eq!(Instant::now(), start);
+        drop(tx);
+        assert_eq!(call.ready_audio().await, Err(Error::Unavailable));
+        call.close(deadline()).await.unwrap();
+        assert_eq!(call.ready_audio().await, Err(Error::Unavailable));
+    };
+    let remote = async {
+        start(&mut server).await;
+        stop(&mut server).await;
+    };
+    tokio::join!(client, remote);
+    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+}
+
+#[path = "../bridge_voice/voice_media_cases.rs"]
+mod voice;
+
+#[tokio::test(start_paused = true)]
 async fn media_call_waits_for_connected_sends_pcm_and_preserves_generation_after_close() {
     let (mut io, mut server) = fixture();
     let (peer, state, tx) = peer(true, None);

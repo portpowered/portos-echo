@@ -328,3 +328,38 @@ nominated API-key delivery, unchanged synthetic auth bytes, callback failure,
 cancellation during initialization/account/session work, process socket release
 and lease reacquisition. No provider or hardware is used. This boundary is not
 yet selected by canonical voice startup and does not prove real-pin M2.
+
+## Bridge device run amendment (2026-11-17)
+
+The run owner joins the existing call/media owner with Wyoming capture and
+playback. It creates no additional process or IO reader. Capture conversion,
+bounded reply conversion and the shared lead pacer remain separate component
+boundaries. During paced waits, blocked playback sends and played settlement,
+the owner continues reading app-server control and device events. One pending
+PCM frame survives cancellation of a blocked send; its successful handoff is
+counted once. The host supplies observation callbacks for screen and trace.
+
+Only assistant transcript completion starts local media drain. A nonblocking
+receive drains already accepted PCM in order before flushing conversion. This
+is a local queue boundary, not proof of remote audio EOF: later PCM fails the
+run rather than silently truncating a reply. Real-pin M2 must still establish
+that the provider's transcript/media ordering supports the complete reply.
+Neither a user transcript nor an unrecognized event ends playback. Success
+requires drained retained PCM, source close, the device's played event, the
+playback operation's Played result and capture completion. Empty replies also
+await played. Response and played settlement have independent deadlines with
+one overall ceiling. A premature receipt, media EOF or error cannot publish
+successful completion.
+
+Mute suppresses capture and discards partial capture state. Cancellation,
+transport, observer and deadline failures request a bounded cut; the outer
+conversation owner must await call/media and device cleanup before reuse or
+supervisor shutdown. Unhandled tool requests fail without an effect until the
+authorized dispatcher is connected. This component does not implement M3.
+
+Paused-clock memory-only checks protect completion, exact PCM and counters,
+200 ms initial lead, oldest-frame evictions, control under backpressure,
+capture admission, error cleanup and missing/premature played. A combined
+component check uses actual MediaCall JSONL projection and the in-memory device
+port with controlled media. These checks do not select canonical voice startup
+or prove pinned app-server ordering, real Wyoming playback or any milestone.

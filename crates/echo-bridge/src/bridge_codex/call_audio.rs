@@ -171,6 +171,12 @@ impl ReplyAudio {
         self.pacer.next_frame(&mut self.queue).await
     }
 
+    /// Whether a paced receive can eventually yield a retained frame.
+    #[must_use]
+    pub fn has_frames(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
     /// Accepted media was flushed and all retained frames were handed to playback.
     /// The run owner must still await Wyoming's played receipt.
     #[must_use]
