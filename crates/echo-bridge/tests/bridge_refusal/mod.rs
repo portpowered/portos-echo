@@ -2,6 +2,7 @@
 use super::*;
 use std::io::Write;
 use tokio::net::TcpListener;
+pub(crate) mod continuous;
 mod journeys;
 
 async fn refusal(cause: &str) {
