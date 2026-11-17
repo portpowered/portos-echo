@@ -216,7 +216,12 @@ impl World {
         tokio::select! {
             result = relay.wait(property) => result,
             result = failure => result,
-            () = tokio::time::sleep(std::time::Duration::from_secs(5)) => Err(format!("M3 {phase}: missing observation before 5000 ms deadline")),
+            () = tokio::time::sleep(std::time::Duration::from_secs(5)) => Err(format!(
+                "M3 {phase}: missing observation before 5000 ms deadline; capture_tail_bytes={} continues={} Live_frames={}",
+                relay.observed.borrow().tail_bytes,
+                relay.observed.borrow().continues,
+                self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().frames,
+            )),
         }
     }
 

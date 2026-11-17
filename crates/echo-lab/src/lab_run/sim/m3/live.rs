@@ -190,9 +190,9 @@ async fn replay(
             wire.send_modify(|state| state.cancel = Some(Instant::now()));
             phase = 2;
         }
-        if phase == 2 && frames >= 55 && state.played.len() == 1 && state.old_sink_pcm.is_some() {
+        if phase == 2 && frames >= 54 && state.played.len() == 1 && state.old_sink_pcm.is_some() {
             verify_tail(&state, frames)?;
-            wire.send_modify(|state| state.live_tail_frames = frames - 50);
+            wire.send_modify(|state| state.live_tail_frames = frames - 49);
             answer(peer, &mut sequence, 10, "The day is Monday.").await?;
             peer.send_text(r#"{"type":"response.audio.done"}"#)
                 .await
@@ -207,8 +207,10 @@ async fn replay(
 }
 
 fn verify_tail(state: &Ledger, frames: u64) -> Result<(), String> {
-    if frames != 55 || state.tail_bytes != 3200 || state.runs != 1 || state.continues != 1 {
-        return Err("M3 continuation: expected 55 Live frames, 3200 post-Played bytes and one run/continue".into());
+    // The continuous resampler retains its partial frame across the cut:
+    // 44 initial frames + 5 interrupting prefix + 5 post-Played tail.
+    if frames != 54 || state.tail_bytes != 3200 || state.runs != 1 || state.continues != 1 {
+        return Err("M3 continuation: expected 54 Live frames, 3200 post-Played bytes and one run/continue".into());
     }
     Ok(())
 }
@@ -297,6 +299,20 @@ async fn request(socket: &mut TcpStream) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn continuous_tail_requires_exact_unflushed_frame_total() {
+        let state = Ledger {
+            tail_bytes: 3200,
+            runs: 1,
+            continues: 1,
+            ..Ledger::default()
+        };
+        assert!(verify_tail(&state, 54).is_ok());
+        for frames in [49, 53, 55] {
+            assert!(verify_tail(&state, frames).is_err());
+        }
+    }
 
     #[tokio::test]
     async fn stopped_receiver_rejects_snapshot_instead_of_reusing_retained_frames() {
