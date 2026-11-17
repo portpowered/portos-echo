@@ -4,6 +4,7 @@ mod bridge_delegation;
 pub(crate) mod bridge_kill;
 mod bridge_lifecycle;
 mod bridge_pacing;
+mod bridge_refusal;
 mod bridge_relink;
 mod bridge_screen;
 mod bridge_timing;
