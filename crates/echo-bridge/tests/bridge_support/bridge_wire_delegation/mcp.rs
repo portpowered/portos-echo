@@ -18,6 +18,8 @@ struct Session {
     control: String,
     wall_epoch: (u64, u64),
     trace_path: PathBuf,
+    probe_schedule: Option<faults::ProbeSchedule>,
+    wyoming_listener: TcpListener,
 }
 
 impl Session {
@@ -80,6 +82,8 @@ impl Session {
             control,
             wall_epoch,
             trace_path: directory.join("trace"),
+            probe_schedule: None,
+            wyoming_listener: listener,
         }
     }
 
@@ -90,6 +94,7 @@ impl Session {
             serde_json::from_str::<Value>(&line).unwrap(),
             json!({"event":"bridge.clock_advanced","milliseconds":milliseconds})
         );
+        self.observe_held_advance().await;
     }
 
     async fn prompt(&mut self, mock: &Mock) {
@@ -110,7 +115,8 @@ impl Session {
         // Receiving this describe orders the cursor after the preceding probe's
         // flushed success. Each Session owns one child and one trace generation.
         let cursor = std::fs::read(&self.trace_path).unwrap().len();
-        bridge_short::send(&mut self.satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
+        self.send_probe_reply().await;
+        self.release_at_probe_wait(cursor).await;
         wait_probe(&self.trace_path, cursor).await;
     }
 }
