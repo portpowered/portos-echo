@@ -20,7 +20,8 @@ fn mock_refuses_invalid_claims_headers_signature_keys_and_reused_jti() {
     let jwk = private.expose();
     let key = proof::signing_key(jwk).unwrap();
     let header = json!({"typ":"dpop+jwt","alg":"ES256","jwk":{"kty":jwk.kty,"crv":jwk.crv,"x":jwk.x,"y":jwk.y}});
-    let claims = json!({"htm":"POST","htu":"http://127.0.0.1/custom/token","iat":crate::wire::unix_now().unwrap(),"jti":"synthetic-id"});
+    let claims =
+        json!({"htm":"POST","htu":"http://127.0.0.1/custom/token","iat":1_800_000_000_u64,"jti":"synthetic-id"});
     for field in ["htm", "htu", "ath", "iat", "jti"] {
         let mut changed = claims.clone();
         changed[field] = if field == "iat" {
@@ -33,7 +34,7 @@ fn mock_refuses_invalid_claims_headers_signature_keys_and_reused_jti() {
         assert!(!verify(
             &request(&header, &changed, key.expose()),
             "http://127.0.0.1",
-            &mut State::default()
+            &mut fixture_state()
         ));
     }
     for field in ["typ", "alg"] {
@@ -42,7 +43,7 @@ fn mock_refuses_invalid_claims_headers_signature_keys_and_reused_jti() {
         assert!(!verify(
             &request(&changed, &claims, key.expose()),
             "http://127.0.0.1",
-            &mut State::default()
+            &mut fixture_state()
         ));
     }
     for field in ["kty", "crv", "x", "y", "d"] {
@@ -51,10 +52,10 @@ fn mock_refuses_invalid_claims_headers_signature_keys_and_reused_jti() {
         assert!(!verify(
             &request(&changed, &claims, key.expose()),
             "http://127.0.0.1",
-            &mut State::default()
+            &mut fixture_state()
         ));
     }
-    let mut state = State::default();
+    let mut state = fixture_state();
     let valid = request(&header, &claims, key.expose());
     assert!(verify(&valid, "http://127.0.0.1", &mut state));
     assert!(!verify(&valid, "http://127.0.0.1", &mut state));
@@ -72,7 +73,7 @@ fn mock_refuses_invalid_claims_headers_signature_keys_and_reused_jti() {
     assert!(!verify(
         &request(&header, &next, other_key.expose()),
         "http://127.0.0.1",
-        &mut State::default()
+        &mut fixture_state()
     ));
 }
 
@@ -91,6 +92,43 @@ fn mock_refuses_truncated_or_missing_proofs() {
             form: BTreeMap::new(),
             time: 0,
         };
-        assert!(!verify(&request, "http://127.0.0.1", &mut State::default()));
+        assert!(!verify(&request, "http://127.0.0.1", &mut fixture_state()));
+    }
+}
+
+fn fixture_state() -> State {
+    State {
+        epoch: 1_800_000_000,
+        ..State::default()
+    }
+}
+
+#[test]
+fn mock_iat_window_is_inclusive_and_tracks_fake_elapsed_time() {
+    let private = proof::generate();
+    let jwk = private.expose();
+    let key = proof::signing_key(jwk).unwrap();
+    let header = json!({"typ":"dpop+jwt","alg":"ES256","jwk":{"kty":jwk.kty,"crv":jwk.crv,"x":jwk.x,"y":jwk.y}});
+    for (iat, accepted) in [
+        (1_799_999_997, false),
+        (1_799_999_998, true),
+        (1_800_000_000, true),
+        (1_800_000_002, true),
+        (1_800_000_003, false),
+    ] {
+        let claims = json!({"htm":"POST","htu":"http://127.0.0.1/custom/token","iat":iat,"jti":"window-id"});
+        let proof = request(&header, &claims, key.expose());
+        assert_eq!(verify(&proof, "http://127.0.0.1", &mut fixture_state()), accepted);
+        let mut elapsed = proof;
+        elapsed.time = 10;
+        assert!(!verify(&elapsed, "http://127.0.0.1", &mut fixture_state()));
+    }
+    for iat in [Value::Null, json!("invalid")] {
+        let claims = json!({"htm":"POST","htu":"http://127.0.0.1/custom/token","iat":iat,"jti":"invalid-iat"});
+        assert!(!verify(
+            &request(&header, &claims, key.expose()),
+            "http://127.0.0.1",
+            &mut fixture_state()
+        ));
     }
 }

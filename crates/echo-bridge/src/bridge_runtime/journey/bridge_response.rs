@@ -32,6 +32,7 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         microphone_at_reply: None,
         played: false,
         cancellation: Cancellation::Response,
+        cut: None,
         deadline: Instant::now() + bridge_timing::RESPONSE,
         delegation: options.4,
         kill: options.5,
@@ -87,12 +88,26 @@ async fn play<L: EchoLink>(
         bridge_timing::playback(context.kill.settings),
     );
     let mut failure = None;
+    let mut tx = Some(tx);
     let producer = async {
-        let result = produce(source, run, events, call, tx, lab, context).await;
+        let result = produce(
+            source,
+            run,
+            events,
+            call,
+            tx.as_ref().ok_or(Error::Wyoming)?,
+            lab,
+            context,
+        )
+        .await;
         failure = stop_failed_producer(result, client, lab.0).await?;
+        drop(tx.take());
         context.await_played(events, run, source, call).await
     };
-    let (outcome, ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer)?;
+    let outcome = match tokio::try_join!(async { play.await.map_err(Error::from) }, producer) {
+        Ok((outcome, ())) => outcome,
+        Err(error) => return Err(context.settle_failure(error).await),
+    };
     if failure.is_some() && source.sent > 0 {
         // A failed response has no replacement answer to end continued capture.
         // Settle Played first, then return the same satellite to wake readiness.

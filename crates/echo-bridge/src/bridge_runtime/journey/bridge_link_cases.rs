@@ -391,6 +391,7 @@ async fn bridge_link_continuation_requires_new_input_and_preserves_admitted_tota
         microphone_at_reply: Some(44),
         played: true,
         cancellation: Cancellation::Response,
+        cut: None,
         deadline: Instant::now(),
         delegation: &mut fixture.host,
         kill: &kill,
@@ -421,16 +422,19 @@ async fn bridge_link_continuation_requires_new_input_and_preserves_admitted_tota
     assert!(!context.continuing(&source));
 }
 
+fn marker(sample: i16) -> MicFrame {
+    MicFrame {
+        format: bridge_audio::format(16_000),
+        payload: sample.to_le_bytes().repeat(1024),
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn bridge_link_interrupting_tail_is_forwarded_while_awaiting_old_played_and_after_resume() {
     let mut fixture = Fixture::new().await;
     let observer = Observer::default();
     let mut link = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = link.events().unwrap();
-    let marker = |sample: i16| MicFrame {
-        format: bridge_audio::format(16_000),
-        payload: sample.to_le_bytes().repeat(1024),
-    };
     observer.wake("Computer", vec![marker(1200)]);
     let mut run = select_wake(events.recv().await.unwrap()).unwrap().unwrap();
     let mut writer = Trace::open(&fixture.directory.path().join("trace"), "api_key").unwrap();
@@ -450,6 +454,7 @@ async fn bridge_link_interrupting_tail_is_forwarded_while_awaiting_old_played_an
         microphone_at_reply: Some(0),
         played: false,
         cancellation: Cancellation::Response,
+        cut: None,
         deadline: Instant::now(),
         delegation: &mut fixture.host,
         kill: &kill,
