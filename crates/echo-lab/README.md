@@ -474,7 +474,8 @@ M4 remains not runnable until the W2 assembled bridge and agent integration.
 
 Build once with `make hassmic-host` and `cargo build -p echo-lab --bins --locked`.
 The host requires the development packages documented by
-`scripts/hassmic-host.sh`; Windows uses the existing WSL Ubuntu installation.
+`scripts/hassmic-host.sh`; Windows selects its guest as documented in
+[Windows WSL helpers](../../docs/README.md#windows-wsl-helpers).
 The runner never builds binaries, installs packages or accesses hardware.
 
 ```text

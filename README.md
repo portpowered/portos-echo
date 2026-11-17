@@ -63,6 +63,7 @@ Git's `cmd`, `bin`, `usr/bin` and `mingw64/bin` layouts are supported. An unsupp
 before recipes with the tool, checked path and manual install/repair instruction; Make never downloads tools.
 If Python is missing, install it manually and ensure `python` is on PATH before retrying. Ubuntu continues to use
 native `sh -ec` and POSIX utilities on PATH, with Python 3 for the lint self-tests.
+For Windows WSL selection and locked validation, see [Windows WSL helpers](docs/README.md#windows-wsl-helpers).
 
 The existing gates also require their provisioned tools: cargo-nextest, cargo-deny, cargo-llvm-cov, the pinned
 nightly coverage toolchain, shfmt, shellcheck, gitleaks, Node/npm and the documentation checkers. The pinned
