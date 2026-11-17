@@ -1,5 +1,4 @@
 """T3 shipped helper CLI with private, offline, already-provisioned cache copies."""
-import concurrent.futures
 import hashlib
 import os
 import pathlib
@@ -16,8 +15,8 @@ COMMAND = (['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File
            ['sh', str(ROOT / 'scripts/codex-app-server.sh')])
 
 
-def run(cache=None, command=COMMAND):
-    environment = dict(os.environ, ECHO_CODEX_OFFLINE='1')
+def run(cache=None, command=COMMAND, offline=True):
+    environment = dict(os.environ, ECHO_CODEX_OFFLINE='1' if offline else '0')
     if cache is not None:
         environment['ECHO_CODEX_CACHE_DIR'] = str(cache)
     return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=20)
@@ -59,31 +58,28 @@ def corrupt_and_restore(path, cache):
 
 
 def writer_lock(published, cache):
-    lock = published.with_name(published.name + '.lock')
+    sys.path.insert(0, str(ROOT / 'crates/echo-codex/tests'))
+    from codex_readers import check_warm
+
+    check_warm(published, cache, sys.modules[__name__])
+    # No publication exists here: online admission must refuse before download.
+    cold_cache = cache.parent / 'cold leased cache'
+    cold_published = cold_cache / pathlib.Path(*published.parts[-3:])
+    cold_published.parent.mkdir(parents=True)
+    lock = cold_published.with_name(cold_published.name + '.lock')
     if WINDOWS:
         lock.write_text('fixture-owned', encoding='ascii')
     else:
         lock.mkdir()
     try:
-        # Both CLI processes encounter an independently held writer lease.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            results = list(pool.map(run, [cache, cache]))
-        for result in results:
-            refused(result, 'codex-app-server:')
-            assert lock.exists(), 'helper deleted another writer lease'
+        refused(run(cold_cache), 'binary missing; provision before testing')
+        refused(run(cold_cache, offline=False), 'codex-app-server:')
+        assert lock.exists(), 'helper deleted another writer lease'
         if WINDOWS:
             assert lock.read_text(encoding='ascii') == 'fixture-owned'
+        assert list(cold_published.parent.iterdir()) == [lock]
     finally:
         lock.unlink() if WINDOWS else lock.rmdir()
-    # Once admitted, competing readers may succeed or refuse an owned lease.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(run, [cache, cache]))
-    successes = [successful(result) for result in results if result.returncode == 0]
-    assert successes and all(path.parent == published for path in successes)
-    for result in results:
-        if result.returncode != 0:
-            refused(result, 'codex-app-server:')
-    assert sorted(path.name for path in published.parent.iterdir()) == [published.name]
 
 
 def external_worktree(temporary, cache, binary):
