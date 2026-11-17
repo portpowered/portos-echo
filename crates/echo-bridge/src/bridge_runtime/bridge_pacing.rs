@@ -3,14 +3,14 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 /// Initial playback credit followed by the existing no-catch-up 20 ms pacer.
-pub(super) struct LeadPacer {
+pub(crate) struct LeadPacer {
     remaining: u16,
     started: Option<Instant>,
     pacer: Pacer,
 }
 
 impl LeadPacer {
-    pub(super) fn new(lead_ms: u16) -> Self {
+    pub(crate) fn new(lead_ms: u16) -> Self {
         Self {
             remaining: lead_ms / 20,
             started: None,
@@ -18,7 +18,7 @@ impl LeadPacer {
         }
     }
 
-    pub(super) async fn next_frame<T>(&mut self, queue: &mut FrameQueue<T>) -> Option<T> {
+    pub(crate) async fn next_frame<T>(&mut self, queue: &mut FrameQueue<T>) -> Option<T> {
         if queue.is_empty() {
             return None;
         }

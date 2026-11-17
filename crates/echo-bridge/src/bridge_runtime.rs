@@ -3,7 +3,7 @@ mod bridge_budget;
 mod bridge_delegation;
 pub(crate) mod bridge_kill;
 mod bridge_lifecycle;
-mod bridge_pacing;
+pub(crate) mod bridge_pacing;
 mod bridge_refusal;
 mod bridge_relink;
 pub(crate) mod bridge_screen;

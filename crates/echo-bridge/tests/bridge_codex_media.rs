@@ -1,7 +1,7 @@
 #![cfg(test)]
 //! T3 component: real echo-media versus the existing local fake's str0m peer.
 //! Controlled JSONL signaling only; not a real app-server or milestone witness.
-use echo_bridge::bridge_codex::{Event, MediaCall, MediaEvent, Options};
+use echo_bridge::bridge_codex::{CaptureAudio, Event, MediaCall, MediaEvent, Options, ReplyAudio};
 use echo_codex::{codex_io::RpcIo, codex_rpc::Limits};
 use echo_live::LivePeer;
 use echo_media::{DropCounts, MediaPeer, Peer, PeerConfig};
@@ -130,30 +130,71 @@ async fn round_trip() {
         call.start(&options, vec![], Instant::now() + Duration::from_secs(10))
             .await
             .unwrap();
-        let clock = MediaClock::start();
-        // A fixed PCM burst exercises framing/codec interoperability, not pacing.
-        let waveform = [
-            0, 6000, 11000, 14500, 16000, 14500, 11000, 6000, 0, -6000, -11000, -14500, -16000, -14500, -11000, -6000,
-        ];
-        for _ in 0..8 {
-            tokio::time::advance(Duration::from_millis(20)).await;
-            call.send(std::array::from_fn(|n| waveform[n % 16])).unwrap();
-        }
-        let mut samples = Vec::new();
-        while samples.len() < 3 * 320 {
-            match call.next().await.unwrap() {
-                MediaEvent::Audio(frame) => samples.extend(*frame),
-                MediaEvent::Control(event) => assert!(matches!(event, Event::Other)),
-            }
-        }
-        let energy: i64 = samples.iter().map(|s| i64::from(*s).pow(2)).sum();
-        assert!(energy > 960 * 1000_i64.pow(2), "round-trip PCM energy {energy}");
-        assert_eq!(call.dropped_frames(), DropCounts::default());
-        drop(clock);
+        audio_round_trip(&mut call).await;
         call.close(Instant::now() + Duration::from_secs(5)).await.unwrap();
     };
     let ((), echoed) = tokio::join!(client, remote(&mut server, &mut fake));
     assert!((4..=8).contains(&echoed), "fake peer echoed {echoed} Opus packets");
     fake.close();
     assert!(io.begin_request("account/read", &json!({})).is_ok());
+}
+
+type ClientCall<'a> = MediaCall<'a, tokio::io::ReadHalf<DuplexStream>, tokio::io::WriteHalf<DuplexStream>>;
+
+async fn audio_round_trip(call: &mut ClientCall<'_>) {
+    let clock = MediaClock::start();
+    // A fixed PCM burst exercises framing/codec interoperability, not pacing.
+    let waveform: [i16; 16] = [
+        0, 6000, 11000, 14500, 16000, 14500, 11000, 6000, 0, -6000, -11000, -14500, -16000, -14500, -11000, -6000,
+    ];
+    let format = echo_bridge::bridge_audio::format(16_000);
+    let mut capture = CaptureAudio::new(format).unwrap();
+    for _ in 0..8 {
+        tokio::time::advance(Duration::from_millis(20)).await;
+        let bytes: Vec<_> = (0..320).flat_map(|n| waveform[n % 16].to_le_bytes()).collect();
+        for chunk in bytes.chunks(146) {
+            for frame in capture.process(&format, chunk).unwrap() {
+                call.send(frame).unwrap();
+            }
+        }
+    }
+    assert_eq!(capture.finish().unwrap(), Vec::<echo_media::PcmFrame>::new());
+    assert_eq!(capture.tail_samples(), 0);
+    let mut reply = ReplyAudio::new(200).unwrap();
+    let mut samples = Vec::new();
+    while samples.len() < 3 * 320 {
+        match call.next().await.unwrap() {
+            MediaEvent::Audio(frame) => {
+                reply.push(&frame).unwrap();
+                samples.extend(*frame);
+            }
+            MediaEvent::Control(event) => assert!(matches!(event, Event::Other)),
+        }
+    }
+    let energy: i64 = samples.iter().map(|s| i64::from(*s).pow(2)).sum();
+    assert!(energy > 960 * 1000_i64.pow(2), "round-trip PCM energy {energy}");
+    check_reply(&mut reply).await;
+    assert_eq!(call.dropped_frames(), DropCounts::default());
+    drop(clock);
+}
+
+async fn check_reply(reply: &mut ReplyAudio) {
+    // Only this accepted three-frame component stream is finished here.
+    // Full reply completion still requires the run owner's media/played proof.
+    reply.finish().unwrap();
+    let mut pcm = Vec::new();
+    while let Some(frame) = reply.next_frame().await {
+        assert_eq!(frame.len(), 960);
+        pcm.extend(frame);
+    }
+    assert_eq!(pcm.len(), 3 * 960);
+    let pcm_energy: i64 = pcm
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i64::from(i16::from_le_bytes([b[0], b[1]])).pow(2))
+        .sum();
+    assert!(pcm_energy > 1440 * 1000_i64.pow(2), "Wyoming PCM energy {pcm_energy}");
+    assert!(reply.drained());
+    assert_eq!(reply.dropped_frames(), 0);
 }

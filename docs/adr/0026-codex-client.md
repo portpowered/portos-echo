@@ -277,3 +277,30 @@ ICE/DTLS/SRTP and a nonzero PCM round trip. All sockets bind IPv4 loopback;
 protocol readiness drives the handshake, without fixed sleeps. This proves
 interoperability with the planned local fake's peer; it does not execute the
 real app server or canonical voice runtime, measure pacing or prove M2.
+
+## Bridge PCM conversion amendment (2026-11-17)
+
+The bridge's run-facing audio adapter converts bounded Wyoming PCM chunks to
+complete mono/16 kHz media frames without Opus encoding. It preserves sample
+order across irregular chunks, downmixes supported stereo input through the
+existing PCM converter and reports an unpadded microphone tail. Format changes,
+incomplete interleaved samples and post-finish input fail closed. A new owner
+after mute or cut discards filter history and partial samples.
+
+Replies convert decoded media PCM from 16 kHz to Wyoming's existing 24 kHz
+format. Complete 20 ms frames enter an oldest-evicting queue of 128 frames,
+with explicit cumulative eviction accounting. The adapter shares the existing
+run pacer: configured initial lead (200 ms by default), then one frame per
+20 ms, without catch-up bursts or renewed credit after underflow. Cancelling
+a paced wait consumes no frame. Finishing drains filter delay once; a drained
+buffer proves only handoff of retained PCM, never a Wyoming played receipt.
+The caller must first establish that accepted media has drained; an assistant
+transcript completion alone does not authorize finish.
+
+This adds no dependency, shared contract or codec path. Memory-only tests use
+a paused clock to assert exact framing, sample duration, tail handling,
+validation, queue evictions and pacing. The existing T3 media component now
+sends irregular Wyoming PCM chunks through capture conversion and checks
+nonzero reply PCM, exactly three 960-byte Wyoming frames, and zero drops
+through the real media peer. This does not switch canonical voice startup,
+establish the end of a remote reply, await Wyoming played, or prove M2.
