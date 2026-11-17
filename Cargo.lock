@@ -957,6 +957,7 @@ dependencies = [
  "echo-live",
  "echo-mcp-auth",
  "echo-mcp-client",
+ "echo-media",
  "echo-screen-contract",
  "echo-screen-server",
  "echo-signin",

@@ -247,3 +247,33 @@ overflow, deadline, EOF and cancellation. They do not prove the real app
 server, ICE, PCM, screen rendering or any milestone. The voice runtime still
 uses the retained legacy path until the planned supervisor/media/simulator
 wiring is complete; this adapter alone does not satisfy the cutover.
+
+## Bridge media ownership amendment (2026-11-17)
+
+The bridge adds an internal dependency on the existing `echo-media` workspace
+crate. No third-party package, media pin or shared protocol changes. Its joint
+call owner obtains the peer's offer, sends it through the signaling adapter,
+applies the matching answer and requires the peer's connected state before
+returning success. Offer creation, signaling, answer application and ICE/DTLS
+readiness share one absolute deadline. Signaling continues during media
+negotiation; early transcript/tool events retain a bounded FIFO rather than
+blocking the process pipes. Overflow and failure close the generation.
+
+Microphone input is the media crate's complete 20 ms mono/16 kHz PCM frame;
+Opus and 48 kHz conversion remain in `echo-media`. The owner fairly polls
+decoded PCM and app-server events without adding a media queue. Assistant
+transcript completion remains a separate event and does not discard accepted
+audio. The future run owner must convert replies to Wyoming PCM, pace them,
+drain accepted media and await `played`. Closing awaits both signaling stop
+and media resource release, including when one fails. Host cancellation must
+still await cleanup and supervisor shutdown; drop retains the existing peer
+and signaling cancellation fallbacks.
+
+Memory-only component tests use controlled media/signaling boundaries and a
+paused clock for readiness, correlation, deadlines, overflow, EOF, tool-result
+delivery and cleanup. A T3 component check connects the real `echo-media` peer
+to the existing `echo-live::LivePeer` used by local fakes, with real SDP,
+ICE/DTLS/SRTP and a nonzero PCM round trip. All sockets bind IPv4 loopback;
+protocol readiness drives the handshake, without fixed sleeps. This proves
+interoperability with the planned local fake's peer; it does not execute the
+real app server or canonical voice runtime, measure pacing or prove M2.

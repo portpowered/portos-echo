@@ -1,6 +1,8 @@
 //! Bridge-owned call signaling on one initialized app-server generation.
 //! The host owns the supervisor and media; no HTTP call or delegated model here.
 mod call_events;
+mod call_media;
+pub use call_media::{MediaCall, MediaEvent};
 #[cfg(test)]
 mod call_failure_tests;
 #[cfg(test)]
