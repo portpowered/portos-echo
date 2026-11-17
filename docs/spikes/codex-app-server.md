@@ -17,7 +17,7 @@ Installed reference binary (used only for `--help` and schema generation): codex
 
 ## 1. App-server realtime API
 
-**Wire format**
+### Wire format
 
 - The wire format is newline-delimited JSON-RPC-like messages with no `"jsonrpc"` field. See
   `app-server-protocol/src/rpc.rs:1-2`
@@ -34,7 +34,7 @@ Installed reference binary (used only for `--help` and schema generation): codex
 **Requests** (`app-server-protocol/src/protocol/common.rs:1137-1184`)
 
 | Method | Params (`protocol/v2/realtime.rs`) | Core op |
-|---|---|---|
+| --- | --- | --- |
 | `thread/realtime/start` | `ThreadRealtimeStartParams` 297-375; response is empty, 405-409 | start (`turn_processor.rs:1290-1404`) |
 | `thread/realtime/appendAudio` | `{threadId, audio: ThreadRealtimeAudioChunk}` 411-418 | `Op::RealtimeConversationAudio` (`turn_processor.rs:1406-1502`) |
 | `thread/realtime/appendText` | `{threadId, text, role?}` (role defaults to user) 426-435 | `...Text` |
@@ -52,7 +52,7 @@ Installed reference binary (used only for `--help` and schema generation): codex
 - Realtime start goes through turn admission (`app-server/src/message_processor.rs:1072`), so a thread must exist first.
   Create it with `thread/start`, whose params are at `protocol/v2/thread.rs:80-153`.
 
-**Audio chunk**
+### Audio chunk
 
 - The chunk is `{data (base64 PCM16), sampleRate, numChannels, samplesPerChannel?, itemId?}`
   (`protocol/v2/realtime.rs:247-257`).
@@ -73,7 +73,7 @@ The 11 notifications are `thread/realtime/started`, `itemAdded`, `item/started`,
 Mapping from core events (`app-server/src/bespoke_event_handling.rs`):
 
 | Core event | Becomes | Lines |
-|---|---|---|
+| --- | --- | --- |
 | started, sdp | `started`, `sdp` | 464-481 |
 | speech started | `itemAdded {type:"input_audio_buffer.speech_started"}` | 527-539 |
 | transcript delta/done | `transcript/delta` / `transcript/done` with role `user` or `assistant` | 541-587 |
@@ -105,7 +105,7 @@ Mapping from core events (`app-server/src/bespoke_event_handling.rs`):
 - The AVAS architecture requires V1 or V3 (1546-1568).
 - Consequence: a V3 webrtc session must send `version: "v3"` explicitly.
 
-**Barge-in and turn end**
+### Barge-in and turn end
 
 - V2: the server VAD interrupts, core sends `conversation.item.truncate` itself (`realtime_conversation.rs:2896`), and
   the
@@ -118,7 +118,7 @@ Mapping from core events (`app-server/src/bespoke_event_handling.rs`):
 - Stop: `thread/realtime/stop` produces `closed`. Delegated Codex work is cancelled with `turn/interrupt`
   (`common.rs:1132`).
 
-**Divergence from portos-echo `docs/program/plan.md`**
+### Divergence from portos-echo `docs/program/plan.md`
 
 - plan.md:45-47 says the delegation event is `session.delegation.created` and that there is no
   `delegation.context.append`. Codex main uses `delegation.created` and sends `delegation.context.append` for V3
@@ -129,7 +129,7 @@ Mapping from core events (`app-server/src/bespoke_event_handling.rs`):
 
 The transport enum is at `protocol/v2/realtime.rs:386-403`: `websocket` | `webrtc {sdp}` | `existingCall {callId}`.
 
-**websocket**
+### websocket
 
 - The app server connects to `wss://api.openai.com/v1/realtime...` (`methods.rs:67, 1241-1291`) using tokio-tungstenite
   with
@@ -140,7 +140,7 @@ The transport enum is at `protocol/v2/realtime.rs:386-403`: `websocket` | `webrt
   (`realtime_conversation.rs:2130-2154`).
 - A TODO at 2143 calls the current ChatGPT/SIWC handling temporary.
 
-**webrtc {sdp}**
+### webrtc {sdp}
 
 - The client supplies its own SDP offer. The app server creates the call (`realtime_conversation.rs:792`,
   `core/src/client.rs:947-1000`) with the provider's auth, so ChatGPT works (`client.rs:835-905`).
@@ -160,7 +160,7 @@ The transport enum is at `protocol/v2/realtime.rs:386-403`: `websocket` | `webrt
 - Whether `appendAudio` or `outputAudio/delta` also work over the sideband in webrtc mode is **unknown**.
 - AVAS webrtc requires conversational output (`realtime_conversation.rs:1675-1690`).
 
-**existingCall {callId}**
+### existingCall {callId}
 
 - The client creates the call and the app server only attaches the sideband (`realtime_conversation.rs:822`).
 - It rejects `includeStartupContext`, `prompt`, `initialItems`, `model`, `voice` and `delegationAckFiller`
@@ -179,7 +179,7 @@ The transport enum is at `protocol/v2/realtime.rs:386-403`: `websocket` | `webrt
 - `Authorization` is sent directly only on the websocket transport.
 - Call creation may add `x-oai-attestation` (`client.rs:947-1000`).
 
-**Base URLs**
+### Base URLs
 
 - Overrides: `experimental_realtime_ws_base_url`, `experimental_realtime_webrtc_call_base_url`,
   `experimental_realtime_ws_model` and `experimental_realtime_ws_backend_prompt` (`config/src/config_toml.rs:460-475`).
@@ -188,7 +188,7 @@ The transport enum is at `protocol/v2/realtime.rs:386-403`: `websocket` | `webrt
 - With ChatGPT auth the provider base is `https://chatgpt.com/backend-api/codex` (`model-provider-info/src/lib.rs:87,
   475-486`).
 
-**Queueing**
+### Queueing
 
 - The audio-in queue holds 256 frames and uses `try_send`, so frames are **dropped when it is full**
   (`realtime_conversation.rs:102, 976-1001`).
@@ -196,7 +196,7 @@ The transport enum is at `protocol/v2/realtime.rs:386-403`: `websocket` | `webrt
 
 ## 3. Tools and handoff
 
-**Delegation path**
+### Delegation path
 
 - A server `delegation.created` (target `client`) or a V1 handoff request becomes `HandoffRequested`.
 - The fanout task (`realtime_conversation.rs:1975-2010`) routes it through `route_handoffs.route` to
@@ -251,7 +251,7 @@ tagged by `type`)
   - Endpoints `deviceauth/usercode` and `deviceauth/token`, verification page `{base}/codex/device`.
   - `request_device_code` and `complete_device_code_login` are public and re-exported at `login/src/lib.rs:25-28`.
 
-**Storage and refresh**
+### Storage and refresh
 
 - Credentials are stored in `$CODEX_HOME/auth.json` (`login/src/auth/storage.rs:51-77, 168`).
 - The mode is `cli_auth_credentials_store` (`config_toml.rs:304`): File (default), Keyring, Auto or Ephemeral
@@ -260,10 +260,10 @@ tagged by `type`)
 - Tokens refresh 5 minutes before expiry or after 8 days against `https://auth.openai.com/oauth/token`, which can be
   overridden with `CODEX_REFRESH_TOKEN_URL_OVERRIDE` (`login/src/auth/manager.rs:232-243, 3668-3676`).
 
-**Auth versus transport**
+### Auth versus transport
 
 | Transport | ChatGPT auth | API-key auth |
-|---|---|---|
+| --- | --- | --- |
 | websocket | fails ("requires API key auth"), unless `OPENAI_API_KEY` is set | works (`realtime_conversation.rs:2130-2154`) |
 | webrtc / existingCall | works (`client.rs:835-905`, `947-1000`) | works |
 
@@ -282,7 +282,7 @@ user can supply the bearer token directly.
 - The stdio transport is a line reader on stdin and a writer on stdout
   (`app-server-transport/src/transport/stdio.rs:60-100`).
 
-**Schema**
+### Schema
 
 - `codex app-server generate-json-schema --experimental --out <DIR>` works offline. It produced the full v2 schema
   including the realtime methods and notifications.
@@ -299,7 +299,7 @@ user can supply the bearer token directly.
    `thread/realtime/sdp` (webrtc, ChatGPT).
 6. `thread/realtime/stop`.
 
-**Disk state**
+### Disk state
 
 - `sqlx` with bundled sqlite (workspace `Cargo.toml:514-522`), plus rollouts and auth under `$CODEX_HOME`.
 - Disk usage per session is **unknown**. Use `ephemeral` on `thread/start` (`thread.rs:80-153`) to limit it.
@@ -312,7 +312,7 @@ user can supply the bearer token directly.
 
 ## 6. ARM cross-build (armv7 Android / Linux)
 
-**CI and toolchain**
+### CI and toolchain
 
 - No armv7 or Android target exists in CI or releases. Releases cover aarch64/x86_64 apple-darwin, x86_64/aarch64
   linux-musl (`.github/workflows/rust-release.yml:102-145`) and x86_64/aarch64 windows (`rust-release-windows.yml`).
@@ -321,7 +321,7 @@ user can supply the bearer token directly.
 - There are git patches for crossterm, tokio-tungstenite, tungstenite and v8 (`Cargo.toml:684-700`).
 - The repo pins Rust 1.99.1. The local WSL had 1.100.0 with `armv7-linux-androideabi` installed.
 
-**What is already handled for `target_os = "android"`**
+### What is already handled for `target_os = "android"`
 
 - landlock and seccompiler are Linux-only deps (`protocol/Cargo.toml:56-58`).
 - `bwrap/build.rs` skips the vendored bubblewrap off Linux.
@@ -335,7 +335,7 @@ user can supply the bearer token directly.
 - `tikv-jemallocator` is used only on musl x86_64/aarch64. `codex-windows-sandbox` is Windows-only
   (`app-server/Cargo.toml`).
 
-**Likely blockers (not verified by building)**
+### Likely blockers (not verified by building)
 
 - **native-tls / openssl-sys.** `http-client` depends on `native-tls 0.2` unconditionally
   (`http-client/Cargo.toml:14-16`),
@@ -354,7 +354,7 @@ user can supply the bearer token directly.
 - **Keyring.** There is no Android backend, so it falls back to the file store (see section 4).
 - A 32-bit target is untested upstream. Atomics, `usize`-sized limits and file offsets on armv7 are **unknown risks**.
 
-**Dependency check attempted**
+### Dependency check attempted
 
 - `cargo tree --target armv7-linux-androideabi` was abandoned.
   - Offline, it failed on the crossterm git dependency.
@@ -404,7 +404,7 @@ The figures below come from a static closure over `Cargo.lock`, so they are appr
 sizes are **estimates, not measured**.
 
 | | Closure (approx.) | Stripped armv7 binary (est.) | Idle RSS (est.) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | codex-app-server | 973 crates (127 workspace, 846 external) | 60-120 MB | 50-150 MB |
 | codex-core | 915 | (part of the above) | |
 | codex-app-server-protocol | 757 (pulls core-adjacent types) | | |
