@@ -2,6 +2,8 @@
 use super::bridge_short::{read_reply as read, satellite, send};
 use super::*;
 use std::io::Write;
+#[path = "bridge_satellite/cut_receipt.rs"]
+mod cut_receipt;
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_cut_duplicate_cancel_emits_one_stop_and_waits_for_played() {
