@@ -74,7 +74,7 @@ pub fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::E
     drop(socket);
     if matches!(fault, "late_wake" | "stale_wake") {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !std::path::Path::new("../play-queued").exists() {
+        while !std::path::Path::new("../../play-queued").exists() {
             if std::time::Instant::now() >= deadline {
                 return Err("play never queued".into());
             }
