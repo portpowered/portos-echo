@@ -1,0 +1,51 @@
+name: Codex Windows
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: pwsh
+jobs:
+  codex-windows:
+    name: codex-windows
+    runs-on: windows-2022
+    timeout-minutes: 10
+    env:
+      ECHO_CODEX_OFFLINE: '1'
+      PYTHONOPTIMIZE: '0'
+    steps:
+      - name: Initialize external Codex cache
+        run: |
+          "ECHO_CODEX_CACHE_DIR=$env:RUNNER_TEMP/portos-echo-codex" >> $env:GITHUB_ENV
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify Windows AMD64 runner
+        run: |
+          python -c "import os,sys; sys.exit(0 if sys.platform == 'win32' and (os.environ.get('PROCESSOR_ARCHITEW6432') or os.environ.get('PROCESSOR_ARCHITECTURE')) == 'AMD64' and sys.version_info >= (3,11) and sys.flags.optimize == 0 else 'requires Windows AMD64, Python 3.11+, and enabled assertions')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output "job=codex-windows runner_label=windows-2022"
+          git rev-parse HEAD
+          Write-Output "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ runner.temp }}/portos-echo-codex
+          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
+      - name: Provision verified pinned Codex
+        env:
+          ECHO_CODEX_OFFLINE: '0'
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-app-server.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exercise completion guard
+        run: |
+          python -m unittest discover -s crates/echo-codex/tests/support -p codex_windows.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run offline Windows helper regression
+        run: |
+          python crates/echo-codex/tests/support/codex_windows.py (Get-Location).Path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
