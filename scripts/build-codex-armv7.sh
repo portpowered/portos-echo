@@ -128,6 +128,7 @@ codex_cleanup() {
 }
 
 codex_main() {
+  stage='' work_claimed=false output_claimed=false
   commit=a956835d020762cb2b570053af06f643a11c0ecc
   repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
   codex_prerequisites

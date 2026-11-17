@@ -166,6 +166,15 @@ codex_inspect() {
         self.assert_failed(self.pipeline(), "work already claimed")
         self.assertTrue(lock.is_dir())
 
+    def test_staging_copy_or_publication_failure_leaves_no_bundle(self):
+        for command in ["cp", "mv"]:
+            with self.subTest(command=command):
+                self.assert_failed(self.pipeline(command + '() { return 28; }'))
+                self.assertFalse(self.output.exists())
+                self.assertEqual(list(self.root.glob("*.staging.*")), [])
+                self.assertEqual(list(self.root.glob("*.lock")), [])
+                self.work = self.root / (command + " next")
+
     def test_independent_invocations_publish_separately(self):
         self.assertEqual(self.pipeline().returncode, 0)
         first = self.output
