@@ -54,10 +54,31 @@ account/device-code sign-in and known realtime notifications. Credentials use
 Unknown notifications remain available as complete raw envelopes regardless of
 whether a caller chooses to deserialize a known projection.
 
+The supervisor creates a fresh external CODEX_HOME and separate empty working
+directory before starting a child. Existing homes and repository paths are
+rejected; the caller retains responsibility for deleting or retaining the home.
+Unix homes are created with mode 0700; Windows uses the caller's inherited
+directory ACL. The child receives an allowlisted system environment, with HOME
+and USERPROFILE redirected to its dedicated home. Proxy/certificate settings
+may be supplied explicitly before launch; provider credentials use account RPC.
+Config overrides are individual argv entries, never shell input. Stderr is
+discarded so payloads cannot enter diagnostics or block an undrained pipe.
+
+Each generation must acknowledge experimental initialization and flush the
+initialized notification before IO becomes accessible. The caller drives IO and
+explicitly shuts down or restarts after a terminal failure. Restarts kill and
+await the old child, consume a rolling monotonic budget (two in 60 seconds by
+default), and create fresh request state without replay. Failed launches consume
+the budget too. Cancellation of launch leaves its child owned but unavailable
+until restart/shutdown. Explicit shutdown awaits reaping within the configured
+timeout. Drop signals termination; Tokio supplies best-effort asynchronous reap,
+so callers needing an awaited cleanup boundary use shutdown before runtime exit.
+
 The pin helpers, settings and raw-stdio S5 witness preserve the initial executable
-spine. The supervisor, process fault matrix and final public-client T3 witness
-remain required in this same work item. The network-free stream tests establish
-IO bounds and scheduling, not child lifecycle or the Rust-driven call journey.
+spine. Controlled-process T3 tests exercise the supervisor's initialization,
+crash/restart, drop, pipe failure and isolated-session boundaries. The final
+public-client pinned-server T3 remains required in this same work item. These
+process witnesses do not establish real app-server call behavior through Rust.
 
 The later bridge cutover owns the tool host, MCP, caps and milestone scenarios.
 This component does not claim M2, M4, real authentication, media or hardware
