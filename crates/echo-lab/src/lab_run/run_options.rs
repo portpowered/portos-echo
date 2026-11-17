@@ -15,6 +15,7 @@ const ALLOWED: &[&str] = &[
     "--bridge-config",
     "--operator-confirm",
     "--wake-clip",
+    "--allow-quiet-hours",
 ];
 
 use std::collections::BTreeMap;
@@ -36,6 +37,8 @@ pub struct Options {
     pub speech: Option<(String, String)>,
     pub cancel: Option<PathBuf>,
     pub operator_confirm: Option<PathBuf>,
+    /// Owner waiver (decisions.md, 2026-11-17): audio may play before 09:00 local time.
+    pub allow_quiet_hours: bool,
 }
 
 fn required<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str, String> {
@@ -60,7 +63,7 @@ fn collect(args: &[String]) -> Result<(Vec<String>, BTreeMap<String, String>), S
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         if arg.starts_with("--") {
-            let value = if arg == "--keep-audio" {
+            let value = if arg == "--keep-audio" || arg == "--allow-quiet-hours" {
                 "true".to_owned()
             } else {
                 index += 1;
@@ -138,6 +141,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         keep_audio: flags.contains_key("--keep-audio"),
         speech,
         cancel: flags.get("--cancel-file").map(PathBuf::from),
+        allow_quiet_hours: flags.contains_key("--allow-quiet-hours"),
     })
 }
 
@@ -207,6 +211,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
         keep_audio: false,
         speech: None,
         cancel: flags.get("--cancel-file").map(PathBuf::from),
+        allow_quiet_hours: false,
     })
 }
 
