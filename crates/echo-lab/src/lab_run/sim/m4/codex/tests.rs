@@ -25,12 +25,19 @@ async fn t3_m4_canonical_provider_reports_mcp_failure_with_one_native_append() {
 }
 
 async fn exercise(negative: bool) {
+    exercise_mode(negative, false).await;
+}
+
+async fn exercise_mode(negative: bool, emotion: bool) {
     let options = options();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (wake, awakened) = oneshot::channel();
     let satellite = tokio::spawn(satellite(listener, awakened));
-    let mut case = Case::default();
+    let mut case = Case {
+        emotion,
+        ..Case::default()
+    };
     case.connect(&options, negative, address).await.unwrap();
     let path = case.root.as_ref().unwrap().0.clone();
     let mut screen = Screen::connect(&path).await.unwrap();
@@ -38,6 +45,7 @@ async fn exercise(negative: bool) {
     wake.send(()).unwrap();
     let (connected, ready) = oneshot::channel();
     let spoof = case.spoof.as_ref().unwrap();
+    let replies = case.provider.as_ref().unwrap().commands.clone();
     let observed = tokio::time::timeout(Duration::from_secs(20), async {
         tokio::try_join!(
             settle(
@@ -46,7 +54,7 @@ async fn exercise(negative: bool) {
                 case.relay.as_ref().unwrap(),
                 ready
             ),
-            presentation(&mut screen, spoof, negative, connected)
+            presentation(&mut screen, spoof, negative, connected, emotion, replies)
         )
     })
     .await;
@@ -54,14 +62,27 @@ async fn exercise(negative: bool) {
     let closed = case.close().await;
     assert_eq!(closed, Ok(()), "work: {observed:?}");
     assert_eq!(
-        observed.unwrap().unwrap().0,
+        observed.as_ref().unwrap().as_ref().unwrap().0,
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
+    assert_results(&case, &timing, negative, emotion);
     assert_eq!(satellite.await.unwrap(), 9600);
-    assert_eq!(timing.captured, 3200);
-    assert_eq!(timing.played, 9600);
-    assert_eq!(case.transcript.as_deref(), Some(text(negative)));
-    stages(&case.trace);
+    if emotion && !negative {
+        assert_animation(observed.as_ref().unwrap().as_ref().unwrap().1.clone());
+    }
+    if emotion && negative {
+        let frames = &observed.as_ref().unwrap().as_ref().unwrap().1;
+        let states: Vec<_> = frames.iter().map(|f| f["state"].clone()).collect();
+        assert_eq!(
+            states,
+            vec![
+                json!({"state":"listening"}),
+                json!({"state":"connected"}),
+                json!({"state":"speaking"}),
+                json!({"state":"ready","message":"Echo Live ready"})
+            ]
+        );
+    }
     assert!(!path.exists());
 }
 
@@ -171,16 +192,26 @@ async fn presentation(
     spoof: &Spoof,
     negative: bool,
     connected: oneshot::Sender<()>,
-) -> Result<(), String> {
-    screen.expect("listening").await?;
-    screen.expect("connected").await?;
+    emotion: bool,
+    replies: tokio::sync::mpsc::Sender<Control>,
+) -> Result<Vec<Value>, String> {
+    let mut states = vec![];
+    observe(screen, &mut states, "listening").await?;
+    observe(screen, &mut states, "connected").await?;
     if negative {
         spoof.set_fault(Fault::Http500).unwrap();
     }
     connected.send(()).unwrap();
-    screen.expect("speaking").await?;
-    screen.expect("ready").await?;
-    Ok(())
+    if emotion {
+        if !negative {
+            observe(screen, &mut states, "emotion").await?;
+            observe(screen, &mut states, "connected").await?;
+        }
+        replies.send(Control::Reply).await.unwrap();
+    }
+    observe(screen, &mut states, "speaking").await?;
+    observe(screen, &mut states, "ready").await?;
+    Ok(states)
 }
 fn stages(trace: &Trace) {
     let stages: Vec<_> = trace
@@ -219,4 +250,41 @@ fn text(negative: bool) -> &'static str {
     } else {
         super::super::model::SUCCESS
     }
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production bridge and offline Codex pin"]
+async fn t3_m6_canonical_provider_preserves_exact_animation_transcript_and_pcm() {
+    tokio::time::timeout(Duration::from_secs(25), Box::pin(exercise_mode(false, true)))
+        .await
+        .unwrap();
+}
+
+fn assert_animation(frames: Vec<Value>) {
+    let mut states = vec![json!({"seq":1,"state":{"state":"ready","message":"Echo Live ready"}})];
+    states.extend(frames);
+    assert_eq!(
+        super::super::emotion::ordered(&states, &json!({"sequence":super::super::emotion::sequence()})),
+        Ok(())
+    );
+}
+
+fn assert_results(case: &Case, timing: &Timing, negative: bool, emotion: bool) {
+    assert_eq!(timing.captured, 3200);
+    assert_eq!(timing.played, 9600);
+    let expected = if emotion && !negative {
+        super::super::emotion::REPLY
+    } else {
+        text(negative)
+    };
+    assert_eq!(case.transcript.as_deref(), Some(expected));
+    stages(&case.trace);
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production bridge and offline Codex pin"]
+async fn t3_m6_canonical_http500_never_animates_and_retains_honest_fallback() {
+    tokio::time::timeout(Duration::from_secs(25), Box::pin(exercise_mode(true, true)))
+        .await
+        .unwrap();
 }

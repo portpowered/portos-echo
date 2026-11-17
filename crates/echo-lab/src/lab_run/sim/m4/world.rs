@@ -1,23 +1,30 @@
 //! One fresh M4 world. Every acquired child/peer remains owned until close.
 use std::path::{Path, PathBuf};
 
-use echo_live::fake::{DialogueLive, DialogueObserver, DialogueScript, FakeLive};
-use echo_spoof_mcp::{Fault, Options, Spoof};
+use echo_live::fake::DialogueLive;
+#[cfg(test)]
+use echo_live::fake::{DialogueObserver, DialogueScript, FakeLive};
+use echo_spoof_mcp::Spoof;
+#[cfg(test)]
+use echo_spoof_mcp::{Fault, Options};
 use serde_json::{Value, json};
 
-use super::super::{
-    process::{self, Process},
-    trace::Trace,
-};
+#[cfg(test)]
+use super::super::process;
+use super::super::{process::Process, trace::Trace};
+#[cfg(test)]
+use super::wire::Timing;
+use super::{model::Model, wire::Relay};
+#[cfg(test)]
 use super::{
-    model::{FALLBACK, Model, SUCCESS},
+    model::{FALLBACK, SUCCESS},
     screen::Screen,
-    wire::{Relay, Timing},
 };
 
 #[derive(Default)]
 pub struct World {
     pub emotion: bool,
+    #[cfg(test)]
     negative: bool,
     pub ui_states: Vec<Value>,
     pub playback: Option<Value>,
@@ -51,6 +58,7 @@ pub fn fixture() -> Vec<u8> {
 }
 
 impl World {
+    #[cfg(test)]
     pub async fn start(&mut self, python: &str, bridge: &Path, root: &Path, negative: bool) -> Result<(), String> {
         std::fs::create_dir(root).map_err(|_| "m4: cannot own private directory")?;
         self.root = root.into();
@@ -93,6 +101,7 @@ impl World {
         self.control(json!({"action":"registered"})).await
     }
 
+    #[cfg(test)]
     async fn start_model(&mut self, negative: bool) -> Result<(), String> {
         let mut timing = self.relay.as_ref().ok_or("m4: missing relay")?.observations();
         let (release, held) = tokio::sync::oneshot::channel();
@@ -117,6 +126,7 @@ impl World {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn start_live(&mut self, negative: bool) -> Result<(), String> {
         let text = if negative {
             FALLBACK
@@ -143,6 +153,7 @@ impl World {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn control(&mut self, value: Value) -> Result<(), String> {
         let host = self.host.as_mut().ok_or("m4: missing host")?;
         host.send(&value).await?;
@@ -150,10 +161,12 @@ impl World {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn observer(&self) -> Result<DialogueObserver, String> {
         Ok(self.live.as_ref().ok_or("m4: missing Live")?.observer())
     }
 
+    #[cfg(test)]
     pub async fn speak(&mut self) -> Result<(Value, Timing), String> {
         let mut screen = Screen::connect(&self.root).await?;
         self.observe(&mut screen, 0, "ready").await?;
@@ -284,6 +297,7 @@ impl World {
     }
 }
 
+#[cfg(test)]
 mod emotion;
 
 pub fn configure(root: &Path, port: u16, spoof: &Spoof) -> Result<(), String> {

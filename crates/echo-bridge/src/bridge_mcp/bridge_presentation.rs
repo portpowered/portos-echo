@@ -10,6 +10,7 @@ pub(crate) const RELINK: &str = "Run echo-bridge link with your config to relink
 pub(crate) struct Presentation {
     states: Option<mpsc::Sender<UiState>>,
     current: Arc<Mutex<Projection>>,
+    emotion_changed: Arc<tokio::sync::Notify>,
 }
 
 struct Projection {
@@ -37,6 +38,7 @@ impl Presentation {
     pub fn new(states: Option<mpsc::Sender<UiState>>) -> Self {
         Self {
             states,
+            emotion_changed: Arc::default(),
             current: Arc::new(Mutex::new(Projection {
                 activity: UiState::Ready {
                     message: "Ready".into(),
@@ -100,7 +102,21 @@ impl Presentation {
             return Ok(());
         }
         current.emotion = Some((state, deadline));
+        self.emotion_changed.notify_one();
         self.send(current.visible())
+    }
+
+    /// The screen owner polls this beside actions; no independent task owns it.
+    pub async fn advance_emotion(&self) -> Result<(), Error> {
+        loop {
+            let changed = self.emotion_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            tokio::select! {
+                () = &mut changed => (),
+                () = self.emotion_deadline() => return self.expire_emotion(),
+            }
+        }
     }
 
     pub fn clear_emotion(&self) -> Result<(), Error> {
@@ -159,6 +175,7 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
 
     fn emotion() -> UiState {
         UiState::Emotion {
@@ -349,5 +366,58 @@ mod tests {
         };
         assert_eq!(receive.try_recv().unwrap(), error);
         assert_eq!(receive.try_recv().unwrap(), error);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn emotion_owner_wakes_after_idle_and_restores_connected_at_exact_deadline() {
+        let (send, mut receive) = mpsc::channel(8);
+        let screen = Presentation::new(Some(send));
+        screen.publish(UiState::Connected).unwrap();
+        assert_eq!(receive.recv().await.unwrap(), UiState::Connected);
+        let expiry = screen.advance_emotion();
+        tokio::pin!(expiry);
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(expiry.as_mut().poll(cx).is_pending())).await);
+        screen
+            .emotion(emotion(), Instant::now() + std::time::Duration::from_millis(160))
+            .unwrap();
+        assert_eq!(receive.recv().await.unwrap(), emotion());
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(expiry.as_mut().poll(cx).is_pending())).await);
+        tokio::time::advance(std::time::Duration::from_millis(159)).await;
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(expiry.as_mut().poll(cx).is_pending())).await);
+        assert!(receive.try_recv().is_err());
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        expiry.await.unwrap();
+        assert_eq!(receive.recv().await.unwrap(), UiState::Connected);
+        assert!(receive.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn emotion_expiry_cannot_overwrite_a_later_mute_or_relink() {
+        for muted in [true, false] {
+            let (send, mut receive) = mpsc::channel(8);
+            let screen = Presentation::new(Some(send));
+            screen
+                .emotion(emotion(), Instant::now() + std::time::Duration::from_millis(160))
+                .unwrap();
+            assert_eq!(receive.recv().await.unwrap(), emotion());
+            let expiry = screen.advance_emotion();
+            tokio::pin!(expiry);
+            assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(expiry.as_mut().poll(cx).is_pending())).await);
+            let expected = if muted {
+                screen.muted(true).unwrap();
+                UiState::Muted
+            } else {
+                screen.rejected(RELINK).unwrap();
+                UiState::Error {
+                    message: RELINK.into(),
+                    relink: true,
+                }
+            };
+            assert_eq!(receive.recv().await.unwrap(), expected);
+            tokio::time::advance(std::time::Duration::from_millis(160)).await;
+            expiry.await.unwrap();
+            assert!(receive.try_recv().is_err());
+            screen.refresh().unwrap();
+            assert_eq!(receive.recv().await.unwrap(), expected);
+        }
     }
 }

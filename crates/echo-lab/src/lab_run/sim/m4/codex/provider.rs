@@ -11,25 +11,28 @@ use tokio::{
 pub(super) enum Control {
     Delegate,
     Complete,
+    Reply,
     Quiesce(oneshot::Sender<()>),
     Close,
 }
 pub(super) struct Provider {
     pub origin: String,
     pub observed: watch::Receiver<Value>,
-    commands: mpsc::Sender<Control>,
+    pub(super) commands: mpsc::Sender<Control>,
     ticks: mpsc::Receiver<()>,
     task: Option<JoinHandle<Result<Value, String>>>,
 }
 impl Provider {
-    pub async fn start(python: &str, negative: bool) -> Result<Self, String> {
+    pub async fn start_mode(python: &str, negative: bool, emotion: bool) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
             .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m4/codex/provider.py"));
         let mut process = Process::start(&mut command)?;
         let ready = process.expect("provider.ready").await?;
-        process.send(&json!({"tools": catalog(), "negative":negative})).await?;
+        process
+            .send(&json!({"tools": catalog(), "negative":negative,"emotion":emotion}))
+            .await?;
         let origin = ready["origin"]
             .as_str()
             .ok_or("m4: missing provider origin")?
@@ -37,7 +40,7 @@ impl Provider {
         let (commands, receiver) = mpsc::channel(2);
         let (ticks, clock) = mpsc::channel(1);
         let (observe, observed) = watch::channel(json!({"delegations":[],"appends":[]}));
-        let task = tokio::spawn(owned(process, receiver, ticks, observe));
+        let task = tokio::spawn(owned(process, receiver, ticks, observe, emotion));
         Ok(Self {
             origin,
             observed,
@@ -86,9 +89,10 @@ async fn owned(
     mut commands: mpsc::Receiver<Control>,
     ticks: mpsc::Sender<()>,
     observed: watch::Sender<Value>,
+    emotion: bool,
 ) -> Result<Value, String> {
     let mut peer = None;
-    let result = drive(&mut process, &mut commands, &ticks, &observed, &mut peer).await;
+    let result = drive(&mut process, &mut commands, &ticks, &observed, &mut peer, emotion).await;
     if let Some(peer) = &mut peer {
         peer.close();
     }
@@ -102,6 +106,7 @@ async fn drive(
     ticks: &mpsc::Sender<()>,
     observed: &watch::Sender<Value>,
     peer: &mut Option<LivePeer>,
+    emotion: bool,
 ) -> Result<Value, String> {
     let offer = tokio::select! {
         offer = process.expect("provider.offer") => Some(offer?),
@@ -123,6 +128,7 @@ async fn drive(
             ticks,
             observed,
             peer.as_mut().ok_or("m4: missing peer")?,
+            emotion,
         )
         .await?;
     }
@@ -143,8 +149,10 @@ async fn conversation(
     ticks: &mpsc::Sender<()>,
     observed: &watch::Sender<Value>,
     peer: &mut LivePeer,
+    emotion: bool,
 ) -> Result<(), String> {
     let mut reply = false;
+    let mut allow_reply = !emotion;
     let mut remaining = None;
     let mut quiesced = false;
     // Drive the bridge's explicit clock at the media frame cadence even when
@@ -172,11 +180,20 @@ async fn conversation(
                     return Err("m4: duplicate native append".into());
                 }
                 reply = true;
-                remaining = Some((0, Instant::now()));
+                if allow_reply {
+                    remaining = Some((0, Instant::now()));
+                }
             }
         } else {
             match action {
                 Some(Control::Delegate) => process.send(&json!({"transcripts":true})).await?,
+                Some(Control::Reply) if emotion && !allow_reply => {
+                    allow_reply = true;
+                    if reply {
+                        remaining = Some((0, Instant::now()));
+                    }
+                }
+                Some(Control::Reply) => return Err("m6: premature reply release".into()),
                 Some(Control::Complete) => process.send(&json!({"complete":true})).await?,
                 Some(Control::Quiesce(done)) => {
                     quiesced = true;

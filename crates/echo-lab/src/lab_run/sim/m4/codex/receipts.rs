@@ -3,7 +3,19 @@ use crate::lab_run::sim::trace::Trace;
 use echo_spoof_mcp::{CallRecord, Snapshot};
 use serde_json::{Value, json};
 
-pub(super) fn merge(trace: &mut Trace, snapshot: &Value, mcp: &Snapshot, negative: bool) -> Result<(), String> {
+pub(super) fn merge_mode(
+    trace: &mut Trace,
+    snapshot: &Value,
+    mcp: &Snapshot,
+    negative: bool,
+    emotion: bool,
+) -> Result<(), String> {
+    let name = if emotion { "ui.show_emotion" } else { "test.echo" };
+    let args = if emotion {
+        json!({"name":"happy"})
+    } else {
+        json!({"text":"delegated echo"})
+    };
     if snapshot["delegations"] != json!(["delegation-local"]) {
         return Err("m4: missing or duplicate native delegation.created".into());
     }
@@ -14,22 +26,13 @@ pub(super) fn merge(trace: &mut Trace, snapshot: &Value, mcp: &Snapshot, negativ
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
         "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
         "delegations":["delegation-local"], "appends":["delegation-local"],
-        "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::model::FALLBACK} else {super::super::model::SUCCESS}}],
+        "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::model::FALLBACK} else if emotion {super::super::emotion::REPLY} else {super::super::model::SUCCESS}}],
         "models":[{"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":0},
                   {"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":1}]});
     if snapshot != &expected {
         return Err("m4: exact pinned provider/model observation mismatch".into());
     }
-    if mcp.calls
-        != vec![CallRecord {
-            name: "test.echo".into(),
-            args: json!({"text":"delegated echo"}),
-            count: 1,
-        }]
-        || mcp.requests.iter().filter(|r| r.method == "tools/call").count() != 1
-    {
-        return Err("m4: expected exactly one observed MCP test.echo attempt".into());
-    }
+    check_mcp(mcp, name, args)?;
     let request = position(trace, "item/tool/call")?;
     let attempt = position(trace, "tools/call")?;
     let transcript = trace
@@ -42,7 +45,7 @@ pub(super) fn merge(trace: &mut Trace, snapshot: &Value, mcp: &Snapshot, negativ
     }
     let received = &trace.records[request];
     let executed = &trace.records[attempt];
-    if received["name"] != "test.echo"
+    if received["name"] != name
         || received["call_id"] != "tool-local"
         || received["run_id"] != "run-1"
         || !["thread_id", "turn_id", "call_id", "run_id", "name"]
@@ -79,4 +82,18 @@ fn position(trace: &Trace, event: &str) -> Result<usize, String> {
         [index] => Ok(*index),
         _ => Err(format!("m4: expected exactly one {event} receipt")),
     }
+}
+
+fn check_mcp(mcp: &Snapshot, name: &str, args: Value) -> Result<(), String> {
+    if mcp.calls
+        != vec![CallRecord {
+            name: name.into(),
+            args,
+            count: 1,
+        }]
+        || mcp.requests.iter().filter(|r| r.method == "tools/call").count() != 1
+    {
+        return Err("m4: expected exactly one observed MCP test.echo attempt".into());
+    }
+    Ok(())
 }

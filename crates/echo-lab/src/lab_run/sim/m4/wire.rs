@@ -161,6 +161,7 @@ impl Relay {
         self.observed.borrow().clone()
     }
 
+    #[cfg(test)]
     pub fn observations(&self) -> watch::Receiver<Timing> {
         self.observed.clone()
     }

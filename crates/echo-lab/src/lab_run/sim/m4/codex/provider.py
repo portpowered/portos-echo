@@ -144,7 +144,7 @@ try:
             answers.put(command['answer'])
         elif 'tools' in command:
             assert delegation is None
-            delegation = tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False))
+            delegation = tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False), command.get('emotion', False))
         elif command == {'complete': True}:
             transcript_output.sendall(b'c')
         elif command == {'transcripts': True}:

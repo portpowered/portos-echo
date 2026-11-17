@@ -1014,3 +1014,31 @@ model work and must remain stable after interrupted completion. The separate
 gated real-pin/media witness fixes the pre-notification schedule and asserts
 exactly one model request before the reader resumes. Neither witness asserts
 a universal zero-request bound for pin-owned automatic routing.
+
+## Canonical emotion and owned expiry
+
+M6 now selects the same real pinned app server, local V3/Responses provider,
+WebRTC/Opus peer, production tool policy and spoof MCP as M4. The model exposes
+exactly the four discovered aliases; `tool_3` calls `ui.show_emotion` with
+`name=happy`. The fake verifies the exact two-frame animation result before
+accepting the native context append and sends the happy-face transcript only
+after that append. Reply media waits for the observed return to Connected.
+The seven complete screen frames and the exact host/forwarded PCM measurement
+remain mandatory. M6 replaces `session.delegation.created` and
+`session.commentary.append` with the native `delegation.created` and
+`delegation.context.append`, and adds the correlated `item/tool/call` receipt.
+M4's two full golden traces remain unchanged.
+
+The existing screen action owner also drives emotion expiry. A notification
+wakes its pending timer when the canonical tool policy publishes an emotion;
+after the configured duration it restores the latest visible activity. Mute
+and relink replace the emotion and cannot be overwritten by an old expiry.
+The timer shares the screen owner's cancellation and awaited shutdown. There
+is no detached animation task, polling interval, new dependency or contract.
+The old laboratory world remains available to its existing protecting tests;
+remaining recovery, M1 and M5 fixture migrations stay in this cutover lane.
+
+The obsolete executable test that expected configured tools to be refused is
+removed from its two-case loop: configured tools are now protected by the
+actual-pin configured-owner and canonical M4/M6 witnesses. Its unsupported
+epoch case still requires invalid input before any process or device admission.

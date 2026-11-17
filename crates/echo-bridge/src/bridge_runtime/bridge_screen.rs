@@ -126,7 +126,14 @@ impl Screen {
         let presentation = self.presentation.clone();
         let approvals = self.approvals.clone();
         self.actions = Some(tokio::spawn(async move {
-            while let Some(action) = actions.recv().await {
+            loop {
+                let action = tokio::select! {
+                    action = actions.recv() => { let Some(action) = action else { break; }; action },
+                    result = presentation.advance_emotion() => {
+                        if result.is_err() { break; }
+                        continue;
+                    },
+                };
                 if !mute.lock().map_or(true, |mute| mute.muted) && approvals.answer(&action).is_err() {
                     break;
                 }

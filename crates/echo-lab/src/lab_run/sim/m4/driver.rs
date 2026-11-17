@@ -1,10 +1,11 @@
 //! M4 scenario adapter: each case owns one fully drained production journey.
 use std::time::Duration;
 
-use echo_live::fake::{DialogueCall, DialogueObserver, DialogueSent};
+#[cfg(test)]
+use echo_live::fake::{DialogueCall, DialogueSent};
 use serde_json::{Value, json};
 
-use super::super::{controlled, observers, selectors};
+use super::super::{observers, selectors};
 use super::{golden, wire, world::World};
 use crate::lab_run::{Driver, Step, run_options::Options, run_report::Artifacts};
 
@@ -79,65 +80,6 @@ impl<'a> M4<'a> {
     }
 
     fn journey(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
-        if !self.emotion {
-            return self.canonical_journey(artifacts);
-        }
-        self.completed = false;
-        self.transcript = None;
-        self.run = None;
-        self.world = World::default();
-        self.world.emotion = self.emotion;
-        let case = if self.negative { "http500" } else { "success" };
-        let work = self.runtime.block_on(controlled(
-            async {
-                self.world
-                    .start(
-                        &self.options.python,
-                        self.options.bridge.as_deref().ok_or("m4: missing bridge")?,
-                        &artifacts.root.join(format!("private-{case}")),
-                        self.negative,
-                    )
-                    .await?;
-                let (completion, timing) = self.world.speak().await?;
-                let observer = self.world.observer()?;
-                observer
-                    .wait_for(0, |call| call.reply_completed)
-                    .await
-                    .map_err(|_| "m4: reply incomplete")?;
-                // Freeze the completed observation before deliberate bridge EOF;
-                // the fake may otherwise record that expected peer close as failure.
-                let text = transcript(&observer)?;
-                Ok((completion, timing, text))
-            },
-            self.options.cancel.as_deref(),
-            tokio::time::Instant::now() + Duration::from_secs(30),
-        ));
-        let cleanup = self.runtime.block_on(self.world.close());
-        if self.emotion {
-            artifacts.m6 = Some(super::emotion::measurement(&self.world));
-        }
-        let (completion, timing, text) = match (work, cleanup) {
-            (Err(primary), Err(cleanup)) => return Err(format!("{primary}; {cleanup}")),
-            (Err(error), _) | (_, Err(error)) => return Err(error),
-            (Ok(value), Ok(())) => value,
-        };
-        let run = completion["run_id"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or("m4: missing completed run")?;
-        self.check_delegation(run)?;
-        self.samples.push(timing.sample()?);
-        self.run = Some(run.into());
-        self.transcript = Some(text);
-        self.completed = true;
-        if self.emotion {
-            super::emotion::ordered(&self.world.ui_states, &json!({"sequence":super::emotion::sequence()}))
-        } else {
-            self.record(artifacts, case, &timing)
-        }
-    }
-
-    fn canonical_journey(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
         self.completed = false;
         self.transcript = None;
         self.run = None;
@@ -146,6 +88,9 @@ impl<'a> M4<'a> {
             .block_on(Box::pin(super::codex::run(self.options, self.negative)))?;
         self.world.trace = journey.trace;
         self.world.speaking = journey.speaking;
+        self.world.ui_states = journey.ui_states;
+        self.world.reply_pcm_bytes = journey.timing.played;
+        self.world.playback = journey.playback;
         self.samples.push(journey.timing.sample()?);
         self.run = Some(
             journey.completion["run_id"]
@@ -156,31 +101,12 @@ impl<'a> M4<'a> {
         self.transcript = Some(journey.text);
         self.completed = true;
         let case = if self.negative { "http500" } else { "success" };
-        self.record(artifacts, case, &journey.timing)
-    }
-
-    fn check_delegation(&self, run: &str) -> Result<(), String> {
-        selectors::check(
-            &self.world.trace.records,
-            &selectors::parse(&[
-                json!("session.delegation.created"),
-                json!(if self.emotion {
-                    "tools/call {name: ui.show_emotion, count: 1}"
-                } else {
-                    "tools/call {name: test.echo, count: 1}"
-                }),
-                json!("session.commentary.append"),
-            ])?,
-            Some(run),
-        )?;
         if self.emotion {
-            selectors::check(
-                &self.world.trace.records,
-                &selectors::parse(&[json!("reply.played {outcome: played}")])?,
-                Some(run),
-            )?;
+            artifacts.m6 = Some(super::emotion::measurement(&self.world));
+            super::emotion::ordered(&self.world.ui_states, &json!({"sequence":super::emotion::sequence()}))
+        } else {
+            self.record(artifacts, case, &journey.timing)
         }
-        Ok(())
     }
 
     fn record(&self, artifacts: &mut Artifacts, case: &str, timing: &wire::Timing) -> Result<(), String> {
@@ -286,11 +212,7 @@ impl Driver for M4<'_> {
     }
 }
 
-fn transcript(observer: &DialogueObserver) -> Result<String, String> {
-    let calls = observer.calls().map_err(|_| "m4: missing Live observations")?;
-    sent_transcript(&calls)
-}
-
+#[cfg(test)]
 fn sent_transcript(calls: &[DialogueCall]) -> Result<String, String> {
     if calls.len() != 1
         || calls[0].call_index != 0

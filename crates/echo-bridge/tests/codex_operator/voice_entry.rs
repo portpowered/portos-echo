@@ -313,40 +313,27 @@ fn recovered_process(fixture: &Fixture) {
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge and local Python"]
-async fn codex_voice_entry_binary_unmigrated_tools_and_epoch_never_fall_back_to_legacy() {
-    for kind in ["tools", "epoch"] {
-        let fixture = Fixture::new("chatgpt");
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        if kind != "tools" {
-            configure(&fixture, listener.local_addr().unwrap().port());
-            let path = fixture.directory.path().join("bridge.toml");
-            let text = std::fs::read_to_string(&path).unwrap();
-            std::fs::write(
-                path,
-                format!("{text}\n[chatgpt_auth]\ntoken_endpoint='http://127.0.0.1:1/token'\n"),
-            )
-            .unwrap();
-        }
-        let mut command = command(&fixture);
-        if kind != "tools" {
-            command.args([
-                "--live-loopback",
-                "http://127.0.0.1:1",
-                "--model-loopback",
-                "http://127.0.0.1:1",
-            ]);
-        }
-        if kind == "epoch" {
-            command.args(["--sim-clock", "--sim-epoch", "1800000000"]);
-        }
-        let mut process = Process::spawn(&mut command);
-        process.collect(2).await;
-        assert_eq!(process.stderr().await, "echo-bridge: invalid input\n");
-        assert!(process.lines.next_line().await.unwrap().is_none());
-        assert!(!fixture.directory.path().join("trace").exists());
-        assert!(!fixture.home.join("launches").exists());
-        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
-    }
+async fn codex_voice_entry_binary_unmigrated_epoch_never_falls_back_to_legacy() {
+    let fixture = Fixture::new("chatgpt");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    configure(&fixture, listener.local_addr().unwrap().port());
+    let mut command = command(&fixture);
+    command.args([
+        "--live-loopback",
+        "http://127.0.0.1:1",
+        "--model-loopback",
+        "http://127.0.0.1:1",
+        "--sim-clock",
+        "--sim-epoch",
+        "1800000000",
+    ]);
+    let mut process = Process::spawn(&mut command);
+    process.collect(2).await;
+    assert_eq!(process.stderr().await, "echo-bridge: invalid input\n");
+    assert!(process.lines.next_line().await.unwrap().is_none());
+    assert!(!fixture.directory.path().join("trace").exists());
+    assert!(!fixture.home.join("launches").exists());
+    assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
 }
 
 fn routing(fixture: &Fixture) -> Value {

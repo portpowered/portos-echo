@@ -30,11 +30,14 @@ def read_frame(connection):
 
 
 class Delegation:
-    def __init__(self, tools, negative, exhausted=False):
+    def __init__(self, tools, negative, exhausted=False, emotion=False):
+        self.emotion = emotion
         self.tools = tools
         self.negative = negative
         self.exhausted = exhausted
         self.reply = "I couldn't call test echo." if negative else 'test echo: delegated echo'
+        if emotion and not negative:
+            self.reply = 'Here is a happy face.'
         self.models = []
         self.delegations = []
         self.appends = []
@@ -45,7 +48,7 @@ class Delegation:
         self.delegations.append('delegation-local')
         return {'type': 'delegation.created', 'item': {
             'type': 'delegation', 'target': 'client', 'id': 'delegation-local',
-            'content': [{'type': 'input_text', 'text': 'Call tool_0 with text delegated echo and report the result.'}]}}
+            'content': [{'type': 'input_text', 'text': 'Call tool_3 with name happy and report the result.' if self.emotion else 'Call tool_0 with text delegated echo and report the result.'}]}}
 
     def respond(self, body):
         expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
@@ -63,7 +66,8 @@ class Delegation:
         if index == 0:
             assert not outputs, 'premature tool output'
             item = {'type': 'function_call', 'id': 'fc-local', 'call_id': 'tool-local',
-                    'name': 'tool_0', 'arguments': '{"text":"delegated echo"}', 'status': 'completed'}
+                    'name': 'tool_3' if self.emotion else 'tool_0',
+                    'arguments': '{"name":"happy"}' if self.emotion else '{"text":"delegated echo"}', 'status': 'completed'}
         else:
             assert len(outputs) == 1 and outputs[0]['call_id'] == 'tool-local', 'tool identity mismatch'
             # The pinned engine encodes dynamic-tool content as a JSON text value.
@@ -80,6 +84,12 @@ class Delegation:
     def check_output(self, output):
         if self.negative:
             assert output == 'tool execution failed', 'exact failure output mismatch'
+        elif self.emotion:
+            content = json.loads(output)
+            assert len(content) == 1 and content[0]['type'] == 'text', 'emotion content mismatch'
+            assert json.loads(content[0]['text']) == {
+                'state': 'emotion', 'name': 'happy', 'frame_ms': 80,
+                'frames': ['(^_^)', '(^o^)']}, 'exact animation result mismatch'
         else:
             assert json.loads(output) == [{'type': 'text', 'text': 'delegated echo'}], 'exact tool output mismatch'
 

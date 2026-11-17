@@ -25,6 +25,8 @@ use std::{path::Path, time::Duration};
 #[derive(Default)]
 struct Case {
     negative: bool,
+    emotion: bool,
+    ui_states: Vec<Value>,
     root: Option<Root>,
     host: Option<Process>,
     bridge: Option<Process>,
@@ -34,6 +36,7 @@ struct Case {
     trace: Trace,
     speaking: Option<Value>,
     transcript: Option<String>,
+    playback: Option<Value>,
 }
 pub(super) struct Journey {
     pub trace: Trace,
@@ -41,10 +44,15 @@ pub(super) struct Journey {
     pub timing: Timing,
     pub completion: Value,
     pub text: String,
+    pub ui_states: Vec<Value>,
+    pub playback: Option<Value>,
 }
 
 pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, String> {
-    let mut case = Case::default();
+    let mut case = Case {
+        emotion: crate::lab_validate::load(&options.scenarios[0])?["id"] == "m6-emotion",
+        ..Case::default()
+    };
     let work = controlled(
         Box::pin(async {
             case.start(options, negative).await?;
@@ -67,6 +75,8 @@ pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, St
         timing,
         completion,
         text,
+        ui_states: case.ui_states,
+        playback: case.playback,
     })
 }
 
@@ -96,7 +106,7 @@ impl Case {
             .await
             .map_err(|_| "m4: spoof startup")?,
         );
-        self.provider = Some(Provider::start(&options.python, negative).await?);
+        self.provider = Some(Provider::start_mode(&options.python, negative, self.emotion).await?);
         let root = &self.root.as_ref().ok_or("m4: missing root")?.0;
         world::configure(
             root,
@@ -130,7 +140,7 @@ impl Case {
     async fn speak(&mut self) -> Result<(Value, Timing), String> {
         let root = &self.root.as_ref().ok_or("m4: missing root")?.0;
         let mut screen = Screen::connect(root).await?;
-        screen.expect("ready").await?;
+        observe(&mut screen, &mut self.ui_states, "ready").await?;
         self.host_control(json!({"action":"finite","pcm":world::fixture()}))
             .await?;
         let provider = self.provider.as_mut().ok_or("m4: missing provider")?;
@@ -139,17 +149,28 @@ impl Case {
         let (connected, ready) = tokio::sync::oneshot::channel();
         let spoof = self.spoof.as_ref().ok_or("m4: missing spoof")?;
         let negative = self.negative;
+        let emotion = self.emotion;
+        let replies = provider.commands.clone();
+        let states = &mut self.ui_states;
         let presentation = async {
-            screen.expect("listening").await?;
-            screen.expect("connected").await?;
+            observe(&mut screen, states, "listening").await?;
+            observe(&mut screen, states, "connected").await?;
             if negative {
                 spoof
                     .set_fault(Fault::Http500)
                     .map_err(|_| "m4: cannot inject MCP fault")?;
             }
             connected.send(()).map_err(|()| "m4: connection observer abandoned")?;
-            let speaking = screen.expect("speaking").await?;
-            screen.expect("ready").await?;
+            if emotion {
+                observe(&mut screen, states, "emotion").await?;
+                observe(&mut screen, states, "connected").await?;
+                replies
+                    .send(Control::Reply)
+                    .await
+                    .map_err(|_| "m6: reply gate closed")?;
+            }
+            let speaking = observe(&mut screen, states, "speaking").await?;
+            observe(&mut screen, states, "ready").await?;
             Ok::<_, String>(speaking)
         };
         let (completion, speaking) = tokio::try_join!(settle(bridge, provider, relay, ready), presentation)?;
@@ -160,6 +181,7 @@ impl Case {
                 "m4: expected exact decoded host playback PCM, observed {playback}"
             ));
         }
+        self.playback = Some(playback);
         let timing = self.relay.as_ref().ok_or("m4: missing relay")?.timing();
         timing.sample()?;
         Ok((completion, timing))
@@ -204,7 +226,7 @@ impl Case {
             let checked = spoof
                 .snapshot()
                 .map_err(|_| "m4: missing MCP observation".to_owned())
-                .and_then(|mcp| receipts::merge(&mut self.trace, snapshot, &mcp, self.negative));
+                .and_then(|mcp| receipts::merge_mode(&mut self.trace, snapshot, &mcp, self.negative, self.emotion));
             errors.extend(checked.err());
             errors.extend(
                 spoof
@@ -283,4 +305,13 @@ async fn settle(
             return Ok(result);
         }
     }
+}
+
+async fn observe(screen: &mut Screen, states: &mut Vec<Value>, name: &str) -> Result<Value, String> {
+    let frame = screen.next().await?;
+    states.push(frame.clone());
+    if frame["state"]["state"] != name {
+        return Err(format!("screen: expected {name}, observed {}", frame["state"]));
+    }
+    Ok(frame["state"].clone())
 }
