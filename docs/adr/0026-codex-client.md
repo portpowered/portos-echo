@@ -437,3 +437,29 @@ early transcript delivery, actual played settlement, pre-admission refusal,
 ICE failure/deadline/cancellation and observer failure cleanup. They do not
 establish canonical executable selection, UI rendering, kill/relink behavior,
 actual app-server/Wyoming interaction or real-pin M2. Those remain retained work.
+
+## First-wake admission amendment (2026-11-17)
+
+The voice service takes the device event stream once inside the authenticated
+host callback. Before the first wake and between idle-closed conversations it
+polls the same process IO, refuses unsolicited server requests without tool
+effects, observes ordered device mute/drop events and probes device readiness.
+One in-flight probe survives unrelated events; each probe has a five-second
+ceiling and the next starts after a one-second cadence. Failure ends this
+borrower; transport recovery remains the device adapter's responsibility.
+
+Only an unmuted wake admits media creation and starts the connection deadline.
+Time spent ready before a wake does not consume that budget. Connected still
+requires the existing signaling and media admission, and each played reply
+retains its call until idle expiry. After awaited stop, the service returns to
+Ready and can admit another call on the same authenticated IO. Mute state is
+retained across these phases. Cancellation reaches active conversation cleanup
+before the outer host closes the device and reaps its child.
+
+Memory-only paused-clock tests protect unsolicited-request refusal with the
+original ID, device probing, mute/drop order, EOF/cancellation, delayed first
+wake, two complete conversations on one IO owner, and peer-creation deadline
+and cancellation. No process or socket is created by these tests. Canonical
+executable selection, UI/relink/kill projection and real-pin M2 remain retained
+work; this component proof does not satisfy those edges. No new dependency,
+shared contract or credential path is introduced.

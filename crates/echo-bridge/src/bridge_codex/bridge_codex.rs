@@ -241,7 +241,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Drop for Call<'_, R, W> {
     }
 }
 
-fn rpc_error(error: RpcError) -> Error {
+pub(crate) fn rpc_error(error: RpcError) -> Error {
     match error {
         RpcError::Deadline => Error::Deadline,
         RpcError::Malformed => Error::Decode,

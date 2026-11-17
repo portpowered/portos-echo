@@ -1,6 +1,167 @@
 //! T1: admission and cleanup observations through memory-only component ports.
 use super::*;
 use crate::bridge_voice::{ConversationOptions, open_conversation};
+use crate::bridge_voice::{ServeNotice, ServeOptions, serve};
+
+fn serving_options() -> ServeOptions<'static> {
+    ServeOptions {
+        call: options(),
+        tools: vec![],
+        session: session_options(),
+        connect_timeout: Duration::from_secs(5),
+    }
+}
+
+fn serving_label(notice: &ServeNotice) -> Option<&'static str> {
+    match notice {
+        ServeNotice::Ready => Some("ready"),
+        ServeNotice::Listening => Some("listening"),
+        ServeNotice::Session(SessionNotice::Connected) => Some("connected"),
+        ServeNotice::Session(SessionNotice::Completed(_)) => Some("completed"),
+        _ => None,
+    }
+}
+
+async fn two_calls(server: &mut Server) {
+    for _ in 0..2 {
+        start(server).await;
+        reply(server).await;
+        stop(server).await;
+    }
+    std::future::pending::<()>().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn serving_waits_past_startup_budget_then_reopens_after_idle_on_same_io() {
+    let (mut io, mut server) = fixture();
+    let observer = Observer::default();
+    let mut link = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let (first, first_state, _audio1) = peer(true, None);
+    let (second, second_state, _audio2) = peer(true, None);
+    let mut peers = std::collections::VecDeque::from([first, second]);
+    let notices = std::cell::RefCell::new(Vec::new());
+    let (stopper, stopping) = tokio::sync::oneshot::channel::<()>();
+    let work = serve(
+        &mut link,
+        &mut io,
+        serving_options(),
+        async || Ok(peers.pop_front().unwrap()),
+        async {
+            let _ = stopping.await;
+        },
+        |notice| {
+            if let Some(label) = serving_label(&notice) {
+                notices.borrow_mut().push(label);
+            }
+            Ok(())
+        },
+    );
+    let mut work = Box::pin(async {
+        tokio::select! { result = work => result, () = two_calls(&mut server) => unreachable!() }
+    });
+    pump(work.as_mut()).await;
+    tokio::time::advance(Duration::from_secs(10)).await;
+    pump(work.as_mut()).await;
+    assert_eq!(*notices.borrow(), ["ready"]);
+    assert_eq!(first_state.offers.load(Ordering::SeqCst), 0);
+    assert_eq!(second_state.offers.load(Ordering::SeqCst), 0);
+    for completed in 1..=2 {
+        wake(&observer);
+        pump(work.as_mut()).await;
+        observer.finish(Ok(()));
+        pump(work.as_mut()).await;
+        assert_eq!(
+            notices.borrow().iter().filter(|&&s| s == "completed").count(),
+            completed
+        );
+        tokio::time::advance(Duration::from_secs(5)).await;
+        pump(work.as_mut()).await;
+    }
+    let cycle = ["ready", "listening", "connected", "completed"];
+    assert_eq!(
+        *notices.borrow(),
+        [cycle.as_slice(), cycle.as_slice(), &["ready"]].concat()
+    );
+    assert_eq!(first_state.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(second_state.closes.load(Ordering::SeqCst), 1);
+    stopper.send(()).unwrap();
+    assert_eq!(work.await, Err(Error::Control));
+    assert_eq!(
+        observer.commands().iter().filter(|c| **c == Command::Connect).count(),
+        1
+    );
+    assert!(io.begin_request("account/read", &json!({})).is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn serving_invalid_budget_or_idle_observer_failure_creates_no_peer_or_call() {
+    for invalid in [false, true] {
+        let (mut io, _server) = fixture();
+        let observer = Observer::default();
+        let mut link = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        let (media, state, _audio) = peer(true, None);
+        let mut media = Some(media);
+        let mut options = serving_options();
+        if invalid {
+            options.connect_timeout = Duration::ZERO;
+        }
+        let result = serve(
+            &mut link,
+            &mut io,
+            options,
+            async || Ok(media.take().unwrap()),
+            std::future::pending(),
+            |_| Err(Error::Screen),
+        )
+        .await;
+        assert_eq!(result, Err(if invalid { Error::Input } else { Error::Screen }));
+        assert!(media.is_some());
+        assert_eq!(state.offers.load(Ordering::SeqCst), 0);
+        assert_eq!(observer.commands(), [Command::Connect]);
+        assert!(io.begin_request("account/read", &json!({})).is_ok());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn serving_peer_creation_uses_wake_deadline_and_cancellation() {
+    for cancelled in [false, true] {
+        let (mut io, _server) = fixture();
+        let observer = Observer::default();
+        let mut link = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        wake(&observer);
+        let (started, ready) = tokio::sync::oneshot::channel::<()>();
+        let mut started = Some(started);
+        let start = Instant::now();
+        let result = serve(
+            &mut link,
+            &mut io,
+            serving_options(),
+            async || {
+                started.take().unwrap().send(()).unwrap();
+                std::future::pending::<Result<Controlled, Error>>().await
+            },
+            async {
+                ready.await.unwrap();
+                if !cancelled {
+                    std::future::pending::<()>().await;
+                }
+            },
+            |_| Ok(()),
+        )
+        .await;
+        assert_eq!(result, Err(if cancelled { Error::Control } else { Error::Deadline }));
+        assert_eq!(
+            start.elapsed(),
+            if cancelled {
+                Duration::ZERO
+            } else {
+                Duration::from_secs(5)
+            }
+        );
+        assert_eq!(observer.commands(), [Command::Connect]);
+        assert!(io.begin_request("account/read", &json!({})).is_ok());
+    }
+}
 
 fn opening_options() -> ConversationOptions<'static> {
     ConversationOptions {

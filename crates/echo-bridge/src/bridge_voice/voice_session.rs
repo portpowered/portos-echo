@@ -13,6 +13,7 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+#[derive(Clone, Copy)]
 pub struct SessionOptions {
     pub idle: Duration,
     pub response_timeout: Duration,
@@ -120,7 +121,7 @@ where
     result.and_then(|completed| cleanup.map(|()| completed))
 }
 
-fn validate(options: &SessionOptions) -> Result<(), Error> {
+pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
     if options.response_timeout.is_zero() || options.played_timeout.is_zero() {
         return Err(Error::Input);
     }
