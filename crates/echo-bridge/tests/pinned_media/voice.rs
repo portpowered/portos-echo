@@ -1,6 +1,8 @@
 //! T3 public executable: pin + real media + loopback Wyoming, controlled clock.
 use super::*;
+mod lifecycle;
 use echo_contracts::wyoming::{Event as WireEvent, Header, encode};
+use lifecycle::Ending;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
@@ -8,12 +10,12 @@ use tokio::{
 
 #[tokio::test]
 async fn t3_pinned_voice_executable_waits_for_played_and_releases_home() {
-    tokio::time::timeout(Duration::from_secs(25), Box::pin(exercise()))
+    tokio::time::timeout(Duration::from_secs(25), Box::pin(exercise(Ending::Eof)))
         .await
         .unwrap();
 }
 
-async fn exercise() {
+async fn exercise(ending: Ending) {
     let directory = tempfile::tempdir().unwrap();
     private_parent(directory.path());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -32,11 +34,14 @@ async fn exercise() {
     let (commands, receive) = mpsc::channel(2);
     let (ticks, clock) = mpsc::channel(1);
     let ((), (mut remote, echoed)) = tokio::join!(
-        executable(directory.path(), &config, origin, listener, commands, clock),
+        executable(directory.path(), &config, origin, listener, (commands, clock), ending),
         clocked_remote(&mut input, &mut output, receive, ticks)
     );
     remote.close();
-    assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
+    assert!(
+        (4 * ending.runs()..=8 * ending.runs()).contains(&echoed),
+        "remote echoed {echoed} packets"
+    );
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let snapshot: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     assert_eq!(
@@ -45,6 +50,9 @@ async fn exercise() {
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
         "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],"sidebands":1,"external":0})
     );
+    input.write_all(b"{\"transcript_count\":true}\n").await.unwrap();
+    let observed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(observed, json!({"transcripts": ending.runs()}));
     drop(input);
     assert!(provider.wait().await.unwrap().success());
     // The actual executable reaped its supervisor and released exclusive ownership.
@@ -93,40 +101,51 @@ async fn executable(
     config: &CodexConfig,
     origin: &str,
     listener: TcpListener,
-    commands: mpsc::Sender<bool>,
-    mut clock: mpsc::Receiver<()>,
+    channels: (mpsc::Sender<bool>, mpsc::Receiver<()>),
+    ending: Ending,
 ) {
+    let (commands, mut clock) = channels;
     let mut process = launch(root, origin);
     let mut input = process.stdin.take().unwrap();
     let mut output = BufReader::new(process.stdout.take().unwrap()).lines();
     let mut satellite = listener.accept().await.unwrap().0;
     admit(&mut satellite, &mut output, config).await;
-    capture(&mut satellite, &mut input, &mut output).await;
-    playback(root, &mut satellite, &commands, &mut input, &mut output, &mut clock).await;
-    settle(root, &mut satellite, &mut output).await;
-    statistics(root);
+    let mut screen = lifecycle::screen(root).await;
+    wake(&mut satellite).await;
+    lifecycle::replies(
+        root,
+        ending.runs(),
+        &mut satellite,
+        &mut input,
+        &mut output,
+        &commands,
+        &mut clock,
+    )
+    .await;
+    statistics(root, ending.runs());
     commands.send(false).await.unwrap();
     commands.closed().await;
+    lifecycle::finish(root, ending, &mut input, &mut output).await;
+    lifecycle::presentation(&mut screen, ending).await;
     drop(input);
-    let result = process.wait_with_output().await.unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-    assert_eq!(result.stderr, b"");
-    assert_eq!(result.stdout, b"");
-    assert_eq!(count(root, "live.closed"), 1);
-    assert_eq!(count(root, "bridge.error"), 0);
+    lifecycle::collected(process, root, ending, &mut screen).await;
 }
 
 async fn settle(
     root: &Path,
     satellite: &mut TcpStream,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    run: usize,
 ) {
-    assert_eq!(count(root, "reply.played"), 0);
-    assert_eq!(count(root, "bridge.run_completed"), 0);
+    assert_eq!(count(root, "reply.played"), run - 1);
+    assert_eq!(count(root, "bridge.run_completed"), run - 1);
     send(satellite, "played", json!({}), vec![]).await;
     let completed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    assert_eq!(completed, json!({"event":"bridge.run_completed", "run_id":"run-1"}));
-    assert_eq!(count(root, "reply.played"), 1);
+    assert_eq!(
+        completed,
+        json!({"event":"bridge.run_completed", "run_id":format!("run-{run}")})
+    );
+    assert_eq!(count(root, "reply.played"), run);
 }
 
 fn launch(root: &Path, origin: &str) -> tokio::process::Child {
@@ -173,6 +192,9 @@ async fn admit(
         )),
         Err(echo_codex::codex_supervisor::ProcessError::PrivateHome)
     ));
+}
+
+async fn wake(satellite: &mut TcpStream) {
     let row: Value = serde_json::from_str(
         include_str!("../../../../tests/fixtures/wyoming/wake-word.jsonl")
             .lines()
@@ -209,6 +231,7 @@ async fn playback(
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     clock: &mut mpsc::Receiver<()>,
 ) {
+    let completed = count(root, "bridge.run_completed");
     let mut frames = 0;
     let mut pcm = Vec::new();
     loop {
@@ -236,7 +259,7 @@ async fn playback(
         .map(|b| i64::from(i16::from_le_bytes(*b)).pow(2))
         .sum();
     assert!(energy > 1440 * 1000_i64.pow(2), "reply PCM energy {energy}");
-    assert_eq!(count(root, "bridge.run_completed"), 0);
+    assert_eq!(count(root, "bridge.run_completed"), completed);
 }
 
 fn count(root: &Path, event: &str) -> usize {
@@ -358,21 +381,25 @@ fn loopback_offer(offer: &str) {
     }
 }
 
-fn statistics(root: &Path) {
+fn statistics(root: &Path, runs: usize) {
     let rows: Vec<Value> = std::fs::read_to_string(root.join("trace"))
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     let microphone: Vec<_> = rows.iter().filter(|row| row["event"] == "mic.completed").collect();
-    assert_eq!(microphone.len(), 1);
-    assert_eq!(microphone[0]["count"], 8);
-    assert_eq!(microphone[0]["received_chunks"], 8);
-    assert_eq!(microphone[0]["dropped_chunks"], 0);
-    assert_eq!(microphone[0]["tail_samples"], 0);
+    assert_eq!(microphone.len(), runs);
+    for row in microphone {
+        assert_eq!(row["count"], 8);
+        assert_eq!(row["received_chunks"], 8);
+        assert_eq!(row["dropped_chunks"], 0);
+        assert_eq!(row["tail_samples"], 0);
+    }
     let replies: Vec<_> = rows.iter().filter(|row| row["event"] == "reply.played").collect();
-    assert_eq!(replies.len(), 1);
-    assert_eq!(replies[0]["outcome"], "played");
-    assert_eq!(replies[0]["dropped_frames"], 0);
-    assert_eq!(replies[0]["frames"], replies[0]["received_frames"]);
+    assert_eq!(replies.len(), runs);
+    for row in replies {
+        assert_eq!(row["outcome"], "played");
+        assert_eq!(row["dropped_frames"], 0);
+        assert_eq!(row["frames"], row["received_frames"]);
+    }
 }

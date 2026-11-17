@@ -4,13 +4,15 @@ import hashlib
 import http.server
 import json
 import queue
+import select
 import socket
 import struct
 import sys
 import threading
 
 answers = queue.Queue()
-transcripts = threading.Event()
+transcript_input, transcript_output = socket.socketpair()
+transcript_count = 0
 observed = {'calls': [], 'sidebands': 0, 'external': 0}
 output_lock = threading.Lock()
 
@@ -72,16 +74,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Sec-WebSocket-Accept', base64.b64encode(hashlib.sha1(key.encode()).digest()).decode())
         self.end_headers()
         frame(self.connection, {'type': 'session.started', 'session': {'id': 'local-media'}})
-        assert transcripts.wait(20), 'transcript command missing'
-        for role, text in [('user', 'ping'), ('assistant', 'echo-ok')]:
-            kind = 'input' if role == 'user' else 'output'
-            frame(self.connection, {'type': kind + '_transcript.added', 'item': {'text': text}})
-            frame(self.connection, {'type': 'turn.done', 'turn': {'role': role, 'transcript': text}})
-        self.connection.settimeout(20)
+        global transcript_count
         try:
-            while self.connection.recv(4096):
-                pass
-        except (OSError, socket.timeout):
+            while True:
+                readable, _, _ = select.select([self.connection, transcript_input], [], [], 20)
+                if not readable:
+                    raise AssertionError('sideband control deadline')
+                if self.connection in readable and not self.connection.recv(4096):
+                    break
+                if transcript_input in readable:
+                    assert transcript_input.recv(1) == b't'
+                    for role, text in [('user', 'ping'), ('assistant', 'echo-ok')]:
+                        kind = 'input' if role == 'user' else 'output'
+                        frame(self.connection, {'type': kind + '_transcript.added', 'item': {'text': text}})
+                        frame(self.connection, {'type': 'turn.done', 'turn': {'role': role, 'transcript': text}})
+                    transcript_count += 1
+        except OSError:
             pass
         self.close_connection = True
 
@@ -96,7 +104,9 @@ try:
         if 'answer' in command:
             answers.put(command['answer'])
         elif command == {'transcripts': True}:
-            transcripts.set()
+            transcript_output.sendall(b't')
+        elif command == {'transcript_count': True}:
+            emit({'transcripts': transcript_count})
         elif command == {'snapshot': True}:
             emit(observed)
         else:
@@ -104,3 +114,5 @@ try:
 finally:
     server.shutdown()
     server.server_close()
+    transcript_input.close()
+    transcript_output.close()
