@@ -104,19 +104,17 @@ impl Muse {
 
     pub async fn close(&mut self) -> Result<(), String> {
         let mut failures = vec![];
+        if self.daemon.is_none() && !self.url.is_empty() {
+            failures.push("m7: missing daemon owner during cleanup".into());
+        } else {
+            self.url.clear();
+        }
         for process in [&mut self.daemon, &mut self.helper] {
             if let Some(mut child) = process.take()
                 && let Err(error) = child.close().await
             {
                 failures.push(error);
             }
-        }
-        if !self.url.is_empty()
-            && tokio::net::TcpStream::connect(self.url.trim_start_matches("https://"))
-                .await
-                .is_ok()
-        {
-            failures.push("m7: daemon listener survived cleanup".into());
         }
         if failures.is_empty() {
             Ok(())

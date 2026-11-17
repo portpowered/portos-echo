@@ -128,7 +128,7 @@ async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
         json!({"state":"ready","message":"Echo Live ready"})
     );
     bridge.finish(0).await;
-    assert!(TcpStream::connect(&address).await.is_err());
+    bridge.assert_collected();
     let text = std::fs::read_to_string(path).unwrap();
     assert!(
         !text.contains("synthetic-api-key") && !text.contains("synthetic-screen-pair"),

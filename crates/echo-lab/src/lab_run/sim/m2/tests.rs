@@ -82,10 +82,34 @@ fn utterance() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/lab/w1-utterance.pcm")
 }
 
-async fn closed(measured: &Value) {
-    for address in measured["endpoints"].as_array().unwrap() {
-        assert!(tokio::net::TcpStream::connect(address.as_str().unwrap()).await.is_err());
+pub(super) async fn close_world(world: &mut super::super::world::World) -> Result<(), String> {
+    use super::super::process::owners::Completion;
+    let host = world
+        .host
+        .as_mut()
+        .map(super::super::process::Process::observe_collection);
+    let bridge = world
+        .bridge
+        .as_mut()
+        .map(super::super::process::Process::observe_collection);
+    let mut owned = std::mem::take(world);
+    let mut completion = Completion::new("M2 bridge/host/Live/spoof", async move {
+        let result = owned.close().await;
+        (owned, result)
+    });
+    completion.stop();
+    let (owned, result) = completion.assert_closed().await;
+    *world = owned;
+    for receipt in [host, bridge].into_iter().flatten() {
+        assert!(receipt.try_recv().unwrap().success());
     }
+    result
+}
+
+pub(super) async fn close_auth(auth: auth::Auth) {
+    let mut completion = super::super::process::owners::Completion::new("M2 auth", auth.close());
+    completion.stop();
+    completion.assert_closed().await;
 }
 
 #[tokio::test]
@@ -93,11 +117,15 @@ async fn closed(measured: &Value) {
 async fn m2_t3_concurrent_cases_are_independent_and_reap_all_endpoints() {
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
-    let options = options();
+    let first_host = super::super::process::owners::Host::new();
+    let second_host = super::super::process::owners::Host::new();
+    let (mut first_options, mut second_options) = (options(), options());
+    first_options.python = first_host.python().into();
+    second_options.python = second_host.python().into();
     let utterance = utterance();
     let ((success, a), (expired, b)) = tokio::join!(
-        journey::run(&options, first.path(), "success", &utterance),
-        journey::run(&options, second.path(), "expired", &utterance)
+        journey::run(&first_options, first.path(), "success", &utterance),
+        journey::run(&second_options, second.path(), "expired", &utterance)
     );
     assert_eq!(a, Ok(()));
     assert_eq!(b, Ok(()));
@@ -106,8 +134,8 @@ async fn m2_t3_concurrent_cases_are_independent_and_reap_all_endpoints() {
     assert_eq!(expired["refreshes"], 1);
     assert_eq!(std::fs::read_dir(first.path()).unwrap().count(), 0);
     assert_eq!(std::fs::read_dir(second.path()).unwrap().count(), 0);
-    closed(&success).await;
-    closed(&expired).await;
+    first_host.assert_closed();
+    second_host.assert_closed();
 }
 
 #[tokio::test]
@@ -115,7 +143,9 @@ async fn m2_t3_concurrent_cases_are_independent_and_reap_all_endpoints() {
 async fn m2_t3_startup_failure_and_input_error_retain_partial_evidence_and_reap() {
     for failure in ["startup", "input"] {
         let root = tempfile::tempdir().unwrap();
+        let host = super::super::process::owners::Host::new();
         let mut options = options();
+        options.python = host.python().into();
         if failure == "startup" {
             options.bridge = Some(root.path().join("missing-bridge"));
         }
@@ -131,7 +161,7 @@ async fn m2_t3_startup_failure_and_input_error_retain_partial_evidence_and_reap(
         if failure == "input" {
             assert_eq!(measured["frames"].as_array().unwrap().len(), 1);
         }
-        closed(&measured).await;
+        host.assert_closed();
     }
 }
 
@@ -140,7 +170,9 @@ async fn m2_t3_startup_failure_and_input_error_retain_partial_evidence_and_reap(
 async fn m2_t3_cancellation_after_wake_reaps_and_retains_observed_frames() {
     let root = tempfile::tempdir().unwrap();
     let cancellation = tempfile::tempdir().unwrap();
+    let host = super::super::process::owners::Host::new();
     let mut options = options();
+    options.python = host.python().into();
     let cancel = cancellation.path().join("cancel");
     options.cancel = Some(cancel.clone());
     let trace = root.path().join("private-success/bridge.private.jsonl");
@@ -171,5 +203,5 @@ async fn m2_t3_cancellation_after_wake_reaps_and_retains_observed_frames() {
         json!({"state":"ready","message":"Echo Live ready"})
     );
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
-    closed(&measured).await;
+    host.assert_closed();
 }

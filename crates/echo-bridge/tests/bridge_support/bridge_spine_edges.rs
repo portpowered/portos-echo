@@ -12,6 +12,79 @@ pub(super) async fn read_to_close(stream: &mut (impl tokio::io::AsyncRead + Unpi
     bytes
 }
 
+// Test adapter retains the existing joined-shutdown future. Triggering shutdown
+// and observing completion are separate, so withholding stop leaves a real
+// listener alive and must fail the same completion assertion.
+pub(super) struct Owner {
+    name: &'static str,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Owner {
+    pub(super) fn new<E: std::fmt::Debug>(
+        name: &'static str,
+        shutdown: impl std::future::Future<Output = Result<(), E>> + Send + 'static,
+    ) -> Self {
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = stopped.await;
+            shutdown.await.unwrap(); // These APIs join the actual listener owner.
+        });
+        Self {
+            name,
+            stop: Some(stop),
+            task,
+        }
+    }
+
+    pub(super) fn stop(&mut self) {
+        self.stop.take().unwrap().send(()).unwrap();
+    }
+
+    pub(super) async fn assert_closed(mut self) {
+        let result = tokio::time::timeout(OBSERVATION_TIMEOUT, &mut self.task).await;
+        if result.is_err() {
+            // Clean a withheld-trigger seed before reporting its failed proof.
+            if self.stop.is_some() {
+                self.stop();
+                (&mut self.task).await.unwrap();
+            } else {
+                self.task.abort();
+                let _ = (&mut self.task).await;
+            }
+        }
+        assert!(result.is_ok(), "{} listener owner did not complete", self.name);
+        result.unwrap().unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_owner_completion_is_independent_of_an_unrelated_live_listener() {
+    let completed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let retained = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = retained.local_addr().unwrap();
+    let mut first = Owner::new("completed peer", async move {
+        drop(completed);
+        Ok::<(), std::io::Error>(())
+    });
+    let second = Owner::new("retained peer", async move {
+        drop(retained);
+        Ok::<(), std::io::Error>(())
+    });
+    first.stop();
+    first.assert_closed().await;
+    let _connection = tokio::net::TcpStream::connect(address).await.unwrap();
+    // The other owner's successful join cannot discharge this owner's barrier.
+    let failure = tokio::spawn(second.assert_closed()).await.unwrap_err();
+    assert!(failure.is_panic());
+    let message = failure.into_panic().downcast::<String>().unwrap();
+    assert!(
+        message.contains("retained peer listener owner did not complete"),
+        "{message}"
+    );
+}
+
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_lifecycle_eof_with_idle_probe_response_closes_without_false_capacity_failure() {
@@ -34,8 +107,7 @@ async fn bridge_lifecycle_eof_with_idle_probe_response_closes_without_false_capa
     let entries = trace(&path);
     assert_eq!(entries.iter().filter(|e| e["event"] == "bridge.error").count(), 0);
     assert_eq!(entries.iter().filter(|e| e["event"] == "run.started").count(), 0);
-    let address = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    process.assert_collected();
     // The late info can still be unread when the bridge closes.
     assert_eq!(read_to_close(&mut satellite).await, Vec::<u8>::new());
 }
@@ -64,8 +136,7 @@ async fn bridge_spine_eof_cancels_registration_before_describe_deadline() {
         entries.iter().map(|e| e["event"].as_str().unwrap()).collect::<Vec<_>>(),
         ["bridge.started"]
     );
-    let address = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    process.assert_collected();
 }
 
 #[tokio::test]
@@ -87,8 +158,7 @@ async fn bridge_spine_eof_during_reply_reaps_satellite_and_health() {
     let entries = trace(&path);
     assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 0);
     assert_eq!(entries.iter().filter(|e| e["event"] == "wyoming.run_ended").count(), 0);
-    let address = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    process.assert_collected();
 }
 
 #[tokio::test]
@@ -168,7 +238,7 @@ async fn bridge_spine_partial_headers_are_bounded_and_eof_cancels_call_setup() {
         json!({"status":"running","wyoming":"connected","live":"connecting","relink_required":false,"kill_switch":false})
     );
     bridge.finish(0).await;
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    bridge.assert_collected();
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
     assert_eq!(fake.observer().calls().unwrap().len(), 1);
     fake.shutdown().await;

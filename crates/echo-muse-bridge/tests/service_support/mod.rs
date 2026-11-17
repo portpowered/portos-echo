@@ -40,7 +40,7 @@ impl Fixture {
         getrandom::fill(&mut random).unwrap();
         let credential = random.iter().map(|b| char::from(b'a' + b % 26)).collect::<String>();
         private(&root.join("credential"), credential.as_bytes());
-        std::fs::hard_link(FAKE, root.join("gadget")).unwrap();
+        std::fs::copy(FAKE, root.join("gadget")).unwrap();
         let config = json!({
             "listen":"127.0.0.1:0", "tls_certificate_der":root.join("cert.der"),
             "tls_private_key_der":root.join("key.der"), "client_credential_file":root.join("credential"),

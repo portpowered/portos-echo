@@ -1,4 +1,5 @@
 //! T3 lifecycle through prebuilt production binaries and pinned host.
+use super::super::super::process::owners::{Completion, Host};
 use super::*;
 
 fn binaries() -> PathBuf {
@@ -26,29 +27,20 @@ fn binaries() -> PathBuf {
     directory
 }
 
-async fn start(world: &mut World, root: &Path, bridge: &Path) -> Result<(), String> {
-    world.start("python3", bridge, root, false, &binaries()).await
+async fn start(world: &mut World, root: &Path, bridge: &Path, host: &Host) -> Result<(), String> {
+    world.start(host.python(), bridge, root, false, &binaries()).await
 }
 
-fn endpoints(world: &World) -> Vec<String> {
-    let mut addresses = vec![
-        world.muse.url.trim_start_matches("https://").into(),
-        world.relay.as_ref().unwrap().address.to_string(),
-    ];
-    for origin in [
-        world.model.as_ref().unwrap().origin.as_str(),
-        world.live.as_ref().unwrap().base_url(),
-        world.spoof.as_ref().unwrap().url(),
-    ] {
-        addresses.push(origin.trim_start_matches("http://").split('/').next().unwrap().into());
-    }
-    addresses
-}
-
-async fn closed(addresses: Vec<String>) {
-    for address in addresses {
-        assert!(tokio::net::TcpStream::connect(address).await.is_err());
-    }
+async fn close(world: &mut World) -> Result<(), String> {
+    let mut owned = std::mem::take(world);
+    let mut completion = Completion::new("M7 daemon/helper/bridge/relay/Live/model/spoof/host", async move {
+        let result = owned.close().await;
+        (owned, result)
+    });
+    completion.stop();
+    let (owned, result) = completion.assert_closed().await;
+    *world = owned;
+    result
 }
 
 #[tokio::test]
@@ -56,19 +48,19 @@ async fn closed(addresses: Vec<String>) {
 async fn m7_partial_startup_reaps_daemon_helper_host_and_all_listeners() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("world");
+    let host_owner = Host::new();
     let mut world = World::default();
     assert_eq!(
-        start(&mut world, &root, &root.join("missing-bridge")).await,
+        start(&mut world, &root, &root.join("missing-bridge"), &host_owner).await,
         Err("launch: cannot spawn owned process".into())
     );
-    let addresses = endpoints(&world);
     let daemon = world.muse.daemon.as_mut().unwrap().observe_collection();
     let host = world.host.as_mut().unwrap().observe_collection();
-    assert_eq!(world.close().await, Ok(()));
+    assert_eq!(close(&mut world).await, Ok(()));
     assert!(daemon.try_recv().unwrap().success());
     assert!(host.try_recv().unwrap().success());
     assert!(!root.exists());
-    closed(addresses).await;
+    host_owner.assert_closed();
 }
 
 #[tokio::test]
@@ -77,9 +69,11 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("world");
     let cancel = parent.path().join("cancel");
+    let host_owner = Host::new();
     let mut world = World::default();
-    start(&mut world, &root, &binaries().join("echo-bridge")).await.unwrap();
-    let addresses = endpoints(&world);
+    start(&mut world, &root, &binaries().join("echo-bridge"), &host_owner)
+        .await
+        .unwrap();
     let daemon = world.muse.daemon.as_mut().unwrap().observe_collection();
     let bridge = world.bridge.as_mut().unwrap().observe_collection();
     let host = world.host.as_mut().unwrap().observe_collection();
@@ -99,7 +93,7 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
         .await,
         Err("sim: cancelled".into())
     );
-    assert_eq!(world.close().await, Ok(()));
+    assert_eq!(close(&mut world).await, Ok(()));
     for collected in [daemon, bridge, host] {
         assert!(collected.try_recv().unwrap().success());
     }
@@ -113,8 +107,8 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
             .count(),
         0
     );
-    closed(addresses).await;
-    assert_eq!(world.close().await, Ok(()));
+    host_owner.assert_closed();
+    assert_eq!(close(&mut world).await, Ok(()));
 }
 
 #[tokio::test]
@@ -135,5 +129,35 @@ async fn m7_private_cleanup_failure_is_propagated() {
     );
     assert_eq!(std::fs::read(&root).unwrap(), b"replacement");
     std::fs::remove_file(root).unwrap();
-    assert_eq!(world.close().await, Ok(()));
+    assert_eq!(close(&mut world).await, Ok(()));
+}
+
+#[tokio::test]
+async fn m7_missing_daemon_owner_is_cleanup_failure() {
+    let mut muse = super::super::muse::Muse::default();
+    muse.url = "https://127.0.0.1:12345".into();
+    assert_eq!(
+        muse.close().await,
+        Err("m7: missing daemon owner during cleanup".into())
+    );
+}
+
+#[tokio::test]
+#[ignore = "T3 starts a local child process"]
+async fn m7_daemon_collection_failure_is_propagated() {
+    let mut command = tokio::process::Command::new("python3");
+    command.args([
+        "-c",
+        "import json,socket,threading,sys; listener=socket.socket(); listener.bind((sys.argv[1],0)); listener.listen(); print(json.dumps({'port':listener.getsockname()[1]}),flush=True); threading.Event().wait()",
+        "127.0.0.1",
+    ]);
+    let mut muse = super::super::muse::Muse::default();
+    muse.daemon = Some(super::super::super::process::Process::start(&mut command).unwrap());
+    let ready = muse.daemon.as_mut().unwrap().line().await.unwrap();
+    let daemon = muse.daemon.as_mut().unwrap().observe_collection();
+    let origin = "https://127.0.0.1";
+    muse.url = format!("{origin}:{}", ready["port"]);
+    assert_eq!(muse.close().await, Err("cleanup: owned child exited nonzero".into()));
+    assert!(!daemon.try_recv().unwrap().success());
+    assert_eq!(muse.close().await, Ok(()));
 }

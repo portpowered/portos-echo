@@ -124,7 +124,7 @@ async fn bridge_spine_host_echo_health_and_eof() {
     assert_host_microphone(&entries, calls[0].frames.len());
     assert_eq!(host.command("pcm").await, "30720 0");
     bridge.finish(0).await;
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    bridge.assert_collected();
     host.finish(0).await;
     fake.shutdown().await;
 }

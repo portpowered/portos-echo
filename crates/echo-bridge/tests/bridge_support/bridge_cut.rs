@@ -103,11 +103,7 @@ async fn bridge_cut_control_overflow_closes_receiver_and_reaps_process() {
         assert_eq!(entries.iter().filter(|e| e["event"] == event).count(), 0);
     }
     assert_eq!(entries.last().unwrap()["reason"], "wyoming");
-    assert!(
-        tokio::net::TcpStream::connect(entries[0]["health_addr"].as_str().unwrap())
-            .await
-            .is_err()
-    );
+    bridge.assert_collected();
 }
 async fn cut_failure(disconnect: bool) {
     let dir = tempfile::tempdir().unwrap();
@@ -125,7 +121,8 @@ async fn cut_failure(disconnect: bool) {
         drop(stream);
     }
     assert_cut_process_failure(&mut bridge, disconnect).await;
-    assert_cut_failure(&path, sent, disconnect).await;
+    assert_cut_failure(&path, sent, disconnect);
+    bridge.assert_collected();
 }
 async fn assert_cut_process_failure(bridge: &mut Process, disconnect: bool) {
     let status = tokio::time::timeout(Duration::from_secs(12), bridge.child.wait())
@@ -144,7 +141,7 @@ async fn assert_cut_process_failure(bridge: &mut Process, disconnect: bool) {
         }
     );
 }
-async fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool) {
+fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool) {
     let entries = trace(path);
     let cuts: Vec<_> = entries.iter().filter(|e| e["event"] == "reply.cut").collect();
     assert_eq!(cuts.len(), 1);
@@ -155,8 +152,6 @@ async fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool) {
         entries.last().unwrap()["reason"],
         if disconnect { "wyoming" } else { "deadline" }
     );
-    let address = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
 }
 async fn cut_reply(offered: u16, initial: u16) {
     let dir = tempfile::tempdir().unwrap();

@@ -37,8 +37,7 @@ async fn bridge_lifecycle_idle_provider_failure_next_wake_creates_fresh_call() {
     assert_eq!(closes.len(), 1);
     assert_eq!(closes[0]["reason"], "unavailable");
     process.finish(0).await;
-    let address = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    process.assert_collected();
 }
 
 async fn idle_failure(path: &Path) {
@@ -132,8 +131,7 @@ async fn bridge_lifecycle_expiry_closes_once_and_next_wake_creates_fresh_call() 
     assert_eq!(entries.iter().filter(|e| e["event"] == "bridge.error").count(), 0);
     process.finish(0).await;
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "live.closed").count(), 2);
-    let address = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    process.assert_collected();
     host.finish(0).await;
     fake.shutdown().await;
 }
@@ -242,7 +240,7 @@ async fn idle_socket_close(authorized: bool) {
     assert_eq!(process.child.id(), pid);
     process.finish(0).await;
     assert_idle_recovery(&path, authorized);
-    assert_idle_cleanup(satellite, &path, &address).await;
+    assert_idle_cleanup(satellite, &path, &mut process).await;
 }
 
 async fn recovered_socket(
@@ -265,17 +263,14 @@ async fn recovered_socket(
     satellite
 }
 
-async fn assert_idle_cleanup(mut satellite: tokio::net::TcpStream, path: &Path, address: &str) {
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+async fn assert_idle_cleanup(mut satellite: tokio::net::TcpStream, path: &Path, process: &mut Process) {
     let screen = trace(path)
         .into_iter()
         .find(|e| e["event"] == "screen.listening")
         .unwrap();
-    assert!(
-        tokio::net::TcpStream::connect(screen["address"].as_str().unwrap())
-            .await
-            .is_err()
-    );
+    let _screen_address = screen["address"].as_str().unwrap();
+    // One collected process owns both health and screen listeners.
+    process.assert_collected();
     let remaining = bridge_spine_edges::read_to_close(&mut satellite).await;
     // A final idle describe can race stdin EOF; no reply audio may remain.
     for line in remaining.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
@@ -417,7 +412,7 @@ async fn bridge_lifecycle_idle_host_restart_recovers_without_a_bridge_restart() 
     );
     assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 2);
     process.finish(0).await;
-    assert!(tokio::net::TcpStream::connect(&address).await.is_err());
+    process.assert_collected();
     host.finish(0).await;
     fake.shutdown().await;
 }
@@ -474,8 +469,7 @@ async fn bridge_lifecycle_three_wakes_reuse_one_call_with_per_run_audio_counts()
     assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 3);
     assert_eq!(entries.iter().filter(|e| e["event"] == "live.closed").count(), 0);
     process.finish(0).await;
-    let address = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    process.assert_collected();
     host.finish(0).await;
     fake.shutdown().await;
 }

@@ -106,15 +106,15 @@ async fn t3_dialogue_waits_for_match_sends_exact_reply_once_and_reaps() {
     assert_eq!(&sent[1..], expected);
     assert_eq!((call.pop_audio(), call.dropped_audio()), (None, 0));
     call.close();
-    let address = fake.base_url().strip_prefix("http://").unwrap().to_owned();
+    let owner = fake.task.abort_handle();
     fake.shutdown().await.unwrap();
+    assert!(owner.is_finished(), "dialogue listener owner still running");
     assert_eq!(observer.calls().unwrap()[0].call_index, 0);
     assert_eq!(observer.calls().unwrap()[0].delegation_id, "d-1");
     assert!(observer.calls().unwrap()[0].closed);
     assert!(observer.calls().unwrap()[0].reply_completed);
     assert_eq!(observer.calls().unwrap()[0].failure, None);
     assert_eq!(observer.calls().unwrap()[0].sent, sent);
-    assert!(TcpStream::connect(address).await.is_err());
 }
 
 #[tokio::test(start_paused = true)]
@@ -274,12 +274,21 @@ async fn t3_dialogue_drop_closes_listener_and_partial_http_tasks() {
     let address = fake.base_url().strip_prefix("http://").unwrap().to_owned();
     let mut socket = TcpStream::connect(&address).await.unwrap();
     wait(&fake.observer(), 0, |call| !call.closed).await;
+    let abort = fake.task.abort_handle();
     drop(fake);
+    tokio::time::resume();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !abort.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(
         socket.read_u8().await.unwrap_err().kind(),
         std::io::ErrorKind::UnexpectedEof
     );
-    assert!(TcpStream::connect(address).await.is_err());
+    assert!(abort.is_finished(), "dialogue listener owner still running");
 }
 
 #[tokio::test(start_paused = true)]

@@ -17,9 +17,10 @@ fn m1_prefix_selects_production_and_observes_ready_before_a_complete_wake() {
     let mut scenario: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     scenario["milestone"] = json!("M1");
     fs::write(path, scenario.to_string()).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_echo-lab"))
+    let output = session
+        .cli()
         .current_dir(&session.0)
-        .args(["run", "scenario.yaml", "--driver", "sim", "--out", "artifacts"])
+        .args(["scenario.yaml", "--driver", "sim", "--out", "artifacts"])
         .output()
         .unwrap();
     assert_eq!(
@@ -45,12 +46,7 @@ fn m1_prefix_selects_production_and_observes_ready_before_a_complete_wake() {
         .map(|record| record["address"].as_str().unwrap().parse().unwrap())
         .collect();
     assert_eq!(addresses.len(), 5);
-    for address in &addresses[1..] {
-        assert!(
-            std::net::TcpStream::connect(address).is_err(),
-            "listener leaked: {address}"
-        );
-    }
+    session.owners_closed();
     assert!(!session.0.join("artifacts/configured.private").exists());
     assert!(!events.contains("synthetic-local-api"));
     assert!(!events.contains("synthetic-local-screen"));

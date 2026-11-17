@@ -85,7 +85,7 @@ impl Harness {
         self.fixture.approve(Approval::Approved).unwrap();
         self.fixture.advance(5).unwrap();
         tokio::time::advance(Duration::from_secs(5)).await;
-        session.advance(5000).await;
+        faults::advance_with_probes(session).await;
         completed(&pending.await.unwrap(), 0, "MCP linked\n", "");
         assert_eq!(
             bridge_wire_screen::state(&mut session.screen).await,
@@ -124,20 +124,13 @@ impl Harness {
         );
     }
     async fn close(self) {
-        let resource = self
-            .spoof
-            .url()
-            .strip_prefix("http://")
-            .unwrap()
-            .strip_suffix("/mcp")
-            .unwrap()
-            .to_owned();
-        let auth = self.fixture.base().strip_prefix("http://").unwrap().to_owned();
+        let mut spoof = bridge_spine_edges::Owner::new("strict MCP spoof", self.spoof.shutdown());
+        let mut auth = bridge_spine_edges::Owner::new("strict MCP auth", self.fixture.shutdown());
         drop(self.live);
-        self.spoof.shutdown().await.unwrap();
-        self.fixture.shutdown().await.unwrap();
-        assert!(TcpStream::connect(resource).await.is_err());
-        assert!(TcpStream::connect(auth).await.is_err());
+        spoof.stop();
+        auth.stop();
+        spoof.assert_closed().await;
+        auth.assert_closed().await;
     }
 }
 #[tokio::test(start_paused = true)]
@@ -252,6 +245,7 @@ fn assert_success(h: &Harness) {
         2
     );
 }
+
 fn tool(id: &str) -> Value {
     json!({"type":"function_call","call_id":id,"name":"tool_0","arguments":"{\"text\":\"m5-linked\"}"})
 }
