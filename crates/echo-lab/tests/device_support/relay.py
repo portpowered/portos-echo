@@ -267,5 +267,11 @@ def forward(argv, relay_argv):
             raise RuntimeError('relay controller did not collect') from None
         finally:
             proc.stdout.close()
+            failures = []
             for relay in relays:
-                relay.close()
+                try:
+                    relay.close()
+                except (OSError, ValueError, RuntimeError) as error:
+                    failures.append(error)
+            if failures:
+                raise RuntimeError('relay cleanup failed') from None

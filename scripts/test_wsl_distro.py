@@ -318,6 +318,27 @@ class PythonDispatchTests(unittest.TestCase):
         self.assertEqual(events.get_nowait(), ('error', None))
         self.assertTrue(events.empty())
 
+    def test_device_forward_collects_every_relay_after_cleanup_failure(self):
+        for failure in (OSError, ValueError, RuntimeError):
+            with self.subTest(failure=failure):
+                first, second = mock.Mock(), mock.Mock()
+                first.address = second.address = '127.0.0.1:23456'
+                first.close.side_effect = failure('private failure detail')
+                proc = mock.Mock(stdin=io.StringIO(), stdout=io.StringIO(
+                    '{"event":"host.ready","address":"127.0.0.1:12345"}\n'
+                    '{"event":"host.ready","address":"127.0.0.1:12346"}\n'))
+                proc.wait.return_value = 0
+                with mock.patch.object(self.relay.subprocess, 'Popen', return_value=proc), \
+                        mock.patch.object(self.relay, 'Relay', side_effect=[first, second]), \
+                        mock.patch.object(self.relay.threading, 'Thread'), \
+                        mock.patch('builtins.print'):
+                    with self.assertRaisesRegex(RuntimeError, '^relay cleanup failed$'):
+                        self.relay.forward(['controller'], ['guest', '--relay'])
+                first.close.assert_called_once_with()
+                second.close.assert_called_once_with()
+                self.assertTrue(proc.stdin.closed)
+                self.assertTrue(proc.stdout.closed)
+
     def exercise(self, remote_first=False, cancel=False):
         socket = self.socket
         errors = []
