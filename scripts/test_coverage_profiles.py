@@ -182,7 +182,7 @@ if "coverage-check" in args:
 ''')
         cargo.chmod(0o755)
         overrides = self.root / "override.mk"
-        overrides.write_text("hassmic-host:\n\t@true\n")
+        overrides.write_text("hassmic-host codex-app-server:\n\t@true\n")
         environment = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
                        "LLVM_PROFDATA": TOOL}
         # Every selection the coverage recipe runs, read from the Makefile itself, so a lane that adds a

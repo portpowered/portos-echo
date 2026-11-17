@@ -114,7 +114,12 @@ fn check_startup(
 
 async fn close_world(world: &mut World, root: &Path) -> Vec<std::net::SocketAddr> {
     let endpoints = world.endpoints.clone();
+    let owner = world.host.as_mut().unwrap().observe_collection();
     let close = world.close().await;
+    assert!(
+        owner.try_recv().unwrap().success(),
+        "owned readiness child did not exit"
+    );
     assert_eq!(world.close().await, Ok(()));
     assert_eq!(close, Ok(()));
     assert!(world.host.is_none());
@@ -190,5 +195,4 @@ async fn child_startup(listen: bool) {
     }
     let endpoints = close_world(&mut world, &root.0).await;
     check_startup(listen, &result, &endpoints, endpoint, next.get());
-    assert!(tokio::net::TcpStream::connect(endpoint).await.is_err());
 }

@@ -1,4 +1,6 @@
 //! T3 fixture-only tool. Never forwards to a real executable or service.
+#[path = "lab_device_bridge.rs"]
+mod device_bridge;
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -6,6 +8,7 @@ use std::io::{self, Write};
 fn operation(args: &[String]) -> &str {
     match args.first().map(String::as_str) {
         Some("shell") => "firmware",
+        Some("--config") => "bridge",
         Some("exec-out") => "screencap",
         Some("-c") => args.get(2).map_or("unknown", String::as_str),
         Some("session") => args.get(1).map_or("unknown", String::as_str),
@@ -189,6 +192,9 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let op = operation(&args);
     let count = ledger(op, &args)?;
+    if let Some(code) = configured_fixture(op, &args, &fixture)? {
+        return Ok(code);
+    }
     if op == "play" {
         fs::write("play-queued", b"synthetic queued playback")?;
     }
@@ -242,6 +248,57 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
         writeln!(io::stdout(), "{result}")?;
     }
     Ok(0)
+}
+
+fn configured_fixture(op: &str, args: &[String], fixture: &Value) -> Result<Option<u8>, Box<dyn std::error::Error>> {
+    if op == "firmware" && matches!(args.get(1).map(String::as_str), Some("ps" | "kill")) {
+        return device_bridge::adb(args, fixture).map(Some);
+    }
+    if op == "bridge" && fixture["device_bridge_fault"].is_string() {
+        return device_bridge::run(args, fixture).map(Some);
+    }
+    if op == "play"
+        && let Ok(address) = std::env::var("ECHO_LAB_DEVICE_CONTROL")
+    {
+        device_wake(&address, args)?;
+    }
+    if real_config(op, args, fixture) {
+        let output = std::process::Command::new("python").args(args).output()?;
+        io::stdout().write_all(&output.stdout)?;
+        return Ok(Some(u8::from(!output.status.success())));
+    }
+    Ok(None)
+}
+
+fn real_config(op: &str, args: &[String], fixture: &Value) -> bool {
+    args.first().is_some_and(|arg| arg == "-c")
+        && fixture["real_config"] == true
+        && !matches!(
+            op,
+            "clock" | "digest" | "reply" | "wav" | "wait_until" | "wait" | "pixels"
+        )
+}
+
+fn device_wake(address: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{BufRead, BufReader};
+    let address: std::net::SocketAddr = address.parse()?;
+    if address.ip() != std::net::Ipv4Addr::LOCALHOST {
+        return Err("nonlocal fake control".into());
+    }
+    let index = args.iter().position(|a| a == "--file").ok_or("missing file")?;
+    let bytes = fs::read(&args[index + 1])?;
+    if bytes.len() < 44 || &bytes[..4] != b"RIFF" {
+        return Err("expected WAV".into());
+    }
+    let mut stream = std::net::TcpStream::connect(address)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(20)))?;
+    writeln!(stream, "{}", json!({"pcm":bytes[44..]}))?;
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply)?;
+    if reply.trim() != "ok" {
+        return Err("fake host failed".into());
+    }
+    Ok(())
 }
 
 fn main() -> std::process::ExitCode {

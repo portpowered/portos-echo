@@ -1,18 +1,19 @@
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+mod cli_owner;
 mod duplex;
 mod emotion;
 mod failures;
+mod host_owner;
 mod mcp;
 mod production;
 mod suite;
-pub struct Session(pub PathBuf);
+pub struct Session(pub PathBuf, host_owner::Host);
 
 impl Session {
     pub fn new() -> Self {
@@ -25,7 +26,9 @@ impl Session {
         // interrupted earlier process that had the same id (Windows reuses ids), never a live one.
         let _ = fs::remove_dir_all(&path);
         fs::create_dir(&path).unwrap();
-        Self(path.canonicalize().unwrap())
+        let path = path.canonicalize().unwrap();
+        cli_owner::prepare(&path);
+        Self(path, host_owner::Host::new())
     }
 
     pub fn scenario(&self, steps: Value, budgets: Value) {
@@ -36,7 +39,87 @@ impl Session {
         fs::write(self.0.join("fixture.pcm"), [1_u8, 0, 2, 0]).unwrap();
     }
 
+    pub fn cli(&self) -> Command {
+        let mut command = Command::new(cli_owner::cli(&self.0));
+        command
+            .current_dir(&self.0)
+            .args(["run", "--python", env!("CARGO_BIN_EXE_echo-lab-sim-script")])
+            .env(
+                "ECHO_LAB_TEST_HOST_DIRECTORY",
+                std::path::Path::new(self.1.python())
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap(),
+            );
+        command
+    }
+
     pub fn command(&self, bridge: &str) -> Command {
+        let mut command = self.cli();
+        let bridge = cli_owner::selected(&self.0, bridge);
+        command
+            .args([
+                "scenario.yaml",
+                "--driver",
+                "sim",
+                "--bridge",
+                &bridge,
+                "--out",
+                "artifacts",
+            ])
+            .env("ECHO_LAB_SIM_SCRIPT", self.0.join("script.json"))
+            .env("ECHO_LAB_SIM_ENDPOINTS", self.0.join("endpoints.json"))
+            .env("ECHO_LAB_SIM_CANCEL", self.0.join("cancel"));
+        command
+    }
+
+    // M5 retains the real direct child, including cancellation of pending link.
+    pub fn m5_command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_echo-lab"));
+        command
+            .current_dir(&self.0)
+            .args([
+                "run",
+                "scenario.yaml",
+                "--driver",
+                "sim",
+                "--out",
+                "artifacts",
+                "--python",
+                env!("CARGO_BIN_EXE_echo-lab-sim-script"),
+            ])
+            .env("ECHO_LAB_TEST_RUNTIME_OWNERS", self.0.join("runtime-owners.json"))
+            .env(
+                "ECHO_LAB_TEST_HOST_DIRECTORY",
+                std::path::Path::new(self.1.python())
+                    .parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap(),
+            );
+        command
+    }
+
+    pub fn m5_owners_closed(&self, generations: usize) {
+        let observations: Value =
+            serde_json::from_slice(&fs::read(self.0.join("runtime-owners.json")).unwrap()).unwrap();
+        let owners = observations.as_array().unwrap();
+        assert_eq!(
+            owners.len(),
+            generations,
+            "every registered bridge generation needs its own owner handle"
+        );
+        for owner in owners {
+            assert_eq!(owner["owner_completed"], true, "direct bridge listener owner survived");
+        }
+        // The already-collected CLI owns auth/resource/Live; host has its own pidfd.
+        self.1.assert_closed();
+    }
+
+    // M5 cancellation owns the delivered child directly; its adapter migration
+    // remains separate from the normal runtime child collection below.
+    pub fn raw_command(&self, bridge: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_echo-lab"));
         command
             .current_dir(&self.0)
@@ -98,32 +181,18 @@ impl Session {
             assert_eq!(endpoints, actual);
         }
         assert_eq!(endpoints.len(), 3);
-        for (index, endpoint) in endpoints.iter().enumerate() {
+        for endpoint in &endpoints {
             assert_eq!(endpoint.ip(), std::net::Ipv4Addr::LOCALHOST);
-            if let Ok(mut stream) =
-                std::net::TcpStream::connect_timeout(endpoint, std::time::Duration::from_millis(100))
-            {
-                // Windows may retain WSL's forwarding socket after its Linux
-                // target closes. The target must reset/EOF, never respond.
-                assert!(cfg!(windows) && index == 0, "listener leaked: {endpoint}");
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(1)))
-                    .unwrap();
-                let _ = stream.write_all(b"{\"type\":\"describe\"}\n");
-                let result = stream.read(&mut [0]);
-                let closed = matches!(result, Ok(0))
-                    || result.as_ref().err().is_some_and(|error| {
-                        matches!(
-                            error.kind(),
-                            std::io::ErrorKind::ConnectionReset
-                                | std::io::ErrorKind::ConnectionAborted
-                                | std::io::ErrorKind::BrokenPipe
-                        )
-                    });
-                assert!(closed, "host still reachable at {endpoint}: {result:?}");
-            }
         }
+        self.owners_closed();
         endpoints
+    }
+
+    pub fn owners_closed(&self) {
+        // The CLI's collected exit owns the in-process spoof/Live tasks. Its
+        // separate bridge child and Linux host require their own receipts.
+        cli_owner::assert_closed(&self.0);
+        self.1.assert_closed();
     }
 }
 

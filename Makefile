@@ -65,6 +65,16 @@ test-unit:
 	python -m unittest discover -s crates/echo-lab/src/lab_run/sim/host_tests
 	if [ -f web/screen/package.json ]; then cd web/screen && npm ci && npm test; fi
 
+.PHONY: codex-app-server
+codex-app-server:
+ifeq ($(OS),Windows_NT)
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-app-server.ps1
+else
+	sh scripts/codex-app-server.sh
+endif
+
+test-unit coverage: codex-app-server
+
 test-contract:
 	cargo test --offline --locked -p echo-contracts --lib --test contracts_wyoming --test contracts_events -- --nocapture
 	cargo test --offline --locked -p echo-screen-contract --test screen_wire -- --nocapture

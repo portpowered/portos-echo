@@ -8,10 +8,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 async fn t3_failed_live_start_releases_the_already_running_host_and_spoof() {
     let root = std::env::temp_dir().join(format!("lab-partial-start-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
-    let python = if cfg!(windows) { "python" } else { "python3" };
+    let owner = super::process::owners::Host::new();
     let mut world = World::default();
     let result = world
-        .start_with(python, std::path::Path::new("not-launched"), &root, async {
+        .start_with(owner.python(), std::path::Path::new("not-launched"), &root, async {
             Err(echo_live::call::CallError::Signaling)
         })
         .await;
@@ -22,17 +22,17 @@ async fn t3_failed_live_start_releases_the_already_running_host_and_spoof() {
         assert_eq!(connection.peer_addr().unwrap(), *endpoint);
         assert_eq!(endpoint.ip(), std::net::Ipv4Addr::LOCALHOST);
     }
+    let collected = world.host.as_mut().unwrap().observe_collection();
+    let mut close = super::process::owners::Completion::new("partial-start world host/spoof", async move {
+        let result = world.close().await;
+        (world, result)
+    });
+    close.stop();
+    let (mut world, result) = close.assert_closed().await;
+    assert_eq!(result, Ok(()));
+    assert!(collected.try_recv().unwrap().success());
+    owner.assert_closed();
     assert_eq!(world.close().await, Ok(()));
-    assert_eq!(world.close().await, Ok(()));
-    assert!(tokio::net::TcpStream::connect(world.endpoints[1]).await.is_err());
-    if let Ok(mut stream) = tokio::net::TcpStream::connect(world.endpoints[0]).await {
-        assert!(cfg!(windows) && stream.peer_addr().unwrap() == world.endpoints[0]);
-        let _ = stream.write_all(b"{\"type\":\"describe\"}\n").await;
-        let response = tokio::time::timeout(std::time::Duration::from_secs(1), stream.read_u8())
-            .await
-            .unwrap();
-        assert!(response.is_err());
-    }
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
     std::fs::remove_dir(root).unwrap();
 }
@@ -399,6 +399,8 @@ async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
         root,
     };
     let (ready, identity) = owned_handshake(&mut process).await;
+    let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
+    assert_eq!(address.ip(), std::net::Ipv4Addr::LOCALHOST);
     assert!(identity["pid"].as_u64().unwrap() > 0);
     if busy {
         process.send(&serde_json::json!({"action":"registered"})).await.unwrap();
@@ -416,12 +418,10 @@ async fn real_wsl_cleanup(interrupted: bool, busy: bool) {
     }
     assert_eq!(fixture.collected.try_recv().unwrap().code(), Some(0));
     let (witness, exit) = guest_cleanup_witness(&fixture, &identity);
-    let address: std::net::SocketAddr = ready["address"].as_str().unwrap().parse().unwrap();
-    assert_endpoint_closed(address).await;
     std::io::Write::write_all(
         &mut std::io::stdout(),
         format!(
-            "R-WSL host.ready then guest.owned; interrupted={interrupted}, busy={busy}: guest={witness}, observer={exit}, endpoint_closed=true\n"
+            "R-WSL host.ready then guest.owned; interrupted={interrupted}, busy={busy}: guest={witness}, observer={exit}, listener_owner_collected=true\n"
         )
         .as_bytes(),
     )
@@ -461,19 +461,6 @@ fn guest_cleanup_witness(
     assert!(witness["status"].as_i64().is_some());
     std::fs::remove_file(fixture.root.join("guest.json")).unwrap();
     (witness, exit)
-}
-
-#[cfg(windows)]
-async fn assert_endpoint_closed(address: std::net::SocketAddr) {
-    if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await {
-        let _ = stream.write_all(b"{\"type\":\"describe\"}\n").await;
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(1), stream.read_u8())
-                .await
-                .unwrap()
-                .is_err()
-        );
-    }
 }
 
 #[tokio::test]

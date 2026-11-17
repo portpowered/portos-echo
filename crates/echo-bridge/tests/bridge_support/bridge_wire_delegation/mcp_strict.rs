@@ -5,18 +5,15 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use echo_lab::lab_mcp::{Approval, Counts, Fixture, LinkCounts, Observations};
 use echo_spoof_mcp::BearerValidator;
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
-
 struct Durable {
     admission: Arc<dyn BearerValidator>,
     directory: PathBuf,
     committed: Arc<Mutex<Vec<bool>>>,
 }
-
 impl BearerValidator for Durable {
     fn protected_resource(&self) -> Option<Value> {
         self.admission.protected_resource()
     }
-
     fn accepts(&self, bearer: &str) -> bool {
         let stored = record(&self.directory);
         let committed = stored["grant"]["access_token"].as_str() == Some(bearer);
@@ -24,7 +21,6 @@ impl BearerValidator for Durable {
         committed && self.admission.accepts(bearer)
     }
 }
-
 struct Harness {
     directory: tempfile::TempDir,
     fixture: Fixture,
@@ -34,7 +30,6 @@ struct Harness {
     epoch: u64,
     committed: Arc<Mutex<Vec<bool>>>,
 }
-
 impl Harness {
     async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
@@ -67,7 +62,6 @@ impl Harness {
             committed,
         }
     }
-
     async fn start(&self, first: bool) -> Session {
         Session::start_resource(
             self.directory.path(),
@@ -78,7 +72,6 @@ impl Harness {
         )
         .await
     }
-
     async fn link(&self, session: &mut Session) -> Value {
         let pending = operator(self.directory.path(), "link");
         let state = bridge_wire_screen::state(&mut session.screen).await;
@@ -92,7 +85,7 @@ impl Harness {
         self.fixture.approve(Approval::Approved).unwrap();
         self.fixture.advance(5).unwrap();
         tokio::time::advance(Duration::from_secs(5)).await;
-        session.advance(5000).await;
+        faults::advance_with_probes(session).await;
         completed(&pending.await.unwrap(), 0, "MCP linked\n", "");
         assert_eq!(
             bridge_wire_screen::state(&mut session.screen).await,
@@ -100,7 +93,6 @@ impl Harness {
         );
         record(self.directory.path())
     }
-
     async fn rotate(&self, initial: &Value, generation: u64) -> Value {
         completed(
             &operator(self.directory.path(), "--refresh-now").await.unwrap(),
@@ -117,11 +109,9 @@ impl Harness {
         assert_eq!(self.spoof.snapshot().unwrap().requests, vec![]);
         stored
     }
-
     fn path(&self) -> PathBuf {
         self.directory.path().join("trace")
     }
-
     fn assert_rotations(&self) {
         assert_eq!(
             self.fixture.counts().unwrap(),
@@ -133,25 +123,16 @@ impl Harness {
             }
         );
     }
-
     async fn close(self) {
-        let resource = self
-            .spoof
-            .url()
-            .strip_prefix("http://")
-            .unwrap()
-            .strip_suffix("/mcp")
-            .unwrap()
-            .to_owned();
-        let auth = self.fixture.base().strip_prefix("http://").unwrap().to_owned();
+        let mut spoof = bridge_spine_edges::Owner::new("strict MCP spoof", self.spoof.shutdown());
+        let mut auth = bridge_spine_edges::Owner::new("strict MCP auth", self.fixture.shutdown());
         drop(self.live);
-        self.spoof.shutdown().await.unwrap();
-        self.fixture.shutdown().await.unwrap();
-        assert!(TcpStream::connect(resource).await.is_err());
-        assert!(TcpStream::connect(auth).await.is_err());
+        spoof.stop();
+        auth.stop();
+        spoof.assert_closed().await;
+        auth.assert_closed().await;
     }
 }
-
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
@@ -168,13 +149,7 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
         drop(session);
         observations.restarted();
         let mut restarted = h.start(false).await;
-        assert_eq!(bridge_short::read(&mut restarted.satellite).await.0["type"], "describe");
-        bridge_short::send(
-            &mut restarted.satellite,
-            "info",
-            json!({"satellite":{"name":"synthetic"}}),
-        )
-        .await;
+        restarted.restart_probe().await;
         restarted.advance(5000).await;
         h.rotate(&initial, 3).await;
         h.assert_rotations();
@@ -212,25 +187,23 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
         assert_eq!(record(h.directory.path())["grant"], Value::Null);
         restarted.process.finish(0).await;
         satellite.await.unwrap();
+        assert_no_restart_disconnect(&h.path());
         assert_replayed(&h);
         assert_measurements(&h, &mut observations, first_process);
         h.close().await;
     })
     .await;
 }
-
 async fn wake_connected(session: &mut Session) {
     journey::wake(&mut session.satellite).await;
     bridge_wire_screen::listening_then_connected(&mut session.screen).await;
 }
-
 async fn assert_commentary(h: &mut Harness) {
     assert_eq!(
         serde_json::from_str::<Value>(&h.live.commentary.recv().await.unwrap()).unwrap(),
         json!({"type":"session.commentary.append","delegation_id":"m5-linked","text":"m5-linked"})
     );
 }
-
 fn assert_success(h: &Harness) {
     let snapshot = h.spoof.snapshot().unwrap();
     assert_eq!(snapshot.requests.iter().filter(|r| r.method == "tools/list").count(), 1);
@@ -276,7 +249,6 @@ fn assert_success(h: &Harness) {
 fn tool(id: &str) -> Value {
     json!({"type":"function_call","call_id":id,"name":"tool_0","arguments":"{\"text\":\"m5-linked\"}"})
 }
-
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn mcp_link_strict_healthy_unlink_revokes_once_and_refuses_resource_use() {
@@ -337,7 +309,6 @@ async fn mcp_link_strict_healthy_unlink_revokes_once_and_refuses_resource_use() 
     })
     .await;
 }
-
 async fn assert_relink(screen: &mut Lines<BufReader<TcpStream>>) -> echo_screen_contract::UiState {
     let expected =
         json!({"state":"error","message":"Run echo-bridge link with your config to relink Port OS MCP.","relink":true});
@@ -350,7 +321,6 @@ async fn assert_relink(screen: &mut Lines<BufReader<TcpStream>>) -> echo_screen_
         assert_eq!(state, json!({"state":"listening"}));
     }
 }
-
 fn observe_trace(observations: &mut Observations, path: &Path, offset: usize) -> usize {
     let records = trace(path);
     for record in &records[offset..] {
@@ -358,7 +328,6 @@ fn observe_trace(observations: &mut Observations, path: &Path, offset: usize) ->
     }
     records.len()
 }
-
 fn assert_measurements(h: &Harness, observations: &mut Observations, offset: usize) {
     observe_trace(observations, &h.path(), offset);
     for request in h.model.requests.lock().unwrap().iter() {
@@ -381,7 +350,6 @@ fn assert_measurements(h: &Harness, observations: &mut Observations, offset: usi
         }
     );
 }
-
 async fn replay(h: &Harness, initial: &Value) {
     let url = format!("{}/custom/token", h.fixture.base());
     let jwk = &initial["private_key_jwk"];
@@ -411,7 +379,6 @@ async fn replay(h: &Harness, initial: &Value) {
         json!({"error":"invalid_grant"})
     );
 }
-
 fn assert_replayed(h: &Harness) {
     let snapshot = h.spoof.snapshot().unwrap();
     assert_eq!(snapshot.calls.len(), 1);
@@ -459,4 +426,66 @@ fn assert_replayed(h: &Harness) {
     ] {
         assert!(!output.contains(private));
     }
+}
+// Wall time bounds observations even while the Tokio clock is frozen.
+pub(super) async fn observe_restart<F: Future>(
+    future: F,
+    deadline: Instant,
+    phase: &str,
+    cursor: usize,
+) -> Result<F::Output, String> {
+    tokio::pin!(future);
+    std::future::poll_fn(|cx| {
+        if Instant::now() >= deadline {
+            return Poll::Ready(Err(format!("restart {phase}: deadline at cursor {cursor}")));
+        }
+        match future.as_mut().poll(cx) {
+            Poll::Ready(value) => Poll::Ready(Ok(value)),
+            Poll::Pending => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    })
+    .await
+}
+pub(super) async fn wait_probe(path: &Path, cursor: usize) {
+    let deadline = Instant::now() + OBSERVATION_TIMEOUT;
+    let mut checked = false;
+    // First Pending witnesses the actual missing record with clocks frozen.
+    std::future::poll_fn(|cx| {
+        if !checked && !fresh_probe(&std::fs::read(path).unwrap(), cursor) {
+            checked = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    })
+    .await;
+    observe_restart(
+        async { while !fresh_probe(&tokio::fs::read(path).await.unwrap(), cursor) {} },
+        deadline,
+        "fresh complete idle probe",
+        cursor,
+    )
+    .await
+    .unwrap();
+}
+pub(super) fn assert_no_restart_disconnect(path: &Path) {
+    assert!(
+        !trace(path)
+            .iter()
+            .any(|r| r["event"] == "wyoming.reconnecting" && r["elapsed_ms"] == 5000 && r["reason"] == "disconnected")
+    );
+}
+pub(super) async fn assert_restart_deadline<F: Future>(operation: F, deadline: Instant, phase: &str, cursor: usize) {
+    tokio::pin!(operation);
+    std::future::poll_fn(|cx| {
+        assert!(operation.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    let failure = observe_restart(operation, deadline, phase, cursor).await.err().unwrap();
+    assert_eq!(failure, format!("restart {phase}: deadline at cursor {cursor}"));
 }

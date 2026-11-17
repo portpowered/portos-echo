@@ -1,3 +1,4 @@
+mod device;
 mod run_command;
 mod run_device;
 mod run_jpeg;
@@ -97,6 +98,9 @@ fn say(value: &str, scenario: &str, options: &Options) -> Result<Step, String> {
         }
         return Ok(Step::SayText(text.to_owned()));
     }
+    if options.bridge_config.is_some() && Path::new(value).extension().is_some_and(|ext| ext == "pcm") {
+        return Ok(Step::SayFile(sim::fixture(value, scenario)?));
+    }
     let relative = Path::new(value);
     if relative.is_absolute() || relative.extension().is_none_or(|ext| ext != "wav") {
         return Err("say: expected a WAV path relative to the scenario directory".into());
@@ -146,6 +150,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
             steps.push(match step["say"].as_str() {
                 Some(value) => say(value, path, options)?,
                 None if options.sim => sim::parse_step(step, path)?,
+                None if options.bridge_config.is_some() || name == "M1" => device::step(step, path)?,
                 None => run_oracles::parse(step)?,
             });
         }
@@ -256,8 +261,24 @@ fn completed(result: Result<(), String>, artifacts: &Artifacts, scenario: Option
 }
 
 fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
+    execute_with_errors(args, output, &mut std::io::sink())
+}
+
+fn execute_with_errors(args: &[String], output: &mut impl Write, errors: &mut impl Write) -> Result<(), String> {
     let options = run_options::parse(args)?;
     let (milestone, tier, steps) = load(&options)?;
+    if !options.sim
+        && options.bridge.is_none()
+        && steps.iter().any(|step| {
+            matches!(
+                step,
+                Step::Ui(_) | Step::Trace(_) | Step::Press(_) | Step::Restart { .. }
+            )
+        })
+    {
+        return Err("device: trace and UiState steps require --bridge and --bridge-config".into());
+    }
+    let configuration = device::config::load(&options)?;
     let root = run_options::destination(&options.out)?;
     let digest = run_command::helper(&options.python, "digest", &options.scenarios)
         .map_err(|_| "scenario: cannot compute digest")?;
@@ -267,7 +288,7 @@ fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
         .ok_or("scenario: invalid SHA-256 digest")?;
     let mut artifacts = Artifacts::create(root)?;
     artifacts.sim = options.sim;
-    let mut driver = driver(&options)?;
+    let mut driver = driver(&options, configuration, errors)?;
     let result = dispatch(driver.as_mut(), &steps, &mut artifacts);
     let cleanup = driver.close(&mut artifacts);
     let final_counts = artifacts.finalize_link_counts();
@@ -307,7 +328,7 @@ pub fn run(args: &[String], output: &mut impl Write, errors: &mut impl Write) ->
     let result = if args.iter().any(|s| s == "--all") {
         sim::suite::execute(args, output)
     } else {
-        execute(args, output)
+        execute_with_errors(args, output, errors)
     };
     match result {
         Ok(()) => 0,
@@ -318,8 +339,15 @@ pub fn run(args: &[String], output: &mut impl Write, errors: &mut impl Write) ->
     }
 }
 
-fn driver(options: &Options) -> Result<Box<dyn Driver + '_>, String> {
+fn driver<'a>(
+    options: &'a Options,
+    configuration: Option<String>,
+    errors: &'a mut dyn Write,
+) -> Result<Box<dyn Driver + 'a>, String> {
     if !options.sim {
+        if let Some(config) = configuration {
+            return Ok(Box::new(device::Configured::new(options, config, errors)?));
+        }
         return Ok(Box::new(run_device::Device::new(options)));
     }
     let scenario = crate::lab_validate::load(&options.scenarios[0])?;

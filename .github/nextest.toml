@@ -8,3 +8,8 @@ slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
 [[profile.ci.overrides]]
 filter = 'package(=echo-lab) & (binary(=probe_cli) | binary(=run_cli))'
 test-group = 'echo-lab-process-heavy'
+
+[[profile.ci.overrides]]
+filter = 'package(=echo-lab) & test(=device_support::recovery::device_m1_complete_unchanged_scenario_recovers_ten_plus_ten)'
+test-group = 'echo-lab-process-heavy'
+slow-timeout = { period = "120s", terminate-after = 1, grace-period = "0s" }

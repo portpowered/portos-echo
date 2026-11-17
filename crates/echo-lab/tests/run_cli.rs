@@ -1,4 +1,7 @@
 #[cfg(test)]
+#[path = "run_support/device.rs"]
+mod device;
+#[cfg(test)]
 #[path = "run_support/lease.rs"]
 mod lease;
 #[cfg(test)]

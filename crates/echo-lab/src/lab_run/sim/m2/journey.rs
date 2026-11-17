@@ -117,10 +117,17 @@ pub async fn run(options: &Options, root: &Path, case: &str, utterance: &Path) -
         tokio::time::Instant::now() + DEADLINE,
     )
     .await;
-    let mut errors = state.world.close().await.err().into_iter().collect::<Vec<_>>();
+    #[cfg(test)]
+    let closed = super::tests::close_world(&mut state.world).await;
+    #[cfg(not(test))]
+    let closed = state.world.close().await;
+    let mut errors = closed.err().into_iter().collect::<Vec<_>>();
     errors.extend(collect(state.collector.take()).await.err());
     let refreshes = state.auth.as_ref().map(|a| a.refreshes.load(Ordering::SeqCst));
     if let Some(auth) = state.auth.take() {
+        #[cfg(test)]
+        super::tests::close_auth(auth).await;
+        #[cfg(not(test))]
         auth.close().await;
     }
     let measured = measurement(

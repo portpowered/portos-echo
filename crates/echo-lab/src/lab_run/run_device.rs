@@ -33,7 +33,7 @@ impl<'a> Device<'a> {
         }
     }
 
-    fn firmware(&self) -> Result<(), String> {
+    pub(super) fn firmware(&self) -> Result<(), String> {
         crate::lab_gate::firmware(|name| self.property(name)).map(|_| ())
     }
 

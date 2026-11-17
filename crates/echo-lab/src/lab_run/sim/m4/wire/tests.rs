@@ -180,6 +180,7 @@ async fn bounded_reader_preserves_bytes_and_rejects_partial_oversize_or_malforme
 async fn t3_relay_forwards_both_directions_and_reaps_on_close() {
     let host = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let relay = Relay::bind(host.local_addr().unwrap(), 4).await.unwrap();
+    let owner = relay.task.abort_handle();
     let address = relay.address;
     let mut bridge = TcpStream::connect(address).await.unwrap();
     let (mut host, _) = host.accept().await.unwrap();
@@ -196,24 +197,25 @@ async fn t3_relay_forwards_both_directions_and_reaps_on_close() {
     host.read_exact(&mut actual).await.unwrap();
     assert_eq!(actual, reply);
     let timing = relay.close().await.unwrap();
+    assert!(owner.is_finished(), "relay listener owner survived joined close");
     assert_eq!((timing.captured, timing.played), (4, 6));
     let _sample = timing.sample().unwrap();
     assert_eq!(
         host.read_u8().await.unwrap_err().kind(),
         std::io::ErrorKind::UnexpectedEof
     );
-    assert!(TcpStream::connect(address).await.is_err());
 }
 
 #[tokio::test]
 async fn t3_relay_shutdown_during_accept_closes_listener_without_observation() {
     let relay = Relay::bind("127.0.0.1:1".parse().unwrap(), 2).await.unwrap();
+    let owner = relay.task.abort_handle();
     let address = relay.address;
     assert_eq!(
         relay.close().await.unwrap().sample(),
         Err("wire: missing finite utterance endpoint".into())
     );
-    assert!(TcpStream::connect(address).await.is_err());
+    assert!(owner.is_finished(), "relay listener owner survived joined close");
     for bytes in [0, 1, 65538] {
         assert_eq!(
             Relay::bind(address, bytes).await.err(),

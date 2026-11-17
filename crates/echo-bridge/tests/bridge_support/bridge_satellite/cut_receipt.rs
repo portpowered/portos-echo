@@ -140,7 +140,7 @@ async fn bridge_cut_acknowledged_before_disconnect_is_recorded() {
             .unwrap(),
         Err(echo_bridge::Error::Wyoming)
     );
-    assert_cut_failure(&path, sent, true).await;
+    assert_cut_failure(&path, sent, true);
     assert!(gate.accepted.load(std::sync::atomic::Ordering::SeqCst));
 }
 async fn wake(stream: &mut tokio::net::TcpStream) {

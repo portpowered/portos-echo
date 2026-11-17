@@ -4,7 +4,7 @@ use super::*;
 fn scenario(session: &Session, contents: &str) {
     fs::write(session.0.join("scenario.yaml"), contents).unwrap();
 }
-const SCENARIO: &str = include_str!("../../../../tests/scenarios/m3-full-duplex.yaml");
+const SCENARIO: &str = include_str!("../../../../../tests/scenarios/m3-full-duplex.yaml");
 
 fn command(session: &Session) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_echo-lab"));

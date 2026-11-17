@@ -12,6 +12,8 @@ const ALLOWED: &[&str] = &[
     "--speech-model",
     "--cancel-file",
     "--bridge",
+    "--bridge-config",
+    "--operator-confirm",
 ];
 
 use std::collections::BTreeMap;
@@ -20,6 +22,7 @@ use std::path::{Path, PathBuf};
 pub struct Options {
     pub sim: bool,
     pub bridge: Option<PathBuf>,
+    pub bridge_config: Option<PathBuf>,
     pub scenarios: Vec<String>,
     pub port: PathBuf,
     pub adb: PathBuf,
@@ -30,6 +33,7 @@ pub struct Options {
     pub keep_audio: bool,
     pub speech: Option<(String, String)>,
     pub cancel: Option<PathBuf>,
+    pub operator_confirm: Option<PathBuf>,
 }
 
 fn required<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str, String> {
@@ -82,9 +86,6 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     if required(&flags, "--driver")? == "sim" {
         return sim(scenarios, &flags);
     }
-    if flags.contains_key("--bridge") {
-        return Err("run: --bridge requires --driver sim".into());
-    }
     if required(&flags, "--driver")? != "device" || required(&flags, "--bench")? != "ring" {
         return Err("run: only --driver device --bench ring is implemented".into());
     }
@@ -115,7 +116,12 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     );
     Ok(Options {
         sim: false,
-        bridge: None,
+        operator_confirm: flags.get("--operator-confirm").map(PathBuf::from),
+        bridge: device_bridge(&flags)?,
+        bridge_config: flags
+            .get("--bridge-config")
+            .map(|v| configuration_path(v))
+            .transpose()?,
         scenarios,
         port: explicit(required(&flags, "--port")?)?,
         adb: explicit(required(&flags, "--adb")?)?,
@@ -168,7 +174,9 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
     );
     Ok(Options {
         sim: true,
+        operator_confirm: None,
         bridge: Some(bridge),
+        bridge_config: None,
         scenarios,
         port: PathBuf::new(),
         adb: PathBuf::new(),
@@ -186,6 +194,25 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
         speech: None,
         cancel: flags.get("--cancel-file").map(PathBuf::from),
     })
+}
+
+fn device_bridge(flags: &BTreeMap<String, String>) -> Result<Option<PathBuf>, String> {
+    match (flags.get("--bridge"), flags.get("--bridge-config")) {
+        (None, None) => Ok(None),
+        (Some(bridge), Some(_)) => explicit(bridge)
+            .map(Some)
+            .map_err(|_| "device: --bridge requires an explicit existing executable".into()),
+        _ => Err("device: supply --bridge and --bridge-config together".into()),
+    }
+}
+
+fn configuration_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if !path.is_file() {
+        return Err("device: --bridge-config requires a readable TOML file".into());
+    }
+    path.canonicalize()
+        .map_err(|_| "device: cannot resolve --bridge-config".into())
 }
 
 pub fn destination(path: &Path) -> Result<PathBuf, String> {
@@ -238,4 +265,32 @@ fn selected_bridge(flags: &BTreeMap<String, String>, scenario: &serde_json::Valu
     } else {
         super::sim::suite::scenario_bridge(scenario)?
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_bridge_pair_is_required_before_tool_paths() {
+        let base = [
+            "scenario.yaml",
+            "--driver",
+            "device",
+            "--bench",
+            "ring",
+            "--stt",
+            "unused",
+            "--ring",
+            "fixture",
+        ];
+        for option in ["--bridge", "--bridge-config"] {
+            let mut args: Vec<String> = base.iter().map(|s| (*s).into()).collect();
+            args.extend([option.into(), "./missing".into()]);
+            assert_eq!(
+                parse(&args).err().unwrap(),
+                "device: supply --bridge and --bridge-config together"
+            );
+        }
+    }
 }
