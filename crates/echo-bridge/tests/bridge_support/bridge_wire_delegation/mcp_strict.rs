@@ -463,8 +463,24 @@ pub(super) async fn wait_probe(path: &Path, cursor: usize) {
         }
     })
     .await;
+    wait_records(|| tokio::fs::read(path), cursor, false, deadline).await;
+}
+pub(super) async fn wait_records<F, R>(mut read: F, cursor: usize, recovered: bool, deadline: Instant)
+where
+    F: FnMut() -> R,
+    R: Future<Output = std::io::Result<Vec<u8>>>,
+{
     observe_restart(
-        async { while !fresh_probe(&tokio::fs::read(path).await.unwrap(), cursor) {} },
+        async {
+            loop {
+                let bytes = read().await.unwrap();
+                if journey::publication_complete(&bytes, cursor, recovered) {
+                    return;
+                }
+                // A fully evaluated negative read yields even with a ready source.
+                tokio::task::yield_now().await;
+            }
+        },
         deadline,
         "fresh complete idle probe",
         cursor,
@@ -478,14 +494,4 @@ pub(super) fn assert_no_restart_disconnect(path: &Path) {
             .iter()
             .any(|r| r["event"] == "wyoming.reconnecting" && r["elapsed_ms"] == 5000 && r["reason"] == "disconnected")
     );
-}
-pub(super) async fn assert_restart_deadline<F: Future>(operation: F, deadline: Instant, phase: &str, cursor: usize) {
-    tokio::pin!(operation);
-    std::future::poll_fn(|cx| {
-        assert!(operation.as_mut().poll(cx).is_pending());
-        Poll::Ready(())
-    })
-    .await;
-    let failure = observe_restart(operation, deadline, phase, cursor).await.err().unwrap();
-    assert_eq!(failure, format!("restart {phase}: deadline at cursor {cursor}"));
 }
