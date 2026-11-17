@@ -14,10 +14,12 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 10
     env:
-      ECHO_CODEX_CACHE_DIR: ${{ runner.temp }}/portos-echo-codex
       ECHO_CODEX_OFFLINE: '1'
       PYTHONOPTIMIZE: '0'
     steps:
+      - name: Initialize external Codex cache
+        run: |
+          "ECHO_CODEX_CACHE_DIR=$env:RUNNER_TEMP/portos-echo-codex" >> $env:GITHUB_ENV
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
