@@ -1,5 +1,7 @@
 //! T3 integration: prebuilt binaries, pinned host, local fake APIs; no Cargo in tests.
 #[cfg(test)]
+mod device_support;
+#[cfg(test)]
 mod sim_support;
 use serde_json::{Value, json};
 use sim_support::{Session, records};
