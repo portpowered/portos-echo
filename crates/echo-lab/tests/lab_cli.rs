@@ -133,7 +133,10 @@ fn command_grammar_rejects_malformed_and_unsupported_requests() {
     for args in [
         vec![],
         vec!["check"],
+        vec!["check", "--milestone"],
         vec!["check", "--milestone", "M1"],
+        vec!["check", "--milestone", "M9"],
+        vec!["check", "--milestone", "M2", "extra"],
         vec!["check", "--milestone", "M0", "extra"],
         vec!["unknown"],
     ] {
@@ -143,5 +146,17 @@ fn command_grammar_rejects_malformed_and_unsupported_requests() {
     }
     let (output, text) = session.run(&["--help"]).unwrap();
     assert!(output.status.success());
-    assert!(text.contains("echo-lab validate [paths...]\necho-lab check --milestone M0"));
+    assert!(text.contains("echo-lab validate [paths...]\necho-lab check --milestone M0|M2|M3\n"));
+    assert_eq!(fs::read_dir(&session.0).unwrap().count(), 0);
+}
+
+#[test]
+fn m2_missing_scenario_returns_the_runner_error_without_success() {
+    let session = Session::new().unwrap();
+    let (output, text) = session.run(&["check", "--milestone", "M2"]).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(text, "");
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(error.trim(), "echo-lab: scenario: cannot read or parse YAML");
+    assert_eq!(fs::read_dir(&session.0).unwrap().count(), 0);
 }
