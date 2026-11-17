@@ -99,8 +99,12 @@ fn m2_unknown_injections_are_rejected_before_effects() {
 }
 
 pub(super) fn options() -> crate::lab_run::run_options::Options {
-    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug")
+    let executable = std::env::current_exe().unwrap();
+    let binary = executable
+        .ancestors()
+        .find(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("deps" | "build")))
+        .and_then(std::path::Path::parent)
+        .unwrap()
         .join(if cfg!(windows) {
             "echo-bridge.exe"
         } else {
@@ -176,7 +180,11 @@ async fn m2_t3_concurrent_cases_are_independent_and_reap_all_endpoints() {
     assert_eq!(std::fs::read_dir(first.path()).unwrap().count(), 0);
     assert_eq!(std::fs::read_dir(second.path()).unwrap().count(), 0);
     first_host.assert_closed();
-    second_host.assert_closed();
+    let rejected_host = std::path::Path::new(second_host.python())
+        .parent()
+        .unwrap()
+        .join("host.json");
+    assert!(!rejected_host.exists(), "rejected credential started a hassmic host");
 }
 
 #[tokio::test]
