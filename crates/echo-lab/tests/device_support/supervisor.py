@@ -6,13 +6,29 @@ import signal
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
+from wsl_distro import resolve_wsl_distro
+
+
+def launch_windows():
+    distro = None
+    try:
+        distro = resolve_wsl_distro()
+        path = subprocess.check_output(
+            ["wsl", "-d", distro, "--exec", "wslpath", "-u", str(Path(__file__).resolve())],
+            text=True).strip()
+        status = subprocess.call(["wsl", "-d", distro, "--exec", "python3", "-u", path])
+        if status:
+            sys.stderr.write(f"WSL distro '{distro}': operation failed\n")
+        return status
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        sys.stderr.write((f"WSL distro '{distro}': operation failed" if distro else str(error)) + "\n")
+        return 1
+
 
 def main():
     if os.name == "nt":
-        path = subprocess.check_output(
-            ["wsl", "-d", "Ubuntu", "--exec", "wslpath", "-u", str(Path(__file__).resolve())],
-            text=True).strip()
-        return subprocess.call(["wsl", "-d", "Ubuntu", "--exec", "python3", "-u", path])
+        return launch_windows()
     source = Path(__file__).resolve().parents[2] / "src/lab_run/sim/host.py"
     spec = importlib.util.spec_from_file_location("native_host", source)
     native = importlib.util.module_from_spec(spec)

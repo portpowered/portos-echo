@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -18,7 +19,8 @@ from wsl_distro import DEFAULT_WSL_DISTRO, resolve_wsl_distro
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTERS = ('scripts/hassmic-host.sh', 'scripts/build-echo-wsl.sh',
             'tests/wyoming_host.sh', 'tests/bridge_host.sh',
-            'tests/hassmic_host_smoke.sh', 'crates/echo-bridge/tests/bridge_refusal/host.sh')
+            'tests/hassmic_host_smoke.sh', 'crates/echo-bridge/tests/bridge_refusal/host.sh',
+            'crates/echo-bridge/tests/bridge_observer/host.sh')
 INVALID = ('bad;name', 'a b', 'a/b', "a'b", 'a"b', 'a\nb', 'é', 'a\\b', 'a\tb')
 TOOL = r'''
 import json, os, sys, pathlib
@@ -142,7 +144,7 @@ class DispatchTests(unittest.TestCase):
                         self.assertIn("WSL distro 'pe-ci'", result.stderr)
                     else:
                         self.assertEqual(result.returncode, 0, result.stderr)
-                        if adapter != ADAPTERS[-1]:
+                        if adapter != 'crates/echo-bridge/tests/bridge_refusal/host.sh':
                             self.assertIn('space ; literal', records[-1][1])
                         self.assertEqual(result.stderr, '')
 
@@ -171,6 +173,73 @@ class PythonDispatchTests(unittest.TestCase):
             ROOT / 'crates/echo-lab/src/lab_run/sim/host.py')
         cls.host = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.host)
+        spec = importlib.util.spec_from_file_location('selector_device_supervisor',
+            ROOT / 'crates/echo-lab/tests/device_support/supervisor.py')
+        cls.supervisor = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.supervisor)
+
+    def test_supervisor_default_empty_invalid_and_translation_refusal(self):
+        supervisor = self.supervisor
+        for value in (None, '', *INVALID, 'pe-ci'):
+            for failure in (OSError('private'), subprocess.CalledProcessError(29, 'wsl')):
+                with self.subTest(value=value, failure=type(failure).__name__):
+                    env = {} if value is None else {'ECHO_WSL_DISTRO': value}
+                    stderr, stdout = io.StringIO(), io.StringIO()
+                    with mock.patch.dict(os.environ, env, clear=True), \
+                            mock.patch.object(supervisor, 'os', types.SimpleNamespace(name='nt')), \
+                            mock.patch.object(subprocess, 'check_output', side_effect=failure) as translate, \
+                            mock.patch.object(subprocess, 'call') as launch, \
+                            contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                        self.assertEqual(supervisor.main(), 1)
+                    launch.assert_not_called()
+                    self.assertEqual(stdout.getvalue(), '')
+                    if value in INVALID:
+                        translate.assert_not_called()
+                        self.assertIn('ECHO_WSL_DISTRO', stderr.getvalue())
+                    else:
+                        self.assertEqual(translate.call_count, 1)
+                        self.assertEqual(translate.call_args.args[0], [
+                            'wsl', '-d', value or DEFAULT_WSL_DISTRO, '--exec', 'wslpath', '-u',
+                            str(Path(supervisor.__file__).resolve())])
+                        self.assertIn(f"WSL distro '{value or DEFAULT_WSL_DISTRO}'", stderr.getvalue())
+                    self.assertNotIn('private', stderr.getvalue())
+
+    def test_supervisor_selected_guest_preserves_argv_output_and_failure_status(self):
+        for status in (0, 17, OSError('private')):
+            with self.subTest(status=status):
+                stderr, stdout = io.StringIO(), io.StringIO()
+
+                def guest(*args):
+                    if isinstance(status, OSError):
+                        raise status
+                    print('{"event":"host.ready","port":12345}')
+                    return status
+
+                with mock.patch.dict(os.environ, {'ECHO_WSL_DISTRO': 'pe-ci'}, clear=True), \
+                        mock.patch.object(self.supervisor, 'os', types.SimpleNamespace(name='nt')), \
+                        mock.patch.object(subprocess, 'check_output',
+                                          return_value='/checkout with spaces ; literal/supervisor.py\n') as translate, \
+                        mock.patch.object(subprocess, 'call', side_effect=guest) as launch, \
+                        contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                    self.assertEqual(self.supervisor.main(), 1 if isinstance(status, OSError) else status)
+                self.assertEqual(translate.call_args.args[0][:4], ['wsl', '-d', 'pe-ci', '--exec'])
+                launch.assert_called_once_with(['wsl', '-d', 'pe-ci', '--exec', 'python3', '-u',
+                                               '/checkout with spaces ; literal/supervisor.py'])
+                self.assertEqual(stdout.getvalue(), '' if isinstance(status, OSError) else
+                                 '{"event":"host.ready","port":12345}\n')
+                self.assertEqual(stderr.getvalue(), "WSL distro 'pe-ci': operation failed\n" if status else '')
+
+    def test_linux_supervisor_ignores_selector_and_runs_native_controller(self):
+        native = types.SimpleNamespace(Host=type('Host', (), {}), main=mock.Mock(return_value=17))
+        with mock.patch.dict(os.environ, {'ECHO_WSL_DISTRO': 'bad;name'}, clear=True), \
+                mock.patch.object(self.supervisor, 'os', types.SimpleNamespace(name='posix')), \
+                mock.patch.object(self.supervisor, 'launch_windows') as windows, \
+                mock.patch.object(self.supervisor.importlib.util, 'spec_from_file_location') as spec, \
+                mock.patch.object(self.supervisor.importlib.util, 'module_from_spec', return_value=native):
+            self.assertEqual(self.supervisor.main(), 17)
+        windows.assert_not_called()
+        native.main.assert_called_once_with()
+        self.assertEqual(spec.call_args.args[1], ROOT / 'crates/echo-lab/src/lab_run/sim/host.py')
 
     def test_invalid_rejects_before_child_and_defaults_refuse_without_forwarding(self):
         host = self.host
