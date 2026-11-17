@@ -47,9 +47,9 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
     }).await;
 }
 
-async fn failed_without_clock_advance(path: &Path) {
+pub(super) async fn failed_without_clock_advance(path: &Path) {
     let events = event_without_clock_advance(path, "mcp.run.failed").await;
-    let failed = events.iter().find(|e| e["event"] == "mcp.run.failed").unwrap();
+    let (_, failed) = unique_journey_event(&events, "mcp.run.failed");
     assert_eq!(failed["reason"], "relink_required");
     assert_eq!(events.iter().filter(|e| e["event"] == "run.failed").count(), 0);
     assert_eq!(
