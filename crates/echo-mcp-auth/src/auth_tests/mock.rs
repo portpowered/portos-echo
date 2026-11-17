@@ -61,10 +61,17 @@ impl Mock {
     /// # Errors
     /// Returns a local bind failure without creating a server task.
     pub async fn bind() -> std::io::Result<Self> {
+        Self::bind_at_epoch(wall_now(&State::default())?).await
+    }
+
+    /// Bind with an independent epoch shared by simulated clients across restarts.
+    /// # Errors
+    /// Returns a local bind failure without creating a server task.
+    pub async fn bind_at_epoch(epoch: u64) -> std::io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let base = format!("{}:{}", "http://127.0.0.1", listener.local_addr()?.port());
         let state = Arc::new(Mutex::new(State {
-            epoch: wall_now(&State::default())?,
+            epoch,
             lifetime: 3600,
             ..State::default()
         }));

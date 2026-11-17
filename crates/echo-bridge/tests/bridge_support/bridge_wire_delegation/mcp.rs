@@ -52,7 +52,7 @@ impl Session {
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
         bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
         assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
-        let wall_epoch = (before, wall_now());
+        let wall_epoch = epoch.map_or_else(|| (before, wall_now()), |epoch| (epoch, epoch));
         let events = trace(&directory.join("trace"));
         let address = |event: &str| {
             events.iter().rev().find(|e| e["event"] == event).unwrap()["address"]
@@ -289,8 +289,11 @@ async fn mcp_link_cli_screen_rotation_reload_and_healthy_unlink() {
 async fn mcp_link_crash_after_rotation_reloads_durable_generation_before_use() {
     drive(async {
         let directory = tempfile::tempdir().unwrap();
-        let mock = Mock::bind().await.unwrap();
-        let mut session = Session::start(directory.path(), &mock, true).await;
+        // Deliberately skewed from wall UTC: neither startup may resample it.
+        // The mock and both children share this independent oracle, not a proof.
+        let epoch = 1_800_000_000;
+        let mock = Mock::bind_at_epoch(epoch).await.unwrap();
+        let mut session = Session::start_resource(directory.path(), &mock.base, true, None, Some(epoch)).await;
         let link = operator(directory.path(), "link");
         session.prompt(&mock).await;
         tokio::time::advance(Duration::from_secs(5)).await;
@@ -312,9 +315,9 @@ async fn mcp_link_crash_after_rotation_reloads_durable_generation_before_use() {
         assert!(!session.process.child.wait().await.unwrap().success());
         drop(session);
         assert_eq!(record(directory.path()), rotated);
-        let mut restarted = Session::start(directory.path(), &mock, false).await;
-        // Resume the new process at the fixture's elapsed fake time before
-        // requesting another proof. AuthClient itself keeps its existing clock.
+        let mut restarted = Session::start_resource(directory.path(), &mock.base, false, None, Some(epoch)).await;
+        // Resume the shared epoch at the mock's elapsed fake time. Restart
+        // latency must not enter the proof timestamp through a new wall sample.
         restarted.restart_probe().await;
         restarted.advance(5000).await;
         completed(
