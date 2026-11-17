@@ -46,7 +46,8 @@ fn job(name: &str, target: &str) -> String {
     if matches!(name, "test-unit" | "coverage") {
         let step = format!("      - name: {name}\n");
         let codex = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: ~/.cache/portos-echo/codex\n          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}\n      - name: Provision verified pinned Codex\n        run: sh scripts/codex-app-server.sh\n";
-        block = block.replace(&step, &format!("{codex}{step}"));
+        let namespace = "      - name: Enable isolated Codex network namespace\n        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n";
+        block = block.replace(&step, &format!("{codex}{namespace}{step}"));
     }
     if name == "coverage" {
         block.push_str(
@@ -180,6 +181,11 @@ mod tests {
             let block = job(name, name);
             for replacement in ["", "        run: sh scripts/codex-app-server.sh || true\n"] {
                 let changed = block.replace("        run: sh scripts/codex-app-server.sh\n", replacement);
+                assert!(evaluate(&makefile, &workflow.replace(&block, &changed)).is_err());
+            }
+            let namespace = "        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n";
+            for replacement in [String::new(), format!("{namespace}        if: false\n")] {
+                let changed = block.replace(namespace, &replacement);
                 assert!(evaluate(&makefile, &workflow.replace(&block, &changed)).is_err());
             }
         }

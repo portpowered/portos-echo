@@ -179,6 +179,8 @@ jobs:
           key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
       - name: Provision verified pinned Codex
         run: sh scripts/codex-app-server.sh
+      - name: Enable isolated Codex network namespace
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: test-unit
         run: make test-unit
       - name: Publish screen screenshot evidence
@@ -267,6 +269,8 @@ jobs:
           key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
       - name: Provision verified pinned Codex
         run: sh scripts/codex-app-server.sh
+      - name: Enable isolated Codex network namespace
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: coverage
         run: make coverage
         env:
