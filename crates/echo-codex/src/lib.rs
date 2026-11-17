@@ -1,5 +1,9 @@
 //! Settings for an isolated, client-tool-only pinned Codex app-server thread.
-//! Transport and process supervision are not yet exposed by this crate.
+//! Wire adaptation and bounded request bookkeeping are independent of process IO.
+//! Process supervision is not yet exposed by this crate.
+pub mod codex_codec;
+pub mod codex_protocol;
+pub mod codex_rpc;
 use serde::Serialize;
 use serde_json::{Value, json};
 

@@ -29,11 +29,19 @@ disable multi-agent, goals and request-user-input tools as well. Preserve the
 caller tool list exactly, including an empty list. The settings builder uses
 ephemeral threads, read-only sandbox and approval policy never.
 
-The first bounded implementation provides the pin helpers, settings and S5
-regression witness. The bounded Rust transport, supervisor, copied account and
-realtime wire types, process fault matrix and final public-client T3 witness
-remain required in this same work item. S5 currently uses a raw stdio probe and
-does not establish the Rust client's lifecycle or backpressure behavior.
+The crate's IO-independent request core uses monotonic elapsed time supplied by
+its caller. It bounds physical JSONL bytes, admitted requests (including unread
+completions), server requests awaiting answers and unsolicited events. Overflow
+closes the connection, fails pending requests and leaves accepted events
+drainable. Cancellation releases admission without reusing IDs; late replies
+cannot satisfy another request. Remote errors retain only their numeric code in
+diagnostics. Unknown notifications retain their complete JSON envelope.
+
+The pin helpers, settings and raw-stdio S5 witness preserve the initial executable
+spine. Selected wire types come from the pinned experimental schema. The Rust IO
+driver and supervisor, account/notification projections, process fault matrix and
+final public-client T3 witness remain required in this same work item. S5 does
+not establish the Rust client's process lifecycle or runtime backpressure.
 
 The later bridge cutover owns the tool host, MCP, caps and milestone scenarios.
 This component does not claim M2, M4, real authentication, media or hardware
