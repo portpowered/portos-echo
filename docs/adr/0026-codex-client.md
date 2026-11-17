@@ -489,3 +489,30 @@ refusal without a wake. These are library composition witnesses, not canonical
 CLI or real-pin M2 evidence. Executable selection, kill-file policy, delegated
 tools, per-chunk mute accounting and real-pin transcript/media ordering remain
 retained work before the cutover can pass. No dependency or contract changes.
+
+## Voice kill ownership amendment (2026-11-17)
+
+The Codex voice service observes the same durable kill marker as the operator
+command. A missing marker permits work; an empty regular marker or an
+unverifiable/invalid marker refuses work. Read before admitting every wake and
+poll while idle, creating a peer, negotiating media, capturing, playing and
+retaining a call. Refused wakes produce the existing Wyoming kill reason and
+never create a peer or a thread. This policy reads no credential or home file.
+
+Kill cancellation retains the playback future through a bounded cut and device
+played receipt, then awaits realtime stop and media cleanup. Only successful
+cleanup and an intact IO generation allow return to the idle service. Failed
+played settlement, stop acknowledgement or media cleanup terminates the owner;
+clearing the marker cannot reuse that generation. Successful clear permits a
+fresh call on the same supervisor and device connection, without replaying the
+interrupted run. Record an observed kill even if the marker clears while
+cleanup is pending. Health and the existing screen overlay retain the kill
+state across Ready and mute/unmute, and clear restores idle presentation.
+
+Memory-only signaling/media/device tests with paused time protect refusal,
+active interruption, exact stop/close counts, clear/reuse and missing-stop
+failure. Component projection tests protect health, trace and overlay values.
+The controlled-process/paired-screen witness protects prewake kill and clear
+without creating media. These do not prove canonical CLI selection or real-pin
+M2, which remain required before cutover acceptance. No new dependency or
+shared contract is introduced.

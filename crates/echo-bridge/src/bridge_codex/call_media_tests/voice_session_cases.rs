@@ -236,6 +236,10 @@ async fn session_cancellation_during_reply_or_idle_stops_once_before_return() {
             pump(work.as_mut()).await;
         }
         cancel.send(()).unwrap();
+        if !idle {
+            pump(work.as_mut()).await;
+            observer.finish(Ok(())); // Acknowledged cut releases playback before stop.
+        }
         assert_eq!(work.await, Err(Error::Control));
         assert_eq!(state.closes.load(Ordering::SeqCst), 1);
         assert_eq!(completed.load(Ordering::SeqCst), usize::from(idle));

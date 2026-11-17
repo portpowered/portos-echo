@@ -79,7 +79,7 @@ where
     // Also covers a cancelled start and a failed Connected observer. The
     // conversation's own completed cleanup is idempotent here.
     let cleanup = call.close(Instant::now() + Duration::from_secs(2)).await;
-    result.and_then(|completed| cleanup.map(|()| completed))
+    settled(result, cleanup)
 }
 
 /// Drive an already connected call, beginning with its admitted microphone run.
@@ -118,7 +118,17 @@ where
     // This cleanup is deliberately outside the cancelled operation. A ready
     // cancellation or observer error must not drop an active media owner.
     let cleanup = call.close(Instant::now() + Duration::from_secs(2)).await;
-    result.and_then(|completed| cleanup.map(|()| completed))
+    settled(result, cleanup)
+}
+
+fn settled(result: Result<u64, Error>, cleanup: Result<(), Error>) -> Result<u64, Error> {
+    // A kill may resume only after successful cleanup. Preserve other original
+    // failures, but never normalize cancellation over an unsuccessful stop.
+    if result == Err(Error::Control) {
+        cleanup.and(result)
+    } else {
+        result.and_then(|completed| cleanup.map(|()| completed))
+    }
 }
 
 pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {

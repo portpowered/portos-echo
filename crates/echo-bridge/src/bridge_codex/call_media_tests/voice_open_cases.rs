@@ -5,6 +5,7 @@ use crate::bridge_voice::{ServeNotice, ServeOptions, serve};
 
 fn serving_options() -> ServeOptions<'static> {
     ServeOptions {
+        kill_path: None,
         call: options(),
         tools: vec![],
         session: session_options(),
@@ -400,3 +401,6 @@ async fn opening_invalid_response_and_played_budgets_have_no_call_effects() {
         );
     }
 }
+
+#[path = "voice_kill_cases.rs"]
+mod kill;

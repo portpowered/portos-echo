@@ -57,3 +57,24 @@ impl Source {
         Ok(())
     }
 }
+
+/// Preserve playback ownership until the device acknowledges an interrupted
+/// reply. A cancellation cannot safely resume the connection after a timeout.
+pub(super) async fn settle_cut(
+    playback: impl std::future::Future<Output = Result<(), Error>>,
+    result: &std::cell::Cell<Option<Result<echo_link::PlayOutcome, echo_link::Error>>>,
+    deadline: std::time::Duration,
+) -> Result<(), Error> {
+    if result.get().is_none() {
+        // Cut maps to Wyoming in the ordinary successful-reply path. Here the
+        // recorded outcome distinguishes an acknowledged cut from transport loss.
+        let _ = tokio::time::timeout(deadline, playback)
+            .await
+            .map_err(|_| Error::Deadline)?;
+    }
+    match result.get() {
+        Some(Ok(_)) => Ok(()),
+        Some(Err(error)) => Err(error.into()),
+        None => Err(Error::Wyoming),
+    }
+}

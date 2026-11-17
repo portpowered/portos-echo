@@ -20,8 +20,8 @@ pub struct RuntimeOptions<'a> {
 /// publish Connected; played settlement precedes Ready. All device/call/process
 /// cleanup finishes while presentation remains owned.
 ///
-/// This library entry point does not select the executable backend, load tools,
-/// or monitor the operator kill file. Its caller supplies those policies and a
+/// This library entry point does not select the executable backend or load
+/// tools. The service monitors the nominated operator kill file; the caller supplies a
 /// peer factory. No legacy call or credential path is used here.
 ///
 /// # Errors

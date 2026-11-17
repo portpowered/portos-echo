@@ -20,6 +20,7 @@ fn runtime_options<'a>(
     bridge_voice::RuntimeOptions {
         host: options(config),
         voice: bridge_voice::ServeOptions {
+            kill_path: None,
             call: bridge_codex::Options {
                 voice: "alloy",
                 instructions: "synthetic fixture",
@@ -378,4 +379,79 @@ async fn codex_device_connect_failure_reaps_and_precancelled_start_has_zero_effe
     assert_eq!(result, Err(Error::Control));
     assert_eq!(observer.commands(), []);
     assert_eq!(std::fs::read(fixture.home.join("launches")).unwrap(), launches);
+}
+
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn codex_voice_runtime_kill_overlay_clear_and_cancel_keep_one_owned_process() {
+    let fixture = Fixture::new("chatgpt");
+    let config = config(&fixture);
+    let screen_config = echo_config::BridgeConfig::load(fixture.directory.path().join("bridge.toml"))
+        .unwrap()
+        .screen;
+    let observer = Observer::default();
+    let trace_path = fixture.directory.path().join("runtime-trace");
+    let kill_path = fixture.directory.path().join("bridge-kill");
+    std::fs::write(&kill_path, []).unwrap();
+    let mut options = runtime_options(&config, Some(&screen_config), &trace_path);
+    options.voice.kill_path = Some(&kill_path);
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let work = echo_bridge::bridge_voice::execute(
+        options,
+        FakeConnector::new(observer.clone()),
+        async || -> Result<echo_media::Peer, Error> { unreachable!("no wake, no peer") },
+        async {
+            stopping.await.unwrap();
+        },
+    );
+    let inspect = async {
+        let _control = fixture.control().await;
+        clear_kill_screen(&fixture, &kill_path).await;
+        stop.send(()).unwrap();
+    };
+    let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        tokio::join!(work, inspect)
+    }))
+    .await
+    .unwrap();
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        observer.commands(),
+        [Command::Connect, Command::Capture, Command::Probe, Command::Close]
+    );
+    super::host::released(&fixture).await;
+    for event in ["kill.enabled", "kill.cleared"] {
+        assert_eq!(trace(&trace_path).iter().filter(|row| row["event"] == event).count(), 1);
+    }
+    assert_eq!(
+        trace(&trace_path)
+            .iter()
+            .filter(|row| row["event"] == "run.started")
+            .count(),
+        0
+    );
+}
+
+async fn clear_kill_screen(fixture: &Fixture, kill_path: &Path) {
+    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    loop {
+        let state = bridge_wire_screen::state(&mut screen).await;
+        if state["state"] == "error" {
+            assert_eq!(
+                state["message"],
+                "Kill switch enabled. Run echo-bridge kill --clear with your config."
+            );
+            assert_eq!(state["relink"], false);
+            break;
+        }
+    }
+    std::fs::remove_file(kill_path).unwrap();
+    loop {
+        let state = bridge_wire_screen::state(&mut screen).await;
+        if state["state"] == "ready" {
+            assert_eq!(state["message"], "Echo Live ready");
+            break;
+        }
+        assert_eq!(state["state"], "error");
+    }
 }

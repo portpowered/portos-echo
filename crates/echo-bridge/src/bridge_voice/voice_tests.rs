@@ -283,7 +283,14 @@ async fn voice_eof_cancellation_and_callback_failure_cannot_publish_played() {
             },
         )
         .await;
-        assert_eq!(result, Err(failure));
+        assert_eq!(
+            result,
+            Err(if failure == Error::Control {
+                Error::Deadline
+            } else {
+                failure
+            })
+        );
         assert_eq!(played, 0);
         assert!(observer.commands().contains(&Command::Cut(0)));
     }

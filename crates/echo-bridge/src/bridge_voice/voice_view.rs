@@ -40,6 +40,7 @@ impl<'a> View<'a> {
 
     pub fn observe(&mut self, notice: ServeNotice) -> Result<(), Error> {
         match notice {
+            ServeNotice::Kill(enabled) => self.kill(enabled),
             ServeNotice::Ready => {
                 self.closed("idle")?;
                 self.health.state.send_modify(|state| state.wyoming = "connected");
@@ -51,6 +52,23 @@ impl<'a> View<'a> {
             ServeNotice::Device(event) => self.screen.observe(&event, self.trace).map(|_| ()),
             ServeNotice::Session(notice) => self.session(notice),
         }
+    }
+
+    fn kill(&mut self, enabled: bool) -> Result<(), Error> {
+        if enabled {
+            self.closed("kill")?;
+            self.run = None;
+        }
+        self.health.state.send_modify(|state| {
+            state.kill_switch = enabled;
+            state.live = if enabled { "error" } else { "idle" };
+        });
+        self.screen.presentation.overlay(enabled.then(|| UiState::Error {
+            message: "Kill switch enabled. Run echo-bridge kill --clear with your config.".into(),
+            relink: false,
+        }))?;
+        self.trace
+            .record(if enabled { "kill.enabled" } else { "kill.cleared" }, None, json!({}))
     }
 
     fn begin(&mut self) -> Result<(), Error> {
@@ -119,7 +137,9 @@ impl<'a> View<'a> {
             self.trace.record("live.closed", None, json!({"reason":reason}))?;
             self.connected = false;
         }
-        self.health.state.send_modify(|state| state.live = "idle");
+        self.health
+            .state
+            .send_modify(|state| state.live = if state.kill_switch { "error" } else { "idle" });
         Ok(())
     }
 
@@ -158,6 +178,61 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn killed_overlay_survives_mute_and_ready_and_clear_restores_idle() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
+        let mut trace = Trace::open(&path, "chatgpt").unwrap();
+        let health = Health::offline();
+        let (send, mut receive) = mpsc::channel(16);
+        let mut screen = Screen::bind(None).await.unwrap();
+        screen.presentation = Presentation::new(Some(send));
+        let mut view = View::new(&screen, &health, &mut trace);
+        view.observe(ServeNotice::Listening).unwrap();
+        view.observe(ServeNotice::Session(SessionNotice::Connected)).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        assert_eq!(receive.try_recv().unwrap(), UiState::Connected);
+        view.observe(ServeNotice::Kill(true)).unwrap();
+        let killed = receive.try_recv().unwrap();
+        assert_eq!(
+            killed,
+            UiState::Error {
+                message: "Kill switch enabled. Run echo-bridge kill --clear with your config.".into(),
+                relink: false,
+            }
+        );
+        view.observe(ServeNotice::Ready).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), killed);
+        assert!(health.state.borrow().kill_switch);
+        assert_eq!(health.state.borrow().live, "error");
+        view.observe(ServeNotice::Device(LinkEvent::Mute(true))).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Muted);
+        view.observe(ServeNotice::Device(LinkEvent::Mute(false))).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), killed);
+        view.observe(ServeNotice::Kill(false)).unwrap();
+        assert_eq!(
+            receive.try_recv().unwrap(),
+            UiState::Ready {
+                message: "Echo Live ready".into()
+            }
+        );
+        assert!(!health.state.borrow().kill_switch);
+        assert_eq!(health.state.borrow().live, "idle");
+        let rows = rows(&path);
+        assert_eq!(rows.iter().filter(|row| row["event"] == "live.closed").count(), 1);
+        assert_eq!(
+            rows.iter().find(|row| row["event"] == "live.closed").unwrap()["reason"],
+            "kill"
+        );
+        for event in ["kill.enabled", "kill.cleared"] {
+            assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), 1);
+        }
+        assert_eq!(
+            rows.iter().filter(|row| row["event"] == "bridge.run_completed").count(),
+            0
+        );
     }
 
     #[tokio::test(start_paused = true)]

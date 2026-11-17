@@ -1,6 +1,8 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
 mod voice_admission;
 mod voice_host;
+#[path = "controls/voice_kill.rs"]
+mod voice_kill;
 mod voice_runtime;
 mod voice_session;
 mod voice_source;
@@ -101,15 +103,18 @@ pub async fn run<L: EchoLink>(
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
     let (sink, reply) = client.reply_channel(NonZeroUsize::MIN);
     let ceiling = options.response_deadline.saturating_duration_since(Instant::now()) + options.played_timeout;
+    let playback_result = std::cell::Cell::new(None);
     let playback = async {
-        match client
+        let result = client
             .play_with_timeout(crate::bridge_audio::format(24_000), reply, ceiling)
-            .await?
-        {
+            .await;
+        playback_result.set(Some(result));
+        result.map_err(Error::from).and_then(|outcome| match outcome {
             PlayOutcome::Played => Ok(()),
             PlayOutcome::Cut => Err(Error::Wyoming),
-        }
+        })
     };
+    tokio::pin!(playback);
     let producer = async {
         tokio::select! {
             biased;
@@ -118,12 +123,16 @@ pub async fn run<L: EchoLink>(
         }
     };
     let result = timeout_at(options.response_deadline + options.played_timeout, async {
-        tokio::try_join!(playback, producer).map(|_| ())
+        tokio::try_join!(&mut playback, producer).map(|_| ())
     })
     .await
     .unwrap_or(Err(Error::Deadline));
     if let Err(error) = result {
-        let _ = timeout(Duration::from_secs(1), client.cut_with_stats()).await;
+        let cut = timeout(Duration::from_secs(1), client.cut_with_stats()).await;
+        if error == Error::Control {
+            cut.map_err(|_| Error::Deadline)??;
+            voice_source::settle_cut(playback.as_mut(), &playback_result, options.played_timeout).await?;
+        }
         return Err(error);
     }
     observe(Notice::ReplyPlayed)?;

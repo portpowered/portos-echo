@@ -1,5 +1,5 @@
 //! Idle supervision and first-wake admission on the authenticated IO borrower.
-use super::{ConversationOptions, Notice, SessionNotice, SessionOptions, open_conversation};
+use super::{ConversationOptions, Notice, SessionNotice, SessionOptions, open_conversation, voice_kill::Gate};
 use crate::{Error, bridge_codex};
 use echo_codex::{DynamicTool, codex_io::RpcIo, codex_protocol::Message};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
@@ -11,6 +11,7 @@ use tokio::{
 };
 
 pub struct ServeOptions<'a> {
+    pub kill_path: Option<&'a std::path::Path>,
     pub call: bridge_codex::Options<'a>,
     pub tools: Vec<DynamicTool>,
     pub session: SessionOptions,
@@ -20,6 +21,7 @@ pub struct ServeOptions<'a> {
 /// Ready means authenticated device readiness, never media connectivity.
 pub enum ServeNotice {
     Ready,
+    Kill(bool),
     Listening,
     Probe,
     Device(LinkEvent<()>),
@@ -58,61 +60,112 @@ where
     }
     let mut events = client.events()?;
     tokio::pin!(cancelled);
+    let mut gate = Gate::new(options.kill_path);
     loop {
+        gate.sync(&mut observe)?;
         observe(ServeNotice::Ready)?;
         let microphone = wait(
             client,
             &mut events,
             io,
-            &mut options.session.muted,
+            (&mut options.session.muted, &mut gate),
             cancelled.as_mut(),
             &mut observe,
         )
         .await?;
-        observe(ServeNotice::Listening)?;
-        let deadline = Instant::now()
-            .checked_add(options.connect_timeout)
-            .ok_or(Error::Input)?;
-        let media = tokio::select! {
-            biased;
-            () = cancelled.as_mut() => return Err(Error::Control),
-            result = timeout_at(deadline, peer()) => result.map_err(|_| Error::Deadline)??,
-        };
-        open_conversation(
+        let killed = std::cell::Cell::new(false);
+        let result = admitted(
             (&*client, &mut events, microphone),
             io,
-            media,
-            ConversationOptions {
-                call: bridge_codex::Options {
-                    voice: options.call.voice,
-                    instructions: options.call.instructions,
-                    model: options.call.model,
-                },
-                tools: options.tools.clone(),
-                deadline,
-                session: options.session,
-            },
-            cancelled.as_mut(),
-            |notice| {
-                if let SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))) = &notice {
-                    options.session.muted = *value;
+            &mut options,
+            &mut peer,
+            async {
+                tokio::select! {
+                    biased;
+                    () = cancelled.as_mut() => (),
+                    () = gate.wait() => killed.set(true),
                 }
-                observe(ServeNotice::Session(notice))
             },
+            &mut observe,
         )
-        .await?;
+        .await;
+        if killed.get() && result == Err(Error::Control) {
+            // Cancelled negotiation can invalidate IO. Never resume that
+            // generation or present readiness after an unsuccessful stop.
+            timeout(Duration::from_secs(2), io.flush())
+                .await
+                .map_err(|_| Error::Deadline)?
+                .map_err(bridge_codex::rpc_error)?;
+            client.fail_run(echo_link::RunFailure::KillSwitch).await?;
+            gate.tripped(&mut observe)?;
+        } else {
+            result?;
+        }
     }
+}
+
+async fn admitted<L, R, W, P>(
+    device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
+    io: &mut RpcIo<R, W>,
+    options: &mut ServeOptions<'_>,
+    peer: &mut impl AsyncFnMut() -> Result<P, Error>,
+    cancelled: impl Future<Output = ()>,
+    observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<(), Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+{
+    tokio::pin!(cancelled);
+    observe(ServeNotice::Listening)?;
+    let deadline = Instant::now()
+        .checked_add(options.connect_timeout)
+        .ok_or(Error::Input)?;
+    let media = tokio::select! {
+        biased;
+        () = cancelled.as_mut() => return Err(Error::Control),
+        result = timeout_at(deadline, peer()) => result.map_err(|_| Error::Deadline)??,
+    };
+    open_conversation(
+        device,
+        io,
+        media,
+        ConversationOptions {
+            call: bridge_codex::Options {
+                voice: options.call.voice,
+                instructions: options.call.instructions,
+                model: options.call.model,
+            },
+            tools: options.tools.clone(),
+            deadline,
+            session: options.session,
+        },
+        cancelled.as_mut(),
+        |notice| {
+            if let SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))) = &notice {
+                options.session.muted = *value;
+            }
+            observe(ServeNotice::Session(notice))
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     client: &L,
     events: &mut L::Events,
     io: &mut RpcIo<R, W>,
-    muted: &mut bool,
+    policy: (&mut bool, &mut Gate<'_>),
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
 ) -> Result<<L::Events as LinkEvents>::Run, Error> {
+    let (muted, gate) = policy;
     tokio::pin!(cancelled);
+    let mut poll = tokio::time::interval(Duration::from_millis(20));
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Preserve one in-flight probe across device/control activity. Device
     // recovery belongs to the adapter; a failed probe ends this borrower.
     let probe = probe(client);
@@ -123,6 +176,7 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
             () = cancelled.as_mut() => return Err(Error::Control),
             result = async {
                 tokio::select! {
+                    _ = poll.tick() => { gate.sync(observe)?; },
                     result = &mut probe => {
                         result?;
                         observe(ServeNotice::Probe)?;
@@ -130,8 +184,12 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                     },
                     event = io.next_event() => idle_message(io, event.map_err(bridge_codex::rpc_error)?)?,
                     event = events.recv() => match event?.ok_or(Error::Wyoming)? {
-                        LinkEvent::Wake(run) if !*muted => return Ok(Some(run)),
-                        LinkEvent::Wake(_) | LinkEvent::Played | LinkEvent::Other => (),
+                        LinkEvent::Wake(run) => {
+                            if gate.sync(observe)? {
+                                client.fail_run(echo_link::RunFailure::KillSwitch).await?;
+                            } else if !*muted { return Ok(Some(run)); }
+                        },
+                        LinkEvent::Played | LinkEvent::Other => (),
                         LinkEvent::Mute(value) => {
                             *muted = value;
                             observe(ServeNotice::Device(LinkEvent::Mute(value)))?;
@@ -193,11 +251,12 @@ mod tests {
             readiness.notify_one();
             Ok(())
         };
+        let mut gate = Gate::new(None);
         let work = wait(
             &client,
             &mut events,
             &mut io,
-            &mut muted,
+            (&mut muted, &mut gate),
             std::future::pending(),
             &mut observe,
         );
@@ -246,7 +305,7 @@ mod tests {
             &client,
             &mut events,
             &mut io,
-            &mut muted,
+            (&mut muted, &mut Gate::new(None)),
             std::future::pending(),
             &mut |notice| {
                 notices.push(match notice {
@@ -283,7 +342,7 @@ mod tests {
                 &client,
                 &mut events,
                 &mut io,
-                &mut false,
+                (&mut false, &mut Gate::new(None)),
                 async {
                     if !cancelled {
                         std::future::pending::<()>().await;
