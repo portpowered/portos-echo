@@ -100,14 +100,15 @@ async fn play<L: EchoLink>(
             context,
         )
         .await;
-        failure = stop_failed_producer(result, client, lab.0).await?;
+        // Cancellation owns its cut even after a failed receipt was consumed.
+        let result = stop_failed_producer(result, client, lab.0 || source.cancelled).await;
         drop(tx.take());
+        failure = result?;
         context.await_played(events, run, source, call).await
     };
-    let outcome = match tokio::try_join!(async { play.await.map_err(Error::from) }, producer) {
-        Ok((outcome, ())) => outcome,
-        Err(error) => return Err(context.settle_failure(error).await),
-    };
+    tokio::pin!(play);
+    let completion = complete_playback(&mut play, producer).await;
+    let outcome = context.finish_playback(play, completion).await?;
     if failure.is_some() && source.sent > 0 {
         // A failed response has no replacement answer to end continued capture.
         // Settle Played first, then return the same satellite to wake readiness.
@@ -126,7 +127,58 @@ async fn play<L: EchoLink>(
     Ok(abandoned)
 }
 
+enum Completion {
+    Playback(Result<PlayOutcome, Error>),
+    Producer(Result<(), Error>),
+}
+async fn complete_playback(
+    play: impl std::future::Future<Output = Result<PlayOutcome, echo_link::Error>>,
+    producer: impl std::future::Future<Output = Result<(), Error>>,
+) -> Completion {
+    tokio::pin!(play, producer);
+    tokio::select! {
+        biased;
+        outcome = &mut play => {
+            // Keep producer-owned failure cleanup and microphone service alive.
+            let result = producer.await;
+            Completion::Playback(outcome.map_err(Error::from).and_then(|outcome| result.map(|()| outcome)))
+        },
+        result = &mut producer => Completion::Producer(result),
+    }
+}
+
 impl<L: EchoLink> PlaybackContext<'_, L> {
+    async fn finish_playback(
+        &mut self,
+        play: impl std::future::Future<Output = Result<PlayOutcome, echo_link::Error>>,
+        completion: Completion,
+    ) -> Result<PlayOutcome, Error> {
+        let result = match completion {
+            Completion::Playback(result) => result,
+            Completion::Producer(Ok(())) => play.await.map_err(Error::from),
+            Completion::Producer(Err(error)) => {
+                if self.cut.is_none() {
+                    // Settled cuts keep the original Played failure ceiling.
+                    return Err(error);
+                }
+                // Keep playback progressing only until the issued receipt
+                // settles. A connected satellite need not send Played after
+                // producer failure. Prefer an already-ready playback error.
+                tokio::pin!(play);
+                let outcome = tokio::select! {
+                    biased;
+                    outcome = &mut play => outcome,
+                    _ = self.finish_cut() => return Err(error),
+                };
+                let original = self.settle_failure(error).await;
+                return Err(outcome.err().map_or(original, Error::from));
+            }
+        };
+        match result {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => Err(self.settle_failure(error).await),
+        }
+    }
     pub(super) async fn await_played(
         &mut self,
         events: &mut L::Events,
