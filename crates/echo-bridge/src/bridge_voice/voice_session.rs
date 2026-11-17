@@ -4,6 +4,7 @@ use crate::{
     Error,
     bridge_codex::{Event, MediaCall, MediaEvent},
 };
+use echo_codex::{DynamicTool, codex_io::RpcIo};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
 use echo_media::MediaPeer;
 use std::{future::Future, time::Duration};
@@ -22,9 +23,62 @@ pub struct SessionOptions {
 
 /// Observations contain no provider bodies, SDP or credentials.
 pub enum SessionNotice {
+    Connected,
     Started,
     Run(Notice),
     Completed(Stats),
+}
+
+pub struct ConversationOptions<'a> {
+    pub call: crate::bridge_codex::Options<'a>,
+    pub tools: Vec<DynamicTool>,
+    pub deadline: Instant,
+    pub session: SessionOptions,
+}
+
+/// Negotiate media on the host's initialized IO and drive its admitted wake.
+/// Connected is emitted only after signaling AND media readiness. Cancellation
+/// takes priority over admission; every return awaits call/media cleanup. The
+/// host must still close the device and reap its supervisor after this returns.
+///
+/// # Errors
+/// Startup, observation and conversation failures retain their original cause
+/// after cleanup. No restart, legacy fallback or call replay is attempted.
+pub async fn open_conversation<L, R, W, P>(
+    device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
+    io: &mut RpcIo<R, W>,
+    peer: P,
+    options: ConversationOptions<'_>,
+    cancelled: impl Future<Output = ()>,
+    mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
+) -> Result<u64, Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+{
+    let mut call = MediaCall::new(io, peer);
+    tokio::pin!(cancelled);
+    let work = async {
+        // Refuse an already expired deadline before generating an offer or RPC.
+        tokio::select! {
+            biased;
+            () = cancelled.as_mut() => return Err(Error::Control),
+            result = async {
+                if Instant::now() >= options.deadline { return Err(Error::Deadline); }
+                validate(&options.session)?;
+                call.start(&options.call, options.tools, options.deadline).await
+            } => result?,
+        }
+        observe(SessionNotice::Connected)?;
+        conversation(device, &mut call, options.session, cancelled.as_mut(), &mut observe).await
+    };
+    let result = work.await;
+    // Also covers a cancelled start and a failed Connected observer. The
+    // conversation's own completed cleanup is idempotent here.
+    let cleanup = call.close(Instant::now() + Duration::from_secs(2)).await;
+    result.and_then(|completed| cleanup.map(|()| completed))
 }
 
 /// Drive an already connected call, beginning with its admitted microphone run.
@@ -56,9 +110,7 @@ where
 {
     tokio::pin!(cancelled);
     let work = async {
-        if options.response_timeout.is_zero() || options.played_timeout.is_zero() {
-            return Err(Error::Input);
-        }
+        validate(&options)?;
         drive(device, call, &mut options, cancelled.as_mut(), &mut observe).await
     };
     let result = work.await;
@@ -66,6 +118,17 @@ where
     // cancellation or observer error must not drop an active media owner.
     let cleanup = call.close(Instant::now() + Duration::from_secs(2)).await;
     result.and_then(|completed| cleanup.map(|()| completed))
+}
+
+fn validate(options: &SessionOptions) -> Result<(), Error> {
+    if options.response_timeout.is_zero() || options.played_timeout.is_zero() {
+        return Err(Error::Input);
+    }
+    Instant::now()
+        .checked_add(options.response_timeout)
+        .and_then(|deadline| deadline.checked_add(options.played_timeout))
+        .ok_or(Error::Input)?;
+    Ok(())
 }
 
 async fn drive<L, R, W, P>(

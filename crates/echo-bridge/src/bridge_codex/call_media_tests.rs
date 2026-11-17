@@ -13,6 +13,7 @@ struct State {
     states: watch::Sender<PeerState>,
     sent: Mutex<Vec<PcmFrame>>,
     answers: Mutex<Vec<String>>,
+    offers: AtomicUsize,
     closes: AtomicUsize,
     ready: bool,
     answer_error: Option<echo_media::Error>,
@@ -27,6 +28,7 @@ fn peer(ready: bool, answer_error: Option<echo_media::Error>) -> (Controlled, Ar
         states,
         sent: Mutex::default(),
         answers: Mutex::default(),
+        offers: AtomicUsize::new(0),
         closes: AtomicUsize::new(0),
         ready,
         answer_error,
@@ -46,6 +48,7 @@ impl MediaPeer for Controlled {
         std::future::ready(Err(echo_media::Error::InvalidConfig))
     }
     fn offer(&self) -> impl std::future::Future<Output = Result<String, echo_media::Error>> {
+        self.state.offers.fetch_add(1, Ordering::SeqCst);
         self.state.states.send_replace(PeerState::Connecting);
         std::future::ready(Ok("fixture-offer".into()))
     }

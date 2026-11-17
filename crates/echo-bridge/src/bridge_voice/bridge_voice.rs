@@ -3,7 +3,7 @@ mod voice_host;
 mod voice_session;
 mod voice_source;
 pub use voice_host::{HostOptions, with_device};
-pub use voice_session::{SessionNotice, SessionOptions, conversation};
+pub use voice_session::{ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation};
 #[cfg(test)]
 mod voice_tests;
 

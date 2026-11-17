@@ -1,4 +1,6 @@
 //! T1: conversation owner, controlled JSONL/media/device ports, paused time.
+#[path = "voice_open_cases.rs"]
+mod opening;
 use super::*;
 use crate::bridge_voice::{SessionNotice, SessionOptions, conversation};
 use echo_link::{
@@ -109,7 +111,7 @@ async fn session_reuses_one_call_resets_idle_deadline_and_discards_old_pcm() {
                 match notice {
                     SessionNotice::Completed(outcome) => completed.lock().unwrap().push(outcome),
                     SessionNotice::Started => again.send(()).unwrap(),
-                    SessionNotice::Run(_) => (),
+                    SessionNotice::Connected | SessionNotice::Run(_) => (),
                 }
                 Ok(())
             },

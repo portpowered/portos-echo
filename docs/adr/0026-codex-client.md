@@ -414,3 +414,26 @@ protect cancellation and the absolute connection deadline. These do not prove
 actual Wyoming startup, media stop ordering, screen state or real-pin M2. The
 canonical executable still requires migration to this host and the conversation
 owner; existing runtime selection remains unchanged in this increment.
+
+## Conversation admission amendment (2026-11-17)
+
+The voice owner now composes media negotiation with the existing conversation
+on the authenticated host's exclusive IO borrow. It emits Connected only after
+both the matching signaling answer and media readiness. An expired startup
+deadline, ready cancellation or invalid response/played budget is refused before
+an offer or RPC. Startup and ICE share one absolute deadline; cancellation wins
+when ready at admission. Early transcript notifications remain queued until
+media connects and the run owner can consume them.
+
+Every return awaits call/media cleanup, including a cancelled start or failure
+to publish Connected. Operational failures retain priority over cleanup errors.
+A cancelled or failed negotiation closes the IO generation without replay;
+successful idle closure preserves initialized IO. Device close and supervisor
+reaping remain the authenticated host's responsibility. This adds no process,
+reader, credential path, dependency or shared contract.
+
+Paused-clock, memory-only component checks protect readiness ordering, accepted
+early transcript delivery, actual played settlement, pre-admission refusal,
+ICE failure/deadline/cancellation and observer failure cleanup. They do not
+establish canonical executable selection, UI rendering, kill/relink behavior,
+actual app-server/Wyoming interaction or real-pin M2. Those remain retained work.
