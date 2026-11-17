@@ -15,6 +15,14 @@ pub mod bridge_trace;
 pub enum Error {
     #[error("invalid input")]
     Input,
+    #[error("codex.home: required for Codex runtime")]
+    CodexHomeRequired,
+    #[error("codex.home: private ownership unavailable")]
+    CodexHome,
+    #[error("codex.binary: unavailable")]
+    CodexBinary,
+    #[error("use signin with the configured Codex home")]
+    CodexImport,
     #[error("authorization")]
     Authorization,
     #[error("audio")]

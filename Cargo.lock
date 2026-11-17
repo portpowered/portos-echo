@@ -948,6 +948,7 @@ dependencies = [
  "echo-agent-api",
  "echo-agent-loop",
  "echo-audio",
+ "echo-codex",
  "echo-config",
  "echo-contracts",
  "echo-delegation",

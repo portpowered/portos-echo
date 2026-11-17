@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 pub(super) mod emotion;
 mod mute;
 
-pub(super) struct Screen {
+pub(crate) struct Screen {
     mute: Arc<Mutex<mute::Mute>>,
     server: Option<ScreenServer>,
     actions: Option<tokio::task::JoinHandle<()>>,

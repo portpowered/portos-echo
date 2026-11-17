@@ -130,7 +130,7 @@ impl World {
                 self.spoof.as_ref().ok_or("launch: missing spoof")?.url(),
             )?;
             if let Some((case, auth)) = &self.m2 {
-                super::m2::auth::configure(&mut command, bridge, root, case, auth).await?;
+                super::m2::auth::configure(&mut command, root, case, auth)?;
             }
         }
         self.bridge = Some(Process::start(&mut command)?);

@@ -6,7 +6,7 @@ mod bridge_lifecycle;
 mod bridge_pacing;
 mod bridge_refusal;
 mod bridge_relink;
-mod bridge_screen;
+pub(crate) mod bridge_screen;
 mod bridge_timing;
 mod journey;
 

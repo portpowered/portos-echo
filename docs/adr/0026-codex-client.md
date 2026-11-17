@@ -183,3 +183,37 @@ confirmation. A controlled stdio child exercises the actual supervisor and
 adapter, awaited shutdown, exclusive ownership and a new process reopening
 byte-identical synthetic auth. These protect the consumer boundary; they do
 not prove provider redemption, the bridge CLI, screen transport or M2.
+
+## Operator CLI cutover amendment (2026-11-17)
+
+The canonical `echo-bridge signin` and `status` commands now host that account
+adapter in an exclusively owned supervisor. This adds the existing workspace
+`echo-codex` dependency to `echo-bridge`; no third-party package is added.
+Configuration parsing stays offline. Active account commands require
+`codex.home`; an omitted binary resolves through the existing platform helper
+with `ECHO_CODEX_OFFLINE=1`, so provisioning is a separate operation. Fixed
+home/binary diagnostics exit 2 without disclosing a path. The helper has a
+bounded runtime and cannot download during startup. A configured executable
+is checked before home preparation and must be executable on Unix.
+
+Sign-in owns the existing paired screen while the bridge is stopped and uses
+`Ready.message` for the exact public URL/code shown in the CLI. No expiry or
+screen contract is invented. Status acquires the same exclusive home and
+reads account metadata through the app server, without opening the bridge's
+legacy credential file. `import-codex` exits 2 with instructions to sign in;
+its source is never read. Kill commands update the existing kill file without
+resolving a binary or taking home ownership. Account failure, output failure
+and explicit host cancellation await child and screen cleanup before releasing
+the lease. Abrupt process termination retains the supervisor's existing
+kill-on-drop fallback; this amendment adds no OS signal handler.
+
+The prebuilt CLI tests use a controlled stdio account child and real loopback
+screen transport. They protect device/browser prompts, foreign completion
+rejection, successful matching completion, retained synthetic auth, sanitized
+failure/EOF, held-home exclusion, import refusal, missing configuration/binary,
+offline cache failure, output failure and host cancellation. These replace the
+CLI's former provider redemption/callback tests; legacy OAuth component tests
+remain in `echo-signin`. While the voice runtime migration is retained work,
+its test fixtures call the legacy library explicitly rather than claiming that
+the canonical CLI still imports or redeems those credentials. Voice calls,
+real-pin M2, browser rendering and remote authentication remain separate gates.

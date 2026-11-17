@@ -55,15 +55,11 @@ fn runtime() -> Result<tokio::runtime::Runtime, Error> {
 }
 
 fn operator(command: bridge_operator::Command) -> ExitCode {
-    let (providers, operation) = match command.prepare() {
+    let operation = match command.prepare() {
         Ok(prepared) => prepared,
         Err(error) => return input_error(&error),
     };
-    outcome(
-        runtime().and_then(|runtime| {
-            runtime.block_on(bridge_operator::execute(providers, operation, &mut std::io::stdout()))
-        }),
-    )
+    outcome(runtime().and_then(|runtime| runtime.block_on(bridge_operator::execute(operation, &mut std::io::stdout()))))
 }
 
 fn input_error(error: &Error) -> ExitCode {
@@ -76,7 +72,12 @@ fn outcome(result: Result<(), Error>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let _ = writeln!(std::io::stderr(), "echo-bridge: {error}");
-            ExitCode::FAILURE
+            match error {
+                Error::CodexHomeRequired | Error::CodexHome | Error::CodexBinary | Error::CodexImport => {
+                    ExitCode::from(2)
+                }
+                _ => ExitCode::FAILURE,
+            }
         }
     }
 }
