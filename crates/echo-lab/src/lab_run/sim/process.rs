@@ -364,7 +364,7 @@ mod readiness_tests {
             pending_once(startup.as_mut()).await;
             advance(READINESS).await;
             assert_eq!(startup.await, Err(timeout()));
-            assert_eq!(endpoints, vec![]);
+            assert_eq!(endpoints, Vec::<std::net::SocketAddr>::new());
             assert_eq!(next.get(), 0);
         }
     }
@@ -381,7 +381,7 @@ mod readiness_tests {
             .await,
             Err(timeout())
         );
-        assert_eq!(endpoints, vec![]);
+        assert_eq!(endpoints, Vec::<std::net::SocketAddr>::new());
         assert_eq!(probes.get(), 0);
     }
 
@@ -397,7 +397,7 @@ mod readiness_tests {
             startup.await,
             Err("launch: hassmic-host readiness timed out after 20000 ms".into())
         );
-        assert_eq!(endpoints, vec![]);
+        assert_eq!(endpoints, Vec::<std::net::SocketAddr>::new());
     }
 
     #[tokio::test(start_paused = true)]
@@ -440,7 +440,7 @@ mod readiness_tests {
                 .await,
                 Err(expected.into())
             );
-            assert_eq!(endpoints, vec![]);
+            assert_eq!(endpoints, Vec::<std::net::SocketAddr>::new());
             assert_eq!(probes.get(), 0);
         }
     }
@@ -465,7 +465,7 @@ mod readiness_tests {
             ));
             pending_once(startup.as_mut()).await;
         }
-        assert_eq!(endpoints, vec![]);
+        assert_eq!(endpoints, Vec::<std::net::SocketAddr>::new());
         assert_eq!(releases.get(), 0);
         drop(owner);
         assert_eq!(releases.get(), 1);
