@@ -2,6 +2,7 @@
 import contextlib
 import importlib.util
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -103,24 +104,27 @@ class DispatchTests(unittest.TestCase):
                               env=env, cwd=ROOT, text=True, capture_output=True, timeout=20)
 
     def test_every_shell_adapter_default_empty_invalid_and_translation_refusal(self):
-        for adapter in ADAPTERS:
-            for value in (None, '', 'bad;name', 'pe-ci'):
-                with self.subTest(adapter=adapter, value=value):
-                    self.env.pop('ECHO_WSL_DISTRO', None)
-                    if value is not None:
-                        self.env['ECHO_WSL_DISTRO'] = value
-                    expected = value or DEFAULT_WSL_DISTRO
-                    result = self.run_adapter(adapter, DENY='1', EXPECTED_DISTRO=expected)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertEqual(result.stdout, '')
-                    if value == 'bad;name':
-                        self.assertIn('ECHO_WSL_DISTRO', result.stderr)
-                        self.assertEqual(self.records(), [])
-                    else:
-                        self.assertIn(f"WSL distro '{expected}'", result.stderr)
-                        record, = self.records()
-                        self.assertEqual(record[0], 'wsl')
-                        self.assertEqual(record[1][:4], ['-d', expected, '--exec', 'wslpath'])
+        for adapter, value, target in itertools.product(
+                ADAPTERS, (None, '', 'bad;name', 'pe-ci'), ('', '/controlled/target')):
+            with self.subTest(adapter=adapter, value=value, target=target):
+                self.env.pop('ECHO_WSL_DISTRO', None)
+                if value is not None:
+                    self.env['ECHO_WSL_DISTRO'] = value
+                expected = value or DEFAULT_WSL_DISTRO
+                result = self.run_adapter(adapter, DENY='1', EXPECTED_DISTRO=expected,
+                                          CARGO_TARGET_DIR=target)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                if value == 'bad;name':
+                    self.assertIn('ECHO_WSL_DISTRO', result.stderr)
+                    self.assertEqual(self.records(), [])
+                else:
+                    self.assertIn(f"WSL distro '{expected}'", result.stderr)
+                    record, = self.records()
+                    self.assertEqual(record[0], 'wsl')
+                    # Absolute guest targets are cleaned before checkout translation.
+                    command = 'sh' if adapter == ADAPTERS[1] and target else 'wslpath'
+                    self.assertEqual(record[1][:4], ['-d', expected, '--exec', command])
 
     def test_every_shell_adapter_selected_success_and_guest_failure_preserve_argv(self):
         for adapter in ADAPTERS:
