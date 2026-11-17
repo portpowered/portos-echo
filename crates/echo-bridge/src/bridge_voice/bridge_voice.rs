@@ -1,6 +1,8 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
+mod voice_host;
 mod voice_session;
 mod voice_source;
+pub use voice_host::{HostOptions, with_device};
 pub use voice_session::{SessionNotice, SessionOptions, conversation};
 #[cfg(test)]
 mod voice_tests;

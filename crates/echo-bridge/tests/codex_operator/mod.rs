@@ -1,5 +1,6 @@
 //! T3: delivered CLI, controlled stdio account process and paired loopback screen.
 use super::*;
+mod device;
 mod fixture;
 mod host;
 use fixture::Fixture;

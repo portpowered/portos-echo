@@ -388,3 +388,29 @@ protect reuse, deadline renewal/equality, muted wakes, old-PCM exclusion,
 observer failure, cancellation and process EOF. These tests do not establish
 canonical CLI selection, kill-file observation, actual app-server/media or
 Wyoming behavior, real-pin M2 or any milestone. Those remain retained work.
+
+## Authenticated device ownership amendment (2026-11-17)
+
+The voice host composes the existing authenticated supervisor with the device
+connector. Initialization and account admission precede connection, capture and
+probe; only then may session work borrow the sole initialized IO generation and
+device. Device readiness still cannot establish Connected: media negotiation
+must succeed first. One absolute deadline bounds process/account/device startup.
+No legacy call or credential path is invoked by this owner.
+
+Cancellation has two stages. Before account admission, it interrupts startup.
+After admission, a watch receiver informs session work, allowing the conversation
+to await signaling/media stop while its IO and private home lease remain owned.
+The session callback must observe this receiver and clean up its calls on every
+return. The host then awaits device close under a two-second ceiling and awaits
+supervisor shutdown before releasing the home. Device startup or callback failure
+also closes the device; the original operational error takes precedence over a
+secondary device cleanup error. The outer owner must be awaited through shutdown.
+
+Controlled-process tests protect account-before-connect ordering, no dial on
+authentication/binary failure, initialized IO and exclusive ownership during
+callback cleanup, device close and child reaping. Memory-only paused-clock tests
+protect cancellation and the absolute connection deadline. These do not prove
+actual Wyoming startup, media stop ordering, screen state or real-pin M2. The
+canonical executable still requires migration to this host and the conversation
+owner; existing runtime selection remains unchanged in this increment.

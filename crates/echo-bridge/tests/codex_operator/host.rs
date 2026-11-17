@@ -14,7 +14,7 @@ fn config(fixture: &Fixture) -> CodexConfig {
     }
 }
 
-async fn released(fixture: &Fixture) {
+pub(super) async fn released(fixture: &Fixture) {
     drop(fixture.owner());
     assert!(
         tokio::net::TcpStream::connect((
