@@ -105,7 +105,7 @@ where
                 assert_eq!(text, "done");
                 return;
             }
-            MediaEvent::Control(Event::Other) => (),
+            MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => (),
             _ => unreachable!("unexpected session event"),
         }
     }
@@ -201,7 +201,7 @@ async fn tools_deadline_interrupts_matching_turn_without_blocking_pcm_or_transcr
                     transcripts.push(text);
                 }
                 MediaEvent::Control(Event::ReplyDone { .. }) => break,
-                MediaEvent::Control(Event::Other) => (),
+                MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => (),
                 MediaEvent::Control(_) => unreachable!("unexpected event"),
             }
         }
@@ -297,7 +297,16 @@ async fn tools_completed_turn_cancels_pending_and_queued_work_before_new_turn() 
             error: false,
         };
         let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
-        finish(&mut session).await;
+        assert_eq!(
+            conversation::lifecycle(&mut session).await,
+            [
+                (true, "turn-1".into()),
+                (false, "turn-1".into()),
+                (true, "turn-2".into()),
+                (false, "old-turn".into()),
+                (false, "turn-2".into())
+            ]
+        );
         drop(session);
         call.close(deadline()).await.unwrap();
     };
@@ -397,7 +406,7 @@ async fn tools_pending_queue_overflow_fails_and_cleanup_reaps_media_without_extr
         let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
         loop {
             match session.next().await {
-                Ok(MediaEvent::Control(Event::Other)) => (),
+                Ok(MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => (),
                 Err(error) => {
                     assert_eq!(error, Error::Unavailable);
                     break;

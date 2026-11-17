@@ -107,6 +107,8 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     }
 
     /// Poll PCM, process IO, absolute turn expiry and tool work fairly.
+    /// Turn lifecycle remains observable after dispatch/cancellation accounting;
+    /// an interrupted turn need not produce a realtime reply transcript.
     /// # Errors
     /// Bounded-queue overflow, invalid turn lifecycle, transport/media failure
     /// or refused output admission. The caller must await media/call cleanup.
@@ -114,8 +116,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         if self.work.is_none()
             && let Some(event) = self.deferred.pop_front()
         {
-            self.control(event)?;
-            return Ok(other());
+            return self.observed_control(event);
         }
         let deadline = self.dispatcher.as_ref().and_then(Dispatcher::deadline);
         tokio::select! {
@@ -132,12 +133,34 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             },
             event = self.port.next() => match event? {
                 MediaEvent::Control(event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => {
-                    self.control(event)?;
-                    Ok(other())
+                    self.observed_control(event)
                 },
                 event => Ok(event),
             },
         }
+    }
+
+    fn observed_control(&mut self, event: Event) -> Result<MediaEvent, Error> {
+        // Publish lifecycle only after the dispatcher has consumed it. Deferred
+        // completion must still cancel pending effects before the caller sees it.
+        let observed = match &event {
+            Event::TurnStarted { thread, turn } => Event::TurnStarted {
+                thread: thread.clone(),
+                turn: turn.clone(),
+            },
+            Event::TurnCompleted { thread, turn } => Event::TurnCompleted {
+                thread: thread.clone(),
+                turn: turn.clone(),
+            },
+            _ => Event::Other,
+        };
+        let deferred = self.work.is_some();
+        self.control(event)?;
+        Ok(if deferred {
+            other()
+        } else {
+            MediaEvent::Control(observed)
+        })
     }
 
     fn control(&mut self, event: Event) -> Result<(), Error> {

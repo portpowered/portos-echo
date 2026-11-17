@@ -920,3 +920,26 @@ native event is inferred or fabricated here. Functional tests use the public
 configured owner, controlled stdio/media and real loopback MCP to verify exact
 receipt ordering/correlation, approval denial and persisted replay refusal.
 They do not replace actual-pin M4, its complete goldens, latency or seed proof.
+
+### Interrupted delegated-turn observation (2026-11-17)
+
+The single-reader tool session now forwards the existing turn-start and
+turn-completion events after applying dispatcher accounting. Deferred lifecycle
+is published only after cancellation settles; it cannot announce completion
+while pending tool work can still run. Voice presentation already ignores
+these lifecycle events. Tool requests remain consumed by the dispatcher.
+
+The existing local pinned-process component now covers a deliberately delayed
+bridge reader: the fake releases exactly one Responses request before the
+bridge polls the automatic delegated turn. With an exhausted shared daily
+budget, the matching turn completes with zero MCP attempts and no context
+append. After advancing the explicit UTC-day clock, the same budget admits a
+new real-pin call and delegated tool result. Isolated homes and peers are
+closed and the home is immediately reacquired on both paths.
+
+The exact one-request observation is scoped to this causal release barrier at
+`rust-v0.160.0`; it is not a universal scheduling bound or proof of zero model
+work before notification. Configured admission and exact interrupt RPC
+correlation retain their separate functional witnesses. Full canonical M4,
+its complete golden traces, latency and reverted missing-result seed remain
+required; this component does not replace them or close the full F24 criterion.

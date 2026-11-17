@@ -332,3 +332,32 @@ async fn daily_result(server: &mut Server, admitted: bool) {
         }})
     );
 }
+
+// Observe lifecycle after pending work is settled, through the voice boundary.
+pub(super) async fn lifecycle<R, W, P, H>(session: &mut ToolSession<'_, '_, R, W, P, H>) -> Vec<(bool, String)>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+    P: MediaPeer,
+    H: ToolHost + 'static,
+{
+    let mut events = Vec::new();
+    loop {
+        match session.next().await.unwrap() {
+            MediaEvent::Control(Event::TurnStarted { thread, turn }) => {
+                assert_eq!(thread, "thread-1");
+                events.push((true, turn));
+            }
+            MediaEvent::Control(Event::TurnCompleted { thread, turn }) => {
+                assert_eq!(thread, "thread-1");
+                events.push((false, turn));
+            }
+            MediaEvent::Control(Event::ReplyDone { text }) => {
+                assert_eq!(text, "done");
+                return events;
+            }
+            MediaEvent::Control(Event::Other) => (),
+            _ => unreachable!("unexpected lifecycle event"),
+        }
+    }
+}

@@ -30,9 +30,10 @@ def read_frame(connection):
 
 
 class Delegation:
-    def __init__(self, tools, negative):
+    def __init__(self, tools, negative, exhausted=False):
         self.tools = tools
         self.negative = negative
+        self.exhausted = exhausted
         self.reply = "I couldn't call test echo." if negative else 'test echo: delegated echo'
         self.models = []
         self.delegations = []
@@ -83,6 +84,8 @@ class Delegation:
             assert json.loads(output) == [{'type': 'text', 'text': 'delegated echo'}], 'exact tool output mismatch'
 
     def append(self, value):
+        if self.exhausted:
+            raise AssertionError('interrupted turn appended a false result')
         assert len(self.models) == 2, 'append before verified output'
         assert value['delegation_item_id'] == 'delegation-local', 'wrong delegation correlation'
         assert value['content'] == [{'type': 'input_text', 'text': self.reply}], 'wrong appended result'

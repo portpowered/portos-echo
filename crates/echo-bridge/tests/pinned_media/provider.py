@@ -55,6 +55,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == '/v1/responses' and delegation is not None:
             try:
                 data = delegation.respond(body)
+                if delegation.exhausted:
+                    emit({'model_started': True})
                 self.respond(200, data, 'text/event-stream')
             except AssertionError as error:
                 delegation.failure = str(error)
@@ -136,7 +138,7 @@ try:
             answers.put(command['answer'])
         elif 'tools' in command:
             assert delegation is None
-            delegation = tools_provider.Delegation(command['tools'], command['negative'])
+            delegation = tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False))
         elif command == {'transcripts': True}:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:

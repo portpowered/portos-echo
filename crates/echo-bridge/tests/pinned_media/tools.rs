@@ -29,7 +29,37 @@ async fn t3_pinned_tools_report_mcp_failure_without_retry_or_false_success() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn t3_pinned_tools_daily_cap_interrupts_without_mcp() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    tokio::time::timeout(
+        Duration::from_secs(25),
+        Box::pin(async {
+            let day = Arc::new(AtomicU64::new(7));
+            let clock = day.clone();
+            let budget = ToolBudget::new(1, move || Ok(clock.load(Ordering::SeqCst)));
+            budget.admit_turn().unwrap();
+            assert!(budget.check_call().is_err());
+            Box::pin(exercise_mode(false, true, budget.clone())).await;
+            assert!(budget.check_call().is_err());
+            day.store(8, Ordering::SeqCst);
+            budget.check_call().unwrap();
+            Box::pin(exercise_mode(false, false, budget.clone())).await;
+            assert!(budget.check_call().is_err());
+        }),
+    )
+    .await
+    .unwrap();
+}
+
 async fn exercise(negative: bool) {
+    Box::pin(exercise_mode(negative, false, ToolBudget::new(1, || Ok(7)))).await;
+}
+
+async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget) {
     let directory = tempfile::tempdir().unwrap();
     private_parent(directory.path());
     let config = CodexConfig {
@@ -54,17 +84,24 @@ async fn exercise(negative: bool) {
     let ready: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let origin = ready["origin"].as_str().unwrap();
     let routes = LocalRoutes::new(origin, origin).unwrap();
-    let initialize = json!({"tools":catalog.tools(), "negative":negative});
+    let initialize = json!({"tools":catalog.tools(), "negative":negative, "exhausted":exhausted});
     input.write_all(format!("{initialize}\n").as_bytes()).await.unwrap();
     let (commands, receive) = mpsc::channel(2);
+    let (started, model_started) = tokio::sync::oneshot::channel();
     let ((), (mut remote, echoed)) = tokio::join!(
-        client(&config, &routes, (host, catalog), commands, negative),
-        super::remote(&mut input, &mut output, receive)
+        client(
+            &config,
+            &routes,
+            (host, catalog),
+            commands,
+            (negative, exhausted, model_started, budget)
+        ),
+        remote(&mut input, &mut output, receive, started)
     );
     remote.close();
     assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
-    snapshot(&mut input, &mut output).await;
-    check_mcp(&spoof);
+    snapshot(&mut input, &mut output, exhausted).await;
+    check_mcp(&spoof, exhausted);
     drop(input);
     assert!(provider.wait().await.unwrap().success());
     spoof.shutdown().await.unwrap();
@@ -105,7 +142,7 @@ async fn client(
     routes: &LocalRoutes,
     (host, catalog): (McpClient<NoToken>, Catalog),
     commands: mpsc::Sender<bool>,
-    negative: bool,
+    (negative, exhausted, model_started, budget): (bool, bool, tokio::sync::oneshot::Receiver<()>, ToolBudget),
 ) {
     let key = Secret::new("dummy-local-only".to_owned());
     let result = with_host_options(
@@ -139,7 +176,10 @@ async fn client(
             .await?;
             audio_round_trip(&mut call).await;
             commands.send(true).await.unwrap();
-            dispatch(&mut call, host, catalog, negative).await;
+            if exhausted {
+                model_started.await.unwrap();
+            }
+            dispatch(&mut call, host, catalog, (negative, exhausted), budget).await;
             commands.send(false).await.unwrap();
             commands.closed().await;
             call.close(Instant::now() + Duration::from_secs(3)).await?;
@@ -150,11 +190,49 @@ async fn client(
     assert_eq!(result, Ok(()));
 }
 
+async fn remote(
+    input: &mut tokio::process::ChildStdin,
+    output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    mut commands: mpsc::Receiver<bool>,
+    started: tokio::sync::oneshot::Sender<()>,
+) -> (LivePeer, usize) {
+    let request: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+    let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
+        .await
+        .unwrap();
+    let answer = peer.answer(request["offer"].as_str().unwrap()).await.unwrap();
+    input
+        .write_all(format!("{}\n", json!({"answer":answer})).as_bytes())
+        .await
+        .unwrap();
+    let mut started = Some(started);
+    let mut echoed = 0;
+    loop {
+        echoed += super::echo_ready(&mut peer).await;
+        tokio::select! {
+            () = step(&mut peer) => (),
+            observation = output.next_line() => {
+                let value: Value = serde_json::from_str(&observation.unwrap().unwrap()).unwrap();
+                assert_eq!(value, json!({"model_started":true}));
+                started.take().expect("pinned daily cap: extra model request after admission refusal").send(()).unwrap();
+            },
+            command = commands.recv() => match command {
+                Some(true) => input.write_all(b"{\"transcripts\":true}\n").await.unwrap(),
+                command => {
+                    assert_eq!(command, Some(false));
+                    return (peer, echoed);
+                },
+            },
+        }
+    }
+}
+
 async fn dispatch<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin>(
     call: &mut MediaCall<'_, R, W>,
     host: McpClient<NoToken>,
     catalog: Catalog,
-    negative: bool,
+    (negative, exhausted): (bool, bool),
+    budget: ToolBudget,
 ) {
     let config = AgentConfig {
         max_tool_calls: 8,
@@ -162,7 +240,9 @@ async fn dispatch<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Un
         daily_request_cap: 1,
         model: None,
     };
-    let mut session = ToolSession::new(call, host, catalog, config, ToolBudget::new(1, || Ok(7))).unwrap();
+    let call_thread = call.thread_id().map(str::to_owned);
+    let mut session = ToolSession::new(call, host, catalog, config, budget).unwrap();
+    let mut started = None;
     let expected = if negative {
         "I couldn't call test echo."
     } else {
@@ -171,6 +251,14 @@ async fn dispatch<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Un
     let completed = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             match session.next().await.unwrap() {
+                MediaEvent::Control(Event::TurnStarted { thread, turn }) => {
+                    assert_eq!(Some(thread.as_str()), call_thread.as_deref());
+                    assert!(started.replace((thread, turn)).is_none());
+                }
+                MediaEvent::Control(Event::TurnCompleted { thread, turn }) if exhausted => {
+                    assert_eq!(started, Some((thread, turn)));
+                    return;
+                }
                 MediaEvent::Control(Event::ReplyDone { text }) => {
                     assert_eq!(text, expected);
                     return;
@@ -183,15 +271,32 @@ async fn dispatch<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Un
         }
     })
     .await;
-    assert!(completed.is_ok(), "pinned delegation: missing verified native append");
+    assert!(
+        completed.is_ok(),
+        "pinned delegation: missing verified native append or interrupted completion"
+    );
 }
 
 async fn snapshot(
     input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    exhausted: bool,
 ) {
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let value: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+    if exhausted {
+        // rust-v0.160.0: release exactly one request before bridge polling.
+        // This is the pre-notification window, not a universal zero-work claim.
+        assert_eq!(
+            value,
+            json!({"calls":[{
+            "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+            "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],
+            "sidebands":1,"external":0,"delegations":["delegation-local"],
+            "models":[{"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":0}],"appends":[]})
+        );
+        return;
+    }
     assert_eq!(
         value,
         json!({"calls":[{
@@ -204,9 +309,14 @@ async fn snapshot(
     );
 }
 
-fn check_mcp(spoof: &Spoof) {
+fn check_mcp(spoof: &Spoof, exhausted: bool) {
     let observed = spoof.snapshot().unwrap();
     assert_eq!(observed.requests.iter().filter(|r| r.method == "tools/list").count(), 1);
+    if exhausted {
+        assert_eq!(observed.requests.iter().filter(|r| r.method == "tools/call").count(), 0);
+        assert_eq!(observed.calls.len(), 0);
+        return;
+    }
     assert_eq!(observed.requests.iter().filter(|r| r.method == "tools/call").count(), 1);
     assert_eq!(observed.calls.len(), 1);
     assert_eq!(observed.calls[0].name, "test.echo");
