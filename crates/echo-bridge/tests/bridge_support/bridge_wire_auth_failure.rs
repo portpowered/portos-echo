@@ -3,23 +3,11 @@ use super::*;
 use tokio::net::TcpListener;
 #[path = "bridge_wire_auth_failure/stream.rs"]
 mod stream;
+#[path = "bridge_wire_auth_failure/trace_wait.rs"]
+pub(super) mod trace_wait;
 
-pub(super) async fn wait_event(path: &Path, event: &str) {
-    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
-        loop {
-            let text = tokio::fs::read_to_string(path).await.unwrap();
-            if text
-                .lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .any(|value| value["event"] == event)
-            {
-                return;
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    })
-    .await
-    .unwrap();
+pub(super) async fn wait_event(path: &Path, event: &str, bridge: &mut Process) {
+    trace_wait::observe(path, event, || trace_wait::child_state(bridge.child.try_wait())).await;
 }
 async fn wake(stream: &mut bridge_short::Satellite) {
     bridge_short::send(
@@ -53,12 +41,25 @@ async fn retained_failure(credential: Option<&str>, status: u16) {
     let path = directory.path().join("trace");
     let (mut satellite, mut frames) = stream::observe_before_wake(satellite, &mut bridge, &path).await;
     let relink = status == 401;
-    wait_event(&path, if relink { "auth.relink_required" } else { "run.failed" }).await;
+    wait_event(
+        &path,
+        if relink { "auth.relink_required" } else { "run.failed" },
+        &mut bridge,
+    )
+    .await;
     stream::assert_failure_frame(&mut frames, relink).await;
     bridge_refusal::error(&mut satellite, relink).await;
     assert_surfaces(&path, relink).await;
     if relink {
-        assert_refused(directory.path(), &mut satellite, &path, &observer, credential).await;
+        assert_refused(
+            directory.path(),
+            &mut satellite,
+            &path,
+            &observer,
+            credential,
+            &mut bridge,
+        )
+        .await;
     }
     stream::finish_failure(bridge, &path, fake).await;
 }
@@ -68,11 +69,12 @@ async fn assert_refused(
     path: &Path,
     observer: &echo_live::fake::FakeObserver,
     credential: Option<&str>,
+    bridge: &mut Process,
 ) {
     // Repairing the file cannot silently clear the in-process refusal latch.
     std::fs::write(directory.join("credential"), "synthetic-repaired-key").unwrap();
     wake(satellite).await;
-    wait_event(path, "run.refused").await;
+    wait_event(path, "run.refused", bridge).await;
     bridge_refusal::error(satellite, true).await;
     assert_eq!(
         observer.calls().unwrap().len(),
@@ -257,10 +259,10 @@ async fn bridge_wire_auth_failure_revoked_refresh_latches_and_explicit_signin_re
     bridge_short::register(&mut satellite, &mut bridge).await;
     let mut satellite = bridge_short::Satellite::new(satellite);
     let trace_path = directory.path().join("trace");
-    wait_event(&trace_path, "auth.relink_required").await;
+    wait_event(&trace_path, "auth.relink_required", &mut bridge).await;
     assert_surfaces(&trace_path, true).await;
     wake(&mut satellite).await;
-    wait_event(&trace_path, "run.refused").await;
+    wait_event(&trace_path, "run.refused", &mut bridge).await;
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
     bridge.finish(0).await;
     bridge_wire_auth::invoke(

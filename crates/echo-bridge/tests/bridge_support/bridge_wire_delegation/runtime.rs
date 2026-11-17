@@ -20,6 +20,17 @@ struct Application {
 }
 
 impl Application {
+    async fn wait_event(&self, event: &str) {
+        bridge_wire_auth_failure::trace_wait::observe(&self.path(), event, || {
+            if self.worker.is_finished() {
+                "application task finished (no child process)".into()
+            } else {
+                "application task running (no child process)".into()
+            }
+        })
+        .await;
+    }
+
     async fn start(cap: u64, deadline: u64) -> Self {
         let mut application = Self::idle(cap, deadline).await;
         application.wake().await;
@@ -236,7 +247,7 @@ async fn bridge_wire_runtime_abandon_replacement_retains_budget_and_discards_lat
     let mut fresh = app.request("fresh").await;
     respond(&mut fresh, "fresh result").await.unwrap();
     app.commentary("fresh", "fresh result").await;
-    bridge_wire_auth_failure::wait_event(&app.path(), "session.commentary.append").await;
+    app.wait_event("session.commentary.append").await;
     let entries = trace(&app.path());
     let appended: Vec<_> = entries
         .iter()
@@ -268,7 +279,7 @@ async fn bridge_wire_runtime_failed_commentary_append_cuts_and_closes_without_su
     }
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
-    bridge_wire_auth_failure::wait_event(&app.path(), "run.failed").await;
+    app.wait_event("run.failed").await;
     bridge_refusal::error(&mut app.satellite, false).await;
     bridge_wire_auth_failure::assert_surfaces(&app.path(), false).await;
     let entries = trace(&app.path());
@@ -327,7 +338,7 @@ async fn bridge_wire_runtime_long_delegation_plays_on_same_call_and_requires_pla
     bridge_short::receive_short(&mut app.satellite, &app.live, &path, 32).await;
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
-    bridge_wire_auth_failure::wait_event(&app.path(), "reply.played").await;
+    app.wait_event("reply.played").await;
     let entries = trace(&app.path());
     assert!(!entries.iter().any(|e| e["event"] == "run.failed"));
     let edges: Vec<_> = entries
@@ -371,7 +382,7 @@ async fn bridge_wire_runtime_long_delegation_missing_played_is_bounded_failure()
         "audio-stop"
     );
     elapse(Duration::from_secs(5)).await;
-    bridge_wire_auth_failure::wait_event(&app.path(), "run.failed").await;
+    app.wait_event("run.failed").await;
     let entries = trace(&app.path());
     assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 0);
     assert_eq!(
@@ -397,7 +408,7 @@ async fn bridge_wire_runtime_long_delegation_kill_abandons_and_shutdown_remains_
     assert_eq!(model.read(&mut [0]).await.unwrap(), 0);
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
-    bridge_wire_auth_failure::wait_event(&app.path(), "live.closed").await;
+    app.wait_event("live.closed").await;
     let entries = trace(&app.path());
     assert_eq!(
         entries.iter().find(|e| e["event"] == "live.closed").unwrap()["reason"],
