@@ -492,7 +492,7 @@ async fn idle_probe_success_is_once_per_completion_and_pending_eof_is_not_succes
         );
         let mut byte = [0];
         assert_eq!(session.satellite.read(&mut byte).await.unwrap(), 0);
-        assert!(TcpStream::connect(&session.control).await.is_err());
+        session.process.assert_collected();
     })
     .await;
 }
