@@ -163,9 +163,9 @@ Per install, exactly one profile executes tools (the RFC's single-writer invaria
 
 ### 3.3 The Codex app server
 
-Research brief: [`docs/spikes/codex-app-server.md`](../spikes/codex-app-server.md) (read from Codex `main` at `5b3d2c7fce`;
-line numbers there refer to that commit). Owner decision (2026-11-16): reuse OpenAI's Codex app server instead of our own GPT-Live client, and build it for
-armv7 too. Reuse is the point: Codex's crates already encode the undocumented parts (endpoints, headers, the V3
+Research brief: [`docs/spikes/codex-app-server.md`](../spikes/codex-app-server.md) (read from Codex `main` at
+`5b3d2c7fce`; line numbers there refer to that commit). Owner decision (2026-11-16): reuse OpenAI's Codex app
+server instead of our own GPT-Live client, and build it for armv7 too. Reuse is the point: Codex's crates already encode the undocumented parts (endpoints, headers, the V3
 events, the sideband's reconnects). Expose only what we need, since the Echo's disk is small.
 
 - **Pin.** Release `rust-v0.160.0` (commit `a956835d020762cb2b570053af06f643a11c0ecc`), Apache-2.0 with a NOTICE that
