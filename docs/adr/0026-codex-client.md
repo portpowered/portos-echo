@@ -609,3 +609,25 @@ confinement. It proves the signaling/media boundary with API-key RPC login
 using an inert local key; it does not prove ChatGPT authentication, Wyoming
 playback settlement, cross-channel reply ordering, idle reuse, or the M2
 scenario. Those retained obligations remain unsatisfied.
+
+### Pinned executable voice witness
+
+Explicit numeric loopback call/model routes now select a media peer restricted
+only to IPv4 loopback, with loopback candidates enabled. Ordinary configured
+calls retain the media peer's LAN defaults. No STUN endpoint or new dependency
+is introduced. The executable heap-allocates the peer factory and each admitted
+conversation future; the Windows main thread otherwise overflows its stack on
+the first real wake even though startup and component media tests pass.
+
+The prebuilt executable witness in `bridge_codex_media` owns a private external
+home, the verified offline app-server pin, local Python provider, real echo-media
+and an existing LivePeer remote, plus a local Wyoming socket peer. It checks
+loopback-only offer candidates, one native V3 call/sideband, nonzero 24 kHz reply
+PCM, no completion before `played`, completion after acknowledgment, EOF cleanup
+and exclusive home ownership until the executable exits. Time advances through
+the existing explicit clock controls on capture and remote protocol progress;
+partially received Wyoming frames survive those controls. It never builds an
+artifact inside the test or uses a real account. This is an executable T3
+interoperability witness, not the hassmic-host M2 scenario, ChatGPT invalid/expired
+proof, direct browser verification or OS-enforced network confinement. Those
+retained gates remain unsatisfied.

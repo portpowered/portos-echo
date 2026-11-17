@@ -15,6 +15,7 @@ pub(crate) async fn execute<C: LinkConnector>(
     }
     let config = settings.config.take().ok_or(Error::Input)?;
     let has_tools = !config.mcp.server.is_empty();
+    let media = media_config(settings.model_url.is_some());
     let configured = Configured::new(config, settings.trace, settings.health)?;
     let configured = match settings.model_url {
         Some(model) => configured.with_routes(crate::bridge_operator::LocalRoutes::new(&settings.live_url, &model)?),
@@ -33,7 +34,7 @@ pub(crate) async fn execute<C: LinkConnector>(
         .execute(
             connector,
             async || {
-                Peer::create(PeerConfig::default())
+                Box::pin(Peer::create(media.clone()))
                     .await
                     .map_err(|_| Error::Unavailable)
             },
@@ -42,4 +43,16 @@ pub(crate) async fn execute<C: LinkConnector>(
         )
         .await;
     if clean_stop.get() { result } else { Err(Error::Control) }
+}
+
+fn media_config(local: bool) -> PeerConfig {
+    if local {
+        PeerConfig {
+            interface_allowlist: vec![std::net::Ipv4Addr::LOCALHOST.into()],
+            allow_loopback: true,
+            ..PeerConfig::default()
+        }
+    } else {
+        PeerConfig::default()
+    }
 }

@@ -74,7 +74,7 @@ where
         )
         .await?;
         let killed = std::cell::Cell::new(false);
-        let result = admitted(
+        let result = Box::pin(admitted(
             (&*client, &mut events, microphone),
             io,
             &mut options,
@@ -87,7 +87,7 @@ where
                 }
             },
             &mut observe,
-        )
+        ))
         .await;
         if killed.get() && result == Err(Error::Control) {
             // Cancelled negotiation can invalidate IO. Never resume that

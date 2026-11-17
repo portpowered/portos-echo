@@ -8,6 +8,7 @@ use echo_config::{CodexConfig, LiveMode};
 use echo_contracts::secret::Secret;
 use std::{path::Path, process::Stdio};
 use tokio::{process::Command, sync::mpsc};
+mod voice;
 
 #[tokio::test]
 async fn t3_pinned_codex_media_and_role_aware_transcripts() {
@@ -39,7 +40,8 @@ async fn journey() {
     let (commands, receive) = mpsc::channel(2);
     let remote = remote(&mut input, &mut output, receive);
     let client = client(&config, &routes, commands);
-    let ((), echoed) = tokio::join!(client, remote);
+    let ((), (mut remote, echoed)) = tokio::join!(client, remote);
+    remote.close();
     assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let observed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
@@ -95,8 +97,9 @@ async fn client(config: &CodexConfig, routes: &LocalRoutes, commands: mpsc::Send
             audio_round_trip(&mut call).await;
             commands.send(true).await.unwrap();
             transcripts(&mut call).await;
-            call.close(Instant::now() + Duration::from_secs(3)).await?;
             commands.send(false).await.unwrap();
+            commands.closed().await;
+            call.close(Instant::now() + Duration::from_secs(3)).await?;
             Ok(())
         },
     )
@@ -137,7 +140,7 @@ async fn remote(
     input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     mut commands: mpsc::Receiver<bool>,
-) -> usize {
+) -> (LivePeer, usize) {
     let request: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
         .await
@@ -161,8 +164,7 @@ async fn remote(
                 Some(true) => input.write_all(b"{\"transcripts\":true}\n").await.unwrap(),
                 command => {
                     assert_eq!(command, Some(false), "client ended without media cleanup");
-                    peer.close();
-                    return echoed;
+                    return (peer, echoed);
                 },
             },
         }
