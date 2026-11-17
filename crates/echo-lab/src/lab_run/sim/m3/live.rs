@@ -153,6 +153,11 @@ async fn replay(
     let mut sequence = 0;
     loop {
         drive(peer, deadline).await?;
+        while peer
+            .receive(Instant::now().into_std())
+            .await
+            .map_err(|_| "M3 Live: snapshot receive failed")?
+        {}
         while peer.pop_text().is_some() {}
         while peer.pop_audio().is_some() {
             frames += 1;
