@@ -12,8 +12,9 @@ use echo_contracts::live::LiveEvent;
 use echo_link::{EchoLink, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PlayOutcome, ReplySink};
 use echo_live::call::CallError;
 use serde_json::json;
-use std::{num::NonZeroUsize, time::Duration};
+use std::{future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
 use tokio::time::Instant;
+type CutReceipt<'a> = Pin<Box<dyn Future<Output = Result<echo_link::CutStats, echo_link::Error>> + Send + 'a>>;
 struct Source {
     mic: Option<Microphone>,
     chunks: u64,
@@ -143,9 +144,7 @@ impl Source {
         retained
     }
     async fn receive(&mut self, call: &mut impl LivePort) -> Result<bool, Error> {
-        // Leave time for the playback and Wyoming event futures in try_join!.
-        // A provider burst must not monopolize the owner with synchronous
-        // decoding/resampling while the bounded control queue fills up.
+        // Let playback and Wyoming events progress between provider bursts.
         for _ in 0..8 {
             let Some(frame) = call.pop_audio() else {
                 return Ok(true);
@@ -210,29 +209,36 @@ pub(super) async fn run<L: EchoLink>(
         speaking: false,
         microphone: false,
         played: false,
+        cut: None,
         deadline: Instant::now() + bridge_timing::RESPONSE,
         delegation: options.4,
         kill: options.5,
     };
     let mut failure = None;
+    let mut tx = Some(tx);
     let producer = async {
         let result = produce(
             &mut source,
             &mut run,
             events,
             call,
-            tx,
+            tx.as_ref().ok_or(Error::Wyoming)?,
             (options.0, options.2),
             &mut context,
         )
         .await;
         failure = stop_failed_producer(result, client, options.0).await?;
+        drop(tx.take());
         context.await_played(events, &mut run, &mut source, call).await
     };
-    let (outcome, ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer)?;
+    let outcome = match tokio::try_join!(async { play.await.map_err(Error::from) }, producer) {
+        Ok((outcome, ())) => outcome,
+        Err(error) => return Err(context.settle_failure(error).await),
+    };
     failure.map_or(Ok(()), Err)?;
     let abandoned = context.delegation.abandon().await;
     context.screen.presentation.clear_emotion()?;
+    drop(context);
     trace.record(
         "reply.played",
         Some(id),
@@ -272,11 +278,17 @@ struct PlaybackContext<'a, L: EchoLink> {
     speaking: bool,
     microphone: bool,
     played: bool,
+    cut: Option<(CutReceipt<'a>, u64, u64, u64)>,
     deadline: Instant,
     delegation: &'a mut super::bridge_delegation::Host,
     kill: &'a super::bridge_kill::Kill<'a>,
 }
 impl<L: EchoLink> PlaybackContext<'_, L> {
+    async fn settle_failure(&mut self, error: Error) -> Error {
+        // Settle only an issued cut, under its original transport deadline.
+        let _ = self.finish_cut().await;
+        error
+    }
     fn pressure(&mut self, source: &Source, reported: &mut bool) -> Result<(), Error> {
         if !*reported && source.queue.drop_count() > 0 {
             self.trace
@@ -404,20 +416,30 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         }
         Ok(())
     }
-
     async fn cut(&mut self, source: &mut Source) -> Result<(), Error> {
         let bridge_evicted = source.queue.drop_count();
-        let bridge_dropped = source.discard_reply();
-        // Keep the source sender alive through this request: EOF must not race
-        // the cut and turn its acknowledgment into normal completion.
-        let stats = self.client.cut_with_stats().await?;
+        self.cut = Some((
+            Box::pin(self.client.cut_with_stats()),
+            source.discard_reply(),
+            bridge_evicted,
+            source.framed,
+        ));
+        self.finish_cut().await
+    }
+    async fn finish_cut(&mut self) -> Result<(), Error> {
+        let Some((receipt, ..)) = &mut self.cut else {
+            return Ok(());
+        };
+        let result = receipt.await;
+        let (_, bridge_dropped, bridge_evicted, framed) = self.cut.take().ok_or(Error::Wyoming)?;
+        let stats = result?;
         self.trace.record(
             "reply.cut",
             Some(self.id),
             json!({
                 "bridge_dropped":bridge_dropped, "transport_dropped":stats.dropped_frames,
                 "dropped_frames":bridge_dropped + stats.dropped_frames,
-                "bridge_evicted":bridge_evicted, "reply_frames":source.framed
+                "bridge_evicted":bridge_evicted, "reply_frames":framed
             }),
         )
     }
@@ -427,7 +449,7 @@ async fn produce<L: EchoLink>(
     run: &mut <L::Events as LinkEvents>::Run,
     events: &mut L::Events,
     call: &mut impl LivePort,
-    tx: L::ReplySink,
+    tx: &L::ReplySink,
     lab: (bool, u64),
     context: &mut PlaybackContext<'_, L>,
 ) -> Result<(), Error> {
@@ -467,7 +489,7 @@ async fn produce<L: EchoLink>(
                 Err(error) => return Err(error.into()),
             },
             frame = pacer.next_frame(&mut source.queue), if !source.queue.is_empty() => {
-                context.forward_available(&tx, frame).await?;
+                context.forward_available(tx, frame).await?;
             }
         }
     }
