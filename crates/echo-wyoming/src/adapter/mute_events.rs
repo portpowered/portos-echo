@@ -89,7 +89,7 @@ impl Events {
         if matches!(event.event, WyomingEvent::AudioChunk(_)) && self.capture == Capture::Ended {
             return Ok(Some(LinkEvent::MicrophoneDropped(event.audio_count)));
         }
-        if matches!(event.event, WyomingEvent::AudioStop(_) | WyomingEvent::Played(_)) {
+        if capture_ended(&event) {
             self.capture = Capture::Ended;
         }
         if matches!(event.event, WyomingEvent::Info(_)) {
@@ -126,5 +126,13 @@ impl LinkEvents for Events {
             }
             return self.next().await;
         }
+    }
+}
+
+fn capture_ended(event: &crate::ReceivedEvent) -> bool {
+    match event.event {
+        WyomingEvent::AudioStop(_) => true,
+        WyomingEvent::Played(_) => !event.capture_continues,
+        _ => false,
     }
 }

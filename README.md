@@ -29,7 +29,9 @@ or `cargo run --locked -p echo-lab -- check --milestone M3`. Normal `make test-s
 discovery includes the same scenario.
 
 The report references scalar evidence in `events.jsonl`: native first playback,
-one overlapping question in the same run, the measured cut below 600 ms with a
+one overlapping question in the same run, `hassmic-continue` before the cut stop,
+3200 tail bytes captured after the old `played` and five tail frames received by
+the controlled Live peer, the measured cut below 600 ms with a
 200 ms send window, replacement playback, and a closed native mute window with
 zero outbound frames. Input phrases map to deterministic synthetic PCM markers;
 this T3 check proves local transport and playback, without speech recognition or

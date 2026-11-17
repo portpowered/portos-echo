@@ -190,7 +190,9 @@ async fn replay(
             wire.send_modify(|state| state.cancel = Some(Instant::now()));
             phase = 2;
         }
-        if phase == 2 && frames >= 50 && state.played.len() == 1 && state.old_sink_pcm.is_some() {
+        if phase == 2 && frames >= 55 && state.played.len() == 1 && state.old_sink_pcm.is_some() {
+            verify_tail(&state, frames)?;
+            wire.send_modify(|state| state.live_tail_frames = frames - 50);
             answer(peer, &mut sequence, 10, "The day is Monday.").await?;
             peer.send_text(r#"{"type":"response.audio.done"}"#)
                 .await
@@ -202,6 +204,13 @@ async fn replay(
             phase = 3;
         }
     }
+}
+
+fn verify_tail(state: &Ledger, frames: u64) -> Result<(), String> {
+    if frames != 55 || state.tail_bytes != 3200 || state.runs != 1 || state.continues != 1 {
+        return Err("M3 continuation: expected 55 Live frames, 3200 post-Played bytes and one run/continue".into());
+    }
+    Ok(())
 }
 
 async fn answer(peer: &mut LivePeer, sequence: &mut u16, count: u16, text: &str) -> Result<(), String> {

@@ -153,6 +153,10 @@ impl World {
         if usize::try_from(old_pcm).ok() != Some(old.bytes[0]) {
             return Err("M3 cut: host decoded PCM does not match the stopped old reply".into());
         }
+        // The prefix triggered cancellation. Its distinguishable tail is fed
+        // only after native Played, without another wake or run-pipeline.
+        self.control(json!({"action":"inject","pcm":fixture().iter().map(|byte| !byte).collect::<Vec<_>>()}))
+            .await?;
         self.relay
             .as_ref()
             .ok_or("M3: missing wire")?

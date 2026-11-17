@@ -20,6 +20,9 @@ pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) ->
     {
         return Err("M3 first reply: missing or inconsistent closed decoded sink PCM".into());
     }
+    if wire.continues != 1 || wire.tail_bytes != 3200 || wire.live_tail_frames != 5 {
+        return Err("M3 continuation: expected one continue, 3200 post-Played bytes and 5 Live tail frames".into());
+    }
     let cancel = wire.cancel.ok_or("M3 cut: missing provider cancellation")?;
     let first = wire.played.first().ok_or("M3 cut: missing actual first Played")?;
     let elapsed = first
@@ -50,7 +53,7 @@ pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) ->
         ));
     }
     Ok(format!(
-        "first_reply_played=true barge_in_cut_ms={cut_ms:.3} barge_in_budget_ms=600 reply_send_window_ms=200 reply_bytes_after_cancel_window=0 second_answer_played=true"
+        "first_reply_played=true barge_in_cut_ms={cut_ms:.3} barge_in_budget_ms=600 reply_send_window_ms=200 reply_bytes_after_cancel_window=0 second_answer_played=true continues=1 post_played_tail_bytes=3200 live_tail_frames=5"
     ))
 }
 
@@ -93,6 +96,9 @@ mod tests {
         Ledger {
             runs: 1,
             inputs: 2,
+            continues: 1,
+            tail_bytes: 3200,
+            live_tail_frames: 5,
             started: 2,
             stops: 2,
             bytes: [19200, 9600],
@@ -100,6 +106,22 @@ mod tests {
             cancel: Some(cancel),
             played: vec![cancel + Duration::from_millis(200), cancel + Duration::from_millis(500)],
             ..Ledger::default()
+        }
+    }
+
+    #[test]
+    fn missing_continuation_or_post_played_tail_cannot_pass() {
+        for field in 0..3 {
+            let mut state = observed();
+            match field {
+                0 => state.continues = 0,
+                1 => state.tail_bytes = 0,
+                _ => state.live_tail_frames = 0,
+            }
+            assert_eq!(
+                duplex(&state, Some(960), Some(9600)).unwrap_err(),
+                "M3 continuation: expected one continue, 3200 post-Played bytes and 5 Live tail frames"
+            );
         }
     }
 

@@ -12,6 +12,9 @@ use tokio::{
 #[derive(Clone, Debug, Default)]
 pub struct Ledger {
     pub inputs: usize,
+    pub continues: usize,
+    pub tail_bytes: usize,
+    pub live_tail_frames: u64,
     pub runs: usize,
     pub capture_frames: u64,
     pub old_sink_pcm: Option<u64>,
@@ -35,6 +38,12 @@ impl Ledger {
                     return Err("M3 wire: unexpected reply start".into());
                 }
                 self.started += 1;
+            }
+            "hassmic-continue" => {
+                if self.started != 1 || self.stops != 0 || self.continues != 0 {
+                    return Err("M3 wire: continuation must precede the cut stop exactly once".into());
+                }
+                self.continues += 1;
             }
             "audio-stop" => self.stops += 1,
             "audio-chunk" => {
@@ -175,6 +184,9 @@ fn capture(state: &mut Ledger, event: &Event, marker: &[u8], tail: &mut Vec<u8>)
         }
         "audio-chunk" => {
             state.capture_frames += 1;
+            if state.played.len() == 1 {
+                state.tail_bytes += event.payload.len();
+            }
             tail.extend(signs(&event.payload));
             if tail.windows(marker.len()).any(|part| part == marker) {
                 state.inputs += 1;
