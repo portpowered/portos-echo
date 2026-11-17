@@ -16,8 +16,9 @@ Windows asset digests. Both helpers verify archives before publishing an externa
 cache, retain upstream LICENSE and NOTICE, and reject corrupt warm entries.
 `ECHO_CODEX_OFFLINE=1` permits only cache reads during a test.
 
-The crate uses the workspace's existing `serde` and `serde_json` packages. No
-new third-party package, upstream Rust crate, FFI or shared contract is added.
+The crate uses the workspace's existing `serde`, `serde_json`, `tokio` and
+`echo-contracts::Secret` dependencies. No new third-party package, upstream
+Rust crate, FFI or shared contract is added.
 Selected settings are adapted from schema generated offline by the verified
 release. The full schema and the binary remain outside git. Attribution is in
 the crate's NOTICE and adapted source; upstream is Apache-2.0.
@@ -37,11 +38,26 @@ drainable. Cancellation releases admission without reusing IDs; late replies
 cannot satisfy another request. Remote errors retain only their numeric code in
 diagnostics. Unknown notifications retain their complete JSON envelope.
 
+The async stream driver services reads, writes and monotonic deadlines when the
+caller polls it. It owns no background tasks. Both input fragments and output
+offsets survive cancellation of a wait future; abandoning a request requires
+explicit cancellation of its ID. Wholly unsent cancelled/expired calls are
+discarded. A partially written frame must finish to preserve framing, but its
+late reply cannot satisfy another waiter. Output frames, including notifications
+and tool replies, have a separate queue capped by the pending-request limit.
+Stalled writes fail the generation within the configured request timeout and
+close both stream halves. Event overflow preserves previously accepted events.
+
+Selected wire types come from the pinned experimental schema, including
+account/device-code sign-in and known realtime notifications. Credentials use
+`Secret`; payload-bearing reply/notification types have no Debug or Display.
+Unknown notifications remain available as complete raw envelopes regardless of
+whether a caller chooses to deserialize a known projection.
+
 The pin helpers, settings and raw-stdio S5 witness preserve the initial executable
-spine. Selected wire types come from the pinned experimental schema. The Rust IO
-driver and supervisor, account/notification projections, process fault matrix and
-final public-client T3 witness remain required in this same work item. S5 does
-not establish the Rust client's process lifecycle or runtime backpressure.
+spine. The supervisor, process fault matrix and final public-client T3 witness
+remain required in this same work item. The network-free stream tests establish
+IO bounds and scheduling, not child lifecycle or the Rust-driven call journey.
 
 The later bridge cutover owns the tool host, MCP, caps and milestone scenarios.
 This component does not claim M2, M4, real authentication, media or hardware

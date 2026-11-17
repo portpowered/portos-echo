@@ -1,5 +1,6 @@
 //! Selected wire types adapted from rust-v0.160.0's experimental JSON schema.
 // OpenAI Codex, Copyright 2025 OpenAI; Apache-2.0 (see ../NOTICE).
+use echo_contracts::secret::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -171,4 +172,165 @@ pub enum ToolContent {
 pub struct ToolResult {
     pub content_items: Vec<ToolContent>,
     pub success: bool,
+}
+
+/// Only the two sign-in modes consumed by the bridge are projected.
+/// Secret bytes are exposed solely to the bounded wire serializer.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum LoginParams<'a> {
+    ApiKey {
+        #[serde(rename = "apiKey", serialize_with = "serialize_secret")]
+        api_key: &'a Secret<String>,
+    },
+    ChatgptDeviceCode {},
+}
+
+fn serialize_secret<S: serde::Serializer>(value: &Secret<String>, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(value.expose())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRead {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum LoginResult {
+    ApiKey,
+    ChatgptDeviceCode {
+        #[serde(rename = "loginId")]
+        login_id: String,
+        #[serde(rename = "verificationUrl")]
+        verification_url: String,
+        #[serde(rename = "userCode")]
+        user_code: Secret<String>,
+    },
+}
+
+/// Selected account fields; routing/plan metadata stays available in the raw reply.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountReadResult {
+    pub account: Option<Account>,
+    pub requires_openai_auth: bool,
+    pub workspace_routing: Option<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum Account {
+    ApiKey,
+    Chatgpt {
+        email: Option<String>,
+        #[serde(rename = "planType")]
+        plan_type: String,
+    },
+}
+
+/// Project only the thread identifier needed for subsequent operations.
+#[derive(Deserialize)]
+pub struct ThreadStartResult {
+    pub thread: Thread,
+}
+
+#[derive(Deserialize)]
+pub struct Thread {
+    pub id: String,
+}
+
+/// Known notifications are optional projections of a preserved raw envelope.
+/// A future method remains an ordinary raw `Message::Notification`.
+#[derive(Deserialize)]
+#[serde(tag = "method", content = "params")]
+pub enum KnownNotification {
+    #[serde(rename = "thread/realtime/started")]
+    Started(RealtimeStarted),
+    #[serde(rename = "thread/realtime/sdp")]
+    Sdp(RealtimeSdp),
+    #[serde(rename = "thread/realtime/itemAdded")]
+    ItemAdded(RealtimeItem),
+    #[serde(rename = "thread/realtime/transcript/delta")]
+    TranscriptDelta(TranscriptDelta),
+    #[serde(rename = "thread/realtime/transcript/done")]
+    TranscriptDone(TranscriptDone),
+    #[serde(rename = "thread/realtime/error")]
+    Error(RealtimeError),
+    #[serde(rename = "thread/realtime/closed")]
+    Closed(RealtimeClosed),
+    #[serde(rename = "account/login/completed")]
+    LoginCompleted(LoginCompleted),
+    #[serde(rename = "account/updated")]
+    AccountUpdated(AccountUpdated),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeStarted {
+    pub thread_id: String,
+    pub version: String,
+    pub realtime_session_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeSdp {
+    pub thread_id: String,
+    pub sdp: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeItem {
+    pub thread_id: String,
+    pub item: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptDelta {
+    pub thread_id: String,
+    pub role: String,
+    pub delta: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptDone {
+    pub thread_id: String,
+    pub role: String,
+    pub text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeError {
+    pub thread_id: String,
+    pub message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeClosed {
+    pub thread_id: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginCompleted {
+    pub login_id: Option<String>,
+    pub success: bool,
+    pub error: Option<String>,
+    pub onboarding_entrypoint: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUpdated {
+    pub auth_mode: Option<String>,
+    pub plan_type: Option<String>,
 }

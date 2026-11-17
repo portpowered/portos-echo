@@ -730,8 +730,10 @@ dependencies = [
 name = "echo-codex"
 version = "0.1.0"
 dependencies = [
+ "echo-contracts",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

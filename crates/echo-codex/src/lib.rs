@@ -1,7 +1,8 @@
 //! Settings for an isolated, client-tool-only pinned Codex app-server thread.
-//! Wire adaptation and bounded request bookkeeping are independent of process IO.
+//! Wire adaptation, bounded request bookkeeping and asynchronous stream IO.
 //! Process supervision is not yet exposed by this crate.
 pub mod codex_codec;
+pub mod codex_io;
 pub mod codex_protocol;
 pub mod codex_rpc;
 use serde::Serialize;
