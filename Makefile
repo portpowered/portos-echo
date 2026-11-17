@@ -169,3 +169,7 @@ build-echo:
 	sh scripts/build-echo.sh $(ECHO_PACKAGES)
 
 ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-docs lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency coverage build-host build-echo
+
+.PHONY: build-codex-armv7
+build-codex-armv7:
+	nice -n 10 sh scripts/build-codex-armv7.sh

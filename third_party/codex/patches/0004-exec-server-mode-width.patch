@@ -1,0 +1,28 @@
+Why: coordinator mailbox answer 2 (2026-11-16) authorizes lossless integer
+widening only. In codex-rs/exec-server/src/no_follow/unix.rs:220/221/228/229
+and :313/314/320, rustix Stat.st_mode is u32 on armv7 Android, while libc's
+mode_t/S_IF* constants are u16. u32::from preserves every bit, also on hosts
+where these constants already are u32. Keep the mask, comparison operands,
+symlink rejection, directory/regular-file decisions and removal unchanged.
+No narrowing, branch, cfg, feature, dependency or syscall changes.
+
+--- a/codex-rs/exec-server/src/no_follow/unix.rs
++++ b/codex-rs/exec-server/src/no_follow/unix.rs
+@@ -220,2 +220,2 @@
+-    let kind = metadata.st_mode & libc::S_IFMT;
+-    if kind == libc::S_IFLNK {
++    let kind = metadata.st_mode & u32::from(libc::S_IFMT);
++    if kind == u32::from(libc::S_IFLNK) {
+@@ -228,2 +228,2 @@
+-        is_directory: kind == libc::S_IFDIR,
+-        is_file: kind == libc::S_IFREG,
++        is_directory: kind == u32::from(libc::S_IFDIR),
++        is_file: kind == u32::from(libc::S_IFREG),
+@@ -313,2 +313,2 @@
+-        let kind = metadata.st_mode & libc::S_IFMT;
+-        if kind == libc::S_IFLNK {
++        let kind = metadata.st_mode & u32::from(libc::S_IFMT);
++        if kind == u32::from(libc::S_IFLNK) {
+@@ -320 +320 @@
+-        let flags = if kind == libc::S_IFDIR {
++        let flags = if kind == u32::from(libc::S_IFDIR) {
