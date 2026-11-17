@@ -14,6 +14,7 @@ pub fn expected(case: &str) -> Value {
             json!({"state":"ready","message":"Echo Live ready"}),
         ]);
     } else {
+        sequence.clear();
         sequence.push(json!({"state":"error","message":"Run echo-bridge signin with your config, then restart the bridge.","relink":true}));
     }
     json!({"sequence":sequence})
@@ -75,7 +76,11 @@ pub fn check(measured: &Value) -> Result<(), String> {
     }
     let success = case == "success";
     count(measured, "calls", u64::from(success))?;
-    count(measured, "refreshes", u64::from(case == "expired"))?;
+    count(
+        measured,
+        "refreshes",
+        if case == "expired" { EXPIRED_REFRESHES } else { 0 },
+    )?;
     if measured["provider_wire"] != true {
         return Err("m2: wrong provider create wire".into());
     }
@@ -94,15 +99,7 @@ pub fn check(measured: &Value) -> Result<(), String> {
             codex_pcm(records)?;
         }
     } else {
-        count(measured, "calls_after_detection", 0)?;
-        trace(
-            measured,
-            &[
-                json!("auth.relink_required"),
-                json!("run.refused {reason: relink_required}"),
-            ],
-            false,
-        )?;
+        rejection(measured, records)?;
     }
     screen(measured, &expected(case))
 }
@@ -124,4 +121,37 @@ fn codex_pcm(records: &[Value]) -> Result<(), String> {
         return Err("m2: PCM/played accounting failed".into());
     }
     Ok(())
+}
+
+// rust-v0.160.0 performs two startup refreshes; remeasure on any pin bump.
+pub(super) const EXPIRED_REFRESHES: u64 = 2;
+
+fn rejection(measured: &Value, records: &[Value]) -> Result<(), String> {
+    for name in ["wyoming_admissions", "sidebands", "external"] {
+        count(measured, name, 0)?;
+    }
+    count(measured, "exit_code", 1)?;
+    for name in ["auth_unchanged", "home_released"] {
+        if measured[name] != true {
+            return Err(format!("m2: {name} not proved"));
+        }
+    }
+    if measured["stdout"] != "" || measured["stderr"] != "echo-bridge: authorization\n" {
+        return Err("m2: unexpected authorization exit output".into());
+    }
+    if records.iter().filter(|r| r["event"] == "auth.relink_required").count() != 1 {
+        return Err("m2: expected exactly one relink event".into());
+    }
+    trace(
+        measured,
+        &[
+            json!("bridge.ready"),
+            json!("run.started"),
+            json!("live.connected"),
+            json!("mic.completed"),
+            json!("reply.played"),
+            json!("run.refused"),
+        ],
+        true,
+    )
 }

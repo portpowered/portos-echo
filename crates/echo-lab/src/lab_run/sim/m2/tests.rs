@@ -9,9 +9,9 @@ fn measured(case: &str) -> Value {
         .map(|(i, state)| json!({"seq":i+1,"state":state}))
         .collect();
     json!({"case":case,"calls":u64::from(case == "success"),"provider_wire":true,
-        "refreshes":u64::from(case == "expired"),"calls_after_detection":0,"frames":frames,
+        "refreshes":if case == "expired" { oracle::EXPIRED_REFRESHES } else { 0 },"wyoming_admissions":0,"sidebands":0,"external":0,"exit_code":1,"stdout":"","stderr":"echo-bridge: authorization\n","auth_unchanged":true,"home_released":true,"frames":frames,
         "trace":if case == "success" { json!([{"event":"live.closed","reason":"idle"}]) }
-            else { json!([{"event":"auth.relink_required","run_id":"run-1"},{"event":"run.refused","reason":"relink_required","run_id":"run-2"}]) }})
+            else { json!([{"event":"auth.relink_required"}]) }})
 }
 
 #[test]
@@ -24,18 +24,18 @@ fn m2_exact_oracle_rejects_missing_duplicate_stale_and_late_evidence() {
             wrong.as_object_mut().unwrap().remove(field);
             assert!(oracle::check(&wrong).is_err(), "missing {field}");
         }
-        for field in ["calls", "refreshes", "calls_after_detection"] {
+        for field in ["calls", "refreshes", "wyoming_admissions"] {
             let mut wrong = actual.clone();
-            wrong[field] = 2.into();
-            if case != "success" || field != "calls_after_detection" {
+            wrong[field] = 3.into();
+            if case != "success" || field != "wyoming_admissions" {
                 assert!(oracle::check(&wrong).is_err());
             }
         }
         let mut wrong = actual.clone();
-        wrong["frames"][1]["seq"] = 1.into();
+        wrong["frames"][0]["seq"] = 0.into();
         assert!(oracle::check(&wrong).is_err());
         wrong = actual.clone();
-        wrong["frames"][1]["state"] = json!({"state":"connected"});
+        wrong["frames"][0]["state"] = json!({"state":"connected"});
         assert!(oracle::check(&wrong).is_err());
         wrong = actual.clone();
         let duplicate = wrong["trace"][0].clone();
@@ -48,6 +48,47 @@ fn m2_exact_oracle_rejects_missing_duplicate_stale_and_late_evidence() {
         oracle::check(&wrong),
         Err("m2: success close count expected 1, observed 0".into())
     );
+}
+
+#[test]
+fn m2_auth_oracle_rejects_unmeasured_cleanup_and_pre_admission_effects() {
+    for case in ["invalid", "expired"] {
+        let valid = measured(case);
+        for field in [
+            "wyoming_admissions",
+            "sidebands",
+            "external",
+            "exit_code",
+            "stdout",
+            "stderr",
+            "auth_unchanged",
+            "home_released",
+        ] {
+            let mut wrong = valid.clone();
+            wrong.as_object_mut().unwrap().remove(field);
+            assert!(oracle::check(&wrong).is_err(), "missing {field}");
+        }
+        for event in [
+            "bridge.ready",
+            "run.started",
+            "live.connected",
+            "mic.completed",
+            "reply.played",
+            "run.refused",
+        ] {
+            let mut wrong = valid.clone();
+            wrong["trace"].as_array_mut().unwrap().push(json!({"event":event}));
+            assert!(oracle::check(&wrong).is_err(), "unexpected {event}");
+        }
+        let mut wrong = valid.clone();
+        wrong["refreshes"] = 1.into();
+        assert!(oracle::check(&wrong).is_err());
+        for field in ["auth_unchanged", "home_released"] {
+            let mut wrong = valid.clone();
+            wrong[field] = false.into();
+            assert!(oracle::check(&wrong).is_err());
+        }
+    }
 }
 
 #[test]
@@ -131,7 +172,7 @@ async fn m2_t3_concurrent_cases_are_independent_and_reap_all_endpoints() {
     assert_eq!(b, Ok(()));
     assert_eq!(success["calls"], 1);
     assert_eq!(expired["calls"], 0);
-    assert_eq!(expired["refreshes"], 1);
+    assert_eq!(expired["refreshes"], oracle::EXPIRED_REFRESHES);
     assert_eq!(std::fs::read_dir(first.path()).unwrap().count(), 0);
     assert_eq!(std::fs::read_dir(second.path()).unwrap().count(), 0);
     first_host.assert_closed();
@@ -149,13 +190,7 @@ async fn m2_t3_startup_failure_and_input_error_retain_partial_evidence_and_reap(
         if failure == "startup" {
             options.bridge = Some(root.path().join("missing-bridge"));
         }
-        let (measured, result) = journey::run(
-            &options,
-            root.path(),
-            if failure == "startup" { "success" } else { "invalid" },
-            &root.path().join("missing-pcm"),
-        )
-        .await;
+        let (measured, result) = journey::run(&options, root.path(), "success", &root.path().join("missing-pcm")).await;
         assert!(result.is_err());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
         if failure == "input" {

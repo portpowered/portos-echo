@@ -19,6 +19,9 @@ async fn t3_pinned_startup_refreshes_before_bridge_account_authentication() {
         .unwrap();
 }
 
+// rust-v0.160.0 performs two startup refreshes; remeasure when the pin changes.
+const EXPIRED_REFRESHES: u64 = 2;
+
 async fn exercise() {
     for expired in [false, true] {
         rejection(expired, LiveMode::Chatgpt).await;
@@ -62,7 +65,10 @@ async fn rejection(expired: bool, mode: LiveMode) {
     assert_eq!(observed["calls"], json!([]));
     assert_eq!(observed["external"], 0);
     assert_eq!(observed["sidebands"], 0);
-    assert_eq!(observed["refreshes"].as_u64().unwrap_or(0), if expired { 2 } else { 0 });
+    assert_eq!(
+        observed["refreshes"].as_u64().unwrap_or(0),
+        if expired { EXPIRED_REFRESHES } else { 0 }
+    );
     drop(input);
     assert!(provider.wait().await.unwrap().success());
     assert_eq!(std::fs::read(home.join("auth.json")).unwrap(), auth);
@@ -139,6 +145,7 @@ async fn executable_rejection(expired: bool) {
     assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
     drop(child.stdin.take());
     rejected_child(child, &mut screen).await;
+    assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
     executable_trace(root);
     provider_closed(provider, input, output, expired).await;
     assert_eq!(std::fs::read(home.join("auth.json")).unwrap(), auth);
@@ -208,7 +215,7 @@ async fn provider_closed(
     let observed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let mut expected = json!({"calls":[], "sidebands":0, "external":0});
     if expired {
-        expected["refreshes"] = 2.into();
+        expected["refreshes"] = EXPIRED_REFRESHES.into();
     }
     assert_eq!(observed, expected);
     drop(input);

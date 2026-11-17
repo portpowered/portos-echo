@@ -21,7 +21,7 @@ async fn t3_m2_codex_provider_closes_before_a_call_without_waiting_for_an_offer(
     let observed = tokio::time::timeout(DEADLINE, owner.close()).await.unwrap().unwrap();
     assert_eq!(
         observed,
-        json!({"event":"provider.snapshot", "calls":[], "sidebands":0, "external":0})
+        json!({"event":"provider.snapshot", "calls":[], "sidebands":0, "external":0, "refreshes":0})
     );
 }
 
@@ -57,7 +57,7 @@ async fn t3_m2_codex_missing_executable_reaps_provider_and_private_configuration
     let observed = tokio::time::timeout(DEADLINE, state.close()).await.unwrap().unwrap();
     assert_eq!(
         observed,
-        json!({"event":"provider.snapshot", "calls":[], "sidebands":0, "external":0})
+        json!({"event":"provider.snapshot", "calls":[], "sidebands":0, "external":0, "refreshes":0})
     );
     assert_eq!(state.trace.records, Vec::<Value>::new());
     drop(state);
@@ -222,4 +222,27 @@ async fn read(stream: &mut TcpStream) -> (Value, Vec<u8>) {
     let mut payload = vec![0; usize::try_from(row["payload_length"].as_u64().unwrap_or(0)).unwrap()];
     stream.read_exact(&mut payload).await.unwrap();
     (row, payload)
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn m2_codex_negative_cases_reject_before_admission_and_release_private_homes() {
+    for case in ["invalid", "expired"] {
+        let options = super::super::tests::options();
+        let (measured, result) = tokio::time::timeout(DEADLINE, rejection::run(&options, case))
+            .await
+            .unwrap();
+        assert_eq!(result, Ok(()), "{measured}");
+        assert_eq!(
+            measured["refreshes"],
+            if case == "expired" {
+                oracle::EXPIRED_REFRESHES
+            } else {
+                0
+            }
+        );
+        assert_eq!(measured["home_released"], true);
+        assert_eq!(measured["auth_unchanged"], true);
+        assert_eq!(measured["wyoming_admissions"], 0);
+    }
 }

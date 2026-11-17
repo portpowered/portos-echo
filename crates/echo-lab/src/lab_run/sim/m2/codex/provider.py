@@ -13,7 +13,7 @@ import threading
 answers = queue.Queue()
 transcript_input, transcript_output = socket.socketpair()
 transcript_count = 0
-observed = {'calls': [], 'sidebands': 0, 'external': 0}
+observed = {'calls': [], 'sidebands': 0, 'external': 0, 'refreshes': 0}
 output_lock = threading.Lock()
 
 
@@ -49,7 +49,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.respond(403, b'{}')
 
     def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+        raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        if self.path == '/token':
+            observed['refreshes'] += 1
+            self.respond(400, b'{"error":"invalid_grant"}')
+            return
+        body = json.loads(raw)
         if not self.path.startswith('/backend-api/codex/realtime/calls?'):
             observed['external'] += 1
             self.respond(403, b'{}')

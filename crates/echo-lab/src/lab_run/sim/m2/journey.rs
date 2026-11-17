@@ -106,13 +106,16 @@ impl Case {
 }
 
 pub async fn run(options: &Options, root: &Path, case: &str, utterance: &Path) -> (Value, Result<(), String>) {
-    if case == "success"
-        && options
-            .bridge
-            .as_deref()
-            .is_some_and(super::super::production::selected)
+    if options
+        .bridge
+        .as_deref()
+        .is_some_and(super::super::production::selected)
     {
-        return super::codex::run(options, root, utterance).await;
+        return if case == "success" {
+            super::codex::run(options, root, utterance).await
+        } else {
+            super::codex::rejection::run(options, case).await
+        };
     }
     let mut state = Case::new();
     let root = root.join(format!("private-{case}"));

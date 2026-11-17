@@ -3,6 +3,17 @@ use super::*;
 pub(super) mod lifecycle;
 use echo_contracts::wyoming::{Event as WireEvent, Header, encode};
 use lifecycle::Ending;
+#[derive(Debug, PartialEq)]
+pub(super) enum RemoteCommand {
+    Begin,
+    Transcript,
+    Close,
+}
+
+// Five Opus packets yield three paced PCM frames before both converters flush.
+// Receiving the third frame is the causal barrier before transcript completion.
+const REPLY_PACKETS: usize = 5;
+
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
@@ -39,7 +50,7 @@ async fn exercise(ending: Ending) {
     );
     remote.close();
     assert!(
-        (4 * ending.runs()..=8 * ending.runs()).contains(&echoed),
+        echoed == REPLY_PACKETS * ending.runs(),
         "remote echoed {echoed} packets"
     );
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
@@ -101,7 +112,7 @@ async fn executable(
     config: &CodexConfig,
     origin: &str,
     listener: TcpListener,
-    channels: (mpsc::Sender<bool>, mpsc::Receiver<()>),
+    channels: (mpsc::Sender<RemoteCommand>, mpsc::Receiver<()>),
     ending: Ending,
 ) {
     let (commands, mut clock) = channels;
@@ -123,7 +134,7 @@ async fn executable(
     )
     .await;
     statistics(root, ending.runs());
-    commands.send(false).await.unwrap();
+    commands.send(RemoteCommand::Close).await.unwrap();
     commands.closed().await;
     lifecycle::finish(root, ending, &mut input, &mut output).await;
     lifecycle::presentation(&mut screen, ending).await;
@@ -226,7 +237,7 @@ async fn capture(
 async fn playback(
     root: &Path,
     satellite: &mut TcpStream,
-    commands: &mpsc::Sender<bool>,
+    commands: &mpsc::Sender<RemoteCommand>,
     input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     clock: &mut mpsc::Receiver<()>,
@@ -244,7 +255,7 @@ async fn playback(
                 frames += 1;
                 pcm.extend(bytes);
                 if frames == 3 {
-                    commands.send(true).await.unwrap();
+                    commands.send(RemoteCommand::Transcript).await.unwrap();
                 }
             }
             "audio-stop" => break,
@@ -309,7 +320,7 @@ async fn read_wire(stream: &mut TcpStream) -> (Value, Vec<u8>) {
 async fn clocked_remote(
     input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
-    mut commands: mpsc::Receiver<bool>,
+    mut commands: mpsc::Receiver<RemoteCommand>,
     ticks: mpsc::Sender<()>,
 ) -> (LivePeer, usize) {
     let request: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
@@ -324,18 +335,15 @@ async fn clocked_remote(
         .await
         .unwrap();
     let mut echoed = 0;
+    let mut remaining = 0;
     loop {
-        if peer.ready() {
-            while let Some(frame) = peer.pop_audio() {
-                peer.send_audio(frame, Instant::now().into_std()).await.unwrap();
-                echoed += 1;
-            }
-        }
+        echo_reply(&mut peer, &mut remaining, &mut echoed).await;
         tokio::select! {
             () = step(&mut peer) => { let _ = ticks.try_send(()); },
             command = commands.recv() => match command {
-                Some(true) => input.write_all(b"{\"transcripts\":true}\n").await.unwrap(),
-                value => {assert_eq!(value,Some(false)); return (peer, echoed);},
+                Some(RemoteCommand::Begin) => { assert_eq!(remaining, 0); remaining = REPLY_PACKETS; },
+                Some(RemoteCommand::Transcript) => { assert_eq!(remaining, 0); input.write_all(b"{\"transcripts\":true}\n").await.unwrap(); },
+                value => {assert_eq!(value,Some(RemoteCommand::Close)); return (peer, echoed);},
             },
         }
     }
@@ -401,5 +409,17 @@ fn statistics(root: &Path, runs: usize) {
         assert_eq!(row["outcome"], "played");
         assert_eq!(row["dropped_frames"], 0);
         assert_eq!(row["frames"], row["received_frames"]);
+    }
+}
+
+async fn echo_reply(peer: &mut LivePeer, remaining: &mut usize, echoed: &mut usize) {
+    if peer.ready() {
+        while let Some(frame) = peer.pop_audio() {
+            if *remaining > 0 {
+                peer.send_audio(frame, Instant::now().into_std()).await.unwrap();
+                *echoed += 1;
+                *remaining -= 1;
+            }
+        }
     }
 }

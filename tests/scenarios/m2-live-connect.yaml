@@ -21,14 +21,10 @@ negative:
     expect_trace_absent: [live.closed]
     expect_screen:
       sequence:
-        - {state: ready, message: "Echo Live ready"}
-        - {state: listening}
         - {state: error, message: "Run echo-bridge signin with your config, then restart the bridge.", relink: true}
   - inject: {credential: expired}
     expect_trace: [auth.relink_required]
     expect_trace_absent: [live.closed]
     expect_screen:
       sequence:
-        - {state: ready, message: "Echo Live ready"}
-        - {state: listening}
         - {state: error, message: "Run echo-bridge signin with your config, then restart the bridge.", relink: true}

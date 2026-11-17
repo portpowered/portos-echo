@@ -37,10 +37,11 @@ pub(super) async fn replies(
     satellite: &mut TcpStream,
     input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
-    commands: &mpsc::Sender<bool>,
+    commands: &mpsc::Sender<RemoteCommand>,
     clock: &mut mpsc::Receiver<()>,
 ) {
     for run in 1..=runs {
+        commands.send(RemoteCommand::Begin).await.unwrap();
         if run > 1 {
             wake(satellite).await;
         }

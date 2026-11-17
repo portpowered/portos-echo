@@ -690,3 +690,32 @@ component case omits the nominated API key, returning before any bridge account
 RPC; the pin still makes two refresh requests during startup. The milestone's
 one-refresh and post-wake refusal oracle remains unchanged pending an operator
 decision. These component witnesses do not satisfy the retained M2 negatives.
+
+### M2 canonical negative oracle amendment (2026-11-17)
+
+The binding 15:39Z coordinator answer replaces the legacy post-wake negative
+oracle with pre-admission rejection. At rust-v0.160.0 invalid synthetic auth
+makes zero refresh requests; expired synthetic auth makes exactly two during
+initialization. Constants name the pin so a changed count requires remeasurement.
+Both cases require exactly one paired seq=1 relink Error, no Ready, Listening,
+Connected, bridge.ready, run.started or live.closed, and zero Wyoming admission
+through cancellation, calls, sidebands, media and external requests. The CLI
+exits 1 with exactly `echo-bridge: authorization`, preserves auth bytes and
+releases home ownership. All success requirements remain unchanged.
+
+The scenario and full-frame oracle migrate together. The runner uses the
+existing workspace echo-codex Supervisor only to provision/reacquire private
+synthetic homes, adding no third-party package or credential path. The actual
+bridge and verified app server perform authentication; a bound loopback listener
+observes absence of device admission. Component executable tests protect the
+same boundary. These negatives cannot receive a wake because authentication
+precedes Wyoming readiness.
+
+The executable media fixture now echoes a bounded five-packet reply per wake,
+then consumes remaining microphone input without sending more reply packets.
+It sends transcript completion only after the third paced Wyoming frame, a
+causal observation that the two streaming converters accepted that reply.
+Each wake explicitly rearms the remote. Exact packet counts, PCM energy,
+played receipt, reuse and kill/idle assertions remain. This removes the fake's
+unbounded post-completion audio source without relaxing production late-audio
+rejection.

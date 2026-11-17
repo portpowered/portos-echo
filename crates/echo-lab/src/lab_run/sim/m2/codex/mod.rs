@@ -1,6 +1,7 @@
 //! Pinned-server M2 success path; the provider and its media endpoint are local.
 mod config;
 mod provider;
+pub(super) mod rejection;
 #[cfg(test)]
 mod tests;
 
