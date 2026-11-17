@@ -8,6 +8,7 @@ use std::{
 };
 
 pub struct Settings {
+    pub config: Option<echo_config::BridgeConfig>,
     pub sim_clock: bool,
     pub sim_epoch: Option<u64>,
     pub mcp: Option<crate::bridge_mcp::Settings>,
@@ -172,6 +173,7 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
         return Err(Error::Input);
     };
     Ok(Settings {
+        config: None,
         sim_clock: false,
         sim_epoch: None,
         mcp: None,
@@ -210,10 +212,15 @@ fn configured(
         echo_config::LiveMode::ApiKey => LiveAuthMode::ApiKey,
     };
     let (live_url, model_url) = configured_origins(&config, origins)?;
-    let credential = Provider::Resolved(
-        echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth.clone()).map_err(|_| Error::Input)?,
-    );
+    let credential = if origins.is_none() && muse.is_none() {
+        Provider::Unavailable
+    } else {
+        Provider::Resolved(
+            echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth.clone()).map_err(|_| Error::Input)?,
+        )
+    };
     Ok(Some(Settings {
+        config: Some(config.clone()),
         sim_clock: false,
         sim_epoch: None,
         mcp: if muse.is_none() {

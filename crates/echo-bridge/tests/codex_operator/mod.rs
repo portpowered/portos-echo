@@ -4,6 +4,7 @@ mod configured;
 mod device;
 mod fixture;
 mod host;
+mod voice_entry;
 use fixture::Fixture;
 
 #[tokio::test]

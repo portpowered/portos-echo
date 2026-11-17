@@ -539,3 +539,30 @@ exercise both authentication modes through this adapter, paired readiness,
 missing-binary/key refusal and awaited cancellation cleanup. The executable
 selector and scenario consumers have not switched to this adapter yet; real-pin
 M2 and tool dispatch remain required. No shared contract or dependency changes.
+
+## Executable voice selection amendment (2026-11-17)
+
+Ordinary configured client runs now select the authenticated Codex voice owner.
+Offline input retains the validated configuration without constructing a legacy
+credential provider. The executable supplies the production echo-media factory;
+account admission precedes Wyoming capture/probe and Ready. Missing home or
+binary is a fixed configuration error with exit code 2 before device admission.
+Stdin EOF requests awaited call/device/process cleanup. Invalid stdin control
+remains an operational failure. Ready and completed runs retain the existing
+stdout notifications as well as the trace observations.
+
+This increment does not complete the cutover. Configured MCP servers fail
+closed until the dynamic-tool dispatcher is integrated. A nominated Codex home
+cannot enter the retained legacy simulator: loopback and fake-clock runs with
+that home are rejected before runtime effects until their process-local routing
+is migrated. Legacy simulator fixtures without a Codex home remain available
+for their protecting tests; Muse selection is unchanged. These temporary guards
+must be removed by completing the retained integration, never by falling back
+to legacy credentials, calls or delegated turns for a configured Codex home.
+
+Prebuilt executable witnesses use a controlled stdio account child and loopback
+Wyoming peer. They protect both auth modes, one process before Ready, EOF/reap,
+missing binary/home, relink without device admission and refused unmigrated
+tools/simulation. They do not prove a real pinned call, delegated tools or any
+milestone scenario. Those proofs remain required before acceptance. No pin,
+dependency or shared protocol changes.

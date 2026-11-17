@@ -45,7 +45,8 @@ impl<'a> View<'a> {
                 self.closed("idle")?;
                 self.health.state.send_modify(|state| state.wyoming = "connected");
                 self.screen.ready()?;
-                self.trace.record("bridge.ready", None, json!({}))
+                self.trace.record("bridge.ready", None, json!({}))?;
+                crate::bridge_runtime::publish("bridge.ready", None)
             }
             ServeNotice::Listening => self.begin(),
             ServeNotice::Probe => self.trace.record("wyoming.probe_ok", Some("connection-1"), json!({})),
@@ -128,6 +129,7 @@ impl<'a> View<'a> {
         self.health.state.send_modify(|state| state.live = "idle");
         self.screen.ready()?;
         self.trace.record("bridge.run_completed", Some(id), json!({}))?;
+        crate::bridge_runtime::publish("bridge.run_completed", Some(id))?;
         self.run = None;
         Ok(())
     }

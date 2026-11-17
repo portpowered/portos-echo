@@ -2,6 +2,8 @@
 mod voice_admission;
 #[path = "controls/voice_config.rs"]
 mod voice_config;
+#[path = "controls/voice_entry.rs"]
+pub(crate) mod voice_entry;
 mod voice_host;
 #[path = "controls/voice_kill.rs"]
 mod voice_kill;
