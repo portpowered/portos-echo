@@ -43,6 +43,12 @@ fn job(name: &str, target: &str) -> String {
         let host = "      - name: Host build dependencies\n        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/hassmic-host\n          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n      - name: Build pinned hassmic-host\n        run: make hassmic-host\n";
         block = block.replace(&step, &format!("{host}{step}"));
     }
+    if matches!(name, "test-unit" | "coverage") {
+        let step = format!("      - name: {name}\n");
+        let codex = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: ~/.cache/portos-echo/codex\n          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}\n      - name: Provision verified pinned Codex\n        run: sh scripts/codex-app-server.sh\n";
+        let namespace = "      - name: Enable isolated Codex network namespace\n        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n";
+        block = block.replace(&step, &format!("{codex}{namespace}{step}"));
+    }
     if name == "coverage" {
         block.push_str(
             "        env:\n          COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}\n",
@@ -166,6 +172,23 @@ mod tests {
     fn matching_ordered_gates_pass() {
         let (makefile, workflow) = fixture();
         assert_eq!(evaluate(&makefile, &workflow), Ok(()));
+    }
+
+    #[test]
+    fn codex_provisioning_cannot_be_removed_or_made_optional() {
+        let (makefile, workflow) = fixture();
+        for name in ["test-unit", "coverage"] {
+            let block = job(name, name);
+            for replacement in ["", "        run: sh scripts/codex-app-server.sh || true\n"] {
+                let changed = block.replace("        run: sh scripts/codex-app-server.sh\n", replacement);
+                assert!(evaluate(&makefile, &workflow.replace(&block, &changed)).is_err());
+            }
+            let namespace = "        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n";
+            for replacement in [String::new(), format!("{namespace}        if: false\n")] {
+                let changed = block.replace(namespace, &replacement);
+                assert!(evaluate(&makefile, &workflow.replace(&block, &changed)).is_err());
+            }
+        }
     }
 
     #[test]
