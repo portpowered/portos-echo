@@ -317,13 +317,50 @@ fn assert_configured_headers(observer: &echo_live::fake::FakeObserver, mode: &st
     }
     let path = directory.join("trace");
     let entries = super::trace(&path);
-    assert_eq!(entries.last().unwrap()["reason"], "authorization");
+    assert_authorization_relink(&entries);
     assert_eq!(entries.iter().filter(|e| e["event"] == "reply.started").count(), 0);
     let trace = std::fs::read_to_string(path).unwrap();
     assert!(
         !trace.contains(&expected) && !trace.contains("synthetic-account-1234"),
         "trace credential disclosure"
     );
+}
+
+fn assert_authorization_relink(entries: &[Value]) {
+    let relinks: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry["event"] == "auth.relink_required")
+        .collect();
+    assert_eq!(relinks.len(), 1);
+    assert_eq!(relinks[0]["reason"], "authorization");
+}
+
+#[test]
+fn bridge_wire_auth_relink_oracle_trailing_probe() {
+    assert_authorization_relink(&[
+        json!({"event":"auth.relink_required", "reason":"authorization"}),
+        json!({"event":"wyoming.probe_ok"}),
+    ]);
+}
+
+#[test]
+fn bridge_wire_auth_relink_oracle_last_relink() {
+    assert_authorization_relink(&[json!({"event":"auth.relink_required", "reason":"authorization"})]);
+}
+
+#[test]
+fn bridge_wire_auth_relink_oracle_rejects_invalid_traces() {
+    let relink = json!({"event":"auth.relink_required", "reason":"authorization"});
+    for entries in [
+        vec![],
+        vec![json!({"event":"wyoming.probe_ok"})],
+        vec![json!({"event":"unrelated", "reason":"authorization"})],
+        vec![relink.clone(), relink],
+        vec![json!({"event":"auth.relink_required", "reason":"unavailable"})],
+        vec![json!({"event":"auth.relink_required"})],
+    ] {
+        assert!(std::panic::catch_unwind(|| assert_authorization_relink(&entries)).is_err());
+    }
 }
 
 pub(super) async fn prepare_configured_credential(directory: &Path, mode: &str) {
