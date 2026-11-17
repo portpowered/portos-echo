@@ -20,7 +20,10 @@ runs:
         rustup toolchain install "$channel" --profile minimal --component clippy --component rustfmt
     - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a
       with:
-        key: ${{ inputs.target }}
+        # The virtual workspace root is absent from rust-cache's package manifests.
+        key: ${{ inputs.target }}-${{ hashFiles('Cargo.toml') }}
+        # Preserve compiled dependencies when a cold gate reaches its time limit.
+        cache-on-failure: true
     - name: Locked dependency cache
       shell: sh
       run: cargo fetch --locked

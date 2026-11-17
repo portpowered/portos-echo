@@ -22,3 +22,9 @@ unimplemented = "deny"
 undocumented_unsafe_blocks = "deny"
 too_many_lines = "deny"
 cognitive_complexity = "deny"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 16
+last modified: 2026, november, 17
 status: active; measured facts, each with its date and source
 ---
 
@@ -9,6 +9,72 @@ status: active; measured facts, each with its date and source
 
 Facts measured on the real device, bench and services. Each row has its date and how it was measured. Plans and
 factory payloads cite these instead of rediscovering them. Add a row whenever a measurement changes a decision.
+
+## Development profile size (2026-11-17)
+
+The owner requested smaller dev/test output. These initial measurements use source `707282e`, Rust 1.100.0
+(`0ef1bc386`), native Windows MSVC and isolated clean targets. Baseline profiles were Cargo defaults; the
+candidate sets workspace dev debuginfo to `line-tables-only` and dependency debuginfo to `false`, with test
+inheriting dev and incremental unchanged. These are clean-build measurements, distinct from the supplied
+41 GB stale-target observation. The Windows observations are historical; Linux measurements below establish
+the required size reduction, while coverage parity remains unproved.
+
+| Measurement | Default profiles | Candidate profiles |
+| --- | --- | --- |
+| `cargo build --locked --workspace --all-targets` | Exit 0; 121.735 s | Exit 0; 100.687 s |
+| Allocated target after build (`du -sh`, `du -sk`) | Separate checkpoint unavailable: initial size command timed out | 3.4G; 3,501,686 KiB |
+| Target after nextest compilation | 11G; 10,807,462 KiB; exit 0 | 3.4G; 3,518,830 KiB; exit 0; 26.344 s |
+
+The baseline nextest command was `cargo nextest run --locked --workspace --all-targets --no-run
+--config-file .github/nextest.toml --profile ci`; its total wall time was not captured. The original long-path
+Windows checkout failed with MSBuild FTK1011; the shorter-path recovery above compiled successfully.
+An external dependency-free scratch test built with the candidate profiles and run with `RUST_BACKTRACE=1`
+exited 101 as intended, with an actual stack frame at `src/diagnostics.rs:2`. Allocated Windows output after
+the complete build/nextest sequence fell 67.4%. Existing `echo-config` `config_load` tests passed (exit 0;
+7.266 s) with the candidate profiles. These timings are single observations on a shared host.
+
+Coordinator-run Linux measurements on source `c2a1a63`, relayed 2026-11-17 at 09:35 UTC, used isolated clean
+baseline/candidate targets and the same source with only the two dev profile tables removed in the baseline.
+The shared pe-ci lock was acquired at 09:18:03 UTC. Rust was 1.100.0 (`0ef1bc386`), LLVM 23.1.5,
+`x86_64-unknown-linux-gnu`, nextest 0.9.152. Commands match the Windows build/nextest sequence above.
+
+| Linux measurement | Default profiles | Candidate profiles |
+| --- | --- | --- |
+| All-target build | Exit 0; 54.057 s | Exit 0; 48.728 s |
+| Allocated target after build | 9.2G; 9,543,200 KiB | 3.4G; 3,469,964 KiB |
+| Nextest compilation | Exit 0; 0.604 s | Exit 0; 0.678 s |
+| Allocated target after nextest | 9.2G; 9,573,868 KiB | 3.4G; 3,500,596 KiB |
+
+Linux output after build/nextest fell **63.44%**. Timings are single observations on shared capacity, not
+portable latency guarantees. Candidate `config_load` passed (exit 0; 2.809 s). The external compiled scratch
+panic exited 101 with actual backtrace frames at `./src/diagnostics.rs:2:26` and `:2:23`.
+
+Coverage used `make coverage COVERAGE_BASE=b54b627`, nightly-2026-11-05, LLVM 23.1.5 and cargo-llvm-cov 0.9.1.
+Candidate coverage exited 0 (269.995 s), passing every floor: workspace 52,481/53,697 lines (97.73%),
+echo-bridge 12,130/12,354 (98.18%), echo-lab 15,528/16,116 (96.35%); all 21 scope counts are in the PR comment.
+Baseline coverage exited 2 (177.624 s): the existing idle-probe failure/recovery test failed at
+`mcp_failures.rs:161:13` (95 passed, 1 failed). Thus no per-crate comparison or coverage parity is claimed.
+The coordinator identified the main-branch fix in PR 152 and directed a rebase followed by a coverage-only
+same-source pair; no size or diagnostic rerun is required under that binding response.
+
+The requested coverage-only pair ran on source `732ed61`, with both variants using
+`make coverage COVERAGE_BASE=407ccef054a57071a87e5b97bfcece96cc9a5dd0`, isolated targets and the
+shared lock (acquired 09:50:47 UTC). The coordinator relayed results at 10:03 UTC. Candidate coverage exited 0
+(376.057 s): workspace 59,812/61,261 lines (97.63%); every unchanged line, branch and changed-line floor passed.
+All 23 scope counts are published in PR 157. Baseline exited 2 (306.977 s):
+`bridge_refusal_live_error_before_pcm_then_same_connection_recovers` failed at
+`crates/echo-bridge/tests/bridge_refusal/mod.rs:82`, reporting 1359.430 ms against a 1000 ms ceiling.
+No baseline LCOV was produced. Per-crate comparison: **not obtained: baseline run hit the known
+refusal-timing flake fixed by #155**. No measured parity or per-crate delta is claimed.
+The coordinator explicitly accepted A-3/E-COV on the passing candidate floors plus this baseline-failure
+explanation, and directed no further coverage pair. This supersedes the pending comparison disposition
+above; historical observations remain scoped to their measured source. Hosted CI and independent review
+own final-head quality and validation.
+
+The coordinator's 2026-11-17 amendment leaves one-shot incremental suppression inconclusive: ci-latency is
+unproved, the full local CI comparison is withdrawn, the optional coverage pair was not run, and default
+incremental is retained. Hosted CI is the quality gate. Raw output and per-crate evidence belong in PR 157
+comments; no scratch or evidence files are committed.
 
 ## The device
 
