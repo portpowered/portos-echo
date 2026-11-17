@@ -81,7 +81,8 @@ codex_source() {
 
 codex_pagable() {
   # The coordinator authorized only this locked crate's ARM layout assertion.
-  checksum=$(python3 - "$work/source/codex-rs/Cargo.lock" <<'PY'
+  checksum=$(
+    python3 - "$work/source/codex-rs/Cargo.lock" <<'PY'
 import sys
 import tomllib
 with open(sys.argv[1], "rb") as source:
