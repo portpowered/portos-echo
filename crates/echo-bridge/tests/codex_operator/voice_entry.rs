@@ -150,7 +150,21 @@ async fn rejected_account(mode: &str) {
     configure(&fixture, listener.local_addr().unwrap().port());
     let auth = preserved_auth(&fixture);
     let mut process = Process::spawn(&mut command(&fixture));
-    let _control = fixture.control().await;
+    // Auth rejection reaps the account child before presenting the relink
+    // frame. Its control listener may already be closed; observe the screen.
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        loop {
+            if std::fs::read_to_string(fixture.directory.path().join("trace"))
+                .is_ok_and(|text| text.contains("\"event\":\"screen.listening\""))
+            {
+                break;
+            }
+            assert!(process.child.try_wait().unwrap().is_none());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
     relink(&mut screen).await;
     denied(&fixture, &listener, &mut process).await;
