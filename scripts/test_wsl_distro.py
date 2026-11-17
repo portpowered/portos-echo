@@ -354,6 +354,7 @@ class PythonDispatchTests(unittest.TestCase):
         socket = self.socket
         errors = []
         received = []
+        active = self.threading.Event()
         payload = bytes(range(256)) * 1024
         reply = payload[::-1]
         with socket.socket() as host:
@@ -375,6 +376,8 @@ class PythonDispatchTests(unittest.TestCase):
                             if not chunk:
                                 break
                             data.extend(chunk)
+                            if cancel and len(data) == len(payload):
+                                active.set()
                         received.append(bytes(data))
                         if not remote_first and not cancel:
                             peer.sendall(reply)
@@ -382,16 +385,20 @@ class PythonDispatchTests(unittest.TestCase):
                     errors.append(error)
 
             server = self.threading.Thread(target=serve)
-            server.start()
             argv = [sys.executable, '-u', '-c',
                     'import sys; sys.path.insert(0, sys.argv[1]); from wsl_relay import guest; guest(int(sys.argv[2]))',
                     str(ROOT / 'scripts'), str(port)]
-            relay = self.relay.Relay(argv)
+            relay = None
+            server.start()
             try:
+                relay = self.relay.Relay(argv)
                 with socket.create_connection(('127.0.0.1', int(relay.address.split(':')[1])), timeout=5) as client:
                     if cancel:
                         client.sendall(payload)
-                        # A response is unnecessary: close must collect an active guest.
+                        # Wait for the guest to deliver all bytes before cancellation.
+                        self.assertTrue(active.wait(timeout=5), 'guest did not deliver payload')
+                        self.assertEqual(len(relay.connections), 1)
+                        self.assertIsNone(relay.connections[0].proc.poll())
                     elif remote_first:
                         data = bytearray()
                         while chunk := client.recv(65536):
@@ -409,12 +416,14 @@ class PythonDispatchTests(unittest.TestCase):
                 if not cancel:
                     server.join(timeout=5)
             finally:
-                relay.close()
-                server.join(timeout=5)
+                try:
+                    if relay is not None:
+                        relay.close()
+                finally:
+                    server.join(timeout=5)
             self.assertFalse(server.is_alive())
             self.assertEqual(errors, [])
-            if not cancel:
-                self.assertEqual(received, [payload])
+            self.assertEqual(received, [payload])
             self.assertEqual(len(relay.connections), 1)
             for connection in relay.connections:
                 self.assertIsNotNone(connection.proc.poll())
