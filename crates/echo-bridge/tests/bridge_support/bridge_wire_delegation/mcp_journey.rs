@@ -228,3 +228,166 @@ async fn continued_stop(
     bridge_short::send(writer, "played", json!({})).await;
     bridge_short::send(writer, "audio-stop", json!({})).await;
 }
+
+pub(super) fn fresh_probe(bytes: &[u8], cursor: usize) -> bool {
+    publication_complete(bytes, cursor, false)
+}
+pub(super) fn publication_complete(bytes: &[u8], cursor: usize, recovered: bool) -> bool {
+    if cursor != 0 && bytes.get(cursor - 1) != Some(&b'\n') {
+        return false;
+    }
+    let Some(tail) = bytes.get(cursor..) else { return false };
+    let mut probe = None;
+    for record in tail
+        .split_inclusive(|b| *b == b'\n')
+        .filter(|line| line.ends_with(b"\n"))
+        .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+    {
+        if record["run_id"] != "connection-1"
+            || record["provider_auth_mode"] != "api_key"
+            || record["elapsed_ms"].as_u64().is_none()
+            || record.as_object().is_none_or(|fields| fields.len() != 4)
+        {
+            continue;
+        }
+        if record["event"] == "wyoming.probe_ok" {
+            if !recovered {
+                return true;
+            }
+            probe = record["elapsed_ms"].as_u64();
+        } else if record["event"] == "wyoming.connected"
+            && probe.is_some_and(|time| record["elapsed_ms"].as_u64().unwrap() >= time)
+        {
+            return true;
+        }
+    }
+    false
+}
+#[test]
+fn probe_barrier_requires_fresh_complete_connection_record() {
+    let record = b"{\"event\":\"wyoming.probe_ok\",\"run_id\":\"connection-1\",\"elapsed_ms\":0,\"provider_auth_mode\":\"api_key\"}\n";
+    assert!(fresh_probe(record, 0));
+    assert!(!fresh_probe(record, record.len()));
+    assert!(!fresh_probe(&record[..record.len() - 1], 0));
+    assert!(!fresh_probe(record, record.len() + 1));
+    for (key, value) in [
+        ("event", json!("wyoming.connected")),
+        ("run_id", json!("run-1")),
+        ("elapsed_ms", json!(null)),
+        ("payload", json!("not approved")),
+    ] {
+        let mut changed: Value = serde_json::from_slice(record).unwrap();
+        changed[key] = value;
+        assert!(!fresh_probe(format!("{changed}\n").as_bytes(), 0));
+    }
+    let mut bytes = record.to_vec();
+    let cursor = bytes.len();
+    bytes.extend_from_slice(record);
+    assert!(fresh_probe(&bytes, cursor));
+    assert!(!fresh_probe(&bytes, cursor - 1));
+    assert!(!fresh_probe(&bytes, cursor + 1));
+    assert!(!fresh_probe(&bytes[..bytes.len() - 1], cursor));
+    assert!(fresh_probe(&bytes, 0));
+}
+
+// T1: immediately-ready reads acknowledge each evaluated stage of the actual
+// recovery wait. No filesystem scheduling, socket, clock advance or sleep.
+#[tokio::test(start_paused = true)]
+async fn reconnect_barrier_waits_for_complete_publication() {
+    let probe =
+        json!({"event":"wyoming.probe_ok","run_id":"connection-1","elapsed_ms":10,"provider_auth_mode":"api_key"});
+    let connected =
+        json!({"event":"wyoming.connected","run_id":"connection-1","elapsed_ms":10,"provider_auth_mode":"api_key"});
+    let mut bytes = format!("{connected}\n{probe}\n").into_bytes();
+    let cursor = bytes.len(); // Old process/connection records cannot release us.
+    bytes.extend_from_slice(format!("{connected}\n").as_bytes()); // Before probe.
+    let source = std::cell::RefCell::new(bytes);
+    let reads = std::cell::Cell::new(0);
+    let next = std::cell::Cell::new(0);
+    let clock = tokio::time::Instant::now();
+    let consumer = async {
+        strict::wait_records(
+            || {
+                reads.set(reads.get() + 1);
+                std::future::ready(Ok(source.borrow().clone()))
+            },
+            cursor,
+            true,
+            Instant::now() + OBSERVATION_TIMEOUT,
+        )
+        .await;
+        next.set(next.get() + 1);
+        let snapshot: Vec<Value> = serde_json::Deserializer::from_slice(&source.borrow())
+            .into_iter()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(snapshot.iter().filter(|r| r["event"] == "wyoming.connected").count(), 2);
+    };
+    tokio::pin!(consumer);
+    assert_publication_pending(consumer.as_mut(), &reads, &next).await;
+    source.borrow_mut().truncate(cursor); // Remove the deliberately early record.
+    source.borrow_mut().extend_from_slice(format!("{probe}\n").as_bytes());
+    assert_publication_pending(consumer.as_mut(), &reads, &next).await;
+    reject_mismatched_publication(consumer.as_mut(), &source, &connected, &reads, &next).await;
+    source.borrow_mut().extend_from_slice(connected.to_string().as_bytes());
+    assert_publication_pending(consumer.as_mut(), &reads, &next).await;
+    source.borrow_mut().push(b'\n');
+    consumer.await;
+    assert_eq!(next.get(), 1);
+    assert_eq!(tokio::time::Instant::now(), clock);
+}
+async fn assert_publication_pending<F: Future>(
+    mut consumer: std::pin::Pin<&mut F>,
+    reads: &std::cell::Cell<usize>,
+    next: &std::cell::Cell<usize>,
+) {
+    let before = reads.get();
+    std::future::poll_fn(|cx| {
+        assert!(
+            consumer.as_mut().poll(cx).is_pending(),
+            "consumer advanced before complete publication"
+        );
+        assert_eq!(next.get(), 0);
+        if reads.get() > before {
+            Poll::Ready(())
+        } else {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
+}
+
+async fn reject_mismatched_publication<F: Future>(
+    mut consumer: std::pin::Pin<&mut F>,
+    source: &std::cell::RefCell<Vec<u8>>,
+    connected: &Value,
+    reads: &std::cell::Cell<usize>,
+    next: &std::cell::Cell<usize>,
+) {
+    for (key, value) in [
+        ("run_id", json!("run-1")),
+        ("provider_auth_mode", json!("other")),
+        ("elapsed_ms", json!(null)),
+        ("elapsed_ms", json!(9)),
+        ("payload", json!("extra")),
+    ] {
+        let mut invalid = connected.clone();
+        invalid[key] = value;
+        let length = source.borrow().len();
+        source.borrow_mut().extend_from_slice(format!("{invalid}\n").as_bytes());
+        assert_publication_pending(consumer.as_mut(), reads, next).await;
+        source.borrow_mut().truncate(length);
+    }
+}
+
+pub(super) async fn assert_restart_deadline<F: Future>(operation: F, deadline: Instant, phase: &str, cursor: usize) {
+    tokio::pin!(operation);
+    std::future::poll_fn(|cx| {
+        assert!(operation.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    let failure = observe_restart(operation, deadline, phase, cursor).await.err().unwrap();
+    assert_eq!(failure, format!("restart {phase}: deadline at cursor {cursor}"));
+}
