@@ -96,7 +96,7 @@ def main():
             "sys.exit(ns['guest'](sys.argv[1],sys.argv[2]))")
 
     def boundary(argv, **kwargs):
-        if "python3" in argv:
+        if "python3" in argv and "--relay" not in argv:
             index = argv.index("python3") + 2
             argv = argv[:index] + ["-c", code, argv[index], directory, *argv[index + 1:]]
         return popen(argv, **kwargs)

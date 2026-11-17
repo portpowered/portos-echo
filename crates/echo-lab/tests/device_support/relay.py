@@ -204,6 +204,24 @@ class Relay:
             raise RuntimeError('relay cleanup failed')
 
 
+def observations(proc, relay_argv, relays, emit, events):
+    """Publish a listening native endpoint, retaining every relay until cleanup."""
+    try:
+        for line in proc.stdout:
+            value = json.loads(line)
+            if value.get('event') == 'host.ready':
+                port = int(value['address'].rsplit(':', 1)[1])
+                argv = [*relay_argv, str(port)]
+                relay = next((owned for owned in relays if owned.argv == argv), None)
+                if relay is None:
+                    relay = Relay(argv)
+                    relays.append(relay)
+                value['address'] = relay.address
+            emit(value)
+    except (OSError, ValueError, RuntimeError):
+        events.put(('error', None))
+
+
 def forward(argv, relay_argv):
     """Guest controller keeps stdin ownership; only host.ready's address changes."""
     relays = []

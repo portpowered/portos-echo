@@ -283,11 +283,40 @@ class PythonDispatchTests(unittest.TestCase):
         owner.close.return_value = 17
         with mock.patch.object(host, 'LauncherChild', return_value=owner), \
                 mock.patch.object(host.subprocess, 'Popen') as spawn, \
-                mock.patch.object(host.threading, 'Thread'), mock.patch.object(sys, 'argv', ['host.py', '--finite']):
+                mock.patch.object(host.threading, 'Thread') as thread, mock.patch.object(sys, 'argv', ['host.py', '--finite']):
+            thread.return_value.is_alive.return_value = False
             self.assertEqual(host.launcher_forward(events, translation, [], 'pe-ci'), 17)
         self.assertEqual(spawn.call_args.args[0], ['wsl', '-d', 'pe-ci', '--exec', 'python3',
                          '-u', '/checkout with spaces/host.py', '--finite'])
         owner.close.assert_called()
+
+    def test_sim_ready_publishes_owned_native_address_and_preserves_other_events(self):
+        events, relays, emitted = self.host.queue.Queue(), [], []
+        proc = types.SimpleNamespace(stdout=io.BytesIO(
+            b'{"event":"host.ready","address":"127.0.0.1:12345"}\n'
+            b'{"event":"host.ack","pid":17}\n'
+            b'{"event":"host.ready","address":"127.0.0.1:12345"}\n'))
+        relay = types.SimpleNamespace(address='127.0.0.1:23456', argv=['guest', '--relay', '12345'])
+        with mock.patch.object(self.relay, 'Relay', return_value=relay) as bind:
+            self.relay.observations(proc, ['guest', '--relay'], relays, emitted.append, events)
+        bind.assert_called_once_with(['guest', '--relay', '12345'])
+        self.assertEqual(relays, [relay])
+        self.assertEqual(emitted, [{'event': 'host.ready', 'address': '127.0.0.1:23456'},
+                                   {'event': 'host.ack', 'pid': 17},
+                                   {'event': 'host.ready', 'address': '127.0.0.1:23456'}])
+        self.assertTrue(events.empty())
+
+    def test_sim_failed_publication_retains_relay_for_owner_and_reports_failure(self):
+        events, relays = self.host.queue.Queue(), []
+        proc = types.SimpleNamespace(stdout=io.BytesIO(
+            b'{"event":"host.ready","address":"127.0.0.1:12345"}\n'))
+        relay = types.SimpleNamespace(address='127.0.0.1:23456')
+        with mock.patch.object(self.relay, 'Relay', return_value=relay), \
+                mock.patch('builtins.print', side_effect=OSError('closed')) as publish:
+            self.relay.observations(proc, ['guest'], relays, publish, events)
+        self.assertEqual(relays, [relay])
+        self.assertEqual(events.get_nowait(), ('error', None))
+        self.assertTrue(events.empty())
 
     def exercise(self, remote_first=False, cancel=False):
         socket = self.socket
