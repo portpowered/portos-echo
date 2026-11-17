@@ -39,6 +39,169 @@ async fn t3_m1_repeated_provider_quiesces_and_closes_without_an_admitted_call() 
 }
 
 #[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn m1_codex_continuous_capture_reopens_calls_without_reply_media() {
+    tokio::time::timeout(DEADLINE, continuous_capture()).await.unwrap();
+}
+
+async fn continuous_capture() {
+    let options = super::super::tests::options();
+    let root = config::Root::new().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let provider = provider::Provider::start_m1(&options.python).await.unwrap();
+    let mut command = continuous_command(
+        options.bridge.as_ref().unwrap(),
+        &root.0,
+        output.path(),
+        address,
+        &provider.origin,
+    );
+    let (wake, requested) = tokio::sync::mpsc::channel(1);
+    let satellite = tokio::spawn(continuous_satellite(listener, requested));
+    let mut bridge = Process::start(&mut command).unwrap();
+    bridge.expect("bridge.ready").await.unwrap();
+    continuous_wakes(&mut bridge, &wake).await;
+    let closed = bridge.close().await;
+    let observed = provider.close().await.unwrap();
+    assert_eq!(closed, Ok(()));
+    assert_eq!(satellite.await.unwrap(), 0);
+    drop(TcpListener::bind(address).await.unwrap());
+    assert_eq!(
+        observed,
+        json!({"event":"provider.snapshot", "calls":2,
+        "matching_calls":2,"sidebands":2,"external":0,"refreshes":0})
+    );
+    let trace = read_trace(&output.path().join("bridge.private.jsonl")).unwrap();
+    continuous_receipts(&trace);
+}
+
+async fn continuous_wakes(bridge: &mut Process, wake: &tokio::sync::mpsc::Sender<()>) {
+    for index in 1..=2 {
+        wake.send(()).await.unwrap();
+        let completed = bridge.expect("bridge.run_completed").await.unwrap();
+        assert_eq!(completed["run_id"], format!("run-{index}"));
+        bridge.expect("bridge.ready").await.unwrap();
+    }
+}
+
+fn continuous_command(
+    binary: &Path,
+    root: &Path,
+    output: &Path,
+    address: std::net::SocketAddr,
+    origin: &str,
+) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(binary);
+    crate::lab_run::sim::production::configure_codex(
+        &mut command,
+        root,
+        output,
+        address,
+        origin,
+        "http://127.0.0.1:1/mcp",
+    )
+    .unwrap();
+    // This component has no tool effects; the native M1 still owns host proof.
+    let path = root.join("configured.private/bridge.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let start = text.find("[[mcp.server]]").unwrap();
+    let end = start + text[start..].find("[screen]").unwrap();
+    std::fs::write(
+        path,
+        format!("{}[mcp]\nserver = []\n\n{}", &text[..start], &text[end..]),
+    )
+    .unwrap();
+    command
+}
+
+fn continuous_receipts(trace: &Trace) {
+    let stops: Vec<_> = trace.records.iter().filter(|r| r["event"] == "live.closed").collect();
+    assert_eq!(stops.len(), 2);
+    assert!(stops.iter().all(|r| r["reason"] == "idle"));
+    assert_eq!(
+        trace
+            .records
+            .iter()
+            .filter(|r| r["event"] == "wyoming.run_ended")
+            .count(),
+        2
+    );
+    let capture: Vec<_> = trace
+        .records
+        .iter()
+        .filter(|r| r["event"] == "wyoming.mic_frames")
+        .collect();
+    assert_eq!(capture.len(), 2);
+    for (index, receipt) in capture.iter().enumerate() {
+        assert_eq!(receipt["run_id"], format!("run-{}", index + 1));
+        assert!(receipt["count"].as_u64().unwrap() >= 10);
+    }
+}
+
+async fn continuous_satellite(listener: TcpListener, mut requested: tokio::sync::mpsc::Receiver<()>) -> usize {
+    let mut stream = listener.accept().await.unwrap().0;
+    assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
+    assert_eq!(read(&mut stream).await.0["type"], "describe");
+    send(&mut stream, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await;
+    let wake: Value = serde_json::from_str(
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/wyoming/wake-word.jsonl"
+        ))
+        .lines()
+        .nth(1)
+        .unwrap(),
+    )
+    .unwrap();
+    let format = json!({"rate":16000,"width":2,"channels":1});
+    let mut frames = 0;
+    for _ in 0..2 {
+        requested.recv().await.unwrap();
+        send(&mut stream, "run-pipeline", wake["header"]["data"].clone(), vec![]).await;
+        send(&mut stream, "audio-start", format.clone(), vec![]).await;
+        let (returned, count) = continuous_playback(stream, format.clone()).await;
+        stream = returned;
+        frames += count;
+    }
+    assert_eq!(stream.read(&mut [0]).await.unwrap(), 0);
+    frames
+}
+
+async fn continuous_playback(stream: TcpStream, format: Value) -> (TcpStream, usize) {
+    let (mut input, mut output) = stream.into_split();
+    // Device cadence continues through call negotiation and stops only when
+    // the bridge ends the run; a fixed finite burst could precede media readiness.
+    let mut cadence = tokio::time::interval(std::time::Duration::from_millis(20));
+    let mut frames = 0;
+    loop {
+        let (row, _) = {
+            let next = read(&mut input);
+            tokio::pin!(next);
+            loop {
+                tokio::select! {
+                    row = &mut next => break row,
+                    _ = cadence.tick() => send(&mut output, "audio-chunk", format.clone(), vec![0;640]).await,
+                }
+            }
+        };
+        match row["type"].as_str().unwrap() {
+            "describe" => send(&mut output, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
+            "audio-start" => {}
+            "audio-chunk" => frames += 1,
+            "audio-stop" => {
+                send(&mut output, "audio-stop", json!({}), vec![]).await;
+                send(&mut output, "played", json!({}), vec![]).await;
+                break;
+            }
+            other => assert_eq!(other, "expected reply end"),
+        }
+    }
+    (input.reunite(output).unwrap(), frames)
+}
+
+#[tokio::test]
 async fn t3_m2_codex_host_failure_names_the_dependency_without_echoing_payloads() {
     let python = if cfg!(windows) { "python" } else { "python3" };
     for (event, expected) in [
@@ -203,7 +366,7 @@ async fn playback(stream: &mut TcpStream) -> (usize, i64) {
     (frames, energy)
 }
 
-async fn send(stream: &mut TcpStream, kind: &str, data: Value, payload: Vec<u8>) {
+async fn send(stream: &mut (impl tokio::io::AsyncWrite + Unpin), kind: &str, data: Value, payload: Vec<u8>) {
     stream
         .write_all(&encode(&Event {
             header: Header {
@@ -219,7 +382,7 @@ async fn send(stream: &mut TcpStream, kind: &str, data: Value, payload: Vec<u8>)
         .unwrap();
 }
 
-async fn read(stream: &mut TcpStream) -> (Value, Vec<u8>) {
+async fn read(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> (Value, Vec<u8>) {
     let mut bytes = vec![];
     loop {
         let b = stream.read_u8().await.unwrap();

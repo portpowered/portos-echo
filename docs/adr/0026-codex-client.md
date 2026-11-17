@@ -1062,3 +1062,11 @@ sideband with the independently completed wake count, exact local route and
 nominated key, and requires zero refreshes or external requests. Partial or
 cancelled journeys retain failure rather than receiving synthetic completion.
 The legacy configuration helper remains for the separately owned M3 fixture.
+
+A controlled Wyoming component keeps microphone frames flowing through real
+call negotiation and playback completion, rather than sending a finite burst
+before media readiness. It checks two successive capture-only calls on the
+same provider and bridge, distinct completed run identities, microphone receipts,
+zero reply PCM, idle stops and socket release. The component consumes prebuilt
+bridge/pin artifacts and cannot replace the native M1 mute and 10+10 restart
+scenario, whose host and recovery edges remain separate.
