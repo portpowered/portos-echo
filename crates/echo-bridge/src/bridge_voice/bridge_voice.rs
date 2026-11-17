@@ -1,4 +1,8 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
+#[path = "controls/tool_ledger.rs"]
+mod tool_ledger;
+#[path = "controls/tool_policy.rs"]
+mod tool_policy;
 mod voice_admission;
 #[path = "controls/voice_config.rs"]
 mod voice_config;
@@ -10,6 +14,8 @@ mod voice_kill;
 mod voice_runtime;
 mod voice_session;
 mod voice_source;
+#[path = "controls/voice_tools.rs"]
+mod voice_tools;
 mod voice_view;
 pub use voice_admission::{ServeNotice, ServeOptions, serve};
 pub use voice_config::Configured;

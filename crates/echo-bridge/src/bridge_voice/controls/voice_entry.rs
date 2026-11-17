@@ -14,18 +14,12 @@ pub(crate) async fn execute<C: LinkConnector>(
         return Err(Error::Input);
     }
     let config = settings.config.take().ok_or(Error::Input)?;
-    let has_tools = !config.mcp.server.is_empty();
     let media = media_config(settings.model_url.is_some());
-    let configured = Configured::new(config, settings.trace, settings.health)?;
+    let configured = Configured::new(config, settings.trace, settings.health)?.with_clock(control.utc_day);
     let configured = match settings.model_url {
         Some(model) => configured.with_routes(crate::bridge_operator::LocalRoutes::new(&settings.live_url, &model)?),
         None => configured,
     };
-    // Do not silently discard configured tools while their dispatcher is being
-    // integrated. Neither the legacy agent nor an unapproved tool host may run.
-    if has_tools {
-        return Err(Error::Input);
-    }
     let clean_stop = Cell::new(true);
     let cancelled = async {
         clean_stop.set(matches!(control.shutdown.await, Ok(true)));

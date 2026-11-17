@@ -43,10 +43,28 @@ pub enum ServeNotice {
 pub async fn serve<L, R, W, P>(
     client: &mut L,
     io: &mut RpcIo<R, W>,
+    options: ServeOptions<'_>,
+    peer: impl AsyncFnMut() -> Result<P, Error>,
+    cancelled: impl Future<Output = ()>,
+    observe: impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<(), Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+{
+    service(client, io, options, peer, cancelled, observe, None).await
+}
+
+pub(super) async fn service<L, R, W, P>(
+    client: &mut L,
+    io: &mut RpcIo<R, W>,
     mut options: ServeOptions<'_>,
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(ServeNotice) -> Result<(), Error>,
+    mut tools: Option<&mut super::voice_tools::Tools>,
 ) -> Result<(), Error>
 where
     L: EchoLink,
@@ -87,6 +105,7 @@ where
                 }
             },
             &mut observe,
+            tools.as_deref_mut(),
         ))
         .await;
         if killed.get() && result == Err(Error::Control) {
@@ -111,6 +130,7 @@ async fn admitted<L, R, W, P>(
     peer: &mut impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+    tools: Option<&mut super::voice_tools::Tools>,
 ) -> Result<(), Error>
 where
     L: EchoLink,
@@ -119,6 +139,9 @@ where
     P: MediaPeer,
 {
     tokio::pin!(cancelled);
+    if let Some(tools) = &tools {
+        tools.budget.check_call()?;
+    }
     observe(ServeNotice::Listening)?;
     let deadline = Instant::now()
         .checked_add(options.connect_timeout)
@@ -128,30 +151,37 @@ where
         () = cancelled.as_mut() => return Err(Error::Control),
         result = timeout_at(deadline, peer()) => result.map_err(|_| Error::Deadline)??,
     };
-    open_conversation(
-        device,
-        io,
-        media,
-        ConversationOptions {
-            call: bridge_codex::Options {
-                voice: options.call.voice,
-                instructions: options.call.instructions,
-                model: options.call.model,
-            },
-            tools: options.tools.clone(),
-            deadline,
-            session: options.session,
+    let options_call = ConversationOptions {
+        call: bridge_codex::Options {
+            voice: options.call.voice,
+            instructions: options.call.instructions,
+            model: options.call.model,
         },
-        cancelled.as_mut(),
-        |notice| {
-            if let SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))) = &notice {
-                options.session.muted = *value;
-            }
-            observe(ServeNotice::Session(notice))
-        },
-    )
-    .await
-    .map(|_| ())
+        tools: options.tools.clone(),
+        deadline,
+        session: options.session,
+    };
+    let mut observer = |notice| {
+        if let SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))) = &notice {
+            options.session.muted = *value;
+        }
+        observe(ServeNotice::Session(notice))
+    };
+    if let Some(tools) = tools {
+        return Box::pin(super::voice_tools::conversation(
+            device,
+            io,
+            media,
+            (options_call, tools),
+            cancelled.as_mut(),
+            &mut observer,
+        ))
+        .await
+        .map(|_| ());
+    }
+    open_conversation(device, io, media, options_call, cancelled.as_mut(), &mut observer)
+        .await
+        .map(|_| ())
 }
 
 async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(

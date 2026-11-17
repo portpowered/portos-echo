@@ -39,6 +39,8 @@ fn runtime_options<'a>(
         screen,
         health: ([127, 0, 0, 1], 0).into(),
         trace,
+        delegation: None,
+        utc_day: std::sync::Arc::new(|| 10),
     }
 }
 

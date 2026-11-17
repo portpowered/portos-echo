@@ -1,5 +1,5 @@
 //! Presentation lifetime encloses authenticated device and conversation cleanup.
-use super::{HostOptions, ServeOptions, serve, voice_view::View, with_device};
+use super::{HostOptions, ServeOptions, voice_view::View, with_device};
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_config::{LiveMode, ScreenConfig};
 use echo_link::LinkConnector;
@@ -13,6 +13,8 @@ pub struct RuntimeOptions<'a> {
     pub screen: Option<&'a ScreenConfig>,
     pub health: SocketAddr,
     pub trace: &'a Path,
+    pub delegation: Option<&'a echo_config::BridgeConfig>,
+    pub utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 /// Compose the Codex voice service with the existing screen, health and trace
@@ -20,9 +22,9 @@ pub struct RuntimeOptions<'a> {
 /// publish Connected; played settlement precedes Ready. All device/call/process
 /// cleanup finishes while presentation remains owned.
 ///
-/// This library entry point does not select the executable backend or load
-/// tools. The service monitors the nominated operator kill file; the caller supplies a
-/// peer factory. No legacy call or credential path is used here.
+/// Configured delegation discovers MCP tools after authentication and retains
+/// policy, consent and the effect ledger across calls. The service monitors
+/// the nominated kill file; the caller supplies a peer factory.
 ///
 /// # Errors
 /// Startup, service, publication and cleanup failures use fixed categories.
@@ -76,10 +78,26 @@ async fn work<C: LinkConnector, P: MediaPeer>(
         connector,
         cancelled.as_mut(),
         async |io, client, stopping| {
-            serve(client, io, options.voice, peer, stopped(stopping), |notice| {
+            let mut tools = options.delegation.map(|config| super::voice_tools::Tools::new(config, options.utc_day));
+            let setup = async {
+                if let (Some(config), Some(tools)) = (options.delegation, &mut tools) {
+                    view.open_tools(tools, config).await?;
+                }
+                Ok::<_, Error>(())
+            };
+            let ready = tokio::select! {
+                biased;
+                () = stopped(stopping.clone()) => Err(Error::Control),
+                result = tokio::time::timeout(std::time::Duration::from_secs(15), setup) => result.unwrap_or(Err(Error::Deadline)),
+            };
+            let result = match ready {
+                Ok(()) => super::voice_admission::service(client, io, options.voice, peer, stopped(stopping), |notice| {
                 view.observe(notice)
-            })
-            .await
+                }, tools.as_mut()).await,
+                Err(error) => Err(error),
+            };
+            if let Some(tools) = &mut tools { tools.close().await; }
+            result
         },
     )
     .await;

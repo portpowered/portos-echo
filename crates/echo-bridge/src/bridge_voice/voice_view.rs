@@ -14,6 +14,14 @@ pub(super) struct View<'a> {
 }
 
 impl<'a> View<'a> {
+    pub(super) async fn open_tools(
+        &mut self,
+        tools: &mut super::voice_tools::Tools,
+        config: &echo_config::BridgeConfig,
+    ) -> Result<(), Error> {
+        tools.open(config, self.screen, self.trace).await
+    }
+
     pub fn startup(&mut self) -> Result<(), Error> {
         self.trace.record(
             "bridge.started",

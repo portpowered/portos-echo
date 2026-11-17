@@ -62,6 +62,25 @@ impl Presentation {
         self.send(current.visible())
     }
 
+    pub(crate) fn clear_approval(&self, id: &str) -> Result<(), Error> {
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        if matches!(&current.overlay, Some(UiState::Approval { id: active, .. }) if active == id) {
+            current.overlay = None;
+            self.send(current.visible())?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn approval(&self, state: UiState) -> Result<(), Error> {
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        if current.muted || current.overlay.is_some() {
+            return Err(Error::Screen);
+        }
+        current.overlay = Some(state);
+        current.emotion = None;
+        self.send(current.visible())
+    }
+
     pub fn muted(&self, muted: bool) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
         current.muted = muted;

@@ -829,3 +829,42 @@ next-day recovery. This cannot prove the number of model requests made before
 the pin publishes a turn. Canonical host admission/policy wiring and that exact
 actual-pin request observer remain required for F24; no pre-model automatic-turn
 guarantee is claimed. The limitation is recorded in the authorized decision row.
+
+### Canonical MCP ownership, consent and effect reservations (2026-11-17)
+
+Configured client voice sessions now select the caller-driven tool scheduler
+instead of refusing configured MCP servers. The existing selected first server,
+Token provider and Port OS grant owner remain the only MCP route. The operator
+endpoint opens after app-server authentication. Catalog discovery waits until
+the first admitted wake, allowing an unlinked install to link before calling;
+the validated allowlisted snapshot supplies dynamic aliases on every new thread.
+No legacy model client or second process reader participates in this path.
+
+One process-owned daily budget checks new-call admission before media creation
+and remains shared by all call dispatchers. Its counter retains the configured
+u64 range. The existing public runtime boundary accepts the owner's UTC-day
+source. The pin's automatic pre-notification routing limitation still applies;
+these changes do not establish the actual-pin model request count for F24.
+
+The legacy client had no bridge-side confirmation handler or durable effect
+ledger to reuse. The canonical host therefore reserves each correlated attempt
+in an exclusively locked append-only ledger in the configured audit directory,
+flushes it before attempting the effect, and refuses an existing reservation
+after cancellation or process reopen. The ledger contains correlation keys,
+never arguments, results or credentials; corrupt or unavailable storage fails
+closed. This protects at-most-once attempts, not transactional remote effects.
+
+The existing test.requires_approval tool requires a current screen approval.
+Only a matching Approve action permits one MCP attempt; Deny, cancellation,
+hidden prompts and stale actions cannot grant consent. Cancellation retires
+the prompt and restores activity without clearing a newer relink overlay.
+Other tools retain their configured exact allowlist policy. A successful typed
+ui.show_emotion result uses the existing presentation decoder. There is no new
+configuration key, shared protocol, credential route or dependency.
+
+Controlled-process functional tests exercise configured authentication, full
+spoof catalog aliases, real loopback MCP, screen actions, persisted no-replay
+and awaited cleanup. Memory tests localize consent, ambiguous cancellation,
+ledger corruption/exclusion and overlay preservation. They do not prove the
+real pin's delegated model turn, native four-stage M4 trace, full goldens,
+latency or the dropped-result seed; story 002 retains those obligations.

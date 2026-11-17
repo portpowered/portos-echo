@@ -37,14 +37,14 @@ pub enum DispatchError {
 /// Check admission before bridge-owned model work. App-server-owned turns also
 /// need a correlated interrupt when their observed admission is refused.
 pub struct DailyBudget {
-    cap: u32,
+    cap: u64,
     day: Option<u64>,
-    used: u32,
+    used: u64,
 }
 
 impl DailyBudget {
     #[must_use]
-    pub fn new(cap: u32) -> Self {
+    pub fn new(cap: u64) -> Self {
         Self {
             cap,
             day: None,

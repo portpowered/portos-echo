@@ -25,15 +25,15 @@ type Work<H> = Pin<Box<dyn Future<Output = (Dispatcher<H>, Option<Outcome>)>>>;
 #[derive(Clone)]
 pub struct ToolBudget {
     counter: Arc<Mutex<DailyBudget>>,
-    utc_day: fn() -> Result<u64, Error>,
+    utc_day: Arc<dyn Fn() -> Result<u64, Error> + Send + Sync>,
 }
 
 impl ToolBudget {
     #[must_use]
-    pub fn new(cap: u32, utc_day: fn() -> Result<u64, Error>) -> Self {
+    pub fn new(cap: u64, utc_day: impl Fn() -> Result<u64, Error> + Send + Sync + 'static) -> Self {
         Self {
             counter: Arc::new(Mutex::new(DailyBudget::new(cap))),
-            utc_day,
+            utc_day: Arc::new(utc_day),
         }
     }
 

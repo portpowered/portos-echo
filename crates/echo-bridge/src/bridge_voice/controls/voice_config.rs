@@ -17,6 +17,7 @@ pub struct Configured {
     trace: PathBuf,
     health: SocketAddr,
     routes: Option<crate::bridge_operator::LocalRoutes>,
+    utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 impl Configured {
@@ -36,6 +37,11 @@ impl Configured {
             trace,
             health,
             routes: None,
+            utc_day: std::sync::Arc::new(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |duration| duration.as_secs() / 86_400)
+            }),
         })
     }
 
@@ -43,6 +49,12 @@ impl Configured {
     #[must_use]
     pub fn with_routes(mut self, routes: crate::bridge_operator::LocalRoutes) -> Self {
         self.routes = Some(routes);
+        self
+    }
+
+    #[must_use]
+    pub fn with_clock(mut self, utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
+        self.utc_day = utc_day;
         self
     }
 
@@ -115,6 +127,8 @@ impl Configured {
             screen: Some(&self.config.screen),
             health: self.health,
             trace: &self.trace,
+            delegation: Some(&self.config),
+            utc_day: self.utc_day.clone(),
         }
     }
 }

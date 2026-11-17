@@ -36,6 +36,10 @@ def emit(value):
 
 for line in sys.stdin:
     request = json.loads(line)
+    if "method" not in request:
+        assert request["id"] == "fixture-tool"
+        home.joinpath("tool-result").write_text(json.dumps(request["result"]))
+        continue
     method = request["method"]
     home.joinpath("last-method").write_text(method)
     with home.joinpath("methods").open("a") as methods:
@@ -92,5 +96,24 @@ for line in sys.stdin:
         if mode == "signed-out":
             account = None
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
+    elif method == "thread/start":
+        assert home.joinpath("mode").read_text().startswith("tool-")
+        assert [tool["name"] for tool in request["params"]["dynamicTools"]] == ["tool_0", "tool_1", "tool_2", "tool_3"]
+        home.joinpath("thread-config").write_text(json.dumps(request["params"]))
+        emit({"id": request["id"], "result": {"thread": {"id": "fixture-thread"}}})
+    elif method == "thread/realtime/start":
+        assert request["params"]["transport"] == {"type": "webrtc", "sdp": "fixture-offer"}
+        assert request["params"]["version"] == "v3"
+        emit({"method": "thread/realtime/sdp", "params": {"threadId": "fixture-thread", "sdp": "fixture-answer"}})
+        emit({"id": request["id"], "result": {}})
+        emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
+        approval = home.joinpath("mode").read_text() == "tool-approval"
+        emit({"id": "fixture-tool", "method": "item/tool/call", "params": {
+            "threadId": "fixture-thread", "turnId": "fixture-turn", "callId": "fixture-call",
+            "tool": "tool_2" if approval else "tool_0", "arguments": {} if approval else {"text": "delegated echo"},
+            "namespace": None}})
+    elif method == "thread/realtime/stop":
+        emit({"method": "thread/realtime/closed", "params": {"threadId": "fixture-thread"}})
+        emit({"id": request["id"], "result": {}})
     else:
         raise AssertionError("unexpected account request")
