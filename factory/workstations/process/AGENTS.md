@@ -23,9 +23,15 @@ review.
 - Read `AGENTS.md`, `docs/program/plan.md` and `docs/program/rules.md` before
   changing anything. The rules apply to every change; where a factory standard
   and `docs/program/rules.md` disagree, `docs/program/rules.md` wins.
-- Quality command: run `make ci` when a `Makefile` exists at the repository
-  root; otherwise run the exact acceptance command(s) the PRD names. Paste the
-  command and its output in a PR comment.
+- Quality gate: hosted CI. The required checks on your pushed final head
+  (`gh pr checks <n>`) run every `make ci` job on GitHub's runners, in parallel.
+  Do not run a full local `make ci`, and never queue one on the shared pe-ci
+  runner. Locally run only the focused commands your PRD names (the crate's
+  tests, the scenario, a seeded failure), and paste them with their output in
+  a PR comment. A red hosted check on your head is your failure to fix; cite
+  the run URL. Use pe-ci (under `/var/tmp/pe-ci.lock`) only when the PRD asks
+  for what hosted CI cannot do: repeated or discriminating runs of named tests,
+  a Windows-native run through WSL interop, or a measurement on that machine.
 - Never run against the Echo Show, the Ring camera, GPT-Live with a real
   credential, the Port OS pilot or any real account. Tiers T0-T4 only, and T4
   only when the PRD explicitly authorizes it. Stop and report a hardware
