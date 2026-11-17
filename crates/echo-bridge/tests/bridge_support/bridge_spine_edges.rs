@@ -118,15 +118,7 @@ async fn bridge_spine_unsupported_microphone_is_safe_and_never_completed() {
     assert_eq!(entries.last().unwrap()["reason"], "audio");
     assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 0);
     assert_eq!(process.lines.next_line().await.unwrap(), None);
-    let mut error = String::new();
-    process
-        .child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut error)
-        .await
-        .unwrap();
+    let error = process.stderr().await;
     assert_eq!(error.trim(), "echo-bridge: audio");
     fake.shutdown().await;
 }

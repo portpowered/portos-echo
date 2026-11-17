@@ -7,18 +7,25 @@ use std::time::Duration;
 
 pub(crate) struct Stream {
     child: Child,
+    profiles: Option<super::probe_profiles::Profiles>,
     receiver: Option<Receiver<io::Result<Vec<u8>>>>,
     readers: Vec<JoinHandle<()>>,
 }
 
 impl Stream {
     pub fn start(command: &mut Command) -> Result<Self, String> {
+        let profiles = super::probe_profiles::Profiles::configure(command)?;
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|_| "calibrate: cannot launch explicit adb")?;
+            .map_err(|_| {
+                if let Some(profiles) = &profiles {
+                    profiles.not_started();
+                }
+                "calibrate: cannot launch explicit adb"
+            })?;
         let stdout = child.stdout.take().ok_or("calibrate: missing child stdout")?;
         let stderr = child.stderr.take().ok_or("calibrate: missing child stderr")?;
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -46,6 +53,7 @@ impl Stream {
         });
         Ok(Self {
             child,
+            profiles,
             receiver: Some(receiver),
             readers: vec![output, errors],
         })
@@ -88,8 +96,12 @@ impl Stream {
 impl Drop for Stream {
     fn drop(&mut self) {
         drop(self.receiver.take());
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(profiles) = &self.profiles {
+            profiles.finish(&mut self.child);
+        } else {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
         for reader in self.readers.drain(..) {
             let _ = reader.join();
         }

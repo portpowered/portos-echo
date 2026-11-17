@@ -7,6 +7,9 @@ mod probe_support;
 // Component T3 calibration cases share this prebuilt-fake test binary and its
 // existing nextest process-heavy concurrency group.
 mod lab_probe {
+    mod probe_profiles {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_profiles.rs"));
+    }
     pub(crate) mod probe_command {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lab_probe/probe_command.rs"));
     }

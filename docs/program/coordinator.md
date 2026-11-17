@@ -82,6 +82,9 @@ The factory was proven on two sample items and a loopback before any program wor
    The loopback runs focused commands: the scenario, the crate's tests, a seeded failure. It cites the hosted CI
    run for `main` instead of running a full local `make ci`. A Codex session doing that from a fresh clone died
    at about 18 minutes, twice, on the W1 loopback (2026-11-15).
+   Lane payloads say the same: the quality gate is hosted CI's required checks on the final head, never a local
+   or pe-ci `make ci` (owner, 2026-11-17). A payload asks for pe-ci only for repeated or discriminating runs of
+   named tests, a Windows-native run through WSL interop, or a measurement on that machine.
 4. **Item name = branch = pull request title = worktree directory**, kebab-case with the plan item's prefix
    (`el-f2-rust-strict`).
 

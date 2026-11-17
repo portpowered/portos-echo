@@ -4,9 +4,11 @@ stdin commands own the lifecycle; EOF (including a Rust panic) reaps the group.
 Only fixed status lines cross stdout. Temporary synthetic audio is deleted.
 """
 import contextlib
+import hashlib
 import os
 from pathlib import Path
 import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -21,6 +23,7 @@ class Host:
     def __init__(self, folder):
         self.folder = Path(folder)
         self.proc = None
+        self.staged = None
         self.log = bytearray()
         self.deadline = time.monotonic() + 20
         with socket.socket() as reservation:
@@ -40,6 +43,9 @@ class Host:
         self.log = self.log[self.log.index(marker) + len(marker):]
 
     def start(self):
+        if self.proc is not None:
+            raise RuntimeError("host still owned; stop before restart")
+        self.deadline = time.monotonic() + 20
         env = {k: v for k, v in os.environ.items() if not k.startswith("HASSMIC_")}
         env.update(HASSMIC_STATE=str(self.folder / "state"),
                    HASSMIC_PLAY=str(self.folder / "play.raw"),
@@ -49,21 +55,75 @@ class Host:
                    HASSMIC_MDNS_FILE=str(self.folder / "no-mdns"))
         self.log.clear()
         failure = ["--invalid-test-option"] if "--startup-failure" in sys.argv else []
-        self.proc = subprocess.Popen(
-            ["sh", str(ROOT / "scripts/hassmic-host.sh"), "run", "-P", "wyoming",
-             "-D", "-p", str(self.port), "-n", "Wyoming Test", *failure],
-            cwd=self.folder, env=env, stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE, start_new_session=True)
-        self.logged(b"wyoming on ")
+        try:
+            binary = self.stage()
+            self.proc = subprocess.Popen(
+                [str(binary), "-P", "wyoming", "-D", "-p", str(self.port),
+                 "-n", "Wyoming Test", *failure],
+                cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE, start_new_session=True)
+            self.logged(b"wyoming on ")
+        except BaseException:
+            self.stop()
+            raise
+
+    def stage(self):
+        pinned = Path(subprocess.check_output(
+            ["sh", str(ROOT / "scripts/hassmic-host.sh"), "path"], text=True,
+            timeout=max(0, self.deadline - time.monotonic())).strip())
+        # /tmp is Linux storage under WSL even when TMPDIR points at Windows.
+        self.staged = tempfile.TemporaryDirectory(prefix="hassmic-exec-", dir="/tmp")
+        folder = Path(self.staged.name).resolve()
+        if folder == Path('/mnt') or Path('/mnt') in folder.parents:
+            raise RuntimeError("host executable requires Linux temporary storage")
+        binary = folder / "hassmic-host"
+        shutil.copy2(pinned, binary)
+        if hashlib.sha256(binary.read_bytes()).digest() != hashlib.sha256(pinned.read_bytes()).digest():
+            raise RuntimeError("staged host differs from pinned artifact")
+        return binary
+
+    def unstage(self):
+        staged = getattr(self, 'staged', None)
+        if staged is not None:
+            staged.cleanup()
+            self.staged = None
 
     def stop(self):
         if self.proc is None:
+            self.unstage()
             return
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(self.proc.pid, signal.SIGKILL)
-        self.proc.wait(timeout=2)
-        self.proc.stderr.close()
+        proc = self.proc
+        deadline = time.monotonic() + 2
+        try:
+            # A collected child no longer owns its PID (or group number).
+            if proc.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            self.stop_status(proc)
+            raise
+        finally:
+            # Keep failed collection distinguishable from a stopped host, but
+            # release the pipe even when signaling or waiting fails.
+            proc.stderr.close()
+            self.unstage()
         self.proc = None
+
+    def stop_status(self, proc):
+        # Preserve kernel evidence of a missed reap without reading command
+        # lines, environment, paths, or any unbounded stream from the child.
+        print(f"host reap timeout: pid={proc.pid} returncode={proc.returncode}",
+              file=sys.stderr, flush=True)
+        with contextlib.suppress(OSError):
+            print(f"pgid={os.getpgid(proc.pid)} sid={os.getsid(proc.pid)}",
+                  file=sys.stderr, flush=True)
+            for task in Path(f"/proc/{proc.pid}/task").iterdir():
+                status = (task / "status").read_text().splitlines()
+                fields = [line for line in status if line.split(':')[0] in
+                          ('State', 'Pid', 'PPid', 'SigPnd', 'ShdPnd')]
+                print(f"task={task.name} wchan={(task / 'wchan').read_text()} "
+                      + ' '.join(fields), file=sys.stderr, flush=True)
 
     def command(self, command):
         if command == "size":

@@ -2,15 +2,14 @@
 //! Resource admission and the milestone scenario are separate retained witnesses.
 use super::*;
 use echo_mcp_auth::mock::Mock;
-use std::{future::Future, task::Poll};
-
+use std::{future::Future, task::Poll, time::Instant};
+use strict::{assert_restart_deadline, observe_restart, wait_probe};
 #[path = "mcp_failures.rs"]
 mod faults;
 #[path = "mcp_journey.rs"]
 mod journey;
 #[path = "mcp_strict.rs"]
 mod strict;
-
 struct Session {
     process: Process,
     satellite: TcpStream,
@@ -21,16 +20,13 @@ struct Session {
     probe_schedule: Option<faults::ProbeSchedule>,
     wyoming_listener: TcpListener,
 }
-
 impl Session {
     async fn start(directory: &Path, mock: &Mock, first: bool) -> Self {
         Self::start_with(directory, mock, first, None).await
     }
-
     async fn start_with(directory: &Path, mock: &Mock, first: bool, peers: Option<(&str, &str)>) -> Self {
         Self::start_resource(directory, &mock.base, first, peers, None).await
     }
-
     async fn start_resource(
         directory: &Path,
         resource: &str,
@@ -86,7 +82,6 @@ impl Session {
             wyoming_listener: listener,
         }
     }
-
     async fn advance(&mut self, milliseconds: u64) {
         let text = json!({"action":"advance_clock","milliseconds":milliseconds}).to_string();
         let line = self.process.command(&text).await;
@@ -96,7 +91,6 @@ impl Session {
         );
         self.observe_held_advance().await;
     }
-
     async fn prompt(&mut self, mock: &Mock) {
         let state = bridge_wire_screen::state(&mut self.screen).await;
         assert_eq!(state["state"], "link_code");
@@ -110,7 +104,6 @@ impl Session {
         assert_eq!(bridge_short::read(&mut self.satellite).await.0["type"], "describe");
         self.answer_probe().await;
     }
-
     async fn answer_probe(&mut self) {
         // Receiving this describe orders the cursor after the preceding probe's
         // flushed success. Each Session owns one child and one trace generation.
@@ -120,36 +113,69 @@ impl Session {
         wait_probe(&self.trace_path, cursor).await;
     }
 }
-
 fn fresh_probe(bytes: &[u8], cursor: usize) -> bool {
-    bytes.get(cursor..).is_some_and(|tail| {
-        tail.split_inclusive(|byte| *byte == b'\n')
-            .filter(|line| line.ends_with(b"\n"))
-            .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
-            .any(|record| {
-                record["event"] == "wyoming.probe_ok"
-                    && record["run_id"] == "connection-1"
-                    && record["elapsed_ms"].as_u64().is_some()
-                    && record["provider_auth_mode"] == "api_key"
-                    && record.as_object().is_some_and(|fields| fields.len() == 4)
-            })
-    })
+    (cursor == 0 || bytes.get(cursor - 1) == Some(&b'\n'))
+        && bytes.get(cursor..).is_some_and(|tail| {
+            tail.split_inclusive(|byte| *byte == b'\n')
+                .filter(|line| line.ends_with(b"\n"))
+                .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+                .any(|record| {
+                    record["event"] == "wyoming.probe_ok"
+                        && record["run_id"] == "connection-1"
+                        && record["elapsed_ms"].as_u64().is_some()
+                        && record["provider_auth_mode"] == "api_key"
+                        && record.as_object().is_some_and(|fields| fields.len() == 4)
+                })
+        })
 }
-
-async fn wait_probe(path: &Path, cursor: usize) {
-    let started = std::time::Instant::now();
-    loop {
-        let bytes = tokio::fs::read(path).await.unwrap();
-        if fresh_probe(&bytes, cursor) {
-            return;
-        }
+impl Session {
+    async fn restart_probe(&mut self) {
+        let deadline = Instant::now() + OBSERVATION_TIMEOUT;
+        let cursor = std::fs::read(&self.trace_path).unwrap().len();
         assert!(
-            started.elapsed() < OBSERVATION_TIMEOUT,
-            "did not observe fresh complete idle probe"
+            fresh_probe(&std::fs::read(&self.trace_path).unwrap(), 0),
+            "retained old-process success required"
         );
+        let describe = observe_restart(
+            bridge_short::read(&mut self.satellite),
+            deadline,
+            "missing describe",
+            cursor,
+        )
+        .await
+        .unwrap();
+        assert_eq!(describe.0["type"], "describe");
+        self.probe_schedule = Some(faults::ProbeSchedule::Held);
+        observe_restart(self.answer_probe(), deadline, "fresh complete idle probe", cursor)
+            .await
+            .unwrap();
+        assert_eq!(self.probe_schedule, Some(faults::ProbeSchedule::Waiting));
+        let bytes = std::fs::read(&self.trace_path).unwrap();
+        assert!(fresh_probe(&bytes, cursor));
+        let records: Vec<Value> = serde_json::Deserializer::from_slice(&bytes[cursor..])
+            .into_iter()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            records.iter().find(|r| r["event"] == "wyoming.probe_ok").unwrap()["elapsed_ms"],
+            0
+        );
+        assert!(!records.iter().any(|r| r["event"] == "wyoming.reconnecting"));
     }
 }
-
+#[tokio::test(start_paused = true)]
+async fn restart_probe_observation_deadline() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    std::fs::write(&path, b"retained old process\n").unwrap();
+    let cursor = std::fs::read(&path).unwrap().len();
+    let deadline = Instant::now();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let _peer = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+    let mut socket = listener.accept().await.unwrap().0;
+    assert_restart_deadline(bridge_short::read(&mut socket), deadline, "missing describe", cursor).await;
+    assert_restart_deadline(wait_probe(&path, cursor), deadline, "fresh complete idle probe", cursor).await;
+}
 #[test]
 fn probe_barrier_requires_fresh_complete_connection_record() {
     let record = b"{\"event\":\"wyoming.probe_ok\",\"run_id\":\"connection-1\",\"elapsed_ms\":0,\"provider_auth_mode\":\"api_key\"}\n";
@@ -171,8 +197,11 @@ fn probe_barrier_requires_fresh_complete_connection_record() {
     let cursor = bytes.len();
     bytes.extend_from_slice(record);
     assert!(fresh_probe(&bytes, cursor));
+    assert!(!fresh_probe(&bytes, cursor - 1));
+    assert!(!fresh_probe(&bytes, cursor + 1));
+    assert!(!fresh_probe(&bytes[..bytes.len() - 1], cursor));
+    assert!(fresh_probe(&bytes, 0));
 }
-
 fn configure(directory: &Path, resource: &str, first: bool, port: u16) {
     if first {
         bridge_wire_screen::setup(directory, port);
@@ -203,7 +232,6 @@ fn configure(directory: &Path, resource: &str, first: bool, port: u16) {
     };
     std::fs::write(&path, text).unwrap();
 }
-
 async fn drive<F: Future>(future: F) -> F::Output {
     tokio::pin!(future);
     std::future::poll_fn(|cx| match future.as_mut().poll(cx) {
@@ -215,22 +243,18 @@ async fn drive<F: Future>(future: F) -> F::Output {
     })
     .await
 }
-
 fn operator(directory: &Path, verb: &str) -> tokio::task::JoinHandle<std::process::Output> {
     let mut command = bridge_wire_auth::command(directory, &[verb, "--config", "bridge.toml"]);
     tokio::spawn(async move { command.output().await.unwrap() })
 }
-
 fn completed(output: &std::process::Output, code: i32, stdout: &str, stderr: &str) {
     assert_eq!(output.status.code(), Some(code));
     assert_eq!(String::from_utf8_lossy(&output.stdout), stdout);
     assert_eq!(String::from_utf8_lossy(&output.stderr), stderr);
 }
-
 fn record(directory: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(directory.join("portos/grant.json")).unwrap()).unwrap()
 }
-
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn mcp_link_cli_screen_rotation_reload_and_healthy_unlink() {
@@ -282,7 +306,6 @@ async fn mcp_link_cli_screen_rotation_reload_and_healthy_unlink() {
         for private in ["access-1", "refresh-3", "synthetic-device", "synthetic-screen-pair"] { assert!(!text.contains(private)); }
     }).await;
 }
-
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn mcp_link_crash_after_rotation_reloads_durable_generation_before_use() {
@@ -314,6 +337,7 @@ async fn mcp_link_crash_after_rotation_reloads_durable_generation_before_use() {
         let mut restarted = Session::start(directory.path(), &mock, false).await;
         // Resume the new process at the fixture's elapsed fake time before
         // requesting another proof. AuthClient itself keeps its existing clock.
+        restarted.restart_probe().await;
         restarted.advance(5000).await;
         completed(
             &operator(directory.path(), "--refresh-now").await.unwrap(),
@@ -326,10 +350,10 @@ async fn mcp_link_crash_after_rotation_reloads_durable_generation_before_use() {
         assert_eq!(recovered["private_key_jwk"], initial["private_key_jwk"]);
         assert_crash_requests(&mock);
         restarted.process.finish(0).await;
+        strict::assert_no_restart_disconnect(&restarted.trace_path);
     })
     .await;
 }
-
 fn assert_crash_requests(mock: &Mock) {
     let state = mock.state.lock().unwrap();
     assert_eq!(state.requests.iter().filter(|r| r.path == "/custom/link").count(), 1);
@@ -343,7 +367,6 @@ fn assert_crash_requests(mock: &Mock) {
     assert_eq!(state.requests.iter().filter(|r| r.path == "/mcp").count(), 0);
     assert!(!state.revoked);
 }
-
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn mcp_link_denial_and_expiry_are_fixed_and_stop_polling() {
@@ -382,7 +405,6 @@ async fn mcp_link_denial_and_expiry_are_fixed_and_stop_polling() {
     })
     .await;
 }
-
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn mcp_link_control_auth_busy_and_cancellation_do_not_duplicate_mutations() {
@@ -417,7 +439,6 @@ async fn mcp_link_control_auth_busy_and_cancellation_do_not_duplicate_mutations(
         session.process.finish(0).await;
     }).await;
 }
-
 fn clock_command(directory: &Path, resource: &str, peers: Option<(&str, &str)>, epoch: Option<u64>) -> Command {
     let mut command = match peers {
         Some((live, model)) => run_command(directory, live, model),
@@ -429,14 +450,12 @@ fn clock_command(directory: &Path, resource: &str, peers: Option<(&str, &str)>, 
     }
     command
 }
-
 fn wall_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
 }
-
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn idle_probe_success_is_once_per_completion_and_pending_eof_is_not_success() {

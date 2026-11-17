@@ -399,15 +399,7 @@ pub(super) async fn browser_failure(process: &mut Process) {
         .unwrap()
         .unwrap();
     assert_eq!(status.code(), Some(1));
-    let mut error = String::new();
-    process
-        .child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut error)
-        .await
-        .unwrap();
+    let error = process.stderr().await;
     assert!(error == "echo-bridge: authorization\n", "unsafe diagnostic");
     assert!(process.lines.next_line().await.unwrap().is_none());
 }
