@@ -12,10 +12,12 @@ workspace = true
 echo-agent-api = { path = "../echo-agent-api", version = "0.1.0" }
 echo-agent-loop = { path = "../echo-agent-loop", version = "0.1.0" }
 echo-config = { path = "../echo-config", version = "0.1.0" }
+echo-codex = { path = "../echo-codex", version = "0.1.0" }
 echo-contracts = { path = "../echo-contracts", version = "0.1.0" }
 echo-mcp-client = { path = "../echo-mcp-client", version = "0.1.0" }
 serde_json = "1"
 thiserror = "2"
+tokio = { version = "1", features = ["time"] }
 
 [dev-dependencies]
 echo-agent-api = { path = "../echo-agent-api", version = "0.1.0", features = ["fakes"] }

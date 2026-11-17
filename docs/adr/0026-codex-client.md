@@ -738,3 +738,33 @@ retains a std File::try_clone across owner Drop, protects live-owner exclusion,
 and requires immediate reacquisition without retries. Existing public lifecycle
 tests protect clean shutdown, persistent auth bytes and independent sessions.
 No dependency, unsafe code, public accessor or credential path is added.
+
+### Delegated tool consumer (2026-11-17)
+
+`echo-delegation::codex_dispatch` consumes the existing pinned tool envelopes
+without opening a model client or writing a delegation append. It maps an
+allowlisted MCP catalog to stable `tool_N` aliases in discovery order, and
+retains the original name, description and schema. Unknown aliases, namespace
+overrides, malformed arguments, foreign or duplicate calls cannot reach the
+tool host. The host still owns MCP authorization and confirmation; discovery
+and model intent grant neither.
+
+One dispatcher belongs to one thread in one process generation. A matching
+turn admission starts an absolute deadline; calls cannot renew it. Dispatch
+reserves IDs before effects, limits attempts to the smaller of configuration
+and eight, and never retries a cancelled or ambiguous effect. Budget and
+deadline outcomes carry the matching turn interrupt for the IO owner to send.
+The owner must poll dispatch alongside IO/media and schedule the deadline even
+without a tool request. Completion only clears a matching active turn. A
+separate daily counter must survive calls and admit before model work; it
+resets on a forward UTC day and fails closed on backward clock movement.
+Server error payloads become fixed failure text, while successful tool content
+and MCP `is_error` retain their meaning in the pinned result envelope.
+
+The adapter adds internal `echo-codex` and already-locked Tokio time dependencies
+to `echo-delegation`; no third-party package or shared wire contract changes.
+Component tests prove its memory-only lifecycle and real loopback MCP boundary.
+Canonical voice-owner wiring, approval presentation, real-pin M4, exact goldens
+and the dropped-result seed remain required before story 002 can pass. The
+retained legacy runner remains available for its existing consumers until the
+canonical owner is wired; these component results do not prove its replacement.
