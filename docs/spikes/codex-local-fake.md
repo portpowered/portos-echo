@@ -149,9 +149,14 @@ parallel journeys for successful delegation, transcript delivery, interrupted
 tool execution, call 401/503, sideband handshake 401 and Responses 401. The
 refusal paths assert exact retry/error values, no successful tool result or
 append, closed reason and socket cleanup. Helper corruption and competing
-leases have a separate offline CLI witness. Concurrent real-pin drop isolation
-and final Linux helper/confinement proof remain retained work in
-`el-w2d-codex-client-001`. The missing-V3
+leases have a separate offline CLI witness. The concurrent drop witness holds
+two real sessions at their tool requests, each with its own fake port, home and
+working directory. It drops one supervisor, observes child exit with an OS
+process handle and waits for zero accepted sockets before releasing the survivor.
+The survivor then completes the exact successful call/tool/append/close oracle.
+Pipe readiness signals coordinate the sessions across their separate Linux
+network namespaces. Final Linux helper/confinement evidence remains required.
+The missing-V3
 negative control is performed temporarily against the same public-client test;
 its command, observed model mismatch and restored pass belong in the PR comment. Independent review,
 final quality checks, merge and loopback remain review-owned. Real authentication,

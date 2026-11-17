@@ -208,6 +208,7 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  text=True, env=env)
         report = None
+        watcher = None
         try:
             output = queue.Queue()
             def read_rust():
@@ -219,7 +220,17 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                 line = output.get(timeout=25)
                 if line is None:
                     break
-                if line.strip() == 'RUST_TURN_COMPLETE':
+                if line.startswith('RUST_TOOL_HELD='):
+                    if case == 'drop':
+                        watcher = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).with_name('codex_watch.py')),
+                                                    line.strip().split('=')[1]], stdout=subprocess.PIPE, text=True)
+                        assert watcher.stdout.readline().strip() == 'WATCHING'
+                    print('ISOLATION_HELD', flush=True)
+                    signal = sys.stdin.readline().strip()
+                    assert signal == ('drop' if case == 'drop' else 'resume'), signal
+                    child.stdin.write(signal + '\n')
+                    child.stdin.flush()
+                elif line.strip() == 'RUST_TURN_COMPLETE':
                     if case != 'interrupt':
                         assert appended.wait(10), 'append missing after Rust tool response'
                     child.stdin.write('append-observed\n')
@@ -232,7 +243,7 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                                  'query=intent=quicksilver&architecture=avas; observed calls=' +
                                  json.dumps(calls) + '; Rust: ' + child.stderr.read())
             assert report is not None, 'Rust journey produced no report'
-            if case == 'happy':
+            if case in ('happy', 'survivor'):
                 verify(report['sdp'], report['tools'], report['started'], report['closed'])
                 expected = []
                 for role, text in [('user', 'ping'), ('assistant', 'echo-ok')]:
@@ -240,6 +251,14 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                                  dict(method='thread/realtime/transcript/done', role=role, delta=None, text=text)]
                 assert report['transcripts'] == expected, report['transcripts']
                 print('TRANSCRIPT_PASS user=ping assistant=echo-ok delta_and_done=preserved', flush=True)
+            elif case == 'drop':
+                assert report == {'dropped': True}, report
+                assert len(observed['calls']) == 1 and len(observed['sideband']) == 1
+                assert len(observed['responses']) == 1 and observed['append'] == []
+                assert [tool['name'] for tool in observed['responses'][0]['tools']] == ['echo_test']
+                assert not observed['external']
+                assert watcher.stdout.readline().strip() == 'EXITED'
+                assert watcher.wait(timeout=5) == 0
             elif case == 'interrupt':
                 print(json.dumps({'case': case, 'report': report, 'append': observed['append']}), flush=True)
                 assert len(observed['responses']) == 1
@@ -280,13 +299,18 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                     assert observed['sideband'] == ['/v1/live/rtc_local'] * 5
                     assert report['errors'] == ['unexpected status 401 Unauthorized: realtime websocket handshake failed']
                     assert report['closed'] == 'error'
-            assert report['reaped'] is True
+            if case != 'drop':
+                assert report['reaped'] is True
             assert connections_empty.wait(5), 'child left a fake socket open after shutdown'
             print('PUBLIC_CLIENT_PASS', flush=True)
         finally:
             if child.poll() is None:
                 child.kill()
             child.wait(timeout=10)
+            if watcher is not None:
+                if watcher.poll() is None:
+                    watcher.kill()
+                watcher.wait(timeout=5)
             server.shutdown()
             server.server_close()
         raise SystemExit(0)

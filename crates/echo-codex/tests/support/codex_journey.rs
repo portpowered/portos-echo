@@ -25,12 +25,15 @@ pub fn run(config: &str) -> Result {
         .block_on(async {
             let mut supervisor = configure(&config)?;
             supervisor.start().await?;
+            if config["case"] == "drop" {
+                return drop_active(supervisor).await;
+            }
             let result = tokio::time::timeout(std::time::Duration::from_secs(20), async {
                 if !config["case"].as_str().unwrap_or("happy").starts_with("call-")
                     && !config["case"].as_str().unwrap_or("happy").starts_with("sideband-")
                     && !config["case"].as_str().unwrap_or("happy").starts_with("responses-")
                 {
-                    journey(&mut supervisor, config["case"] == "interrupt").await
+                    journey(&mut supervisor, config["case"].as_str().unwrap_or("happy")).await
                 } else {
                     failure(&mut supervisor, config["case"].as_str().ok_or("missing case")?).await
                 }
@@ -42,6 +45,39 @@ pub fn run(config: &str) -> Result {
             writeln!(std::io::stdout(), "RUST_REPORT={report}")?;
             Ok(())
         })
+}
+
+async fn drop_active(mut supervisor: Supervisor) -> Result {
+    sign_in(&mut supervisor).await?;
+    let tid = start_thread(&mut supervisor).await?;
+    let pid = supervisor.pid().ok_or("missing child")?;
+    let io = supervisor.io()?;
+    let id = io.begin_request(
+        "thread/realtime/start",
+        &RealtimeStart::new(&tid, "v=0\r\ns=fake-offer\r\n"),
+    )?;
+    io.wait_reply(&id).await?;
+    loop {
+        if let Message::Request { method, params, .. } = io.next_event().await? {
+            assert_eq!(method, "item/tool/call");
+            assert_eq!(params["threadId"], tid);
+            assert_eq!(params["tool"], "echo_test");
+            held(pid, "drop")?;
+            drop(supervisor);
+            tokio::task::yield_now().await;
+            writeln!(std::io::stdout(), "RUST_REPORT={}", json!({"dropped":true}))?;
+            return Ok(());
+        }
+    }
+}
+
+fn held(pid: u32, expected: &str) -> Result {
+    writeln!(std::io::stdout(), "RUST_TOOL_HELD={pid}")?;
+    std::io::stdout().flush()?;
+    let mut signal = String::new();
+    std::io::stdin().lock().read_line(&mut signal)?;
+    assert_eq!(signal.trim_end(), expected);
+    Ok(())
 }
 
 async fn failure(supervisor: &mut Supervisor, case: &str) -> Result<Value> {
@@ -183,7 +219,7 @@ async fn start_thread(supervisor: &mut Supervisor) -> Result<String> {
     Ok(thread.thread.id)
 }
 
-async fn journey(supervisor: &mut Supervisor, interrupt: bool) -> Result<Value> {
+async fn journey(supervisor: &mut Supervisor, case: &str) -> Result<Value> {
     sign_in(supervisor).await?;
     let tid = start_thread(supervisor).await?;
     let io = supervisor.io()?;
@@ -193,7 +229,7 @@ async fn journey(supervisor: &mut Supervisor, interrupt: bool) -> Result<Value> 
     )?;
     io.wait_reply(&id).await?;
     let mut report = json!({"sdp":[], "tools":[], "started":[], "closed":false, "transcripts":[]});
-    delegation(supervisor, &tid, &mut report, interrupt).await?;
+    delegation(supervisor, &tid, &mut report, case).await?;
     writeln!(std::io::stdout(), "RUST_TURN_COMPLETE")?;
     std::io::stdout().flush()?;
     let mut signal = String::new();
@@ -215,7 +251,8 @@ async fn journey(supervisor: &mut Supervisor, interrupt: bool) -> Result<Value> 
     Ok(report)
 }
 
-async fn delegation(supervisor: &mut Supervisor, tid: &str, report: &mut Value, interrupt: bool) -> Result {
+async fn delegation(supervisor: &mut Supervisor, tid: &str, report: &mut Value, case: &str) -> Result {
+    let pid = supervisor.pid().ok_or("missing child")?;
     let io = supervisor.io()?;
     loop {
         match io.next_event().await? {
@@ -227,7 +264,10 @@ async fn delegation(supervisor: &mut Supervisor, tid: &str, report: &mut Value, 
                 assert_eq!(tool.arguments, json!({"message":"ping"}));
                 report["tools"].as_array_mut().ok_or("tools array")?.push(params);
                 report["turn_id"] = json!(tool.turn_id);
-                if interrupt {
+                if case == "survivor" {
+                    held(pid, "resume")?;
+                }
+                if case == "interrupt" {
                     let id = io.begin_request(
                         "turn/interrupt",
                         &TurnInterrupt {
@@ -255,12 +295,7 @@ async fn delegation(supervisor: &mut Supervisor, tid: &str, report: &mut Value, 
                 }
                 "thread/realtime/error" => return Err("unexpected realtime error".into()),
                 "turn/completed" => {
-                    assert_eq!(params["threadId"], tid);
-                    assert_eq!(
-                        params["turn"]["status"],
-                        if interrupt { "interrupted" } else { "completed" }
-                    );
-                    assert_eq!(params["turn"]["id"], report["turn_id"]);
+                    verify_completed(tid, case, &params, report);
                     return Ok(());
                 }
                 _ => {}
@@ -268,6 +303,19 @@ async fn delegation(supervisor: &mut Supervisor, tid: &str, report: &mut Value, 
             _ => return Err("unexpected response event".into()),
         }
     }
+}
+
+fn verify_completed(tid: &str, case: &str, params: &Value, report: &Value) {
+    assert_eq!(params["threadId"], tid);
+    assert_eq!(
+        params["turn"]["status"],
+        if case == "interrupt" {
+            "interrupted"
+        } else {
+            "completed"
+        }
+    );
+    assert_eq!(params["turn"]["id"], report["turn_id"]);
 }
 
 fn record_notification(tid: &str, method: &str, params: &Value, report: &mut Value) -> Result {

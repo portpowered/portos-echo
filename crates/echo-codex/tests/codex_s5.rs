@@ -28,6 +28,17 @@ fn t3_pinned_codex_local_call_and_delegation() -> Result<(), Box<dyn Error>> {
         String::from_utf8_lossy(&resolved.stderr)
     );
     let binary = String::from_utf8(resolved.stdout)?;
+    let isolation = Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .arg(root.join("crates/echo-codex/tests/support/codex_isolation.py"))
+        .arg(binary.trim())
+        .arg(std::env::current_exe()?)
+        .output()?;
+    std::io::stdout().write_all(&isolation.stdout)?;
+    assert!(
+        isolation.status.success(),
+        "isolation: {}",
+        String::from_utf8_lossy(&isolation.stderr)
+    );
     std::thread::scope(|scope| {
         let jobs: Vec<_> = [
             "happy",

@@ -82,7 +82,12 @@ signal confirms receipt of the delegation append before Rust stops the call;
 shutdown awaits child reaping. No compilation occurs inside that journey.
 Controlled-process T3 tests separately exercise initialization, crash/restart,
 drop, pipe failure and isolated-session boundaries. Real-pin fault cases cover call creation, sideband handshake and delegated-model
-refusal. Concurrent drop isolation and Linux confinement remain required.
+refusal. The real-pin concurrent drop witness holds both sessions at a tool
+request before dropping one supervisor. An OS exit observer and the fake's
+accepted-socket inventory establish cleanup before releasing the survivor to
+complete its exact tool/append/close journey. Each session owns a distinct fake
+port, home and working directory; pipe barriers also work across separate Linux
+network namespaces. Linux confinement remains a required platform witness.
 
 Initialization cancellation and timeout tests hold the child's handshake at a
 loopback readiness barrier. Cancellation keeps the child owned and IO private;
