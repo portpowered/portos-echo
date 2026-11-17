@@ -363,3 +363,18 @@ class FixtureHandshake(unittest.TestCase):
         self.assertFalse(self.host.observer_reader.is_alive())
         self.assertTrue(self.observer_proc.stdout.closed)
         self.assertIsNotNone(self.host.proc.returncode)
+
+
+class InlineOwnerAdapter(unittest.TestCase):
+    def test_t3_owner_adapter_preserves_inline_python_and_exact_arguments(self):
+        import json
+        import subprocess
+        import sys
+        adapter = Path(__file__).with_name("owner.py")
+        code = "import json,sys\nprint(json.dumps([__name__, sys.argv]))\nsys.exit(7)"
+        output = subprocess.run(
+            [sys.executable, str(adapter), "unused", "-u", "-c", code, "space value", "line\nbreak"],
+            capture_output=True, timeout=5, check=False)
+        self.assertEqual(output.returncode, 7)
+        self.assertEqual(output.stderr, b"")
+        self.assertEqual(json.loads(output.stdout), ["__main__", ["-c", "space value", "line\nbreak"]])

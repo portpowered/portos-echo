@@ -78,6 +78,10 @@ def main():
     arguments = [arg for arg in arguments if arg != "-u"]
     script, *flags = arguments
     sys.argv = [script, *flags]
+    if script == "-c":
+        sys.argv = ["-c", *flags[1:]]
+        exec(compile(flags[0], "<string>", "exec"), {"__name__": "__main__"})
+        return 0
     if Path(script).name != "host.py":
         runpy.run_path(script, run_name="__main__")
         return 0
