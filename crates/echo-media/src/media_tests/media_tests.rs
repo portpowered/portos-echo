@@ -93,6 +93,14 @@ async fn t3_peer_lifecycle_releases_all_advertised_sockets() {
     for line in offer.lines().filter(|l| l.starts_with("a=candidate:")) {
         let fields: Vec<_> = line.split_whitespace().collect();
         if fields[7] == "host" {
+            // ICE-TCP active candidates advertise discard port 9, not a listener.
+            if fields[2].eq_ignore_ascii_case("tcp") && fields.windows(2).any(|w| w == ["tcptype", "active"]) {
+                assert_eq!(fields[5], "9");
+                continue;
+            }
+            if fields[2].eq_ignore_ascii_case("tcp") {
+                assert!(fields.windows(2).any(|w| w == ["tcptype", "passive"]));
+            }
             sockets.insert((
                 fields[2].to_ascii_lowercase(),
                 fields[4].parse::<IpAddr>().unwrap(),
@@ -100,9 +108,18 @@ async fn t3_peer_lifecycle_releases_all_advertised_sockets() {
             ));
         }
     }
-    peer.close().await.unwrap();
     assert!(sockets.iter().any(|s| s.0 == "udp"));
     assert!(sockets.iter().any(|s| s.0 == "tcp"));
+    for (protocol, ip, port) in &sockets {
+        let address = std::net::SocketAddr::new(*ip, *port);
+        // Prove these are owned sockets before requiring close to release them.
+        if protocol == "udp" {
+            assert!(std::net::UdpSocket::bind(address).is_err());
+        } else {
+            assert!(std::net::TcpListener::bind(address).is_err());
+        }
+    }
+    peer.close().await.unwrap();
     for (protocol, ip, port) in sockets {
         let address = std::net::SocketAddr::new(ip, port);
         if protocol == "udp" {
