@@ -118,7 +118,7 @@ pub(super) async fn collected(process: tokio::process::Child, root: &Path, endin
     assert_eq!(count(root, "bridge.error"), 0);
 }
 
-pub(super) async fn screen(root: &Path) -> Screen {
+pub(in super::super) async fn screen(root: &Path) -> Screen {
     let rows: Vec<Value> = std::fs::read_to_string(root.join("trace"))
         .unwrap()
         .lines()
@@ -137,7 +137,7 @@ pub(super) async fn screen(root: &Path) -> Screen {
     lines
 }
 
-pub(super) async fn next_frame(screen: &mut Screen) -> Option<Value> {
+pub(in super::super) async fn next_frame(screen: &mut Screen) -> Option<Value> {
     while let Some(line) = screen.next_line().await.unwrap() {
         if let Some(data) = line.strip_prefix("data: ") {
             let frame: echo_screen_contract::ScreenFrame = serde_json::from_str(data).unwrap();

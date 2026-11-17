@@ -1,6 +1,6 @@
 //! T3 public executable: pin + real media + loopback Wyoming, controlled clock.
 use super::*;
-mod lifecycle;
+pub(super) mod lifecycle;
 use echo_contracts::wyoming::{Event as WireEvent, Header, encode};
 use lifecycle::Ending;
 use tokio::{
@@ -65,7 +65,7 @@ async fn exercise(ending: Ending) {
     );
 }
 
-fn configure(root: &Path, port: u16) -> CodexConfig {
+pub(super) fn configure(root: &Path, port: u16) -> CodexConfig {
     let config = CodexConfig {
         binary: Some(binary()),
         home: Some(root.join("home")),
@@ -148,7 +148,7 @@ async fn settle(
     assert_eq!(count(root, "reply.played"), run);
 }
 
-fn launch(root: &Path, origin: &str) -> tokio::process::Child {
+pub(super) fn launch(root: &Path, origin: &str) -> tokio::process::Child {
     Command::new(env!("CARGO_BIN_EXE_echo-bridge"))
         .current_dir(root)
         .args([

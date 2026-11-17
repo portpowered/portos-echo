@@ -673,3 +673,20 @@ identical synthetic auth bytes and reacquires ownership after cleanup. This is
 component evidence; it does not migrate or satisfy the M2 scenario's negative
 cases, exact refresh counter, screen sequence or post-rejection wake behavior.
 Those scenario obligations remain open.
+
+### Canonical local ChatGPT admission
+
+A configured client with a Codex home no longer validates the unused legacy
+ChatGPT refresh endpoint when admitting paired local provider origins. Its
+refresh routing remains exclusively `LocalRoutes::environment`; the legacy
+endpoint guard remains for retained legacy and Muse paths. Wyoming, screen,
+MCP and both provider origins retain their loopback checks.
+
+Prebuilt executable tests now exercise malformed and expired synthetic homes
+through the actual pin. They assert the exact relink frame, no prior Ready or
+Listening publication, no Wyoming admission, no call/media effects, sanitized
+exit, unchanged auth bytes and released home ownership. A discriminating
+component case omits the nominated API key, returning before any bridge account
+RPC; the pin still makes two refresh requests during startup. The milestone's
+one-refresh and post-wake refusal oracle remains unchanged pending an operator
+decision. These component witnesses do not satisfy the retained M2 negatives.
