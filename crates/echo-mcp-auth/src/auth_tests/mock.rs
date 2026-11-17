@@ -27,6 +27,9 @@ pub struct Request {
 
 #[derive(Default)]
 pub struct State {
+    epoch: u64,
+    #[cfg(test)]
+    pub(crate) raw_wall: Option<u64>,
     pub requests: Vec<Request>,
     pub polling: VecDeque<String>,
     pub generation: u64,
@@ -61,6 +64,7 @@ impl Mock {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let base = format!("{}:{}", "http://127.0.0.1", listener.local_addr()?.port());
         let state = Arc::new(Mutex::new(State {
+            epoch: wall_now(&State::default())?,
             lifetime: 3600,
             ..State::default()
         }));
@@ -72,6 +76,13 @@ impl Mock {
             release,
             task,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_epoch(&self, epoch: u64) {
+        let mut state = self.state.lock().unwrap();
+        state.epoch = epoch;
+        state.raw_wall = Some(epoch);
     }
 
     #[cfg(test)]
@@ -127,6 +138,15 @@ async fn serve(listener: TcpListener, base: String, state: Arc<Mutex<State>>, re
         // server per exchange, and no detached per-request workers.
         let _ = handle(stream, &base, &state, &release, start).await;
     }
+}
+
+fn wall_now(state: &State) -> std::io::Result<u64> {
+    #[cfg(test)]
+    if let Some(now) = state.raw_wall {
+        return Ok(now);
+    }
+    let _ = state;
+    crate::wire::unix_now().map_err(|_| invalid())
 }
 
 fn invalid() -> std::io::Error {
@@ -309,7 +329,7 @@ fn verify(request: &Request, base: &str, state: &mut State) -> bool {
         || claims["ath"] != Value::Null
         || claims["iat"]
             .as_u64()
-            .is_none_or(|iat| !crate::wire::unix_now().is_ok_and(|now| iat.abs_diff(now + request.time) <= 2))
+            .is_none_or(|iat| iat.abs_diff(state.epoch.saturating_add(request.time)) > 2)
     {
         return false;
     }

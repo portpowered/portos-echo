@@ -47,8 +47,16 @@ struct Harness {
 impl Harness {
     async fn new() -> Self {
         let mock = Mock::start().await;
+        mock.set_epoch(1_800_000_000);
         let directory = tempfile::tempdir().unwrap();
-        let client = Arc::new(drive(AuthClient::open(options(&mock, directory.path()))).await.unwrap());
+        let client = Arc::new(
+            drive(AuthClient::open_at_epoch(
+                options(&mock, directory.path()),
+                1_800_000_000,
+            ))
+            .await
+            .unwrap(),
+        );
         Self {
             mock,
             directory,
@@ -59,13 +67,7 @@ impl Harness {
     async fn linked() -> Self {
         let harness = Self::new().await;
         let link = drive(harness.client.begin_link()).await.unwrap();
-        let task = tokio::spawn({
-            let client = harness.client.clone();
-            async move { client.await_approval(link).await }
-        });
-        until(|| !task.is_finished()).await;
-        // Give the future a poll to register its first sleep before moving time.
-        tokio::task::yield_now().await;
+        let task = start_approval(harness.client.clone(), link).await;
         advance(Duration::from_secs(5)).await;
         drive(task).await.unwrap().unwrap();
         harness
@@ -97,4 +99,27 @@ fn options(mock: &Mock, directory: &std::path::Path) -> AuthOptions {
 
 fn error<T>(result: Result<T, AuthError>, expected: AuthError) {
     assert_eq!(result.err(), Some(expected));
+}
+
+// Acknowledge the first poll only after await_approval registers its sleep.
+async fn start_approval(
+    client: Arc<AuthClient>,
+    link: LinkInstructions,
+) -> tokio::task::JoinHandle<Result<(), AuthError>> {
+    let (ready, registered) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut ready = Some(ready);
+        let future = client.await_approval(link);
+        tokio::pin!(future);
+        std::future::poll_fn(|cx| {
+            let result = future.as_mut().poll(cx);
+            if let Some(ready) = ready.take() {
+                ready.send(()).unwrap();
+            }
+            result
+        })
+        .await
+    });
+    drive(registered).await.unwrap();
+    task
 }
