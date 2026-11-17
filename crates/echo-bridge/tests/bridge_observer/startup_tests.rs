@@ -114,6 +114,6 @@ async fn pinned_host_startup_coordination_and_failure_regressions() {
         .await
         .unwrap();
     assert!(result.status.success(), "{}", diagnostics::safe(&result.stderr));
-    assert!(result.stdout.is_empty());
+    assert_eq!(result.stdout, [] as [u8; 0]);
     assert!(String::from_utf8(result.stderr).unwrap().trim_end().ends_with("OK"));
 }
