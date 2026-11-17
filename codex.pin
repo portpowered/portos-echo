@@ -1,0 +1,13 @@
+repo = "https://github.com/openai/codex"
+tag = "rust-v0.160.0"
+commit = "a956835d020762cb2b570053af06f643a11c0ecc"
+license = "Apache-2.0"
+notice = "OpenAI Codex, Copyright 2025 OpenAI"
+
+[assets.x86_64-unknown-linux-musl]
+name = "codex-x86_64-unknown-linux-musl.tar.gz"
+sha256 = "306865417d4ee7a927785852910a527f41e1e159add390ac5ae3accb67d44a13"
+
+[assets.x86_64-pc-windows-msvc]
+name = "codex-x86_64-pc-windows-msvc.exe.zip"
+sha256 = "aad5cf364c873b148e462b58fd06ad7b37fcab9b996be67133386b9322df26bb"
