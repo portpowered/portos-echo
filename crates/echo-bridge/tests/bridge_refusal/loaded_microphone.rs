@@ -280,7 +280,7 @@ async fn loaded_microphone_pending_reply_admission_keeps_capture_serviced() {
         Connector(listener.local_addr().unwrap(), schedule.clone()),
     ));
     let mut peer = listener.accept().await.unwrap().0;
-    start_capture(&mut peer, directory.path()).await;
+    start_capture(&mut peer, directory.path(), &runtime).await;
     // Reply readiness is withheld, never microphone readiness. Eight owner
     // polls per independently received chunk expose the service gap without
     // elapsed-time assumptions or a deliberately blocked capture consumer.
