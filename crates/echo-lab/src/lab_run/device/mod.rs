@@ -1,8 +1,10 @@
 //! Opt-in configured device journey. Legacy B0 stays in `run_device`.
 pub mod config;
 mod confirmation;
+mod generation;
 mod observations;
 pub mod pcm;
+mod recovery;
 mod runtime;
 
 use super::{Driver, Step, run_device::Device, run_options::Options, run_report::Artifacts};
@@ -60,6 +62,7 @@ impl Driver for Configured<'_> {
     ) -> Result<(), String> {
         self.start(artifacts)?;
         match step {
+            Step::Restart { process, count, say } => self.restart(process, *count, say, index, artifacts),
             Step::Press(key) if key == "mute" => {
                 self.state.arm_mute()?;
                 let elapsed = confirmation::wait(
@@ -86,6 +89,7 @@ impl Driver for Configured<'_> {
             Step::Trace(values) => self.state.expect_trace(values, index),
             Step::SayFile(path) => {
                 let path = pcm::adapt(path, &artifacts.root, index)?;
+                self.state.arm_wake()?;
                 self.bench.execute(&Step::SayFile(path), index, next, artifacts)?;
                 if self.state.muted() {
                     return Ok(());
@@ -107,12 +111,13 @@ impl Driver for Configured<'_> {
     }
 }
 
-pub fn step(value: &serde_json::Value) -> Result<Step, String> {
+pub fn step(value: &serde_json::Value, scenario: &str) -> Result<Step, String> {
     if value["expect_screen"].get("state").is_some()
         || value.get("expect_trace").is_some()
         || value.get("press").is_some()
+        || value.get("restart").is_some()
     {
-        return super::sim::parse(value);
+        return super::sim::parse_step(value, scenario);
     }
     super::run_oracles::parse(value)
 }

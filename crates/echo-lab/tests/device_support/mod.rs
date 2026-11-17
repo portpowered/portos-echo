@@ -1,5 +1,6 @@
 //! T3 device bench: only loopback tools and the real prebuilt bridge/host.
 mod mute;
+mod recovery;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -23,7 +24,7 @@ impl Bench {
         let root = tempfile::tempdir().unwrap();
         let mut host = Command::new(if cfg!(windows) { "python" } else { "python3" })
             .arg("-u")
-            .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/host.py"))
+            .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/device_support/supervisor.py"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -161,7 +162,8 @@ fn device_m1_prefix_ready_and_ordered_complete_wake() {
     assert!(!root.join("configured.private").exists());
     assert!(!root.join("bridge.private.jsonl").exists());
     assert!(!root.join("utterance-1.wav").exists());
-    let ui: Value = serde_json::from_str(fs::read_to_string(root.join("device-steps.jsonl")).unwrap().trim()).unwrap();
+    let records = fs::read_to_string(root.join("device-steps.jsonl")).unwrap();
+    let ui: Value = serde_json::from_str(records.lines().next().unwrap()).unwrap();
     assert_eq!(ui["state"], json!({"state":"ready","message":"Echo Live ready"}));
     assert_eq!(ui["seq"], 1);
     assert_eq!(report["evidence"], json!(["events.jsonl", "device-steps.jsonl"]));
@@ -200,6 +202,22 @@ fn serve(
         let value: Value = serde_json::from_str(&line).unwrap();
         if value["stop"] == true {
             break;
+        }
+        if matches!(value["action"].as_str(), Some("identity" | "kill")) {
+            writeln!(input, "{value}").unwrap();
+            input.flush().unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            if value["action"] == "kill" {
+                assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["event"], "host.ready");
+                line.clear();
+                output.read_line(&mut line).unwrap();
+            }
+            let reply: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(reply["event"], "host.ack");
+            registered = false;
+            writeln!(stream, "{reply}").unwrap();
+            continue;
         }
         let commands = if value["action"] == "mute" {
             vec![json!({"action":"mute"})]

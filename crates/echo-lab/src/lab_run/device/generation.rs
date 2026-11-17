@@ -1,0 +1,70 @@
+//! Finalize each original process trace before reusing its output path.
+use super::super::run_report::Artifacts;
+use super::{observations, runtime::Runtime};
+use serde_json::json;
+
+impl Runtime {
+    pub(super) fn collect(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
+        let result = self.observe().and_then(|()| self.trace.finish());
+        self.invalid |= result.is_err();
+        let mut failures = Vec::new();
+        for (index, selectors, run, offset) in &self.expectations {
+            if let Err(error) = result.as_ref().map_err(Clone::clone).and_then(|()| {
+                super::super::sim::selectors::check(&self.trace.records[*offset..], selectors, run.as_deref())
+            }) {
+                artifacts.checks.insert(format!("step_{index}"), false);
+                failures.push(error);
+            }
+        }
+        if result.is_ok() {
+            for record in &self.trace.records {
+                failures.extend(artifacts.observation(record).err());
+                failures.extend(observations::mute_window(artifacts, record).err());
+                if record["event"] == "mic.mute_window" {
+                    self.window = Some(json!({"received_frames":record["received_frames"],
+                        "forwarded_frames":record["forwarded_frames"]}));
+                }
+            }
+            self.errors += self
+                .trace
+                .records
+                .iter()
+                .filter(|r| r["event"] == "bridge.error")
+                .count();
+            artifacts.checks.insert("bridge_errors_absent".into(), self.errors == 0);
+            if self.errors != 0 {
+                failures.push("device: bridge errors observed".into());
+            }
+        }
+        failures.extend(result.err());
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    }
+
+    pub(super) fn summary(&self, artifacts: &mut Artifacts) -> Result<(), String> {
+        if self.invalid || !self.started || self.generation == 0 {
+            return Ok(());
+        }
+        artifacts.m1 = Some(json!({"ready_before_first_wake":self.ready,
+            "streamed_wakes":self.wakes,"bridge_restarts":self.bridge_restarts,
+            "hassmic_host_restarts":self.host_restarts,
+            "mute_status":if self.window.is_some() { "pass" } else { "blocked" }}));
+        if let Some(window) = &self.window {
+            artifacts.m1.as_mut().ok_or("device: missing summary")?["mute_window"] = window.clone();
+        }
+        observations::append(
+            artifacts,
+            &json!({"event":"device.summary","step":null,
+            "elapsed_ms":self.elapsed()?,"bridge_errors":self.errors,
+            "bridge_restarts_recovered":self.bridge_restarts,
+            "hassmic_restarts_recovered":self.host_restarts}),
+        )
+    }
+
+    pub(super) fn elapsed(&self) -> Result<u128, String> {
+        Ok(self.began.ok_or("device: missing start time")?.elapsed().as_millis())
+    }
+}

@@ -149,7 +149,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
             steps.push(match step["say"].as_str() {
                 Some(value) => say(value, path, options)?,
                 None if options.sim => sim::parse_step(step, path)?,
-                None if options.bridge_config.is_some() || name == "M1" => device::step(step)?,
+                None if options.bridge_config.is_some() || name == "M1" => device::step(step, path)?,
                 None => run_oracles::parse(step)?,
             });
         }

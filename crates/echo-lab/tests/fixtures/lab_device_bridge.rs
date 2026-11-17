@@ -6,6 +6,52 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
+pub fn adb(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::Error>> {
+    if args.get(1).is_some_and(|v| v == "ps")
+        && let Some(rows) = fixture["device_ps"].as_str()
+    {
+        writeln!(io::stdout(), "{rows}")?;
+        return Ok(0);
+    }
+    if args.get(1).is_some_and(|v| v == "kill") {
+        if fixture["device_cancel_kill"] == true {
+            fs::write("cancel.signal", "")?;
+            return Ok(0);
+        }
+        if fixture["device_fail_kill"] == true {
+            return Ok(1);
+        }
+        if fixture["device_no_reconnect"] == true {
+            return Ok(0);
+        }
+    }
+    let address: std::net::SocketAddr = std::env::var("ECHO_LAB_DEVICE_CONTROL")?.parse()?;
+    if address.ip() != std::net::Ipv4Addr::LOCALHOST {
+        return Err("nonlocal fake control".into());
+    }
+    let command = if args == ["shell", "ps", "-A", "-o", "PID,PPID,NAME"] {
+        json!({"action":"identity"})
+    } else if args.len() == 3 && args[1] == "kill" {
+        json!({"action":"kill","pid":args[2].parse::<u32>()?})
+    } else {
+        return Err("unexpected adb command".into());
+    };
+    let mut socket = TcpStream::connect(address)?;
+    socket.set_read_timeout(Some(std::time::Duration::from_secs(20)))?;
+    writeln!(socket, "{command}")?;
+    let mut line = String::new();
+    io::BufReader::new(socket).read_line(&mut line)?;
+    let response: Value = serde_json::from_str(&line)?;
+    if response["event"] != "host.ack" {
+        return Err("host control failed".into());
+    }
+    if args[1] == "ps" {
+        let pid = response["pid"].as_u64().ok_or("missing pid")?;
+        writeln!(io::stdout(), "PID PPID NAME\n2 1 hassmic\n{pid} 2 hassmic")?;
+    }
+    Ok(0)
+}
+
 pub fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::Error>> {
     let fault = fixture["device_bridge_fault"].as_str().ok_or("missing fault")?;
     let index = args.iter().position(|s| s == "--trace").ok_or("missing trace")?;
@@ -20,17 +66,25 @@ pub fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::E
             json!({"event":"screen.listening","elapsed_ms":0,"address":listener.local_addr()?.to_string()})
         ),
     )?;
-    wake_trace(path, fault)?;
     writeln!(io::stdout(), "{}", json!({"event":"bridge.ready"}))?;
-    if matches!(fault, "late_wake" | "stale_wake") {
-        let run = if fault == "stale_wake" { "run-2" } else { "run-1" };
-        writeln!(io::stdout(), "{}", json!({"event":"bridge.run_completed","run_id":run}))?;
-    }
     io::stdout().flush()?;
     let (mut socket, _) = listener.accept()?;
     authenticated(&socket)?;
     response(&mut socket, fault)?;
     drop(socket);
+    if matches!(fault, "late_wake" | "stale_wake") {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !std::path::Path::new("../play-queued").exists() {
+            if std::time::Instant::now() >= deadline {
+                return Err("play never queued".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        wake_trace(path, fault)?;
+        let run = if fault == "stale_wake" { "run-2" } else { "run-1" };
+        writeln!(io::stdout(), "{}", json!({"event":"bridge.run_completed","run_id":run}))?;
+        io::stdout().flush()?;
+    }
     // The real owner closes stdin during finalization. Only then inject a late
     // record, proving final oracles use the collected trace, not an early copy.
     io::stdin().read_to_end(&mut Vec::new())?;

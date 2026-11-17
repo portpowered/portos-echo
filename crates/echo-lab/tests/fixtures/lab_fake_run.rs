@@ -251,6 +251,9 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
 }
 
 fn configured_fixture(op: &str, args: &[String], fixture: &Value) -> Result<Option<u8>, Box<dyn std::error::Error>> {
+    if op == "firmware" && matches!(args.get(1).map(String::as_str), Some("ps" | "kill")) {
+        return device_bridge::adb(args, fixture).map(Some);
+    }
     if op == "bridge" && fixture["device_bridge_fault"].is_string() {
         return device_bridge::run(args, fixture).map(Some);
     }

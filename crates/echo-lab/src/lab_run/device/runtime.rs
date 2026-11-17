@@ -13,17 +13,26 @@ use super::super::{
 
 #[derive(Default)]
 pub struct Runtime {
-    bridge: Option<Process>,
+    pub(super) bridge: Option<Process>,
     live: Option<FakeLive>,
-    screen: Option<Screen>,
-    trace: Trace,
-    trace_path: PathBuf,
-    offset: usize,
+    pub(super) screen: Option<Screen>,
+    pub(super) trace: Trace,
+    pub(super) trace_path: PathBuf,
+    pub(super) offset: usize,
     mute_offset: usize,
+    wake_offset: usize,
     pub run: Option<String>,
-    expectations: Vec<(usize, Vec<selectors::Selector>, Option<String>, usize)>,
+    pub(super) expectations: Vec<(usize, Vec<selectors::Selector>, Option<String>, usize)>,
     pub started: bool,
-    began: Option<std::time::Instant>,
+    pub(super) generation: u64,
+    pub(super) errors: usize,
+    pub(super) invalid: bool,
+    pub(super) wakes: Vec<Value>,
+    pub(super) bridge_restarts: u64,
+    pub(super) host_restarts: u64,
+    pub(super) ready: u64,
+    pub(super) window: Option<Value>,
+    pub(super) began: Option<std::time::Instant>,
 }
 
 impl Runtime {
@@ -40,6 +49,11 @@ impl Runtime {
             .await
             .map_err(|_| "device: fake Live startup failed")?,
         );
+        self.generation = 1;
+        self.launch(bridge, root).await
+    }
+
+    pub(super) async fn launch(&mut self, bridge: &Path, root: &Path) -> Result<(), String> {
         let origin = self.live.as_ref().ok_or("device: missing fake Live")?.base_url();
         let mut command = tokio::process::Command::new(bridge);
         for name in [
@@ -119,7 +133,17 @@ impl Runtime {
                 json!("wyoming.run_ended"),
             ],
             index,
-        )
+        )?;
+        let frames = self
+            .trace
+            .records
+            .iter()
+            .find(|r| r["event"] == "wyoming.mic_frames" && r["run_id"] == id)
+            .and_then(|r| r["count"].as_u64())
+            .ok_or("device: missing frame measurement")?;
+        self.wakes
+            .push(json!({"bridge_generation":self.generation,"run_id":id,"mic_frames":frames}));
+        Ok(())
     }
 
     pub fn expect_trace(&mut self, values: &[Value], index: usize) -> Result<(), String> {
@@ -131,7 +155,7 @@ impl Runtime {
         {
             self.mute_offset
         } else {
-            0
+            self.wake_offset
         };
         selectors::check(&self.trace.records[offset..], &parsed, self.run.as_deref())?;
         self.expectations.push((index, parsed, self.run.clone(), offset));
@@ -143,6 +167,9 @@ impl Runtime {
         screen.expect(expected).await?;
         // expect uses the shared typed UiState oracle. Project only the matched
         // Ready/Muted values, never credentials or arbitrary provider content.
+        if self.wakes.is_empty() && expected["state"] == "ready" {
+            self.ready += 1;
+        }
         let state = match expected["state"].as_str() {
             Some("ready") if expected["message"] == "Echo Live ready" => {
                 json!({"state":"ready","message":"Echo Live ready"})
@@ -150,7 +177,7 @@ impl Runtime {
             Some("muted") => json!({"state":"muted"}),
             _ => return Err("device: unsupported UI projection".into()),
         };
-        let value = json!({"event":"device.ui","step":index,"bridge_generation":1,
+        let value = json!({"event":"device.ui","step":index,"bridge_generation":self.generation,
             "seq":screen.sequence(),"elapsed_ms":self.began.ok_or("device: missing start time")?.elapsed().as_millis(),"state":state});
         super::observations::append(artifacts, &value)?;
         Ok(())
@@ -161,6 +188,12 @@ impl Runtime {
             self.observe()?;
             self.mute_offset = self.trace.records.len();
         }
+        Ok(())
+    }
+
+    pub fn arm_wake(&mut self) -> Result<(), String> {
+        self.observe()?;
+        self.wake_offset = self.trace.records.len();
         Ok(())
     }
 
@@ -182,35 +215,9 @@ impl Runtime {
         let mut failures = Vec::new();
         if let Some(mut child) = self.bridge.take() {
             failures.extend(child.close().await.err());
-            let trace = self.observe().and_then(|()| self.trace.finish());
-            for (index, selectors, run, offset) in &self.expectations {
-                if let Err(error) = trace
-                    .as_ref()
-                    .map_err(Clone::clone)
-                    .and_then(|()| selectors::check(&self.trace.records[*offset..], selectors, run.as_deref()))
-                {
-                    artifacts.checks.insert(format!("step_{index}"), false);
-                    failures.push(error);
-                }
-            }
-            if trace.is_ok() {
-                for record in &self.trace.records {
-                    failures.extend(artifacts.observation(record).err());
-                    failures.extend(super::observations::mute_window(artifacts, record).err());
-                }
-                let errors = self
-                    .trace
-                    .records
-                    .iter()
-                    .filter(|r| r["event"] == "bridge.error")
-                    .count();
-                artifacts.checks.insert("bridge_errors_absent".into(), errors == 0);
-                if errors != 0 {
-                    failures.push("device: bridge errors observed".into());
-                }
-            }
-            failures.extend(trace.err());
+            failures.extend(self.collect(artifacts).err());
         }
+        failures.extend(self.summary(artifacts).err());
         if let Some(live) = self.live.take() {
             live.shutdown().await;
         }
@@ -278,5 +285,36 @@ mod tests {
             "mic.mute_window {window_id: mute-1, received_frames: 0, forwarded_frames: 0}"
         )];
         assert!(runtime.expect_trace(&selector, 0).unwrap_err().contains("observed 0"));
+    }
+
+    #[test]
+    fn device_recovery_wake_cannot_reuse_a_previous_connection_run() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("trace");
+        let data = ["wyoming.run_started", "wyoming.mic_frames", "wyoming.run_ended"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, event)| {
+                format!(
+                    "{}\n",
+                    json!({"event":event,"elapsed_ms":i,"run_id":"run-1","count":10})
+                )
+            })
+            .collect::<Vec<_>>()
+            .concat();
+        std::fs::write(&path, data).unwrap();
+        let mut runtime = Runtime {
+            trace_path: path,
+            run: Some("run-1".into()),
+            ..Runtime::default()
+        };
+        runtime.arm_wake().unwrap();
+        assert!(
+            runtime
+                .expect_trace(&[json!("wyoming.run_started")], 0)
+                .unwrap_err()
+                .contains("observed 0")
+        );
+        assert_eq!(runtime.wakes.len(), 0);
     }
 }

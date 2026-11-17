@@ -14,7 +14,7 @@ fn mute_steps() -> Value {
     ])
 }
 
-fn observations(bench: &Bench) -> Vec<Value> {
+pub(super) fn observations(bench: &Bench) -> Vec<Value> {
     fs::read_to_string(bench.root.path().join("artifacts/device-steps.jsonl"))
         .unwrap()
         .lines()
@@ -22,7 +22,7 @@ fn observations(bench: &Bench) -> Vec<Value> {
         .collect()
 }
 
-fn operator(
+pub(super) fn operator(
     bench: &Bench,
     mut command: Command,
     response: &str,
@@ -117,7 +117,7 @@ fn device_m1_confirmation_cancel_collects_resources_without_later_step() {
     assert!(!bench.root.path().join("artifacts/configured.private").exists());
 }
 
-fn assert_mute_evidence(bench: &Bench) {
+pub(super) fn assert_mute_evidence(bench: &Bench) {
     let report = bench.report();
     let records = observations(bench);
     let confirms: Vec<_> = records
