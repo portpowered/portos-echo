@@ -40,7 +40,7 @@ impl Case {
         let host = self.host.as_mut().ok_or("m2: missing host")?;
         let address = process::admit_host(
             &mut vec![],
-            host.expect("host.ready"),
+            host_ready(host),
             process::readiness_deadline(),
             process::connect,
         )
@@ -216,6 +216,15 @@ fn read_trace(path: &Path) -> Result<Trace, String> {
     trace.append(&std::fs::read(path).map_err(|_| "m2: missing bridge trace")?)?;
     trace.finish()?;
     Ok(trace)
+}
+
+async fn host_ready(host: &mut Process) -> Result<Value, String> {
+    let value = host.line().await?;
+    match value["event"].as_str() {
+        Some("host.ready") => Ok(value),
+        Some("host.failed") => Err("m2: pinned hassmic-host startup failed before readiness".into()),
+        _ => Err("m2: unexpected hassmic-host startup observation".into()),
+    }
 }
 
 fn finite_pcm(utterance: &Path) -> Result<Vec<u8>, String> {

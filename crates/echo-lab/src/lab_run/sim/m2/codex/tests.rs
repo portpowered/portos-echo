@@ -26,6 +26,26 @@ async fn t3_m2_codex_provider_closes_before_a_call_without_waiting_for_an_offer(
 }
 
 #[tokio::test]
+async fn t3_m2_codex_host_failure_names_the_dependency_without_echoing_payloads() {
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    for (event, expected) in [
+        ("host.failed", "m2: pinned hassmic-host startup failed before readiness"),
+        ("untrusted-payload", "m2: unexpected hassmic-host startup observation"),
+    ] {
+        let mut command = tokio::process::Command::new(python);
+        command.args([
+            "-u",
+            "-c",
+            "import json,sys; print(json.dumps({'event':sys.argv[1]}))",
+            event,
+        ]);
+        let mut host = Process::start(&mut command).unwrap();
+        assert_eq!(host_ready(&mut host).await, Err(expected.into()));
+        assert_eq!(host.close().await, Ok(()));
+    }
+}
+
+#[tokio::test]
 async fn t3_m2_codex_missing_executable_reaps_provider_and_private_configuration() {
     let mut options = super::super::tests::options();
     let missing = tempfile::tempdir().unwrap();
