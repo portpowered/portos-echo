@@ -74,11 +74,15 @@ until restart/shutdown. Explicit shutdown awaits reaping within the configured
 timeout. Drop signals termination; Tokio supplies best-effort asynchronous reap,
 so callers needing an awaited cleanup boundary use shutdown before runtime exit.
 
-The pin helpers, settings and raw-stdio S5 witness preserve the initial executable
-spine. Controlled-process T3 tests exercise the supervisor's initialization,
-crash/restart, drop, pipe failure and isolated-session boundaries. The final
-public-client pinned-server T3 remains required in this same work item. These
-process witnesses do not establish real app-server call behavior through Rust.
+The retained S5 fixture now launches the already compiled Rust integration test
+as its client. That client uses the public supervisor, bounded IO, selected wire
+types and ThreadSettings against the unmodified pin. Python owns only the local
+HTTP/WebSocket/Responses fake and its exact wire-value oracle. A pipe readiness
+signal confirms receipt of the delegation append before Rust stops the call;
+shutdown awaits child reaping. No compilation occurs inside that journey.
+Controlled-process T3 tests separately exercise initialization, crash/restart,
+drop, pipe failure and isolated-session boundaries. The complete provider fault
+matrix, concurrent real-pin journeys and Linux confinement remain required.
 
 The later bridge cutover owns the tool host, MCP, caps and milestone scenarios.
 This component does not claim M2, M4, real authentication, media or hardware

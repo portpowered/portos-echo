@@ -128,6 +128,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
         data = ''.join(('event: ' + x['type'] + '\ndata: ' + json.dumps(x) + '\n\n' for x in events))
         self.respond(200, data.encode(), 'text/event-stream')
 
+def verify(sdps, tools, started, closed):
+    normalized = []
+    for body in observed['responses']:
+        normalized.append([x.get('name', x.get('type')) for x in body['tools']])
+    print(json.dumps({'calls': [{'path': x['path'], 'model': x['body']['session']['model']} for x in observed['calls']], 'sideband': observed['sideband'], 'model_tools': normalized, 'tool_calls': tools, 'sdp': sdps, 'started': started, 'append': observed['append'], 'closed': closed, 'external_requests': observed['external']}, indent=2), flush=True)
+    assert len(observed['calls']) == 1
+    call = observed['calls'][0]
+    assert call['body']['sdp'] == 'v=0\r\ns=fake-offer\r\n'
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(call['path']).query) == {'intent': ['quicksilver'], 'architecture': ['avas']}, call['path']
+    assert call['body']['session']['model'] == 'gpt-live-1-codex', call['body']['session']['model']
+    assert sdps == [ANSWER] and started == ['v3'], (sdps, started)
+    assert normalized == [['echo_test'], ['echo_test']], normalized
+    assert len(tools) == 1 and tools[0]['tool'] == 'echo_test' and (tools[0]['arguments'] == {'message': 'ping'}), tools
+    assert len(observed['append']) == 1 and observed['append'][0]['delegation_item_id'] == 'delegation-local', observed['append']
+    assert observed['append'][0]['content'] == [{'type': 'input_text', 'text': 'echo-ok'}]
+    outputs = [item for item in observed['responses'][1]['input'] if item.get('type') == 'function_call_output']
+    assert len(outputs) == 1 and outputs[0]['call_id'] == 'tool-local', outputs
+    assert 'echo-ok' in outputs[0]['output'], outputs
+    assert not observed['external'], observed['external']
+    print('S5_PASS', flush=True)
+
 # Stop can close HTTP keep-alive connections while handlers are reading.
 class QuietServer(http.server.ThreadingHTTPServer):
 
@@ -139,12 +160,53 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 port = server.server_port
 base = f'http://127.0.0.1:{port}'
 with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=True) as home:
-    overrides = {'model_provider': 'local', 'model': 'gpt-5.4', 'model_providers.local': {'name': 'local', 'base_url': base + '/v1', 'wire_api': 'responses', 'experimental_bearer_token': 'dummy-local-only'}, 'experimental_realtime_webrtc_call_base_url': base + '/backend-api/codex', 'experimental_realtime_ws_base_url': base + '/v1', 'features.plugins': False, 'features.recommended_plugins': False, 'features.remote_models': False, 'features.apps': False, 'features.remote_control': False, 'features.skill_search': False, 'features.skip_host_skill_discovery': True, 'cloud.skills.enabled': False, 'analytics.enabled': False, 'feedback.enabled': False, 'features.multi_agent': False, 'features.multi_agent_v2': False, 'features.goals': False, 'tools.experimental_request_user_input.enabled': False, 'features.shell_tool': False, 'features.unified_exec': False, 'web_search': 'disabled', 'tools.update_plan.enabled': False, 'mcp_servers': {}, 'cli_auth_credentials_store': 'file', 'check_for_update_on_startup': False}
+    overrides = {'model_provider': 'local', 'model': 'gpt-5.4', 'model_providers.local': {'name': 'local', 'base_url': base + '/v1', 'wire_api': 'responses', 'requires_openai_auth': True, 'experimental_bearer_token': 'dummy-local-only'}, 'experimental_realtime_webrtc_call_base_url': base + '/backend-api/codex', 'experimental_realtime_ws_base_url': base + '/v1', 'features.plugins': False, 'features.recommended_plugins': False, 'features.remote_models': False, 'features.apps': False, 'features.remote_control': False, 'features.skill_search': False, 'features.skip_host_skill_discovery': True, 'cloud.skills.enabled': False, 'analytics.enabled': False, 'feedback.enabled': False, 'features.multi_agent': False, 'features.multi_agent_v2': False, 'features.goals': False, 'tools.experimental_request_user_input.enabled': False, 'features.shell_tool': False, 'features.unified_exec': False, 'web_search': 'disabled', 'tools.update_plan.enabled': False, 'mcp_servers': {}, 'cli_auth_credentials_store': 'file', 'check_for_update_on_startup': False}
 
     def toml(v):
         if isinstance(v, dict):
             return '{' + ','.join((k + '=' + toml(x) for k, x in v.items())) + '}'
         return json.dumps(v)
+    if '--rust-client' in sys.argv:
+        executable = sys.argv[sys.argv.index('--rust-client') + 1]
+        env = dict(os.environ, ECHO_CODEX_JOURNEY=json.dumps({
+            'binary': sys.argv[1], 'home': str(pathlib.Path(home) / 'client'),
+            'base': base, 'overrides': [(k, toml(v)) for k, v in overrides.items()]}))
+        child = subprocess.Popen([executable, '--exact', 't3_pinned_codex_local_call_and_delegation', '--nocapture'],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True, env=env)
+        report = None
+        try:
+            output = queue.Queue()
+            def read_rust():
+                for line in child.stdout:
+                    output.put(line)
+                output.put(None)
+            threading.Thread(target=read_rust, daemon=True).start()
+            while True:
+                line = output.get(timeout=20)
+                if line is None:
+                    break
+                if line.strip() == 'RUST_TURN_COMPLETE':
+                    assert appended.wait(10), 'append missing after Rust tool response'
+                    child.stdin.write('append-observed\n')
+                    child.stdin.flush()
+                elif line.startswith('RUST_REPORT='):
+                    report = json.loads(line.removeprefix('RUST_REPORT='))
+            result = child.wait(timeout=10)
+            calls = [{'path': x['path'], 'model': x['body']['session']['model']} for x in observed['calls']]
+            assert result == 0, ('expected explicit v3, model=gpt-live-1-codex, '
+                                 'query=intent=quicksilver&architecture=avas; observed calls=' +
+                                 json.dumps(calls) + '; Rust: ' + child.stderr.read())
+            assert report is not None, 'Rust journey produced no report'
+            verify(report['sdp'], report['tools'], report['started'], report['closed'])
+            assert report['reaped'] is True
+            print('PUBLIC_CLIENT_PASS', flush=True)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=10)
+            server.shutdown()
+        raise SystemExit(0)
     argv = [sys.argv[1], 'app-server', '--listen', 'stdio://']
     for k, v in overrides.items():
         argv += ['-c', k + '=' + toml(v)]
@@ -205,25 +267,7 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
         while not closed:
             value = messages.get(timeout=20)
             closed = value.get('method') == 'thread/realtime/closed'
-        normalized = []
-        for body in observed['responses']:
-            normalized.append([x.get('name', x.get('type')) for x in body['tools']])
-        print(json.dumps({'calls': [{'path': x['path'], 'model': x['body']['session']['model']} for x in observed['calls']], 'sideband': observed['sideband'], 'model_tools': normalized, 'tool_calls': tools, 'sdp': sdps, 'started': started, 'append': observed['append'], 'closed': closed, 'external_requests': observed['external']}, indent=2), flush=True)
-        assert len(observed['calls']) == 1
-        call = observed['calls'][0]
-        assert call['body']['sdp'] == 'v=0\r\ns=fake-offer\r\n'
-        assert urllib.parse.parse_qs(urllib.parse.urlsplit(call['path']).query) == {'intent': ['quicksilver'], 'architecture': ['avas']}, call['path']
-        assert call['body']['session']['model'] == 'gpt-live-1-codex', call['body']['session']['model']
-        assert sdps == [ANSWER] and started == ['v3'], (sdps, started)
-        assert normalized == [['echo_test'], ['echo_test']], normalized
-        assert len(tools) == 1 and tools[0]['tool'] == 'echo_test' and (tools[0]['arguments'] == {'message': 'ping'}), tools
-        assert len(observed['append']) == 1 and observed['append'][0]['delegation_item_id'] == 'delegation-local', observed['append']
-        assert observed['append'][0]['content'] == [{'type': 'input_text', 'text': 'echo-ok'}]
-        outputs = [item for item in observed['responses'][1]['input'] if item.get('type') == 'function_call_output']
-        assert len(outputs) == 1 and outputs[0]['call_id'] == 'tool-local', outputs
-        assert 'echo-ok' in outputs[0]['output'], outputs
-        assert not observed['external'], observed['external']
-        print('S5_PASS', flush=True)
+        verify(sdps, tools, started, closed)
     finally:
         child.terminate()
         child.wait(timeout=10)

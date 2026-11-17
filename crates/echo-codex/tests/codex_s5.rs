@@ -1,9 +1,13 @@
-//! T3 component feasibility proof. This uses the real pin and a raw stdio probe;
-//! it does not prove the future Rust supervisor/client's lifecycle or bounds.
+//! T3 public Rust client journey against the unmodified pin and local fakes.
+#[path = "support/codex_journey.rs"]
+mod journey;
 use std::{error::Error, io::Write, path::PathBuf, process::Command};
 
 #[test]
 fn t3_pinned_codex_local_call_and_delegation() -> Result<(), Box<dyn Error>> {
+    if let Ok(config) = std::env::var("ECHO_CODEX_JOURNEY") {
+        return journey::run(&config);
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut helper = if cfg!(windows) {
         let mut command = Command::new("powershell.exe");
@@ -27,6 +31,8 @@ fn t3_pinned_codex_local_call_and_delegation() -> Result<(), Box<dyn Error>> {
     let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
         .arg(root.join("crates/echo-codex/tests/support/codex_probe.py"))
         .arg(binary.trim())
+        .arg("--rust-client")
+        .arg(std::env::current_exe()?)
         .output()?;
     std::io::stdout().write_all(&output.stdout)?;
     assert!(
@@ -34,6 +40,6 @@ fn t3_pinned_codex_local_call_and_delegation() -> Result<(), Box<dyn Error>> {
         "probe: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("S5_PASS"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("PUBLIC_CLIENT_PASS"));
     Ok(())
 }

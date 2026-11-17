@@ -80,6 +80,7 @@ features.skip_host_skill_discovery = true
 name = "local"
 base_url = "http://127.0.0.1:PORT/v1"
 wire_api = "responses"
+requires_openai_auth = true
 experimental_bearer_token = "dummy-local-only"
 ```
 
@@ -87,7 +88,8 @@ experimental_bearer_token = "dummy-local-only"
 `sandbox:"read-only"`, `environments:[]` and only the `echo_test` dynamic tool.
 Start explicitly supplies `version:"v3"`, `outputModality:"audio"`, a WebRTC
 offer, `includeStartupContext:false` and `clientManagedHandoffs:false`.
-A synthetic `prompt` prevents copying the pin's default prompt into observations.
+The public client sends only its selected start fields. Observations retain
+exact call query/model/SDP values without copying the default prompt.
 
 ## Wire observations and exact oracle
 
@@ -131,10 +133,21 @@ pinned commit, not Codex main. This resolves the S5 feasibility questions only.
 
 ## Remaining proof
 
-The current witness drives raw stdio from Python. It does not exercise a Rust
-client or prove its bounded lines, IDs, queues, deadlines, restart budget,
-kill/reap/drop, concurrent session isolation, error matrix or missing-v3 seed.
-Those remain retained work in `el-w2d-codex-client-001`; the final public-client
-journey must reuse the real binary/local-fake boundaries. Independent review,
+The component witness now uses the public Rust supervisor/client and selected
+wire types, including ThreadSettings and explicit V3 start. The Python fake
+launches the already compiled integration-test executable inside its namespace
+on Linux. It supplies only synthetic configuration and uses a pipe readiness
+signal after receiving the delegation append. Rust then stops and awaits child
+reaping; the witness additionally prints `PUBLIC_CLIENT_PASS`. The local model
+provider requires OpenAI auth so account/read also observes the dummy apiKey
+login; the explicit local call, sideband and model destinations stay in effect.
+The original raw-stdio probe remains available for feasibility diagnosis.
+
+Bounded lines, IDs, queues and deadlines have separate T1/T2 tests; controlled
+process tests cover restart/drop and reaping. Concurrent real-pin sessions,
+provider/transcript fault edges, helper corruption/concurrency and final Linux
+confinement remain retained work in `el-w2d-codex-client-001`. The missing-V3
+negative control is performed temporarily against the same public-client test;
+its command, observed model mismatch and restored pass belong in the PR comment. Independent review,
 final quality checks, merge and loopback remain review-owned. Real authentication,
 bridge/MCP integration and M2/M4 belong to their later gates.
