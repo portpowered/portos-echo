@@ -1101,3 +1101,31 @@ then compares the complete provider snapshot and reaps each owned process.
 The component witness substitutes only Wyoming, consumes prebuilt artifacts
 and checks released listeners and private-state removal. It complements the
 native hassmic-host milestone scenario; it does not replace that boundary.
+
+## Canonical lifecycle component amendment (2026-11-17)
+
+The protecting T3 lifecycle components consume the prebuilt configured bridge,
+verified app-server pin and real media peer. Their Wyoming socket and provider
+are controlled boundaries; they do not replace native hassmic-host scenarios.
+Continuous capture crosses negotiation, and each native assistant completion
+still requires twelve microphone packets at the remote. A test-only control
+rearms that existing remote for a second wake without creating another call.
+The original M1 automatic completion and fresh-call behavior are unchanged.
+
+Two wakes within the idle interval retain one call and one sideband, publish
+Connected once, and finish with matching run identities and played receipts.
+The idle case observes one close. The kill case holds the reused second run
+before its transcript, invokes the public kill command, and requires the kill
+screen, one close, no second success and zero reply PCM. Two independent owners
+use separate homes, device sockets and providers; closing one cannot prevent
+the survivor from completing its second wake on its own original call.
+
+The local provider also refuses call creation or supplies malformed SDP.
+Neither case can publish Connected, play audio or report completion. The
+components assert the exact nominated-key call request, zero external/refresh
+traffic, redacted traces, collected exit 1, joined device ownership and immediate
+private-home reacquisition through the delivered status command. Only inert
+local credentials are involved. These components preserve the production
+clock; the separate explicit-clock and native-scenario gates retain their own
+proof obligations. The controlled Wyoming peer accepts the existing
+hassmic-continue control, including during an interrupted reused run.

@@ -15,6 +15,8 @@ transcript_input, transcript_output = socket.socketpair()
 transcript_count = 0
 observed = {'calls': [], 'sidebands': 0, 'external': 0, 'refreshes': 0}
 output_lock = threading.Lock()
+fault = sys.argv[1] if len(sys.argv) == 2 else None
+assert fault in (None, 'call_refused', 'malformed_sdp')
 
 
 def emit(value):
@@ -65,6 +67,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             'nominated_key': self.headers.get('Authorization') == 'Bearer dummy-local-only',
             'account_header': self.headers.get('ChatGPT-Account-Id'),
         })
+        if fault == 'call_refused':
+            self.respond(400, b'{"error":"synthetic private provider body"}')
+            return
+        if fault == 'malformed_sdp':
+            self.respond(201, b'synthetic private SDP', 'application/sdp', '/v1/live/rtc_local')
+            return
         emit({'event': 'provider.offer', 'offer': body['sdp']})
         self.respond(201, answers.get(timeout=20).encode(), 'application/sdp', '/v1/live/rtc_local')
 

@@ -1,5 +1,7 @@
 //! Pinned-server M2 success path; the provider and its media endpoint are local.
 pub(in crate::lab_run::sim) mod config;
+#[cfg(test)]
+mod lifecycle;
 pub(in crate::lab_run::sim) mod provider;
 pub(super) mod rejection;
 #[cfg(test)]

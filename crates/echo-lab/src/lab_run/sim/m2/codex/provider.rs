@@ -12,6 +12,8 @@ enum Control {
     Transcripts,
     Quiesce(oneshot::Sender<()>),
     Close,
+    #[cfg(test)]
+    NextCapture,
 }
 pub(in crate::lab_run::sim) struct Provider {
     pub origin: String,
@@ -20,17 +22,26 @@ pub(in crate::lab_run::sim) struct Provider {
     task: Option<JoinHandle<Result<Value, String>>>,
 }
 impl Provider {
+    #[cfg(test)]
+    pub(super) async fn next_capture(&self) {
+        self.commands.send(Control::NextCapture).await.unwrap();
+    }
     pub async fn start(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, false).await
+        Self::start_mode(python, false, None).await
     }
     pub async fn start_m1(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, true).await
+        Self::start_mode(python, true, None).await
     }
-    async fn start_mode(python: &str, repeated: bool) -> Result<Self, String> {
+    #[cfg(test)]
+    pub(super) async fn start_fault(python: &str, fault: &str) -> Result<Self, String> {
+        Self::start_mode(python, false, Some(fault)).await
+    }
+    async fn start_mode(python: &str, repeated: bool, fault: Option<&str>) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
-            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m2/codex/provider.py"));
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m2/codex/provider.py"))
+            .args(fault);
         let mut process = Process::start(&mut command)?;
         let ready = process.expect("provider.ready").await?;
         let origin = ready["origin"]
@@ -120,6 +131,8 @@ async fn drive(
                 Some(Control::Transcripts) => process.send(&json!({"transcripts":true})).await?,
                 Some(Control::Quiesce(done)) => { quiesced = true; let _ = done.send(()); },
                 Some(Control::Close) | None => break,
+                #[cfg(test)]
+                Some(Control::NextCapture) => return Err("m2: capture-only control".into()),
             },
         }
     }
@@ -155,6 +168,8 @@ async fn repeat(
             control = commands.recv() => match control {
                 Some(Control::Quiesce(done)) => { quiesced = true; let _ = done.send(()); },
                 Some(Control::Close) | None => break,
+                #[cfg(test)]
+                Some(Control::NextCapture) => { received = 0; quiesced = false; },
                 Some(Control::Transcripts) => return Err("m1: automatic transcript ownership".into()),
             },
         }

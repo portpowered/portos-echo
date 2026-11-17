@@ -86,7 +86,7 @@ async fn continuous_wakes(bridge: &mut Process, wake: &tokio::sync::mpsc::Sender
     }
 }
 
-fn continuous_command(
+pub(super) fn continuous_command(
     binary: &Path,
     root: &Path,
     output: &Path,
@@ -169,7 +169,7 @@ async fn continuous_satellite(listener: TcpListener, mut requested: tokio::sync:
     frames
 }
 
-async fn continuous_playback(stream: TcpStream, format: Value) -> (TcpStream, usize) {
+pub(super) async fn continuous_playback(stream: TcpStream, format: Value) -> (TcpStream, usize) {
     let (mut input, mut output) = stream.into_split();
     // Device cadence continues through call negotiation and stops only when
     // the bridge ends the run; a fixed finite burst could precede media readiness.
@@ -189,6 +189,7 @@ async fn continuous_playback(stream: TcpStream, format: Value) -> (TcpStream, us
         match row["type"].as_str().unwrap() {
             "describe" => send(&mut output, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
             "audio-start" => {}
+            "hassmic-continue" => assert!(row["data"].is_null()),
             "audio-chunk" => frames += 1,
             "audio-stop" => {
                 send(&mut output, "audio-stop", json!({}), vec![]).await;
@@ -366,7 +367,7 @@ async fn playback(stream: &mut TcpStream) -> (usize, i64) {
     (frames, energy)
 }
 
-async fn send(stream: &mut (impl tokio::io::AsyncWrite + Unpin), kind: &str, data: Value, payload: Vec<u8>) {
+pub(super) async fn send(stream: &mut (impl tokio::io::AsyncWrite + Unpin), kind: &str, data: Value, payload: Vec<u8>) {
     stream
         .write_all(&encode(&Event {
             header: Header {
@@ -382,7 +383,7 @@ async fn send(stream: &mut (impl tokio::io::AsyncWrite + Unpin), kind: &str, dat
         .unwrap();
 }
 
-async fn read(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> (Value, Vec<u8>) {
+pub(super) async fn read(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> (Value, Vec<u8>) {
     let mut bytes = vec![];
     loop {
         let b = stream.read_u8().await.unwrap();
