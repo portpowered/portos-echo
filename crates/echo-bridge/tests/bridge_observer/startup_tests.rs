@@ -85,7 +85,7 @@ async fn startup_reachable_peer_without_info_exits_without_ready() {
         "{failure}"
     );
     assert!(
-        failure.contains("TCP observer action (not bridge connection): accepts TCP connect"),
+        failure.contains("TCP observer action: skipped (port does not establish ownership)"),
         "{failure}"
     );
     let status = tokio::time::timeout(OBSERVATION_TIMEOUT, bridge.child.wait())
@@ -103,4 +103,17 @@ async fn startup_reachable_peer_without_info_exits_without_ready() {
     drop(listener);
     bridge.assert_collected();
     fake.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "T3 consumes the prebuilt pin through Python lifecycle regressions"]
+async fn pinned_host_startup_coordination_and_failure_regressions() {
+    let result = bridge_refusal::host_script("crates/echo-bridge/tests/bridge_observer/startup.sh")
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert!(result.status.success(), "{}", diagnostics::safe(&result.stderr));
+    assert!(result.stdout.is_empty());
+    assert!(String::from_utf8(result.stderr).unwrap().trim_end().ends_with("OK"));
 }

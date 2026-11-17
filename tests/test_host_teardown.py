@@ -170,7 +170,7 @@ class PinnedHost(unittest.TestCase):
 
         with mock.patch('wyoming_host.shutil.copy2', side_effect=corrupt):
             with mock.patch('wyoming_host.subprocess.Popen', wraps=subprocess.Popen) as launch:
-                with self.assertRaisesRegex(RuntimeError, 'differs from pinned'):
+                with self.assertRaisesRegex(RuntimeError, 'stage-hash-mismatch'):
                     self.host.start()
         self.assertEqual(launch.call_count, 1)  # Only the pin resolver; no host.
         self.assertEqual(launch.call_args.args[0][-1], 'path')
@@ -189,7 +189,7 @@ class PinnedHost(unittest.TestCase):
             raise PermissionError('launch rejected')
 
         with mock.patch('wyoming_host.subprocess.Popen', side_effect=reject_host):
-            with self.assertRaisesRegex(PermissionError, 'launch rejected'):
+            with self.assertRaisesRegex(RuntimeError, 'startup-error'):
                 self.host.start()
         self.assertIsNone(self.host.proc)
         self.assertIsNone(self.host.staged)
@@ -367,7 +367,7 @@ finally:
             input='', capture_output=True, text=True, timeout=25)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(result.stdout, '')
-        self.assertIn('RuntimeError: host readiness failed', result.stderr)
+        self.assertIn('host readiness failed:', result.stderr)
         self.assertIn('startup-child-collected; stderr-closed', result.stderr)
 
     FAILURE_RUNNER = '''

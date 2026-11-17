@@ -14,9 +14,36 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+# A fork must not inherit another start's writable executable descriptor.
+# Release before readiness: independent children still start concurrently.
+LAUNCH_GUARD = threading.Lock()
+TAIL = 8192
+
+
+def safe_tail(raw, truncated=False):
+    raw = bytes(raw)
+    if truncated:
+        raw = raw.partition(b"\n")[2]
+    records = raw.split(b"\n")
+    result = []
+    for line in records[:-1]:
+        lower = line.lower()
+        unsafe = any(word in lower for word in (
+            b"bearer", b"token", b"secret", b"private", b"password", b"api_key",
+            b"api-key", b"account", b"/", b"\\"))
+        unsafe |= any(char < 32 or char > 126 for char in line)
+        result.append("<redacted>" if unsafe else line.decode("ascii"))
+    if records[-1]:
+        result.append("<redacted>")  # Incomplete records have unknown context.
+    return "\n".join(result) or "<empty>"
+
+
+class ReadinessFailure(RuntimeError):
+    """Already sanitized, pre-cleanup startup evidence."""
 
 
 class Host:
@@ -25,6 +52,9 @@ class Host:
         self.proc = None
         self.staged = None
         self.log = bytearray()
+        self.guard = threading.RLock()
+        self.tail = bytearray()
+        self.truncated = False
         self.deadline = time.monotonic() + 20
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
@@ -34,13 +64,52 @@ class Host:
         (self.folder / "addrs").write_text("127.0.0.1\n")
 
     def logged(self, marker):
-        while marker not in self.log:
-            remaining = self.deadline - time.monotonic()
-            if remaining <= 0 or self.proc.poll() is not None:
-                raise RuntimeError("host readiness failed")
-            if select.select([self.proc.stderr], [], [], remaining)[0]:
-                self.log.extend(os.read(self.proc.stderr.fileno(), 65536))
-        self.log = self.log[self.log.index(marker) + len(marker):]
+        with self.guard:
+            while True:
+                status = self.proc.poll()
+                if status is not None:
+                    self.drain_failure()
+                    raise self.failure("child-exited", status)
+                if marker in self.log:
+                    self.log = self.log[self.log.index(marker) + len(marker):]
+                    return
+                # Retain diagnostics and any split marker, without accumulating
+                # an unbounded pre-readiness stream from a noisy failed child.
+                keep = max(TAIL, len(marker) - 1)
+                if len(self.log) > keep:
+                    del self.log[:-keep]
+                remaining = self.deadline - time.monotonic()
+                if remaining <= 0:
+                    self.drain_failure()
+                    raise self.failure("deadline", self.proc.poll())
+                if select.select([self.proc.stderr], [], [], remaining)[0]:
+                    part = os.read(self.proc.stderr.fileno(), 65536)
+                    if not part:
+                        status = self.proc.poll()
+                        reason = "stderr-eof" if status is None else "child-exited"
+                        raise self.failure(reason, status)
+                    self.record(part)
+
+    def record(self, part):
+        self.log.extend(part)
+        self.tail.extend(part)
+        if len(self.tail) > TAIL:
+            del self.tail[:-TAIL]
+            self.truncated = True
+
+    def drain_failure(self):
+        for _ in range(8):
+            if not select.select([self.proc.stderr], [], [], 0)[0]:
+                break
+            part = os.read(self.proc.stderr.fileno(), 8192)
+            if not part:
+                break
+            self.record(part)
+
+    def failure(self, reason, status=None):
+        return ReadinessFailure(
+            f"host readiness failed: reason={reason} status={status} "
+            f"startup_stderr={safe_tail(self.tail, self.truncated)}")
 
     def start(self):
         if self.proc is not None:
@@ -54,18 +123,28 @@ class Host:
                    HASSMIC_FAKE_ADDRS=str(self.folder / "addrs"),
                    HASSMIC_MDNS_FILE=str(self.folder / "no-mdns"))
         self.log.clear()
+        self.tail.clear()
+        self.truncated = False
         failure = ["--invalid-test-option"] if "--startup-failure" in sys.argv else []
         try:
-            binary = self.stage()
-            self.proc = subprocess.Popen(
-                [str(binary), "-P", "wyoming", "-D", "-p", str(self.port),
-                 "-n", "Wyoming Test", *failure],
-                cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE, start_new_session=True)
+            with LAUNCH_GUARD:
+                binary = self.stage()
+                self.proc = subprocess.Popen(
+                    [str(binary), "-P", "wyoming", "-D", "-p", str(self.port),
+                     "-n", "Wyoming Test", *failure],
+                    cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE, start_new_session=True)
             self.logged(b"wyoming on ")
-        except BaseException:
-            self.stop()
-            raise
+        except BaseException as error:
+            if isinstance(error, Exception) and not isinstance(error, ReadinessFailure):
+                reason = f"startup-error errno={getattr(error, 'errno', None)}"
+                error = self.failure(reason, self.proc.poll() if self.proc else None)
+            try:
+                self.stop()
+            except Exception:
+                # Keep the original startup evidence distinct from cleanup.
+                raise self.failure("cleanup-failed") from error
+            raise error from None
 
     def stage(self):
         pinned = Path(subprocess.check_output(
@@ -75,11 +154,11 @@ class Host:
         self.staged = tempfile.TemporaryDirectory(prefix="hassmic-exec-", dir="/tmp")
         folder = Path(self.staged.name).resolve()
         if folder == Path('/mnt') or Path('/mnt') in folder.parents:
-            raise RuntimeError("host executable requires Linux temporary storage")
+            raise self.failure("stage-requires-linux-storage")
         binary = folder / "hassmic-host"
         shutil.copy2(pinned, binary)
         if hashlib.sha256(binary.read_bytes()).digest() != hashlib.sha256(pinned.read_bytes()).digest():
-            raise RuntimeError("staged host differs from pinned artifact")
+            raise self.failure("stage-hash-mismatch")
         return binary
 
     def unstage(self):
