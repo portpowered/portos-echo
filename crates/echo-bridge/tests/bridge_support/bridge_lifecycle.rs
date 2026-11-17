@@ -147,6 +147,7 @@ async fn bridge_lifecycle_wake_during_playback_stays_in_the_existing_run() {
     let mut process = Process::spawn(&mut bridge(&port, &live.url, &path));
     assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
     assert_eq!(host.command("arm").await, "armed");
+    let before = live.microphone_frames.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(host.command("wake").await, "wake");
     assert_eq!(host.command("cut-ready").await, "cut-ready");
     assert_eq!(host.command("wake-playing").await, "wake-playing");
@@ -160,6 +161,7 @@ async fn bridge_lifecycle_wake_during_playback_stays_in_the_existing_run() {
         serde_json::from_str::<Value>(&process.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
+    bridge_latency::assert_microphone(&path, &live, 1, before).await;
     let entries = trace(&path);
     for name in [
         "run.started",

@@ -14,6 +14,7 @@ async fn bridge_cut_latency_ten_trials_at_200ms_lead() {
     assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
     let mut values = Vec::new();
     for trial in 1..=10 {
+        let before = live.microphone_frames.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(host.command("arm").await, "armed");
         assert_eq!(host.command("wake").await, "wake");
         let ready = host.command("cut-ready").await;
@@ -33,6 +34,7 @@ async fn bridge_cut_latency_ten_trials_at_200ms_lead() {
             serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
             json!({"event":"bridge.run_completed","run_id":format!("run-{trial}")})
         );
+        assert_microphone(&path, &live, trial, before).await;
         assert!((0.0..600.0).contains(&elapsed), "trial {trial}: {elapsed}ms");
         writeln!(
             std::io::stdout(),
@@ -60,4 +62,39 @@ async fn bridge_cut_latency_ten_trials_at_200ms_lead() {
     );
     bridge.finish(0).await;
     host.finish(0).await;
+}
+
+pub(super) async fn assert_microphone(path: &Path, live: &bridge_peer::Live, run: usize, before: usize) {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        while live.microphone_frames.load(std::sync::atomic::Ordering::SeqCst) < before + 32 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let received = live.microphone_frames.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert_eq!(received, 32);
+    let entries = trace(path);
+    let mic: Vec<_> = entries
+        .iter()
+        .filter(|e| e["event"] == "mic.completed" && e["run_id"] == format!("run-{run}"))
+        .collect();
+    assert_eq!(mic.len(), 1);
+    for (field, expected) in [
+        ("count", 32),
+        ("input_samples", 10240),
+        ("tail_samples", 0),
+        ("dropped_chunks", 0),
+    ] {
+        assert_eq!(mic[0][field], expected, "run-{run} {field}: {:?}", mic[0]);
+    }
+    writeln!(
+        std::io::stdout(),
+        "run-{run} mic.completed={} fake.received={received} input_samples={} tail_samples={} dropped_chunks={}",
+        mic[0]["count"],
+        mic[0]["input_samples"],
+        mic[0]["tail_samples"],
+        mic[0]["dropped_chunks"]
+    )
+    .unwrap();
 }

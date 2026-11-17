@@ -3,7 +3,7 @@ use super::continuous::settings;
 use super::*;
 use echo_link::{
     CutStats, EchoLink, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
-    RunFailure, RunStats,
+    ReplySink, RunFailure, RunStats,
 };
 use std::{
     num::NonZeroUsize,
@@ -16,6 +16,8 @@ use std::{
 #[derive(Default)]
 struct Schedule {
     competing: AtomicBool,
+    reply_pending: AtomicBool,
+    reply_polls: AtomicUsize,
     blocked: AtomicBool,
     turns: AtomicUsize,
     run: Mutex<Option<echo_wyoming::Run>>,
@@ -25,6 +27,23 @@ struct Connector(std::net::SocketAddr, Arc<Schedule>);
 struct Link(echo_wyoming::WyomingClient, Arc<Schedule>);
 struct Events(echo_wyoming::adapter::Events, Arc<Schedule>);
 struct Run(Arc<Schedule>);
+struct Sink(echo_wyoming::adapter::Sink, Arc<Schedule>);
+
+impl ReplySink for Sink {
+    async fn send(&self, frame: Vec<u8>) -> Result<(), echo_link::Error> {
+        std::future::poll_fn(|cx| {
+            if self.1.reply_pending.load(Ordering::SeqCst) {
+                self.1.reply_polls.fetch_add(1, Ordering::SeqCst);
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(())
+            }
+        })
+        .await;
+        self.0.send(frame).await
+    }
+}
 
 impl Schedule {
     fn stats(&self) -> echo_wyoming::RunStats {
@@ -98,13 +117,14 @@ impl MicrophoneRun for Run {
 }
 impl EchoLink for Link {
     type Events = Events;
-    type ReplySink = echo_wyoming::adapter::Sink;
+    type ReplySink = Sink;
     type ReplySource = tokio::sync::mpsc::Receiver<Vec<u8>>;
     fn events(&mut self) -> Result<Events, echo_link::Error> {
         Ok(Events(EchoLink::events(&mut self.0)?, self.1.clone()))
     }
     fn reply_channel(&self, size: NonZeroUsize) -> (Self::ReplySink, Self::ReplySource) {
-        self.0.reply_channel(size)
+        let (tx, rx) = self.0.reply_channel(size);
+        (Sink(tx, self.1.clone()), rx)
     }
     async fn enable_capture(&self) -> Result<(), echo_link::Error> {
         self.0.enable_capture().await
@@ -237,4 +257,50 @@ async fn offer_sequence(peer: &mut tokio::net::TcpStream, schedule: &Schedule) {
         let turns = schedule.turns.load(Ordering::SeqCst);
         until(|| schedule.turns.load(Ordering::SeqCst) >= turns + 8).await;
     }
+}
+
+#[tokio::test]
+#[ignore = "T3 production runtime, bounded capture and local Live/Wyoming sockets"]
+async fn loaded_microphone_pending_reply_admission_keeps_capture_serviced() {
+    let directory = tempfile::tempdir().unwrap();
+    let live = bridge_peer::Live::bind_frames(3).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let schedule = Arc::new(Schedule::default());
+    schedule.reply_pending.store(true, Ordering::SeqCst);
+    let (stop, shutdown) = tokio::sync::oneshot::channel();
+    let runtime = tokio::spawn(echo_bridge::bridge_runtime::execute_controlled(
+        settings(directory.path(), &live.url),
+        echo_bridge::bridge_runtime::Control {
+            utc_day: Arc::new(|| 0),
+            shutdown,
+        },
+        Connector(listener.local_addr().unwrap(), schedule.clone()),
+    ));
+    let mut peer = listener.accept().await.unwrap().0;
+    start_capture(&mut peer, directory.path()).await;
+    // Reply readiness is withheld, never microphone readiness. Eight owner
+    // polls per independently received chunk expose the service gap without
+    // elapsed-time assumptions or a deliberately blocked capture consumer.
+    until(|| schedule.reply_polls.load(Ordering::SeqCst) > 0).await;
+    for index in 0..64 {
+        offer(&mut peer, index).await;
+        until(|| schedule.stats().received == u64::from(index) + 1).await;
+        let polls = schedule.reply_polls.load(Ordering::SeqCst);
+        until(|| schedule.reply_polls.load(Ordering::SeqCst) >= polls + 8).await;
+    }
+    schedule.reply_pending.store(false, Ordering::SeqCst);
+    schedule.competing.store(false, Ordering::SeqCst);
+    until(|| schedule.delivered.lock().unwrap().len() as u64 + schedule.stats().dropped == 64).await;
+    let stats = schedule.stats();
+    let delivered = schedule.delivered.lock().unwrap().clone();
+    stop.send(true).unwrap();
+    assert_eq!(runtime.await.unwrap(), Ok(()));
+    assert_delivery(false, stats, &delivered);
+    writeln!(
+        std::io::stdout(),
+        "pending reply: offered_samples=20480 delivered_samples={} drops={}",
+        delivered.len() * 320,
+        stats.dropped
+    )
+    .unwrap();
 }

@@ -188,6 +188,8 @@ impl Source {
         }
     }
 }
+mod bridge_output;
+use bridge_output::Output;
 mod bridge_response;
 pub(super) use bridge_response::run;
 async fn stop_failed_producer<L: EchoLink>(
@@ -290,7 +292,12 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             }
         }
     }
-    async fn cancelled(&mut self, source: &mut Source, call: &mut impl LivePort) -> Result<bool, Error> {
+    async fn cancelled(
+        &mut self,
+        source: &mut Source,
+        call: &mut impl LivePort,
+        output: &mut Output<'_, L>,
+    ) -> Result<bool, Error> {
         if self.kill.sync(self.trace).await? {
             self.cancellation = Cancellation::Shutdown;
             source.cancelled = true;
@@ -301,7 +308,7 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             // These packets were admitted for the response being cancelled.
             // Drain them before cut can await Played and admit a replacement.
             while call.pop_audio().is_some() {}
-            self.cut(source).await?;
+            self.cut(source, output.discard()).await?;
             self.delegation.abandon().await;
         }
         Ok(source.cancelled)
@@ -369,30 +376,11 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             Ok(())
         }
     }
-    async fn forward(&mut self, tx: &L::ReplySink, frame: Vec<u8>) -> Result<(), Error> {
-        tx.send(frame).await.map_err(|_| Error::Wyoming)?;
-        if !self.speaking {
-            self.trace.record("reply.started", Some(self.id), json!({}))?;
-            self.screen.publish(echo_screen_contract::UiState::Speaking)?;
-            self.speaking = true;
-        }
-        Ok(())
-    }
-    async fn forward_available(&mut self, tx: &L::ReplySink, frame: Option<Vec<u8>>, sent: u64) -> Result<(), Error> {
-        if let Some(frame) = frame {
-            if !self.speaking {
-                self.microphone_at_reply = Some(sent);
-            }
-            self.forward(tx, frame).await?;
-        }
-        Ok(())
-    }
-
-    async fn cut(&mut self, source: &mut Source) -> Result<(), Error> {
+    async fn cut(&mut self, source: &mut Source, pending: u64) -> Result<(), Error> {
         let bridge_evicted = source.queue.drop_count();
         self.cut = Some((
             Box::pin(self.client.cut_with_stats()),
-            source.discard_reply(),
+            source.discard_reply() + pending,
             bridge_evicted,
             source.framed,
         ));
@@ -438,12 +426,13 @@ async fn produce_turns<L: EchoLink>(
     context: &mut PlaybackContext<'_, L>,
 ) -> Result<(), Error> {
     let mut pacer = LeadPacer::new(context.lead_ms);
+    let mut output = Output::<L>::new(tx);
     let mut completed = false;
     let mut ended = false;
     let mut pressure_reported = false;
     let mut arbiter = Arbiter::default();
     loop {
-        if context.cancelled(source, call).await? {
+        if context.cancelled(source, call, &mut output).await? {
             return Ok(());
         }
         context.delegation.service(call, context.trace, context.screen).await?;
@@ -455,7 +444,7 @@ async fn produce_turns<L: EchoLink>(
             .completion(completed, drained, echo_done, call, context.screen)
             .await?;
         context.microphone_activity(source)?;
-        if completed && source.queue.is_empty() {
+        if completed && source.queue.is_empty() && output.is_empty() {
             return Ok(());
         }
         bridge_timing::check_deadline(context.deadline)?;
@@ -466,7 +455,7 @@ async fn produce_turns<L: EchoLink>(
             work = arbiter.next(
                 async { if ended { std::future::pending().await } else { run.recv().await } },
                 call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()),
-                async { if source.queue.is_empty() { std::future::pending().await } else { pacer.next_frame(&mut source.queue).await } },
+                output.next(&mut pacer, &mut source.queue, source.sent),
                 events.recv(),
             ) => match work {
                 Work::Device(event) => {
@@ -479,7 +468,7 @@ async fn produce_turns<L: EchoLink>(
                 Err(CallError::Deadline) => (),
                 Err(error) => return Err(error.into()),
                 },
-                Work::Reply(frame) => context.forward_available(tx, frame, source.sent).await?,
+                Work::Reply(receipt) => { if let Some(sent) = receipt? { context.admitted(sent)?; } },
             }
         }
     }
