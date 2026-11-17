@@ -4,6 +4,12 @@
 #[path = "support/signin_browser.rs"]
 mod signin_browser;
 #[cfg(test)]
+#[path = "support/signin_codex.rs"]
+mod signin_codex;
+#[cfg(test)]
+#[path = "support/signin_codex_process.rs"]
+mod signin_codex_process;
+#[cfg(test)]
 #[path = "support/signin_import.rs"]
 mod signin_import;
 #[cfg(test)]

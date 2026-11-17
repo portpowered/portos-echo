@@ -261,22 +261,26 @@ fn bridge_spine_configured_modes_preserve_paths_and_never_read_credentials_at_pa
         assert!(!settings.lab);
         assert!(!settings.sim_clock);
         assert_eq!(settings.sim_epoch, None);
-        assert_configured_provider(settings, mode);
+        assert_configured_provider(&settings, mode);
     }
 }
 
-fn assert_configured_provider(settings: bridge_input::Settings, mode: &str) {
+fn assert_configured_provider(settings: &bridge_input::Settings, mode: &str) {
+    assert!(matches!(settings.credential, Provider::Unavailable));
+    let config = settings.config.as_ref().unwrap();
+    assert_eq!(
+        config.live.credential_file,
+        std::path::PathBuf::from("credentials/live.json")
+    );
+    assert_eq!(config.codex.home, None);
     if mode == "chatgpt" {
         assert_eq!(settings.mode, echo_live::call::LiveAuthMode::Chatgpt);
         assert_eq!(settings.live_url.split_once("://"), Some(("https", "chatgpt.com")));
-        assert!(matches!(settings.credential, Provider::Resolved(_)));
+        assert_eq!(config.live.mode, echo_config::LiveMode::Chatgpt);
     } else {
         assert_eq!(settings.mode, echo_live::call::LiveAuthMode::ApiKey);
         assert_eq!(settings.live_url.split_once("://"), Some(("https", "api.openai.com")));
-        match settings.credential {
-            Provider::Resolved(providers) => assert_eq!(providers.mode(), echo_config::LiveMode::ApiKey),
-            _ => unreachable!(),
-        }
+        assert_eq!(config.live.mode, echo_config::LiveMode::ApiKey);
     }
 }
 

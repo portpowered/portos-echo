@@ -265,13 +265,16 @@ async fn bridge_wire_auth_failure_revoked_refresh_latches_and_explicit_signin_re
     wait_event(&trace_path, "run.refused", &mut bridge).await;
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
     bridge.finish(0).await;
-    bridge_wire_auth::invoke(
-        directory.path(),
-        &["signin", "--config", "bridge.toml"],
-        0,
-        &format!("code: TEST-CODE\nurl: {origin}/verify\nsigned in\n"),
-    )
-    .await;
+    // The voice runtime still uses this dormant provider; canonical CLI proof is separate.
+    let mut output = Vec::new();
+    bridge_wire_auth::legacy_providers(directory.path())
+        .execute(echo_signin::OperatorCommand::Signin { browser: false }, &mut output)
+        .await
+        .unwrap();
+    assert_eq!(
+        output,
+        format!("code: TEST-CODE\nurl: {origin}/verify\nsigned in\n").as_bytes()
+    );
     task.await.unwrap();
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 4);
     recovered_run(directory.path(), &listener, &renewed).await;
@@ -312,115 +315,6 @@ fn auth_recovery(
         }
     });
     (token, requests, task)
-}
-
-// HTTP clients drive the printed callback; no desktop browser or real issuer is used.
-#[tokio::test]
-#[ignore = "T3 requires prebuilt echo-bridge"]
-async fn bridge_wire_auth_browser_success_and_callback_refusal_preserve_credentials() {
-    for outcome in ["success", "wrong-state", "denied"] {
-        browser_signin(outcome).await;
-    }
-}
-
-async fn browser_signin(outcome: &str) {
-    let directory = tempfile::tempdir().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    bridge_wire_screen::setup(directory.path(), listener.local_addr().unwrap().port());
-    let auth = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = "http://127.0.0.1";
-    let origin = format!("{base}:{}", auth.local_addr().unwrap().port());
-    let path = directory.path().join("bridge.toml");
-    let text = std::fs::read_to_string(&path)
-        .unwrap()
-        .replace("mode = \"api_key\"", "mode = \"chatgpt\"");
-    std::fs::write(&path, format!("{text}\n[chatgpt_auth]\nclient_id = 'fixture-client'\nauthorization_endpoint = '{origin}/authorize'\ntoken_endpoint = '{origin}/token'\nbrowser_redirect_uri = 'http://127.0.0.1:0/auth/callback'\n")).unwrap();
-    std::fs::remove_file(directory.path().join("credential")).unwrap();
-    bridge_wire_auth::prepare_configured_credential(directory.path(), "chatgpt").await;
-    let before = std::fs::read(directory.path().join("credential")).unwrap();
-    let mut process = Process::spawn(&mut bridge_wire_auth::command(
-        directory.path(),
-        &["signin", "--browser", "--config", "bridge.toml"],
-    ));
-    let line = process.line().await;
-    let url = reqwest::Url::parse(line.strip_prefix("url: ").unwrap()).unwrap();
-    assert_eq!(url.origin().ascii_serialization(), origin);
-    assert_eq!(url.path(), "/authorize");
-    let query = bridge_wire_auth::browser_query(&url);
-    let mut callback = reqwest::Url::parse(&query["redirect_uri"]).unwrap();
-    browser_callback(&mut process, &mut callback, &query["state"], outcome, auth, url).await;
-    if outcome == "success" {
-        let stored: Value =
-            serde_json::from_slice(&std::fs::read(directory.path().join("credential")).unwrap()).unwrap();
-        assert!(
-            stored["access"].as_str() == Some(bridge_wire_auth::token().as_str()),
-            "persisted credential mismatch"
-        );
-        assert!(
-            stored["refresh"].as_str() == Some("synthetic-browser-refresh"),
-            "persisted refresh mismatch"
-        );
-        std::fs::write(directory.path().join("trace"), "").unwrap();
-        recovered_run(directory.path(), &listener, &bridge_wire_auth::token()).await;
-    } else {
-        assert!(
-            std::fs::read(directory.path().join("credential")).unwrap() == before,
-            "prior credential changed"
-        );
-    }
-    process.assert_collected();
-}
-
-async fn browser_callback(
-    process: &mut Process,
-    callback: &mut reqwest::Url,
-    state: &str,
-    outcome: &str,
-    auth: TcpListener,
-    authorization: reqwest::Url,
-) {
-    // The printed URL is inert until the operator follows it.
-    let auth = auth.into_std().unwrap();
-    assert_eq!(auth.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
-    let auth = TcpListener::from_std(auth).unwrap();
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    let visit = client.get(authorization).send();
-    let serve = async {
-        let mut socket = auth.accept().await.unwrap().0;
-        let (head, _) = bridge_wire_auth::request_body(&mut socket).await;
-        assert!(head.starts_with("GET /authorize?"), "authorization route mismatch");
-        socket
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .await
-            .unwrap();
-    };
-    let (response, ()) = tokio::join!(visit, serve);
-    assert_eq!(response.unwrap().status().as_u16(), 200);
-    let mut auth = Some(auth);
-    let exchange = if outcome == "success" {
-        Some(tokio::spawn(bridge_wire_auth::browser_exchange(
-            auth.take().unwrap(),
-            callback.to_string(),
-        )))
-    } else {
-        None
-    };
-    bridge_wire_auth::callback_query(callback, state, outcome);
-    assert_eq!(
-        client.get(callback.clone()).send().await.unwrap().status().as_u16(),
-        if outcome == "success" { 200 } else { 400 }
-    );
-    if let Some(exchange) = exchange {
-        assert_eq!(process.line().await, "signed in");
-        process.finish(0).await;
-        exchange.await.unwrap();
-    } else {
-        bridge_wire_auth::browser_failure(process).await;
-        assert_eq!(
-            auth.unwrap().into_std().unwrap().accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
-    }
 }
 
 pub(super) async fn rotate_credential(directory: &Path, mode: &str) -> Option<tokio::task::JoinHandle<()>> {

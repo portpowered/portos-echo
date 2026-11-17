@@ -1,51 +1,68 @@
-//! M6 extends the same production World and paired screen connection as M4.
-use super::{Screen, Value, World};
+//! Interrupted and failed M6 presentations on canonical Codex ownership.
+use super::lifecycle::start;
+use super::*;
 
-impl World {
-    pub(super) fn configure_emotion(&self) -> Result<(), String> {
-        if !self.emotion {
-            return Ok(());
+#[tokio::test]
+#[ignore = "T3 requires pinned hassmic-host, prebuilt bridge and offline Codex pin"]
+async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
+    let (mut case, owners) = start(true, true).await;
+    let (completion, timing) = case.speak().await.unwrap();
+    assert_eq!(completion, json!({"event":"bridge.run_completed","run_id":"run-1"}));
+    assert_eq!(timing.played, 9600);
+    assert_eq!(case.close().await, Ok(()));
+    assert_eq!(case.transcript.as_deref(), Some(super::super::model::FALLBACK));
+    let expected = super::super::emotion::sequence();
+    let states: Vec<_> = case.ui_states.iter().map(|f| f["state"].clone()).collect();
+    assert_eq!(
+        states,
+        [
+            expected[0].clone(),
+            expected[1].clone(),
+            expected[2].clone(),
+            expected[5].clone(),
+            expected[6].clone()
+        ]
+    );
+    assert!(
+        case.ui_states
+            .windows(2)
+            .all(|p| p[0]["seq"].as_u64() < p[1]["seq"].as_u64())
+    );
+    assert_eq!(
+        case.playback,
+        Some(json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0}))
+    );
+    owners.closed().await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires pinned hassmic-host, prebuilt bridge and offline Codex pin"]
+async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners() {
+    let (mut case, owners) = start(true, false).await;
+    let mut screen = Screen::connect(&owners.root).await.unwrap();
+    screen.expect("ready").await.unwrap();
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    let observation = async {
+        for state in ["listening", "connected", "emotion"] {
+            screen.expect(state).await.unwrap();
         }
-        let path = self.root.join("bridge.toml");
-        let config = std::fs::read_to_string(&path).map_err(|_| "m6: missing configuration")?;
-        std::fs::write(
-            path,
-            config.replace("allow_tools = [\"test.echo\"]", "allow_tools = [\"ui.show_emotion\"]"),
-        )
-        .map_err(|_| "m6: cannot select emotion tool".into())
-    }
-
-    pub(super) async fn observe(&mut self, screen: &mut Screen, index: usize, name: &str) -> Result<Value, String> {
-        if !self.emotion {
-            return screen.expect(name).await;
+        cancel.send(()).unwrap();
+    };
+    let interrupted = async {
+        tokio::select! {
+            result = case.speak() => panic!("reply completed before animation cancellation: {result:?}"),
+            result = cancelled => result.unwrap(),
         }
-        let frame = screen.next().await?;
-        // Retain actual values even if this frame is the failing seed.
-        self.ui_states.push(frame.clone());
-        let previous = self.ui_states.iter().rev().nth(1).and_then(|v| v["seq"].as_u64());
-        super::super::emotion::frame(&frame, previous, &super::super::emotion::sequence()[index])?;
-        Ok(frame["state"].clone())
-    }
-
-    pub(super) async fn animate(&mut self, screen: &mut Screen) -> Result<(), String> {
-        self.observe(screen, 3, "emotion").await?;
-        let bridge = self.bridge.as_mut().ok_or("m6: missing bridge")?;
-        bridge
-            .send(&serde_json::json!({"action":"advance_clock","milliseconds":160}))
-            .await?;
-        let advanced = bridge.expect("bridge.clock_advanced").await?;
-        if advanced["milliseconds"] != 160 {
-            return Err("m6: clock acknowledgment mismatch".into());
-        }
-        self.observe(screen, 4, "connected").await?;
-        self.release_result()
-    }
-
-    pub(super) fn release_result(&mut self) -> Result<(), String> {
-        self.result_gate
-            .take()
-            .ok_or("m6: missing result gate")?
-            .send(())
-            .map_err(|()| "m6: result observer abandoned".into())
-    }
+    };
+    tokio::join!(observation, interrupted);
+    let timing = case.relay.as_ref().unwrap().timing();
+    assert_eq!(timing.played, 0);
+    assert!(case.speaking.is_none());
+    let result = case.close().await;
+    assert!(result.as_ref().unwrap_err().contains("m4: missing"), "{result:?}");
+    assert_eq!(case.snapshot["transcripts"], json!([]));
+    assert_eq!(screen.next().await, Err("screen: EOF before observation".into()));
+    assert!(!case.trace.records.iter().any(|r| r["event"] == "bridge.run_completed"));
+    owners.closed().await;
+    assert_eq!(case.close().await, Ok(()));
 }

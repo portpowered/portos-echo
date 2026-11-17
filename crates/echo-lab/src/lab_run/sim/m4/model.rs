@@ -34,11 +34,6 @@ impl Model {
     }
 
     #[cfg(test)]
-    pub async fn wait_for_result_request(&self) {
-        self.observed.clone().wait_for(|o| o.requests == 2).await.unwrap();
-    }
-
-    #[cfg(test)]
     pub async fn bind(negative: bool) -> Result<Self, String> {
         Self::bind_after(negative, async { Ok(()) }).await
     }
@@ -83,6 +78,7 @@ impl Model {
         })
     }
 
+    #[cfg(test)]
     pub fn check(&self) -> Result<(), String> {
         let observed = self.observed.borrow();
         if let Some(error) = &observed.failure {

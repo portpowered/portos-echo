@@ -3,6 +3,7 @@
 //! URL without launching a browser. Import always needs an explicit path.
 //! Status reads stored metadata without refreshing. The host owns argv parsing,
 //! exit codes, traces and cancellation of active calls/audio on a kill signal.
+pub mod signin_codex;
 mod signin_commands;
 mod signin_providers;
 

@@ -15,12 +15,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::time::Instant;
+mod tool_receipts;
+pub(crate) use tool_receipts::ToolTrace;
 
 #[derive(Clone)]
 pub struct Trace {
     writer: Arc<Mutex<File>>,
     started: Instant,
     mode: &'static str,
+    active_run: Arc<Mutex<Option<String>>>,
 }
 
 impl Trace {
@@ -36,7 +39,13 @@ impl Trace {
             writer: Arc::new(Mutex::new(writer)),
             started: Instant::now(),
             mode,
+            active_run: Arc::default(),
         })
+    }
+
+    pub(crate) fn tool_run(&self, run: Option<&str>) -> Result<(), Error> {
+        *self.active_run.lock().map_err(|_| Error::Trace)? = run.map(str::to_owned);
+        Ok(())
     }
 
     /// Callers supply only authored event names and safe, bounded fields.
@@ -105,6 +114,7 @@ mod bridge_spine_tests {
             writer: Arc::new(Mutex::new(File::open(&path).unwrap())), // Read-only sink injects an actual write error.
             started: Instant::now(),
             mode: "chatgpt",
+            active_run: Arc::default(),
         };
         let error = trace.record("run.started", Some("run-1"), json!({})).unwrap_err();
         assert_eq!(error, Error::Trace);

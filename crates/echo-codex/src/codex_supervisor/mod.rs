@@ -45,7 +45,7 @@ pub struct Supervisor {
     launched: bool,
     ready: bool,
     environment: Vec<(String, String)>,
-    _lease: File,
+    lease: File,
 }
 
 impl Supervisor {
@@ -66,7 +66,7 @@ impl Supervisor {
             launched: false,
             ready: false,
             environment: Vec::new(),
-            _lease: lease,
+            lease,
         })
     }
 
@@ -75,11 +75,24 @@ impl Supervisor {
     /// # Errors
     /// Only routing/certificate keys are accepted, and only before first launch.
     pub fn set_environment(&mut self, key: &str, value: String) -> Result<(), ProcessError> {
+        let refresh = key == "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+        let refresh_target = value
+            .strip_prefix("http://")
+            .and_then(|url| url.strip_suffix("/token"))
+            .and_then(|authority| {
+                authority
+                    .strip_prefix("127.0.0.1:")
+                    .or_else(|| authority.strip_prefix("[::1]:"))
+            })
+            .filter(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|port| port.parse::<u16>().ok())
+            .is_some_and(|port| port != 0);
         let allowed = matches!(
             key.to_ascii_uppercase().as_str(),
             "HTTP_PROXY" | "HTTPS_PROXY" | "ALL_PROXY" | "NO_PROXY" | "SSL_CERT_FILE"
         );
-        if self.launched || !allowed || value.contains('\0') {
+        let duplicate = self.environment.iter().any(|(name, _)| name == key);
+        if self.launched || !(allowed || refresh && refresh_target && !duplicate) || value.contains('\0') {
             return Err(ProcessError::InvalidConfig);
         }
         self.environment.push((key.into(), value));
@@ -212,8 +225,13 @@ impl RestartBudget {
 impl Drop for Supervisor {
     fn drop(&mut self) {
         self.io.take();
-        if let Some(child) = &mut self.child {
+        let reaped = self.child.as_mut().is_none_or(|child| {
             let _ = child.start_kill();
+            matches!(child.try_wait(), Ok(Some(_)))
+        });
+        if reaped {
+            // Unlock the shared open description before any inherited copy closes.
+            let _ = self.lease.unlock();
         }
     }
 }
@@ -221,6 +239,36 @@ impl Drop for Supervisor {
 #[cfg(test)]
 mod codex_restart_tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn drop_releases_home_with_retained_open_description() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::DirBuilderExt;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let parent = std::env::temp_dir().join(format!("echo-lease-{}-{nonce}", std::process::id()));
+        std::fs::DirBuilder::new().mode(0o700).create(&parent)?;
+        let binary = std::env::current_exe()?;
+        let config = || SupervisorConfig::new(binary.clone(), parent.join("home"));
+        let owner = Supervisor::new(config())?;
+        let retained = owner.lease.try_clone()?;
+        assert!(matches!(Supervisor::new(config()), Err(ProcessError::PrivateHome)));
+        drop(owner);
+        let next = Supervisor::new(config());
+        assert!(
+            next.is_ok(),
+            "dropped owner must release home despite retained description"
+        );
+        let next = next?;
+        assert!(matches!(retained.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+        drop(next);
+        retained.try_lock()?;
+        retained.unlock()?;
+        drop(retained);
+        std::fs::remove_dir_all(parent)?;
+        Ok(())
+    }
+
     #[tokio::test(start_paused = true)]
     async fn restart_budget_expires_at_window_boundary() -> Result<(), ProcessError> {
         let window = std::time::Duration::from_secs(60);

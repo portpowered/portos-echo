@@ -40,20 +40,28 @@ impl Session {
         let host = self.host.as_mut().ok_or("M5: missing host")?;
         host.send(&json!({"action":"wake"})).await?;
         host.expect("host.ack").await?;
-        self.dispatch("m5-linked").await?;
-        self.reach("session.commentary.append", 20).await?;
-        let live = self.live.as_mut().ok_or("M5: missing Live fixture")?;
-        let text = live.commentary.recv().await.ok_or("M5: missing delivered commentary")?;
-        let actual: Value = serde_json::from_str(&text).map_err(|_| "M5: malformed commentary")?;
-        if actual != json!({"type":"session.commentary.append","delegation_id":"m5-linked","text":"m5-linked"}) {
-            return Err("M5: delivered commentary mismatch".into());
-        }
-        let requests = live.requests.lock().map_err(|_| "M5: model observation failed")?;
-        if requests.len() != 2 {
+        self.dispatch().await?;
+        self.reach(1).await?;
+        let state = self
+            .live
+            .as_ref()
+            .ok_or("M5: missing Live fixture")?
+            .observed
+            .borrow()
+            .clone();
+        let requests = state["requests"]
+            .as_array()
+            .ok_or("M5: missing native model observations")?;
+        if requests.len() != 2
+            || state["delegations"] != json!(["m5-linked"])
+            || state["appends"] != json!(["m5-linked"])
+        {
             return Err("M5: model request count mismatch".into());
         }
-        for request in requests.iter() {
-            self.observations.model("m5-linked", request).map_err(str::to_owned)?;
+        for request in requests {
+            self.observations
+                .codex_model("m5-thread", request)
+                .map_err(str::to_owned)?;
         }
         Ok(())
     }
@@ -63,11 +71,12 @@ impl Session {
         if !self.replayed || self.measure()?.tool_call != 1 {
             return Err("M5: probe requires a completed tool call and rejected replay".into());
         }
-        self.dispatch("m5-replayed").await?;
+        self.dispatch().await?;
         // This is an I/O-only probe on the already established call. Keep its
-        // clock fixed while the rejected request and the real host's Played
-        // acknowledgment settle; polling must not consume the control deadline.
-        self.reach("mcp.run.failed", 0).await?;
+        // clock fixed while the rejected request and native failure output
+        // settle; polling must not consume the control deadline.
+        self.reach(2).await?;
+        self.native_results()?;
         loop {
             self.receive_screen().await?;
             if self.screen["state"] == "error" {
@@ -99,30 +108,88 @@ impl Session {
         Ok(())
     }
 
-    async fn dispatch(&self, id: &str) -> Result<(), String> {
+    async fn dispatch(&self) -> Result<(), String> {
         self.live
             .as_ref()
             .ok_or("M5: missing Live fixture")?
             .events
-            .send(
-                json!({"type":"session.delegation.created","delegation":{"id":id,"target":"client","input":"echo"}})
-                    .to_string(),
-            )
+            .send(())
             .await
             .map_err(|_| "M5: delegation control failed".into())
     }
 
-    async fn reach(&mut self, event: &str, milliseconds: u64) -> Result<(), String> {
+    fn native_results(&mut self) -> Result<(), String> {
+        let state = self
+            .live
+            .as_ref()
+            .ok_or("M5: missing provider")?
+            .observed
+            .borrow()
+            .clone();
+        let expected = json!(["m5-linked", "m5-replayed"]);
+        let requests = state["requests"]
+            .as_array()
+            .ok_or("M5: missing native model receipts")?;
+        if state["delegations"] != expected || state["appends"] != expected || requests.len() != 4 {
+            return Err("M5: native delegation/model/append count mismatch".into());
+        }
+        for request in requests {
+            self.observations
+                .codex_model("m5-thread", request)
+                .map_err(str::to_owned)?;
+        }
+        self.observe()?;
+        let received: Vec<_> = self
+            .trace
+            .records
+            .iter()
+            .filter(|r| r["event"] == "item/tool/call")
+            .collect();
+        let attempts: Vec<_> = self
+            .trace
+            .records
+            .iter()
+            .filter(|r| r["event"] == "tools/call")
+            .collect();
+        if received.len() != 2 || attempts.len() != 2 {
+            return Err("M5: dispatch count mismatch".into());
+        }
+        for (index, (request, attempt)) in received.iter().zip(attempts).enumerate() {
+            if request["call_id"] != format!("m5-call-{index}")
+                || request["name"] != "test.echo"
+                || !["thread_id", "turn_id", "call_id", "run_id", "name"]
+                    .into_iter()
+                    .all(|key| !request[key].is_null() && request[key] == attempt[key])
+            {
+                return Err("M5: native dispatch correlation mismatch".into());
+            }
+        }
+        if received[0]["thread_id"] != received[1]["thread_id"] || received[0]["turn_id"] == received[1]["turn_id"] {
+            return Err("M5: native turn identity mismatch".into());
+        }
+        Ok(())
+    }
+
+    async fn reach(&mut self, appends: usize) -> Result<(), String> {
         loop {
             self.observe()?;
-            if self.trace.records.iter().any(|r| r["event"] == event) {
+            let live = self.live.as_ref().ok_or("M5: missing Live fixture")?;
+            if live.observed.borrow()["appends"]
+                .as_array()
+                .is_some_and(|items| items.len() == appends)
+            {
                 return Ok(());
+            }
+            if live.observed.has_changed().is_err() {
+                return Err("M5: canonical provider ended before append".into());
             }
             if self.bridge.as_mut().ok_or("M5: missing bridge")?.exited()? {
                 return Err("M5: bridge exited before resource observation".into());
             }
-            // A zero tick polls the owner without manufacturing elapsed time.
-            // The outer scenario retains its wall-clock timeout for stalled I/O.
+            // Negotiation needs the media cadence. Once established, the replay
+            // probe polls without consuming the turn deadline or grant lifetime.
+            self.live.as_mut().ok_or("M5: missing provider")?.tick().await?;
+            let milliseconds = if appends == 1 { 20 } else { 0 };
             self.advance_bridge(milliseconds).await?;
             self.elapsed_ms += milliseconds;
             if milliseconds != 0 && self.elapsed_ms.is_multiple_of(1000) {

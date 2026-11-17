@@ -76,6 +76,32 @@ async fn event_without_clock_advance(path: &Path, event: &str) -> Vec<Value> {
     }
 }
 
+/// A run that ends returns the bridge to idle, which probes the satellite at once.
+/// Closing stdin while that describe/info exchange is in flight leaves the
+/// info unread in the bridge's socket, so its exit resets the satellite
+/// instead of closing it. Finish only after the probe that follows `event`.
+pub(super) async fn finish_after_idle_probe(process: &mut Process, path: &Path, event: &str) {
+    let started = std::time::Instant::now();
+    let cursor = loop {
+        let bytes = tokio::fs::read(path).await.unwrap();
+        let mut end = 0;
+        let found = bytes.split_inclusive(|b| *b == b'\n').any(|line| {
+            end += line.len();
+            line.ends_with(b"\n") && serde_json::from_slice::<Value>(line).is_ok_and(|record| record["event"] == event)
+        });
+        if found {
+            break end;
+        }
+        assert!(
+            started.elapsed() < OBSERVATION_TIMEOUT,
+            "did not observe a complete {event} with clocks frozen"
+        );
+        tokio::task::yield_now().await;
+    };
+    strict::wait_records(|| tokio::fs::read(path), cursor, false, started + OBSERVATION_TIMEOUT).await;
+    process.finish(0).await;
+}
+
 pub(super) async fn link(session: &mut Session, mock: &Mock, directory: &Path) {
     let link = operator(directory, "link");
     session.prompt(mock).await;

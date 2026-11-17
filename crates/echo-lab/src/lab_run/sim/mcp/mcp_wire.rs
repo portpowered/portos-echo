@@ -71,7 +71,8 @@ pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str) -> Res
         .replace("wyoming_port = 16700", &format!("wyoming_port = {}", host.port()))
         .replace("mode = \"chatgpt\"", "mode = 'api_key'")
         .replace("credentials/live.json", "credential")
-        .replace("[agent]", "[agent]\nmodel = 'fixture-model'")
+        .replace("voice = \"default\"\n", "")
+        .replace("[agent]", "[agent]\nmodel = 'gpt-5.4'")
         .replace(
             "[[mcp.server]]",
             "[mcp]\nstate_dir = 'portos'\nclient_id = 'echo-lab'\noperator_listen = '127.0.0.1:0'\n[[mcp.server]]",
@@ -79,6 +80,7 @@ pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str) -> Res
         .replace("http://127.0.0.1:18080/mcp", resource)
         .replace("auth = \"none\"", "auth = 'portos_device_code'")
         .replace(&format!("{}:16900", std::net::Ipv4Addr::UNSPECIFIED), "127.0.0.1:0");
+    let text = format!("{text}\n[codex]\nhome = '{}'\n", root.join("home").display());
     std::fs::create_dir(root.join("credentials")).map_err(|_| "M5: cannot create pairing directory")?;
     for (name, content) in [
         ("bridge.toml", text.as_str()),

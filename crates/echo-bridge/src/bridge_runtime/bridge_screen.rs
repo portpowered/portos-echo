@@ -8,14 +8,16 @@ use echo_screen_server::ScreenServer;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-pub(super) mod emotion;
+pub(crate) mod approval;
+pub(crate) mod emotion;
 mod mute;
 
-pub(super) struct Screen {
+pub(crate) struct Screen {
     mute: Arc<Mutex<mute::Mute>>,
     server: Option<ScreenServer>,
     actions: Option<tokio::task::JoinHandle<()>>,
     pub(crate) presentation: Presentation,
+    pub(crate) approvals: approval::Approvals,
 }
 
 impl Screen {
@@ -30,6 +32,7 @@ impl Screen {
                 server: None,
                 actions: None,
                 presentation: Presentation::new(None),
+                approvals: approval::Approvals::default(),
             });
         };
         let bind = loopback(&config.listen.to_string(), true)?;
@@ -56,6 +59,7 @@ impl Screen {
             server: Some(server),
             presentation: Presentation::new(Some(states.clone())),
             actions: None,
+            approvals: approval::Approvals::default(),
         };
         Ok(screen)
     }
@@ -70,6 +74,10 @@ impl Screen {
 
     pub async fn publish_confirmed(&self, state: UiState) -> Result<(), Error> {
         self.publish(state)?;
+        self.flush().await
+    }
+
+    pub(crate) async fn flush(&self) -> Result<(), Error> {
         if let Some(server) = &self.server {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
             server.flush(deadline).await.map_err(|_| Error::Screen)?;
@@ -116,8 +124,19 @@ impl Screen {
         let mut actions = std::mem::replace(&mut server.actions, mpsc::channel(1).1);
         let mute = self.mute.clone();
         let presentation = self.presentation.clone();
+        let approvals = self.approvals.clone();
         self.actions = Some(tokio::spawn(async move {
-            while let Some(action) = actions.recv().await {
+            loop {
+                let action = tokio::select! {
+                    action = actions.recv() => { let Some(action) = action else { break; }; action },
+                    result = presentation.advance_emotion() => {
+                        if result.is_err() { break; }
+                        continue;
+                    },
+                };
+                if !mute.lock().map_or(true, |mute| mute.muted) && approvals.answer(&action).is_err() {
+                    break;
+                }
                 if action == echo_screen_contract::UiAction::Relink {
                     // This is an instruction, never an implicit sign-in request.
                     if mute.lock().map_or(true, |mute| mute.muted) {
@@ -156,7 +175,7 @@ impl Drop for Screen {
     }
 }
 
-pub(super) fn failure_state(relink: bool) -> UiState {
+pub(crate) fn failure_state(relink: bool) -> UiState {
     UiState::Error {
         message: if relink {
             "Run echo-bridge signin with your config, then restart the bridge."
@@ -180,6 +199,7 @@ mod tests {
             server: None,
             actions: None,
             presentation: Presentation::new(Some(send)),
+            approvals: approval::Approvals::default(),
         };
         let overlay = UiState::Error {
             message: "MCP link".into(),

@@ -9,9 +9,12 @@ pub fn expected(case: &str) -> Value {
     if case == "success" {
         sequence.extend([
             json!({"state":"connected"}),
+            json!({"state":"speaking"}),
+            json!({"state":"ready","message":"Echo Live ready"}),
             json!({"state":"ready","message":"Echo Live ready"}),
         ]);
     } else {
+        sequence.clear();
         sequence.push(json!({"state":"error","message":"Run echo-bridge signin with your config, then restart the bridge.","relink":true}));
     }
     json!({"sequence":sequence})
@@ -73,9 +76,13 @@ pub fn check(measured: &Value) -> Result<(), String> {
     }
     let success = case == "success";
     count(measured, "calls", u64::from(success))?;
-    count(measured, "refreshes", u64::from(case == "expired"))?;
+    count(
+        measured,
+        "refreshes",
+        if case == "expired" { EXPIRED_REFRESHES } else { 0 },
+    )?;
     if measured["provider_wire"] != true {
-        return Err("m2: wrong ChatGPT create wire".into());
+        return Err("m2: wrong provider create wire".into());
     }
     let records = measured["trace"].as_array().ok_or("m2: missing trace")?;
     let closes = records.iter().filter(|r| r["event"] == "live.closed").count();
@@ -88,16 +95,63 @@ pub fn check(measured: &Value) -> Result<(), String> {
     if success {
         trace(measured, &[json!("live.closed {reason: idle, count: 1}")], false)?;
         trace(measured, &[json!("auth.relink_required"), json!("run.refused")], true)?;
+        if measured["runtime"] == "codex" {
+            codex_pcm(records)?;
+        }
     } else {
-        count(measured, "calls_after_detection", 0)?;
-        trace(
-            measured,
-            &[
-                json!("auth.relink_required"),
-                json!("run.refused {reason: relink_required}"),
-            ],
-            false,
-        )?;
+        rejection(measured, records)?;
     }
     screen(measured, &expected(case))
+}
+
+fn codex_pcm(records: &[Value]) -> Result<(), String> {
+    let microphone: Vec<_> = records.iter().filter(|r| r["event"] == "mic.completed").collect();
+    let reply: Vec<_> = records.iter().filter(|r| r["event"] == "reply.played").collect();
+    let ([microphone], [reply]) = (microphone.as_slice(), reply.as_slice()) else {
+        return Err("m2: expected one measured microphone and played reply".into());
+    };
+    if microphone["count"].as_u64().is_none_or(|count| count < 1)
+        || microphone["dropped_chunks"] != 0
+        || microphone["tail_samples"] != 0
+        || reply["outcome"] != "played"
+        || reply["frames"].as_u64().is_none_or(|count| count < 1)
+        || reply["frames"] != reply["received_frames"]
+        || reply["dropped_frames"] != 0
+    {
+        return Err("m2: PCM/played accounting failed".into());
+    }
+    Ok(())
+}
+
+// rust-v0.160.0 performs two startup refreshes; remeasure on any pin bump.
+pub(super) const EXPIRED_REFRESHES: u64 = 2;
+
+fn rejection(measured: &Value, records: &[Value]) -> Result<(), String> {
+    for name in ["wyoming_admissions", "sidebands", "external"] {
+        count(measured, name, 0)?;
+    }
+    count(measured, "exit_code", 1)?;
+    for name in ["auth_unchanged", "home_released"] {
+        if measured[name] != true {
+            return Err(format!("m2: {name} not proved"));
+        }
+    }
+    if measured["stdout"] != "" || measured["stderr"] != "echo-bridge: authorization\n" {
+        return Err("m2: unexpected authorization exit output".into());
+    }
+    if records.iter().filter(|r| r["event"] == "auth.relink_required").count() != 1 {
+        return Err("m2: expected exactly one relink event".into());
+    }
+    trace(
+        measured,
+        &[
+            json!("bridge.ready"),
+            json!("run.started"),
+            json!("live.connected"),
+            json!("mic.completed"),
+            json!("reply.played"),
+            json!("run.refused"),
+        ],
+        true,
+    )
 }

@@ -2,6 +2,7 @@
 #![cfg(test)]
 #[cfg(test)]
 mod cases {
+    mod codex;
     mod journey;
     mod lifecycle;
     mod limits;

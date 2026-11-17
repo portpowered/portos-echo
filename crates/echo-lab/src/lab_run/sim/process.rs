@@ -2,8 +2,9 @@ use std::path::Path;
 use std::process::Stdio;
 
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+mod line;
 
 #[cfg(test)]
 pub(super) mod owners {
@@ -14,6 +15,7 @@ pub struct Process {
     child: Child,
     input: Option<ChildStdin>,
     output: ChildStdout,
+    pending: Vec<u8>,
     status: Option<std::process::ExitStatus>,
     stopping: Option<(std::time::Instant, tokio::time::Instant)>,
     forced: bool,
@@ -46,6 +48,7 @@ impl Process {
             child,
             input,
             output,
+            pending: Vec::new(),
             status: None,
             stopping: None,
             forced: false,
@@ -59,21 +62,7 @@ impl Process {
     }
 
     pub async fn line(&mut self) -> Result<Value, String> {
-        let mut bytes = Vec::new();
-        loop {
-            let byte = self
-                .output
-                .read_u8()
-                .await
-                .map_err(|_| "process: exited before observation")?;
-            if bytes.len() >= 4096 {
-                return Err("process: oversized observation".into());
-            }
-            if byte == b'\n' {
-                return serde_json::from_slice(&bytes).map_err(|_| "process: malformed observation".into());
-            }
-            bytes.push(byte);
-        }
+        line::read(&mut self.output, &mut self.pending).await
     }
 
     pub async fn expect(&mut self, event: &str) -> Result<Value, String> {

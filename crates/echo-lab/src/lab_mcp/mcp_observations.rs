@@ -121,12 +121,21 @@ impl Observations {
     /// # Errors
     /// Malformed or changed results invalidate measurement without payload logs.
     pub fn model(&mut self, delegation: &str, request: &Value) -> Result<(), &'static str> {
-        let result = self.model_inner(delegation, request);
+        let result = self.model_inner(delegation, request, false);
         self.invalid |= result.is_err();
         self.valid().and(result)
     }
 
-    fn model_inner(&mut self, delegation: &str, request: &Value) -> Result<(), &'static str> {
+    /// Observe the pinned app server's dynamic-tool output representation.
+    /// # Errors
+    /// Unchanged identities must retain their exact content, including errors.
+    pub fn codex_model(&mut self, thread: &str, request: &Value) -> Result<(), &'static str> {
+        let result = self.model_inner(thread, request, true);
+        self.invalid |= result.is_err();
+        self.valid().and(result)
+    }
+
+    fn model_inner(&mut self, delegation: &str, request: &Value, codex: bool) -> Result<(), &'static str> {
         if delegation.is_empty() {
             return Err(INVALID);
         }
@@ -135,7 +144,13 @@ impl Observations {
                 continue;
             }
             let id = item["call_id"].as_str().filter(|id| !id.is_empty()).ok_or(INVALID)?;
-            let output: Value = serde_json::from_str(item["output"].as_str().ok_or(INVALID)?).map_err(|_| INVALID)?;
+            let text = item["output"].as_str().ok_or(INVALID)?;
+            let failed = codex && matches!(text, "tool execution failed" | "tool authorization required");
+            let output: Value = if failed {
+                json!(text)
+            } else {
+                serde_json::from_str(text).map_err(|_| INVALID)?
+            };
             let key = (delegation.into(), id.into());
             if let Some(previous) = self.results.get(&key) {
                 if previous != &output {
@@ -143,7 +158,12 @@ impl Observations {
                 }
                 continue;
             }
-            if output == json!({"content":[{"text":"m5-linked","type":"text"}],"is_error":false}) {
+            let success = if codex {
+                json!([{"text":"m5-linked","type":"text"}])
+            } else {
+                json!({"content":[{"text":"m5-linked","type":"text"}],"is_error":false})
+            };
+            if output == success {
                 self.counts.tool_call += 1;
                 self.reload = match self.reload {
                     Reload::Restarted => Reload::Used,
@@ -153,7 +173,7 @@ impl Observations {
                     }
                     other => other,
                 };
-            } else if output["is_error"] != true {
+            } else if !(failed || !codex && output["is_error"] == true) {
                 return Err(INVALID);
             }
             self.results.insert(key, output);

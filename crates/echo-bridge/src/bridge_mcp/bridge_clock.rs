@@ -29,7 +29,7 @@ pub fn execute(settings: Settings) -> Result<(), Error> {
     runtime.block_on(drive(async move {
         let (stop, shutdown) = oneshot::channel();
         let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
-        let work = bridge_runtime::execute_controlled(
+        let work = bridge_runtime::execute_with_control(
             settings,
             Control {
                 utc_day: std::sync::Arc::new(|| 0),

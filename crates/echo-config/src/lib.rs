@@ -2,10 +2,12 @@
 //! credential paths remain literal and are never opened or expanded.
 
 mod config_auth;
+mod config_codex;
 mod config_decode;
 mod config_muse;
 mod config_validate;
 pub use config_auth::ChatGptAuthConfig;
+pub use config_codex::CodexConfig;
 pub use config_muse::{AgentBackend, MuseConfig};
 
 #[cfg(test)]
@@ -66,6 +68,7 @@ impl BridgeConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeConfig {
     pub chatgpt_auth: ChatGptAuthConfig,
+    pub codex: CodexConfig,
     pub echo: EchoConfig,
     pub live: LiveConfig,
     pub audio: AudioConfig,

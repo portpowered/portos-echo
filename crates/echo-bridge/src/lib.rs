@@ -1,5 +1,7 @@
 //! Bridge-owned orchestration. Real provider compatibility remains the M2 gate.
 pub mod bridge_audio;
+#[path = "bridge_codex/bridge_codex.rs"]
+pub mod bridge_codex;
 pub mod bridge_health;
 pub mod bridge_input;
 #[path = "bridge_mcp/bridge_mcp.rs"]
@@ -9,12 +11,22 @@ pub mod bridge_muse;
 pub mod bridge_operator;
 pub mod bridge_runtime;
 pub mod bridge_trace;
+#[path = "bridge_voice/bridge_voice.rs"]
+pub mod bridge_voice;
 
 /// Fixed diagnostics never contain input, credentials, audio or provider bodies.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("invalid input")]
     Input,
+    #[error("codex.home: required for Codex runtime")]
+    CodexHomeRequired,
+    #[error("codex.home: private ownership unavailable")]
+    CodexHome,
+    #[error("codex.binary: unavailable")]
+    CodexBinary,
+    #[error("use signin with the configured Codex home")]
+    CodexImport,
     #[error("authorization")]
     Authorization,
     #[error("audio")]

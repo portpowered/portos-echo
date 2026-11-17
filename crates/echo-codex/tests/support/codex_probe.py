@@ -187,12 +187,42 @@ class QuietServer(http.server.ThreadingHTTPServer):
 
     def handle_error(self, request, client_address):
         pass
+
+
+def private_parent(path):
+    if sys.platform != 'win32':
+        return
+    # Give the supervisor-created home a private inherited ACL, as bridge T3 does.
+    # The path is environment data; never interpolate it into PowerShell code.
+    script = r'''
+$ErrorActionPreference = 'Stop'
+$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in @($user.Value, 'S-1-5-18', 'S-1-5-32-544')) {
+    $identity = New-Object System.Security.Principal.SecurityIdentifier $sid
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $acl.AddAccessRule($rule)
+}
+# Change only the DACL: the temporary directory already belongs to this user.
+# Set-Acl also requests audit privileges unavailable to an ordinary test process.
+[System.IO.Directory]::SetAccessControl($env:ECHO_CODEX_S5_PARENT, $acl)
+'''
+    env = {k: v for k, v in os.environ.items() if k.upper() != 'PSMODULEPATH'}
+    env['ECHO_CODEX_S5_PARENT'] = str(path)
+    powershell = pathlib.Path(os.environ['SYSTEMROOT']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    subprocess.run([str(powershell), '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+                   env=env, check=True)
+
+
 server = QuietServer(('127.0.0.1', 0), Handler)
 server.daemon_threads = True
 threading.Thread(target=server.serve_forever, daemon=True).start()
 port = server.server_port
 base = f'http://127.0.0.1:{port}'
 with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=True) as home:
+    private_parent(home)
     overrides = {'model_provider': 'local', 'model': 'gpt-5.4', 'model_providers.local': {'name': 'local', 'base_url': base + '/v1', 'wire_api': 'responses', 'requires_openai_auth': True, 'experimental_bearer_token': 'dummy-local-only'}, 'experimental_realtime_webrtc_call_base_url': base + '/backend-api/codex', 'experimental_realtime_ws_base_url': base + '/v1', 'features.plugins': False, 'features.recommended_plugins': False, 'features.remote_models': False, 'features.apps': False, 'features.remote_control': False, 'features.skill_search': False, 'features.skip_host_skill_discovery': True, 'cloud.skills.enabled': False, 'analytics.enabled': False, 'feedback.enabled': False, 'features.multi_agent': False, 'features.multi_agent_v2': False, 'features.goals': False, 'tools.experimental_request_user_input.enabled': False, 'features.shell_tool': False, 'features.unified_exec': False, 'web_search': 'disabled', 'tools.update_plan.enabled': False, 'mcp_servers': {}, 'cli_auth_credentials_store': 'file', 'check_for_update_on_startup': False}
 
     def toml(v):

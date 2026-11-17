@@ -41,6 +41,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 #[path = "bridge_refusal/mod.rs"]
 mod bridge_refusal;
 
+#[path = "codex_operator/mod.rs"]
+mod codex_operator;
 #[path = "bridge_observer/process.rs"]
 mod process;
 use process::Process;
@@ -367,13 +369,6 @@ async fn wire_journey_screen(directory: &Path) -> Lines<BufReader<tokio::net::Tc
         bridge_wire_screen::state(&mut screen).await,
         json!({"state":"ready","message":"Echo Live ready"})
     );
-    bridge_wire_auth::invoke(
-        directory,
-        &["status", "--config", "bridge.toml"],
-        0,
-        "mode: api-key\naccount: n/a\nexpires: n/a\n",
-    )
-    .await;
     screen
 }
 async fn wire_journey_commentary(live: &mut bridge_peer::Live) {

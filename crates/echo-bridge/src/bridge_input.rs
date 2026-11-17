@@ -8,6 +8,7 @@ use std::{
 };
 
 pub struct Settings {
+    pub config: Option<echo_config::BridgeConfig>,
     pub sim_clock: bool,
     pub sim_epoch: Option<u64>,
     pub mcp: Option<crate::bridge_mcp::Settings>,
@@ -172,6 +173,7 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
         return Err(Error::Input);
     };
     Ok(Settings {
+        config: None,
         sim_clock: false,
         sim_epoch: None,
         mcp: None,
@@ -210,10 +212,15 @@ fn configured(
         echo_config::LiveMode::ApiKey => LiveAuthMode::ApiKey,
     };
     let (live_url, model_url) = configured_origins(&config, origins)?;
-    let credential = Provider::Resolved(
-        echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth.clone()).map_err(|_| Error::Input)?,
-    );
+    let credential = if muse.is_none() && (origins.is_none() || config.codex.home.is_some()) {
+        Provider::Unavailable
+    } else {
+        Provider::Resolved(
+            echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth.clone()).map_err(|_| Error::Input)?,
+        )
+    };
     Ok(Some(Settings {
+        config: Some(config.clone()),
         sim_clock: false,
         sim_epoch: None,
         mcp: if muse.is_none() {
@@ -285,8 +292,11 @@ fn configured_origins(
     for server in &config.mcp.server {
         loopback_endpoint(&server.url)?;
     }
-    // A configured run can refresh credentials, but never starts signin itself.
-    if config.live.mode == echo_config::LiveMode::Chatgpt {
+    // Only the retained legacy path consumes this endpoint. Codex refresh uses
+    // the owned child's explicit LocalRoutes, never legacy auth configuration.
+    if config.live.mode == echo_config::LiveMode::Chatgpt
+        && (config.codex.home.is_none() || config.agent_backend == echo_config::AgentBackend::Muse)
+    {
         loopback_endpoint(&config.chatgpt_auth.token_endpoint)?;
     }
     Ok((live.into(), Some(model.into())))
@@ -304,4 +314,32 @@ fn parse_epoch(value: &str) -> Result<u64, Error> {
         return Err(Error::Input);
     }
     value.parse().map_err(|_| Error::Input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_local_routes_ignore_only_the_unused_legacy_refresh_endpoint() {
+        let mut config = echo_config::BridgeConfig::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/bridge.example.toml"),
+        )
+        .unwrap();
+        config.echo.host = "127.0.0.1".into();
+        config.screen.listen = "127.0.0.1:0".parse().unwrap();
+        config.mcp.server.clear();
+        let origins = Some(("http://127.0.0.1:1", "http://127.0.0.1:2"));
+        assert_eq!(configured_origins(&config, origins), Err(Error::Input));
+        config.codex.home = Some(std::env::temp_dir().join("unused-codex-home"));
+        assert_eq!(
+            configured_origins(&config, origins),
+            Ok(("http://127.0.0.1:1".into(), Some("http://127.0.0.1:2".into())))
+        );
+        config.echo.host = "non-loopback.invalid".into();
+        assert_eq!(configured_origins(&config, origins), Err(Error::Input));
+        config.echo.host = "127.0.0.1".into();
+        config.agent_backend = echo_config::AgentBackend::Muse;
+        assert_eq!(configured_origins(&config, origins), Err(Error::Input));
+    }
 }

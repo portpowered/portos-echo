@@ -19,6 +19,7 @@ serde_json = "1"
 serde_norway = "0.9.42"
 jsonschema = { version = "0.33", default-features = false }
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
+echo-codex = { version = "0.1.0", path = "../echo-codex" }
 echo-config = { version = "0.1.0", path = "../echo-config" }
 echo-wyoming = { version = "0.1.0", path = "../echo-wyoming" }
 echo-screen-contract = { version = "0.1.0", path = "../echo-screen-contract" }

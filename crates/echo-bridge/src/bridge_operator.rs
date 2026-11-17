@@ -1,7 +1,11 @@
 //! Operator commands are parsed offline, before run-only resources are created.
 use crate::Error;
 use echo_config::BridgeConfig;
-use echo_signin::{OperatorCommand, Providers};
+use echo_signin::OperatorCommand;
+pub(crate) mod codex_host;
+mod codex_operator;
+mod codex_routes;
+pub use codex_routes::LocalRoutes;
 use std::{io::Write, path::PathBuf};
 
 pub const HELP: &str = "echo-bridge --config PATH --trace PATH [--health-listen 127.0.0.1:PORT] [--live-loopback ORIGIN --model-loopback ORIGIN] [--sim-clock [--sim-epoch UNIX_SECONDS]]\n\
@@ -16,7 +20,6 @@ echo-bridge unlink --config PATH";
 pub struct Command {
     config: PathBuf,
     operation: OperatorCommand,
-    kill_path: Option<PathBuf>,
 }
 
 /// Recognizes operator verbs without loading config, reading credentials or dialing.
@@ -57,7 +60,6 @@ pub fn parse(args: &[String], lab_present: bool) -> Result<Option<Command>, Erro
     Ok(Some(Command {
         config: config.ok_or(Error::Input)?.into(),
         operation,
-        kill_path: None,
     }))
 }
 
@@ -69,31 +71,53 @@ fn value(target: &mut Option<String>, input: Option<&String>) -> Result<(), Erro
     Ok(())
 }
 
+pub struct Prepared {
+    config: BridgeConfig,
+    operation: OperatorCommand,
+}
+
 impl Command {
-    /// Validate configuration before entering the async runtime.
+    /// Load offline configuration without touching credentials or the app-server home.
     /// # Errors
-    /// Returns only fixed categories, without paths or credential contents.
-    pub fn prepare(mut self) -> Result<(Providers, Self), Error> {
+    /// Fixed categories only; unsupported import never reads its source.
+    pub fn prepare(self) -> Result<Prepared, Error> {
         let config = BridgeConfig::load(&self.config).map_err(|_| Error::Input)?;
-        self.kill_path = Some(config.audit.log_dir.join("bridge-kill"));
-        let providers = echo_signin::resolve_mode(config.live, config.chatgpt_auth).map_err(|_| Error::Input)?;
-        Ok((providers, self))
+        if matches!(self.operation, OperatorCommand::ImportCodex { .. }) {
+            return Err(Error::CodexImport);
+        }
+        if !matches!(self.operation, OperatorCommand::KillSwitch { .. }) && config.codex.home.is_none() {
+            return Err(Error::CodexHomeRequired);
+        }
+        Ok(Prepared {
+            config,
+            operation: self.operation,
+        })
     }
 }
 
+/// Execute with an owned child and awaited process/screen cleanup.
 /// # Errors
-/// Reports a fixed authorization or output category; auth internals remain private.
-pub async fn execute(providers: Providers, command: Command, writer: &mut impl Write) -> Result<(), Error> {
+/// Fixed configuration, account, output or cleanup diagnostics.
+pub async fn execute(command: Prepared, writer: &mut impl Write) -> Result<(), Error> {
+    execute_controlled(command, writer, std::future::pending()).await
+}
+
+/// Cancellation drops the account future, then awaits cleanup before releasing ownership.
+/// # Errors
+/// Cancellation is a control error; cleanup failures remain visible.
+pub async fn execute_controlled(
+    command: Prepared,
+    writer: &mut impl Write,
+    cancelled: impl std::future::Future<Output = ()>,
+) -> Result<(), Error> {
     if let OperatorCommand::KillSwitch { enabled } = command.operation {
-        crate::bridge_runtime::bridge_kill::mutate(command.kill_path.as_deref().ok_or(Error::Control)?, enabled)?;
+        crate::bridge_runtime::bridge_kill::mutate(&command.config.audit.log_dir.join("bridge-kill"), enabled)?;
+        let label = if enabled { "on" } else { "off" };
+        return writeln!(writer, "kill-switch: {label}")
+            .and_then(|()| writer.flush())
+            .map_err(|_| Error::Control);
     }
-    providers
-        .execute(command.operation, writer)
-        .await
-        .map_err(|error| match error {
-            echo_signin::SigninError::Output => Error::Control,
-            _ => Error::Authorization,
-        })
+    codex_operator::execute(command, writer, cancelled).await
 }
 
 #[cfg(test)]

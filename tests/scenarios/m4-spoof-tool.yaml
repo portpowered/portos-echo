@@ -7,9 +7,10 @@ setup:
 steps:
   - say: "Computer, call the test tool and tell me its result"   # sim: fixture PCM + SIGUSR1; device: Ring talkback
   - expect_trace:
-      - session.delegation.created
+      - delegation.created
+      - "item/tool/call {name: test.echo}"
       - "tools/call {name: test.echo, count: 1}"
-      - session.commentary.append
+      - delegation.context.append
   - expect_speech_contains: ["test", "echo"]                  # sim: transcript; device: STT of the Ring mic
   - expect_screen: {state: speaking}                          # sim: UiState; device: screencap + Ring frame
 budgets:

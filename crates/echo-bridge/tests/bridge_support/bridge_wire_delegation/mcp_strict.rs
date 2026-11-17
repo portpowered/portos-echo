@@ -185,7 +185,7 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
             "",
         );
         assert_eq!(record(h.directory.path())["grant"], Value::Null);
-        restarted.process.finish(0).await;
+        journey::finish_after_idle_probe(&mut restarted.process, &h.path(), "mcp.run.failed").await;
         satellite.await.unwrap();
         assert_no_restart_disconnect(&h.path());
         assert_replayed(&h);

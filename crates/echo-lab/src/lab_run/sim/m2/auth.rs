@@ -1,4 +1,5 @@
-//! Synthetic private `ChatGPT` storage through the delivered import command.
+//! Synthetic private storage for the retained legacy voice-runtime fixture.
+//! Canonical sign-in is app-server-owned; this fixture never imports credentials.
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::json;
 use std::{
@@ -58,13 +59,7 @@ impl Drop for Auth {
     }
 }
 
-pub async fn configure(
-    command: &mut Command,
-    bridge: &Path,
-    root: &Path,
-    case: &str,
-    auth: &str,
-) -> Result<(), String> {
+pub fn configure(command: &mut Command, root: &Path, case: &str, auth: &str) -> Result<(), String> {
     let directory = root.join("configured.private");
     let path = directory.join("bridge.toml");
     let config = std::fs::read_to_string(&path).map_err(|_| "m2: config missing")?;
@@ -78,20 +73,7 @@ pub async fn configure(
     let claims = json!({"exp":4_000_000_000_u64,
         "https://api.openai.com/auth":{"chatgpt_account_id":"synthetic-local"}}); // lint-rules: allow-literal inert JWT claim key
     let token = format!("e30.{}.synthetic", URL_SAFE_NO_PAD.encode(claims.to_string()));
-    let source = json!({"tokens":{"access_token":token,"refresh_token":"synthetic-refresh", "account_id":"synthetic-local"},
-        "last_refresh":"2096-01-01T00:00:00Z"});
-    std::fs::write(directory.join("source"), source.to_string()).map_err(|_| "m2: import source")?;
-    let status = Command::new(bridge)
-        .current_dir(&directory)
-        .args(["import-codex", "--config", "bridge.toml", "--path", "source"])
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|_| "m2: import failed")?;
-    if !status.status.success() {
-        return Err("m2: import rejected".into());
-    }
-    std::fs::remove_file(directory.join("source")).map_err(|_| "m2: source cleanup")?;
+    seed_legacy_store(&directory.join("credential"), &token)?;
     let credential = directory.join("credential");
     match case {
         "invalid" => std::fs::write(credential, "malformed synthetic store").map_err(|_| "m2: invalid store")?,
@@ -107,4 +89,21 @@ pub async fn configure(
     }
     command.arg("--sim-clock");
     Ok(())
+}
+
+// Temporary SUT setup, removed when the retained M2 voice path switches to Codex.
+// Writes synthetic data only to the old fixture store, never CODEX_HOME/auth.json.
+fn seed_legacy_store(path: &Path, token: &str) -> Result<(), String> {
+    let record = json!({"access":token,"refresh":"synthetic-refresh",
+        "account_id":"synthetic-local","expires":4_000_000_000_u64,
+        "last_refresh":4_000_000_000_u64});
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path).map_err(|_| "m2: cannot create synthetic store")?;
+    serde_json::to_writer(file, &record).map_err(|_| "m2: cannot write synthetic store".into())
 }

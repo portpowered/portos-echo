@@ -4,6 +4,7 @@
 //! Reuse one runner to retain request accounting. Drive `run` to completion; if its
 //! future is abandoned, drop the entire runner to stop the backend worker. A trace
 //! observes preparation/dispatch attempts, not remote delivery or authorization.
+pub mod codex_dispatch;
 use echo_agent_api::{AgentBackend, Task, ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_agent_loop::{InitError, ModelCredential, ResponsesBackend};
 use echo_config::{AgentConfig, LiveMode};

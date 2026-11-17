@@ -170,6 +170,7 @@ fn settings(directory: &Path, live: &str, port: u16) -> bridge_input::Settings {
     let providers = echo_signin::resolve_mode(config.live.clone(), config.chatgpt_auth).unwrap();
     let origin = "http://127.0.0.1";
     bridge_input::Settings {
+        config: None,
         sim_clock: false,
         sim_epoch: None,
         mcp: None,

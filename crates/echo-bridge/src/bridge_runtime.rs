@@ -3,10 +3,10 @@ mod bridge_budget;
 mod bridge_delegation;
 pub(crate) mod bridge_kill;
 mod bridge_lifecycle;
-mod bridge_pacing;
+pub(crate) mod bridge_pacing;
 mod bridge_refusal;
 mod bridge_relink;
-mod bridge_screen;
+pub(crate) mod bridge_screen;
 mod bridge_timing;
 mod journey;
 
@@ -39,15 +39,32 @@ pub struct Control {
 /// # Errors
 /// All failures use fixed categories. EOF closes owned tasks and sockets.
 pub async fn execute<C: LinkConnector>(settings: Settings, connector: C) -> Result<(), Error> {
-    execute_controlled(
-        settings,
-        Control {
-            utc_day: std::sync::Arc::new(utc_day),
-            shutdown: control()?,
-        },
-        connector,
-    )
-    .await
+    let control = Control {
+        utc_day: std::sync::Arc::new(utc_day),
+        shutdown: control()?,
+    };
+    execute_with_control(settings, control, connector).await
+}
+
+/// Select the configured owner while preserving explicit clock/stop control.
+/// # Errors
+/// The selected owner reports fixed startup, device, call and cleanup errors.
+pub async fn execute_with_control<C: LinkConnector>(
+    settings: Settings,
+    control: Control,
+    connector: C,
+) -> Result<(), Error> {
+    if settings.config.is_some()
+        && settings.muse.is_none()
+        && (settings.model_url.is_none()
+            || settings
+                .config
+                .as_ref()
+                .is_some_and(|config| config.codex.home.is_some()))
+    {
+        return Box::pin(crate::bridge_voice::voice_entry::execute(settings, control, connector)).await;
+    }
+    Box::pin(execute_controlled(settings, control, connector)).await
 }
 
 fn utc_day() -> u64 {
@@ -58,7 +75,24 @@ fn utc_day() -> u64 {
         / 86_400
 }
 
-/// Runs the same application owner with an explicit host clock and stop receiver.
+fn validate_sim(settings: &Settings) -> Result<(), Error> {
+    if settings
+        .config
+        .as_ref()
+        .is_some_and(|config| config.codex.home.is_some())
+        || settings.sim_epoch.is_some() && (!settings.sim_clock || settings.model_url.is_none() || settings.lab)
+    {
+        return Err(Error::Input);
+    }
+    if let Some(path) = &settings.kill_path {
+        bridge_kill::inspect(path)?;
+    }
+    Ok(())
+}
+
+/// Retained simulator owner with an explicit host clock and stop receiver.
+/// Configured Codex runs use `execute_with_control`; keeping this legacy owner
+/// separate preserves its Send boundary for existing spawned library callers.
 /// # Errors
 /// Returns the same fixed operational failures as `execute`.
 pub async fn execute_controlled<C: LinkConnector>(
@@ -66,12 +100,7 @@ pub async fn execute_controlled<C: LinkConnector>(
     control: Control,
     connector: C,
 ) -> Result<(), Error> {
-    if settings.sim_epoch.is_some() && (!settings.sim_clock || settings.model_url.is_none() || settings.lab) {
-        return Err(Error::Input);
-    }
-    if let Some(path) = &settings.kill_path {
-        bridge_kill::inspect(path)?;
-    }
+    validate_sim(&settings)?;
     let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day)?;
     let mut trace = Trace::open(
         &settings.trace,
@@ -401,7 +430,7 @@ fn control() -> Result<oneshot::Receiver<bool>, Error> {
     Ok(receive)
 }
 
-fn publish(event: &str, run: Option<&str>) -> Result<(), Error> {
+pub(crate) fn publish(event: &str, run: Option<&str>) -> Result<(), Error> {
     let mut value = json!({"event":event});
     if let Some(id) = run {
         value["run_id"] = id.into();
