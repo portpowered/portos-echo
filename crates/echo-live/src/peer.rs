@@ -39,6 +39,12 @@ pub struct LivePeer {
 impl LivePeer {
     pub(crate) async fn from_socket(socket: UdpSocket, now: Instant) -> Result<Self, Error> {
         let address = socket.local_addr().map_err(|_| Error::Io)?;
+        // rtc's host nomination uses elapsed > 0, even with zero minimum wait.
+        // Seed signaling one microsecond before the initial tick so a datagram
+        // at the caller's initial tick can nominate. All later input, media and
+        // timeout times stay exactly caller-owned; no clock or task is started.
+        // A nanosecond rounds to zero at Windows Instant's counter resolution.
+        let now = now.checked_sub(Duration::from_micros(1)).ok_or(Error::Protocol)?;
         let rtc = crate::negotiation::connection(address, now)?;
         let mut peer = Self {
             rtc,

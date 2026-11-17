@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 17
 status: amended; str0m choice superseded, explicit encoded transport retained
 ---
 
@@ -25,6 +25,10 @@ signaled SDP, preserving one sendrecv audio track and no video. Receive queues
 retain 128 audio packets (drop oldest) and 16 texts (reject overflow). Text
 admission remains 16 KiB with a 128 KiB outstanding-send bound. Errors retain
 their sanitized public categories. Close/drop release the socket immediately.
+Signaling starts one microsecond before the initial injected tick to accommodate
+rtc's strict positive elapsed-time check for host nomination, including Windows
+clock resolution. Subsequent input, media and timeout times remain exactly the
+caller's; a frozen bridge clock can negotiate with an advancing remote peer.
 
 The canonical bridge path uses Codex and echo-media. Legacy/Muse bridge calls,
 M3, and simulator fake peers still consume echo-live. Sign-in and Responses
