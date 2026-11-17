@@ -1,12 +1,13 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use str0m::channel::ChannelId;
-use str0m::format::Codec;
-use str0m::net::{Protocol, Receive};
-use str0m::rtp::RtpWrite;
-use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
+use rtc::data_channel::RTCDataChannelId;
+use rtc::peer_connection::RTCPeerConnection;
+use rtc::peer_connection::event::{RTCDataChannelEvent, RTCPeerConnectionEvent};
+use rtc::peer_connection::message::RTCMessage;
+use rtc::peer_connection::state::RTCIceConnectionState;
+use rtc::sansio::Protocol;
+use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
 use tokio::net::UdpSocket;
 
 use crate::{Error, negotiation::Negotiation, queue::Queue};
@@ -24,11 +25,12 @@ pub struct AudioFrame {
 /// All times must be monotonic and use the same caller-owned clock.
 /// Drop/close releases the UDP socket; cancellation of a receive never owns a task.
 pub struct LivePeer {
-    rtc: Rtc,
+    rtc: RTCPeerConnection,
+    now: Instant,
     socket: Option<UdpSocket>,
     address: SocketAddr,
     negotiation: Negotiation,
-    channel: Option<ChannelId>,
+    channel: Option<RTCDataChannelId>,
     connected: bool,
     audio: Queue<AudioFrame>,
     text: Queue<String>,
@@ -37,17 +39,10 @@ pub struct LivePeer {
 impl LivePeer {
     pub(crate) async fn from_socket(socket: UdpSocket, now: Instant) -> Result<Self, Error> {
         let address = socket.local_addr().map_err(|_| Error::Io)?;
-        let mut rtc = Rtc::builder()
-            .set_crypto_provider(Arc::new(str0m::crypto::from_feature_flags()))
-            .set_rtp_mode(true)
-            .clear_codecs()
-            .enable_opus(true, false)
-            .set_sctp_max_message_size(16_384)
-            .build(now);
-        rtc.add_local_candidate(Candidate::host(address, "udp").map_err(|_| Error::Protocol)?)
-            .ok_or(Error::Protocol)?;
+        let rtc = crate::negotiation::connection(address, now)?;
         let mut peer = Self {
             rtc,
+            now,
             socket: Some(socket),
             address,
             negotiation: Negotiation::default(),
@@ -75,7 +70,7 @@ impl LivePeer {
     /// Returns `Closed` or `State` when negotiation cannot start.
     pub async fn offer(&mut self) -> Result<String, Error> {
         self.open()?;
-        let offer = self.negotiation.offer(&mut self.rtc)?;
+        let offer = self.negotiation.offer(&mut self.rtc, self.now)?;
         self.flush().await?;
         Ok(offer)
     }
@@ -84,7 +79,7 @@ impl LivePeer {
     /// Returns closed, state or invalid-SDP errors.
     pub async fn answer(&mut self, offer: &str) -> Result<String, Error> {
         self.open()?;
-        let answer = self.negotiation.answer(&mut self.rtc, offer)?;
+        let answer = self.negotiation.answer(&mut self.rtc, self.now, offer)?;
         self.flush().await?;
         Ok(answer)
     }
@@ -93,7 +88,7 @@ impl LivePeer {
     /// Returns closed, state or invalid-SDP errors.
     pub async fn apply_answer(&mut self, answer: &str) -> Result<(), Error> {
         self.open()?;
-        self.negotiation.apply_answer(&mut self.rtc, answer)?;
+        self.negotiation.apply_answer(&mut self.rtc, self.now, answer)?;
         self.flush().await?;
         Ok(())
     }
@@ -103,29 +98,9 @@ impl LivePeer {
     /// Returns closed/readiness/payload/protocol/I/O errors.
     pub async fn send_audio(&mut self, frame: AudioFrame, now: Instant) -> Result<(), Error> {
         self.check_ready()?;
-        if frame.payload.is_empty() || frame.payload.len() > 1200 {
-            return Err(Error::Payload);
-        }
-        let mid = self.negotiation.mid.ok_or(Error::NotReady)?;
-        let pt = self
-            .rtc
-            .codec_config()
-            .params()
-            .iter()
-            .find(|p| p.spec().codec == Codec::Opus)
-            .map(str0m::format::PayloadParams::pt)
-            .ok_or(Error::NotReady)?;
-        self.rtc
-            .direct_api()
-            .stream_tx_by_mid(mid, None)
-            .ok_or(Error::NotReady)?
-            .write_rtp(RtpWrite::new(
-                pt,
-                u64::from(frame.sequence).into(),
-                frame.timestamp,
-                now,
-                frame.payload,
-            ));
+        audio_payload(frame.payload.len())?;
+        self.now = now;
+        self.negotiation.send_audio(&mut self.rtc, now, frame)?;
         self.flush().await?;
         Ok(())
     }
@@ -135,16 +110,15 @@ impl LivePeer {
     /// Returns closed/readiness/pressure/protocol/I/O errors.
     pub async fn send_text(&mut self, text: &str) -> Result<(), Error> {
         self.check_ready()?;
-        if text.len() > 16_384 {
-            return Err(Error::Full);
-        }
+        text_payload(text.len())?;
         let mut channel = self
             .rtc
-            .channel(self.channel.ok_or(Error::NotReady)?)
+            .data_channel(self.channel.ok_or(Error::NotReady)?)
             .ok_or(Error::NotReady)?;
-        if !channel.write(false, text.as_bytes()).map_err(|_| Error::Protocol)? {
+        if channel.outstanding_bytes().saturating_add(text.len()) > 128 * 1024 {
             return Err(Error::Full);
         }
+        channel.send_text(self.now, text).map_err(|_| Error::Protocol)?;
         self.flush().await?;
         Ok(())
     }
@@ -154,32 +128,29 @@ impl LivePeer {
     /// Returns closed/protocol/I/O/receive-pressure errors.
     pub async fn flush(&mut self) -> Result<Instant, Error> {
         self.open()?;
-        loop {
-            match self.rtc.poll_output().map_err(|_| Error::Protocol)? {
-                Output::Timeout(deadline) => return Ok(deadline),
-                Output::Transmit(packet) => {
-                    self.socket
-                        .as_ref()
-                        .ok_or(Error::Closed)?
-                        .send_to(&packet.contents, packet.destination)
-                        .await
-                        .map_err(|_| Error::Io)?;
-                }
-                Output::Event(event) => self.event(event)?,
-            }
+        while let Some(packet) = self.rtc.poll_write() {
+            self.socket
+                .as_ref()
+                .ok_or(Error::Closed)?
+                .send_to(&packet.message, packet.transport.peer_addr)
+                .await
+                .map_err(|_| Error::Io)?;
         }
+        while let Some(event) = self.rtc.poll_event() {
+            self.event(&event);
+        }
+        while let Some(packet) = self.rtc.poll_read() {
+            self.message(packet.message)?;
+        }
+        Ok(self.rtc.poll_timeout().unwrap_or(self.now + Duration::from_hours(24)))
     }
 
     /// Wait for socket readiness. Cancelling this future preserves queued data.
     /// # Errors
     /// Returns `Closed` or `Io`.
-    pub async fn readable(&self) -> Result<(), Error> {
-        self.socket
-            .as_ref()
-            .ok_or(Error::Closed)?
-            .readable()
-            .await
-            .map_err(|_| Error::Io)
+    pub fn readable(&self) -> impl Future<Output = Result<(), Error>> + Send + use<'_> {
+        let socket = self.socket.as_ref();
+        async move { socket.ok_or(Error::Closed)?.readable().await.map_err(|_| Error::Io) }
     }
 
     /// Consume one datagram after readiness; false denotes spurious readiness.
@@ -193,9 +164,19 @@ impl LivePeer {
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
             Err(_) => return Err(Error::Io),
         };
-        let received = Receive::new(Protocol::Udp, source, self.address, &buf[..len]).map_err(|_| Error::Protocol)?;
+        datagram(&buf[..len])?;
+        self.now = now;
         self.rtc
-            .handle_input(Input::Receive(now, received))
+            .handle_read(TaggedBytesMut {
+                now,
+                transport: TransportContext {
+                    local_addr: self.address,
+                    peer_addr: source,
+                    transport_protocol: TransportProtocol::UDP,
+                    ecn: None,
+                },
+                message: (&buf[..len]).into(),
+            })
             .map_err(|_| Error::Protocol)?;
         self.flush().await?;
         Ok(true)
@@ -206,9 +187,8 @@ impl LivePeer {
     /// Returns closed/protocol/I/O/pressure errors.
     pub async fn timeout(&mut self, now: Instant) -> Result<(), Error> {
         self.open()?;
-        self.rtc
-            .handle_input(Input::Timeout(now))
-            .map_err(|_| Error::Protocol)?;
+        self.now = now;
+        self.rtc.handle_timeout(now).map_err(|_| Error::Protocol)?;
         self.flush().await?;
         Ok(())
     }
@@ -230,7 +210,7 @@ impl LivePeer {
 
     /// Idempotent; keeps already received values available for draining.
     pub fn close(&mut self) {
-        self.rtc.disconnect();
+        let _ = self.rtc.close();
         self.socket.take();
         self.negotiation = Negotiation::default();
         self.connected = false;
@@ -252,22 +232,38 @@ impl LivePeer {
         if self.ready() { Ok(()) } else { Err(Error::NotReady) }
     }
 
-    fn event(&mut self, event: Event) -> Result<(), Error> {
+    fn event(&mut self, event: &RTCPeerConnectionEvent) {
         match event {
-            Event::IceConnectionStateChange(state) => {
-                self.connected = matches!(state, IceConnectionState::Connected | IceConnectionState::Completed);
+            RTCPeerConnectionEvent::OnIceConnectionStateChangeEvent(state) => {
+                self.connected = matches!(
+                    state,
+                    RTCIceConnectionState::Connected | RTCIceConnectionState::Completed
+                );
             }
-            Event::MediaAdded(media) => self.negotiation.mid = Some(media.mid),
-            Event::ChannelOpen(id, label) if label == "oai-events" => self.channel = Some(id),
-            Event::ChannelClose(id) if self.channel == Some(id) => self.channel = None,
-            Event::ChannelData(data) if self.channel == Some(data.id) => {
-                if data.binary {
+            RTCPeerConnectionEvent::OnDataChannel(RTCDataChannelEvent::OnOpen(id)) => {
+                if self.rtc.data_channel(*id).is_some_and(|c| c.label() == "oai-events") {
+                    self.channel = Some(*id);
+                }
+            }
+            RTCPeerConnectionEvent::OnDataChannel(
+                RTCDataChannelEvent::OnClose(id)
+                | RTCDataChannelEvent::OnClosing(id)
+                | RTCDataChannelEvent::OnError(id),
+            ) if self.channel == Some(*id) => self.channel = None,
+            _ => {}
+        }
+    }
+
+    fn message(&mut self, message: RTCMessage) -> Result<(), Error> {
+        match message {
+            RTCMessage::DataChannelMessage(id, data) if self.channel == Some(id) => {
+                if !data.is_string {
                     return Err(Error::Payload);
                 }
-                let text = String::from_utf8(data.data).map_err(|_| Error::Payload)?;
+                let text = String::from_utf8(data.data.to_vec()).map_err(|_| Error::Payload)?;
                 self.text.push(text, false)?;
             }
-            Event::RtpPacket(packet) => self.audio.push(
+            RTCMessage::RtpPacket(_, packet) => self.audio.push(
                 AudioFrame {
                     sequence: packet.header.sequence_number,
                     timestamp: packet.header.timestamp,
@@ -280,3 +276,32 @@ impl LivePeer {
         Ok(())
     }
 }
+
+fn audio_payload(len: usize) -> Result<(), Error> {
+    if (1..=1200).contains(&len) {
+        Ok(())
+    } else {
+        Err(Error::Payload)
+    }
+}
+
+fn text_payload(len: usize) -> Result<(), Error> {
+    if len <= 16_384 { Ok(()) } else { Err(Error::Full) }
+}
+
+// Preserve the public malformed-datagram error before rtc's tolerant demuxer.
+// RFC 7983 assigns the first-byte ranges for STUN, DTLS and RTP/RTCP.
+fn datagram(bytes: &[u8]) -> Result<(), Error> {
+    match bytes.first() {
+        Some(0..=1) if bytes.len() >= 20 => rtc::stun::message::Message::default()
+            .unmarshal_binary(bytes)
+            .map_err(|_| Error::Protocol),
+        Some(20..=63) => Ok(()),
+        Some(128..=191) if bytes.len() > 2 => Ok(()),
+        _ => Err(Error::Protocol),
+    }
+}
+
+#[cfg(test)]
+#[path = "peer/peer_tests.rs"]
+mod tests;
