@@ -7,6 +7,7 @@ import concurrent.futures
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import signal
@@ -44,11 +45,16 @@ def component(kind):
     host.guard = threading.RLock()
     host.observed = collections.deque(maxlen=8192)
     host.deadline = 20
+    host.reservation = mock.Mock()
     return host
 
 
 class Readiness(unittest.TestCase):
     """T1: explicit component doubles, no descriptors or sockets opened."""
+
+    def setUp(self):
+        self.enterContext(mock.patch('wyoming_host._allocation_guard',
+                                     side_effect=lambda deadline: contextlib.nullcontext()))
 
     def test_split_marker_preserves_trailing_record_for_next_reader(self):
         for kind in KINDS:
@@ -153,6 +159,128 @@ class Readiness(unittest.TestCase):
 
 class StartupProcesses(unittest.TestCase):
     """T3: real prebuilt pin, OS fork/exec, pipes and synthetic IPv4 clients."""
+
+    PEER = r'''
+import contextlib, fcntl, json, os, socket, sys, tempfile
+from unittest import mock
+sys.path.insert(0, sys.argv[1])
+import test_host_startup as suite
+role = sys.argv[2]
+if role == 'observer' and sys.argv[4] == 'handoff':
+    with open(f'/tmp/wyoming-t3-bind-{os.getuid()}.lock', 'rb') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(json.dumps({'excluded': True}), flush=True)
+        else:
+            raise AssertionError('handoff was not coordinated across processes')
+with tempfile.TemporaryDirectory(prefix='endpoint-peer-') as folder:
+    bind = socket.socket.bind
+    calls = 0
+    def allocate(sock, address):
+        global calls
+        calls += 1
+        if role == 'observer' and calls == 2:
+            try:
+                return bind(sock, ('127.0.0.1', int(sys.argv[3])))
+            except OSError as error:
+                assert error.errno == 98
+        return bind(sock, address)
+    with mock.patch.object(socket.socket, 'bind', allocate):
+        host = (suite.ObservedHost if role == 'observer' else suite.Host)(folder)
+    detail = {'selected': host.port, 'pid': os.getpid()}
+    if role == 'observer':
+        detail.update(diagnostic=host.listener.getsockname()[1],
+                      descriptor=host.listener.fileno())
+    print(json.dumps(detail), flush=True)
+    try:
+        assert sys.stdin.readline() == 'start\n'
+        launch = suite.wyoming_host.subprocess.Popen
+        def handoff(args, **kwargs):
+            if args[-1] != 'path':
+                assert host.reservation is None
+                print(json.dumps({'handoff': host.port}), flush=True)
+                assert sys.stdin.readline() == 'bind\n'
+            return launch(args, **kwargs)
+        try:
+            with mock.patch('wyoming_host.subprocess.Popen',
+                            handoff if role == 'handoff' else launch):
+                host.start()
+            print(json.dumps({'ready': host.port}), flush=True)
+        except RuntimeError as error:
+            print(json.dumps({'failure': str(error)}), flush=True)
+        for command in sys.stdin:
+            if command.strip() == 'stop':
+                host.stop()
+                print('stopped', flush=True)
+    finally:
+        host.stop()
+        if role == 'observer':
+            with contextlib.suppress(OSError):
+                host.listener.shutdown(socket.SHUT_RDWR)
+            host.listener.close()
+'''
+
+    def test_independent_observer_cannot_take_selected_core_endpoint(self):
+        self.independent(False)
+
+    def test_independent_allocator_is_excluded_until_child_binds(self):
+        self.independent(True)
+
+    def independent(self, handoff):
+        # Force the kernel allocator's contested choice, without a port probe.
+        # Each exec owns its descriptors; both real pinned children start once.
+        peers = []
+
+        def peer(role, port=0):
+            proc = subprocess.Popen(
+                [sys.executable, '-c', self.PEER, str(ROOT / 'tests'), role, str(port),
+                 'handoff' if handoff else 'preparation'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+            peers.append(proc)
+            return proc
+
+        def row(proc):
+            self.assertTrue(wyoming_host.select.select([proc.stdout], [], [], 20)[0])
+            line = proc.stdout.readline()
+            self.assertTrue(line, 'controller EOF')
+            return json.loads(line)
+
+        try:
+            first = peer('handoff' if handoff else 'base')
+            selected = row(first)['selected']
+            if handoff:
+                first.stdin.write('start\n')
+                first.stdin.flush()
+                self.assertEqual(row(first), {'handoff': selected})
+            second = peer('observer', selected)
+            if handoff:
+                self.assertEqual(row(second), {'excluded': True})
+                first.stdin.write('bind\n')
+                first.stdin.flush()
+            owner = row(second)
+            for proc in peers[1:] if handoff else peers:
+                proc.stdin.write('start\n')
+                proc.stdin.flush()
+            outcomes = [row(proc) for proc in peers]
+            print(f'core={selected} contender={owner} outcomes={outcomes}', file=sys.stderr)
+            self.assertEqual(outcomes, [{'ready': selected}, {'ready': owner['selected']}])
+            self.assertNotIn(owner['diagnostic'], (selected, owner['selected']))
+            for port in (selected, owner['selected']):
+                self.describe(mock.Mock(port=port))
+            first.stdin.write('stop\n')
+            first.stdin.flush()
+            self.assertEqual(first.stdout.readline(), 'stopped\n')
+            self.describe(mock.Mock(port=owner['selected']))
+        finally:
+            for proc in peers:
+                proc.stdin.close()
+                proc.wait(timeout=3)
+                proc.stdout.close()
+                diagnostic = proc.stderr.read()
+                proc.stderr.close()
+                self.assertEqual(proc.returncode, 0, diagnostic)
 
     def host(self, kind):
         folder = tempfile.TemporaryDirectory(prefix='startup-t3-')

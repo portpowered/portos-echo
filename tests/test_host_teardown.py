@@ -18,11 +18,29 @@ import unittest
 from unittest import mock
 
 import bridge_host
+import wyoming_host
 from wyoming_host import Host, ROOT
 
 
 class StopAccounting(unittest.TestCase):
     """T1: faults are in-memory and never signal a real PID."""
+
+    def test_coordination_timeout_collects_waiter_and_closes_lock(self):
+        waiter, owner = mock.Mock(), mock.Mock()
+        waiter.wait.side_effect = [subprocess.TimeoutExpired('coordination', 3.5), 0]
+        waiter.poll.return_value = None
+        with mock.patch('wyoming_host.os.open', return_value=43), \
+                mock.patch('wyoming_host.os.fdopen', return_value=owner), \
+                mock.patch('wyoming_host._LockWaiter', return_value=waiter) as launch, \
+                mock.patch('wyoming_host.time.monotonic', return_value=16.5):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                with wyoming_host._allocation_guard(20):
+                    self.fail('expired acquisition entered the handoff')
+        self.assertEqual(waiter.wait.call_args_list,
+                         [mock.call(timeout=3.5), mock.call()])
+        waiter.kill.assert_called_once()
+        owner.close.assert_called_once()
+        self.assertEqual(launch.call_args.kwargs['pass_fds'], (43,))
 
     def host(self, status=None):
         host = Host.__new__(Host)
@@ -158,6 +176,14 @@ class PinnedHost(unittest.TestCase):
         self.assertNotEqual(self.host.proc.pid, proc.pid)
         self.assertNotEqual(Path(f'/proc/{self.host.proc.pid}/exe').resolve(), executable)
         self.connect()
+        advertised = self.host.port
+        self.host.stop()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.host.command('restart')
+        self.assertEqual(output.getvalue(), 'restart\n')
+        self.assertEqual(self.host.port, advertised)
+        self.connect()
 
     def test_staged_copy_mismatch_refuses_launch_and_removes_private_directory(self):
         original = shutil.copy2
@@ -287,7 +313,25 @@ class PinnedHost(unittest.TestCase):
                 try:
                     self.host.start()
                     other.start()
+                    former_port = self.host.port
                     self.host.stop()
+                    with socket.socket() as unrelated:
+                        unrelated.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                        unrelated.bind(('127.0.0.1', former_port))
+                        unrelated.listen()
+                        unrelated.setblocking(False)
+                        with mock.patch('wyoming_host.os.killpg') as kill, \
+                                mock.patch('socket.create_connection') as probe:
+                            self.host.stop()
+                            self.assertIn('status=None', str(self.host.failure('stopped')))
+                        kill.assert_not_called()
+                        probe.assert_not_called()
+                        self.host.start()
+                        self.assertNotEqual(self.host.port, former_port)
+                        self.connect()
+                        self.assertEqual(unrelated.getsockname()[1], former_port)
+                        with self.assertRaises(BlockingIOError):
+                            unrelated.accept()
                     self.assertIsNone(sentinel.poll())
                     self.assertIsNone(other.proc.poll())
                     with socket.create_connection(('127.0.0.1', other.port), timeout=2) as conn:
