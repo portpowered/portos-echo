@@ -18,6 +18,8 @@ struct Schedule {
     competing: AtomicBool,
     reply_pending: AtomicBool,
     reply_polls: AtomicUsize,
+    cut_pending: AtomicBool,
+    cut_polls: AtomicUsize,
     blocked: AtomicBool,
     turns: AtomicUsize,
     run: Mutex<Option<echo_wyoming::Run>>,
@@ -141,7 +143,18 @@ impl EchoLink for Link {
         EchoLink::play_with_timeout(&self.0, format, source, deadline).await
     }
     async fn cut_with_stats(&self) -> Result<CutStats, echo_link::Error> {
-        EchoLink::cut_with_stats(&self.0).await
+        let stats = EchoLink::cut_with_stats(&self.0).await?;
+        std::future::poll_fn(|cx| {
+            self.1.cut_polls.fetch_add(1, Ordering::SeqCst);
+            if self.1.cut_pending.load(Ordering::SeqCst) {
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(())
+            }
+        })
+        .await;
+        Ok(stats)
     }
     async fn fail_run(&self, code: RunFailure) -> Result<(), echo_link::Error> {
         self.0.fail_run(code).await
@@ -306,4 +319,70 @@ async fn loaded_microphone_pending_reply_admission_keeps_capture_serviced() {
         stats.dropped
     )
     .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 production runtime, bounded capture and local Live/Wyoming sockets"]
+async fn loaded_microphone_pending_cut_receipt_keeps_capture_serviced() {
+    let directory = tempfile::tempdir().unwrap();
+    let live = bridge_peer::Live::bind_frames(3).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let schedule = Arc::new(Schedule::default());
+    schedule.cut_pending.store(true, Ordering::SeqCst);
+    let (stop, shutdown) = tokio::sync::oneshot::channel();
+    let runtime = tokio::spawn(echo_bridge::bridge_runtime::execute_controlled(
+        settings(directory.path(), &live.url),
+        echo_bridge::bridge_runtime::Control {
+            utc_day: Arc::new(|| 0),
+            shutdown,
+        },
+        Connector(listener.local_addr().unwrap(), schedule.clone()),
+    ));
+    let mut peer = listener.accept().await.unwrap().0;
+    start_capture(&mut peer, directory.path(), &runtime).await;
+    bridge_wire_auth_failure::trace_wait::observe(&directory.path().join("trace"), "reply.started", || {
+        format!("in-process bridge task finished={}", runtime.is_finished())
+    })
+    .await;
+    live.events
+        .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
+        .await
+        .unwrap();
+    until(|| schedule.cut_polls.load(Ordering::SeqCst) > 0).await;
+    for index in 0..64 {
+        offer(&mut peer, index).await;
+        until(|| schedule.stats().received == u64::from(index) + 1).await;
+        // Observe owner service opportunities, never successful capture receipt,
+        // before offering the next unchanged chunk.
+        let polls = schedule.cut_polls.load(Ordering::SeqCst);
+        until(|| schedule.cut_polls.load(Ordering::SeqCst) >= polls + 8).await;
+    }
+    writeln!(
+        std::io::stdout(),
+        "cut schedule: offered=64 received={} dropped={}",
+        schedule.stats().received,
+        schedule.stats().dropped
+    )
+    .unwrap();
+    schedule.cut_pending.store(false, Ordering::SeqCst);
+    schedule.competing.store(false, Ordering::SeqCst);
+    until(|| schedule.delivered.lock().unwrap().len() as u64 + schedule.stats().dropped == 64).await;
+    let stats = schedule.stats();
+    let delivered = schedule.delivered.lock().unwrap().clone();
+    let packets = delivered.len();
+    writeln!(
+        std::io::stdout(),
+        "cut schedule: drained={} dropped={}",
+        delivered.len(),
+        stats.dropped
+    )
+    .unwrap();
+    bridge_short::send(&mut peer, "audio-stop", json!({})).await;
+    bridge_short::send(&mut peer, "played", json!({})).await;
+    until(|| live.microphone_frames.load(Ordering::SeqCst) == packets).await;
+    stop.send(true).unwrap();
+    schedule.competing.store(false, Ordering::SeqCst);
+    assert_eq!(runtime.await.unwrap(), Ok(()));
+    writeln!(std::io::stdout(), "pending cut: offered=0..64 received={} delivered={delivered:?} offered_samples=20480 delivered_samples={} dropped={} fake_received={packets} capacity=32", stats.received, delivered.len()*320, stats.dropped).unwrap();
+    assert_delivery(false, stats, &delivered);
 }

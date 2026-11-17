@@ -88,6 +88,10 @@ impl Rig {
         assert_eq!(self.muse.calls().len(), calls);
         let entries = trace(&self.path());
         assert_eq!(entries.iter().filter(|e| e["event"] == "tools/call").count(), 0);
+        let microphone: Vec<_> = entries.iter().filter(|e| e["event"] == "mic.completed").collect();
+        assert_eq!(microphone.len(), 1);
+        assert_eq!(microphone[0]["dropped_chunks"], 0);
+        evidence(&format!("muse microphone: {}", microphone[0]));
         let raw = std::fs::read_to_string(self.path()).unwrap();
         for private in [
             "Late success",
