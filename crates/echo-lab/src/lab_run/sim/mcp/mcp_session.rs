@@ -41,6 +41,7 @@ pub struct Session {
     pub(super) initial: Option<Secret<Value>>,
     pub(super) replayed: bool,
     pub endpoints: Vec<SocketAddr>,
+    root: Option<super::super::m2::codex::config::Root>,
 }
 
 impl Session {
@@ -48,11 +49,8 @@ impl Session {
         !self.directory.as_os_str().is_empty()
     }
 
-    pub async fn start(&mut self, options: &Options, root: &Path) -> Result<(), String> {
-        self.binary = options.bridge.clone().ok_or("M5: missing production bridge")?;
-        let directory = root.join("mcp.private");
-        std::fs::create_dir(&directory).map_err(|_| "M5: cannot own private state directory")?;
-        self.directory = directory;
+    pub async fn start(&mut self, options: &Options, _root: &Path) -> Result<(), String> {
+        self.prepare(options)?;
         self.host = Some(Process::start(&mut process::host(&options.python))?);
         let host = self.host.as_mut().ok_or("M5: missing host")?;
         let address = process::admit_host(
@@ -62,8 +60,16 @@ impl Session {
             process::connect,
         )
         .await?;
-        let origin = self.start_peers(address).await?;
+        let origin = self.start_peers(address, &options.python).await?;
         self.launch(&origin).await
+    }
+
+    fn prepare(&mut self, options: &Options) -> Result<(), String> {
+        self.binary = options.bridge.clone().ok_or("M5: missing production bridge")?;
+        self.root = Some(super::super::m2::codex::config::Root::new()?);
+        let directory = self.root.as_ref().ok_or("M5: missing private root")?.0.clone();
+        self.directory = directory;
+        Ok(())
     }
 
     async fn launch(&mut self, origin: &str) -> Result<(), String> {
@@ -170,7 +176,7 @@ impl Session {
         Ok(())
     }
 
-    async fn start_peers(&mut self, address: SocketAddr) -> Result<String, String> {
+    async fn start_peers(&mut self, address: SocketAddr, python: &str) -> Result<String, String> {
         self.fixture = Some(
             Fixture::bind(EPOCH)
                 .await
@@ -188,7 +194,7 @@ impl Session {
             .map_err(|_| "M5: resource binding failed")?;
         self.endpoints.push(endpoint(fixture.base())?);
         self.endpoints.push(endpoint(spoof.url())?);
-        self.live = Some(super::mcp_peers::Peers::bind().await?);
+        self.live = Some(super::mcp_peers::Peers::bind(python).await?);
         let origin = self.live.as_ref().ok_or("M5: missing Live fixture")?.origin.clone();
         self.endpoints.push(endpoint(&origin)?);
         mcp_wire::configure(&self.directory, address, spoof.url())?;
@@ -399,7 +405,13 @@ impl Session {
     }
 
     async fn close_bridge(&mut self) -> Vec<String> {
-        let mut failures = self.stop_bridge().await;
+        let mut failures = Vec::new();
+        if let Some(live) = &self.live
+            && let Err(error) = live.quiesce().await
+        {
+            failures.push(error);
+        }
+        failures.extend(self.stop_bridge().await);
         if self.fixture.is_some() && self.spoof.is_some() {
             match self.measure() {
                 Ok(counts) => self.measured = Some(counts),
@@ -418,8 +430,10 @@ impl Session {
         self.stream.take();
         failures.extend(self.close_bridge().await);
         self.initial.take();
-        if let Some(live) = self.live.take() {
-            live.shutdown().await;
+        if let Some(live) = self.live.take()
+            && let Err(error) = live.shutdown().await
+        {
+            failures.push(error);
         }
         if let Some(spoof) = self.spoof.take()
             && spoof.shutdown().await.is_err()
@@ -462,3 +476,7 @@ fn endpoint(value: &str) -> Result<SocketAddr, String> {
         .ok_or_else(|| "M5: invalid local endpoint".into())
         .and_then(|value| value.parse().map_err(|_| "M5: invalid local endpoint".into()))
 }
+
+#[cfg(test)]
+#[path = "mcp_tests.rs"]
+mod tests;

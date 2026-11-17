@@ -55,6 +55,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == '/v1/responses' and delegation is not None:
             try:
                 data = delegation.respond(body)
+                if isinstance(delegation, tools_provider.McpDelegation):
+                    emit({'event': 'provider.model', 'request': {'input': [
+                        item for item in body['input'] if item.get('type') == 'function_call_output']}})
                 if delegation.exhausted:
                     emit({'model_started': True})
                 self.respond(200, data, 'text/event-stream')
@@ -144,7 +147,8 @@ try:
             answers.put(command['answer'])
         elif 'tools' in command:
             assert delegation is None
-            delegation = tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False), command.get('emotion', False))
+            delegation = (tools_provider.McpDelegation(command['tools']) if command.get('mcp') else
+                          tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False), command.get('emotion', False)))
         elif command == {'complete': True}:
             transcript_output.sendall(b'c')
         elif command == {'transcripts': True}:

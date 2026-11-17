@@ -264,3 +264,45 @@ fn mcp_measurements_screen_requires_the_exact_mcp_instruction_and_new_transition
         2
     );
 }
+
+#[test]
+fn mcp_codex_model_counts_exact_native_content_once_and_preserves_error_identity() {
+    let mut observer = linked();
+    observer.restarted();
+    observer.trace(&json!({"event":"mcp.grant.reloaded"})).unwrap();
+    let request = output(&json!([{"text":"m5-linked","type":"text"}]));
+    observer.codex_model("thread-1", &request).unwrap();
+    observer.codex_model("thread-1", &request).unwrap();
+    let failed = json!({"input":[{"type":"function_call_output","call_id":"call-2",
+        "output":"tool authorization required"}]});
+    observer.codex_model("thread-1", &failed).unwrap();
+    observer.codex_model("thread-1", &failed).unwrap();
+    let counts = observer
+        .measure(
+            Counts {
+                links: 1,
+                ..Counts::default()
+            },
+            &resource(),
+        )
+        .unwrap();
+    assert_eq!((counts.tool_call, counts.restart_grant_kept), (1, 1));
+    let changed = json!({"input":[{"type":"function_call_output","call_id":"call-2",
+        "output":"tool execution failed"}]});
+    assert_eq!(observer.codex_model("thread-1", &changed), Err(INVALID));
+}
+
+#[test]
+fn mcp_codex_model_rejects_legacy_or_extra_content_and_unrecognized_plaintext() {
+    for request in [
+        success(),
+        output(&json!({"is_error":true})),
+        output(&json!("tool execution failed")),
+        output(&json!("unproved success")),
+        output(&json!([])),
+        output(&json!([{"type":"text","text":"m5-linked"},{"type":"text","text":"extra"}])),
+        json!({"input":[{"type":"function_call_output","call_id":"call-1","output":"unproved success"}]}),
+    ] {
+        assert_eq!(Observations::default().codex_model("thread-1", &request), Err(INVALID));
+    }
+}

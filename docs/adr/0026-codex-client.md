@@ -1040,8 +1040,8 @@ remaining recovery, M1 and M5 fixture migrations stay in this cutover lane.
 
 The obsolete executable test that expected configured tools to be refused is
 removed from its two-case loop: configured tools are now protected by the
-actual-pin configured-owner and canonical M4/M6 witnesses. Its unsupported
-epoch case still requires invalid input before any process or device admission.
+actual-pin configured-owner and canonical M4/M6 witnesses. The epoch guard
+still requires the explicit simulated clock before any process or device admission.
 
 ## Canonical M1 restart and mute fixture
 
@@ -1070,3 +1070,34 @@ same provider and bridge, distinct completed run identities, microphone receipts
 zero reply PCM, idle stops and socket release. The component consumes prebuilt
 bridge/pin artifacts and cannot replace the native M1 mute and 10+10 restart
 scenario, whose host and recovery edges remain separate.
+
+## Canonical M5 grant journey
+
+M5 uses the same configured bridge owner, pinned app server and real media
+negotiation as M2/M4/M6. Its private external fixture directory retains both
+the app-server home and the existing Port OS grant across the explicit bridge
+restart. Operator processes still address the live grant owner and never open
+the store themselves. The existing link, two forced refreshes, restart, tool
+call, rotated-token replay, rejected probe and unlink scenario keeps all eight
+exact counters and the same MCP relink presentation.
+
+The guarded local-fake entry forwards the existing simulated epoch to the MCP
+grant owner. It requires both validated loopback routes and the simulated
+clock; production configuration has no epoch key. Codex authentication and
+daily-cap clock ownership remain separate. Negotiation advances the simulated
+clock at the media cadence, while the established replay probe leaves it fixed.
+
+The local provider speaks V3 delegation and the pinned Responses protocol. It
+requires only the admitted dynamic `tool_0` (`test.echo`), two distinct native
+delegations on one thread, four exact model requests, retained tool histories,
+and matching native append identities. A successful dynamic-tool output at the
+pin is the complete JSON content array. An unauthorized MCP probe returns the
+literal `tool authorization required`; it cannot count as a successful call.
+The measurement observer preserves result identity and reconciles it with the
+independent authorization fixture, signed MCP admissions and paired screen.
+Cleanup quiesces the fake media driver before intentionally stopping the bridge,
+then compares the complete provider snapshot and reaps each owned process.
+
+The component witness substitutes only Wyoming, consumes prebuilt artifacts
+and checks released listeners and private-state removal. It complements the
+native hassmic-host milestone scenario; it does not replace that boundary.

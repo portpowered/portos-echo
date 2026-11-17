@@ -104,3 +104,64 @@ class Delegation:
 
     def snapshot(self):
         return {'delegations': self.delegations, 'models': self.models, 'appends': self.appends}
+
+
+class McpDelegation:
+    """M5's two native turns, with exact retained model history and outputs."""
+    exhausted = False
+    reply = 'm5-linked'
+
+    def __init__(self, tools):
+        self.tools = tools
+        self.models = []
+        self.delegations = []
+        self.appends = []
+        self.failure = None
+
+    def begin(self):
+        index = len(self.delegations)
+        assert index < 2 and len(self.appends) == index, 'M5 overlapping delegation'
+        name = ['m5-linked', 'm5-replayed'][index]
+        self.delegations.append(name)
+        return {'type': 'delegation.created', 'item': {
+            'type': 'delegation', 'target': 'client', 'id': name,
+            'content': [{'type': 'input_text', 'text': 'Call tool_0 with text m5-linked and report the result.'}]}}
+
+    def respond(self, body):
+        expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
+                     'parameters': {**deepcopy(tool['inputSchema']), 'additionalProperties': False},
+                     'strict': False} for tool in self.tools]
+        assert body['tools'] == expected and len(expected) == 1, 'M5 exact dynamic catalog mismatch'
+        assert body['model'] == 'gpt-5.4', 'M5 wrong delegated model'
+        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
+        index = len(self.models)
+        assert index < 4 and len(self.delegations) == index // 2 + 1, 'M5 model order/retry mismatch'
+        expected_outputs = [[{'type': 'text', 'text': 'm5-linked'}],
+                            'tool authorization required']
+        assert len(outputs) == (index + 1) // 2, 'M5 output count mismatch'
+        for position, output in enumerate(outputs):
+            assert output['call_id'] == f'm5-call-{position}', 'M5 tool identity mismatch'
+            actual = json.loads(output['output']) if position == 0 else output['output']
+            assert actual == expected_outputs[position], 'M5 exact native output mismatch'
+        if index % 2 == 0:
+            item = {'type': 'function_call', 'id': f'm5-fc-{index}', 'call_id': f'm5-call-{index // 2}',
+                    'name': 'tool_0', 'arguments': '{"text":"m5-linked"}', 'status': 'completed'}
+        else:
+            item = {'type': 'message', 'id': f'm5-msg-{index}', 'role': 'assistant', 'status': 'completed',
+                    'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
+        self.models.append({'tools': [tool['name'] for tool in body['tools']], 'outputs': len(outputs)})
+        response = {'id': f'm5-response-{index}', 'status': 'completed', 'output': [item]}
+        events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
+                  {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
+                  {'type': 'response.completed', 'response': response}]
+        return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
+
+    def append(self, value):
+        index = len(self.appends)
+        assert len(self.models) == (index + 1) * 2, 'M5 append before verified output'
+        assert value['delegation_item_id'] == self.delegations[index], 'M5 append identity mismatch'
+        assert value['content'] == [{'type': 'input_text', 'text': self.reply}], 'M5 append content mismatch'
+        self.appends.append(value['delegation_item_id'])
+
+    def snapshot(self):
+        return {'delegations': self.delegations, 'models': self.models, 'appends': self.appends}
