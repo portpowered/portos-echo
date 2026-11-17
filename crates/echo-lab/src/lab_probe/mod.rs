@@ -1,6 +1,7 @@
 mod probe_adb;
 pub(crate) mod probe_command;
 pub(crate) mod probe_parse;
+mod probe_profiles;
 pub(crate) mod probe_stream;
 #[cfg(test)]
 mod probe_tests;

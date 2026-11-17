@@ -156,6 +156,15 @@ class InstrumentedTests(unittest.TestCase):
             'import json, pathlib, sys\n'
             'pathlib.Path("self-test.json").write_text(json.dumps(sys.argv[1:]))\n'
         )
+        # Cargo is substituted below, so no prebuilt writer exists in this
+        # fixture. Observe that boundary; the real writer has its own T3 suite.
+        tests = self.root / "tests"
+        tests.mkdir()
+        (tests / "test_windows_profraw.py").write_text(
+            'import json, pathlib, sys\n'
+            'pathlib.Path("writer-test.json").write_text(json.dumps(sys.argv[1:]))\n'
+        )
+        shutil.copyfile(ROOT / "tests/coverage_children.py", tests / "coverage_children.py")
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         (bin_dir / "python").symlink_to(sys.executable)
@@ -173,13 +182,13 @@ if "coverage-check" in args:
 ''')
         cargo.chmod(0o755)
         overrides = self.root / "override.mk"
-        overrides.write_text("hassmic-host:\n\t@true\n")
+        overrides.write_text("hassmic-host codex-app-server:\n\t@true\n")
         environment = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
                        "LLVM_PROFDATA": TOOL}
         # Every selection the coverage recipe runs, read from the Makefile itself, so a lane that adds a
         # selection (as the bridge did) does not have to edit this count.
         makefile = (ROOT / "Makefile").read_text()
-        recipe = makefile.split("\ncoverage:", 1)[1].split("\n\n", 1)[0]
+        recipe = makefile.split("\ncoverage: hassmic-host\n", 1)[1].split("\n\n", 1)[0]
         expected_selections = sum(
             "llvm-cov" in line and "--no-report" in line for line in recipe.splitlines()
         )
@@ -195,6 +204,8 @@ if "coverage-check" in args:
                 log.unlink(missing_ok=True)
                 self_test = self.root / "self-test.json"
                 self_test.unlink(missing_ok=True)
+                writer_test = self.root / "writer-test.json"
+                writer_test.unlink(missing_ok=True)
                 result = subprocess.run(
                     ["make", "-f", str(ROOT / "Makefile"), "-f", str(overrides), "coverage"],
                     cwd=self.root, env={**environment, "CHECK_EXIT": str(gate_exit)},
@@ -202,6 +213,8 @@ if "coverage-check" in args:
                 )
                 calls = [json.loads(line) for line in log.read_text().splitlines()]
                 self.assertEqual(json.loads(self_test.read_text()), ["--instrumented"])
+                self.assertEqual(json.loads(writer_test.read_text()),
+                                 ["--writer", "target/llvm-cov-target/debug/echo-lab-fake-adb"])
                 self.assertEqual(sum("--no-report" in call for call in calls), expected_selections)
                 reports = [call for call in calls if "report" in call]
                 checks = [call for call in calls if "coverage-check" in call]

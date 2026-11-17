@@ -4,6 +4,8 @@ Unique processes and directories per case; signal gates, never timing sleeps.
 These faults prove fixture ownership, not real WSL or pinned-host readiness.
 """
 import contextlib
+import json
+import os
 import runpy
 import subprocess
 import sys
@@ -14,8 +16,89 @@ from pathlib import Path
 from unittest import mock
 
 from test_controls import CONTROLLER, real_wsl_launcher_fixture
+from owner import instrument
+from runtime_owner import Owner, Runtime
 
 POPEN = subprocess.Popen
+
+
+@unittest.skipUnless(hasattr(os, "pidfd_open"), "Linux pidfd ownership observer")
+class ListenerOwner(unittest.TestCase):
+    def test_t3_pidfd_rejects_a_real_retained_listener_despite_a_closed_flag(self):
+        for leak in [False, True]:
+            with self.subTest(leak=leak), tempfile.TemporaryDirectory(prefix="lab-owner-") as folder:
+                events = []
+                globals()["emit"] = events.append
+                self.addCleanup(lambda: globals().pop("emit", None))
+
+                class Host:
+                    def start(self):
+                        code = ("import socket,sys; s=socket.socket(); s.bind(('127.0.0.1',0)); "
+                                "s.listen(); print(s.getsockname()[1],flush=True); sys.stdin.buffer.read()")
+                        self.proc = POPEN([sys.executable, "-u", "-c", code], stdin=subprocess.PIPE,
+                                          stdout=subprocess.PIPE)
+                        self.port = int(self.proc.stdout.readline())
+                        emit({"event": "host.ready", "address": f"127.0.0.1:{self.port}"})
+
+                    def close(self):
+                        self.closed = True
+                        if not leak:
+                            self.proc.stdin.close()
+                            self.proc.wait(timeout=4)
+
+                audit = Path(folder) / "host.json"
+                instrument({"Host": Host}, audit)
+                host = Host()
+                try:
+                    host.start()
+                    self.assertEqual(events, [{"event": "host.ready", "address": f"127.0.0.1:{host.port}"}])
+                    host.close()
+                    observed = json.loads(audit.read_text())
+                    self.assertEqual(observed[0]["owner_completed"], not leak)
+                    self.assertTrue(host.closed)
+                    self.assertIsNotNone(host.proc.returncode)
+                finally:
+                    if host.proc.poll() is None:
+                        host.proc.kill()
+                    host.proc.wait(timeout=4)
+                    host.proc.stdin.close()
+                    host.proc.stdout.close()
+
+
+class RuntimeOwner(unittest.TestCase):
+    def test_t3_handle_observes_exit_and_rejects_a_retained_listener(self):
+        for leak in [False, True]:
+            with self.subTest(leak=leak):
+                code = ("import socket,sys; s=socket.socket(); s.bind(('127.0.0.1',0)); "
+                        "s.listen(); print(s.getsockname()[1],flush=True); sys.stdin.buffer.read()")
+                with POPEN([sys.executable, "-u", "-c", code], stdin=subprocess.PIPE,
+                           stdout=subprocess.PIPE) as child:
+                    self.assertGreater(int(child.stdout.readline()), 0)
+                    owner = Owner(child.pid)
+                    if not leak:
+                        child.stdin.close()
+                        child.wait(timeout=4)
+                    observation = owner.close()
+                    self.assertEqual(observation, {"owner_completed": not leak, "pid": child.pid})
+                    child.wait(timeout=4)
+
+    def test_t3_registration_retains_each_real_runtime_generation(self):
+        with tempfile.TemporaryDirectory(prefix="runtime-owners-") as folder:
+            audit = Path(folder) / "runtime.json"
+            with mock.patch.dict(os.environ, {"ECHO_LAB_TEST_RUNTIME_OWNERS": str(audit)}):
+                runtime = Runtime()
+            for _ in range(2):
+                with POPEN([sys.executable, "-u", "-c", "import sys; sys.stdin.buffer.read()"],
+                           stdin=subprocess.PIPE) as child:
+                    entries = {os.getpid(): (1, "echo-lab"), child.pid: (os.getpid(), "echo-bridge")}
+                    with mock.patch("runtime_owner.processes", return_value=entries):
+                        runtime.registered()
+                    child.stdin.close()
+                    child.wait(timeout=4)
+            runtime.close()
+            observations = json.loads(audit.read_text())
+            self.assertEqual(len(observations), 2)
+            self.assertEqual([value["owner_completed"] for value in observations], [True, True])
 
 
 class FixtureHandshake(unittest.TestCase):
@@ -280,3 +363,18 @@ class FixtureHandshake(unittest.TestCase):
         self.assertFalse(self.host.observer_reader.is_alive())
         self.assertTrue(self.observer_proc.stdout.closed)
         self.assertIsNotNone(self.host.proc.returncode)
+
+
+class InlineOwnerAdapter(unittest.TestCase):
+    def test_t3_owner_adapter_preserves_inline_python_and_exact_arguments(self):
+        import json
+        import subprocess
+        import sys
+        adapter = Path(__file__).with_name("owner.py")
+        code = "import json,sys\nprint(json.dumps([__name__, sys.argv]))\nsys.exit(7)"
+        output = subprocess.run(
+            [sys.executable, str(adapter), "unused", "-u", "-c", code, "space value", "line\nbreak"],
+            capture_output=True, timeout=5, check=False)
+        self.assertEqual(output.returncode, 7)
+        self.assertEqual(output.stderr, b"")
+        self.assertEqual(json.loads(output.stdout), ["__main__", ["-c", "space value", "line\nbreak"]])

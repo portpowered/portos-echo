@@ -85,4 +85,7 @@ Add each new tracked documentation page to this index in the same change.
 - [Bridge audio orchestration](adr/0024-echo-bridge.md)
 
 - [Protocol-neutral Echo link](adr/0025-echo-link.md)
-- [Pinned Codex Android ARM build](adr/0026-codex-armv7.md)
+- [Pinned Codex Android ARM build](adr/0028-codex-armv7.md)
+- [Pinned Codex app-server client](adr/0026-codex-client.md)
+- [Codex local fake: S5](spikes/codex-local-fake.md)
+- [Frame-based Codex media peer](adr/0027-echo-media.md)

@@ -14,11 +14,7 @@ async fn t3_discovery_poll_schedule_rotation_and_revoke() {
     assert_eq!(link.user_code, "TEST-CODE");
     assert_eq!(link.verification_uri, format!("{}/approve", h.mock.base));
     assert_eq!((link.expires_in, link.interval), (1800, 5));
-    let task = tokio::spawn({
-        let c = h.client.clone();
-        async move { c.await_approval(link).await }
-    });
-    tokio::task::yield_now().await;
+    let task = start_approval(h.client.clone(), link).await;
     for (seconds, count) in [(5, 1), (5, 2), (10, 3)] {
         advance(Duration::from_secs(seconds)).await;
         until(|| h.mock.count("/custom/token") == count).await;

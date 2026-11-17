@@ -189,8 +189,7 @@ async fn bridge_spine_burst_completion_drains_all_decode_batches_before_stop() {
         .await
         .unwrap();
 }
-// The observation queue is unbounded only for these finite synthetic workloads:
-// a caller withholding audio observations must never block control replies.
+// Unbounded for finite synthetic workloads: withholding audio observations must never block control replies.
 use std::{
     future::Future,
     pin::Pin,
@@ -411,13 +410,20 @@ impl AsyncWrite for Satellite {
     }
 }
 pub(super) use super::bridge_cut::ReadyClock;
-// Preserve the original kind/source, but distinguish partial reads and probe
-// writes from a raw reset encountered before any byte of a new frame.
+// Preserve kind/source, distinguishing partial reads and probe writes from a raw reset before a new frame's first byte.
 fn nonterminal(error: std::io::Error) -> std::io::Error {
     std::io::Error::new(error.kind(), error)
 }
 pub(super) fn terminal(error: &std::io::Error, completed: bool) -> bool {
-    completed && error.kind() == std::io::ErrorKind::ConnectionReset && error.get_ref().is_none()
+    // Windows reports a peer reset on an established socket as WSAECONNABORTED (10053) as well as WSAECONNRESET.
+    let aborted = cfg!(windows) && error.kind() == std::io::ErrorKind::ConnectionAborted;
+    completed && (error.kind() == std::io::ErrorKind::ConnectionReset || aborted) && error.get_ref().is_none()
+}
+#[test]
+fn bridge_satellite_aborted_terminal_authority_is_windows_only() {
+    let error = std::io::ErrorKind::ConnectionAborted.into();
+    assert_eq!(terminal(&error, true), cfg!(windows));
+    assert!(!terminal(&nonterminal(error), true));
 }
 #[tokio::test]
 async fn bridge_satellite_pending_write_precedes_shutdown() {

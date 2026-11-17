@@ -192,15 +192,9 @@ fn independent_worlds_have_distinct_endpoints_and_shared_destination_has_one_own
     for session in [&first, &second] {
         session.scenario(json!([{"expect_trace":["wyoming.run_ended"]}]), json!({}));
     }
-    std::thread::scope(|scope| {
-        let a = scope.spawn(|| first.script(&json!({"records":records()})));
-        let b = scope.spawn(|| second.script(&json!({"records":records()})));
-        assert_eq!(a.join().unwrap().status.code(), Some(0));
-        assert_eq!(b.join().unwrap().status.code(), Some(0));
-    });
-    let a = first.endpoints();
-    let b = second.endpoints();
-    assert!(a.iter().all(|address| !b.contains(address)));
+    parallel_worlds(&first, &second);
+    first.endpoints();
+    second.endpoints();
     assert_eq!(first.report()["checks"], second.report()["checks"]);
     let report = std::fs::read(first.0.join("artifacts/report.json")).unwrap();
     assert_eq!(
@@ -223,4 +217,52 @@ fn independent_worlds_have_distinct_endpoints_and_shared_destination_has_one_own
     assert_eq!(codes, [Some(0), Some(1)]);
     assert_eq!(race.report()["result"], "pass");
     race.endpoints();
+}
+
+fn parallel_worlds(first: &Session, second: &Session) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let script = json!({"records":records(),"ready_barrier":listener.local_addr().unwrap().to_string()});
+        for session in [first, second] {
+            std::fs::write(session.0.join("script.json"), script.to_string()).unwrap();
+        }
+        let mut one = first
+            .command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
+            .spawn()
+            .unwrap();
+        let mut two = second
+            .command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
+            .spawn()
+            .unwrap();
+        let held = async {
+            let mut owners = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let endpoints: Vec<std::net::SocketAddr> = serde_json::from_str(&line).unwrap();
+                assert_eq!(endpoints.len(), 3);
+                owners.push((reader, endpoints));
+            }
+            let distinct = owners[0].1.iter().all(|address| !owners[1].1.contains(address));
+            // Both bridges are still blocked before ready, with their real
+            // host/spoof/Live owners alive. Release even when comparison fails.
+            for (stream, _) in &mut owners {
+                stream.get_mut().write_all(b"G").await.unwrap();
+            }
+            distinct
+        };
+        let distinct = tokio::time::timeout(std::time::Duration::from_secs(20), held).await;
+        // Timeout drops the control connections. Let each runner collect its
+        // children through its existing readiness/cleanup deadlines.
+        let statuses = [one.wait().unwrap().code(), two.wait().unwrap().code()];
+        assert!(distinct.unwrap(), "simultaneous worlds shared an owned endpoint");
+        assert_eq!(statuses, [Some(0), Some(0)]);
+    });
 }

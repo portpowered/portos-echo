@@ -110,7 +110,10 @@ or prove on-device TLS, memory use or account compatibility.
 The dedicated dispatch/weekly workflow uploads the verified bundle. The
 large upstream build stays outside `make ci`. Repeat the procedure with a
 second clean directory pair and post both byte counts and hashes in the PR;
-equal size is required, while hash reproducibility is reported honestly.
+the coordinator amended C-4 on 2026-11-17 to require both successful clean
+builds, both sizes and hashes, the measured difference and differing sections.
+Equal size is no longer required. State plainly when not byte-reproducible;
+further reproducibility work belongs to a separate lane.
 Review owns hosted workflow execution, terminal CI, merge, clean-room checks,
 W2d integration and the coordinator's T5 execution/RSS measurement.
 Rollback removes this opt-in target, workflow and helper; external outputs

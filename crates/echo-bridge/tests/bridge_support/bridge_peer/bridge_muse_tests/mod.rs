@@ -3,6 +3,7 @@ use super::*;
 mod failures;
 mod fixture;
 mod pending;
+mod ready_input;
 mod transport;
 use fixture::{Muse, configure};
 

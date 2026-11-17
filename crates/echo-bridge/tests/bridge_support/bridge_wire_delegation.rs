@@ -245,7 +245,11 @@ async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() 
     release.send(()).unwrap();
     assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-start");
     live.events.send(event("d-auth", "client")).await.unwrap();
-    assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-stop");
+    for kind in ["hassmic-continue", "audio-stop"] {
+        let (header, payload) = bridge_short::read_reply(&mut satellite).await;
+        assert_eq!(header["type"], kind);
+        assert_eq!(payload, Vec::<u8>::new());
+    }
     bridge_short::send(&mut satellite, "played", json!({})).await;
     bridge_short::send(&mut satellite, "audio-stop", json!({})).await;
     let path = directory.path().join("trace");

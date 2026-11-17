@@ -190,7 +190,8 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             frame.typed().map_err(|_| Error::Protocol)?;
             return Ok(());
         }
-        match self.router.route(frame)? {
+        let capture_continues = self.play.as_ref().is_some_and(|play| play.cut);
+        match self.router.route_with_capture(frame, capture_continues)? {
             event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
                     let _ = reply.send(Ok(event));
@@ -205,7 +206,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                     };
                     play.finish(Ok(outcome));
                 }
-                self.router.end(Ok(()));
+                if !capture_continues {
+                    self.router.end(Ok(()));
+                }
             }
             _ => {}
         }
@@ -275,10 +278,12 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     async fn cut(&mut self) -> Result<CutStats, Error> {
         let mut stats = CutStats::default();
         if let Some(play) = &mut self.play {
-            play.cut = true;
             stats.dropped_frames = play.quiesce().await?;
             if !play.stopped {
+                play.cut = true;
                 play.stopped = true;
+                self.send(WyomingEvent::Other("hassmic-continue".into(), Value::Null), vec![])
+                    .await?;
                 self.send(WyomingEvent::AudioStop(Value::Null), vec![]).await?;
             }
         }

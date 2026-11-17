@@ -40,6 +40,7 @@ async fn t3_store_replace_failure_blocks_access_and_never_replays() {
     let h = Harness::linked().await;
     let original = h.record();
     let path = h.directory.path().join("grant.json");
+    let bytes = std::fs::read(&path).unwrap();
     let backup = h.directory.path().join("previous.json");
     std::fs::rename(&path, &backup).unwrap();
     std::fs::create_dir(&path).unwrap();
@@ -47,7 +48,9 @@ async fn t3_store_replace_failure_blocks_access_and_never_replays() {
     error(drive(h.client.access_token()).await, AuthError::RelinkRequired);
     error(drive(h.client.force_refresh()).await, AuthError::RelinkRequired);
     assert_eq!(h.mock.refreshes(), 1);
-    let retained: Value = serde_json::from_slice(&std::fs::read(backup).unwrap()).unwrap();
+    let retained_bytes = std::fs::read(backup).unwrap();
+    assert_eq!(retained_bytes, bytes);
+    let retained: Value = serde_json::from_slice(&retained_bytes).unwrap();
     assert_eq!(retained, original);
 }
 
@@ -148,4 +151,33 @@ fn private_replacement_files_are_owner_only() {
             & 0o777,
         0o600
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_refresh_clock_skew_preserves_rotation_and_storage_failure() {
+    for storage_failure in [false, true] {
+        let h = Harness::linked().await;
+        let original = h.record();
+        let path = h.directory.path().join("grant.json");
+        let backup = h.directory.path().join("previous.json");
+        let bytes = std::fs::read(&path).unwrap();
+        if storage_failure {
+            std::fs::rename(&path, &backup).unwrap();
+            std::fs::create_dir(&path).unwrap();
+        }
+        let before = h.client.now();
+        h.mock.state.lock().unwrap().raw_wall = Some(1_800_000_010);
+        if storage_failure {
+            error(drive(h.client.force_refresh()).await, AuthError::Storage);
+            error(drive(h.client.access_token()).await, AuthError::RelinkRequired);
+            error(drive(h.client.force_refresh()).await, AuthError::RelinkRequired);
+            assert_eq!(std::fs::read(backup).unwrap(), bytes);
+        } else {
+            assert_eq!(drive(h.client.force_refresh()).await.unwrap().expose(), "access-2");
+            assert_eq!(h.record()["grant"]["refresh_token"], "refresh-2");
+            assert_eq!(h.record()["private_key_jwk"], original["private_key_jwk"]);
+        }
+        assert_eq!(h.client.now(), before);
+        assert_eq!(h.mock.refreshes(), 1);
+    }
 }

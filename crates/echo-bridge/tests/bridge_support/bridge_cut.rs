@@ -2,6 +2,8 @@
 use super::bridge_short::{read_reply as read, satellite, send};
 use super::*;
 use std::io::Write;
+#[path = "bridge_satellite/cut_receipt.rs"]
+mod cut_receipt;
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_cut_duplicate_cancel_emits_one_stop_and_waits_for_played() {
@@ -28,7 +30,7 @@ async fn bridge_cut_overload_excludes_earlier_evictions_from_retained_frames() {
         .unwrap();
     let sent = initial + drain_to_stop(&mut stream).await;
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
-    send(&mut stream, "played", json!({})).await;
+    complete_capture(&mut stream).await;
     assert_eq!(
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
@@ -101,11 +103,7 @@ async fn bridge_cut_control_overflow_closes_receiver_and_reaps_process() {
         assert_eq!(entries.iter().filter(|e| e["event"] == event).count(), 0);
     }
     assert_eq!(entries.last().unwrap()["reason"], "wyoming");
-    assert!(
-        tokio::net::TcpStream::connect(entries[0]["health_addr"].as_str().unwrap())
-            .await
-            .is_err()
-    );
+    bridge.assert_collected();
 }
 async fn cut_failure(disconnect: bool) {
     let dir = tempfile::tempdir().unwrap();
@@ -123,7 +121,8 @@ async fn cut_failure(disconnect: bool) {
         drop(stream);
     }
     assert_cut_process_failure(&mut bridge, disconnect).await;
-    assert_cut_failure(&path, sent, disconnect).await;
+    assert_cut_failure(&path, sent, disconnect);
+    bridge.assert_collected();
 }
 async fn assert_cut_process_failure(bridge: &mut Process, disconnect: bool) {
     let status = tokio::time::timeout(Duration::from_secs(12), bridge.child.wait())
@@ -132,15 +131,7 @@ async fn assert_cut_process_failure(bridge: &mut Process, disconnect: bool) {
         .unwrap();
     assert_eq!(status.code(), Some(1));
     assert_eq!(bridge.lines.next_line().await.unwrap(), None);
-    let mut error = String::new();
-    bridge
-        .child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut error)
-        .await
-        .unwrap();
+    let error = bridge.stderr().await;
     assert_eq!(
         error.trim(),
         if disconnect {
@@ -150,7 +141,7 @@ async fn assert_cut_process_failure(bridge: &mut Process, disconnect: bool) {
         }
     );
 }
-async fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool) {
+fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool) {
     let entries = trace(path);
     let cuts: Vec<_> = entries.iter().filter(|e| e["event"] == "reply.cut").collect();
     assert_eq!(cuts.len(), 1);
@@ -161,8 +152,6 @@ async fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool) {
         entries.last().unwrap()["reason"],
         if disconnect { "wyoming" } else { "deadline" }
     );
-    let address = entries[0]["health_addr"].as_str().unwrap();
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
 }
 async fn cut_reply(offered: u16, initial: u16) {
     let dir = tempfile::tempdir().unwrap();
@@ -179,7 +168,7 @@ async fn cut_reply(offered: u16, initial: u16) {
     }
     let sent = initial + drain_to_stop(&mut stream).await;
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
-    send(&mut stream, "played", json!({})).await;
+    complete_capture(&mut stream).await;
     assert_eq!(
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
@@ -187,6 +176,10 @@ async fn cut_reply(offered: u16, initial: u16) {
     assert_cut_trace(&path, offered, sent);
     bridge.finish(0).await;
     assert_closed(&mut stream).await;
+}
+async fn complete_capture(stream: &mut bridge_short::Satellite) {
+    send(stream, "played", json!({})).await;
+    send(stream, "audio-stop", json!({})).await;
 }
 async fn receive_initial(stream: &mut bridge_short::Satellite, initial: u16) {
     for _ in 0..initial {
@@ -199,7 +192,11 @@ async fn drain_to_stop(stream: &mut bridge_short::Satellite) -> u16 {
     let mut sent = 0;
     loop {
         let (header, payload) = read(stream).await;
-        if header["type"] == "audio-stop" {
+        if header["type"] == "hassmic-continue" {
+            assert_eq!(payload, Vec::<u8>::new());
+            let (stop, payload) = read(stream).await;
+            assert_eq!(stop["type"], "audio-stop");
+            assert_eq!(payload, Vec::<u8>::new());
             break;
         }
         assert_eq!(header["type"], "audio-chunk");

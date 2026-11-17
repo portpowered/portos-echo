@@ -104,3 +104,13 @@ kind = "lib"
 name = "echo-link"
 path = "crates/echo-link"
 kind = "lib"
+
+[[crate]]
+name = "echo-codex"
+path = "crates/echo-codex"
+kind = "lib"
+
+[[crate]]
+name = "echo-media"
+path = "crates/echo-media"
+kind = "lib"

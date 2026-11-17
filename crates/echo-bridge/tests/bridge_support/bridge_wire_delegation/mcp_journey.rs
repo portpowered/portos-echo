@@ -47,9 +47,9 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
     }).await;
 }
 
-async fn failed_without_clock_advance(path: &Path) {
+pub(super) async fn failed_without_clock_advance(path: &Path) {
     let events = event_without_clock_advance(path, "mcp.run.failed").await;
-    let failed = events.iter().find(|e| e["event"] == "mcp.run.failed").unwrap();
+    let (_, failed) = unique_journey_event(&events, "mcp.run.failed");
     assert_eq!(failed["reason"], "relink_required");
     assert_eq!(events.iter().filter(|e| e["event"] == "run.failed").count(), 0);
     assert_eq!(
@@ -108,12 +108,7 @@ fn rejected_once(mock: &Mock, model: &Model, path: &Path) {
     let rejected: Vec<_> = events.iter().filter(|e| e["event"] == "mcp.relink_required").collect();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0]["reason"], "unauthorized");
-    let refused: Vec<_> = events.iter().filter(|e| e["event"] == "delegation.refused").collect();
-    assert_eq!(refused.len(), 1);
-    assert_eq!(refused[0]["run_id"], "run-2");
-    assert_eq!(refused[0]["reason"], "mcp_relink_required");
-    let failed = events.iter().find(|e| e["event"] == "mcp.run.failed").unwrap();
-    assert_eq!(refused[0]["elapsed_ms"], failed["elapsed_ms"]);
+    assert_relink_chain(&events);
     assert_eq!(
         events.iter().filter(|e| e["event"] == "wyoming.reconnecting").count(),
         0
@@ -125,6 +120,40 @@ fn rejected_once(mock: &Mock, model: &Model, path: &Path) {
             .count(),
         0
     );
+}
+
+fn assert_relink_chain(events: &[Value]) {
+    let (failure_index, failed) = unique_journey_event(events, "mcp.run.failed");
+    let (refusal_index, refused) = unique_journey_event(events, "delegation.refused");
+    assert_eq!(failed["run_id"], "run-1");
+    assert_eq!(failed["reason"], "relink_required");
+    assert_eq!(refused["run_id"], "run-2");
+    assert_eq!(refused["reason"], "mcp_relink_required");
+    let starts: Vec<_> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e["event"] == "run.started")
+        .collect();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0].1["run_id"], "run-1");
+    assert_eq!(starts[1].1["run_id"], "run-2");
+    assert!(starts[0].0 < failure_index);
+    assert!(failure_index < starts[1].0);
+    assert!(starts[1].0 < refusal_index);
+    assert_eq!(events.iter().filter(|e| e["event"] == "run.failed").count(), 0);
+    let failure_ms = failed["elapsed_ms"].as_u64().unwrap();
+    let refusal_ms = refused["elapsed_ms"].as_u64().unwrap();
+    assert!(failure_ms <= refusal_ms);
+    // reach can observe mcp.relink_required just after its check, leaving one
+    // final acknowledged 20 ms advance after the failure sample. Both clocks
+    // then stay frozen through run-2's refusal; this is no wall-time tolerance.
+    assert!(refusal_ms - failure_ms <= 20);
+}
+
+fn unique_journey_event<'a>(events: &'a [Value], name: &str) -> (usize, &'a Value) {
+    let matching: Vec<_> = events.iter().enumerate().filter(|(_, e)| e["event"] == name).collect();
+    assert_eq!(matching.len(), 1, "expected exactly one {name}: {events:?}");
+    matching[0]
 }
 
 pub(super) async fn reach(process: &mut Process, path: &Path, event: &str) -> Result<(), String> {
@@ -176,6 +205,9 @@ pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::
                 );
                 errors += 1;
             }
+            "hassmic-continue" => {
+                continued_stop(&mut lines, &mut writer).await;
+            }
             "audio-stop" => {
                 bridge_short::send(&mut writer, "played", json!({})).await;
                 bridge_short::send(&mut writer, "audio-stop", json!({})).await;
@@ -183,4 +215,16 @@ pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::
             _ => assert_eq!(header["type"], "audio-start"),
         }
     }
+}
+
+async fn continued_stop(
+    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+) {
+    let stop = lines.next_line().await.unwrap().unwrap();
+    let stop: Value = serde_json::from_str(&stop).unwrap();
+    assert_eq!(stop["type"], "audio-stop");
+    assert_eq!(stop["payload_length"].as_u64().unwrap_or(0), 0);
+    bridge_short::send(writer, "played", json!({})).await;
+    bridge_short::send(writer, "audio-stop", json!({})).await;
 }

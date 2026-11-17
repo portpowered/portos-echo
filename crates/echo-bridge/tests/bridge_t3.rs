@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines},
-    process::{Child, ChildStdin, ChildStdout, Command},
+    process::Command,
 };
 #[path = "bridge_support/bridge_cut.rs"]
 mod bridge_cut;
@@ -41,105 +41,15 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 #[path = "bridge_refusal/mod.rs"]
 mod bridge_refusal;
 
-struct Process {
-    name: &'static str,
-    expected: String,
-    child: Child,
-    input: Option<ChildStdin>,
-    lines: Lines<BufReader<ChildStdout>>,
-}
-impl Process {
-    fn spawn(command: &mut Command) -> Self {
-        let name = if Path::new(command.as_std().get_program())
-            .file_stem()
-            .is_some_and(|name| name == "echo-bridge")
-        {
-            "echo-bridge"
-        } else {
-            "host controller"
-        };
-        let expected = if name == "echo-bridge" {
-            "bridge.ready"
-        } else {
-            "host port"
-        }
-        .into();
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(name == "echo-bridge")
-            .spawn()
-            .unwrap();
-        let input = child.stdin.take();
-        let lines = BufReader::new(child.stdout.take().unwrap()).lines();
-        Self {
-            name,
-            expected,
-            child,
-            input,
-            lines,
-        }
-    }
-    async fn line(&mut self) -> String {
-        let response = tokio::time::timeout(OBSERVATION_TIMEOUT, self.lines.next_line()).await;
-        assert!(
-            response.is_ok(),
-            "{} pid {:?}: timed out after 30s waiting for {}",
-            self.name,
-            self.child.id(),
-            self.expected
-        );
-        let line = response.unwrap().unwrap();
-        if self.name == "echo-bridge" {
-            self.expected = "bridge.run_completed".into();
-        }
-        if line.is_none() {
-            let mut error = String::new();
-            self.child
-                .stderr
-                .take()
-                .unwrap()
-                .read_to_string(&mut error)
-                .await
-                .unwrap();
-            assert_eq!(error, "", "controller or bridge exited before response");
-        }
-        line.unwrap()
-    }
-    async fn command(&mut self, command: &str) -> String {
-        self.expected = format!("host command reply: {command}");
-        self.input
-            .as_mut()
-            .unwrap()
-            .write_all(format!("{command}\n").as_bytes())
-            .await
-            .unwrap();
-        self.input.as_mut().unwrap().flush().await.unwrap();
-        self.line().await
-    }
-    async fn finish(&mut self, code: i32) {
-        drop(self.input.take());
-        let status = tokio::time::timeout(Duration::from_secs(5), self.child.wait())
-            .await
-            .unwrap()
-            .unwrap();
-        let mut error = String::new();
-        self.child
-            .stderr
-            .take()
-            .unwrap()
-            .read_to_string(&mut error)
-            .await
-            .unwrap();
-        assert_eq!(status.code(), Some(code), "{error}");
-    }
-}
+#[path = "bridge_observer/process.rs"]
+mod process;
+use process::Process;
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 fn host() -> Command {
-    bridge_refusal::host_script("tests/bridge_host.sh")
+    bridge_refusal::host_script("crates/echo-bridge/tests/bridge_observer/host.sh")
 }
 fn bridge(port: &str, url: &str, trace: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_echo-bridge"));
@@ -214,7 +124,7 @@ async fn bridge_spine_host_echo_health_and_eof() {
     assert_host_microphone(&entries, calls[0].frames.len());
     assert_eq!(host.command("pcm").await, "30720 0");
     bridge.finish(0).await;
-    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    bridge.assert_collected();
     host.finish(0).await;
     fake.shutdown().await;
 }
@@ -366,7 +276,8 @@ async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
         directory.path(),
         &live.url,
         &model.origin,
-    ));
+    ))
+    .with_host(port, directory.path().join("trace"));
     assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
     let path = directory.path().join("trace");
     let mut screen = wire_journey_screen(directory.path()).await;

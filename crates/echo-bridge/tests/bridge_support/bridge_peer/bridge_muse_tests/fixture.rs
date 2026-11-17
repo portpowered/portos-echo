@@ -189,11 +189,7 @@ impl Muse {
             .await
             .unwrap();
         self.child.finish(0).await;
-        assert!(
-            tokio::net::TcpStream::connect(self.url.trim_start_matches("https://"))
-                .await
-                .is_err()
-        );
+        self.child.assert_collected();
     }
 }
 

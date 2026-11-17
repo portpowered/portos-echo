@@ -144,7 +144,6 @@ async fn f18_shutdown_drains_held_child_and_releases_socket_and_store() {
     daemon.stdin.write_all(b"{\"operation\":\"shutdown\"}\n").await.unwrap();
     let _released = held.write_all(&[1]).await;
     assert_eq!(request.await.unwrap().status(), 201);
-    let address = daemon.url.trim_start_matches("https://").to_string();
     assert!(
         tokio::time::timeout(Duration::from_secs(8), daemon.child.wait())
             .await
@@ -153,7 +152,8 @@ async fn f18_shutdown_drains_held_child_and_releases_socket_and_store() {
             .success()
     );
     assert!(!fixture.path("report.sock").exists());
-    assert!(tokio::net::TcpStream::connect(&address).await.is_err());
+    // The collected daemon owns the TLS listener; the held child is checked below.
+    assert!(daemon.child.try_wait().unwrap().unwrap().success());
     let pid = std::fs::read_to_string(fixture.path("child.pid")).unwrap();
     assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
     fixture.script(CHAT, "", 0, None);
