@@ -661,7 +661,12 @@ adb forward tcp:16700 tcp:16700
 Copy `examples/bridge.example.toml` outside the repository. In its existing
 `[echo]` table set `host = "127.0.0.1"` and `wyoming_port = 16700`.
 The nominated configuration must use loopback screen and unauthenticated local
-MCP endpoints; it must not nominate real auth state or Muse credentials. The
+MCP endpoints; it must not nominate real auth state or Muse credentials. Never
+include the operator's Codex home: any `codex.home` key is refused with
+`device: invalid or unsafe nominated bridge configuration`, even if its path
+does not exist. Remove `home` from the disposable nomination before retrying;
+leave the operator home and its `auth.json` untouched. Home-free `[codex]`
+settings may remain. The
 device journey validates it before effects and stages a private synthetic
 configuration. A LAN Echo address is refused with
 `device: echo.host must be 127.0.0.1; forward the Echo's Wyoming port with adb forward`.
