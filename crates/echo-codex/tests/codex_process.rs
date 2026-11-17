@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::{
     error::Error,
     fs,
+    io::BufRead,
     path::PathBuf,
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
@@ -58,6 +59,19 @@ impl Fixture {
         let io = self.server()?.io()?;
         let id = io.begin_request(method, &json!({}))?;
         Ok(io.wait_reply(&id).await?)
+    }
+    fn hold_initialize(&self) -> Result<tokio::task::JoinHandle<std::io::Result<String>>> {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        fs::write(
+            self.home.join("work/mode"),
+            format!("hold-initialize:{}", listener.local_addr()?.port()),
+        )?;
+        Ok(tokio::task::spawn_blocking(move || {
+            let (stream, _) = listener.accept()?;
+            let mut signal = String::new();
+            std::io::BufReader::new(stream).read_line(&mut signal)?;
+            Ok(signal)
+        }))
     }
 }
 impl Drop for Fixture {
@@ -128,6 +142,80 @@ async fn t3_refused_handshake_and_eof_never_expose_io() -> Result {
         assert!(matches!(fixture.server()?.io(), Err(ProcessError::Unavailable)));
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn t3_cancelled_initialize_keeps_child_private_until_restart() -> Result {
+    let mut fixture = Fixture::new("normal")?;
+    let mut barrier = fixture.hold_initialize()?;
+    {
+        let start = fixture.server()?.start();
+        tokio::pin!(start);
+        tokio::select! {
+            result = &mut start => return Err(format!("unexpected initialize completion: {result:?}").into()),
+            signal = &mut barrier => assert_eq!(signal??, "INITIALIZE_RECEIVED\n"),
+        }
+        // Dropping this future must preserve ownership without publishing IO.
+    }
+    let old = fixture.server()?.pid().ok_or("expected initializing child")?;
+    assert!(matches!(fixture.server()?.io(), Err(ProcessError::Unavailable)));
+    assert_eq!(fixture.server()?.start().await, Err(ProcessError::Unavailable));
+    let (mut observer, mut lines) = observe_exit(old).await?;
+    fs::write(fixture.home.join("work/mode"), "normal")?;
+    fixture.server()?.restart().await?;
+    assert_eq!(lines.next_line().await?.as_deref(), Some("EXITED"));
+    assert!(observer.wait().await?.success());
+    assert_ne!(fixture.server()?.pid(), Some(old));
+    assert_eq!(fixture.inspect("inspect").await?["initialized"], true);
+    fixture.server()?.shutdown().await?;
+    assert_eq!(fixture.server()?.pid(), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_stalled_initialize_expires_and_reaps_without_publishing_io() -> Result {
+    let mut fixture = Fixture::new("normal")?;
+    let mut barrier = fixture.hold_initialize()?;
+    let outcome;
+    {
+        let start = fixture.server()?.start();
+        tokio::pin!(start);
+        tokio::select! {
+            result = &mut start => return Err(format!("unexpected initialize completion: {result:?}").into()),
+            signal = &mut barrier => assert_eq!(signal??, "INITIALIZE_RECEIVED\n"),
+        }
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(6)).await;
+        // OS child reaping uses real readiness, so do not auto-advance its watchdog.
+        tokio::time::resume();
+        outcome = start.await;
+    }
+    assert_eq!(outcome, Err(ProcessError::Rpc(RpcError::Deadline)));
+    assert_eq!(fixture.server()?.pid(), None);
+    assert!(matches!(fixture.server()?.io(), Err(ProcessError::Unavailable)));
+    fs::write(fixture.home.join("work/mode"), "normal")?;
+    fixture.server()?.restart().await?;
+    assert_eq!(fixture.inspect("inspect").await?["initialized"], true);
+    fixture.server()?.shutdown().await?;
+    Ok(())
+}
+
+async fn observe_exit(
+    pid: u32,
+) -> Result<(
+    tokio::process::Child,
+    tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+)> {
+    let mut observer = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support/codex_watch.py"))
+        .arg(pid.to_string())
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let stdout = observer.stdout.take().ok_or("expected observer pipe")?;
+    let mut lines = BufReader::new(stdout).lines();
+    assert_eq!(lines.next_line().await?.as_deref(), Some("WATCHING"));
+    Ok((observer, lines))
 }
 
 #[tokio::test]
@@ -211,15 +299,7 @@ async fn t3_drop_kills_active_child_releases_port_and_preserves_other_session() 
     let io = first.server()?.io()?;
     io.begin_request("hold", &json!({}))?;
     assert!(matches!(io.next_event().await?, Message::Notification {method, ..} if method == "holding"));
-    let mut observer = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support/codex_watch.py"))
-        .arg(pid.to_string())
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let stdout = observer.stdout.take().ok_or("expected observer pipe")?;
-    let mut lines = BufReader::new(stdout).lines();
-    assert_eq!(lines.next_line().await?.as_deref(), Some("WATCHING"));
+    let (mut observer, mut lines) = observe_exit(pid).await?;
     drop(first.supervisor.take());
     assert_eq!(lines.next_line().await?.as_deref(), Some("EXITED"));
     assert!(observer.wait().await?.success());

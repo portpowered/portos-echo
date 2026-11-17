@@ -84,6 +84,15 @@ Controlled-process T3 tests separately exercise initialization, crash/restart,
 drop, pipe failure and isolated-session boundaries. The complete provider fault
 matrix, concurrent real-pin journeys and Linux confinement remain required.
 
+Initialization cancellation and timeout tests hold the child's handshake at a
+loopback readiness barrier. Cancellation keeps the child owned and IO private;
+restart kills the held generation before exposing a newly initialized one.
+Timeout advances the client clock, then resumes real time for OS reaping.
+The offline helper CLI test copies an already provisioned cache into a private
+temporary path with spaces, rejects missing/corrupt artifacts, and exercises
+competing helpers with an independently held writer lease. Provisioning remains
+outside tests; a cache miss cannot download during this journey.
+
 The later bridge cutover owns the tool host, MCP, caps and milestone scenarios.
 This component does not claim M2, M4, real authentication, media or hardware
 proof. Reverting this additive lane removes its crate, registration and helper

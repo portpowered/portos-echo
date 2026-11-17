@@ -22,6 +22,9 @@ for line in sys.stdin:
             emit({'id': request['id'], 'error': {'code': -32600, 'message': 'private payload'}})
         elif mode == 'eof':
             break
+        elif mode.startswith('hold-initialize:'):
+            with socket.create_connection(('127.0.0.1', int(mode.split(':')[1]))) as barrier:
+                barrier.sendall(b'INITIALIZE_RECEIVED\n')
         else:
             emit({'id': request['id'], 'result': {'userAgent': 'controlled-local'}})
     elif method == 'initialized':
