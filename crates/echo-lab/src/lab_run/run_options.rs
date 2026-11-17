@@ -239,23 +239,54 @@ pub fn destination(path: &Path) -> Result<PathBuf, String> {
     if !output.status.success() {
         return Err("run output: cannot inspect worktrees".into());
     }
-    for field in output.stdout.split(|byte| *byte == 0) {
-        if let Some(root) = std::str::from_utf8(field)
-            .ok()
-            .and_then(|s| s.strip_prefix("worktree "))
-        {
-            let root = Path::new(root)
-                .canonicalize()
-                .map_err(|_| "run output: cannot resolve worktree")?;
-            if target.starts_with(root) {
-                return Err("run output: artifacts must be outside all repository worktrees".into());
-            }
-        }
-    }
+    check_worktrees(&output.stdout, &target, |root| {
+        resolved_worktree(root.canonicalize(), || std::fs::symlink_metadata(root).map(|_| ()))
+    })?;
     if target.ancestors().any(|ancestor| ancestor.join(".git").exists()) {
         return Err("run output: artifacts must be outside git".into());
     }
     Ok(target)
+}
+
+fn check_worktrees(
+    listing: &[u8],
+    target: &Path,
+    mut resolve: impl FnMut(&Path) -> Result<Option<PathBuf>, String>,
+) -> Result<(), String> {
+    let fields: Vec<_> = listing.split(|byte| *byte == 0).collect();
+    for record in fields.split(|field| field.is_empty()) {
+        if record
+            .iter()
+            .any(|field| *field == b"prunable" || field.starts_with(b"prunable "))
+        {
+            continue;
+        }
+        for field in record {
+            if let Some(root) = std::str::from_utf8(field)
+                .ok()
+                .and_then(|s| s.strip_prefix("worktree "))
+                && let Some(root) = resolve(Path::new(root))?
+                && target.starts_with(root)
+            {
+                return Err("run output: artifacts must be outside all repository worktrees".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolved_worktree(
+    canonical: std::io::Result<PathBuf>,
+    metadata: impl FnOnce() -> std::io::Result<()>,
+) -> Result<Option<PathBuf>, String> {
+    match canonical {
+        Ok(root) => Ok(Some(root)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            _ => Err("run output: cannot resolve worktree".into()),
+        },
+        Err(_) => Err("run output: cannot resolve worktree".into()),
+    }
 }
 
 fn selected_bridge(flags: &BTreeMap<String, String>, scenario: &serde_json::Value) -> Result<PathBuf, String> {
@@ -292,5 +323,72 @@ mod tests {
                 "device: supply --bridge and --bridge-config together"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod worktree_tests {
+    use super::{check_worktrees, resolved_worktree};
+    use std::io::{Error, ErrorKind};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn worktree_records_skip_prunable_and_keep_live_siblings_and_final_record() {
+        for marker in ["prunable", "prunable gitdir file points to non-existent location"] {
+            let listing = format!(
+                "worktree /missing\0detached\0{marker}\0\0worktree /live space\nline\0branch refs/heads/main\0locked reason\0"
+            );
+            let mut roots = Vec::new();
+            let result = check_worktrees(listing.as_bytes(), Path::new("/live space\nline/output"), |root| {
+                roots.push(root.to_owned());
+                Ok(Some(root.to_owned()))
+            });
+            assert_eq!(roots, [PathBuf::from("/live space\nline")]);
+            assert_eq!(
+                result.unwrap_err(),
+                "run output: artifacts must be outside all repository worktrees"
+            );
+        }
+    }
+
+    #[test]
+    fn worktree_external_output_and_absent_unmarked_records_are_accepted() {
+        let mut roots = Vec::new();
+        assert_eq!(
+            check_worktrees(
+                b"worktree /absent\0\0worktree /live\0\0",
+                Path::new("/external/out"),
+                |root| {
+                    roots.push(root.to_owned());
+                    Ok((root == Path::new("/live")).then(|| root.to_owned()))
+                }
+            ),
+            Ok(())
+        );
+        assert_eq!(roots, [PathBuf::from("/absent"), PathBuf::from("/live")]);
+    }
+
+    #[test]
+    fn worktree_resolution_skips_only_confirmed_absence() {
+        assert_eq!(
+            resolved_worktree(Ok(PathBuf::from("/live")), || unreachable!()),
+            Ok(Some(PathBuf::from("/live")))
+        );
+        assert_eq!(
+            resolved_worktree(Err(Error::from(ErrorKind::NotFound)), || Err(Error::from(
+                ErrorKind::NotFound
+            ))),
+            Ok(None)
+        );
+        for metadata in [Ok(()), Err(ErrorKind::PermissionDenied), Err(ErrorKind::Other)] {
+            assert_eq!(
+                resolved_worktree(Err(Error::from(ErrorKind::NotFound)), || metadata.map_err(Error::from)).unwrap_err(),
+                "run output: cannot resolve worktree"
+            );
+        }
+        let result = check_worktrees(b"worktree /live\0\0", Path::new("/external/out"), |_| {
+            resolved_worktree(Err(Error::from(ErrorKind::PermissionDenied)), || unreachable!())
+        });
+        assert_eq!(result.unwrap_err(), "run output: cannot resolve worktree");
     }
 }
