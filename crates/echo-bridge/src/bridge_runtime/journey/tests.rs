@@ -86,3 +86,59 @@ mod bridge_pacing_cut_tests {
         assert_eq!(source.discard_reply(), 0);
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn bridge_output_pending_admission_survives_turns_and_cut_counts_it_once() {
+    use echo_link::{
+        LinkConnector,
+        fake::{Command, FakeConnector, FakeLink, Observer},
+    };
+    use std::task::Poll;
+    let observer = Observer::default();
+    let link = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let (tx, rx) = link.reply_channel(NonZeroUsize::new(1).unwrap());
+    let mut output = Output::<FakeLink>::new(&tx);
+    let mut source = Source::new().unwrap();
+    source.enqueue(&vec![0; 2880]);
+    let mut pacer = LeadPacer::new(200);
+    assert_eq!(output.next(&mut pacer, &mut source.queue, 7).await.unwrap(), None);
+    assert_eq!(output.next(&mut pacer, &mut source.queue, 8).await.unwrap(), Some(7));
+    assert_eq!(output.next(&mut pacer, &mut source.queue, 8).await.unwrap(), None);
+    for _ in 0..3 {
+        let next = output.next(&mut pacer, &mut source.queue, 9);
+        tokio::pin!(next);
+        std::future::poll_fn(|cx| {
+            assert!(next.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+    }
+    assert!(!output.is_empty());
+    let pending = output.discard();
+    assert_eq!(pending, 1);
+    assert_eq!(output.discard(), 0);
+    assert!(output.is_empty());
+    assert_eq!(source.discard_reply() + pending, 2);
+    assert_eq!(source.framed, 3);
+    assert_eq!(source.queue.drop_count(), 0);
+    drop(output);
+    drop(tx);
+    let play = link.play_with_timeout(bridge_audio::format(24_000), rx, Duration::from_secs(5));
+    tokio::pin!(play);
+    std::future::poll_fn(|cx| {
+        assert!(play.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    let delivered: Vec<_> = observer
+        .commands()
+        .into_iter()
+        .filter_map(|command| match command {
+            Command::Frame(frame) => Some(frame),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delivered, vec![vec![0; 960]]);
+    observer.finish(Ok(()));
+    assert_eq!(play.await.unwrap(), PlayOutcome::Played);
+}
