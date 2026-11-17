@@ -48,6 +48,8 @@ struct State {
     revoked: bool,
     used_refreshes: BTreeSet<String>,
     counts: Counts,
+    #[cfg(test)]
+    token_reply: Option<Arc<tokio::sync::Notify>>,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -87,6 +89,8 @@ impl Fixture {
             revoked: true,
             used_refreshes: BTreeSet::new(),
             counts: Counts::default(),
+            #[cfg(test)]
+            token_reply: None,
         }));
         let app = mcp_routes::router(shared.clone());
         let (stop, mut stopped) = watch::channel(false);
@@ -181,3 +185,33 @@ impl Drop for Fixture {
 
 #[cfg(test)]
 mod mcp_tests;
+
+#[cfg(test)]
+fn approval_task<F>(
+    future: F,
+    gate: impl std::future::Future<Output = ()> + Send + 'static,
+) -> (
+    JoinHandle<Result<(), echo_mcp_auth::AuthError>>,
+    tokio::sync::oneshot::Receiver<()>,
+)
+where
+    F: std::future::Future<Output = Result<(), echo_mcp_auth::AuthError>> + Send + 'static,
+{
+    let (ready, registered) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        gate.await;
+        tokio::pin!(future);
+        let mut ready = Some(ready);
+        std::future::poll_fn(|cx| {
+            let result = future.as_mut().poll(cx);
+            if result.is_pending()
+                && let Some(ready) = ready.take()
+            {
+                let _ = ready.send(());
+            }
+            result
+        })
+        .await
+    });
+    (task, registered)
+}

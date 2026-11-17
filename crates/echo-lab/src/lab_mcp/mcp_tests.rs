@@ -5,11 +5,8 @@ use echo_mcp_auth::{AuthClient, AuthOptions, TokenProvider};
 use echo_spoof_mcp::{Options, Spoof};
 use p256::ecdsa::{Signature, signature::Signer};
 use serde_json::json;
-use std::{
-    future::Future,
-    task::Poll,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{future::Future, task::Poll, time::Duration};
+use tokio::sync::{Notify, oneshot};
 
 async fn drive<F: Future>(future: F) -> F::Output {
     tokio::pin!(future);
@@ -50,9 +47,8 @@ impl Harness {
     }
 
     async fn new() -> Self {
-        let fixture = Fixture::bind(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs())
-            .await
-            .unwrap();
+        let epoch = 1_800_000_000;
+        let fixture = Fixture::bind(epoch).await.unwrap();
         let spoof = Spoof::start_authorized(Options::default(), Some(fixture.validator()))
             .await
             .unwrap();
@@ -65,7 +61,7 @@ impl Harness {
             storage_dir: dir.path().into(),
             request_timeout: Duration::from_secs(2),
         };
-        let client = Arc::new(drive(AuthClient::open(options)).await.unwrap());
+        let client = Arc::new(drive(AuthClient::open_at_epoch(options, epoch)).await.unwrap());
         Self {
             fixture,
             spoof,
@@ -79,21 +75,30 @@ impl Harness {
     }
 
     async fn link(&self) {
-        let task = self.start_link().await;
+        let task = self.start_link(std::future::ready(())).await;
         self.fixture.advance(5).unwrap();
         tokio::time::advance(Duration::from_secs(5)).await;
         drive(task).await.unwrap().unwrap();
     }
 
-    async fn start_link(&self) -> JoinHandle<Result<(), echo_mcp_auth::AuthError>> {
+    async fn start_link(
+        &self,
+        gate: impl Future<Output = ()> + Send + 'static,
+    ) -> JoinHandle<Result<(), echo_mcp_auth::AuthError>> {
         let link = drive(self.client.begin_link()).await.unwrap();
         assert_eq!(link.user_code, "TEST-CODE");
         assert_eq!(link.verification_uri, format!("{}/approve", self.fixture.base()));
         assert_eq!((link.expires_in, link.interval), (1800, 5));
         self.fixture.approve(Approval::Approved).unwrap();
         let client = self.client.clone();
-        let task = tokio::spawn(async move { client.await_approval(link).await });
-        tokio::task::yield_now().await;
+        // The first Pending of await_approval registers its advertised interval.
+        // Keep virtual time fixed while the task reaches that actual poll.
+        let (mut task, registered) = approval_task(async move { client.await_approval(link).await }, gate);
+        assert!(
+            drive(registered).await.is_ok(),
+            "approval ended before interval registration: {:?}",
+            drive(&mut task).await
+        );
         task
     }
 
@@ -151,7 +156,8 @@ async fn t3_m5_strict_link_rotate_reload_and_replay_revoke_resource_access() {
         );
         assert_eq!(stored["private_key_jwk"], initial["private_key_jwk"]);
     }
-    let reloaded = drive(AuthClient::open(h.options())).await.unwrap();
+    let now = h.fixture.shared.lock().unwrap().now;
+    let reloaded = drive(AuthClient::open_at_epoch(h.options(), now)).await.unwrap();
     let token = drive(reloaded.access_token()).await.unwrap();
     assert_eq!(
         h.fixture.counts().unwrap(),
@@ -373,13 +379,22 @@ async fn t3_m5_proofs_are_exact_single_use_and_code_expiry_is_inclusive() {
 #[tokio::test(start_paused = true)]
 async fn t3_m5_parallel_sessions_keep_grants_and_cleanup_independent() {
     let (a, b) = tokio::join!(Harness::new(), Harness::new());
-    let (pending_a, pending_b) = tokio::join!(a.start_link(), b.start_link());
+    let (release, gate) = oneshot::channel();
+    let (pending_a, (pending_b,)) = tokio::join!(a.start_link(async { gate.await.unwrap() }), async {
+        let task = b.start_link(std::future::ready(())).await;
+        release.send(()).unwrap();
+        (task,)
+    });
     a.fixture.advance(5).unwrap();
     b.fixture.advance(5).unwrap();
     tokio::time::advance(Duration::from_secs(5)).await;
     let (a_linked, b_linked) = drive(async { tokio::join!(pending_a, pending_b) }).await;
     a_linked.unwrap().unwrap();
     b_linked.unwrap().unwrap();
+    assert_eq!(
+        (a.fixture.counts().unwrap().polls, b.fixture.counts().unwrap().polls),
+        (1, 1)
+    );
     let token_a = drive(a.client.access_token()).await.unwrap();
     let token_b = drive(b.client.access_token()).await.unwrap();
     assert_eq!(b.request(token_a.expose(), "tools/call").await.status(), 401);
@@ -389,4 +404,78 @@ async fn t3_m5_parallel_sessions_keep_grants_and_cleanup_independent() {
     assert_eq!(b.spoof.snapshot().unwrap().calls.len(), 1);
     assert_eq!(b.fixture.counts().unwrap().links, 1);
     b.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_m5_delayed_first_poll_and_token_reply_keep_clocks_fixed() {
+    let h = Harness::new().await;
+    let entered = Arc::new(Notify::new());
+    let held = entered.clone();
+    let (release, gate) = oneshot::channel();
+    let before = tokio::time::Instant::now();
+    let task = {
+        let starting = h.start_link(async move {
+            held.notify_one();
+            gate.await.unwrap();
+        });
+        tokio::pin!(starting);
+        let reached_gate = drive(async {
+            tokio::select! {
+                _ = &mut starting => false,
+                () = entered.notified() => true
+            }
+        })
+        .await;
+        assert!(reached_gate, "link returned before its first approval poll");
+        assert_eq!(tokio::time::Instant::now(), before);
+        assert_eq!(h.fixture.counts().unwrap().polls, 0);
+        release.send(()).unwrap();
+        drive(&mut starting).await
+    };
+    let reply = Arc::new(Notify::new());
+    h.fixture.shared.lock().unwrap().token_reply = Some(reply.clone());
+    h.fixture.advance(5).unwrap();
+    tokio::time::advance(Duration::from_secs(5)).await;
+    drive(std::future::poll_fn(|cx| {
+        if h.fixture.counts().unwrap().polls == 1 {
+            Poll::Ready(())
+        } else {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }))
+    .await;
+    assert!(!task.is_finished());
+    assert_eq!(h.record()["grant"], Value::Null);
+    assert_eq!(tokio::time::Instant::now() - before, Duration::from_secs(5));
+    reply.notify_one();
+    drive(task).await.unwrap().unwrap();
+    let token = drive(h.client.access_token()).await.unwrap();
+    assert_eq!(h.record()["grant"]["access_token"], *token.expose());
+    let result: Value = drive(h.request(token.expose(), "tools/call").await.json())
+        .await
+        .unwrap();
+    assert_eq!(result["result"]["content"], json!([{"type":"text","text":"m5-linked"}]));
+    assert_eq!(h.fixture.counts().unwrap().polls, 1);
+    h.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_m5_cancelled_approval_never_reports_readiness_or_publishes_grant() {
+    let h = Harness::new().await;
+    let link = drive(h.client.begin_link()).await.unwrap();
+    let client = h.client.clone();
+    let (task, registered) = approval_task(async move { client.await_approval(link).await }, std::future::pending());
+    task.abort();
+    assert!(drive(registered).await.is_err());
+    assert!(drive(task).await.unwrap_err().is_cancelled());
+    let (failed, registered) = approval_task(
+        std::future::ready(Err(echo_mcp_auth::AuthError::Expired)),
+        std::future::ready(()),
+    );
+    assert!(drive(registered).await.is_err());
+    assert_eq!(drive(failed).await.unwrap(), Err(echo_mcp_auth::AuthError::Expired));
+    assert_eq!(h.fixture.counts().unwrap().polls, 0);
+    assert_eq!(h.record()["grant"], Value::Null);
+    h.close().await;
 }

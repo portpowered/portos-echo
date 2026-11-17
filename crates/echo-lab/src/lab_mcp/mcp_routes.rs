@@ -76,21 +76,33 @@ async fn link(Extract(shared): Extract<Shared>, headers: HeaderMap, Form(form): 
 }
 
 async fn token(Extract(shared): Extract<Shared>, headers: HeaderMap, Form(form): Form<Fields>) -> Reply {
+    let reply = token_reply(&shared, &headers, &form);
+    #[cfg(test)]
+    {
+        let hold = shared.lock().ok().and_then(|state| state.token_reply.clone());
+        if let Some(hold) = hold {
+            hold.notified().await;
+        }
+    }
+    reply
+}
+
+fn token_reply(shared: &Shared, headers: &HeaderMap, form: &Fields) -> Reply {
     let Ok(mut state) = shared.lock() else {
         return unavailable();
     };
-    if !client(&form) {
+    if !client(form) {
         return fail("invalid_client");
     }
-    if !proof(&mut state, &headers, TOKEN, false) {
+    if !proof(&mut state, headers, TOKEN, false) {
         return fail("invalid_dpop_proof");
     }
     if state.revoked || state.device == 0 {
         return fail("invalid_grant");
     }
     match form.get("grant_type").map(String::as_str) {
-        Some("urn:ietf:params:oauth:grant-type:device_code") => poll(&mut state, &form),
-        Some("refresh_token") => rotate(&mut state, &form),
+        Some("urn:ietf:params:oauth:grant-type:device_code") => poll(&mut state, form),
+        Some("refresh_token") => rotate(&mut state, form),
         _ => fail("unsupported_grant_type"),
     }
 }
