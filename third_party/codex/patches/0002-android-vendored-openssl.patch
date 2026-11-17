@@ -1,0 +1,13 @@
+Why: pe-ci has no Android static OpenSSL prefix. openssl-sys 0.9.111 fails
+because pkg-config cannot cross-compile. Enable the existing vendored feature
+only for Android ARMv7, as authorized by the payload. Build configuration only.
+
+diff --git a/codex-rs/core/Cargo.toml b/codex-rs/core/Cargo.toml
+--- a/codex-rs/core/Cargo.toml
++++ b/codex-rs/core/Cargo.toml
+@@ -141,1 +141,5 @@
++# Build OpenSSL from source for the Android ARMv7 deployment.
++[target.armv7-linux-androideabi.dependencies]
++openssl-sys = { workspace = true, features = ["vendored"] }
++
+ [dev-dependencies]
