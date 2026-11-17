@@ -57,6 +57,20 @@ Baseline coverage exited 2 (177.624 s): the existing idle-probe failure/recovery
 The coordinator identified the main-branch fix in PR 152 and directed a rebase followed by a coverage-only
 same-source pair; no size or diagnostic rerun is required under that binding response.
 
+The requested coverage-only pair ran on source `732ed61`, with both variants using
+`make coverage COVERAGE_BASE=407ccef054a57071a87e5b97bfcece96cc9a5dd0`, isolated targets and the
+shared lock (acquired 09:50:47 UTC). The coordinator relayed results at 10:03 UTC. Candidate coverage exited 0
+(376.057 s): workspace 59,812/61,261 lines (97.63%); every unchanged line, branch and changed-line floor passed.
+All 23 scope counts are published in PR 157. Baseline exited 2 (306.977 s):
+`bridge_refusal_live_error_before_pcm_then_same_connection_recovers` failed at
+`crates/echo-bridge/tests/bridge_refusal/mod.rs:82`, reporting 1359.430 ms against a 1000 ms ceiling.
+No baseline LCOV was produced. Per-crate comparison: **not obtained: baseline run hit the known
+refusal-timing flake fixed by #155**. No measured parity or per-crate delta is claimed.
+The coordinator explicitly accepted A-3/E-COV on the passing candidate floors plus this baseline-failure
+explanation, and directed no further coverage pair. This supersedes the pending comparison disposition
+above; historical observations remain scoped to their measured source. Hosted CI and independent review
+own final-head quality and validation.
+
 The coordinator's 2026-11-17 amendment leaves one-shot incremental suppression inconclusive: ci-latency is
 unproved, the full local CI comparison is withdrawn, the optional coverage pair was not run, and default
 incremental is retained. Hosted CI is the quality gate. Raw output and per-crate evidence belong in PR 157
