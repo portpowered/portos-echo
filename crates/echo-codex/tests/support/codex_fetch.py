@@ -16,11 +16,11 @@ COMMAND = (['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File
            ['sh', str(ROOT / 'scripts/codex-app-server.sh')])
 
 
-def run(cache=None):
+def run(cache=None, command=COMMAND):
     environment = dict(os.environ, ECHO_CODEX_OFFLINE='1')
     if cache is not None:
         environment['ECHO_CODEX_CACHE_DIR'] = str(cache)
-    return subprocess.run(COMMAND, env=environment, capture_output=True, text=True, timeout=20)
+    return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=20)
 
 
 def successful(result):
@@ -86,6 +86,46 @@ def writer_lock(published, cache):
     assert sorted(path.name for path in published.parent.iterdir()) == [published.name]
 
 
+def external_worktree(temporary, cache, binary):
+    if WINDOWS:
+        return  # This regression is in the Linux helper.
+    checkout = temporary / 'main checkout'
+    checkout.mkdir()
+    (checkout / 'scripts').mkdir()
+    for name in ('codex.pin', 'scripts/codex-app-server.sh'):
+        shutil.copy2(ROOT / name, checkout / name)
+
+    def git(*arguments):
+        return subprocess.check_output(['git', '-C', str(checkout), *arguments],
+                                       stderr=subprocess.STDOUT, text=True, timeout=10).strip()
+
+    git('init', '--quiet')
+    git('add', 'codex.pin', 'scripts/codex-app-server.sh')
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+        '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'helper fixture')
+    lane = temporary / 'external linked worktree'
+    git('worktree', 'add', '--quiet', '--detach', str(lane))
+    command = ['sh', str(lane / 'scripts/codex-app-server.sh')]
+    assert successful(run(cache, command)) == binary
+    assert successful(run(cache, command)) == binary
+    refused(run(temporary / 'missing cache', command), 'binary missing; provision before testing')
+    for root in (lane, checkout):
+        refused(run(root / 'cache', command), 'cache must be outside repository')
+    alias = temporary / 'cache alias'
+    alias.symlink_to(checkout, target_is_directory=True)
+    refused(run(alias / 'cache', command), 'cache must be outside repository')
+    # Git permits relative gitdir entries as well as the absolute entry it wrote.
+    marker = lane / '.git'
+    gitdir = pathlib.Path(marker.read_text().strip().removeprefix('gitdir: '))
+    marker.write_text('gitdir: ' + os.path.relpath(gitdir, lane) + '\n')
+    assert successful(run(cache, command)) == binary
+    refused(run(checkout / 'cache', command), 'cache must be outside repository')
+    marker.unlink()
+    refused(run(cache, command), 'repository metadata missing')
+    print('external_worktree=verified_reuse offline_miss=reported lane_cache=refused shared_cache=refused')
+    print('symlink_cache=refused relative_gitdir=verified missing_metadata=refused')
+
+
 def main():
     source = successful(run())
     with tempfile.TemporaryDirectory(prefix='echo codex cache ') as temporary:
@@ -103,6 +143,7 @@ def main():
         corrupt_and_restore(binary, cache)
         writer_lock(published, cache)
         assert successful(run(cache)) == binary
+        external_worktree(pathlib.Path(temporary).resolve(), cache, binary)
     print('offline_missing=refused warm_path=stable archive_corruption=refused binary_corruption=refused')
     print('writer_lease=retained concurrent_paths=one no_partial_publication=true')
     print('FETCH_CACHE_PASS')

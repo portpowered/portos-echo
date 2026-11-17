@@ -12,6 +12,7 @@ import os
 import pathlib
 import platform
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -27,6 +28,30 @@ def digest(path):
 def fetch(url, path):
     with urllib.request.urlopen(url, timeout=120) as source, path.open('wb') as target:
         shutil.copyfileobj(source, target)
+
+
+def metadata_path(base, value):
+    # Windows-created worktrees can also be invoked through WSL.
+    if pathlib.PureWindowsPath(value).is_absolute():
+        value = subprocess.check_output(['wslpath', '-u', value], text=True).strip()
+    return (base / value).resolve(strict=True)
+
+
+def checkout_roots(root):
+    marker = root / '.git'
+    if marker.is_dir():
+        return (root,)
+    if not marker.is_file():
+        raise ValueError('repository metadata missing')
+    prefix, separator, value = marker.read_text().strip().partition(': ')
+    if prefix != 'gitdir' or not separator:
+        raise ValueError('invalid repository metadata')
+    gitdir = metadata_path(root, value)
+    common = gitdir / 'commondir'
+    if common.is_file():
+        shared = metadata_path(gitdir, common.read_text().strip())
+        return (root, shared.parent)
+    return (root,)
 
 
 def main():
@@ -48,10 +73,7 @@ def main():
         raise ValueError('cache must be absolute')
     cache = cache.resolve()
     # Reject caches inside any checkout, including this lane's shared main checkout.
-    checkout = root
-    while checkout.parent != checkout and not (checkout / '.git').is_dir():
-        checkout = checkout.parent
-    if cache.is_relative_to(root) or cache.is_relative_to(checkout):
+    if any(cache.is_relative_to(checkout) for checkout in checkout_roots(root)):
         raise ValueError('cache must be outside repository')
     parent = cache / commit / target
     parent.mkdir(parents=True, exist_ok=True)
