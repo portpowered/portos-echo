@@ -23,6 +23,16 @@ external version, checksum, feature or dependency. Its zero-context hunks
 apply only after verifying the exact pinned source. Other build failures
 remain blockers; behavioral portability changes require a new decision.
 
+Coordinator mailbox answer 1 (2026-11-16) authorizes patch 0003 for locked
+`pagable` 0.4.1 only: ARM32's layout is ten words, while the existing
+non-ARM32 (including wasm32) assertion retains twelve. Neither assertion is
+removed and no runtime code changes. The coordinator checked that no runtime
+code depends on this size. The helper downloads the crate outside git, checks
+the checksum from the pinned lockfile, and applies the patch there. Cargo's
+`paths` override selects that private copy without changing the lockfile,
+version, dependencies or shared registry cache. Any further source change
+requires another decision. GNU tar is also required to unpack the crate.
+
 The pre-approved upstream closure includes OpenSSL, aws-lc, portable-pty,
 bundled SQLite and compression libraries. No package enters this repository's
 Cargo.lock. pe-ci has no Android static `OPENSSL_DIR`; `openssl-sys` 0.9.111

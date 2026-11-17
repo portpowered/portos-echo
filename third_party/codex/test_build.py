@@ -4,9 +4,12 @@ No network or compilation. The two real builds remain separate release evidence.
 """
 
 import hashlib
+import io
+import json
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -109,6 +112,46 @@ codex_source
                            'curl() { printf wrong > "$stage/cacert.pem"; }; codex_ca')
         self.assert_failed(result, "FAILED")
 
+    def test_pagable_checksum_patch_and_private_override(self):
+        self.work.mkdir()
+        source = self.work / "source/codex-rs"
+        source.mkdir(parents=True)
+        original = ('\n' * 738 + '#[cfg(target_pointer_width = "32")]\n'
+                    'static_assertions::assert_eq_size!(PagableArcInner<[usize; 4]>, [usize; 12]);\n')
+        archive = self.root / "download.crate"
+        with tarfile.open(archive, "w:gz") as bundle:
+            entry = tarfile.TarInfo("pagable-0.4.1/src/pagable_arc.rs")
+            entry.size = len(original.encode())
+            bundle.addfile(entry, io.BytesIO(original.encode()))
+        checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+        lock = source / "Cargo.lock"
+        locked = ('[[package]]\nname = "pagable"\nversion = "0.4.1"\n'
+                  'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+                  f'checksum = "{checksum}"\n')
+        lock.write_text(locked)
+        patches = self.repo / "third_party/codex/patches"
+        patches.mkdir(parents=True)
+        patch = patches / "0003-pagable-arm-layout.patch"
+        patch.write_bytes((SCRIPT.parent.parent / "third_party/codex/patches" / patch.name).read_bytes())
+        code = ('work="$CODEX_ARMV7_WORK_DIR"; '
+                'curl() { cp "$TEST_ARCHIVE" "$work/pagable.crate"; }; codex_pagable')
+        lock.write_text(locked.replace(checksum, "0" * 64))
+        self.assert_failed(self.call(code, TEST_ARCHIVE=str(archive)), "FAILED")
+        self.assertFalse((self.work / "vendor").exists())
+        lock.write_text(locked)
+        result = self.call(code, TEST_ARCHIVE=str(archive))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        patched = (self.work / "vendor/pagable-0.4.1/src/pagable_arc.rs").read_text()
+        self.assertEqual(patched, '\n' * 738 +
+                         '#[cfg(all(target_pointer_width = "32", not(target_arch = "arm")))]\n'
+                         'static_assertions::assert_eq_size!(PagableArcInner<[usize; 4]>, [usize; 12]);\n'
+                         '#[cfg(all(target_pointer_width = "32", target_arch = "arm"))]\n'
+                         'static_assertions::assert_eq_size!(PagableArcInner<[usize; 4]>, [usize; 10]);\n')
+        self.assertEqual((self.work / "cargo-config.toml").read_text(),
+                         'paths = [' + json.dumps(str(self.work / "vendor/pagable-0.4.1")) + ']\n')
+        self.assertEqual(lock.read_text(), locked)
+        self.assertFalse(self.output.exists())
+
     def pipeline(self, override=""):
         # Controlled component seams: real directory claiming/staging/publication.
         return self.call('''
@@ -119,6 +162,7 @@ codex_source() {
   printf notice > "$work/source/NOTICE"
 }
 codex_ca() { printf ca > "$stage/cacert.pem"; }
+codex_pagable() { :; }
 codex_build() { printf binary > "$stage/codex-app-server"; }
 codex_inspect() {
   needed=libc.so; size=6
@@ -140,7 +184,7 @@ codex_inspect() {
         self.assertEqual(list(self.root.glob("*.lock")), [])
 
     def test_every_stage_failure_and_signal_prevent_publication(self):
-        for stage in ["codex_source", "codex_ca", "codex_build", "codex_inspect"]:
+        for stage in ["codex_source", "codex_pagable", "codex_ca", "codex_build", "codex_inspect"]:
             with self.subTest(stage=stage):
                 result = self.pipeline(stage + '() { return 9; }')
                 self.assert_failed(result)

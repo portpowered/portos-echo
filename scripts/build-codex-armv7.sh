@@ -38,7 +38,7 @@ codex_paths() {
 }
 
 codex_prerequisites() {
-  for tool in git curl cargo rustc realpath find sha256sum file patch cmake make perl python3; do
+  for tool in git curl cargo rustc realpath find sha256sum file patch cmake make perl python3 tar; do
     command -v "$tool" >/dev/null || codex_fail "missing prerequisite: $tool"
   done
   ndk=${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME}
@@ -73,9 +73,39 @@ codex_source() {
   git -C "$work/source" checkout -q --detach FETCH_HEAD
   for change in "$repo"/third_party/codex/patches/*.patch; do
     [ -f "$change" ] || continue
+    case $change in */0003-pagable-arm-layout.patch) continue ;; esac
     git -C "$work/source" apply --unidiff-zero --check "$change"
     git -C "$work/source" apply --unidiff-zero "$change"
   done
+}
+
+codex_pagable() {
+  # The coordinator authorized only this locked crate's ARM layout assertion.
+  checksum=$(python3 - "$work/source/codex-rs/Cargo.lock" <<'PY'
+import sys
+import tomllib
+with open(sys.argv[1], "rb") as source:
+    packages = tomllib.load(source)["package"]
+package, = (p for p in packages if p["name"] == "pagable")
+assert package["version"] == "0.4.1"
+assert package["source"] == "registry+https://github.com/rust-lang/crates.io-index"
+print(package["checksum"])
+PY
+  )
+  curl --fail --location --proto '=https' --tlsv1.2 \
+    https://static.crates.io/crates/pagable/pagable-0.4.1.crate -o "$work/pagable.crate"
+  printf '%s  %s\n' "$checksum" "$work/pagable.crate" | sha256sum -c - >&2
+  mkdir "$work/vendor"
+  tar -xzf "$work/pagable.crate" -C "$work/vendor"
+  patch -d "$work/vendor/pagable-0.4.1" -p1 <"$repo/third_party/codex/patches/0003-pagable-arm-layout.patch"
+  python3 - "$work" <<'PY'
+import json
+import sys
+from pathlib import Path
+work = Path(sys.argv[1])
+(work / "cargo-config.toml").write_text(
+    "paths = [" + json.dumps(str(work / "vendor/pagable-0.4.1")) + "]\n")
+PY
 }
 
 codex_ca() {
@@ -86,7 +116,7 @@ codex_ca() {
 }
 
 codex_build() {
-  (cd "$work/source/codex-rs" && cargo +1.100.0 build --locked --release \
+  (cd "$work/source/codex-rs" && cargo +1.100.0 --config "$work/cargo-config.toml" build --locked --release \
     --target armv7-linux-androideabi -p codex-app-server --bin codex-app-server) >&2
   cp "$work/target/armv7-linux-androideabi/release/codex-app-server" "$stage/codex-app-server"
   "$tools/llvm-strip" "$stage/codex-app-server"
@@ -145,6 +175,7 @@ codex_main() {
   stage=$(mktemp -d "$output.staging.XXXXXX")
   codex_environment
   codex_source >&2
+  codex_pagable >&2
   codex_ca
   codex_build
   codex_inspect
