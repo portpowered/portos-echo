@@ -168,7 +168,7 @@ async fn restart_probe_observation_deadline() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("trace");
     std::fs::write(&path, b"retained old process\n").unwrap();
-    let cursor = std::fs::metadata(&path).unwrap().len() as usize;
+    let cursor = std::fs::read(&path).unwrap().len();
     let deadline = Instant::now();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let _peer = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
