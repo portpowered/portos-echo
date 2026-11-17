@@ -516,3 +516,26 @@ The controlled-process/paired-screen witness protects prewake kill and clear
 without creating media. These do not prove canonical CLI selection or real-pin
 M2, which remain required before cutover acceptance. No new dependency or
 shared contract is introduced.
+
+## Configured voice admission amendment (2026-11-17)
+
+The voice configuration adapter owns its validated bridge config, audit kill
+path and trace path for the entire authenticated service lifetime. Preparing it
+requires a Codex home and the client backend, without opening credentials,
+resolving a binary or creating a home. Runtime reads only the nominated API-key
+file in API-key mode, bounds it to 16 KiB and wraps the validated value in
+`Secret`. ChatGPT mode never opens the legacy credential path. Process login
+still owns authentication, and device readiness still follows account admission.
+
+Effective Codex voice and delegated model use the existing config precedence.
+When neither voice is supplied, omit the realtime voice field so the pinned
+server chooses its default. Do not substitute a legacy voice or send null.
+Preserve configured instructions, idle interval, response deadline and reply
+lead; retain the existing kill marker and caller-owned dynamic tool list.
+
+Memory-only checks protect credential bounds, offline preparation, effective
+options and the exact voice-omitted start request. Controlled-process checks
+exercise both authentication modes through this adapter, paired readiness,
+missing-binary/key refusal and awaited cancellation cleanup. The executable
+selector and scenario consumers have not switched to this adapter yet; real-pin
+M2 and tool dispatch remain required. No shared contract or dependency changes.

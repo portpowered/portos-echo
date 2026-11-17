@@ -1,5 +1,7 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
 mod voice_admission;
+#[path = "controls/voice_config.rs"]
+mod voice_config;
 mod voice_host;
 #[path = "controls/voice_kill.rs"]
 mod voice_kill;
@@ -8,6 +10,7 @@ mod voice_session;
 mod voice_source;
 mod voice_view;
 pub use voice_admission::{ServeNotice, ServeOptions, serve};
+pub use voice_config::Configured;
 pub use voice_host::{HostOptions, with_device};
 pub use voice_runtime::{RuntimeOptions, execute};
 pub use voice_session::{ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation};

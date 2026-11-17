@@ -4,6 +4,45 @@ use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 
 #[tokio::test(start_paused = true)]
+async fn call_omitted_voice_uses_server_default_without_null_or_legacy_substitution() {
+    let (mut io, mut server) = fixture();
+    let client = async {
+        let mut call = Call::new(&mut io);
+        let options = Options {
+            voice: None,
+            ..options()
+        };
+        assert_eq!(
+            call.start(&options, vec![], "fixture-offer", deadline()).await.unwrap(),
+            "fixture-answer"
+        );
+        call.stop(deadline()).await.unwrap();
+    };
+    let remote = async {
+        thread(&mut server).await;
+        let request = read(&mut server).await;
+        assert_eq!(request["method"], "thread/realtime/start");
+        assert_eq!(
+            request["params"],
+            json!({
+                "threadId":"thread-1", "outputModality":"audio", "transport":{"type":"webrtc","sdp":"fixture-offer"},
+                "version":"v3", "includeStartupContext":false, "clientManagedHandoffs":false,
+                "prompt":"Client audio bridge"
+            })
+        );
+        notification(
+            &mut server,
+            "thread/realtime/sdp",
+            json!({"threadId":"thread-1","sdp":"fixture-answer"}),
+        )
+        .await;
+        write(&mut server, json!({"id":request["id"],"result":{}})).await;
+        stop(&mut server).await;
+    };
+    tokio::join!(client, remote);
+}
+
+#[tokio::test(start_paused = true)]
 async fn call_empty_offer_has_no_effect_and_omitted_model_stays_omitted() {
     let (mut io, mut server) = fixture();
     let client = async {

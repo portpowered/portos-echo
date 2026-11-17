@@ -18,7 +18,7 @@ pub(super) fn fixture() -> (Io, Server) {
 
 pub(super) fn options() -> Options<'static> {
     Options {
-        voice: "alloy",
+        voice: Some("alloy"),
         instructions: "Client audio bridge",
         model: Some("fixture-model"),
     }

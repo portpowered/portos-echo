@@ -123,7 +123,7 @@ async fn round_trip() {
     let client = async {
         let mut call = MediaCall::new(&mut io, peer);
         let options = Options {
-            voice: "alloy",
+            voice: Some("alloy"),
             instructions: "Client audio bridge",
             model: None,
         };

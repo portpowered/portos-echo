@@ -22,7 +22,7 @@ fn runtime_options<'a>(
         voice: bridge_voice::ServeOptions {
             kill_path: None,
             call: bridge_codex::Options {
-                voice: "alloy",
+                voice: Some("alloy"),
                 instructions: "synthetic fixture",
                 model: None,
             },

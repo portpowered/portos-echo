@@ -37,7 +37,7 @@ pub enum Event {
 
 /// Call configuration, distinct from the delegated thread's optional model.
 pub struct Options<'a> {
-    pub voice: &'a str,
+    pub voice: Option<&'a str>,
     pub instructions: &'a str,
     pub model: Option<&'a str>,
 }
@@ -122,7 +122,9 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         }
         self.thread = Some(thread.clone());
         let mut params = serde_json::to_value(RealtimeStart::new(&thread, offer)).map_err(|_| Error::Decode)?;
-        params["voice"] = options.voice.into();
+        if let Some(voice) = options.voice {
+            params["voice"] = voice.into();
+        }
         params["prompt"] = options.instructions.into();
         let request = self
             .io
