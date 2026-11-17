@@ -24,8 +24,10 @@ Port OS:
    captures the room through Amazon's echo canceller and plays replies. It runs in Wyoming mode with `-D`, which
    keeps the microphone open while a reply plays: the duplex mode echo-dot-assist added for realtime clients
    (#173).
-2. On the operator's PC, `echo-bridge` connects to hassmic over Wyoming, carries the audio to and from a GPT-Live
-   session, runs the delegated agent loop and executes every MCP tool call: against Port OS MCP for the home, a
+2. On the operator's PC, `echo-bridge` connects to hassmic over Wyoming and carries the audio to and from a
+   GPT-Live call through its own WebRTC media peer. OpenAI's Codex app server, a pinned release running beside the
+   bridge, owns the call: sign-in, call creation, the control channel and the delegated agent turns (owner decision
+   2026-11-16, section 3.3). The bridge executes every tool call those turns make: against Port OS MCP for the home, a
    spoof MCP for tests, and later other MCP servers.
 3. A small screen client on the Echo shows what the bridge is doing: status, the Port OS link code, approval
    prompts and the M6 animation.
@@ -42,9 +44,11 @@ Premises the review found wrong, and what this plan does instead:
    is that server and the WebRTC peer itself: audio flows Echo ↔ bridge over Wyoming, and bridge ↔ OpenAI over
    WebRTC. Owner decision (2026-11-16): credentials may live on the device, so the bridge's role moves onto the Echo
    after M1 (W4, section 12).
-2. **The drafts' GPT-Live event names are wrong.** Delegation arrives as `session.delegation.created` with
-   `delegation.target` set to `client` or `responses`. Results go back with `session.commentary.append`. There is
-   no `delegation.context.append`. Contracts are generated from captured traces, never from the RFC.
+2. **The drafts' GPT-Live event names are wrong, and so were this plan's.** The app server at the pin speaks the V3
+   protocol (`FramelessBidi`): delegation arrives as `delegation.created` and results go back with
+   `delegation.context.append`; the subscription model is `gpt-live-1.1-codex` (section 3.3). The app server
+   parses and writes those events itself, so the bridge sees only the app server's JSON-RPC. Contracts are generated
+   from captured traces, never from the RFC.
 3. **Port OS MCP does not yet accept device-code tokens.** `/mcp` accepts Bearer tokens from authorization code +
    PKCE today. Making it accept any valid Port OS access token for the MCP resource, whatever grant minted it, is
    portos-backend work (section 9).
@@ -61,9 +65,12 @@ Premises the review found wrong, and what this plan does instead:
 ```text
 Echo Show (stock firmware + hassmic)            echo-bridge (Rust, operator's PC)        Services
   hassmic: Pryon "Alexa", AEC, mic,   <-Wyoming->  Wyoming client, audio framing
-  speaker, mute latch, keys (-D)                   GPT-Live peer (WebRTC + sideband) <==> GPT-Live (OpenAI)
+  speaker, mute latch, keys (-D)                   media peer (WebRTC, Opus) <==========> GPT-Live (OpenAI)
+                                                   codex app-server (stdio JSON-RPC):
+                                                     sign-in, call creation, sideband <==> GPT-Live control
+                                                     delegated Codex turns ----------->  Codex models
   echo-screen: WebView of the bridge  <--HTTP-->   screen server (UiState, UiAction)
-  page (status, prompts, M6)                       agent loop + MCP clients ---------->  Port OS MCP, spoof MCP
+  page (status, prompts, M6)                       tool host + MCP clients ---------->  Port OS MCP, spoof MCP
                                                    Port OS OAuth (device code, DPoP)
 ```
 
@@ -71,7 +78,8 @@ Echo Show (stock firmware + hassmic)            echo-bridge (Rust, operator's PC
 | --- | --- | --- | --- |
 | `hassmic` (our fork of echo-dot-assist, `portpowered/echo-dot-assist`, pinned) | The Echo | Nothing of ours | Wake word, echo canceller, capture and playback, mute latch, keys, light band. `PROTO=wyoming`, `ARGS` with `-D`. Installed by echo-dot-assist's `scripts/install-system.sh` |
 | `echo-screen` | The Echo, as hassmic's home app | A pairing token for the bridge's screen page | Shows the bridge's screen page full screen; touches go back to the bridge as `UiAction`s |
-| `echo-bridge` and its crates | The operator's PC first (section 6) | The GPT-Live credential; the Port OS grant (DPoP key, refresh token, access token) | Wyoming client; the GPT-Live session; the delegated agent loop; every MCP call; `session.commentary.append`; the screen server; caps, audit log, kill switch |
+| `echo-bridge` and its crates | The operator's PC first (section 6) | The Port OS grant (DPoP key, refresh token, access token); the app server's `CODEX_HOME` | Wyoming client; the media peer; the app server's client and supervisor; the tool host behind the delegated turns' `dynamicTools`; every MCP call; the screen server; caps, audit log, kill switch |
+| `codex app-server` (OpenAI Codex, pinned release, Apache-2.0) | Beside the bridge, its child process over `stdio://` | The ChatGPT sign-in (`$CODEX_HOME/auth.json`) | Sign-in and refresh, Live call creation, the sideband control channel, delegated Codex turns with only the bridge's tools (section 3.3) |
 | `echo-lab` | The operator's workstation and CI | Bench session leases (never committed) | Runs scenario files with the `sim`, `cloud` or `device` driver and writes reports |
 | `echo-spoof-mcp` | CI and the bench | Nothing secret | Deterministic MCP server: `test.echo`, `test.wait`, `test.requires_approval`, `ui.show_emotion` |
 | `echo-muse-bridge` | A Linux host beside the Muse gadget service | Its own Muse SDK token | Submits tasks to Muse and receives results through one gadget command (section 7) |
@@ -90,31 +98,36 @@ Owner decision (2026-11-15): MCP runs on the bridge, on the owner's side and nev
 sequenceDiagram
     participant H as hassmic (Echo)
     participant B as echo-bridge (PC)
+    participant C as codex app-server (PC)
     participant L as GPT-Live
     participant P as Port OS MCP
     participant S as echo-screen (Echo)
     H->>B: run-pipeline, audio-start, audio-chunk (wake word heard)
-    B->>L: open or reuse the Live call (credential, instructions, client delegation)
-    B->>L: microphone audio (WebRTC track)
-    L-->>B: reply audio and events (data channel, sideband)
+    B->>C: thread/realtime/start (webrtc sdp offer, version v3)
+    C->>L: create the call (ChatGPT sign-in), attach the sideband
+    C-->>B: thread/realtime/sdp (answer)
+    B->>L: microphone audio (WebRTC track, peer to peer)
+    L-->>B: reply audio (WebRTC track)
+    C-->>B: transcript notifications
     B->>H: audio-start, audio-chunk, audio-stop (reply)
     B-->>S: UiState speaking
-    L->>B: session.delegation.created (target client)
-    loop agent turn
-        B->>B: model call with the MCP tools as function tools
+    L->>C: delegation.created (sideband)
+    loop delegated Codex turn
+        C->>B: item/tool/call (one of the bridge's dynamicTools)
         B->>P: tools/call (Bearer#59; refreshed with the DPoP-bound refresh token)
         P-->>B: tool result
+        B-->>C: tool result
     end
-    B->>L: session.commentary.append (delegation.id, result)
+    C->>L: delegation.context.append (result)
     L-->>B: spoken answer
     B->>H: reply audio
 ```
 
 | `echo-bridge` | hassmic on the Echo |
 | --- | --- |
-| The GPT-Live credential; creating and closing Live calls; session config (model, voice, instructions, `client` delegation) | Wake word, the echo canceller, the mute latch: hardware authority stays here |
-| WebRTC peer and the `oai-events` data channel; optional sideband for observability and the kill switch | Streams the microphone of a run over Wyoming; with `-D` it keeps streaming while the reply plays |
-| Agent loop: `tools/list` → function schemas → each `function_call` executed as MCP `tools/call` → output returned; at most 8 tool calls and a deadline per task | Plays the reply audio the bridge sends; reports `played` |
+| Supervises the app server; asks it to open and close Live calls with the session config (voice, instructions, `client` delegation) | Wake word, the echo canceller, the mute latch: hardware authority stays here |
+| The WebRTC media peer (Opus, adapted from Codex's `voice-host`); the kill switch is `thread/realtime/stop` | Streams the microphone of a run over Wyoming; with `-D` it keeps streaming while the reply plays |
+| Tool host: MCP `tools/list` → `dynamicTools` on `thread/start` → each `item/tool/call` executed as MCP `tools/call` → result returned; at most 8 tool calls and a deadline per task, then `turn/interrupt` | Plays the reply audio the bridge sends; reports `played` |
 | Port OS credential, tool allowlist, confirmation policy, idempotency ledger; single writer of MCP calls | Nothing of the program's state |
 
 Consequences:
@@ -124,8 +137,10 @@ Consequences:
   bridge. The owner decided on 2026-11-16 that credentials may live on the device. In W4 the bridge runs on the Echo
   and holds them the way OpenClaw's gateway does: only the bridge's own process can read them, and the screen app
   gets one-time tokens (`docs/program/decisions.md`).
-- **No Codex runs in the product.** The agent loop is a small crate (`echo-agent-loop`). The drafts' Codex
-  app-server backend and its ARMv7 build (EL-004, `el-x-codex-spike`) are dropped.
+- **The Codex app server runs in the product** (owner decision 2026-11-16, superseding "No Codex runs in the
+  product"). The drafts' app-server backend and its ARMv7 build are back, as section 3.3 and phase W2d (section 12)
+  describe. `echo-agent-loop`, our own Live call path in `echo-live` and the sign-in in `echo-chatgpt-auth` retire
+  once the cutover passes M2 and M4 with `--driver sim`.
 - **No code of ours runs as root on the Echo.** The screen client is an ordinary app; hassmic is upstream's.
 - **One turn per wake word in v1.** With `-D` a run ends at the reply's `audio-stop`; the Live call stays open for
   `session_idle_seconds`, so the next wake word continues the same conversation.
@@ -134,7 +149,7 @@ Consequences:
 
 | Spike | Question | Decides |
 | --- | --- | --- |
-| S1 Live transport | Which Rust WebRTC stack carries GPT-Live's audio track and `oai-events` data channel from the PC (`str0m`, `webrtc-rs`, or `libdatachannel` through FFI)? Do `session.delegation.created` and `session.commentary.append` flow on the data channel, or only on the sideband WebSocket? | `echo-live`'s dependency (ADR); whether the bridge attaches the sideband for delegation |
+| S1 Live transport (answered, then superseded on 2026-11-16: the media peer is `webrtc-rs` 0.20.3 as in Codex's `voice-host`, and the control events travel on the app server's sideband) | Which Rust WebRTC stack carries GPT-Live's audio track and `oai-events` data channel from the PC (`str0m`, `webrtc-rs`, or `libdatachannel` through FFI)? Do `session.delegation.created` and `session.commentary.append` flow on the data channel, or only on the sideband WebSocket? | `echo-live`'s dependency (ADR); whether the bridge attaches the sideband for delegation |
 | S2 Wyoming barge-in | With `-D`, how does the bridge cut a reply hassmic is already playing when GPT-Live cancels its response: an early `audio-stop`, `pause-satellite`, or nothing yet? What does hassmic send when the wake word is heard while it speaks? Measured against `hassmic-host` | Whether we need an upstream hassmic change; the barge-in budget |
 | S3 Screen client | A minimal WebView app as hassmic's home app showing the bridge's page: memory with hassmic running, coexistence with the light band and hassmic's face and words layers, touch focus, start on boot | `echo-screen`'s shape (ADR); the fallback is Kiosk Satellite pointed at the page |
 | S4 Live tools | `gpt-live-1` lists function calling. Tools declared directly on the Live session could skip the delegated model for one-step requests | Measured only; nothing depends on it |
@@ -146,7 +161,57 @@ Consequences:
 
 Per install, exactly one profile executes tools (the RFC's single-writer invariant).
 
+### 3.3 The Codex app server
+
+Research brief: [`docs/spikes/codex-app-server.md`](../spikes/codex-app-server.md) (read from Codex `main` at
+`5b3d2c7fce`; line numbers there refer to that commit). Owner decision (2026-11-16): reuse OpenAI's Codex app
+server instead of our own GPT-Live client, and build it for armv7 too. Reuse is the point: Codex's crates already
+encode the undocumented parts (endpoints, headers, the V3 events, the sideband's reconnects). Expose only what we
+need, since the Echo's disk is small.
+
+- **Pin.** Release `rust-v0.160.0` (commit `a956835d020762cb2b570053af06f643a11c0ecc`), Apache-2.0 with a NOTICE that
+  any redistributed build or adapted file keeps. The PC uses the published `x86_64-unknown-linux-musl` (CI) or
+  Windows (operator) binary, checked against a pinned SHA-256 by `scripts/codex-app-server.sh`; the Echo uses our
+  own armv7 build of the same commit. Moving the pin is a coordinator PR, like `hassmic.pin`.
+- **Process.** `codex app-server --listen stdio://`, a child of the bridge with its own `CODEX_HOME` outside the
+  repository. Messages are newline-delimited JSON-RPC without a `"jsonrpc"` field. The bridge sends `initialize`
+  with `capabilities.experimentalApi: true` (every realtime method is experimental and is refused without it),
+  then `initialized`.
+- **Sign-in.** `account/read`; if signed out, `account/login/start {type: "chatgptDeviceCode"}` returns the URL and
+  code the screen shows, and `account/login/completed` reports the result. The app server stores and refreshes the
+  credential in `$CODEX_HOME/auth.json` (5 minutes before expiry or after 8 days). For `api-key` mode,
+  `account/login/start {type: "apiKey"}`.
+- **A call.** `thread/start` (ephemeral, the settings below), then `thread/realtime/start {threadId,
+  outputModality, transport: {type: "webrtc", sdp: <offer>}, version: "v3"}`. The version must be explicit: webrtc
+  defaults to V1. The app server POSTs `{chatgpt base}/realtime/calls?intent=quicksilver&architecture=avas`,
+  returns the answer as `thread/realtime/sdp`, and attaches the sideband (`/v1/live/{call_id}`, retried on 404).
+  Media flows peer to peer between the bridge's media peer and OpenAI. `thread/realtime/stop` ends it and
+  `thread/realtime/closed` confirms. Under a ChatGPT sign-in the all-JSON audio path (`appendAudio`,
+  `outputAudio/delta` over the websocket transport) is refused, so the media peer is required.
+- **Events the bridge uses.** `thread/realtime/started`, `itemAdded` (speech started, response cancelled),
+  `transcript/delta` and `transcript/done` (role `user` or `assistant`; a reply's end is `transcript/done` with role
+  `assistant`, since `response.done` is not forwarded), `error` and `closed`.
+- **Delegated turns.** `delegation.created` becomes a normal Codex turn on the thread. It gets only the bridge's
+  tools: `dynamicTools` on `thread/start`, each call arriving as an `item/tool/call` request the bridge answers.
+  Codex's own tools are off: `features.shell_tool=false`, `features.unified_exec=false`, empty `environments`, no MCP
+  servers in Codex's config, `approvalPolicy: never` with a read-only sandbox. The result goes back as
+  `delegation.context.append` without bridge code. The bridge enforces the 8-call and deadline caps and ends an
+  over-budget turn with `turn/interrupt`.
+- **Audio.** The media peer's track is Opus at 48 kHz; the bridge resamples hassmic's 16 kHz to it and back with
+  `rubato`, as `voice-host` does.
+- **Not yet known (each answered by a W2d lane, measured, recorded in `docs/program/baselines.md`).** Whether the
+  sideband base can be pointed at a local fake for T3 (the call base can: `experimental_realtime_webrtc_call_base_url`);
+  how V3 signals barge-in to the app server's client; whether `apply_patch` can be disabled by config; disk and
+  memory use per session; whether the armv7 build links (OpenSSL vendored, `aws-lc-sys` with the NDK,
+  `portable-pty`, a CA bundle through `SSL_CERT_FILE`).
+
 ## 4. GPT-Live access: the credential and the token exchange
+
+Since 2026-11-16 (owner) the Codex app server performs sections 4.2 and 4.3 itself: it signs in, stores and
+refreshes the credential, and creates the call (section 3.3). What follows stays as the record of what that path
+does on the wire, which is what our contract tests and the fake Live server check; `echo-chatgpt-auth`'s own sign-in
+retires after the cutover. The model on the `chatgpt` path is `gpt-live-1.1-codex` at the pinned release, not
+`gpt-live-1-codex` as OpenClaw named it.
 
 The operator sets up GPT-Live access (owner, 2026-11-15). The bridge is the only component that ever holds the
 credential. The code follows OpenClaw's implementation, which signs in with the operator's ChatGPT subscription
@@ -302,7 +367,12 @@ What follows from it:
   stays possible for the Muse bridge.
 - **It talks to Port OS directly.** The bridge is the Port OS OAuth client and the only MCP client. Section 9 says
   what it can use today and what waits for portos-backend.
-- **Crates** (declared in `lanes.toml`, section 10): `echo-contracts`, `echo-config`, `echo-wyoming`, `echo-audio`,
+- **The app server beside it.** On the PC the bridge starts the pinned `codex app-server` as a child process
+  (section 3.3). On the Echo (W4) it starts our armv7 build of the same commit the same way, with `CODEX_HOME` in the
+  bridge user's mode-0700 directory, so the credential rule above holds for `auth.json` too.
+- **Crates** (declared in `lanes.toml`, section 10). W2d adds `echo-codex` (the app server's client and supervisor)
+  and `echo-media` (the WebRTC/Opus media peer) and retires `echo-agent-loop` and `echo-live`'s call path. Today:
+  `echo-contracts`, `echo-config`, `echo-wyoming`, `echo-audio`,
   `echo-live`, `echo-chatgpt-auth`, `echo-agent-api`, `echo-agent-loop`, `echo-agent-muse`, `echo-mcp-auth`,
   `echo-mcp-client`, `echo-screen-contract`, `echo-bridge`, `echo-screen-server`, `echo-delegation`, `echo-signin`,
   `echo-lab`, `echo-spoof-mcp`, `echo-muse-bridge` and `xtask`. The screen page lives in `web/screen/`; the
@@ -409,9 +479,9 @@ Milestones accumulate: the installed image still demonstrates every earlier one.
 | **M0** repository harness | Every T0 gate runs in CI and has been seen to fail on a seeded violation. `echo-lab check --milestone M0` passes. Nothing else starts before M0 | T0 | Phase F (section 10) |
 | **B0** bench on a stock Echo | The Ring plays "Alexa, what time is it?" to a stock Echo; the bench records the reply; STT finds a time; a Ring frame shows the light ring. Mouth, ear and STT are proven (`docs/program/baselines.md`); the eye is not yet | T5 (stock device) | The Port OS CLI (done, v0.1.27) |
 | **M1** hassmic and the bridge | hassmic is installed on the probed firmware with `PROTO=wyoming` and `-D` (owner's go-ahead first); after a reboot the bridge connects over Wyoming; a wake word reaches the bridge as a run with microphone audio; the screen client shows "Echo Live ready"; the mute switch shows on the screen and the bridge receives zero frames while latched; 10 restarts of the bridge and of hassmic each recover without a reboot; a second LAN host is refused on 16700 | T3, T5 | W0, W1 |
-| **M2** GPT-Live connects | The bridge creates and closes a Live call in the `chatgpt` mode; the screen shows "Connected"; an invalid or expired credential shows a relink error instead of pretending | T3, T4, T5 | Section 4 |
+| **M2** GPT-Live connects | The bridge creates and closes a Live call in the `chatgpt` mode, through the app server from W2d on; the screen shows "Connected"; an invalid or expired credential shows a relink error instead of pretending | T3, T4, T5 | Section 4 |
 | **M3** full-duplex voice | "Alexa, what time is it?" is answered through the Echo speaker; talking over the reply cuts it within the S2 budget and the new question is answered; mute stops outbound audio (hassmic's log and the bridge's counter both show zero frames) | T3, T5 | M1, M2, S1, S2 |
-| **M4** spoof MCP tool call | "Call the test tool and tell me its result": exactly one correlated `session.delegation.created` → `tools/call` → `session.commentary.append`; the answer is spoken; an MCP error gives an honest fallback | T3, T4, T5 | Agent loop, spoof MCP |
+| **M4** spoof MCP tool call | "Call the test tool and tell me its result": exactly one correlated delegation → `item/tool/call` → `tools/call` → result (V3 `delegation.created` and `delegation.context.append` from W2d on); the answer is spoken; an MCP error gives an honest fallback | T3, T4, T5 | Agent loop, spoof MCP |
 | **M5** Port OS link | The bridge starts the device-code grant; the Show displays the code; the phone approves `endpoint:read`; `tools/list` and one `endpoint_query` on the "Echo test light" simulator succeed; refresh needs a proof from the same key; a replayed refresh token is rejected; a bridge restart keeps the grant; revoke forces a relink. Until portos-backend's change lands, T4 runs the same scenario with an authorization code + PKCE token | T4, T5 | Section 9 |
 | **M6** MCP drives an animation | "Show me a happy face": the spoof MCP's `ui.show_emotion` makes the screen play an animated face (frames, not a still), then clear; audio stays usable. Spoof MCP only: Port OS does not grow an equivalent | T3, T5 | M4, `echo-screen` |
 | **M7** Muse delegation | "Ask Muse to run the test job": correlated `delegation_id → task_id → Muse session → result`, spoken; a timeout gives a safe voice response | T4, T5 | Muse bridge (section 7) |
@@ -627,8 +697,26 @@ loopback (`docs/program/coordinator.md`), and fans out inside a phase only where
    `echo-lab calibrate`, and the Ring frame of the light ring.
 5. **W3 device.** hassmic installed on the Echo (the owner's go-ahead), then M1, M3, M5 and M6 as operator-started
    T5 runs. PR 2731 and the PB-6 simulator are on the pilot.
-6. **Muse** (`el-w3-muse-bridge`), gating M7.
-7. **W4 the bridge on the Echo** (owner, 2026-11-16: credentials may live on the device). Two parts.
+6. **W2d the Codex app-server cutover** (owner, 2026-11-16; section 3.3). One batch, `operator-w2d-20261116`:
+   - `el-w2d-codex-client` (starts at once): `scripts/codex-app-server.sh` fetches the pinned release and checks
+     its SHA-256; crate `echo-codex` supervises the process and speaks its JSON-RPC (types copied from the pinned
+     `generate-json-schema --experimental` output, not the `codex-app-server-protocol` crate, whose closure is about
+     750 crates). Its first story answers whether the app server can run fully against a local fake (call base and
+     sideband); T3 runs the real pinned binary against the fake Live server with an `apiKey` sign-in.
+   - `el-w2d-media-peer` (starts at once): crate `echo-media`, the WebRTC/Opus peer adapted from `voice-host` at the
+     pin (`webrtc`/`rtc` 0.20.3, `opus`, `rubato`), with host candidates on a routable interface, never 127.0.0.1 alone.
+     T3 is two peers over loopback plus the fake Live server's peer.
+   - `el-w2d-codex-armv7` (starts at once, long): the pinned app server cross-built for `armv7-linux-androideabi`
+     on the CI image, with Codex's code unmodified and any build changes as patch files under `third_party/codex/`.
+     Records the stripped size; RSS is a coordinator T5 measurement on the Echo.
+   - `el-w2d-bridge-cutover` (after the client and the peer): `echo-bridge` opens calls through `echo-codex` and
+     `echo-media`, hosts the `dynamicTools`, and keeps M1, M2, M4, M5 and M6 passing with `--driver sim` (golden
+     traces re-recorded deliberately, never loosened). Then `el-w2d-retire` removes the replaced code paths.
+   - A loopback closes it. Done when M2 and M4 pass with `--driver sim` through the app server, and the coordinator's
+     T5 run makes a real call from the Echo.
+   M3's Live side (barge-in) is re-scoped onto this path once the cutover lands.
+7. **Muse** (`el-w3-muse-bridge`), gating M7.
+8. **W4 the bridge on the Echo** (owner, 2026-11-16: credentials may live on the device). Two parts.
    - **Device-free preparation, which starts now**, in parallel with W2 and W3: the bridge-side crates, and the
      `echo-bridge` binary once it is on main, built for `armv7-linux-androideabi` in CI on every PR
      (`el-w4-echo-cross-build`). It is a release artifact with its size recorded, T0–T2 only. The protocol-neutral
