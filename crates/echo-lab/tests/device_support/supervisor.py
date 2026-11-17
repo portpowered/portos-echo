@@ -9,8 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
 from wsl_distro import resolve_wsl_distro
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from relay import forward, guest
+from wsl_relay import forward, guest
 
 
 def launch_windows():
