@@ -95,6 +95,7 @@ async fn exact_cut_before_first_send_drops_every_frame_once() {
     // Both commands precede session scheduling. Command priority makes the cut
     // linearize before the first audio write, regardless of pump scheduling.
     assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
+    assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-continue");
     assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
     assert_eq!(cut.await.unwrap(), CutStats { dropped_frames: 3 });
     assert!(tx.is_closed());
@@ -145,7 +146,8 @@ async fn exact_cut_conserves_sent_and_dropped_and_requires_played() {
     let mut sent = 1_u8;
     loop {
         let frame = peer::receive(&mut stream).await;
-        if frame.header.r#type == "audio-stop" {
+        if frame.header.r#type == "hassmic-continue" {
+            assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
             break;
         }
         assert_eq!(frame.header.r#type, "audio-chunk");

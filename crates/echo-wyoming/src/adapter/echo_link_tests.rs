@@ -90,26 +90,62 @@ async fn echo_link_empty_reply_waits_for_played_and_timeout_retains_category() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn echo_link_cut_is_idempotent_and_waits_for_acknowledgment() {
+async fn echo_link_cut_is_idempotent_and_preserves_tail_through_played() {
     let (io, mut peer) = duplex(65536);
-    let client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = EchoLink::events(&mut client).unwrap();
+    send_wake(&mut peer).await;
+    let Some(LinkEvent::Wake(mut run)) = LinkEvents::recv(&mut events).await.unwrap() else {
+        unreachable!()
+    };
     let (_tx, rx) = client.reply_channel(NonZeroUsize::new(1).unwrap());
     let play = EchoLink::play_with_timeout(&client, pcm(), rx, Duration::from_secs(2));
     let server = async {
         assert_eq!(receive(&mut peer).await.header.r#type, "audio-start");
-        assert_eq!(
-            EchoLink::cut_with_stats(&client).await.unwrap(),
-            CutStats { dropped_frames: 0 }
-        );
-        assert_eq!(
-            EchoLink::cut_with_stats(&client).await.unwrap(),
-            CutStats { dropped_frames: 0 }
-        );
+        for _ in 0..2 {
+            assert_eq!(
+                EchoLink::cut_with_stats(&client).await.unwrap(),
+                CutStats { dropped_frames: 0 }
+            );
+        }
+        assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-continue");
         assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
         send(&mut peer, "played", json!(null), vec![]).await;
     };
     let (result, ()) = tokio::join!(play, server);
     assert_eq!(result, Ok(PlayOutcome::Cut));
+    assert!(matches!(
+        LinkEvents::recv(&mut events).await.unwrap(),
+        Some(LinkEvent::Played)
+    ));
+    send(
+        &mut peer,
+        "audio-chunk",
+        json!({"rate":16000,"width":2,"channels":1}),
+        vec![7, 8],
+    )
+    .await;
+    assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload, [7, 8]);
+    assert!(matches!(
+        LinkEvents::recv(&mut events).await.unwrap(),
+        Some(LinkEvent::Other)
+    ));
+    let (tx, rx) = client.reply_channel(NonZeroUsize::new(1).unwrap());
+    drop(tx);
+    let normal = EchoLink::play_with_timeout(&client, pcm(), rx, Duration::from_secs(2));
+    let server = async {
+        assert_eq!(receive(&mut peer).await.header.r#type, "audio-start");
+        assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
+        // A cancellation after the normal stop cannot request continuation.
+        assert_eq!(
+            EchoLink::cut_with_stats(&client).await.unwrap(),
+            CutStats { dropped_frames: 0 }
+        );
+        send(&mut peer, "played", json!(null), vec![]).await;
+    };
+    let (result, ()) = tokio::join!(normal, server);
+    assert_eq!(result, Ok(PlayOutcome::Played));
+    assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
     EchoLink::close(&client).await.unwrap();
 }
 

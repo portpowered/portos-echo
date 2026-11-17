@@ -47,9 +47,9 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
     }).await;
 }
 
-async fn failed_without_clock_advance(path: &Path) {
+pub(super) async fn failed_without_clock_advance(path: &Path) {
     let events = event_without_clock_advance(path, "mcp.run.failed").await;
-    let failed = events.iter().find(|e| e["event"] == "mcp.run.failed").unwrap();
+    let (_, failed) = unique_journey_event(&events, "mcp.run.failed");
     assert_eq!(failed["reason"], "relink_required");
     assert_eq!(events.iter().filter(|e| e["event"] == "run.failed").count(), 0);
     assert_eq!(
@@ -205,6 +205,9 @@ pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::
                 );
                 errors += 1;
             }
+            "hassmic-continue" => {
+                continued_stop(&mut lines, &mut writer).await;
+            }
             "audio-stop" => {
                 bridge_short::send(&mut writer, "played", json!({})).await;
                 bridge_short::send(&mut writer, "audio-stop", json!({})).await;
@@ -212,4 +215,16 @@ pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::
             _ => assert_eq!(header["type"], "audio-start"),
         }
     }
+}
+
+async fn continued_stop(
+    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+) {
+    let stop = lines.next_line().await.unwrap().unwrap();
+    let stop: Value = serde_json::from_str(&stop).unwrap();
+    assert_eq!(stop["type"], "audio-stop");
+    assert_eq!(stop["payload_length"].as_u64().unwrap_or(0), 0);
+    bridge_short::send(writer, "played", json!({})).await;
+    bridge_short::send(writer, "audio-stop", json!({})).await;
 }

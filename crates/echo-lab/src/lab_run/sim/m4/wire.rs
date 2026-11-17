@@ -265,7 +265,9 @@ async fn forward(
     Ok(())
 }
 
-async fn frame(input: &mut (impl AsyncRead + Unpin)) -> Result<Option<(Vec<u8>, Event)>, String> {
+pub(in crate::lab_run::sim) async fn frame(
+    input: &mut (impl AsyncRead + Unpin),
+) -> Result<Option<(Vec<u8>, Event)>, String> {
     let mut bytes = Vec::new();
     loop {
         let mut byte = [0];
