@@ -208,7 +208,7 @@ impl Driver for M4<'_> {
     }
 
     fn close(&mut self, _: &mut Artifacts) -> Result<(), String> {
-        self.runtime.block_on(self.world.close())
+        Ok(())
     }
 }
 

@@ -1129,3 +1129,25 @@ local credentials are involved. These components preserve the production
 clock; the separate explicit-clock and native-scenario gates retain their own
 proof obligations. The controlled Wyoming peer accepts the existing
 hassmic-continue control, including during an interrupted reused run.
+
+## Canonical M4/M6 recovery fixture amendment (2026-11-17)
+
+The native recovery fixtures now use the same Codex case owner as the milestone
+runner, rather than launching the configured CLI with legacy Live events.
+The existing finite capture, exact decoded playback, paired screen, fallback,
+redaction, concurrent worlds and child/listener collection assertions remain.
+The former controlled-Wyoming journeys share the canonical pin/media witnesses;
+the independent queued-probe and full-golden negative comparison are retained.
+No dormant product crate is removed.
+
+A failed emotion tool result has no animation: the runner observes Speaking
+and Ready and permits the existing honest fallback. Cancellation during an
+animation or active playback cannot manufacture a completed journey; the strict
+native receipt check still reports missing completion evidence during teardown.
+Provider media is quiesced before bridge EOF, then the provider, relay, MCP and
+native host are joined. The case reads the final trace while closing its bridge,
+reports private-directory removal failure after collecting all other owners,
+and permits idempotent cleanup. A deterministic replacement-file test preserves
+the foreign file instead of silently deleting it. Exclusive directory creation
+also retains the previous owner's contents on collision. Only synthetic external
+private homes and loopback peers are used.

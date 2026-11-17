@@ -161,11 +161,6 @@ impl Relay {
         self.observed.borrow().clone()
     }
 
-    #[cfg(test)]
-    pub fn observations(&self) -> watch::Receiver<Timing> {
-        self.observed.clone()
-    }
-
     pub async fn close(mut self) -> Result<Timing, String> {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());

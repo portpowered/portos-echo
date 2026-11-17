@@ -1,4 +1,13 @@
 //! Canonical M4: real bridge, pinned app-server, media and hassmic-host.
+#[cfg(test)]
+#[path = "world/emotion.rs"]
+mod emotion_tests;
+#[cfg(test)]
+#[path = "world/tests.rs"]
+mod host_tests;
+#[cfg(test)]
+#[path = "world/lifecycle.rs"]
+mod lifecycle;
 mod provider;
 mod receipts;
 #[cfg(test)]
@@ -36,6 +45,7 @@ struct Case {
     trace: Trace,
     speaking: Option<Value>,
     transcript: Option<String>,
+    snapshot: Value,
     playback: Option<Value>,
 }
 pub(super) struct Journey {
@@ -82,7 +92,11 @@ pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, St
 
 impl Case {
     async fn start(&mut self, options: &Options, negative: bool) -> Result<(), String> {
-        self.host = Some(Process::start(process::host(&options.python).arg("--finite"))?);
+        self.start_host(options, negative, &options.python).await
+    }
+
+    async fn start_host(&mut self, options: &Options, negative: bool, python: &str) -> Result<(), String> {
+        self.host = Some(Process::start(process::host(python).arg("--finite"))?);
         let ready = self.host.as_mut().ok_or("m4: missing host")?.expect("host.ready");
         let address = process::admit_host(&mut vec![], ready, process::readiness_deadline(), process::connect).await?;
         self.connect(options, negative, address).await?;
@@ -162,8 +176,10 @@ impl Case {
             }
             connected.send(()).map_err(|()| "m4: connection observer abandoned")?;
             if emotion {
-                observe(&mut screen, states, "emotion").await?;
-                observe(&mut screen, states, "connected").await?;
+                if !negative {
+                    observe(&mut screen, states, "emotion").await?;
+                    observe(&mut screen, states, "connected").await?;
+                }
                 replies
                     .send(Control::Reply)
                     .await
@@ -192,9 +208,7 @@ impl Case {
         if let Some(provider) = &self.provider {
             errors.extend(provider.quiesce().await.err());
         }
-        if let Some(mut bridge) = self.bridge.take() {
-            errors.extend(bridge.close().await.err());
-        }
+        self.close_bridge(&mut errors).await;
         let mut snapshot = Value::Null;
         if let Some(provider) = self.provider.take() {
             match provider.close().await {
@@ -203,10 +217,6 @@ impl Case {
             }
         }
         self.transcript = snapshot["transcripts"][1]["text"].as_str().map(str::to_owned);
-        if let Some(root) = &self.root {
-            let read = std::fs::read(root.0.join("trace")).map_err(|_| "m4: missing final trace".to_owned());
-            errors.extend(read.and_then(|bytes| self.trace.append(&bytes)).err());
-        }
         self.close_mcp(&snapshot, &mut errors).await;
         if let Some(relay) = self.relay.take() {
             errors.extend(relay.close().await.err());
@@ -214,12 +224,25 @@ impl Case {
         if let Some(mut host) = self.host.take() {
             errors.extend(host.close().await.err());
         }
-        self.root.take();
+        self.snapshot = snapshot;
+        errors.extend(self.remove_root().err());
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors.join("; "))
         }
+    }
+    async fn close_bridge(&mut self, errors: &mut Vec<String>) {
+        if let Some(mut bridge) = self.bridge.take() {
+            errors.extend(bridge.close().await.err());
+            if let Some(root) = &self.root {
+                let read = std::fs::read(root.0.join("trace")).map_err(|_| "m4: missing final trace".to_owned());
+                errors.extend(read.and_then(|bytes| self.trace.append(&bytes)).err());
+            }
+        }
+    }
+    fn remove_root(&mut self) -> Result<(), String> {
+        self.root.take().map_or(Ok(()), |root| remove_root(&root.0))
     }
     async fn close_mcp(&mut self, snapshot: &Value, errors: &mut Vec<String>) {
         if let Some(spoof) = self.spoof.take() {
@@ -314,4 +337,12 @@ async fn observe(screen: &mut Screen, states: &mut Vec<Value>, name: &str) -> Re
         return Err(format!("screen: expected {name}, observed {}", frame["state"]));
     }
     Ok(frame["state"].clone())
+}
+
+fn remove_root(root: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(root) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("cleanup: private M4 directory removal failed".into()),
+    }
 }

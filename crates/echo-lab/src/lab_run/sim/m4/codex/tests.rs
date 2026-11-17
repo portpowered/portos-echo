@@ -163,7 +163,7 @@ async fn read(socket: &mut TcpStream) -> (Value, Vec<u8>) {
     (header, payload)
 }
 
-fn options() -> Options {
+pub(super) fn options() -> Options {
     let binary = std::env::current_exe()
         .unwrap()
         .ancestors()
@@ -279,6 +279,15 @@ fn assert_results(case: &Case, timing: &Timing, negative: bool, emotion: bool) {
     };
     assert_eq!(case.transcript.as_deref(), Some(expected));
     stages(&case.trace);
+    super::super::tests::assert_recorded_comparison(
+        &case
+            .trace
+            .records
+            .iter()
+            .map(|row| serde_json::to_string(row).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
 }
 
 #[tokio::test]

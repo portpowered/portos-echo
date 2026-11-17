@@ -17,6 +17,10 @@ impl Root {
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
+        Self::create(path)
+    }
+
+    pub(in crate::lab_run::sim) fn create(path: PathBuf) -> Result<Self, String> {
         let builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
