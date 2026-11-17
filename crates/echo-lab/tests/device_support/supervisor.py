@@ -21,6 +21,25 @@ def main():
 
     class Supervisor(original):
         def command(self, value):
+            if value.get("action") == "say" and self.muted:
+                # Playback in a muted room cannot trigger Pryon. SIGUSR1 is
+                # a forced wake in hassmic-host, retained until unmute by the
+                # current pin, so only feed the utterance in this window.
+                import fcntl
+                data = bytes(value["pcm"])
+                if not data or len(data) > 4096 or len(data) % 2:
+                    raise ValueError("invalid fixture")
+                with self.condition:
+                    self.fixture = data
+                    target = self.fed + fcntl.fcntl(self.fd, fcntl.F_GETPIPE_SZ) + 8192
+                    ready = self.condition.wait_for(
+                        lambda: self.fed >= target or self.error or self.cancelled.is_set(), 20)
+                    if not ready or self.error:
+                        raise RuntimeError("fixture consumption failed")
+                    if self.cancelled.is_set():
+                        raise native.HostCancelled("host command cancelled")
+                native.emit({"event": "host.ack"})
+                return
             if value.get("action") == "kill":
                 if value.get("pid") != self.proc.pid:
                     raise ValueError("wrong target")
