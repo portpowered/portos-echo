@@ -410,14 +410,77 @@ async fn bridge_link_continuation_requires_new_input_and_preserves_admitted_tota
     assert!(!context.continuing(&source));
     context.microphone_at_reply = Some(44);
     source.finished = true;
-    assert!(!context.continuing(&source));
+    assert!(context.continuing(&source));
     source.finished = false;
     source.audio_done = true;
-    let mut live = Live::default();
-    source.resume_reply(&mut live, &fixture.screen).await.unwrap();
+    source.resume_reply().unwrap();
     assert_eq!((source.sent, source.chunks, source.call_packets_base), (49, 17, 10));
-    assert!(source.finished);
+    assert!(!source.finished);
     assert!(!source.cancelled);
     assert!(!source.audio_done);
     assert!(!context.continuing(&source));
+}
+
+#[tokio::test(start_paused = true)]
+async fn bridge_link_interrupting_tail_is_forwarded_while_awaiting_old_played_and_after_resume() {
+    let mut fixture = Fixture::new().await;
+    let observer = Observer::default();
+    let mut link = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = link.events().unwrap();
+    let marker = |sample: i16| MicFrame {
+        format: bridge_audio::format(16_000),
+        payload: sample.to_le_bytes().repeat(1024),
+    };
+    observer.wake("Computer", vec![marker(1200)]);
+    let mut run = select_wake(events.recv().await.unwrap()).unwrap().unwrap();
+    let mut writer = Trace::open(&fixture.directory.path().join("trace"), "api_key").unwrap();
+    let kill = Kill {
+        settings: &fixture.settings,
+        health: &fixture.health,
+        screen: &fixture.screen,
+    };
+    let mut context = PlaybackContext {
+        client: &link,
+        trace: &mut writer,
+        id: "run-1",
+        lead_ms: 200,
+        screen: &fixture.screen,
+        speaking: true,
+        microphone: true,
+        microphone_at_reply: Some(0),
+        played: false,
+        cancellation: Cancellation::Response,
+        deadline: Instant::now(),
+        delegation: &mut fixture.host,
+        kill: &kill,
+    };
+    let mut source = Source::new().unwrap();
+    source.cancelled = true;
+    let mut live = Live::default();
+    let mut wait = Box::pin(context.await_played(&mut events, &mut run, &mut source, &mut live));
+    pending(wait.as_mut()).await;
+    observer.finish(Ok(()));
+    wait.await.unwrap();
+    assert_eq!(source.mic.as_ref().unwrap().input_samples, 1024);
+    assert!(context.continuing(&source));
+    source.resume_reply().unwrap();
+    assert!(!source.finished);
+    context
+        .capture(&mut source, Some(marker(-2400)), &mut live, false)
+        .await
+        .unwrap();
+    context.capture(&mut source, None, &mut live, false).await.unwrap();
+    assert_eq!(source.mic.as_ref().unwrap().input_samples, 2048);
+    let mut expected = bridge_audio::Microphone::new(bridge_audio::format(16_000)).unwrap();
+    let mut packets = expected.process(&marker(1200).format, &marker(1200).payload).unwrap();
+    packets.extend(expected.process(&marker(-2400).format, &marker(-2400).payload).unwrap());
+    packets.extend(expected.finish().unwrap());
+    assert_eq!(live.sent.len(), packets.len());
+    for (actual, expected) in live.sent.iter().zip(packets) {
+        assert_eq!(actual.payload, expected.payload);
+        assert_eq!(actual.sequence, expected.sequence);
+    }
+    assert_eq!(source.sent, 6);
+    assert!(source.finished);
+    link.close().await.unwrap();
 }

@@ -9,7 +9,7 @@ use std::sync::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{oneshot, watch},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
     time::{Duration, Instant},
 };
@@ -17,6 +17,7 @@ use tokio::{
 #[derive(Clone, Debug, Default)]
 pub struct Received {
     pub frames: u64,
+    pub active: bool,
     pub first: bool,
     pub second: bool,
     pub transcript: Option<String>,
@@ -26,6 +27,7 @@ pub struct Received {
 pub struct Live {
     pub origin: String,
     pub observed: watch::Sender<Received>,
+    snapshots: mpsc::Sender<oneshot::Sender<Received>>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), String>>,
     closing: Arc<AtomicBool>,
@@ -42,13 +44,15 @@ impl Live {
         let (observed, _) = watch::channel(Received::default());
         let sender = observed.clone();
         let (stop, stopped) = oneshot::channel();
+        let (snapshots, requests) = mpsc::channel(1);
         let closing = Arc::new(AtomicBool::new(false));
         let owner_closing = closing.clone();
         let task = tokio::spawn(async move {
             let result = tokio::select! {
-                result = session(listener, wire, &sender) => result,
+                result = session(listener, wire, &sender, requests) => result,
                 _ = stopped => Ok(()),
             };
+            sender.send_modify(|state| state.active = false);
             if let Err(error) = &result {
                 if owner_closing.load(Ordering::Acquire) {
                     return Ok(());
@@ -60,6 +64,7 @@ impl Live {
         Ok(Self {
             origin,
             observed,
+            snapshots,
             stop: Some(stop),
             task,
             closing,
@@ -74,6 +79,29 @@ impl Live {
     pub fn prepare_close(&self) {
         self.closing.store(true, Ordering::Release);
     }
+    pub async fn snapshot(&self) -> Result<u64, String> {
+        let (reply, received) = oneshot::channel();
+        self.snapshots
+            .send(reply)
+            .await
+            .map_err(|_| "M3 mute: Live observer ended")?;
+        let state = tokio::time::timeout(Duration::from_secs(2), received)
+            .await
+            .map_err(|_| "M3 mute: Live snapshot deadline")?
+            .map_err(|_| "M3 mute: Live observer ended")?;
+        if self.task.is_finished() {
+            return Err("M3 mute: Live observer ended".into());
+        }
+        state.snapshot()
+    }
+}
+impl Received {
+    fn snapshot(&self) -> Result<u64, String> {
+        if !self.active || self.failure.is_some() {
+            return Err("M3 mute: Live observer ended or failed".into());
+        }
+        Ok(self.frames)
+    }
 }
 impl Drop for Live {
     fn drop(&mut self) {
@@ -85,6 +113,7 @@ async fn session(
     listener: TcpListener,
     wire: watch::Sender<Ledger>,
     observed: &watch::Sender<Received>,
+    requests: mpsc::Receiver<oneshot::Sender<Received>>,
 ) -> Result<(), String> {
     let (mut socket, _) = listener
         .accept()
@@ -109,30 +138,34 @@ async fn session(
         .await
         .map_err(|_| "M3 Live: signaling write failed")?;
     drop(socket);
-    replay(&mut peer, wire, observed).await
+    replay(&mut peer, wire, observed, requests).await
 }
 
 async fn replay(
     peer: &mut LivePeer,
     wire: watch::Sender<Ledger>,
     observed: &watch::Sender<Received>,
+    mut requests: mpsc::Receiver<oneshot::Sender<Received>>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut frames = 0;
     let mut phase = 0;
     let mut sequence = 0;
     loop {
-        if let Err(error) = drive(peer, deadline).await {
-            if phase == 3 && wire.borrow().played.len() == 2 {
-                return Ok(());
-            }
-            return Err(error);
-        }
+        drive(peer, deadline).await?;
         while peer.pop_text().is_some() {}
         while peer.pop_audio().is_some() {
             frames += 1;
         }
-        observed.send_modify(|state| state.frames = frames);
+        observed.send_modify(|state| {
+            state.frames = frames;
+            state.active = true;
+        });
+        // Acknowledge only from the receiving loop, after servicing the peer.
+        // World requests the closing snapshot after native input consumption.
+        while let Ok(reply) = requests.try_recv() {
+            let _ = reply.send(observed.borrow().clone());
+        }
         let state = wire.borrow().clone();
         if phase == 0 && frames >= 44 && state.inputs == 1 {
             answer(peer, &mut sequence, 120, "The time is twelve.").await?;
@@ -162,9 +195,6 @@ async fn replay(
                 state.transcript = Some("The day is Monday.".into());
             });
             phase = 3;
-        }
-        if phase == 3 && state.played.len() == 2 {
-            return Ok(());
         }
     }
 }
@@ -248,4 +278,48 @@ async fn request(socket: &mut TcpStream) -> Result<Value, String> {
         .await
         .map_err(|_| "M3 Live: incomplete body")?;
     serde_json::from_slice(&bytes[end..]).map_err(|_| "M3 Live: invalid body".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stopped_receiver_rejects_snapshot_instead_of_reusing_retained_frames() {
+        let (observed, _) = watch::channel(Received {
+            frames: 50,
+            active: true,
+            ..Received::default()
+        });
+        let (snapshots, requests) = mpsc::channel(1);
+        let task = tokio::spawn(async move {
+            drop(requests);
+            Ok(())
+        });
+        let live = Live {
+            origin: String::new(),
+            observed,
+            snapshots,
+            stop: None,
+            task,
+            closing: Arc::new(AtomicBool::new(false)),
+        };
+        assert_eq!(live.snapshot().await.unwrap_err(), "M3 mute: Live observer ended");
+        assert_eq!(live.observed.borrow().frames, 50);
+    }
+
+    #[test]
+    fn ended_receiver_cannot_supply_zero_delta_mute_evidence() {
+        let mut state = Received {
+            frames: 50,
+            active: true,
+            ..Received::default()
+        };
+        assert_eq!(state.snapshot().unwrap(), 50);
+        state.active = false;
+        assert_eq!(state.snapshot().unwrap_err(), "M3 mute: Live observer ended or failed");
+        state.active = true;
+        state.failure = Some("disconnected".into());
+        assert!(state.snapshot().is_err());
+    }
 }

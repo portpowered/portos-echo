@@ -89,12 +89,7 @@ impl Source {
         }
         Ok(())
     }
-    async fn resume_reply(
-        &mut self,
-        call: &mut impl LivePort,
-        screen: &super::bridge_screen::Screen,
-    ) -> Result<(), Error> {
-        self.finish_mic(call, screen).await?;
+    fn resume_reply(&mut self) -> Result<(), Error> {
         self.reply = Reply::new()?;
         self.audio_done = false;
         self.cancelled = false;
@@ -232,7 +227,6 @@ struct PlaybackContext<'a, L: EchoLink> {
 impl<L: EchoLink> PlaybackContext<'_, L> {
     fn continuing(&self, source: &Source) -> bool {
         source.cancelled
-            && !source.finished
             && self.cancellation == Cancellation::Response
             && self.microphone_at_reply.is_some_and(|before| source.sent > before)
     }
@@ -268,7 +262,15 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
                         _ => (),
                     }
                 },
-                frame = run.recv(), if !ended => { ended = frame?.is_none(); },
+                frame = run.recv(), if !ended => {
+                    if let Some(frame) = frame? {
+                        if source.cancelled && self.cancellation == Cancellation::Response {
+                            self.microphone(source, frame, call, false).await?;
+                        }
+                    } else {
+                        ended = true;
+                    }
+                },
                 () = tokio::time::sleep_until(deadline) => return Err(Error::Deadline),
                 () = self.kill.wait(), if !source.cancelled => {
                     self.kill.sync(self.trace).await?;
@@ -329,7 +331,7 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             self.microphone(source, frame, call, lab).await?;
             Ok(false)
         } else {
-            source.finished = true;
+            source.finish_mic(call, self.screen).await?;
             Ok(true)
         }
     }

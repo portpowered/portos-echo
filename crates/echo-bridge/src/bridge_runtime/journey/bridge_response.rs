@@ -50,10 +50,9 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         if !context.continuing(&source) {
             break;
         }
-        // Provider cancellation ends the old response, not the question that
-        // caused it. Native Played closes capture; retain that admitted input
-        // and the same Live call for its replacement reply, without a wake.
-        source.resume_reply(call, context.screen).await?;
+        // Reset only reply state. Keep forwarding the interrupting question
+        // until the capture port reports its own completion.
+        source.resume_reply()?;
         context.played = false;
         context.speaking = false;
     }

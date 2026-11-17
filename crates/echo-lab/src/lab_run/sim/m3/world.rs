@@ -77,6 +77,14 @@ impl World {
             &self.live.as_ref().ok_or("M3: missing Live")?.origin,
             "http://127.0.0.1:1/mcp",
         )?;
+        // M3 observes the same provider through the later native mute span.
+        let config = root.join("configured.private/bridge.toml");
+        let contents = std::fs::read_to_string(&config).map_err(|_| "M3: missing configuration")?;
+        std::fs::write(
+            config,
+            contents.replace("session_idle_seconds = 0", "session_idle_seconds = 120"),
+        )
+        .map_err(|_| "M3: cannot retain Live session")?;
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
             .as_mut()
@@ -176,7 +184,7 @@ impl World {
             .ok_or("M3: missing screen")?
             .expect(&json!({"state":if muted {"ready"} else {"muted"}}))
             .await?;
-        let frames = self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().frames;
+        let frames = self.live.as_ref().ok_or("M3: missing Live")?.snapshot().await?;
         if muted {
             self.muted_live_after = Some(frames);
         } else {
