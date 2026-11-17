@@ -38,7 +38,7 @@ async fn survival(paced: bool) {
     bridge_short::register(&mut socket, &mut bridge).await;
     let mut satellite = bridge_short::Satellite::new(socket);
     let path = directory.path().join("trace");
-    wait_event(&path, "auth.relink_required").await;
+    wait_event(&path, "auth.relink_required", &mut bridge).await;
     let total = if paced { 313 } else { 3_000 };
     let written = stream_audio(&mut satellite, paced).await;
     // Same-socket control marker precedes run-2. Observing run-2 proves all

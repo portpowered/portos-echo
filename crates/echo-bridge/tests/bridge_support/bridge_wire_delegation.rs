@@ -191,7 +191,7 @@ async fn delegated(mode: &str, allowed: bool, outage: bool) {
     let _satellite = bridge_short::Satellite::new(satellite);
     assert_commentary(&observer, allowed, outage).await;
     let path = directory.path().join("trace");
-    bridge_wire_auth_failure::wait_event(&path, "session.commentary.append").await;
+    bridge_wire_auth_failure::wait_event(&path, "session.commentary.append", &mut bridge).await;
     bridge.finish(0).await;
     bridge_wire_auth_failure::check_rotation(directory.path(), renewal).await;
     check(&path, &model, &observer, &spoof, mode, allowed, outage);
@@ -253,7 +253,7 @@ async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() 
     bridge_short::send(&mut satellite, "played", json!({})).await;
     bridge_short::send(&mut satellite, "audio-stop", json!({})).await;
     let path = directory.path().join("trace");
-    bridge_wire_auth_failure::wait_event(&path, "auth.relink_required").await;
+    bridge_wire_auth_failure::wait_event(&path, "auth.relink_required", &mut bridge).await;
     bridge_wire_auth_failure::assert_surfaces(&path, true).await;
     failures::assert_relink_error(&mut satellite).await;
     // File repair is insufficient: another wake must refuse without dispatch.
@@ -266,7 +266,7 @@ async fn bridge_wire_delegation_lost_model_credential_latches_relink_and_cuts() 
         }),
     )
     .await;
-    bridge_wire_auth_failure::wait_event(&path, "run.refused").await;
+    bridge_wire_auth_failure::wait_event(&path, "run.refused", &mut bridge).await;
     failures::assert_relink_error(&mut satellite).await;
     assert_eq!(live.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(model.requests.lock().unwrap().len(), 0);

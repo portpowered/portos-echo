@@ -174,7 +174,7 @@ async fn bridge_wire_delegation_mcp_500_is_one_attempt_and_exact_error() {
         })
     );
     let path = directory.path().join("trace");
-    bridge_wire_auth_failure::wait_event(&path, "session.commentary.append").await;
+    bridge_wire_auth_failure::wait_event(&path, "session.commentary.append", &mut bridge).await;
     bridge.finish(0).await;
     {
         let requests = model.requests.lock().unwrap();

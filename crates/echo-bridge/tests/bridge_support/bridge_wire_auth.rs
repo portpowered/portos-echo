@@ -283,7 +283,8 @@ async fn bridge_wire_auth_configured_live_uses_selected_provider() {
             .await
             .unwrap()
             .unwrap();
-        super::bridge_wire_auth_failure::wait_event(&directory.path().join("trace"), "auth.relink_required").await;
+        let trace = directory.path().join("trace");
+        super::bridge_wire_auth_failure::wait_event(&trace, "auth.relink_required", &mut bridge).await;
         bridge.finish(0).await;
         assert_configured_headers(&observer, mode, directory.path());
         drop(stream);

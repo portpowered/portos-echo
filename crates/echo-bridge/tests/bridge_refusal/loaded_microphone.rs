@@ -208,7 +208,7 @@ async fn exercise(blocked: bool) {
         Connector(listener.local_addr().unwrap(), schedule.clone()),
     ));
     let mut peer = listener.accept().await.unwrap().0;
-    start_capture(&mut peer, directory.path()).await;
+    start_capture(&mut peer, directory.path(), &runtime).await;
     offer_sequence(&mut peer, &schedule).await;
     schedule.blocked.store(false, Ordering::SeqCst);
     schedule.competing.store(false, Ordering::SeqCst);
@@ -232,11 +232,14 @@ fn assert_delivery(blocked: bool, stats: echo_wyoming::RunStats, delivered: &[u1
     writeln!(std::io::stdout(), "loaded microphone: offered=64 received=64 delivered={} dropped={dropped} ordered={}..64 capacity=32 blocked={blocked}", delivered.len(), dropped).unwrap();
 }
 
-async fn start_capture(peer: &mut tokio::net::TcpStream, directory: &Path) {
+async fn start_capture<T>(peer: &mut tokio::net::TcpStream, directory: &Path, runtime: &tokio::task::JoinHandle<T>) {
     assert_eq!(bridge_short::read(peer).await.0["type"], "run-satellite");
     assert_eq!(bridge_short::read(peer).await.0["type"], "describe");
     bridge_short::send(peer, "info", json!({})).await;
-    bridge_wire_auth_failure::wait_event(&directory.join("trace"), "wyoming.connected").await;
+    bridge_wire_auth_failure::trace_wait::observe(&directory.join("trace"), "wyoming.connected", || {
+        format!("in-process bridge task finished={}", runtime.is_finished())
+    })
+    .await;
     bridge_short::send(
         peer,
         "run-pipeline",

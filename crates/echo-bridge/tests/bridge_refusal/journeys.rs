@@ -32,7 +32,7 @@ async fn bridge_refusal_live_error_before_pcm_then_same_connection_recovers() {
     live.events.send(json!({"type":"error"}).to_string()).await.unwrap();
     let result: Value = serde_json::from_str(&host.command("result").await).unwrap();
     assert_refusal(&result, "unavailable", 1);
-    bridge_wire_auth_failure::wait_event(&path, "run.failed").await;
+    bridge_wire_auth_failure::wait_event(&path, "run.failed", &mut bridge).await;
     bridge_wire_auth_failure::assert_surfaces(&path, false).await;
     assert_eq!(host.command("start").await, "listening");
     wait_run(&path, "run-2", "mic.frames").await;
@@ -69,7 +69,7 @@ async fn bridge_refusal_post_pcm_failure_preserves_host_cut_idle_without_error()
     assert_eq!(host.command("start").await, "listening");
     wait_run(&path, "run-1", "reply.started").await;
     live.events.send(json!({"type":"error"}).to_string()).await.unwrap();
-    bridge_wire_auth_failure::wait_event(&path, "run.failed").await;
+    bridge_wire_auth_failure::wait_event(&path, "run.failed", &mut bridge).await;
     let result: Value = serde_json::from_str(&host.command("idle").await).unwrap();
     assert_eq!(result["errors"], json!([]));
     assert_eq!(result["connections"], 1);

@@ -283,14 +283,14 @@ async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
     let mut screen = wire_journey_screen(directory.path()).await;
     assert_eq!(host.command("wake").await, "wake");
     bridge_wire_screen::listening_then_connected(&mut screen).await;
-    bridge_wire_auth_failure::wait_event(&path, "mic.frames").await;
+    bridge_wire_auth_failure::wait_event(&path, "mic.frames", &mut bridge).await;
     live.events
         .send(bridge_wire_delegation::event("d-1", "client"))
         .await
         .unwrap();
     wire_journey_commentary(&mut live).await;
     live.events.send("synthetic.more_audio".into()).await.unwrap();
-    bridge_wire_auth_failure::wait_event(&path, "reply.started").await;
+    bridge_wire_auth_failure::wait_event(&path, "reply.started", &mut bridge).await;
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
         json!({"state":"speaking"})

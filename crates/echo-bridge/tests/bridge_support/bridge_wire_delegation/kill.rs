@@ -93,14 +93,14 @@ impl Rig {
         }
         bridge_short::send(&mut self.satellite, "played", json!({})).await;
         bridge_short::send(&mut self.satellite, "audio-stop", json!({})).await;
-        bridge_wire_auth_failure::wait_event(&self.path(), "live.closed").await;
+        bridge_wire_auth_failure::wait_event(&self.path(), "live.closed", self.bridge.as_mut().unwrap()).await;
         chunks
     }
 
     async fn refused(&mut self, run: &str) {
         self.wake().await;
         assert_kill_error(&mut self.satellite).await;
-        bridge_wire_auth_failure::wait_event(&self.path(), "run.refused").await;
+        bridge_wire_auth_failure::wait_event(&self.path(), "run.refused", self.bridge.as_mut().unwrap()).await;
         assert!(
             trace(&self.path())
                 .iter()
@@ -171,7 +171,7 @@ async fn bridge_wire_kill_reply_refuses_restart_and_clear_creates_fresh_call() {
         bridge_short::read_reply(&mut rig.satellite).await.0["type"],
         "audio-start"
     );
-    bridge_wire_auth_failure::wait_event(&rig.path(), "reply.started").await;
+    bridge_wire_auth_failure::wait_event(&rig.path(), "reply.started", rig.bridge.as_mut().unwrap()).await;
     rig.command(false).await;
     let chunks = rig.cut().await;
     assert!(chunks < 32, "kill must discard the unsent reply");
@@ -205,12 +205,12 @@ async fn restart_and_clear(rig: &mut Rig) {
     register(&mut satellite, &mut bridge).await;
     rig.satellite = bridge_short::Satellite::new(satellite);
     rig.bridge = Some(bridge);
-    bridge_wire_auth_failure::wait_event(&rig.path(), "kill.enabled").await;
+    bridge_wire_auth_failure::wait_event(&rig.path(), "kill.enabled", rig.bridge.as_mut().unwrap()).await;
     assert_killed(&rig.path()).await;
     rig.refused("run-1").await;
     rig.command(true).await;
     rig.command(true).await;
-    bridge_wire_auth_failure::wait_event(&rig.path(), "kill.cleared").await;
+    bridge_wire_auth_failure::wait_event(&rig.path(), "kill.cleared", rig.bridge.as_mut().unwrap()).await;
     fresh(rig, "run-2").await;
 }
 
@@ -278,7 +278,7 @@ async fn bridge_wire_kill_abandons_delegation_and_never_replays_after_clear() {
     assert!(rig.live.commentary.try_recv().is_err());
     rig.refused("run-2").await;
     rig.command(true).await;
-    bridge_wire_auth_failure::wait_event(&rig.path(), "kill.cleared").await;
+    bridge_wire_auth_failure::wait_event(&rig.path(), "kill.cleared", rig.bridge.as_mut().unwrap()).await;
     let _ = old.write_all(b"late abandoned response").await;
     fresh(&mut rig, "run-3").await;
     let appended: Vec<_> = trace(&rig.path())
@@ -325,13 +325,13 @@ async fn bridge_wire_kill_during_call_setup_cancels_http_and_refuses_another_req
     )
     .await;
     let path = directory.path().join("trace");
-    bridge_wire_auth_failure::wait_event(&path, "kill.enabled").await;
+    bridge_wire_auth_failure::wait_event(&path, "kill.enabled", &mut bridge).await;
     assert_eq!(pending.read(&mut [0]).await.unwrap(), 0);
     assert_killed(&path).await;
     assert_kill_error(&mut satellite).await;
     wake_socket(&mut satellite).await;
     assert_kill_error(&mut satellite).await;
-    bridge_wire_auth_failure::wait_event(&path, "run.refused").await;
+    bridge_wire_auth_failure::wait_event(&path, "run.refused", &mut bridge).await;
     assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(live.poll_accept(cx).is_pending())).await);
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.started").count(), 0);
     bridge_refusal::setup_clear_and_reply(directory.path(), &mut satellite, live, &mut bridge).await;
@@ -444,7 +444,7 @@ async fn bridge_wire_kill_waiting_for_played_abandons_pending_model_before_ack()
         "audio-stop"
     );
     rig.command(false).await;
-    bridge_wire_auth_failure::wait_event(&rig.path(), "kill.enabled").await;
+    bridge_wire_auth_failure::wait_event(&rig.path(), "kill.enabled", rig.bridge.as_mut().unwrap()).await;
     assert_eq!(model.read(&mut [0]).await.unwrap(), 0);
     assert_killed(&rig.path()).await;
     assert_eq!(
@@ -456,7 +456,7 @@ async fn bridge_wire_kill_waiting_for_played_abandons_pending_model_before_ack()
     );
     bridge_short::send(&mut rig.satellite, "played", json!({})).await;
     bridge_short::send(&mut rig.satellite, "audio-stop", json!({})).await;
-    bridge_wire_auth_failure::wait_event(&rig.path(), "live.closed").await;
+    bridge_wire_auth_failure::wait_event(&rig.path(), "live.closed", rig.bridge.as_mut().unwrap()).await;
     assert_kill_error(&mut rig.satellite).await;
     rig.refused("run-2").await;
     assert!(rig.live.commentary.try_recv().is_err());
@@ -481,7 +481,7 @@ async fn bridge_wire_kill_idle_call_closes_once_and_runtime_corruption_refuses_w
     // A path that becomes invalid after startup is a kill, never permission to dial.
     let marker = rig.directory.path().join("logs/audit/bridge-kill");
     std::fs::create_dir_all(&marker).unwrap();
-    bridge_wire_auth_failure::wait_event(&rig.path(), "live.closed").await;
+    bridge_wire_auth_failure::wait_event(&rig.path(), "live.closed", rig.bridge.as_mut().unwrap()).await;
     assert_killed(&rig.path()).await;
     rig.refused("run-2").await;
     assert_eq!(
