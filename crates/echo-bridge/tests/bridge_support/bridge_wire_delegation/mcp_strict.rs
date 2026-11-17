@@ -183,7 +183,7 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
         restarted.advance(5000).await;
         h.rotate(&initial, 3).await;
         h.assert_rotations();
-        journey::wake(&mut restarted.satellite).await;
+        wake_connected(&mut restarted).await;
         let (_next_wake, wakes) = tokio::sync::mpsc::channel(1);
         let satellite = tokio::spawn(journey::answer(restarted.satellite, wakes));
         h.live.events.send(event("m5-linked", "client")).await.unwrap();
@@ -222,6 +222,11 @@ async fn mcp_link_strict_signed_tools_after_crash_restart_and_refresh_replay() {
         h.close().await;
     })
     .await;
+}
+
+async fn wake_connected(session: &mut Session) {
+    journey::wake(&mut session.satellite).await;
+    bridge_wire_screen::listening_then_connected(&mut session.screen).await;
 }
 
 async fn assert_commentary(h: &mut Harness) {

@@ -63,6 +63,16 @@ async fn presentation(lines: &mut Lines<BufReader<TcpStream>>) -> Value {
     .unwrap()
 }
 
+async fn assert_page_auth(address: &str) {
+    let page = health(address, "GET", "/").await;
+    assert!(page.starts_with("HTTP/1.1 200 OK\r\n") && page.contains("<title>Echo screen</title>"));
+    for url in ["/events", "/events?token=wrong"] {
+        let response = health(address, "GET", url).await;
+        assert!(response.starts_with("HTTP/1.1 401 Unauthorized\r\n"));
+        assert_eq!(response.split_once("\r\n\r\n").unwrap().1, "");
+    }
+}
+
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
@@ -89,13 +99,7 @@ async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
         presentation(&mut events).await,
         json!({"seq":1,"state":{"state":"ready","message":"Echo Live ready"}})
     );
-    let page = health(&address, "GET", "/").await;
-    assert!(page.starts_with("HTTP/1.1 200 OK\r\n") && page.contains("<title>Echo screen</title>"));
-    for url in ["/events", "/events?token=wrong"] {
-        let response = health(&address, "GET", url).await;
-        assert!(response.starts_with("HTTP/1.1 401 Unauthorized\r\n"));
-        assert_eq!(response.split_once("\r\n\r\n").unwrap().1, "");
-    }
+    assert_page_auth(&address).await;
     bridge_short::send(
         &mut satellite,
         "run-pipeline",
@@ -104,7 +108,13 @@ async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
     .await;
     assert_eq!(state(&mut events).await, json!({"state":"listening"}));
     waiting.await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::ZERO, presentation(&mut events))
+            .await
+            .is_err()
+    );
     release.send(()).unwrap();
+    assert_eq!(state(&mut events).await, json!({"state":"connected"}));
     assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-start");
     bridge_short::receive_short(&mut satellite, &live, &path, 3).await;
     assert_eq!(state(&mut events).await, json!({"state":"speaking"}));
@@ -212,6 +222,11 @@ async fn bridge_mute_snapshot_idle_stray_frames_and_unmute_are_measured() {
         assert_eq!(trace(&path).iter().filter(|e| e["event"] == "run.started").count(), 0);
         bridge.finish(0).await;
     }
+}
+
+pub(super) async fn listening_then_connected(events: &mut Lines<BufReader<TcpStream>>) {
+    assert_eq!(state(events).await, json!({"state":"listening"}));
+    assert_eq!(state(events).await, json!({"state":"connected"}));
 }
 
 pub(super) async fn microphone_chunk(satellite: &mut TcpStream) {

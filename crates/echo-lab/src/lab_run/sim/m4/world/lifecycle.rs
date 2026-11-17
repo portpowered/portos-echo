@@ -58,8 +58,9 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
         vec![
             expected[0].clone(),
             expected[1].clone(),
-            expected[4].clone(),
-            expected[5].clone()
+            expected[2].clone(),
+            expected[5].clone(),
+            expected[6].clone()
         ]
     );
     assert!(
@@ -92,7 +93,8 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
     world.observe(&mut screen, 0, "ready").await.unwrap();
     world.control(json!({"action":"finite","pcm":fixture()})).await.unwrap();
     world.observe(&mut screen, 1, "listening").await.unwrap();
-    world.observe(&mut screen, 2, "emotion").await.unwrap();
+    world.observe(&mut screen, 2, "connected").await.unwrap();
+    world.observe(&mut screen, 3, "emotion").await.unwrap();
     world.model.as_ref().unwrap().wait_for_result_request().await;
     let partial = super::super::emotion::measurement(&world);
     assert_eq!(partial["return_state"], json!({}));
@@ -103,11 +105,11 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
     );
     assert!(host.try_recv().unwrap().success());
     assert!(bridge.try_recv().unwrap().success());
-    world.observe(&mut screen, 3, "listening").await.unwrap();
+    world.observe(&mut screen, 4, "connected").await.unwrap();
     let measurement = super::super::emotion::measurement(&world);
     assert_eq!(measurement["frame_count"], 2);
     assert_eq!(measurement["frame_ms"], 80);
-    assert_eq!(measurement["return_state"], json!({"state":"listening"}));
+    assert_eq!(measurement["return_state"], json!({"state":"connected"}));
     assert_eq!(measurement["reply_pcm_bytes"], 0);
     assert_eq!(screen.next().await, Err("screen: EOF before observation".into()));
     assert!(
@@ -171,6 +173,7 @@ async fn t3_m4_cancel_active_reply_reaps_children_listeners_and_private_files() 
     let cancel = root.join("cancel");
     let cancelled = async {
         screen.expect("listening").await.unwrap();
+        screen.expect("connected").await.unwrap();
         screen.expect("speaking").await.unwrap();
         std::fs::write(&cancel, "cancel").unwrap();
     };

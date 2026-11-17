@@ -1,3 +1,4 @@
+pub mod m2;
 pub mod m4;
 pub mod m7;
 pub(super) mod mcp;

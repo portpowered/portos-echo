@@ -68,6 +68,14 @@ pub struct Screen {
 }
 
 impl Screen {
+    pub fn current(&self) -> Result<Value, String> {
+        serde_json::to_value(&self.current).map_err(|_| "screen: invalid frame".into())
+    }
+
+    pub async fn next(&mut self) -> Result<Value, String> {
+        self.current = frame(&mut self.socket, &mut self.pending).await?;
+        self.current()
+    }
     pub async fn connect(address: SocketAddr, initial: bool) -> Result<Self, String> {
         let mut socket = TcpStream::connect(address)
             .await
@@ -130,7 +138,13 @@ async fn frame(socket: &mut TcpStream, pending: &mut Vec<u8>) -> Result<ScreenFr
 
 async fn line(socket: &mut TcpStream, bytes: &mut Vec<u8>) -> Result<String, String> {
     loop {
-        let byte = socket.read_u8().await.map_err(|_| "screen: stream ended")?;
+        let byte = socket.read_u8().await.map_err(|_| {
+            if bytes.is_empty() {
+                "screen: stream ended"
+            } else {
+                "screen: incomplete line"
+            }
+        })?;
         if byte == b'\n' {
             return String::from_utf8(std::mem::take(bytes)).map_err(|_| "screen: invalid UTF-8".into());
         }

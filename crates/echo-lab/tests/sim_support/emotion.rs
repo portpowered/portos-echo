@@ -30,11 +30,12 @@ fn m6_cli_orders_animation_return_and_exact_later_host_playback() {
     );
     let expected = json!([
         {"state":"ready","message":"Echo Live ready"}, {"state":"listening"},
+        {"state":"connected"},
         {"state":"emotion","name":"happy","frame_ms":80,"frames":["(^_^)","(^o^)"]},
-        {"state":"listening"}, {"state":"speaking"}, {"state":"ready","message":"Echo Live ready"}
+        {"state":"connected"}, {"state":"speaking"}, {"state":"ready","message":"Echo Live ready"}
     ]);
     let frames = report["m6"]["ui_states"].as_array().unwrap();
-    assert_eq!(frames.len(), 6);
+    assert_eq!(frames.len(), 7);
     let mut seq = 0;
     for (frame, state) in frames.iter().zip(expected.as_array().unwrap()) {
         assert_eq!(&frame["state"], state);
@@ -42,7 +43,7 @@ fn m6_cli_orders_animation_return_and_exact_later_host_playback() {
         assert!(next > seq);
         seq = next;
     }
-    assert_eq!(report["m6"]["return_state"], json!({"state":"listening"}));
+    assert_eq!(report["m6"]["return_state"], json!({"state":"connected"}));
     for (key, value) in [
         ("frame_count", 2),
         ("frame_ms", 80),

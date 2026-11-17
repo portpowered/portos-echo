@@ -371,10 +371,7 @@ async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
     let path = directory.path().join("trace");
     let mut screen = wire_journey_screen(directory.path()).await;
     assert_eq!(host.command("wake").await, "wake");
-    assert_eq!(
-        bridge_wire_screen::state(&mut screen).await,
-        json!({"state":"listening"})
-    );
+    bridge_wire_screen::listening_then_connected(&mut screen).await;
     bridge_wire_auth_failure::wait_event(&path, "mic.frames").await;
     live.events
         .send(bridge_wire_delegation::event("d-1", "client"))

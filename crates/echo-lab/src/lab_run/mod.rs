@@ -150,6 +150,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
         }
         if options.sim {
             steps.extend(sim::m4::negative(&scenario)?);
+            steps.extend(sim::m2::negative(&scenario)?);
             steps.extend(sim::m7::negative(&scenario)?);
             for (name, value) in scenario["budgets"].as_object().ok_or("sim: missing budgets")? {
                 steps.push(Step::Budget(
@@ -185,6 +186,10 @@ fn sim_setup(scenario: &serde_json::Value) -> Result<(), String> {
         })
     }) {
         return Err("sim: unsupported setup mode".into());
+    }
+    if scenario["id"] == "m2-live-connect" {
+        sim::m2::negative(scenario)?;
+        return Ok(());
     }
     if scenario["id"] == "m4-spoof-tool" {
         sim::m4::negative(scenario)?;
@@ -317,6 +322,9 @@ fn driver(options: &Options) -> Result<Box<dyn Driver + '_>, String> {
         return Ok(Box::new(run_device::Device::new(options)));
     }
     let scenario = crate::lab_validate::load(&options.scenarios[0])?;
+    if scenario["id"] == "m2-live-connect" {
+        return Ok(Box::new(sim::m2::M2::new(options)?));
+    }
     if scenario["milestone"] == "M5" {
         return Ok(Box::new(sim::mcp::M5::new(options)?));
     }

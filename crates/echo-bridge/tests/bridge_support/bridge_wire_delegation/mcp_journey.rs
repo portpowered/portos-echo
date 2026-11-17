@@ -25,6 +25,7 @@ async fn mcp_link_resource_401_shows_relink_without_dead_token_retry() {
         reach(&mut session.process, &path, "mcp.relink_required").await.unwrap();
         let expected = json!({"state":"error","message":"Run echo-bridge link with your config to relink Port OS MCP.","relink":true});
         assert_eq!(bridge_wire_screen::state(&mut session.screen).await, json!({"state":"listening"}));
+        assert_eq!(bridge_wire_screen::state(&mut session.screen).await, json!({"state":"connected"}));
         assert_eq!(bridge_wire_screen::state(&mut session.screen).await, expected);
         completed(
             &operator(directory.path(), "--refresh-now").await.unwrap(),

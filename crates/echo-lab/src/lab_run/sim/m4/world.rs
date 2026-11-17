@@ -159,6 +159,7 @@ impl World {
         self.observe(&mut screen, 0, "ready").await?;
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
         self.observe(&mut screen, 1, "listening").await?;
+        self.observe(&mut screen, 2, "connected").await?;
         if self.emotion {
             if self.negative {
                 self.release_result()?;
@@ -166,14 +167,14 @@ impl World {
                 self.animate(&mut screen).await?;
             }
         }
-        self.speaking = Some(self.observe(&mut screen, 4, "speaking").await?);
+        self.speaking = Some(self.observe(&mut screen, 5, "speaking").await?);
         let completion = self
             .bridge
             .as_mut()
             .ok_or("m4: missing bridge")?
             .expect("bridge.run_completed")
             .await?;
-        self.observe(&mut screen, 5, "ready").await?;
+        self.observe(&mut screen, 6, "ready").await?;
         let host = self.host.as_mut().ok_or("m4: missing host")?;
         host.send(&json!({"action":"playback"})).await?;
         let playback = host.expect("host.ack").await?;

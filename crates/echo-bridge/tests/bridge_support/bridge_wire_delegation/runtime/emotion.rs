@@ -49,7 +49,7 @@ async fn cancelled(app: &mut Application, screen: &mut Events) {
     );
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
-    assert_eq!(bridge_wire_screen::state(screen).await, json!({"state":"listening"}));
+    assert_eq!(bridge_wire_screen::state(screen).await, json!({"state":"connected"}));
     assert_eq!(
         bridge_wire_screen::state(screen).await,
         json!({"state":"ready","message":"Echo Live ready"})
@@ -66,6 +66,10 @@ async fn m6_repeated_delegation_executes_once_and_cancelled_animation_cannot_ove
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
         json!({"state":"listening"})
+    );
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"connected"})
     );
     let mut old = animate(&mut app, &mut screen, "face").await;
     app.live.events.send(event("face", "client")).await.unwrap();
@@ -85,6 +89,10 @@ async fn m6_repeated_delegation_executes_once_and_cancelled_animation_cannot_ove
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
         json!({"state":"listening"})
+    );
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"connected"})
     );
     // An abandoned expiry cannot overwrite the replacement run.
     elapse(Duration::from_millis(160)).await;

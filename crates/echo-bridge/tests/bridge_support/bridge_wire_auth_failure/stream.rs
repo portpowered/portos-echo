@@ -148,3 +148,43 @@ async fn outcome(path: &Path, bridge: &mut Process) -> Vec<Value> {
     .await
     .unwrap()
 }
+
+pub(super) async fn observe_before_wake(
+    mut satellite: tokio::net::TcpStream,
+    bridge: &mut Process,
+    path: &Path,
+) -> (bridge_short::Satellite, Lines<BufReader<tokio::net::TcpStream>>) {
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
+    bridge_short::send(&mut satellite, "info", json!({})).await;
+    assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
+    let mut satellite = bridge_short::Satellite::new(satellite);
+    let entries = trace(path);
+    let address = entries.iter().find(|e| e["event"] == "screen.listening").unwrap()["address"]
+        .as_str()
+        .unwrap();
+    let mut frames = bridge_wire_screen::stream(address).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut frames).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
+    wake(&mut satellite).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut frames).await,
+        json!({"state":"listening"})
+    );
+    (satellite, frames)
+}
+
+pub(super) async fn assert_failure_frame(frames: &mut Lines<BufReader<tokio::net::TcpStream>>, relink: bool) {
+    let failed = bridge_wire_screen::state(frames).await;
+    assert_eq!(failed["state"], "error");
+    assert_eq!(failed["relink"], relink);
+}
+
+pub(super) async fn finish_failure(mut bridge: Process, screen: &str, path: &Path, fake: FakeLive) {
+    bridge.finish(0).await;
+    assert!(tokio::net::TcpStream::connect(screen).await.is_err());
+    assert_private_trace(path);
+    fake.shutdown().await;
+}
