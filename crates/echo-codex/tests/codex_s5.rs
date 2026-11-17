@@ -28,11 +28,37 @@ fn t3_pinned_codex_local_call_and_delegation() -> Result<(), Box<dyn Error>> {
         String::from_utf8_lossy(&resolved.stderr)
     );
     let binary = String::from_utf8(resolved.stdout)?;
+    std::thread::scope(|scope| {
+        let jobs: Vec<_> = [
+            "happy",
+            "interrupt",
+            "call-401",
+            "call-503",
+            "sideband-401",
+            "responses-401",
+        ]
+        .into_iter()
+        .map(|case| {
+            let root = &root;
+            let binary = binary.trim();
+            scope.spawn(move || run_probe(root, binary, case).map_err(|error| error.to_string()))
+        })
+        .collect();
+        for job in jobs {
+            job.join().map_err(|_| "probe thread failed")??;
+        }
+        Ok::<_, Box<dyn Error>>(())
+    })?;
+    Ok(())
+}
+
+fn run_probe(root: &std::path::Path, binary: &str, case: &str) -> Result<(), Box<dyn Error>> {
     let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
         .arg(root.join("crates/echo-codex/tests/support/codex_probe.py"))
-        .arg(binary.trim())
+        .arg(binary)
         .arg("--rust-client")
         .arg(std::env::current_exe()?)
+        .args(["--case", case])
         .output()?;
     std::io::stdout().write_all(&output.stdout)?;
     assert!(

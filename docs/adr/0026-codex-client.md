@@ -81,8 +81,8 @@ HTTP/WebSocket/Responses fake and its exact wire-value oracle. A pipe readiness
 signal confirms receipt of the delegation append before Rust stops the call;
 shutdown awaits child reaping. No compilation occurs inside that journey.
 Controlled-process T3 tests separately exercise initialization, crash/restart,
-drop, pipe failure and isolated-session boundaries. The complete provider fault
-matrix, concurrent real-pin journeys and Linux confinement remain required.
+drop, pipe failure and isolated-session boundaries. Real-pin fault cases cover call creation, sideband handshake and delegated-model
+refusal. Concurrent drop isolation and Linux confinement remain required.
 
 Initialization cancellation and timeout tests hold the child's handshake at a
 loopback readiness barrier. Cancellation keeps the child owned and IO private;
@@ -92,6 +92,17 @@ The offline helper CLI test copies an already provisioned cache into a private
 temporary path with spaces, rejects missing/corrupt artifacts, and exercises
 competing helpers with an independently held writer lease. Provisioning remains
 outside tests; a cache miss cannot download during this journey.
+
+The public-client witness runs independent real-pin journeys concurrently after
+one offline helper resolution. Each journey owns its home, working directory,
+loopback server and namespace. The successful path checks user and assistant
+transcript deltas and final text. An interrupted path holds the incoming tool
+request, sends the matching thread/turn interrupt and withholds its tool result.
+Call and provider refusals preserve the pinned error notifications and closed
+reason. The fake asserts exact retry counts and absence of successful tool
+results, and waits for all accepted sockets to close after awaited shutdown.
+A journey watchdog bounds failures while retaining supervisor cleanup; it is a
+ceiling for the unmodified process, not a latency requirement.
 
 The later bridge cutover owns the tool host, MCP, caps and milestone scenarios.
 This component does not claim M2, M4, real authentication, media or hardware

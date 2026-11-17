@@ -28,7 +28,12 @@ if sys.platform == 'linux':
     else:
         raise AssertionError('non-loopback connection escaped namespace')
 observed = {'calls': [], 'sideband': [], 'responses': [], 'append': [], 'external': []}
+case = sys.argv[sys.argv.index('--case') + 1] if '--case' in sys.argv else 'happy'
 appended = threading.Event()
+connections = set()
+connections_lock = threading.Lock()
+connections_empty = threading.Event()
+connections_empty.set()
 ANSWER = 'v=0\r\ns=fake-answer\r\n'
 
 def frame(sock, value):
@@ -62,6 +67,21 @@ def read_frame(sock):
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
+    def setup(self):
+        super().setup()
+        with connections_lock:
+            connections.add(self.connection)
+            connections_empty.clear()
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            with connections_lock:
+                connections.remove(self.connection)
+                if not connections:
+                    connections_empty.set()
+
     def log_message(self, *a):
         pass
 
@@ -84,6 +104,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.respond(404, b'{}')
             return
         observed['sideband'].append(self.path)
+        if case == 'sideband-401':
+            self.respond(401, b'{}')
+            return
         key = base64.b64encode(hashlib.sha1((self.headers['Sec-WebSocket-Key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
         self.send_response(101)
         self.send_header('Upgrade', 'websocket')
@@ -92,6 +115,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.connection.settimeout(20)
         frame(self.connection, {'type': 'session.started', 'session': {'id': 'session-local'}})
+        for role, text in [('user', 'ping'), ('assistant', 'echo-ok')]:
+            kind = 'input' if role == 'user' else 'output'
+            frame(self.connection, {'type': kind + '_transcript.added', 'item': {'text': text}})
+            frame(self.connection, {'type': 'turn.done', 'turn': {'role': role, 'transcript': text}})
         frame(self.connection, {'type': 'delegation.created', 'item': {'type': 'delegation', 'target': 'client', 'id': 'delegation-local', 'content': [{'type': 'input_text', 'text': 'Call echo_test with message ping and report echo-ok.'}]}})
         try:
             while True:
@@ -112,12 +139,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         if self.path.startswith('/backend-api/codex/realtime/calls'):
             observed['calls'].append({'path': self.path, 'body': body})
+            if case.startswith('call-'):
+                self.respond(int(case.removeprefix('call-')), b'{"error":{"message":"synthetic refusal"}}')
+                return
             self.respond(201, ANSWER.encode(), 'application/sdp', {'Location': '/v1/live/rtc_local'})
             return
         if self.path != '/v1/responses':
             self.respond(404, b'{}')
             return
         observed['responses'].append(body)
+        if case.startswith('responses-'):
+            self.respond(int(case.removeprefix('responses-')), b'{"error":{"message":"synthetic model refusal"}}')
+            return
         count = len(observed['responses'])
         if count == 1:
             item = {'type': 'function_call', 'id': 'fc-local', 'call_id': 'tool-local', 'name': 'echo_test', 'arguments': '{"message":"ping"}', 'status': 'completed'}
@@ -170,7 +203,7 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
         executable = sys.argv[sys.argv.index('--rust-client') + 1]
         env = dict(os.environ, ECHO_CODEX_JOURNEY=json.dumps({
             'binary': sys.argv[1], 'home': str(pathlib.Path(home) / 'client'),
-            'base': base, 'overrides': [(k, toml(v)) for k, v in overrides.items()]}))
+            'base': base, 'case': case, 'overrides': [(k, toml(v)) for k, v in overrides.items()]}))
         child = subprocess.Popen([executable, '--exact', 't3_pinned_codex_local_call_and_delegation', '--nocapture'],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  text=True, env=env)
@@ -183,11 +216,12 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                 output.put(None)
             threading.Thread(target=read_rust, daemon=True).start()
             while True:
-                line = output.get(timeout=20)
+                line = output.get(timeout=25)
                 if line is None:
                     break
                 if line.strip() == 'RUST_TURN_COMPLETE':
-                    assert appended.wait(10), 'append missing after Rust tool response'
+                    if case != 'interrupt':
+                        assert appended.wait(10), 'append missing after Rust tool response'
                     child.stdin.write('append-observed\n')
                     child.stdin.flush()
                 elif line.startswith('RUST_REPORT='):
@@ -198,14 +232,63 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                                  'query=intent=quicksilver&architecture=avas; observed calls=' +
                                  json.dumps(calls) + '; Rust: ' + child.stderr.read())
             assert report is not None, 'Rust journey produced no report'
-            verify(report['sdp'], report['tools'], report['started'], report['closed'])
+            if case == 'happy':
+                verify(report['sdp'], report['tools'], report['started'], report['closed'])
+                expected = []
+                for role, text in [('user', 'ping'), ('assistant', 'echo-ok')]:
+                    expected += [dict(method='thread/realtime/transcript/delta', role=role, delta=text, text=None),
+                                 dict(method='thread/realtime/transcript/done', role=role, delta=None, text=text)]
+                assert report['transcripts'] == expected, report['transcripts']
+                print('TRANSCRIPT_PASS user=ping assistant=echo-ok delta_and_done=preserved', flush=True)
+            elif case == 'interrupt':
+                print(json.dumps({'case': case, 'report': report, 'append': observed['append']}), flush=True)
+                assert len(observed['responses']) == 1
+                assert [tool['name'] for tool in observed['responses'][0]['tools']] == ['echo_test']
+                assert len(report['tools']) == 1 and report['tools'][0]['turnId'] == report['turn_id']
+                assert report['closed'] is True and report['sdp'] == [ANSWER] and report['started'] == ['v3']
+                assert observed['append'] == []
+                assert not observed['external']
+            elif case.startswith('responses-'):
+                print(json.dumps({'case': case, 'report': report, 'responses': len(observed['responses']),
+                                  'append': observed['append']}), flush=True)
+                assert len(observed['responses']) == 6 and observed['append'] == []
+                assert len(report['errors']) == 6
+                for index, error in enumerate(report['errors'][:5], 1):
+                    assert error['message'] == f'Reconnecting... {index}/5'
+                    assert error['codexErrorInfo'] == {'responseStreamDisconnected': {'httpStatusCode': 401}}
+                assert report['errors'][-1]['codexErrorInfo'] == {'httpConnectionFailed': {'httpStatusCode': 401}}
+                assert 'synthetic model refusal' in report['errors'][-1]['message']
+                assert report['status'] == 'failed' and report['closed'] == 'requested'
+                assert report['tools'] == [] and report['errors']
+                assert not observed['external']
+            else:
+                print(json.dumps({'case': case, 'report': report, 'calls': len(observed['calls']),
+                                  'sideband': observed['sideband'], 'external': observed['external']}), flush=True)
+                assert not observed['responses'] and not observed['append']
+                assert not observed['external'] and report['tools'] == []
+                if case.startswith('call-'):
+                    assert report['sdp'] == []
+                    assert not observed['sideband']
+                    count = 1 if case == 'call-401' else 5
+                    assert len(observed['calls']) == count
+                    status = case.removeprefix('call-')
+                    assert len(report['errors']) == 1 and f'status {status}' in report['errors'][0]
+                    assert 'synthetic refusal' in report['errors'][0]
+                    assert report['closed'] == 'requested'
+                else:
+                    assert len(observed['calls']) == 1 and report['sdp'] == [ANSWER]
+                    assert observed['sideband'] == ['/v1/live/rtc_local'] * 5
+                    assert report['errors'] == ['unexpected status 401 Unauthorized: realtime websocket handshake failed']
+                    assert report['closed'] == 'error'
             assert report['reaped'] is True
+            assert connections_empty.wait(5), 'child left a fake socket open after shutdown'
             print('PUBLIC_CLIENT_PASS', flush=True)
         finally:
             if child.poll() is None:
                 child.kill()
             child.wait(timeout=10)
             server.shutdown()
+            server.server_close()
         raise SystemExit(0)
     argv = [sys.argv[1], 'app-server', '--listen', 'stdio://']
     for k, v in overrides.items():

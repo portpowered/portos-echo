@@ -144,9 +144,14 @@ login; the explicit local call, sideband and model destinations stay in effect.
 The original raw-stdio probe remains available for feasibility diagnosis.
 
 Bounded lines, IDs, queues and deadlines have separate T1/T2 tests; controlled
-process tests cover restart/drop and reaping. Concurrent real-pin sessions,
-provider/transcript fault edges, helper corruption/concurrency and final Linux
-confinement remain retained work in `el-w2d-codex-client-001`. The missing-V3
+process tests cover restart/drop and reaping. The public-client fixture runs
+parallel journeys for successful delegation, transcript delivery, interrupted
+tool execution, call 401/503, sideband handshake 401 and Responses 401. The
+refusal paths assert exact retry/error values, no successful tool result or
+append, closed reason and socket cleanup. Helper corruption and competing
+leases have a separate offline CLI witness. Concurrent real-pin drop isolation
+and final Linux helper/confinement proof remain retained work in
+`el-w2d-codex-client-001`. The missing-V3
 negative control is performed temporarily against the same public-client test;
 its command, observed model mismatch and restored pass belong in the PR comment. Independent review,
 final quality checks, merge and loopback remain review-owned. Real authentication,
