@@ -461,17 +461,18 @@ async fn produce_turns<L: EchoLink>(
         bridge_timing::check_deadline(context.deadline)?;
         tokio::select! {
             biased;
-            event = events.recv() => {
-                let event = event?.ok_or(Error::Wyoming)?;
-                context.device(source, &event)?;
-            },
             () = context.delegation.ready() => (),
             () = context.screen.presentation.emotion_deadline() => (),
             work = arbiter.next(
                 async { if ended { std::future::pending().await } else { run.recv().await } },
                 call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()),
                 async { if source.queue.is_empty() { std::future::pending().await } else { pacer.next_frame(&mut source.queue).await } },
+                events.recv(),
             ) => match work {
+                Work::Device(event) => {
+                    let event = event?.ok_or(Error::Wyoming)?;
+                    context.device(source, &event)?;
+                },
                 Work::Microphone(frame) => { ended = context.capture(source, frame?, call, lab.0).await?; },
                 Work::Control(event) => match event {
                 Ok(event) => context.event(event, source, lab.0)?,
