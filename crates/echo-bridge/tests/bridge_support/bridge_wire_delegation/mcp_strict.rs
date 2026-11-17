@@ -85,7 +85,7 @@ impl Harness {
         self.fixture.approve(Approval::Approved).unwrap();
         self.fixture.advance(5).unwrap();
         tokio::time::advance(Duration::from_secs(5)).await;
-        advance_with_probes(session).await;
+        faults::advance_with_probes(session).await;
         completed(&pending.await.unwrap(), 0, "MCP linked\n", "");
         assert_eq!(
             bridge_wire_screen::state(&mut session.screen).await,
@@ -244,42 +244,6 @@ fn assert_success(h: &Harness) {
         events.iter().filter(|e| e["event"] == "mcp.refresh.committed").count(),
         2
     );
-}
-
-async fn advance_with_probes(session: &mut Session) {
-    // A five-second jump can expire an idle describe whose info is still in
-    // flight. Keep the same total elapsed time and service the real peer while
-    // advancing in the journey's existing twenty-millisecond clock steps.
-    for _ in 0..250 {
-        let advance = session
-            .process
-            .command(r#"{"action":"advance_clock","milliseconds":20}"#);
-        tokio::pin!(advance);
-        loop {
-            tokio::select! {
-                ready = session.satellite.readable() => {
-                    ready.unwrap();
-                    // Select readiness before reading, so a completed clock
-                    // command cannot discard a partially buffered header.
-                    let mut first = [0];
-                    match session.satellite.try_read(&mut first) {
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
-                        result => assert_eq!(result.unwrap(), 1),
-                    }
-                    let mut frame = (&first[..]).chain(&mut session.satellite);
-                    let (header, payload) = bridge_short::read(&mut frame).await;
-                    assert_eq!(header["type"], "describe");
-                    assert_eq!(payload, Vec::<u8>::new());
-                    bridge_short::send(&mut session.satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
-                }
-                line = &mut advance => {
-                    assert_eq!(serde_json::from_str::<Value>(&line).unwrap(),
-                        json!({"event":"bridge.clock_advanced","milliseconds":20}));
-                    break;
-                }
-            }
-        }
-    }
 }
 
 fn tool(id: &str) -> Value {

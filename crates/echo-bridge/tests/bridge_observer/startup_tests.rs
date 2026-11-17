@@ -55,8 +55,9 @@ async fn startup_port_is_advertised_before_listen_without_premature_ready() {
     );
     bridge.finish(0).await;
     drop(stream);
+    // This test owns the listener directly; dropping it releases that owner.
     drop(listener);
-    assert!(TcpStream::connect(address).await.is_err());
+    bridge.assert_collected();
     fake.shutdown().await;
 }
 
@@ -98,7 +99,8 @@ async fn startup_reachable_peer_without_info_exits_without_ready() {
     assert_eq!(rows.iter().filter(|row| row["event"] == "wyoming.connected").count(), 0);
     assert_eq!(rows.iter().filter(|row| row["event"] == "run.started").count(), 0);
     drop(stream);
+    // This test owns the listener directly; dropping it releases that owner.
     drop(listener);
-    assert!(TcpStream::connect(address).await.is_err());
+    bridge.assert_collected();
     fake.shutdown().await;
 }

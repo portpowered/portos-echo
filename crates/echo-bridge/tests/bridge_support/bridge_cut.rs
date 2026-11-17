@@ -121,7 +121,8 @@ async fn cut_failure(disconnect: bool) {
         drop(stream);
     }
     assert_cut_process_failure(&mut bridge, disconnect).await;
-    assert_cut_failure(&path, sent, disconnect, &mut bridge);
+    assert_cut_failure(&path, sent, disconnect);
+    bridge.assert_collected();
 }
 async fn assert_cut_process_failure(bridge: &mut Process, disconnect: bool) {
     let status = tokio::time::timeout(Duration::from_secs(12), bridge.child.wait())
@@ -140,7 +141,7 @@ async fn assert_cut_process_failure(bridge: &mut Process, disconnect: bool) {
         }
     );
 }
-fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool, bridge: &mut Process) {
+fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool) {
     let entries = trace(path);
     let cuts: Vec<_> = entries.iter().filter(|e| e["event"] == "reply.cut").collect();
     assert_eq!(cuts.len(), 1);
@@ -151,7 +152,6 @@ fn assert_cut_failure(path: &Path, sent: u16, disconnect: bool, bridge: &mut Pro
         entries.last().unwrap()["reason"],
         if disconnect { "wyoming" } else { "deadline" }
     );
-    bridge.assert_collected();
 }
 async fn cut_reply(offered: u16, initial: u16) {
     let dir = tempfile::tempdir().unwrap();
