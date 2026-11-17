@@ -14,6 +14,8 @@ control.bind(("127.0.0.1", 0))
 control.listen(1)
 home.joinpath("peer-port").write_text(str(control.getsockname()[1]))
 home.joinpath("peer-pid").write_text(str(os.getpid()))
+with home.joinpath("launches").open("a") as launches:
+    launches.write("started\n")
 
 
 def emit(value):
@@ -26,11 +28,19 @@ for line in sys.stdin:
     home.joinpath("last-method").write_text(method)
     if method == "initialize":
         assert request["params"]["capabilities"]["experimentalApi"] is True
+        if home.joinpath("mode").read_text() == "blocked-initialize":
+            connection, _ = control.accept()
+            with connection:
+                connection.recv(64)
         emit({"id": request["id"], "result": {}})
     elif method == "initialized":
         pass
     elif method == "account/login/start":
         kind = request["params"]["type"]
+        if kind == "apiKey":
+            assert request["params"]["apiKey"] == "synthetic-nominated-key"
+            emit({"id": request["id"], "result": {"type": "apiKey"}})
+            continue
         assert kind in ("chatgptDeviceCode", "chatgpt")
         result = {"type": kind, "loginId": "local-login"}
         if kind == "chatgptDeviceCode":
@@ -53,8 +63,18 @@ for line in sys.stdin:
     elif method == "account/read":
         assert request["params"] == {"refreshToken": False}
         mode = home.joinpath("mode").read_text()
+        if mode == "blocked-account":
+            connection, _ = control.accept()
+            with connection:
+                connection.recv(64)
+        if mode == "rejected-account":
+            emit({"id": request["id"], "error": {
+                "code": -32000, "message": "synthetic private error"}})
+            continue
         account = {"type": "apiKey"} if mode == "api_key" else {
             "type": "chatgpt", "email": "synthetic@example.invalid", "planType": "synthetic"}
+        if mode == "signed-out":
+            account = None
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     else:
         raise AssertionError("unexpected account request")

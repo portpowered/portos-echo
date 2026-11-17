@@ -7,9 +7,40 @@ use std::{
     process::Stdio,
     time::Duration,
 };
-use tokio::{process::Command, time::timeout};
+use tokio::{
+    process::Command,
+    time::{Instant, timeout, timeout_at},
+};
 
-pub(super) fn process_error(error: ProcessError) -> Error {
+/// Own startup, cancellation and awaited reaping around one borrowed generation.
+pub(crate) async fn run<T>(
+    mut supervisor: Supervisor,
+    cancelled: impl std::future::Future<Output = ()>,
+    deadline: Instant,
+    work: impl AsyncFnOnce(&mut Supervisor) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let operation = async {
+        if Instant::now() >= deadline {
+            return Err(Error::Deadline);
+        }
+        timeout_at(deadline, supervisor.start())
+            .await
+            .map_err(|_| Error::Deadline)?
+            .map_err(process_error)?;
+        work(&mut supervisor).await
+    };
+    let result = tokio::select! {
+        biased;
+        () = cancelled => Err(Error::Control),
+        result = operation => result,
+    };
+    // Cancel the borrower before closing pipes and reaping the owned child.
+    // The home lease remains held until this owner drops after shutdown.
+    supervisor.shutdown().await.map_err(process_error)?;
+    result
+}
+
+pub(crate) fn process_error(error: ProcessError) -> Error {
     match error {
         ProcessError::PrivateHome => Error::CodexHome,
         ProcessError::InvalidConfig | ProcessError::Spawn => Error::CodexBinary,
@@ -17,7 +48,7 @@ pub(super) fn process_error(error: ProcessError) -> Error {
     }
 }
 
-pub(super) async fn supervisor(config: &CodexConfig) -> Result<Supervisor, Error> {
+pub(crate) async fn supervisor(config: &CodexConfig) -> Result<Supervisor, Error> {
     let home = config.home.clone().ok_or(Error::CodexHomeRequired)?;
     let binary = match &config.binary {
         Some(binary) => binary.clone(),

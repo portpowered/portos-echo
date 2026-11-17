@@ -17,12 +17,12 @@ pub(super) async fn execute(
     if matches!(command.operation, OperatorCommand::Signin { .. }) && command.config.live.mode != LiveMode::Chatgpt {
         return Err(Error::Authorization);
     }
-    let mut supervisor = codex_host::supervisor(&command.config.codex).await?;
+    let supervisor = codex_host::supervisor(&command.config.codex).await?;
     let mut screen =
         Screen::bind(matches!(command.operation, OperatorCommand::Signin { .. }).then_some(&command.config.screen))
             .await?;
-    let operation = async {
-        supervisor.start().await.map_err(codex_host::process_error)?;
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let result = codex_host::run(supervisor, cancelled, deadline, async |supervisor| {
         let result = signin_codex::execute(
             supervisor.io().map_err(codex_host::process_error)?,
             command.config.live.mode,
@@ -35,7 +35,7 @@ pub(super) async fn execute(
                     })
                     .map_err(|_| AccountError::Output)
             },
-            Instant::now() + Duration::from_secs(300),
+            deadline,
         )
         .await;
         if result.is_err() {
@@ -51,14 +51,9 @@ pub(super) async fn execute(
             AccountError::Deadline => Error::Deadline,
             _ => Error::Authorization,
         })
-    };
-    let result = tokio::select! {
-        biased;
-        () = cancelled => Err(Error::Control),
-        result = operation => result,
-    };
-    // Both cleanup operations run even when the account future or one cleanup fails.
-    let process = supervisor.shutdown().await.map_err(codex_host::process_error);
+    })
+    .await;
+    // Screen cleanup still runs when process cleanup or the command fails.
     let screen = screen.close().await;
-    process.and(screen).and(result)
+    screen.and(result)
 }

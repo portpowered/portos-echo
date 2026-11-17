@@ -1,6 +1,7 @@
 //! T3: delivered CLI, controlled stdio account process and paired loopback screen.
 use super::*;
 mod fixture;
+mod host;
 use fixture::Fixture;
 
 #[tokio::test]

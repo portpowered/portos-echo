@@ -2,7 +2,7 @@
 use crate::Error;
 use echo_config::BridgeConfig;
 use echo_signin::OperatorCommand;
-mod codex_host;
+pub(crate) mod codex_host;
 mod codex_operator;
 use std::{io::Write, path::PathBuf};
 

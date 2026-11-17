@@ -304,3 +304,27 @@ sends irregular Wyoming PCM chunks through capture conversion and checks
 nonzero reply PCM, exactly three 960-byte Wyoming frames, and zero drops
 through the real media peer. This does not switch canonical voice startup,
 establish the end of a remote reply, await Wyoming played, or prove M2.
+
+## Bridge authenticated host amendment (2026-11-17)
+
+The bridge host boundary owns one supervisor through initialization,
+authentication and an exclusively borrowed session. ChatGPT admission uses
+the app server's account state; API-key admission uses only a caller-nominated
+`Secret` through `account/login/start`, followed by matching account mode
+confirmation. Admission errors never invoke session work. Startup and account
+admission share an absolute deadline; the admitted conversation has its own
+lifetime. The boundary never publishes readiness or Connected for the caller.
+
+Operator commands share the same startup/cancellation/reaping owner. Normal
+completion, callback failure and cancellation await supervisor shutdown before
+releasing its private home lease. A callback still owns its media and call
+cleanup: cancellation drops that borrower before process shutdown, so callers
+needing graceful media stop must settle it inside their session work.
+
+T3 tests use the actual supervisor and controlled Python stdio process, with
+private external homes, allocated loopback control ports and readiness signals.
+They assert exclusive ownership, one initialized child, account-mode gating,
+nominated API-key delivery, unchanged synthetic auth bytes, callback failure,
+cancellation during initialization/account/session work, process socket release
+and lease reacquisition. No provider or hardware is used. This boundary is not
+yet selected by canonical voice startup and does not prove real-pin M2.
