@@ -218,10 +218,17 @@ fn operator(directory: &Path, verb: &str) -> tokio::task::JoinHandle<std::proces
     let mut command = bridge_wire_auth::command(directory, &[verb, "--config", "bridge.toml"]);
     tokio::spawn(async move { command.output().await.unwrap() })
 }
+#[track_caller]
 fn completed(output: &std::process::Output, code: i32, stdout: &str, stderr: &str) {
-    assert_eq!(output.status.code(), Some(code));
-    assert_eq!(String::from_utf8_lossy(&output.stdout), stdout);
-    assert_eq!(String::from_utf8_lossy(&output.stderr), stderr);
+    assert_eq!(
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+        (Some(code), stdout.into(), stderr.into()),
+        "operator result (exit code, stdout, stderr)"
+    );
 }
 fn record(directory: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(directory.join("portos/grant.json")).unwrap()).unwrap()
