@@ -13,6 +13,13 @@ pub fn prepare(root: &Path) {
     std::fs::create_dir(&directory).unwrap();
     let cli = Path::new(env!("CARGO_BIN_EXE_echo-lab"));
     install(cli, &directory.join(cli.file_name().unwrap()));
+    // M7 discovers these real prebuilt peers beside the relocated CLI.
+    for name in ["echo-muse-daemon", "echo-muse-report", "echo-muse-fake-gadget"] {
+        let original = cli.with_file_name(name);
+        if original.is_file() {
+            install(&original, &directory.join(name));
+        }
+    }
     for name in ["echo-bridge", "echo-lab-sim-script", "echo-lab-sim-bridge"] {
         let original = cli.with_file_name(if cfg!(windows) {
             format!("{name}.exe")
