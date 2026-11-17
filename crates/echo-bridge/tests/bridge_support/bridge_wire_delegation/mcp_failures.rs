@@ -1,6 +1,187 @@
 //! T3: uncertain external mutations never publish or automatically replay a grant.
 use super::*;
 
+// Test-owned peer scheduling: hold the complete Info until shared setup's
+// next decision is observable. The baseline reaches advance; the fix waits.
+#[derive(Debug, PartialEq)]
+pub(super) enum ProbeSchedule {
+    Held,
+    Waiting,
+    Advanced,
+}
+
+impl Session {
+    pub(super) async fn send_probe_reply(&mut self) {
+        if self.probe_schedule != Some(ProbeSchedule::Held) {
+            bridge_short::send(&mut self.satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
+        }
+    }
+
+    pub(super) async fn release_at_probe_wait(&mut self, cursor: usize) {
+        if self.probe_schedule != Some(ProbeSchedule::Held) {
+            return;
+        }
+        let path = self.trace_path.clone();
+        let pending = wait_probe(&path, cursor);
+        tokio::pin!(pending);
+        // Poll the real readiness wait once with both clocks frozen. This is
+        // a scheduling observation, not a timed assertion that nothing happened.
+        std::future::poll_fn(|cx| {
+            assert!(pending.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        self.probe_schedule = Some(ProbeSchedule::Waiting);
+        self.send_probe_reply().await;
+        pending.await;
+    }
+
+    pub(super) async fn observe_held_advance(&mut self) {
+        if self.probe_schedule == Some(ProbeSchedule::Held) {
+            self.probe_schedule = Some(ProbeSchedule::Advanced);
+            let records = observed(&self.trace_path, "wyoming.reconnecting").await;
+            let loss = records.iter().find(|r| r["event"] == "wyoming.reconnecting").unwrap();
+            assert_eq!(loss["elapsed_ms"], 5000);
+            assert_eq!(loss["reason"], "disconnected");
+        }
+    }
+}
+
+async fn observed(path: &Path, event: &str) -> Vec<Value> {
+    let started = std::time::Instant::now();
+    loop {
+        let bytes = tokio::fs::read(path).await.unwrap();
+        let records: Vec<Value> = bytes
+            .split_inclusive(|b| *b == b'\n')
+            .filter(|line| line.ends_with(b"\n"))
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        if records.iter().any(|r| r["event"] == event) {
+            return records;
+        }
+        assert!(
+            started.elapsed() < OBSERVATION_TIMEOUT,
+            "did not observe {event}: {records:?}"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn held_info_shared_link_orders_probe_before_clock_and_revoked_resource() {
+    drive(async {
+        let directory = tempfile::tempdir().unwrap();
+        let mock = Mock::bind().await.unwrap();
+        let live = FakeLive::bind(FakeScript {
+            events: vec![event("revoked", "client")],
+            response: FakeResponse::Answer,
+        })
+        .await
+        .unwrap();
+        let model = Model::start(false, true).await;
+        let mut session = Session::start_with(
+            directory.path(),
+            &mock,
+            true,
+            Some((live.base_url().trim_end_matches('/'), &model.origin)),
+        )
+        .await;
+        session.probe_schedule = Some(ProbeSchedule::Held);
+        journey::link(&mut session, &mock, directory.path()).await;
+        mock.state.lock().unwrap().revoked = true;
+        journey::wake(&mut session.satellite).await;
+        let (next, wakes) = tokio::sync::mpsc::channel(1);
+        let satellite = tokio::spawn(journey::answer(session.satellite, wakes));
+        let reached = journey::reach(&mut session.process, &session.trace_path, "mcp.relink_required").await;
+        let records = trace(&session.trace_path);
+        assert!(records.iter().any(|r| r["event"] == "mcp.link.approved"));
+        assert!(reached.is_ok(), "{}", reached.unwrap_err());
+        assert_eq!(session.probe_schedule, Some(ProbeSchedule::Waiting));
+        assert_eq!(
+            records.iter().filter(|r| r["event"] == "mcp.relink_required").count(),
+            1
+        );
+        assert_eq!(
+            records.iter().filter(|r| r["event"] == "wyoming.reconnecting").count(),
+            0
+        );
+        assert_eq!(
+            mock.state
+                .lock()
+                .unwrap()
+                .requests
+                .iter()
+                .filter(|r| r.path == "/mcp")
+                .count(),
+            1
+        );
+        observed(&session.trace_path, "mcp.run.failed").await;
+        next.send(()).await.unwrap();
+        observed(&session.trace_path, "delegation.refused").await;
+        session.process.finish(0).await;
+        satellite.await.unwrap();
+        live.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn idle_probe_failed_and_timed_out_emit_no_success_then_recover() {
+    drive(async {
+        for disconnect in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let mock = Mock::bind().await.unwrap();
+            let mut session = Session::start(directory.path(), &mock, true).await;
+            assert_eq!(bridge_short::read(&mut session.satellite).await.0["type"], "describe");
+            if disconnect {
+                session.satellite.shutdown().await.unwrap();
+            } else {
+                session.advance(5000).await;
+            }
+            let records = observed(&session.trace_path, "wyoming.reconnecting").await;
+            assert_eq!(records.iter().filter(|r| r["event"] == "wyoming.probe_ok").count(), 0);
+            session.satellite = clock_until(&mut session.process, session.wyoming_listener.accept())
+                .await
+                .unwrap()
+                .0;
+            assert_eq!(
+                bridge_short::read(&mut session.satellite).await.0["type"],
+                "run-satellite"
+            );
+            assert_eq!(
+                clock_until(&mut session.process, bridge_short::read(&mut session.satellite))
+                    .await
+                    .0["type"],
+                "describe"
+            );
+            session.answer_probe().await;
+            let records = trace(&session.trace_path);
+            assert_eq!(records.iter().filter(|r| r["event"] == "wyoming.probe_ok").count(), 1);
+            assert_eq!(records.iter().filter(|r| r["event"] == "wyoming.connected").count(), 2);
+            session.process.finish(0).await;
+        }
+    })
+    .await;
+}
+
+async fn clock_until<F: Future>(process: &mut Process, future: F) -> F::Output {
+    tokio::pin!(future);
+    for _ in 0..1500 {
+        if let Poll::Ready(value) = std::future::poll_fn(|cx| Poll::Ready(future.as_mut().poll(cx))).await {
+            return value;
+        }
+        // Never cancel command(): its acknowledgement belongs to this tick.
+        let line = process.command(r#"{"action":"advance_clock","milliseconds":20}"#).await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap(),
+            json!({"event":"bridge.clock_advanced","milliseconds":20})
+        );
+        tokio::time::advance(Duration::from_millis(20)).await;
+    }
+    unreachable!("recovery did not reach peer boundary within existing simulated ceiling")
+}
+
 const STORAGE: &str = "Grant storage failed; rotation may require recovery";
 const TRANSPORT: &str = "OAuth transport failed; operation may be incomplete";
 

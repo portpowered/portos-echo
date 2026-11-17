@@ -192,3 +192,23 @@ The fixture records the epoch independently, reuses it across child restarts,
 and resumes elapsed fake time before another operation. Exact expiry and proof
 checks use that fixture UTC; bridge output never supplies expected values.
 No dependency is added. The integrated M5 scenario remains required separately.
+
+## Idle probe completion trace amendment (2026-11-16)
+
+The operator authorized `wyoming.probe_ok` as a readiness barrier for T3 tests.
+The idle conversation owner emits it once when it receives a successful describe
+probe result, including when health is already connected. Failed, timed-out or
+cancelled probes emit no new event. `wyoming.connected` keeps its existing health
+transition meaning; the reconnect supervisor remains the only dial owner.
+
+The record carries only the existing JSONL envelope: `event`, `elapsed_ms`,
+`provider_auth_mode` and fixed `run_id` `connection-1`. It contains no Info payload,
+identity or payload-derived counters. `elapsed_ms` is time since trace creation,
+not probe duration. Tests receive the outstanding describe, capture their trace
+cursor, send Info, and wait for a fresh complete success before advancing clocks.
+This replaces scheduling assumptions with observed readiness, without sleeps.
+
+Raw readers retain and validate these records. M4 golden normalization ignores
+only this exact payload-free envelope before assigning identity aliases; all
+other records and fields retain strict comparison. Revert the emitter, helper,
+consumer accommodation and this amendment together.

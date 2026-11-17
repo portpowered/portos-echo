@@ -70,6 +70,9 @@ impl Conversation {
                 () = tokio::time::sleep_until(cadence.0) => continue,
                 event = events.recv() => event?,
                 connected = &mut probe => {
+                    if connected {
+                        trace.record("wyoming.probe_ok", Some("connection-1"), json!({}))?;
+                    }
                     observe_link(connected, health, trace)?;
                     backoff = probe_backoff(connected, backoff, &policy);
                     probe.set(probe_link(client, backoff));

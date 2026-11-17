@@ -1,4 +1,6 @@
 //! Closed event vocabulary and counters only. Never serialize provider events.
+//! `wyoming.probe_ok` acknowledges each successful idle describe probe when its
+//! owner observes completion. It carries only the existing envelope, no payload.
 //! `reply.cut` also reports `bridge_evicted` (prior capacity evictions) and
 //! `reply_frames` (complete decoded frames offered to the bridge queue). Neither
 //! prior evictions nor partial tails belong to the retained `dropped_frames`.
@@ -73,6 +75,26 @@ impl Trace {
 mod bridge_spine_tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test(start_paused = true)]
+    async fn bridge_trace_probe_success_has_only_fixed_envelope() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
+        let mut trace = Trace::open(&path, "api_key").unwrap();
+        tokio::time::advance(std::time::Duration::from_millis(7)).await;
+        trace
+            .record("wyoming.probe_ok", Some("connection-1"), json!({}))
+            .unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        assert!(bytes.ends_with(b"\n"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({
+                "event":"wyoming.probe_ok", "elapsed_ms":7,
+                "provider_auth_mode":"api_key", "run_id":"connection-1"
+            })
+        );
+    }
 
     #[test]
     fn bridge_spine_trace_write_failure_is_sanitized_and_keeps_existing_bytes() {
