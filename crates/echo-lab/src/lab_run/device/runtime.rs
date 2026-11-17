@@ -35,14 +35,68 @@ pub struct Runtime {
     pub(super) ready: u64,
     pub(super) window: Option<Value>,
     pub(super) began: Option<std::time::Instant>,
+    pub(super) startup: Option<Startup>,
+}
+
+pub(super) struct Startup {
+    began: tokio::time::Instant,
+    phase_began: tokio::time::Instant,
+    phase: &'static str,
+    completed: Vec<String>,
+}
+
+impl Startup {
+    pub(super) fn new(phase: &'static str) -> Self {
+        let began = tokio::time::Instant::now();
+        Self {
+            began,
+            phase_began: began,
+            phase,
+            completed: Vec::new(),
+        }
+    }
+
+    fn next(&mut self, phase: &'static str) {
+        self.completed
+            .push(format!("{}:{}ms", self.phase, self.phase_began.elapsed().as_millis()));
+        self.phase = phase;
+        self.phase_began = tokio::time::Instant::now();
+    }
+
+    fn error(&self, error: String) -> String {
+        if error != "device: observation timed out" {
+            return error;
+        }
+        format!(
+            "{error}; phase={}; elapsed_ms={}; completed=[{}]",
+            self.phase,
+            self.began.elapsed().as_millis(),
+            self.completed.join(",")
+        )
+    }
 }
 
 impl Runtime {
+    pub fn startup_result(&self, result: Result<(), String>) -> Result<(), String> {
+        result.map_err(|error| match &self.startup {
+            Some(state) => state.error(error),
+            None => error,
+        })
+    }
+
+    fn phase(&mut self, phase: &'static str) {
+        if let Some(state) = &mut self.startup {
+            state.next(phase);
+        }
+    }
+
     pub async fn start(&mut self, bridge: &Path, config: &str, root: &Path) -> Result<(), String> {
+        self.startup = Some(Startup::new("config_stage"));
         self.started = true;
         self.began = Some(std::time::Instant::now());
         self.trace_path = root.join("bridge.private.jsonl");
         super::config::stage(root, config)?;
+        self.phase("fake_live_bind");
         self.live = Some(
             FakeLive::bind(FakeScript {
                 events: vec![json!({"type":"response.audio.done"}).to_string()],
@@ -52,6 +106,7 @@ impl Runtime {
             .map_err(|_| "device: fake Live startup failed")?,
         );
         self.generation = 1;
+        self.phase("bridge_spawn");
         self.launch(bridge, root).await
     }
 
@@ -83,11 +138,14 @@ impl Runtime {
             .arg("--trace")
             .arg(&self.trace_path);
         self.bridge = Some(Process::start(&mut command)?);
+        self.phase("bridge_ready");
         self.child()?.expect("bridge.ready").await?;
+        self.phase("wyoming_connect");
         self.observe()?;
         if !self.trace.records.iter().any(|r| r["event"] == "wyoming.connected") {
             return Err("device: ready without fresh Wyoming connection".into());
         }
+        self.phase("screen_endpoint");
         let address = self
             .trace
             .records
@@ -265,6 +323,78 @@ pub async fn controlled<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn device_startup_timeout_retains_completed_phase_durations() {
+        let mut state = Startup::new("config_stage");
+        let result = controlled(
+            async {
+                tokio::time::advance(Duration::from_millis(3)).await;
+                state.next("fake_live_bind");
+                tokio::time::advance(Duration::from_millis(7)).await;
+                state.next("bridge_spawn");
+                tokio::time::advance(Duration::from_millis(11)).await;
+                state.next("bridge_ready");
+                std::future::pending::<Result<(), String>>().await
+            },
+            None,
+        )
+        .await;
+        assert_eq!(
+            state.error(result.unwrap_err()),
+            "device: observation timed out; phase=bridge_ready; elapsed_ms=20000; completed=[config_stage:3ms,fake_live_bind:7ms,bridge_spawn:11ms]"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn device_startup_empty_history_and_relaunch_reset_are_exact() {
+        let mut runtime = Runtime {
+            startup: Some(Startup::new("config_stage")),
+            ..Runtime::default()
+        };
+        tokio::time::advance(Duration::from_millis(4)).await;
+        assert_eq!(
+            runtime.startup_result(Err("device: observation timed out".into())),
+            Err("device: observation timed out; phase=config_stage; elapsed_ms=4; completed=[]".into())
+        );
+        runtime.phase("fake_live_bind");
+        runtime.startup = Some(Startup::new("bridge_spawn"));
+        tokio::time::advance(Duration::from_millis(2)).await;
+        runtime.phase("bridge_ready");
+        tokio::time::advance(Duration::from_millis(5)).await;
+        assert_eq!(
+            runtime.startup_result(Err("device: observation timed out".into())),
+            Err("device: observation timed out; phase=bridge_ready; elapsed_ms=7; completed=[bridge_spawn:2ms]".into())
+        );
+        assert_eq!(runtime.startup_result(Ok(())), Ok(()));
+        assert_eq!(
+            runtime.startup_result(Err("process: exited before observation".into())),
+            Err("process: exited before observation".into())
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn device_startup_cancel_has_priority_and_never_runs_later_work() {
+        let root = tempfile::tempdir().unwrap();
+        let cancel = root.path().join("cancel");
+        std::fs::write(&cancel, "cancel").unwrap();
+        let later = std::cell::Cell::new(0);
+        let runtime = Runtime {
+            startup: Some(Startup::new("bridge_spawn")),
+            ..Runtime::default()
+        };
+        let result = controlled(
+            async {
+                later.set(1);
+                Ok(())
+            },
+            Some(&cancel),
+        )
+        .await;
+        assert_eq!(runtime.startup_result(result), Err("run cancelled".into()));
+        assert_eq!(later.get(), 0);
+    }
+
     #[test]
     fn device_mute_measurement_must_be_fresh_not_an_earlier_window() {
         let root = tempfile::tempdir().unwrap();

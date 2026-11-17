@@ -43,14 +43,15 @@ impl<'a> Configured<'a> {
     fn start(&mut self, artifacts: &Artifacts) -> Result<(), String> {
         self.bench.firmware()?;
         if !self.state.started {
-            self.executor.block_on(runtime::controlled(
+            let result = self.executor.block_on(runtime::controlled(
                 self.state.start(
                     self.options.bridge.as_deref().ok_or("device: missing bridge")?,
                     &self.config,
                     &artifacts.root,
                 ),
                 self.options.cancel.as_deref(),
-            ))?;
+            ));
+            self.state.startup_result(result)?;
         }
         Ok(())
     }
