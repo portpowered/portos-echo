@@ -30,8 +30,19 @@ removed and no runtime code changes. The coordinator checked that no runtime
 code depends on this size. The helper downloads the crate outside git, checks
 the checksum from the pinned lockfile, and applies the patch there. Cargo's
 `paths` override selects that private copy without changing the lockfile,
-version, dependencies or shared registry cache. Any further source change
-requires another decision. GNU tar is also required to unpack the crate.
+version, dependencies or shared registry cache. GNU tar is also required to
+unpack the crate.
+
+Coordinator mailbox answer 2 (2026-11-16) authorizes patch 0004: in
+`exec-server/src/no_follow/unix.rs`, lines 220/221/228/229 and 313/314/320,
+widen libc's `S_IFMT`, `S_IFLNK`, `S_IFDIR` and `S_IFREG` constants from
+ARM32 Android's `u16` to rustix `Stat.st_mode`'s `u32` using `u32::from`.
+Every mask, comparison, symlink rejection and removal decision is preserved.
+The same answer permits only identical lossless integer-width fixes elsewhere
+in the pinned closure, each documented in its patch header. Narrowing, casts
+that could truncate, branches, cfgs, features, dependencies and other behavior
+changes still require a new decision. Patch 0004 also compiles on hosts where
+these constants already are `u32`.
 
 The pre-approved upstream closure includes OpenSSL, aws-lc, portable-pty,
 bundled SQLite and compression libraries. No package enters this repository's
