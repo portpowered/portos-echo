@@ -61,7 +61,8 @@ class Session(C.Session):
     def send(self, kind, data=None, payload=b"", keep=True):
         if kind == "audio-stop":
             self.stop_pending = True
-        if kind == "run-satellite":
+        # A resume on this socket cannot discard lead-in already queued by the host.
+        if kind == "run-satellite" and self.mic != "lead":
             self.mic = "active"
         super().send(kind, data, payload, keep)
     def receive(self, expected=None):
@@ -315,13 +316,11 @@ class LogicTests(unittest.TestCase):
                 session.mic, session.context = "active", context
                 with mock.patch.object(C, "read_event", return_value=event), self.assertRaisesRegex(AssertionError, context + ": audio-chunk: expected") as error:
                     session.until("pong", keep=False)
-                print(str(error.exception))
         for kind in ("audio-chunk", "audio-start", "run-pipeline", "played", "unknown"):
             session.mic, session.context = "paused", "post-cut"
             event = (mic, bytes(1600)) if kind == "audio-chunk" else ({"type": kind, "data": {}}, b"")
             with mock.patch.object(C, "read_event", return_value=event), self.assertRaisesRegex(AssertionError, "post-cut: " + kind + ": expected") as error:
                 session.receive()
-            print(str(error.exception))
         session.stop_pending = True
         with mock.patch.object(C, "read_event", return_value=({"type": "played", "data": {}}, b"")):
             session.until("played")
@@ -332,7 +331,9 @@ class LogicTests(unittest.TestCase):
         session.sock, session.remaining = mock.Mock(), lambda: 1
         session.mic, session.lead_remaining = "lead", 25600
         event = {"type": "audio-chunk", "data": {"rate": 16000, "width": 2, "channels": 1, "timestamp": 0}}
-        for size in [2048] * 12 + [1024, 1600]:
+        for index, size in enumerate([2048] * 12 + [1024, 1600]):
+            if index == 1:
+                session.send("run-satellite", keep=False)
             with mock.patch.object(C, "read_event", return_value=(event, bytes(size))):
                 session.receive("audio-chunk")
         self.assertEqual((session.mic, session.lead_remaining), ("active", 0))
@@ -357,7 +358,6 @@ class LogicTests(unittest.TestCase):
                     assert_result(strategy, playback, trial, result)
             with self.assertRaisesRegex(AssertionError, "bytes/played/EOF"):
                 assert_result(strategy, playback, trial, {"bytes": count - 1})
-            print(f"oracle {strategy}: bytes={count} played={played} EOF={drained}; mutations rejected")
     def test_mismatch_names_the_differing_lines(self):
         assert_same(b"a\nb\n", b"a\nb\n", "same")
         with self.assertRaises(AssertionError) as caught:
