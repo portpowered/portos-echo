@@ -83,6 +83,9 @@ def main():
         exec(compile(flags[0], "<string>", "exec"), {"__name__": "__main__"})
         return 0
     if Path(script).name != "host.py":
+        # run_path leaves the adapter directory on sys.path, unlike a direct
+        # Python script launch. Providers import modules beside their script.
+        sys.path[0] = str(Path(script).resolve().parent)
         runpy.run_path(script, run_name="__main__")
         return 0
     if os.name != "nt":
