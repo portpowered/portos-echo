@@ -14,6 +14,7 @@ import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests"))
 import bridge_host
+from wyoming_host import _allocation_guard
 
 
 class ObservedHost(bridge_host.Host):
@@ -21,12 +22,8 @@ class ObservedHost(bridge_host.Host):
         super().__init__(folder)
         self.observed = collections.deque(maxlen=8192)
         self.listener = socket.socket()
-        self.listener.bind(("127.0.0.1", 0))
-        if self.listener.getsockname()[1] == self.port:
-            replacement = socket.socket()
-            replacement.bind(("127.0.0.1", 0))
-            self.listener.close()
-            self.listener = replacement
+        with _allocation_guard(self.deadline):
+            self.listener.bind(("127.0.0.1", 0))
         self.listener.listen()
         print(f"observer port: {self.listener.getsockname()[1]}", file=sys.stderr, flush=True)
         threading.Thread(target=self.snapshots, daemon=True).start()

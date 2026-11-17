@@ -12,16 +12,49 @@ import shutil
 import signal
 import socket
 import subprocess
+from subprocess import Popen as _LockWaiter
 import sys
 import tempfile
 import threading
 import time
+import weakref
 
 ROOT = Path(__file__).resolve().parents[1]
 # A fork must not inherit another start's writable executable descriptor.
 # Release before readiness: independent children still start concurrently.
 LAUNCH_GUARD = threading.Lock()
 TAIL = 8192
+# Python fork test helpers must not extend another controller's reservation or
+# lock lifetime. Executed children also close these non-inheritable descriptors.
+_inherited = weakref.WeakSet()
+os.register_at_fork(after_in_child=lambda: [owner.close() for owner in tuple(_inherited)])
+
+
+@contextlib.contextmanager
+def _allocation_guard(deadline):
+    # flock belongs to the open file description shared with this short helper.
+    # The helper makes acquisition cancellable by the original startup deadline,
+    # including when callers run in threads. Never unlink this coordination file.
+    path = f'/tmp/wyoming-t3-bind-{os.getuid()}.lock'
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    owner = os.fdopen(fd, 'rb')
+    _inherited.add(owner)
+    try:
+        with LAUNCH_GUARD:
+            waiter = _LockWaiter(
+                [sys.executable, '-c',
+                 'import fcntl,sys; fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX)', str(fd)],
+                pass_fds=(fd,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            if waiter.wait(timeout=max(0, deadline - time.monotonic())) != 0:
+                raise RuntimeError('endpoint coordination failed')
+        finally:
+            if waiter.poll() is None:
+                waiter.kill()
+                waiter.wait()
+        yield
+    finally:
+        owner.close()
 
 
 def safe_tail(raw, truncated=False):
@@ -56,12 +89,29 @@ class Host:
         self.tail = bytearray()
         self.truncated = False
         self.deadline = time.monotonic() + 20
-        with socket.socket() as reservation:
-            reservation.bind(("127.0.0.1", 0))
-            self.port = reservation.getsockname()[1]
+        self.reservation = None
+        with _allocation_guard(self.deadline):
+            self.reserve()
         (self.folder / "state").mkdir()
         (self.folder / "state/config").write_text("even_volume=off\n")
         (self.folder / "addrs").write_text("127.0.0.1\n")
+
+    def reserve(self, port=0):
+        self.reservation = socket.socket()
+        _inherited.add(self.reservation)
+        if port:
+            # An explicit protocol restart keeps the advertised address, even
+            # while former client connections finish their kernel TIME_WAIT.
+            self.reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.reservation.bind(("127.0.0.1", port))
+        if port:
+            self.reservation.listen()
+        self.port = self.reservation.getsockname()[1]
+
+    def release_reservation(self):
+        if getattr(self, 'reservation', None) is not None:
+            self.reservation.close()
+            self.reservation = None
 
     def logged(self, marker):
         with self.guard:
@@ -114,7 +164,9 @@ class Host:
     def start(self):
         if self.proc is not None:
             raise RuntimeError("host still owned; stop before restart")
-        self.deadline = time.monotonic() + 20
+        if getattr(self, '_started', False):
+            self.deadline = time.monotonic() + 20
+        self._started = True
         env = {k: v for k, v in os.environ.items() if not k.startswith("HASSMIC_")}
         env.update(HASSMIC_STATE=str(self.folder / "state"),
                    HASSMIC_PLAY=str(self.folder / "play.raw"),
@@ -127,14 +179,18 @@ class Host:
         self.truncated = False
         failure = ["--invalid-test-option"] if "--startup-failure" in sys.argv else []
         try:
-            with LAUNCH_GUARD:
-                binary = self.stage()
-                self.proc = subprocess.Popen(
-                    [str(binary), "-P", "wyoming", "-D", "-p", str(self.port),
-                     "-n", "Wyoming Test", *failure],
-                    cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE, start_new_session=True)
-            self.logged(b"wyoming on ")
+            with _allocation_guard(self.deadline):
+                if self.reservation is None:
+                    self.reserve()
+                with LAUNCH_GUARD:
+                    binary = self.stage()
+                    self.release_reservation()
+                    self.proc = subprocess.Popen(
+                        [str(binary), "-P", "wyoming", "-D", "-p", str(self.port),
+                         "-n", "Wyoming Test", *failure],
+                        cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE, start_new_session=True)
+                self.logged(b"wyoming on ")
         except BaseException as error:
             if isinstance(error, Exception) and not isinstance(error, ReadinessFailure):
                 reason = f"startup-error errno={getattr(error, 'errno', None)}"
@@ -168,6 +224,7 @@ class Host:
             self.staged = None
 
     def stop(self):
+        self.release_reservation()
         if self.proc is None:
             self.unstage()
             return
@@ -215,6 +272,12 @@ class Host:
         elif command == "stop":
             self.stop()
         elif command == "restart":
+            if self.proc is not None:
+                raise RuntimeError("host still owned; stop before restart")
+            self.deadline = time.monotonic() + 20
+            with _allocation_guard(self.deadline):
+                self.reserve(self.port)
+            self._started = False
             self.start()
         else:
             raise ValueError("invalid controller command")
