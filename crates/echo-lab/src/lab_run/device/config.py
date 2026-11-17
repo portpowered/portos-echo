@@ -52,6 +52,8 @@ def project(path):
     local_socket(str(config["echo"]["host"]) + ":" + str(config["echo"].get("wyoming_port", 16700)))
     local_socket(config["screen"].get("listen", ""), True)
     local_socket(config["mcp"].get("operator_listen", "127.0.0.1:0"), True)
+    if "home" in config.get("codex", {}):
+        raise ValueError("real auth state is not admitted")
     if "state_dir" in config["mcp"]:
         raise ValueError("real auth state is not admitted")
     for server in config["mcp"].get("server", []):
