@@ -197,6 +197,7 @@ fn config(fixture: &Fixture) -> CodexConfig {
 
 fn options(config: &CodexConfig) -> HostOptions<'_> {
     HostOptions {
+        routes: None,
         config,
         mode: LiveMode::Chatgpt,
         api_key: None,

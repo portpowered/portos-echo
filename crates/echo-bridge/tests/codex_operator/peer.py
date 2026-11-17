@@ -5,8 +5,19 @@ import os
 import pathlib
 import socket
 import sys
+import tomllib
 
 home = pathlib.Path(os.environ["CODEX_HOME"])
+overrides = {}
+for index, argument in enumerate(sys.argv):
+    if argument == "-c":
+        key, value = sys.argv[index + 1].split("=", 1)
+        assert key not in overrides
+        overrides[key] = tomllib.loads("value=" + value)["value"]
+routing_keys = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                "http_proxy", "https_proxy", "all_proxy", "no_proxy")
+home.joinpath("routing.json").write_text(json.dumps({
+    "config": overrides, "proxy": {key: os.environ[key] for key in routing_keys if key in os.environ}}))
 assert "OPENAI_API_KEY" not in os.environ
 assert "OPENAI_ACCESS_TOKEN" not in os.environ
 control = socket.socket()

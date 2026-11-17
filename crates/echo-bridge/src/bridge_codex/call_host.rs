@@ -9,6 +9,15 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+pub struct HostOptions<'a> {
+    pub config: &'a CodexConfig,
+    pub mode: LiveMode,
+    pub api_key: Option<&'a Secret<String>>,
+    pub routes: Option<&'a crate::bridge_operator::LocalRoutes>,
+    /// Absolute ceiling shared by process, account and device startup.
+    pub deadline: Instant,
+}
+
 /// Run one authenticated session with exclusive initialized process IO.
 /// The caller owns screen/readiness publication, calls and media cleanup inside
 /// `session`. It must not publish Connected merely because account admission
@@ -27,13 +36,42 @@ pub async fn with_host<T>(
     cancelled: impl std::future::Future<Output = ()>,
     session: impl AsyncFnOnce(&mut RpcIo<ChildStdout, ChildStdin>) -> Result<T, Error>,
 ) -> Result<T, Error> {
+    with_host_options(
+        HostOptions {
+            config,
+            mode,
+            api_key,
+            routes: None,
+            deadline,
+        },
+        cancelled,
+        session,
+    )
+    .await
+}
+
+/// Authenticate with optional process-local fake routing.
+/// # Errors
+/// The same admission, session and cleanup errors as `with_host`.
+pub async fn with_host_options<T>(
+    options: HostOptions<'_>,
+    cancelled: impl std::future::Future<Output = ()>,
+    session: impl AsyncFnOnce(&mut RpcIo<ChildStdout, ChildStdin>) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let HostOptions {
+        config,
+        mode,
+        api_key,
+        routes,
+        deadline,
+    } = options;
     tokio::pin!(cancelled);
     let supervisor = tokio::select! {
         biased;
         () = &mut cancelled => return Err(Error::Control),
         result = timeout_at(deadline, async {
             if Instant::now() >= deadline { return Err(Error::Deadline); }
-            codex_host::supervisor(config).await
+            codex_host::routed_supervisor(config, routes).await
         }) => {
             result.map_err(|_| Error::Deadline)??
         },

@@ -43,6 +43,17 @@ pub async fn execute<C: LinkConnector>(settings: Settings, connector: C) -> Resu
         utc_day: std::sync::Arc::new(utc_day),
         shutdown: control()?,
     };
+    execute_with_control(settings, control, connector).await
+}
+
+/// Select the configured owner while preserving explicit clock/stop control.
+/// # Errors
+/// The selected owner reports fixed startup, device, call and cleanup errors.
+pub async fn execute_with_control<C: LinkConnector>(
+    settings: Settings,
+    control: Control,
+    connector: C,
+) -> Result<(), Error> {
     if settings.config.is_some()
         && settings.muse.is_none()
         && (settings.model_url.is_none()
@@ -51,9 +62,9 @@ pub async fn execute<C: LinkConnector>(settings: Settings, connector: C) -> Resu
                 .as_ref()
                 .is_some_and(|config| config.codex.home.is_some()))
     {
-        return crate::bridge_voice::voice_entry::execute(settings, control, connector).await;
+        return Box::pin(crate::bridge_voice::voice_entry::execute(settings, control, connector)).await;
     }
-    execute_controlled(settings, control, connector).await
+    Box::pin(execute_controlled(settings, control, connector)).await
 }
 
 fn utc_day() -> u64 {
@@ -80,7 +91,8 @@ fn validate_sim(settings: &Settings) -> Result<(), Error> {
 }
 
 /// Retained simulator owner with an explicit host clock and stop receiver.
-/// Configured Codex simulation must migrate before it can use this boundary.
+/// Configured Codex runs use `execute_with_control`; keeping this legacy owner
+/// separate preserves its Send boundary for existing spawned library callers.
 /// # Errors
 /// Returns the same fixed operational failures as `execute`.
 pub async fn execute_controlled<C: LinkConnector>(

@@ -1,8 +1,6 @@
 //! Staged cancellation keeps device cleanup inside the authenticated IO lease.
-use crate::{Error, bridge_codex::with_host};
+use crate::{Error, bridge_codex::with_host_options};
 use echo_codex::codex_io::RpcIo;
-use echo_config::{CodexConfig, LiveMode};
-use echo_contracts::secret::Secret;
 use echo_link::{EchoLink, LinkConnector};
 use std::{cell::Cell, future::Future, time::Duration};
 use tokio::{
@@ -12,13 +10,7 @@ use tokio::{
     time::{Instant, timeout, timeout_at},
 };
 
-pub struct HostOptions<'a> {
-    pub config: &'a CodexConfig,
-    pub mode: LiveMode,
-    pub api_key: Option<&'a Secret<String>>,
-    /// Absolute ceiling shared by process, account and device startup.
-    pub deadline: Instant,
-}
+pub use crate::bridge_codex::HostOptions;
 
 /// Initialize and authenticate one child before connecting the device. Capture
 /// and probe must succeed before invoking the session; Connected still requires
@@ -42,11 +34,9 @@ pub async fn with_device<C: LinkConnector, T>(
     let admitted = Cell::new(false);
     let (stop, stopping) = watch::channel(false);
     let startup_stop = stopping.clone();
-    let operation = with_host(
-        options.config,
-        options.mode,
-        options.api_key,
-        options.deadline,
+    let deadline = options.deadline;
+    let operation = with_host_options(
+        options,
         async {
             stopped(startup_stop).await;
             if admitted.get() {
@@ -55,7 +45,7 @@ pub async fn with_device<C: LinkConnector, T>(
         },
         async |io| {
             admitted.set(true);
-            device(io, &connector, options.deadline, stopping, session).await
+            device(io, &connector, deadline, stopping, session).await
         },
     );
     tokio::pin!(operation, cancelled);

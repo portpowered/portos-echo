@@ -4,6 +4,8 @@ use echo_config::BridgeConfig;
 use echo_signin::OperatorCommand;
 pub(crate) mod codex_host;
 mod codex_operator;
+mod codex_routes;
+pub use codex_routes::LocalRoutes;
 use std::{io::Write, path::PathBuf};
 
 pub const HELP: &str = "echo-bridge --config PATH --trace PATH [--health-listen 127.0.0.1:PORT] [--live-loopback ORIGIN --model-loopback ORIGIN] [--sim-clock [--sim-epoch UNIX_SECONDS]]\n\

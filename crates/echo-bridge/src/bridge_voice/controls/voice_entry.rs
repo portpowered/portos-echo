@@ -1,4 +1,4 @@
-//! Executable admission for configured calls; simulation migration is separate.
+//! Executable admission for configured calls with explicit local-fake routing.
 use super::Configured;
 use crate::{Error, bridge_input::Settings, bridge_runtime::Control};
 use echo_link::LinkConnector;
@@ -10,12 +10,16 @@ pub(crate) async fn execute<C: LinkConnector>(
     control: Control,
     connector: C,
 ) -> Result<(), Error> {
-    if settings.model_url.is_some() || settings.sim_clock || settings.sim_epoch.is_some() || settings.lab {
+    if settings.sim_epoch.is_some() || settings.lab || (settings.sim_clock && settings.model_url.is_none()) {
         return Err(Error::Input);
     }
     let config = settings.config.take().ok_or(Error::Input)?;
     let has_tools = !config.mcp.server.is_empty();
     let configured = Configured::new(config, settings.trace, settings.health)?;
+    let configured = match settings.model_url {
+        Some(model) => configured.with_routes(crate::bridge_operator::LocalRoutes::new(&settings.live_url, &model)?),
+        None => configured,
+    };
     // Do not silently discard configured tools while their dispatcher is being
     // integrated. Neither the legacy agent nor an unapproved tool host may run.
     if has_tools {

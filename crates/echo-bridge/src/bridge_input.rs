@@ -212,7 +212,7 @@ fn configured(
         echo_config::LiveMode::ApiKey => LiveAuthMode::ApiKey,
     };
     let (live_url, model_url) = configured_origins(&config, origins)?;
-    let credential = if origins.is_none() && muse.is_none() {
+    let credential = if muse.is_none() && (origins.is_none() || config.codex.home.is_some()) {
         Provider::Unavailable
     } else {
         Provider::Resolved(

@@ -566,3 +566,25 @@ missing binary/home, relink without device admission and refused unmigrated
 tools/simulation. They do not prove a real pinned call, delegated tools or any
 milestone scenario. Those proofs remain required before acceptance. No pin,
 dependency or shared protocol changes.
+
+### Process-local simulation routing
+
+Configured runs with `--live-loopback` and `--model-loopback` now
+carry numeric loopback origins into the same authenticated Codex voice owner.
+The child receives call and sideband base overrides, a local Responses provider,
+and the S5 probe's discovery/tool/telemetry restrictions. Proxy variables in
+both spellings are set only through Supervisor's existing environment API;
+no parent environment mutation, inherited provider key or new credential path
+is used. Ordinary runs receive none of these overrides. Codex simulation no
+longer constructs a legacy credential provider during input preparation.
+
+The pinned S5 fixture (`crates/echo-codex/tests/support/codex_probe.py`) is the
+source of these routing settings; this does not move the pin or edit Codex.
+Controlled prebuilt-executable witnesses inspect effective child argv as parsed
+TOML, exact proxy settings, account-before-Ready and EOF/reap for both auth modes.
+The existing explicit Tokio clock driver selects this same owner and acknowledges
+clock advances; it does not enter the legacy simulator for a nominated home.
+These witnesses do not establish network confinement, a real pinned call or
+idle/reply timing through that pin. The local V3/media fake and canonical M2
+remain required integration work. Configured tools and simulated daily epochs
+still fail closed pending their retained dispatcher and budget integration.

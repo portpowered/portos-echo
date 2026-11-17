@@ -49,13 +49,28 @@ pub(crate) fn process_error(error: ProcessError) -> Error {
 }
 
 pub(crate) async fn supervisor(config: &CodexConfig) -> Result<Supervisor, Error> {
+    routed_supervisor(config, None).await
+}
+
+pub(crate) async fn routed_supervisor(
+    config: &CodexConfig,
+    routes: Option<&super::LocalRoutes>,
+) -> Result<Supervisor, Error> {
     let home = config.home.clone().ok_or(Error::CodexHomeRequired)?;
     let binary = match &config.binary {
         Some(binary) => binary.clone(),
         None => resolve_binary().await?,
     };
     executable(&binary)?;
-    Supervisor::new(SupervisorConfig::new(binary, home)).map_err(process_error)
+    let mut config = SupervisorConfig::new(binary, home);
+    if let Some(routes) = routes {
+        routes.configure(&mut config);
+    }
+    let mut supervisor = Supervisor::new(config).map_err(process_error)?;
+    if let Some(routes) = routes {
+        routes.environment(&mut supervisor)?;
+    }
+    Ok(supervisor)
 }
 
 fn executable(path: &Path) -> Result<(), Error> {

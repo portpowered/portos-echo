@@ -5,7 +5,7 @@ mod call_events;
 mod call_host;
 mod call_media;
 pub use call_audio::{CaptureAudio, ReplyAudio};
-pub use call_host::with_host;
+pub use call_host::{HostOptions, with_host, with_host_options};
 pub use call_media::{MediaCall, MediaEvent};
 #[cfg(test)]
 mod call_failure_tests;

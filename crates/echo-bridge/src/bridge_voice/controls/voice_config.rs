@@ -16,6 +16,7 @@ pub struct Configured {
     kill_path: PathBuf,
     trace: PathBuf,
     health: SocketAddr,
+    routes: Option<crate::bridge_operator::LocalRoutes>,
 }
 
 impl Configured {
@@ -34,7 +35,15 @@ impl Configured {
             config,
             trace,
             health,
+            routes: None,
         })
+    }
+
+    /// Route only the owned child to validated local fakes; no global mutation.
+    #[must_use]
+    pub fn with_routes(mut self, routes: crate::bridge_operator::LocalRoutes) -> Self {
+        self.routes = Some(routes);
+        self
     }
 
     /// Run configured voice ownership with caller-owned tools and media factory.
@@ -82,6 +91,7 @@ impl Configured {
             host: HostOptions {
                 config: &self.config.codex,
                 mode: self.config.live.mode,
+                routes: self.routes.as_ref(),
                 api_key,
                 deadline: Instant::now() + Duration::from_secs(30),
             },
