@@ -124,17 +124,97 @@ fn trace_if_present(path: &Path) -> Vec<Value> {
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge and local Python"]
 async fn codex_voice_entry_binary_signed_out_shows_relink_without_device_admission() {
+    rejected_account("signed-out").await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge and local Python"]
+async fn codex_voice_entry_binary_invalid_account_relinks_and_recovers_on_explicit_restart() {
+    rejected_account("rejected-account").await;
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge and local Python"]
+async fn codex_voice_entry_binary_expired_account_relinks_and_recovers_on_explicit_restart() {
+    rejected_account("expired-account").await;
+}
+
+async fn rejected_account(mode: &str) {
     let fixture = Fixture::new("chatgpt");
-    std::fs::write(fixture.home.join("mode"), "signed-out").unwrap();
+    std::fs::write(fixture.home.join("mode"), mode).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     configure(&fixture, listener.local_addr().unwrap().port());
-    let auth = b"synthetic unchanged auth bytes\n";
-    std::fs::write(fixture.home.join("auth.json"), auth).unwrap();
+    let auth = preserved_auth(&fixture);
     let mut process = Process::spawn(&mut command(&fixture));
     let _control = fixture.control().await;
     let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    relink(&mut screen).await;
+    denied(&fixture, &listener, &mut process).await;
+    completed(&mut process, 1, "echo-bridge: authorization\n").await;
+    assert_eq!(std::fs::read(fixture.home.join("auth.json")).unwrap(), auth);
+    super::host::released(&fixture).await;
+    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    screen_ended(&mut screen).await;
+    rejected_trace(&fixture);
+    recover(&fixture, &listener).await;
+    assert_eq!(std::fs::read(fixture.home.join("auth.json")).unwrap(), auth);
+}
+
+async fn denied(fixture: &Fixture, listener: &TcpListener, process: &mut Process) {
+    assert!(process.child.try_wait().unwrap().is_none());
+    assert_no_dial(listener).await;
+    // Only the initialized account boundary was reached. No implicit login,
+    // thread creation, retries or legacy credential route is allowed.
+    methods(fixture, &["initialize", "initialized", "account/read"]);
+    super::host::released(fixture).await;
+}
+
+fn preserved_auth(fixture: &Fixture) -> &'static [u8] {
+    let auth = b"synthetic unchanged auth bytes\n";
+    std::fs::write(fixture.home.join("auth.json"), auth).unwrap();
+    auth
+}
+
+fn rejected_trace(fixture: &Fixture) {
+    let rows = trace(&fixture.directory.path().join("trace"));
+    for event in [
+        "bridge.ready",
+        "live.connected",
+        "live.created",
+        "mic.completed",
+        "reply.played",
+    ] {
+        assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), 0);
+    }
+    let serialized = serde_json::to_string(&rows).unwrap();
+    for private in [
+        "synthetic private error",
+        "synthetic-provider-private-detail",
+        "invalid_grant",
+        "invalid_token",
+    ] {
+        assert!(!serialized.contains(private));
+    }
+    assert_eq!(
+        rows.iter().filter(|row| row["event"] == "auth.relink_required").count(),
+        1
+    );
+}
+
+async fn screen_ended(screen: &mut Lines<BufReader<tokio::net::TcpStream>>) {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        // HTTP chunk/SSE separators may remain after the last parsed frame.
+        while let Some(line) = screen.next_line().await.unwrap() {
+            assert!(!line.starts_with("data: "), "unexpected screen frame: {line}");
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn relink(screen: &mut Lines<BufReader<tokio::net::TcpStream>>) {
     loop {
-        let state = bridge_wire_screen::state(&mut screen).await;
+        let state = bridge_wire_screen::state(screen).await;
         if state["state"] == "error" {
             assert_eq!(
                 state,
@@ -145,15 +225,72 @@ async fn codex_voice_entry_binary_signed_out_shows_relink_without_device_admissi
         }
         assert_eq!(state["state"], "ready");
     }
-    assert!(process.child.try_wait().unwrap().is_none());
+}
+
+async fn assert_no_dial(listener: &TcpListener) {
     assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
+}
+
+async fn completed(process: &mut Process, code: i32, stderr: &str) {
     drop(process.input.take());
-    process.collect(1).await;
-    assert_eq!(process.stderr().await, "echo-bridge: authorization\n");
+    process.collect(code).await;
+    assert_eq!(process.stderr().await, stderr);
     assert!(process.lines.next_line().await.unwrap().is_none());
-    assert_eq!(std::fs::read(fixture.home.join("auth.json")).unwrap(), auth);
-    super::host::released(&fixture).await;
+}
+
+fn methods(fixture: &Fixture, expected: &[&str]) {
+    let text = std::fs::read_to_string(fixture.home.join("methods")).unwrap();
+    assert_eq!(text.lines().collect::<Vec<_>>(), expected);
+}
+
+async fn recover(fixture: &Fixture, listener: &TcpListener) {
+    std::fs::write(fixture.home.join("mode"), "chatgpt").unwrap();
+    let mut process = Process::spawn(&mut command(fixture));
+    let _satellite = admitted(&mut process, listener).await;
+    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"ready", "message":"Echo Live ready"})
+    );
+    completed(&mut process, 0, "").await;
+    recovered_process(fixture);
+    super::host::released(fixture).await;
     assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    screen_ended(&mut screen).await;
+}
+
+async fn admitted(process: &mut Process, listener: &TcpListener) -> tokio::net::TcpStream {
+    let mut satellite = tokio::time::timeout(OBSERVATION_TIMEOUT, listener.accept())
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
+    bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
+    assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+    satellite
+}
+
+fn recovered_process(fixture: &Fixture) {
+    methods(
+        fixture,
+        &[
+            "initialize",
+            "initialized",
+            "account/read",
+            "initialize",
+            "initialized",
+            "account/read",
+        ],
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.home.join("launches"))
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        ["started", "started"]
+    );
 }
 
 #[tokio::test]

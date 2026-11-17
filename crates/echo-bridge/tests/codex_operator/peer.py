@@ -37,6 +37,8 @@ for line in sys.stdin:
     request = json.loads(line)
     method = request["method"]
     home.joinpath("last-method").write_text(method)
+    with home.joinpath("methods").open("a") as methods:
+        methods.write(method + "\n")
     if method == "initialize":
         assert request["params"]["capabilities"]["experimentalApi"] is True
         if home.joinpath("mode").read_text() == "blocked-initialize":
@@ -78,9 +80,11 @@ for line in sys.stdin:
             connection, _ = control.accept()
             with connection:
                 connection.recv(64)
-        if mode == "rejected-account":
+        if mode in ("rejected-account", "expired-account"):
             emit({"id": request["id"], "error": {
-                "code": -32000, "message": "synthetic private error"}})
+                "code": -32000, "message": "synthetic private error",
+                "data": {"reason": "invalid_grant" if mode == "expired-account" else "invalid_token",
+                         "detail": "synthetic-provider-private-detail"}}})
             continue
         account = {"type": "apiKey"} if mode == "api_key" else {
             "type": "chatgpt", "email": "synthetic@example.invalid", "planType": "synthetic"}
