@@ -63,6 +63,7 @@ lint-self-tests:
 test-unit:
 	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci
 	python -m unittest discover -s crates/echo-lab/src/lab_run/sim/host_tests
+	python -m unittest discover -s crates/echo-lab/src/lab_run/device/clip_tests
 	if [ -f web/screen/package.json ]; then cd web/screen && npm ci && npm test; fi
 
 .PHONY: codex-app-server

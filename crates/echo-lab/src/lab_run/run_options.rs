@@ -14,12 +14,14 @@ const ALLOWED: &[&str] = &[
     "--bridge",
     "--bridge-config",
     "--operator-confirm",
+    "--wake-clip",
 ];
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct Options {
+    pub wake_clip: Option<super::device::pcm::Clip>,
     pub sim: bool,
     pub bridge: Option<PathBuf>,
     pub bridge_config: Option<PathBuf>,
@@ -83,6 +85,9 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     if flags.keys().any(|key| !ALLOWED.contains(&key.as_str())) || scenarios.is_empty() {
         return Err("run: unknown option or missing scenario".into());
     }
+    if flags.contains_key("--wake-clip") && required(&flags, "--driver")? == "sim" {
+        return Err("run: --wake-clip is only supported with --driver device".into());
+    }
     if required(&flags, "--driver")? == "sim" {
         return sim(scenarios, &flags);
     }
@@ -116,6 +121,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     );
     Ok(Options {
         sim: false,
+        wake_clip: wake_clip(&flags)?,
         operator_confirm: flags.get("--operator-confirm").map(PathBuf::from),
         bridge: device_bridge(&flags)?,
         bridge_config: flags
@@ -133,6 +139,13 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         speech,
         cancel: flags.get("--cancel-file").map(PathBuf::from),
     })
+}
+
+fn wake_clip(flags: &BTreeMap<String, String>) -> Result<Option<super::device::pcm::Clip>, String> {
+    flags
+        .get("--wake-clip")
+        .map(|path| super::device::pcm::Clip::load(path, flags.get("--python").map_or("python", String::as_str)))
+        .transpose()
 }
 
 fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Options, String> {
@@ -174,6 +187,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
     );
     Ok(Options {
         sim: true,
+        wake_clip: None,
         operator_confirm: None,
         bridge: Some(bridge),
         bridge_config: None,

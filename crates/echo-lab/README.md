@@ -646,6 +646,57 @@ cargo nextest run --locked -p echo-lab --test sim_host --run-ignored only \
   -E 'test(m1_independent_restart_steps)' --config-file .github/nextest.toml --profile ci --no-capture
 ```
 
+### M1 device procedure (coordinator only)
+
+Run the unchanged `tests/scenarios/m1-hassmic-bridge.yaml` after the simulated
+journey passes. The device driver refuses audio before **09:00 local time**,
+including each later playback; this is not a UTC gate.
+
+Forward Wyoming from the connected Echo to the bridge host:
+
+```sh
+adb forward tcp:16700 tcp:16700
+```
+
+Copy `examples/bridge.example.toml` outside the repository. In its existing
+`[echo]` table set `host = "127.0.0.1"` and `wyoming_port = 16700`.
+The nominated configuration must use loopback screen and unauthenticated local
+MCP endpoints; it must not nominate real auth state or Muse credentials. The
+device journey validates it before effects and stages a private synthetic
+configuration. A LAN Echo address is refused with
+`device: echo.host must be 127.0.0.1; forward the Echo's Wyoming port with adb forward`.
+
+Supply an operator WAV outside every repository worktree: PCM format 1,
+16-bit mono, 16000 or 48000 Hz, 0.5–10 seconds inclusive, containing the spoken
+wake word **Computer** and the intended utterance. No audio is committed.
+
+```sh
+target/debug/echo-lab run tests/scenarios/m1-hassmic-bridge.yaml \
+  --driver device --bench ring --port /path/to/port --adb /path/to/adb \
+  --stt /path/to/stt --ring "$RING_ENDPOINT" \
+  --bridge /path/to/echo-bridge --bridge-config /outside/repository/bridge.toml \
+  --wake-clip /outside/repository/computer.wav \
+  --operator-confirm /outside/repository/mute-confirm \
+  --out /outside/repository/fresh-m1-run
+```
+
+Watch stderr. At the first mute prompt, physically press the Echo's mute key,
+then create the nominated confirmation file. After the muted playback, at the
+second prompt, physically press mute again to unmute, then create a **fresh**
+confirmation file at that path. Each confirmation expires after 120 seconds
+and is consumed once; a stale file cannot confirm a later press. File creation
+does not replace the physical press or the observed Muted/Ready screen state.
+
+Every plain, muted and restart `say` uses the same validated snapshot. The
+optional `m1.wake_clip` records the complete WAV SHA-256, rate and duration;
+`m1.plays` records each successful playback, and streamed wakes reference its
+`play_index` and source. Reports contain neither audio nor the operator path.
+Run-owned clip copies are removed even with `--keep-audio`; the original WAV
+remains caller-owned. Omitting `--wake-clip` retains fixture playback and the
+original report shape. Sim mode rejects the option. T3 evidence proves source
+routing only; the coordinator's post-merge T5 must prove acoustic wake, physical
+mute and recovery before M1 can be declared complete.
+
 M6 extends the M4 production world with the spoof `ui.show_emotion` tool:
 
 ```sh

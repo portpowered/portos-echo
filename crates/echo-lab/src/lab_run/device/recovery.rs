@@ -67,8 +67,10 @@ impl Configured<'_> {
             return Err("device: unsupported restart".into());
         }
         for iteration in 1..=count {
+            self.iteration = iteration;
             self.recover(process, iteration, say, index, artifacts)?;
         }
+        self.iteration = 0;
         Ok(())
     }
 

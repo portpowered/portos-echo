@@ -6,7 +6,11 @@ pub fn load(options: &Options) -> Result<Option<String>, String> {
     let Some(path) = &options.bridge_config else {
         return Ok(None);
     };
-    echo_config::BridgeConfig::load(path).map_err(|_| "device: invalid or unsafe nominated bridge configuration")?;
+    let config = echo_config::BridgeConfig::load(path)
+        .map_err(|_| "device: invalid or unsafe nominated bridge configuration")?;
+    if config.echo.host != "127.0.0.1" {
+        return Err("device: echo.host must be 127.0.0.1; forward the Echo's Wyoming port with adb forward".into());
+    }
     let bytes = run_command::controlled(
         Path::new(&options.python),
         &[

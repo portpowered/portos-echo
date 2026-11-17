@@ -227,7 +227,11 @@ fn serve(
                 commands.push(json!({"action":"registered"}));
                 registered = true;
             }
-            commands.push(json!({"action":"say","pcm":value["pcm"]}));
+            // The fake speaker receives the complete WAV payload. The native
+            // capture adapter cycles at most 4096 bytes; it does not model
+            // acoustic wake detection or speaker sample-rate conversion.
+            let pcm = value["pcm"].as_array().unwrap();
+            commands.push(json!({"action":"say","pcm":&pcm[..pcm.len().min(4096)]}));
             commands
         };
         for command in commands {

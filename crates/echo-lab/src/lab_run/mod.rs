@@ -80,6 +80,9 @@ pub trait Driver {
 }
 
 fn say(value: &str, scenario: &str, options: &Options) -> Result<Step, String> {
+    if options.wake_clip.is_some() {
+        return Ok(Step::SayFile(PathBuf::new()));
+    }
     if options.sim {
         match crate::lab_validate::load(scenario)?["id"].as_str() {
             Some("m3-full-duplex") => return sim::m3::utterance(value),
@@ -150,7 +153,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
             steps.push(match step["say"].as_str() {
                 Some(value) => say(value, path, options)?,
                 None if options.sim => sim::parse_step(step, path)?,
-                None if options.bridge_config.is_some() || name == "M1" => device::step(step, path)?,
+                None if options.bridge_config.is_some() || name == "M1" => device::step(step, path, options)?,
                 None => run_oracles::parse(step)?,
             });
         }
@@ -347,6 +350,9 @@ fn driver<'a>(
     if !options.sim {
         if let Some(config) = configuration {
             return Ok(Box::new(device::Configured::new(options, config, errors)?));
+        }
+        if options.wake_clip.is_some() {
+            return Ok(Box::new(device::pcm::Standalone::new(options)));
         }
         return Ok(Box::new(run_device::Device::new(options)));
     }
