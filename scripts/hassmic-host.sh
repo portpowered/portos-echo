@@ -1,15 +1,18 @@
 #!/bin/sh
-# Build on Linux; Windows callers use the same implementation in WSL Ubuntu.
+# Build on Linux; Windows callers use the same implementation in the selected WSL distro.
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 case $(uname -s) in
   MINGW* | MSYS* | CYGWIN*)
-    script=$(MSYS_NO_PATHCONV=1 wsl -d Ubuntu --exec wslpath -u "$(cygpath -am "$root/scripts/hassmic-host.sh")")
+    # shellcheck source=scripts/wsl-distro.sh
+    . "$root/scripts/wsl-distro.sh"
+    distro=$(echo_wsl_distro)
+    script=$(echo_wsl_run "$distro" wslpath -u "$(cygpath -am "$root/scripts/hassmic-host.sh")")
     source_path=''
     if [ -n "${HASSMIC_SRC:-}" ]; then
-      source_path=$(MSYS_NO_PATHCONV=1 wsl -d Ubuntu --exec wslpath -u "$(cygpath -am "$HASSMIC_SRC")")
+      source_path=$(echo_wsl_run "$distro" wslpath -u "$(cygpath -am "$HASSMIC_SRC")")
     fi
-    MSYS_NO_PATHCONV=1 exec wsl -d Ubuntu --exec sh -lc "export HASSMIC_SRC=\"\$1\"; shift; exec sh \"\$@\"" sh "$source_path" "$script" "$@"
+    echo_wsl_exec "$distro" sh -lc "export HASSMIC_SRC=\"\$1\"; shift; exec sh \"\$@\"" sh "$source_path" "$script" "$@"
     ;;
 esac
 cd "$root"

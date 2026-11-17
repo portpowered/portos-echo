@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from wsl_distro import DEFAULT_WSL_DISTRO
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -55,8 +56,8 @@ elif name == 'wsl':
     if os.environ.get('TEST_PLATFORM') == 'Linux':
         sys.exit('unexpected recursive WSL dispatch in controlled guest')
     if os.environ.get('WSL_FAILURE'):
-        sys.exit('controlled WSL Ubuntu unavailable')
-    assert args[:3] == ['-d', 'Ubuntu', '--exec'], args
+        sys.exit('controlled WSL unavailable')
+    assert args[:3] == ['-d', os.environ['EXPECTED_DISTRO'], '--exec'], args
     if args[3] == 'wslpath':
         if os.environ.get('PATH_FAILURE'):
             sys.exit(26)
@@ -84,7 +85,7 @@ class BuildEchoTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / 'scripts').mkdir()
         for path in ('Makefile', 'scripts/build-echo.sh', 'scripts/build-echo-wsl.sh',
-                     'scripts/make-posix.py'):
+                     'scripts/make-posix.py', 'scripts/wsl-distro.sh'):
             shutil.copyfile(ROOT / path, self.root / path)
         self.bin = self.root / 'bin'
         self.bin.mkdir()
@@ -96,9 +97,9 @@ class BuildEchoTests(unittest.TestCase):
                      'MFLAGS', 'MAKELEVEL', 'CARGO_FAILURE', 'NO_BINARY',
                      'HEADERS', 'INSPECT_FAILURE', 'COMPILER_FAILURE', 'TEST_PLATFORM',
                      'WSL_FAILURE', 'PATH_FAILURE', 'PATH_TRANSLATIONS', 'PARTIAL_BINARY',
-                     'GUEST_PATHS'):
+                     'GUEST_PATHS', 'ECHO_WSL_DISTRO'):
             self.env.pop(name, None)
-        self.env.update(COMMAND_LOG=str(self.log), WITNESS=self.witness.as_posix(),
+        self.env.update(EXPECTED_DISTRO=DEFAULT_WSL_DISTRO, COMMAND_LOG=str(self.log), WITNESS=self.witness.as_posix(),
                         GUEST_HOME=self.root.as_posix(),
                         CARGO_TARGET_DIR=(self.root / 'output with spaces').as_posix())
         self.env['PATH'] = str(self.bin) + os.pathsep + self.env['PATH']
@@ -110,6 +111,20 @@ class BuildEchoTests(unittest.TestCase):
                      'uname', 'wsl', 'cygpath'):
             self.tool(self.bin / name)
         self.ndk = self.make_ndk('ndk with spaces')
+
+    def test_windows_override_selects_every_guest_operation(self):
+        self.env.update(ECHO_WSL_DISTRO='pe-ci', EXPECTED_DISTRO='pe-ci')
+        self.make_ndk('android/android-ndk-r27d')
+        result = self.run_helper(['echo-contracts'], TEST_PLATFORM='MINGW64_NT')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [c for c in self.commands() if c['name'] == 'wsl']
+        self.assertTrue(calls)
+        self.assertTrue(all(c['args'][:3] == ['-d', 'pe-ci', '--exec'] for c in calls))
+
+    def test_linux_build_ignores_invalid_windows_selector(self):
+        result, _ = self.run_make(ECHO_WSL_DISTRO='bad;name', ANDROID_NDK_HOME=str(self.ndk))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(c['name'] == 'wsl' for c in self.commands()))
 
     def commands(self):
         records = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -185,7 +200,7 @@ class BuildEchoTests(unittest.TestCase):
         self.make_ndk('android/android-ndk-r27d')
         for fault, diagnostic in [
                 ({'ANDROID_NDK_HOME': (self.root / 'missing').as_posix()}, 'does not exist'),
-                ({'WSL_FAILURE': '1'}, 'WSL Ubuntu'),
+                ({'WSL_FAILURE': '1'}, "WSL distro '" + self.env['EXPECTED_DISTRO'] + "'"),
                 ({'PATH_FAILURE': '1'}, 'could not translate'),
                 ({'COMPILER_FAILURE': '1'}, 'compiler failed'),
                 ({'INSPECT_FAILURE': '1'}, 'inspection failed')]:
@@ -246,7 +261,7 @@ class BuildEchoTests(unittest.TestCase):
         binary = self.stale_binary()
         result = self.run_helper(['echo-bridge'], TEST_PLATFORM='MINGW64_NT', PATH=path)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('installed WSL Ubuntu required', result.stderr)
+        self.assertIn("installed WSL distro '" + self.env['EXPECTED_DISTRO'] + "' required", result.stderr)
         self.assertFalse(binary.exists())
 
     def test_cargo_partial_failure_removes_unpublishable_binary(self):
@@ -411,6 +426,9 @@ class BuildEchoTests(unittest.TestCase):
                 self.assertFalse((Path(self.env['CARGO_TARGET_DIR']) / 'armv7-linux-androideabi/release/echo-bridge').exists())
                 self.assertIn(diagnostic, result.stderr)
                 self.assertNotIn('binary size', result.stdout)
+
+
+from test_wsl_distro import SelectorTests, DispatchTests, PythonDispatchTests
 
 
 if __name__ == '__main__':
