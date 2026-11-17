@@ -4,7 +4,7 @@ use crate::Error;
 use echo_codex::{
     DynamicTool,
     codex_io::RpcIo,
-    codex_protocol::{RequestId, ToolResult},
+    codex_protocol::{RequestId, ToolResult, TurnInterrupt},
 };
 use echo_media::{DropCounts, MediaPeer, PcmFrame, Peer, PeerState};
 use std::collections::VecDeque;
@@ -144,6 +144,20 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             return Err(Error::Unavailable);
         }
         self.call.answer_tool(id, result)
+    }
+
+    #[must_use]
+    pub fn thread_id(&self) -> Option<&str> {
+        self.call.thread_id()
+    }
+
+    /// # Errors
+    /// Retains the signaling owner's lifecycle and correlation restrictions.
+    pub fn interrupt(&mut self, params: &TurnInterrupt, deadline: Instant) -> Result<(), Error> {
+        if !self.active {
+            return Err(Error::Unavailable);
+        }
+        self.call.interrupt(params, deadline)
     }
 
     #[must_use]

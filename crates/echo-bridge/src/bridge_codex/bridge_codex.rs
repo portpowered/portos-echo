@@ -4,19 +4,23 @@ mod call_audio;
 mod call_events;
 mod call_host;
 mod call_media;
+mod call_tools;
 pub use call_audio::{CaptureAudio, ReplyAudio};
 pub use call_host::{HostOptions, with_host, with_host_options};
 pub use call_media::{MediaCall, MediaEvent};
+pub use call_tools::ToolSession;
 #[cfg(test)]
 mod call_failure_tests;
 #[cfg(test)]
 mod call_tests;
+#[cfg(test)]
+mod call_turn_tests;
 
 use crate::Error;
 use echo_codex::{
     DynamicTool, ThreadSettings,
     codex_io::RpcIo,
-    codex_protocol::{Message, RealtimeStart, RequestId, ThreadStartResult, ToolCall, ToolResult},
+    codex_protocol::{Message, RealtimeStart, RequestId, ThreadStartResult, ToolCall, ToolResult, TurnInterrupt},
     codex_rpc::RpcError,
 };
 use serde_json::json;
@@ -31,6 +35,8 @@ pub enum Event {
     Transcript { role: String, text: String, done: bool },
     ReplyDone { text: String },
     Tool { id: RequestId, call: ToolCall },
+    TurnStarted { thread: String, turn: String },
+    TurnCompleted { thread: String, turn: String },
     Closed,
     Other,
 }
@@ -58,6 +64,7 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     phase: Phase,
     thread: Option<String>,
     early: VecDeque<Event>,
+    interrupt: Option<(RequestId, Instant)>,
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
@@ -67,6 +74,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             phase: Phase::Fresh,
             thread: None,
             early: VecDeque::new(),
+            interrupt: None,
         }
     }
 
@@ -168,6 +176,17 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if self.phase != Phase::Active {
             return Err(Error::Unavailable);
         }
+        if let Some((id, deadline)) = &self.interrupt {
+            let result = timeout_at(*deadline, self.io.wait_reply(id))
+                .await
+                .map_err(|_| Error::Deadline)
+                .and_then(|reply| reply.map_err(rpc_error));
+            if let Err(error) = result {
+                self.fail();
+                return Err(error);
+            }
+            self.interrupt = None;
+        }
         if let Some(event) = self.early.pop_front() {
             return Ok(event);
         }
@@ -190,6 +209,34 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             return Err(Error::Unavailable);
         }
         self.io.respond(id, result).map_err(rpc_error)
+    }
+
+    /// The negotiated thread belongs to this process generation only.
+    #[must_use]
+    pub fn thread_id(&self) -> Option<&str> {
+        self.thread.as_deref()
+    }
+
+    /// Queue one correlated interrupt; `next` drives its acknowledgement while
+    /// the media owner continues polling PCM. Cancellation retains the request.
+    /// # Errors
+    /// Inactive/foreign/empty turns, concurrent interrupts or output admission.
+    pub fn interrupt(&mut self, params: &TurnInterrupt, deadline: Instant) -> Result<(), Error> {
+        if self.phase != Phase::Active
+            || self.thread.as_deref() != Some(params.thread_id.as_str())
+            || params.turn_id.is_empty()
+            || params.turn_id.len() > 256
+            || params.turn_id.chars().any(char::is_control)
+            || self.interrupt.is_some()
+        {
+            return Err(Error::Input);
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::Deadline);
+        }
+        let id = self.io.begin_request("turn/interrupt", params).map_err(rpc_error)?;
+        self.interrupt = Some((id, deadline));
+        Ok(())
     }
 
     /// Stop once. A stopped call cannot start or consume more events.
@@ -220,6 +267,9 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         .await
         .unwrap_or(Err(Error::Deadline));
         self.early.clear();
+        if let Some((id, _)) = self.interrupt.take() {
+            self.io.cancel(&id);
+        }
         if result.is_err() {
             self.fail();
         } else {
@@ -232,6 +282,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         self.io.close(RpcError::Disconnected);
         self.phase = Phase::Closed;
         self.early.clear();
+        self.interrupt = None;
     }
 }
 

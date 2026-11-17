@@ -269,7 +269,7 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::Transcript { role, text, done }) => observe(Notice::Transcript { role, text, done }),
-        MediaEvent::Control(Event::Other) => Ok(()),
+        MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }
 }

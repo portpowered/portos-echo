@@ -768,3 +768,28 @@ Canonical voice-owner wiring, approval presentation, real-pin M4, exact goldens
 and the dropped-result seed remain required before story 002 can pass. The
 retained legacy runner remains available for its existing consumers until the
 canonical owner is wired; these component results do not prove its replacement.
+
+### Caller-driven dispatch scheduling (2026-11-17)
+
+The bridge projects matching `turn/started` and `turn/completed` notifications
+from the pinned JSONL envelope (`threadId`, `turn.id`). Malformed matching IDs
+close the generation; foreign-thread lifecycle notifications do not admit work.
+Its call owner queues a matching `turn/interrupt` and retains the admitted RPC
+across cancelled polls. A bounded acknowledgement failure closes the generation.
+Media polling continues while that acknowledgement is pending, and accepted
+notifications remain in the existing bounded IO queue.
+
+`ToolSession` borrows a connected media call and supplies the existing voice
+port boundary. It retains one dispatch future across PCM and transcript polls,
+serializes queued requests with a 32-event limit, and schedules silent-turn
+expiry. Matching turn completion cancels pending work and retires the turn
+before queued requests can execute. Results use their original server request
+IDs. Dropping this adapter drops its work; the caller still owns and must await
+call/media cleanup. There is no spawned worker, model client or second reader.
+
+Memory-only tests protect delivery, interleaved PCM/transcripts, expired and
+exhausted turns, cancelled polling, queued and duplicate requests, queue
+overflow, safe failures and cleanup. These are component observations. Canonical
+MCP/approval and daily-cap admission wiring, actual-pin M4, full goldens and the
+dropped-result seed remain required for story 002. No shared protocol change or
+new dependency is introduced by this scheduling adapter.

@@ -120,7 +120,9 @@ async fn transcripts<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite +
                 break;
             }
             MediaEvent::Control(Event::Other) | MediaEvent::Audio(_) => (),
-            MediaEvent::Control(Event::Closed | Event::Tool { .. }) => {
+            MediaEvent::Control(
+                Event::Closed | Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. },
+            ) => {
                 transcript.push(json!(["unexpected pinned-server event"]));
                 break;
             }

@@ -21,6 +21,19 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                 if params["threadId"].as_str() != self.thread.as_deref() {
                     return Ok(Event::Other);
                 }
+                if matches!(method.as_str(), "turn/started" | "turn/completed") {
+                    let turn = params["turn"]["id"]
+                        .as_str()
+                        .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+                        .ok_or(Error::Decode)?
+                        .to_owned();
+                    let thread = self.thread.clone().ok_or(Error::Decode)?;
+                    return Ok(if method == "turn/started" {
+                        Event::TurnStarted { thread, turn }
+                    } else {
+                        Event::TurnCompleted { thread, turn }
+                    });
+                }
                 self.notification(&method, raw)
             }
             _ => Ok(Event::Other),
