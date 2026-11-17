@@ -14,7 +14,7 @@ fn device_unsafe_or_unreadable_config_never_invokes_bench_tools() {
         Some(original.replace("max_tool_calls = 8", "unexpected_field = 8")),
         Some(original.replace("max_tool_calls = 8", "max_tool_calls = \"invalid\"")),
         Some(original.replace("127.0.0.1", "localhost")),
-        Some(original.replace("http://127.0.0.1:18080/mcp", "https://mcp.example.invalid/mcp")),
+        Some(original.replace("http://127.0.0.1:18080/mcp", "https://mcp.example.invalid/mcp")), // lint-rules: allow-literal inert rejected config; no tool is invoked
         Some(original.replace("auth = \"none\"", "auth = \"bearer_file\"")),
         Some(format!("{original}\n[muse]\n")),
     ] {
