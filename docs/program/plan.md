@@ -505,7 +505,7 @@ them in one table-driven module.
 | Hold ordering | after a play without `--listen`, no other command on the hold until `playEndedAt` passes: a snapshot during playback cuts the clip |
 | Ear only | `port message record --lease <l> --audio-only` (to be pinned against the source before echo-lab uses it) |
 | Eye | `port message snapshot <ring> --lease <l> --output <frame.jpg> --json`, from the held camera with no new session. Frames are JPEG and stay JPEG; PTZ to aim |
-| Quiet hours | audio commands refuse before 09:00 local unless `--allow-quiet-hours` (never passed by `echo-lab`) |
+| Quiet hours | audio commands refuse before 09:00 local unless `--allow-quiet-hours`; `echo-lab run` passes it on to `port play-audio` only when given it (owner waiver, `decisions.md` 2026-11-17) |
 
 Harness rules:
 

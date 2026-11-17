@@ -180,6 +180,39 @@ mod tests {
     }
 
     #[test]
+    fn f03b_owner_waiver_plays_before_0900_and_forwards_flag_to_playback_only() {
+        let session = Session::new(&json!({"hour":8}));
+        assert_eq!(session.run(&["--allow-quiet-hours"]).status.code(), Some(0));
+        let ledger = session.ledger();
+        let waived = |op: &str| {
+            ledger
+                .iter()
+                .filter(|v| v["operation"] == op)
+                .all(|v| v["args"].as_array().unwrap().iter().any(|a| a == "--allow-quiet-hours"))
+        };
+        assert_eq!(ledger.iter().filter(|v| v["operation"] == "play").count(), 1);
+        assert!(waived("play"));
+        for op in ["hold", "release", "firmware", "clock"] {
+            assert!(
+                ledger.iter().filter(|v| v["operation"] == op).all(|v| !v["args"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a == "--allow-quiet-hours")),
+                "{op}"
+            );
+        }
+        let sim = Session::new(&json!({}));
+        failed(
+            &sim.command()
+                .args(["run", "one.yaml", "--driver", "sim", "--allow-quiet-hours"])
+                .output()
+                .unwrap(),
+            "sim options only",
+        );
+    }
+
+    #[test]
     fn f04_unprobed_firmware_and_adb_fail_before_hold() {
         for fixture in [json!({"build":"unprobed"}), json!({"fail":"firmware"})] {
             let session = Session::new(&fixture);

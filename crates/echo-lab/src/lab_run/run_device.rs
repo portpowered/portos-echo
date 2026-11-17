@@ -69,6 +69,7 @@ impl<'a> Device<'a> {
             .observe(clock["monotonic_ms"].as_u64().ok_or("clock: missing monotonic time")?)?;
         match clock["hour"].as_u64() {
             Some(9..=23) => Ok(()),
+            Some(0..=8) if self.options.allow_quiet_hours => Ok(()),
             Some(0..=8) => Err("quiet hours: audio refused before 09:00 local time".into()),
             _ => Err("clock: invalid local hour".into()),
         }
@@ -149,13 +150,18 @@ impl<'a> Device<'a> {
             self.playback_end.borrow_mut().acknowledge(value["reached"] == true)?;
         }
         self.playback_end.borrow_mut().pending = None;
+        let playing = matches!(operation, "file" | "text" | "file_only" | "text_only");
+        let mut args = argv(operation, values)?;
+        if playing && self.options.allow_quiet_hours {
+            args.push("--allow-quiet-hours".into());
+        }
         let child = super::run_command::Pending::start(
             &self.options.port,
-            &argv(operation, values)?,
+            &args,
             self.clock.deadline(cleanup),
             if cleanup { None } else { self.options.cancel.as_deref() },
         )?;
-        if matches!(operation, "file" | "text" | "file_only" | "text_only") {
+        if playing {
             // Launch can queue remote audio even if waiting for the CLI later fails.
             self.playback_end.borrow_mut().pending = Some(String::new());
         }
