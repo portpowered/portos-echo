@@ -72,10 +72,13 @@ async fn t3_negotiation_errors_preserve_state_and_precedence() {
     assert_eq!(a.answer("private").await, Err(Error::InvalidSdp));
     assert_eq!(a.send_audio(frame(0, 0), now()).await, Err(Error::NotReady));
     assert_eq!(a.send_text(&"x".repeat(16385)).await, Err(Error::NotReady));
+    let incomplete = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
+    assert_eq!(a.answer(incomplete).await, Err(Error::InvalidSdp));
     let offer = a.offer().await.unwrap();
     assert_eq!(a.offer().await, Err(Error::State));
     assert_eq!(a.answer("private").await, Err(Error::State));
     assert_eq!(a.apply_answer("private").await, Err(Error::InvalidSdp));
+    assert_eq!(a.apply_answer(incomplete).await, Err(Error::InvalidSdp));
     let answer = b.answer(&offer).await.unwrap();
     assert_eq!(b.offer().await, Err(Error::State));
     assert_eq!(b.answer(&offer).await, Err(Error::State));

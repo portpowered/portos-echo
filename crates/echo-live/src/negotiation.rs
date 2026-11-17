@@ -79,6 +79,49 @@ fn local_sdp(rtc: &RTCPeerConnection) -> Result<String, Error> {
     Ok(result)
 }
 
+// rtc mutates signaling state before inspecting transport attributes. Reject
+// incomplete/conflicting transport descriptions first so a parsed bad SDP
+// cannot consume the caller's new/pending negotiation.
+fn remote(sdp: &str, answer: bool) -> Result<RTCSessionDescription, Error> {
+    let description = if answer {
+        RTCSessionDescription::answer(sdp.into())
+    } else {
+        RTCSessionDescription::offer(sdp.into())
+    }
+    .map_err(|_| Error::InvalidSdp)?;
+    let parsed = description.unmarshal().map_err(|_| Error::InvalidSdp)?;
+    if parsed.media_descriptions.is_empty() {
+        return Err(Error::InvalidSdp);
+    }
+    let mut transport = [None, None, None];
+    for (i, key) in ["ice-ufrag", "ice-pwd", "fingerprint"].into_iter().enumerate() {
+        transport[i] = parsed.attribute(key).cloned();
+    }
+    for media in &parsed.media_descriptions {
+        if media.attribute("mid").flatten().is_none_or(str::is_empty) {
+            return Err(Error::InvalidSdp);
+        }
+        for (i, key) in ["ice-ufrag", "ice-pwd", "fingerprint"].into_iter().enumerate() {
+            if let Some(value) = media.attribute(key).flatten() {
+                if transport[i].as_ref().is_some_and(|prior| prior != value) {
+                    return Err(Error::InvalidSdp);
+                }
+                transport[i] = Some(value.into());
+            }
+        }
+        for attr in media.attributes.iter().filter(|a| a.key == "candidate") {
+            rtc::ice::candidate::unmarshal_candidate(attr.value.as_deref().ok_or(Error::InvalidSdp)?)
+                .map_err(|_| Error::InvalidSdp)?;
+        }
+    }
+    if transport.iter().any(|v| v.as_ref().is_none_or(String::is_empty))
+        || transport[2].as_ref().is_none_or(|f| f.split_whitespace().count() != 2)
+    {
+        return Err(Error::InvalidSdp);
+    }
+    Ok(description)
+}
+
 #[derive(Default)]
 pub(crate) struct Negotiation {
     pending: bool,
@@ -126,7 +169,7 @@ impl Negotiation {
 
     pub fn answer(&mut self, rtc: &mut RTCPeerConnection, now: Instant, sdp: &str) -> Result<String, Error> {
         self.check_new()?;
-        let offer = RTCSessionDescription::offer(sdp.into()).map_err(|_| Error::InvalidSdp)?;
+        let offer = remote(sdp, false)?;
         rtc.set_remote_description(now, offer).map_err(|_| Error::InvalidSdp)?;
         self.attach(rtc)?;
         let answer = rtc.create_answer(None).map_err(|_| Error::InvalidSdp)?;
@@ -139,7 +182,7 @@ impl Negotiation {
         if !self.pending {
             return Err(Error::State);
         }
-        let answer = RTCSessionDescription::answer(sdp.into()).map_err(|_| Error::InvalidSdp)?;
+        let answer = remote(sdp, true)?;
         rtc.set_remote_description(now, answer).map_err(|_| Error::InvalidSdp)?;
         self.pending = false;
         self.negotiated = true;
@@ -205,6 +248,46 @@ mod tests {
         );
         assert_eq!(Error::InvalidSdp.to_string(), "invalid SDP");
         assert!(!state.negotiated);
+        Ok(())
+    }
+    #[test]
+    fn parsed_bad_transport_preserves_new_and_pending_negotiation() -> Result<(), Error> {
+        let now = Instant::now();
+        let mut a = connection("127.0.0.1:12345".parse().unwrap(), now)?;
+        let mut b = connection("127.0.0.1:12346".parse().unwrap(), now)?;
+        let mut left = Negotiation::default();
+        let mut right = Negotiation::default();
+        let offer = left.offer(&mut a, now)?;
+        for key in ["mid", "ice-ufrag", "ice-pwd", "fingerprint"] {
+            let bad = offer
+                .lines()
+                .filter(|l| !l.starts_with(&format!("a={key}:")))
+                .fold(String::new(), |mut s, l| {
+                    s.push_str(l);
+                    s.push_str("\r\n");
+                    s
+                });
+            assert_eq!(right.answer(&mut b, now, &bad), Err(Error::InvalidSdp));
+            assert!(!right.negotiated);
+        }
+        let answer = right.answer(&mut b, now, &offer)?;
+        for key in ["mid", "ice-ufrag", "ice-pwd", "fingerprint"] {
+            let bad =
+                answer
+                    .lines()
+                    .filter(|l| !l.starts_with(&format!("a={key}:")))
+                    .fold(String::new(), |mut s, l| {
+                        s.push_str(l);
+                        s.push_str("\r\n");
+                        s
+                    });
+            assert_eq!(left.apply_answer(&mut a, now, &bad), Err(Error::InvalidSdp));
+            assert!(left.pending);
+        }
+        left.apply_answer(&mut a, now, &answer)?;
+        assert!(left.negotiated);
+        assert!(!left.pending);
+        assert_eq!(left.apply_answer(&mut a, now, &answer), Err(Error::State));
         Ok(())
     }
 }
