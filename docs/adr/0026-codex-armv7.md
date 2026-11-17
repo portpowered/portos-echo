@@ -79,6 +79,18 @@ nonempty output is refused and preserved. Do not reuse a failed work directory:
 select another clean pair. SIGKILL cannot run cleanup; inspect and remove only
 the abandoned invocation's claim directories before attempting reuse.
 
+The coordinator's reproducibility correction (2026-11-17) authorizes build
+configuration changes and two replacement clean builds. Rust source paths
+under the external work directory (including generated files and private
+pagable) and Cargo home are remapped to `/codex-armv7/work` and
+`/codex-armv7/cargo`. Encoded compiler arguments preserve paths with spaces
+and existing caller flags. This removes those Rust compile-time path inputs;
+it does not establish equal executable sizes or hash reproducibility.
+Native OpenSSL engine/module directory literals remain build-specific.
+The replacement evidence pair must each hold `/var/tmp/pe-ci.lock` for the
+whole build, with four workers and nice 10. This operational restriction
+applies to that pair; the helper remains independent of the shared lock.
+
 The bundle contains stripped `codex-app-server`, `cacert.pem`, upstream
 `LICENSE` and complete `NOTICE` (including OpenAI Codex, Copyright 2025 OpenAI
 and upstream attributions). Codex is Apache-2.0. The CA bundle retains its

@@ -63,6 +63,23 @@ codex_environment() {
   export ANDROID_PLATFORM=android-24
   export CMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake"
   export RUSTUP_AUTO_INSTALL=0
+  # Encode each argument separately so external paths containing spaces survive.
+  CARGO_ENCODED_RUSTFLAGS=$(
+    python3 - "$work" <<'PY'
+import os
+from pathlib import Path
+import sys
+separator = "\x1f"
+encoded = os.environ.get("CARGO_ENCODED_RUSTFLAGS")
+flags = os.environ.get("RUSTFLAGS", "").split() if encoded is None else encoded.split(separator)
+flags = [flag for flag in flags if flag]
+cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")).resolve()
+flags += ["--remap-path-prefix=" + str(cargo_home) + "=/codex-armv7/cargo",
+          "--remap-path-prefix=" + sys.argv[1] + "=/codex-armv7/work"]
+print(separator.join(flags), end="")
+PY
+  )
+  export CARGO_ENCODED_RUSTFLAGS
 }
 
 codex_source() {

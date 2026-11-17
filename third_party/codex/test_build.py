@@ -86,6 +86,23 @@ class BuildHelperTests(unittest.TestCase):
                          ["4", str(self.work / "target"),
                           "/ndk/bin/armv7a-linux-androideabi24-clang"])
 
+    def test_remapped_paths_are_single_arguments_and_keep_caller_flags(self):
+        code = ('codex_paths; tools=/ndk/bin; ndk=/ndk; codex_environment; '
+                'printf "%s" "$CARGO_ENCODED_RUSTFLAGS"')
+        cargo_home = self.root / "cargo home"
+        for inherited, expected in [
+            ({"RUSTFLAGS": "-C opt-level=2"}, ["-C", "opt-level=2"]),
+            ({"RUSTFLAGS": "ignored", "CARGO_ENCODED_RUSTFLAGS": ""}, []),
+            ({"RUSTFLAGS": "ignored", "CARGO_ENCODED_RUSTFLAGS": "-C\x1fdebuginfo=1"},
+             ["-C", "debuginfo=1"]),
+        ]:
+            result = self.call(code, CARGO_HOME=str(cargo_home), **inherited)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.split("\x1f"), expected + [
+                f"--remap-path-prefix={cargo_home}=/codex-armv7/cargo",
+                f"--remap-path-prefix={self.work}=/codex-armv7/work",
+            ])
+
     def test_wrong_revision_and_patch_failure(self):
         fake = '''
 work="$CODEX_ARMV7_WORK_DIR"; mkdir "$work"; commit=expected
