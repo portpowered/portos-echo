@@ -92,3 +92,79 @@ assert not [t for t in threading.enumerate() if t is not threading.main_thread()
 print('collected: ' + ','.join(str(proc.pid) for proc in owned), file=sys.stderr, flush=True)
 sys.exit(status)
 '''
+
+
+JSON_CONTROLLER = r'''
+import json, subprocess, sys
+from wsl_relay_test_support import SERVER
+host = None
+def start():
+    global host
+    host = subprocess.Popen([sys.executable, '-u', '-c', SERVER, '0'],
+                            stdout=subprocess.PIPE, text=True)
+    print(json.dumps({'event': 'host.ready', 'address': '127.0.0.1:' + host.stdout.readline().strip()}), flush=True)
+def stop():
+    host.kill()
+    host.wait()
+    host.stdout.close()
+start()
+try:
+    for line in sys.stdin:
+        action = json.loads(line)['action']
+        if action == 'kill':
+            stop()
+        elif action == 'release':
+            start()
+        print(json.dumps({'event': 'host.ack', 'action': action}), flush=True)
+finally:
+    if host.poll() is None:
+        stop()
+'''
+
+
+def exercise_json_forward(test, root):
+    """Actual JSON stdio owner, native relay and framed guest, without WSL."""
+    import json
+    import os
+    import queue
+    import threading
+    import socket
+    import subprocess
+    import sys
+    import tempfile
+    with tempfile.TemporaryDirectory() as folder:
+        controller = root.__class__(folder) / 'controller.py'
+        controller.write_text(JSON_CONTROLLER)
+        code = ('import sys; from wsl_relay import forward; '
+                'sys.exit(forward([sys.executable, "-u", sys.argv[1]], '
+                '[sys.executable, "-u", sys.argv[2], "--guest"]))')
+        proc = subprocess.Popen([sys.executable, '-u', '-c', code, str(controller), str(root / 'wsl_relay.py')],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, env=dict(os.environ, PYTHONPATH=str(root)))
+        out = queue.Queue()
+        reader = threading.Thread(target=test.read, args=(proc.stdout, out))
+        reader.start()
+        try:
+            initial = json.loads(out.get(timeout=5))
+            port = int(initial['address'].rsplit(':', 1)[1])
+            proc.stdin.write('{"action":"kill"}\n')
+            proc.stdin.flush()
+            test.assertEqual(json.loads(out.get(timeout=5)), {'event': 'host.ack', 'action': 'kill'})
+            with socket.create_connection(('127.0.0.1', port), timeout=5) as client:
+                client.sendall(b'json-gap')
+                client.shutdown(socket.SHUT_WR)
+                proc.stdin.write('{"action":"release"}\n')
+                proc.stdin.flush()
+                test.assertEqual(json.loads(out.get(timeout=5)), initial)
+                test.assertEqual(json.loads(out.get(timeout=5)), {'event': 'host.ack', 'action': 'release'})
+                test.assertEqual(client.recv(8), b'pag-nosj')
+                test.assertEqual(client.recv(1), b'')
+            proc.stdin.close()
+            test.assertEqual(proc.wait(timeout=5), 0)
+            diagnostics = proc.stderr.read()
+            test.assertIn('"role": "host-controller"', diagnostics)
+            test.assertIn('"phase": "collected", "status": 0', diagnostics)
+        finally:
+            test.dispose(proc)
+            reader.join(timeout=5)
+            test.assertFalse(reader.is_alive())
