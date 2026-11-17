@@ -45,7 +45,7 @@ pub struct Supervisor {
     launched: bool,
     ready: bool,
     environment: Vec<(String, String)>,
-    _lease: File,
+    lease: File,
 }
 
 impl Supervisor {
@@ -66,7 +66,7 @@ impl Supervisor {
             launched: false,
             ready: false,
             environment: Vec::new(),
-            _lease: lease,
+            lease,
         })
     }
 
@@ -225,8 +225,13 @@ impl RestartBudget {
 impl Drop for Supervisor {
     fn drop(&mut self) {
         self.io.take();
-        if let Some(child) = &mut self.child {
+        let reaped = self.child.as_mut().is_none_or(|child| {
             let _ = child.start_kill();
+            matches!(child.try_wait(), Ok(Some(_)))
+        });
+        if reaped {
+            // Unlock the shared open description before any inherited copy closes.
+            let _ = self.lease.unlock();
         }
     }
 }
@@ -234,6 +239,36 @@ impl Drop for Supervisor {
 #[cfg(test)]
 mod codex_restart_tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn drop_releases_home_with_retained_open_description() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::DirBuilderExt;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let parent = std::env::temp_dir().join(format!("echo-lease-{}-{nonce}", std::process::id()));
+        std::fs::DirBuilder::new().mode(0o700).create(&parent)?;
+        let binary = std::env::current_exe()?;
+        let config = || SupervisorConfig::new(binary.clone(), parent.join("home"));
+        let owner = Supervisor::new(config())?;
+        let retained = owner.lease.try_clone()?;
+        assert!(matches!(Supervisor::new(config()), Err(ProcessError::PrivateHome)));
+        drop(owner);
+        let next = Supervisor::new(config());
+        assert!(
+            next.is_ok(),
+            "dropped owner must release home despite retained description"
+        );
+        let next = next?;
+        assert!(matches!(retained.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+        drop(next);
+        retained.try_lock()?;
+        retained.unlock()?;
+        drop(retained);
+        std::fs::remove_dir_all(parent)?;
+        Ok(())
+    }
+
     #[tokio::test(start_paused = true)]
     async fn restart_budget_expires_at_window_boundary() -> Result<(), ProcessError> {
         let window = std::time::Duration::from_secs(60);

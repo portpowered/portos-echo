@@ -719,3 +719,22 @@ Each wake explicitly rearms the remote. Exact packet counts, PCM energy,
 played receipt, reuse and kill/idle assertions remain. This removes the fake's
 unbounded post-completion audio source without relaxing production late-audio
 rejection.
+
+### Owner-scoped home unlock (2026-11-17)
+
+The coordinator's 16:48Z answer and 16:58Z test-placement amendment authorize
+explicit lease unlock in Supervisor Drop after its child is confirmed reaped
+or absent. Shutdown alone still holds exclusive ownership until Drop. If Drop
+cannot confirm reaping, it retains the existing kill-on-drop and file-close
+behavior without explicit unlock. The private field is named `lease` now that
+Drop uses it directly.
+
+On Unix a forked copy can retain the same open file description before exec,
+even with close-on-exec set. Closing only the owner's File does not release a
+flock while such a copy survives. Explicit unlock releases the description's
+lock. The causal observation was a closed owner followed by refused acquisition;
+the transient holder was unidentified. A deterministic private Unix regression
+retains a std File::try_clone across owner Drop, protects live-owner exclusion,
+and requires immediate reacquisition without retries. Existing public lifecycle
+tests protect clean shutdown, persistent auth bytes and independent sessions.
+No dependency, unsafe code, public accessor or credential path is added.
