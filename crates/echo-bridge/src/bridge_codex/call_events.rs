@@ -31,6 +31,20 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                         .ok_or(Error::Decode)?
                         .to_owned();
                     let thread = self.thread.clone().ok_or(Error::Decode)?;
+                    if method == "turn/completed"
+                        && self
+                            .interrupted
+                            .as_ref()
+                            .is_some_and(|interrupted| interrupted.thread_id == thread && interrupted.turn_id == turn)
+                    {
+                        if params["turn"]["status"] == "interrupted"
+                            && let Some(trace) = &mut self.tool_trace
+                            && let Some(interrupted) = &self.interrupted
+                        {
+                            trace.interrupt("turn.interrupted", interrupted)?;
+                        }
+                        self.interrupted = None;
+                    }
                     return Ok(if method == "turn/started" {
                         Event::TurnStarted { thread, turn }
                     } else {

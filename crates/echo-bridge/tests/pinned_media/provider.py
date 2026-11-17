@@ -17,6 +17,7 @@ transcript_count = 0
 observed = {'calls': [], 'sidebands': 0, 'external': 0}
 output_lock = threading.Lock()
 delegation = None
+manual = False
 
 
 def emit(value):
@@ -108,7 +109,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         value = json.loads(data)
                         if value.get('type') == 'delegation.context.append':
                             delegation.append(value)
-                            self.transcripts(delegation.reply)
+                            if manual:
+                                emit({'append': value['delegation_item_id']})
+                            else:
+                                self.transcripts(delegation.reply)
                 if transcript_input in readable:
                     assert transcript_input.recv(1) == b't'
                     if delegation is None:
@@ -137,8 +141,15 @@ try:
         if 'answer' in command:
             answers.put(command['answer'])
         elif 'tools' in command:
-            assert delegation is None
+            assert delegation is None or manual
+            history = [] if delegation is None else delegation.history + delegation.outputs
+            manual = command.get('manual', False)
             delegation = tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False))
+            if manual:
+                delegation.identity = command['identity']
+                delegation.call_id = command['identity'] + '-tool'
+                delegation.history = history
+                emit({'initialized': command['identity']})
         elif command == {'transcripts': True}:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:

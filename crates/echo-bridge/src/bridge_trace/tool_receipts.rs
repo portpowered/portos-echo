@@ -1,7 +1,7 @@
 //! Correlation-only dispatch receipts. Tool bodies never enter the trace.
 use super::Trace;
 use crate::Error;
-use echo_codex::codex_protocol::{RequestId, ToolCall};
+use echo_codex::codex_protocol::{RequestId, ToolCall, TurnInterrupt};
 use echo_delegation::codex_dispatch::Catalog;
 use serde_json::json;
 
@@ -20,6 +20,18 @@ impl ToolTrace {
                 .filter_map(|tool| catalog.resolve(&tool.name).map(str::to_owned))
                 .collect(),
         }
+    }
+
+    pub fn interrupt(&mut self, event: &str, turn: &TurnInterrupt) -> Result<(), Error> {
+        if !valid(&turn.thread_id) || !valid(&turn.turn_id) {
+            return Err(Error::Decode);
+        }
+        let run = self.trace.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        self.trace.record(
+            event,
+            run.as_deref(),
+            json!({"thread_id":turn.thread_id,"turn_id":turn.turn_id}),
+        )
     }
 
     pub fn request(&mut self, id: &RequestId, call: &ToolCall) -> Result<(), Error> {
@@ -134,6 +146,29 @@ mod tests {
         idle.as_object_mut().unwrap().remove("run_id");
         idle["call_id"] = json!("next");
         assert_eq!(rows, vec![requested, expected, idle]);
+    }
+
+    #[test]
+    fn interrupt_receipts_reject_unsafe_ids_and_record_only_matching_correlation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("trace");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        trace.tool_run(Some("run-1")).unwrap();
+        let mut receipts = ToolTrace::new(trace, &catalog());
+        let mut turn = TurnInterrupt {
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+        };
+        receipts.interrupt("turn/interrupt", &turn).unwrap();
+        turn.turn_id = "private\nvalue".into();
+        assert_eq!(receipts.interrupt("turn/interrupt", &turn), Err(Error::Decode));
+        let mut row: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        row["elapsed_ms"] = json!(0);
+        assert_eq!(
+            row,
+            json!({"event":"turn/interrupt","thread_id":"thread","turn_id":"turn",
+            "run_id":"run-1","elapsed_ms":0,"provider_auth_mode":"api_key"})
+        );
     }
 
     #[test]

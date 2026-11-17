@@ -986,3 +986,31 @@ the MCP attempt; legacy mic phase and reply-start receipts disappear;
 Only incidental identity names, endpoints, elapsed times and the existing
 payload-free idle probes are normalized. Full-trace comparison remains exact.
 M6 retains its separate migration obligation; no legacy code is deleted.
+
+## Configured daily admission and interrupt receipts
+
+The configured runtime retains its daily counter across delegated turns and
+reads the injected UTC day at admission. A refused bridge-owned call cannot
+create a peer, thread or model request. An automatic turn already routed by
+the unmodified pin is interrupted on its matching lifecycle notification;
+its tool requests cannot reach MCP. A later UTC day admits a fresh turn.
+This does not close the pin-owned pre-notification routing gap recorded in
+the program decisions.
+
+The single call reader emits correlation-only `turn/interrupt` when it queues
+the request, `turn.interrupt_acknowledged` only after its matching RPC reply,
+and `turn.interrupted` only after the same thread/turn completes with the
+pinned `interrupted` status. No provider body or tool argument is recorded.
+Normal successful turns add no interrupt events to the complete M4 goldens.
+
+The T3 configured-owner witness uses the real pinned app server, production
+catalog, policy, durable ledger and MCP client, with loopback Responses and
+spoof MCP. Device and media ports are controlled to isolate admission; the
+separate M4 scenario retains real Wyoming and WebRTC/Opus evidence. Each fake
+delegation retains exact historical tool outputs and uses its own call ID.
+A fresh turn after the UTC-day change executes once on the same thread.
+Exact ingress observations account for the scheduling-dependent automatic
+model work and must remain stable after interrupted completion. The separate
+gated real-pin/media witness fixes the pre-notification schedule and asserts
+exactly one model request before the reader resumes. Neither witness asserts
+a universal zero-request bound for pin-owned automatic routing.

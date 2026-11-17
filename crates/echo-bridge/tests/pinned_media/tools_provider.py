@@ -39,12 +39,16 @@ class Delegation:
         self.delegations = []
         self.appends = []
         self.failure = None
+        self.identity = 'delegation-local'
+        self.history = []
+        self.outputs = []
+        self.call_id = 'tool-local'
 
     def begin(self):
         assert not self.delegations, 'duplicate delegation'
-        self.delegations.append('delegation-local')
+        self.delegations.append(self.identity)
         return {'type': 'delegation.created', 'item': {
-            'type': 'delegation', 'target': 'client', 'id': 'delegation-local',
+            'type': 'delegation', 'target': 'client', 'id': self.identity,
             'content': [{'type': 'input_text', 'text': 'Call tool_0 with text delegated echo and report the result.'}]}}
 
     def respond(self, body):
@@ -58,16 +62,19 @@ class Delegation:
         assert body['tools'] == expected, 'model exposed tools beyond exact dynamic catalog'
         assert body['model'] == 'gpt-5.4', 'wrong delegated model'
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
+        assert outputs[:len(self.history)] == self.history, 'prior tool outputs changed across turns'
+        outputs = outputs[len(self.history):]
         index = len(self.models)
         assert index < 2, 'unexpected model retry'
         if index == 0:
             assert not outputs, 'premature tool output'
-            item = {'type': 'function_call', 'id': 'fc-local', 'call_id': 'tool-local',
+            item = {'type': 'function_call', 'id': 'fc-local', 'call_id': self.call_id,
                     'name': 'tool_0', 'arguments': '{"text":"delegated echo"}', 'status': 'completed'}
         else:
-            assert len(outputs) == 1 and outputs[0]['call_id'] == 'tool-local', 'tool identity mismatch'
+            assert len(outputs) == 1 and outputs[0]['call_id'] == self.call_id, 'tool identity mismatch'
             # The pinned engine encodes dynamic-tool content as a JSON text value.
             self.check_output(outputs[0]['output'])
+            self.outputs = deepcopy(outputs)
             item = {'type': 'message', 'id': 'msg-local', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
         self.models.append({'tools': [tool['name'] for tool in body['tools']], 'outputs': len(outputs)})
@@ -87,7 +94,7 @@ class Delegation:
         if self.exhausted:
             raise AssertionError('interrupted turn appended a false result')
         assert len(self.models) == 2, 'append before verified output'
-        assert value['delegation_item_id'] == 'delegation-local', 'wrong delegation correlation'
+        assert value['delegation_item_id'] == self.identity, 'wrong delegation correlation'
         assert value['content'] == [{'type': 'input_text', 'text': self.reply}], 'wrong appended result'
         self.appends.append(value['delegation_item_id'])
         assert len(self.appends) == 1, 'duplicate append'

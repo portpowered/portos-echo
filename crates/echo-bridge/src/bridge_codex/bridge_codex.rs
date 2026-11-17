@@ -65,6 +65,7 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     thread: Option<String>,
     early: VecDeque<Event>,
     interrupt: Option<(RequestId, Instant)>,
+    interrupted: Option<TurnInterrupt>,
     tool_trace: Option<crate::bridge_trace::ToolTrace>,
 }
 
@@ -76,6 +77,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             thread: None,
             early: VecDeque::new(),
             interrupt: None,
+            interrupted: None,
             tool_trace: None,
         }
     }
@@ -187,6 +189,9 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
                 self.fail();
                 return Err(error);
             }
+            if let (Some(trace), Some(turn)) = (&mut self.tool_trace, &self.interrupted) {
+                trace.interrupt("turn.interrupt_acknowledged", turn)?;
+            }
             self.interrupt = None;
         }
         if let Some(event) = self.early.pop_front() {
@@ -238,6 +243,13 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         }
         let id = self.io.begin_request("turn/interrupt", params).map_err(rpc_error)?;
         self.interrupt = Some((id, deadline));
+        self.interrupted = Some(TurnInterrupt {
+            thread_id: params.thread_id.clone(),
+            turn_id: params.turn_id.clone(),
+        });
+        if let Some(trace) = &mut self.tool_trace {
+            trace.interrupt("turn/interrupt", params)?;
+        }
         Ok(())
     }
 
@@ -285,6 +297,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         self.phase = Phase::Closed;
         self.early.clear();
         self.interrupt = None;
+        self.interrupted = None;
     }
 }
 

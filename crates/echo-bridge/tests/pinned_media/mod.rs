@@ -9,6 +9,7 @@ use echo_contracts::secret::Secret;
 use std::{path::Path, process::Stdio};
 use tokio::{process::Command, sync::mpsc};
 mod auth;
+mod daily;
 mod tools;
 mod voice;
 
