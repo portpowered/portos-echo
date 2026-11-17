@@ -217,3 +217,33 @@ remain in `echo-signin`. While the voice runtime migration is retained work,
 its test fixtures call the legacy library explicitly rather than claiming that
 the canonical CLI still imports or redeems those credentials. Voice calls,
 real-pin M2, browser rendering and remote authentication remain separate gates.
+
+## Bridge call signaling amendment (2026-11-17)
+
+The bridge's call-control adapter exclusively borrows one initialized
+`echo-codex` IO generation. It uses the existing pinned `ThreadSettings` and
+`RealtimeStart` serializers, adding the bridge's optional delegated model,
+instructions and voice. Realtime start always selects V3 WebRTC. The media
+owner supplies its offer and receives only the matching thread's SDP answer;
+the signaling adapter does not infer media connectivity from that answer.
+This adds no dependency, copied upstream implementation or protocol change.
+The pin, rather than the research brief's older main snapshot, defines the
+wire shapes (brief sections 2, 3 and 5; program plan section 3.3).
+
+The adapter preserves early transcript/tool events in a bounded queue while
+waiting for SDP. Only the matching assistant `transcript/done` signals the
+reply's end; draining accepted media and receiving `played` remain the run
+owner's responsibility. An acknowledged stop also requires the matching
+`thread/realtime/closed`. A failed or abandoned start/stop closes the IO
+generation; the host must still await supervisor shutdown before releasing
+ownership. A successful stop leaves the initialized generation usable for a
+later call. Unknown or foreign server requests receive unsuccessful results
+without executing a tool. Matching requests retain their original IDs for the
+future authorized tool dispatcher.
+
+Component tests exercise memory-stream JSONL and a paused clock, including
+early notifications, foreign IDs, exact settings, malformed responses,
+overflow, deadline, EOF and cancellation. They do not prove the real app
+server, ICE, PCM, screen rendering or any milestone. The voice runtime still
+uses the retained legacy path until the planned supervisor/media/simulator
+wiring is complete; this adapter alone does not satisfy the cutover.

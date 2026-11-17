@@ -1,5 +1,7 @@
 //! Bridge-owned orchestration. Real provider compatibility remains the M2 gate.
 pub mod bridge_audio;
+#[path = "bridge_codex/bridge_codex.rs"]
+pub mod bridge_codex;
 pub mod bridge_health;
 pub mod bridge_input;
 #[path = "bridge_mcp/bridge_mcp.rs"]
