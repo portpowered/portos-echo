@@ -178,6 +178,14 @@ class PythonDispatchTests(unittest.TestCase):
         cls.supervisor = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.supervisor)
 
+        import socket
+        import threading
+        cls.socket, cls.threading = socket, threading
+        spec = importlib.util.spec_from_file_location('device_relay',
+            ROOT / 'crates/echo-lab/tests/device_support/relay.py')
+        cls.relay = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.relay)
+
     def test_supervisor_default_empty_invalid_and_translation_refusal(self):
         supervisor = self.supervisor
         for value in (None, '', *INVALID, 'pe-ci'):
@@ -188,7 +196,7 @@ class PythonDispatchTests(unittest.TestCase):
                     with mock.patch.dict(os.environ, env, clear=True), \
                             mock.patch.object(supervisor, 'os', types.SimpleNamespace(name='nt')), \
                             mock.patch.object(subprocess, 'check_output', side_effect=failure) as translate, \
-                            mock.patch.object(subprocess, 'call') as launch, \
+                            mock.patch.object(supervisor, 'forward') as launch, \
                             contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
                         self.assertEqual(supervisor.main(), 1)
                     launch.assert_not_called()
@@ -219,12 +227,14 @@ class PythonDispatchTests(unittest.TestCase):
                         mock.patch.object(self.supervisor, 'os', types.SimpleNamespace(name='nt')), \
                         mock.patch.object(subprocess, 'check_output',
                                           return_value='/checkout with spaces ; literal/supervisor.py\n') as translate, \
-                        mock.patch.object(subprocess, 'call', side_effect=guest) as launch, \
+                        mock.patch.object(self.supervisor, 'forward', side_effect=guest) as launch, \
                         contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
                     self.assertEqual(self.supervisor.main(), 1 if isinstance(status, OSError) else status)
                 self.assertEqual(translate.call_args.args[0][:4], ['wsl', '-d', 'pe-ci', '--exec'])
                 launch.assert_called_once_with(['wsl', '-d', 'pe-ci', '--exec', 'python3', '-u',
-                                               '/checkout with spaces ; literal/supervisor.py'])
+                                               '/checkout with spaces ; literal/supervisor.py'],
+                                              ['wsl', '-d', 'pe-ci', '--exec', 'python3', '-u',
+                                               '/checkout with spaces ; literal/supervisor.py', '--relay'])
                 self.assertEqual(stdout.getvalue(), '' if isinstance(status, OSError) else
                                  '{"event":"host.ready","port":12345}\n')
                 self.assertEqual(stderr.getvalue(), "WSL distro 'pe-ci': operation failed\n" if status else '')
@@ -273,8 +283,140 @@ class PythonDispatchTests(unittest.TestCase):
         owner.close.return_value = 17
         with mock.patch.object(host, 'LauncherChild', return_value=owner), \
                 mock.patch.object(host.subprocess, 'Popen') as spawn, \
-                mock.patch.object(host.threading, 'Thread'), mock.patch.object(sys, 'argv', ['host.py', '--finite']):
+                mock.patch.object(host.threading, 'Thread') as thread, mock.patch.object(sys, 'argv', ['host.py', '--finite']):
+            thread.return_value.is_alive.return_value = False
             self.assertEqual(host.launcher_forward(events, translation, [], 'pe-ci'), 17)
         self.assertEqual(spawn.call_args.args[0], ['wsl', '-d', 'pe-ci', '--exec', 'python3',
                          '-u', '/checkout with spaces/host.py', '--finite'])
         owner.close.assert_called()
+
+    def test_sim_ready_publishes_owned_native_address_and_preserves_other_events(self):
+        events, relays, emitted = self.host.queue.Queue(), [], []
+        proc = types.SimpleNamespace(stdout=io.BytesIO(
+            b'{"event":"host.ready","address":"127.0.0.1:12345"}\n'
+            b'{"event":"host.ack","pid":17}\n'
+            b'{"event":"host.ready","address":"127.0.0.1:12345"}\n'))
+        relay = types.SimpleNamespace(address='127.0.0.1:23456', argv=['guest', '--relay', '12345'])
+        with mock.patch.object(self.relay, 'Relay', return_value=relay) as bind:
+            self.relay.observations(proc, ['guest', '--relay'], relays, emitted.append, events)
+        bind.assert_called_once_with(['guest', '--relay', '12345'])
+        self.assertEqual(relays, [relay])
+        self.assertEqual(emitted, [{'event': 'host.ready', 'address': '127.0.0.1:23456'},
+                                   {'event': 'host.ack', 'pid': 17},
+                                   {'event': 'host.ready', 'address': '127.0.0.1:23456'}])
+        self.assertTrue(events.empty())
+
+    def test_sim_failed_publication_retains_relay_for_owner_and_reports_failure(self):
+        events, relays = self.host.queue.Queue(), []
+        proc = types.SimpleNamespace(stdout=io.BytesIO(
+            b'{"event":"host.ready","address":"127.0.0.1:12345"}\n'))
+        relay = types.SimpleNamespace(address='127.0.0.1:23456')
+        with mock.patch.object(self.relay, 'Relay', return_value=relay), \
+                mock.patch('builtins.print', side_effect=OSError('closed')) as publish:
+            self.relay.observations(proc, ['guest'], relays, publish, events)
+        self.assertEqual(relays, [relay])
+        self.assertEqual(events.get_nowait(), ('error', None))
+        self.assertTrue(events.empty())
+
+    def test_device_forward_collects_every_relay_after_cleanup_failure(self):
+        for failure in (OSError, ValueError, RuntimeError):
+            with self.subTest(failure=failure):
+                first, second = mock.Mock(), mock.Mock()
+                first.address = second.address = '127.0.0.1:23456'
+                first.close.side_effect = failure('private failure detail')
+                proc = mock.Mock(stdin=io.StringIO(), stdout=io.StringIO(
+                    '{"event":"host.ready","address":"127.0.0.1:12345"}\n'
+                    '{"event":"host.ready","address":"127.0.0.1:12346"}\n'))
+                proc.wait.return_value = 0
+                with mock.patch.object(self.relay.subprocess, 'Popen', return_value=proc), \
+                        mock.patch.object(self.relay, 'Relay', side_effect=[first, second]), \
+                        mock.patch.object(self.relay.threading, 'Thread'), \
+                        mock.patch('builtins.print'):
+                    with self.assertRaisesRegex(RuntimeError, '^relay cleanup failed$'):
+                        self.relay.forward(['controller'], ['guest', '--relay'])
+                first.close.assert_called_once_with()
+                second.close.assert_called_once_with()
+                self.assertTrue(proc.stdin.closed)
+                self.assertTrue(proc.stdout.closed)
+
+    def exercise(self, remote_first=False, cancel=False):
+        socket = self.socket
+        errors = []
+        received = []
+        payload = bytes(range(256)) * 1024
+        reply = payload[::-1]
+        with socket.socket() as host:
+            host.bind(('127.0.0.1', 0))
+            host.listen()
+            host.settimeout(5)
+            port = host.getsockname()[1]
+
+            def serve():
+                try:
+                    with host.accept()[0] as peer:
+                        peer.settimeout(5)
+                        if remote_first:
+                            peer.sendall(reply)
+                            peer.shutdown(socket.SHUT_WR)
+                        data = bytearray()
+                        while True:
+                            chunk = peer.recv(65536)
+                            if not chunk:
+                                break
+                            data.extend(chunk)
+                        received.append(bytes(data))
+                        if not remote_first and not cancel:
+                            peer.sendall(reply)
+                except BaseException as error:
+                    errors.append(error)
+
+            server = self.threading.Thread(target=serve)
+            server.start()
+            argv = [sys.executable, '-u', '-c',
+                    'import sys; sys.path.insert(0, sys.argv[1]); from relay import guest; guest(int(sys.argv[2]))',
+                    str(ROOT / 'crates/echo-lab/tests/device_support'), str(port)]
+            relay = self.relay.Relay(argv)
+            try:
+                with socket.create_connection(('127.0.0.1', int(relay.address.split(':')[1])), timeout=5) as client:
+                    if cancel:
+                        client.sendall(payload)
+                        # A response is unnecessary: close must collect an active guest.
+                    elif remote_first:
+                        data = bytearray()
+                        while chunk := client.recv(65536):
+                            data.extend(chunk)
+                        self.assertEqual(bytes(data), reply)
+                        client.sendall(payload)
+                        client.shutdown(socket.SHUT_WR)
+                    else:
+                        client.sendall(payload)
+                        client.shutdown(socket.SHUT_WR)
+                        data = bytearray()
+                        while chunk := client.recv(65536):
+                            data.extend(chunk)
+                        self.assertEqual(bytes(data), reply)
+                if not cancel:
+                    server.join(timeout=5)
+            finally:
+                relay.close()
+                server.join(timeout=5)
+            self.assertFalse(server.is_alive())
+            self.assertEqual(errors, [])
+            if not cancel:
+                self.assertEqual(received, [payload])
+            self.assertEqual(len(relay.connections), 1)
+            for connection in relay.connections:
+                self.assertIsNotNone(connection.proc.poll())
+                self.assertFalse(connection.reader.is_alive())
+                self.assertFalse(connection.writer.is_alive())
+                self.assertTrue(connection.proc.stdin.closed)
+                self.assertTrue(connection.proc.stdout.closed)
+
+    def test_t3_exact_duplex_and_client_half_close(self):
+        self.exercise()
+
+    def test_t3_guest_half_close_still_accepts_client_bytes(self):
+        self.exercise(remote_first=True)
+
+    def test_t3_cancel_collects_active_relay_process_and_streams(self):
+        self.exercise(cancel=True)

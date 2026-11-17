@@ -33,6 +33,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from wsl_distro import resolve_wsl_distro
 from wsl_host import LauncherError, LauncherChild, HostCancelled
 
+# Both T3 launchers share the native transport; the Linux Host stays direct.
+sys.path.insert(0, str(ROOT / "crates/echo-lab/tests/device_support"))
+from relay import observations, guest
+
 
 def launcher_input(events):
     try:
@@ -140,12 +144,19 @@ def launch_windows():
             return 1
 
 
+def launcher_emit(value):
+    sys.stdout.buffer.write((json.dumps(value) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 def launcher_forward(events, translation, owners, distro=None):
     owner = translation
     pending = []
     commands = queue.Queue(maxsize=16)
     writer = None
     translated = False
+    output = None
+    relays = []
     startup = time.monotonic() + 20
     try:
         while True:
@@ -174,11 +185,15 @@ def launcher_forward(events, translation, owners, distro=None):
                 owner = LauncherChild(subprocess.Popen(
                     ["wsl", "-d", distro or resolve_wsl_distro(), "--exec", "python3", "-u", value,
                      *(["--finite"] if "--finite" in sys.argv[1:] else [])],
-                    stdin=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0))
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0))
                 owners.append(owner)
+                translated = True
+                output = threading.Thread(target=observations, args=(
+                    owner.proc, ["wsl", "-d", distro or resolve_wsl_distro(), "--exec",
+                                 "python3", "-u", value, "--relay"], relays, launcher_emit, events))
+                output.start()
                 writer = threading.Thread(target=launcher_write, args=(owner.proc, commands, events), daemon=True)
                 writer.start()
-                translated = True
                 for line in pending:
                     commands.put_nowait(line)
                 pending.clear()
@@ -196,6 +211,19 @@ def launcher_forward(events, translation, owners, distro=None):
                 with contextlib.suppress(queue.Full):
                     commands.put_nowait(None)
                 writer.join(timeout=0.5)
+            failed = False
+            if output and output.ident is not None:
+                output.join(timeout=0.5)
+                failed = output.is_alive()
+            if translated and not failed:
+                owner.proc.stdout.close()
+            for relay in relays:
+                try:
+                    relay.close()
+                except (OSError, ValueError, RuntimeError):
+                    failed = True
+            if failed:
+                raise RuntimeError("launch: output cleanup failed")
 
 
 class Host:
@@ -443,4 +471,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(launch_windows() if os.name == "nt" else main())
+    if len(sys.argv) == 3 and sys.argv[1] == "--relay":
+        guest(int(sys.argv[2]))
+    else:
+        sys.exit(launch_windows() if os.name == "nt" else main())

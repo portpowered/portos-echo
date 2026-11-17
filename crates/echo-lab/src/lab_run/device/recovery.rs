@@ -77,13 +77,14 @@ impl Configured<'_> {
     fn replace(&mut self, process: &str, host: u32, artifacts: &mut Artifacts) -> Result<u128, String> {
         let began = std::time::Instant::now();
         if process == "bridge" {
-            self.executor.block_on(runtime::controlled(
+            let result = self.executor.block_on(runtime::controlled(
                 self.state.restart_bridge(
                     self.options.bridge.as_deref().ok_or("device: missing bridge")?,
                     artifacts,
                 ),
                 self.options.cancel.as_deref(),
-            ))?;
+            ));
+            self.state.startup_result(result)?;
         } else {
             self.state.observe()?;
             let offset = self.state.trace.records.len();
@@ -152,6 +153,7 @@ impl Configured<'_> {
 
 impl runtime::Runtime {
     async fn restart_bridge(&mut self, bridge: &Path, artifacts: &mut Artifacts) -> Result<(), String> {
+        self.startup = None;
         self.screen.take();
         // Keep the child owned until close finishes, including cancellation.
         self.bridge.as_mut().ok_or("device: missing bridge")?.close().await?;
@@ -163,6 +165,7 @@ impl runtime::Runtime {
         self.expectations.clear();
         self.run = None;
         self.generation += 1;
+        self.startup = Some(super::runtime::Startup::new("bridge_spawn"));
         self.launch(bridge, &artifacts.root).await
     }
 
