@@ -26,6 +26,19 @@ async fn t3_m2_codex_provider_closes_before_a_call_without_waiting_for_an_offer(
 }
 
 #[tokio::test]
+async fn t3_m1_repeated_provider_quiesces_and_closes_without_an_admitted_call() {
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let owner = provider::Provider::start_m1(python).await.unwrap();
+    tokio::time::timeout(DEADLINE, owner.quiesce()).await.unwrap().unwrap();
+    let observed = tokio::time::timeout(DEADLINE, owner.close()).await.unwrap().unwrap();
+    assert_eq!(
+        observed,
+        json!({"event":"provider.snapshot", "calls":0, "matching_calls":0,
+        "sidebands":0, "external":0, "refreshes":0})
+    );
+}
+
+#[tokio::test]
 async fn t3_m2_codex_host_failure_names_the_dependency_without_echoing_payloads() {
     let python = if cfg!(windows) { "python" } else { "python3" };
     for (event, expected) in [

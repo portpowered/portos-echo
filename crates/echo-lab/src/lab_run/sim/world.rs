@@ -19,6 +19,8 @@ pub struct World {
     pub bridge: Option<Process>,
     spoof: Option<Spoof>,
     live: Option<FakeLive>,
+    canonical: Option<super::m2::codex::provider::Provider>,
+    private: Option<super::m2::codex::config::Root>,
     pub trace: Trace,
     trace_path: PathBuf,
     pub ui_path: PathBuf,
@@ -59,6 +61,9 @@ impl World {
         root: &Path,
         live: impl std::future::Future<Output = Result<FakeLive, echo_live::call::CallError>>,
     ) -> Result<(), String> {
+        if super::production::selected(bridge) {
+            self.canonical = Some(super::m2::codex::provider::Provider::start_m1(python).await?);
+        }
         self.start_owned(&mut process::host(python), bridge, root, live, process::connect)
             .await
     }
@@ -97,6 +102,9 @@ impl World {
             process::connect,
         )
         .await?;
+        if let Some(provider) = &self.canonical {
+            self.endpoints.push(Self::endpoint(&provider.origin)?);
+        }
         self.start_bridge(bridge, root, address).await
     }
 
@@ -122,11 +130,13 @@ impl World {
             .env("ECHO_LAB_TRACE_PATH", &self.trace_path)
             .env("ECHO_LAB_UI_STATE_PATH", &self.ui_path);
         if super::production::selected(bridge) {
-            super::production::configure(
+            self.private = Some(super::m2::codex::config::Root::new()?);
+            super::production::configure_codex(
                 &mut command,
+                &self.private.as_ref().ok_or("m1: missing private root")?.0,
                 root,
                 address,
-                &self.live.as_ref().ok_or("launch: missing fake Live")?.base_url(),
+                &self.canonical.as_ref().ok_or("m1: missing provider")?.origin,
                 self.spoof.as_ref().ok_or("launch: missing spoof")?.url(),
             )?;
             if let Some((case, auth)) = &self.m2 {
@@ -216,12 +226,16 @@ impl World {
     }
 
     pub async fn complete_run(&mut self) -> Result<(), String> {
-        let value = self
-            .bridge
-            .as_mut()
-            .ok_or("bridge: not started")?
-            .expect("bridge.run_completed")
-            .await?;
+        let value = loop {
+            let value = self.bridge.as_mut().ok_or("bridge: not started")?.line().await?;
+            if self.canonical.is_some() && value["event"] == "bridge.ready" {
+                continue;
+            }
+            if value["event"] != "bridge.run_completed" {
+                return Err("bridge: unexpected completion observation".into());
+            }
+            break value;
+        };
         let id = value["run_id"]
             .as_str()
             .filter(|s| !s.is_empty())
@@ -276,6 +290,13 @@ impl World {
     pub async fn close(&mut self) -> Result<(), String> {
         self.screen.take();
         let mut failures = self.close_bridge().await;
+        if let Some(provider) = self.canonical.take() {
+            match provider.close().await {
+                Ok(snapshot) if super::production::valid_provider(&snapshot, &self.trace, &self.history) => {}
+                _ => failures.push("cleanup: canonical M1 provider observations disagree"),
+            }
+        }
+        self.private.take();
         if let Some(live) = self.live.take() {
             live.shutdown().await;
         }

@@ -9,57 +9,14 @@ use serde_json::Value;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    process::Command,
 };
 
 pub fn selected(bridge: &Path) -> bool {
     bridge.file_stem().is_some_and(|name| name == "echo-bridge")
 }
 
-pub fn configure(command: &mut Command, root: &Path, address: SocketAddr, live: &str, mcp: &str) -> Result<(), String> {
-    let directory = root.join("configured.private");
-    std::fs::create_dir(&directory).map_err(|_| "launch: cannot create private configuration")?;
-    let template = include_str!("../../../../../../examples/bridge.example.toml")
-        .replace("echo.example.invalid", "127.0.0.1")
-        .replace("wyoming_port = 16700", &format!("wyoming_port = {}", address.port()))
-        .replace("mode = \"chatgpt\"", "mode = \"api_key\"")
-        .replace("voice = \"default\"", "voice = \"alloy\"")
-        .replace("0.0.0.0:16900", "127.0.0.1:0") // lint-rules: allow-literal inert example replaced with loopback
-        // FakeLive's script completes one turn per call. Use the existing
-        // idle policy to give each wake a fresh controlled provider session.
-        .replace("session_idle_seconds = 120", "session_idle_seconds = 0")
-        .replace("credentials/live.json", "credential")
-        .replace("credentials/screen-pairing.txt", "pairing")
-        .replace("http://127.0.0.1:18080/mcp", mcp);
-    for (name, contents) in [
-        ("bridge.toml", template.as_str()),
-        ("credential", "synthetic-local-api"),
-        ("pairing", "synthetic-local-screen"),
-    ] {
-        std::fs::write(directory.join(name), contents).map_err(|_| "launch: cannot write private configuration")?;
-    }
-    for name in [
-        "ECHO_LAB_WYOMING_ADDR",
-        "ECHO_LAB_LIVE_URL",
-        "ECHO_LAB_TRACE_PATH",
-        "ECHO_LAB_SESSION_IDLE_SECONDS",
-    ] {
-        command.env_remove(name);
-    }
-    let origin = live.trim_end_matches('/');
-    command.current_dir(directory).args([
-        "--config",
-        "bridge.toml",
-        "--health-listen",
-        "127.0.0.1:0",
-        "--live-loopback",
-        origin,
-        "--model-loopback",
-        origin,
-    ]);
-    command.arg("--trace").arg(root.join("bridge.private.jsonl"));
-    Ok(())
-}
+mod config;
+pub use config::{configure, configure_codex};
 
 pub struct Screen {
     socket: TcpStream,
@@ -153,4 +110,18 @@ async fn line(socket: &mut TcpStream, bytes: &mut Vec<u8>) -> Result<String, Str
         }
         bytes.push(byte);
     }
+}
+
+/// Every observed call must use the nominated dummy key and local V3 route.
+/// A wake is counted independently from the production bridge trace.
+pub(super) fn valid_provider(snapshot: &Value, trace: &super::trace::Trace, history: &[super::trace::Trace]) -> bool {
+    let wakes = history
+        .iter()
+        .chain(std::iter::once(trace))
+        .flat_map(|t| &t.records)
+        .filter(|row| row["event"] == "wyoming.run_ended")
+        .count();
+    snapshot
+        == &serde_json::json!({"event":"provider.snapshot", "calls":wakes, "matching_calls":wakes,
+        "sidebands":wakes, "external":0, "refreshes":0})
 }

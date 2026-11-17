@@ -1042,3 +1042,23 @@ The obsolete executable test that expected configured tools to be refused is
 removed from its two-case loop: configured tools are now protected by the
 actual-pin configured-owner and canonical M4/M6 witnesses. Its unsupported
 epoch case still requires invalid input before any process or device admission.
+
+## Canonical M1 restart and mute fixture
+
+The M1 production world now owns a real pinned app server through its configured
+bridge child. Every bridge generation gets an external private Codex home and
+the nominated dummy API key. Its local V3 provider negotiates each new offer
+with the real media peer. M1 retains its original capture-only behavior: no reply RTP is generated.
+Twelve received microphone packets gate native assistant transcript completion;
+the remote then quiesces before idle close.
+The existing complete-wake and mute oracles remain unchanged, including the
+independent host/bridge identities and all twenty restart recoveries.
+
+The configured fixture uses the pin's default voice, matching M2. An idle close
+can publish bridge.ready before the next wake completes; the M1 completion
+observer consumes that known readiness notification without substituting it
+for bridge.run_completed. Provider cleanup compares every observed call and
+sideband with the independently completed wake count, exact local route and
+nominated key, and requires zero refreshes or external requests. Partial or
+cancelled journeys retain failure rather than receiving synthetic completion.
+The legacy configuration helper remains for the separately owned M3 fixture.

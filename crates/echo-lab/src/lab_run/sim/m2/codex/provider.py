@@ -114,6 +114,15 @@ try:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:
             emit({'transcripts': transcript_count})
+        elif command == {'summary': True}:
+            expected = {
+                'path': '/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas',
+                'model': 'gpt-live-1-codex', 'alpha': 'quicksilver=v2',
+                'nominated_key': True, 'account_header': None,
+            }
+            emit({'event': 'provider.snapshot', **observed,
+                  'calls': len(observed['calls']),
+                  'matching_calls': sum(call == expected for call in observed['calls'])})
         elif command == {'snapshot': True}:
             emit({'event': 'provider.snapshot', **observed})
         else:

@@ -13,7 +13,7 @@ enum Control {
     Quiesce(oneshot::Sender<()>),
     Close,
 }
-pub(super) struct Provider {
+pub(in crate::lab_run::sim) struct Provider {
     pub origin: String,
     commands: mpsc::Sender<Control>,
     ticks: mpsc::Receiver<()>,
@@ -21,6 +21,12 @@ pub(super) struct Provider {
 }
 impl Provider {
     pub async fn start(python: &str) -> Result<Self, String> {
+        Self::start_mode(python, false).await
+    }
+    pub async fn start_m1(python: &str) -> Result<Self, String> {
+        Self::start_mode(python, true).await
+    }
+    async fn start_mode(python: &str, repeated: bool) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
@@ -33,7 +39,7 @@ impl Provider {
             .to_owned();
         let (commands, receiver) = mpsc::channel(2);
         let (ticks, clock) = mpsc::channel(1);
-        let task = tokio::spawn(owned(process, receiver, ticks));
+        let task = tokio::spawn(owned(process, receiver, ticks, repeated));
         Ok(Self {
             origin,
             commands,
@@ -79,9 +85,14 @@ async fn owned(
     mut process: Process,
     mut commands: mpsc::Receiver<Control>,
     ticks: mpsc::Sender<()>,
+    repeated: bool,
 ) -> Result<Value, String> {
     let mut peer = None;
-    let result = drive(&mut process, &mut commands, &ticks, &mut peer).await;
+    let result = if repeated {
+        repeat(&mut process, &mut commands, &mut peer).await
+    } else {
+        drive(&mut process, &mut commands, &ticks, &mut peer).await
+    };
     if let Some(peer) = &mut peer {
         peer.close();
     }
@@ -104,7 +115,7 @@ async fn drive(
     let mut quiesced = peer.is_none();
     loop {
         tokio::select! {
-            result = step(peer), if !quiesced => { result?; let _ = ticks.try_send(()); },
+            result = step(peer, true), if !quiesced => { result?; let _ = ticks.try_send(()); },
             control = commands.recv() => match control {
                 Some(Control::Transcripts) => process.send(&json!({"transcripts":true})).await?,
                 Some(Control::Quiesce(done)) => { quiesced = true; let _ = done.send(()); },
@@ -113,6 +124,42 @@ async fn drive(
         }
     }
     process.send(&json!({"snapshot":true})).await?;
+    process.expect("provider.snapshot").await
+}
+
+/// M1 preserves its capture-only oracle: no reply RTP is generated.
+/// Native completion follows twelve microphone frames received by the remote.
+/// New offers replace the quiescent peer after the prior call's idle stop.
+async fn repeat(
+    process: &mut Process,
+    commands: &mut mpsc::Receiver<Control>,
+    peer: &mut Option<LivePeer>,
+) -> Result<Value, String> {
+    let mut received = 0;
+    let mut quiesced = true;
+    loop {
+        tokio::select! {
+            offer = process.expect("provider.offer") => {
+                if let Some(peer) = peer.as_mut() { peer.close(); }
+                negotiate(process, peer, &offer?).await?;
+                received = 0;
+                quiesced = false;
+            },
+            result = step(peer, false), if !quiesced => {
+                received += result?;
+                if received >= 12 {
+                    process.send(&json!({"transcripts":true})).await?;
+                    quiesced = true;
+                }
+            },
+            control = commands.recv() => match control {
+                Some(Control::Quiesce(done)) => { quiesced = true; let _ = done.send(()); },
+                Some(Control::Close) | None => break,
+                Some(Control::Transcripts) => return Err("m1: automatic transcript ownership".into()),
+            },
+        }
+    }
+    process.send(&json!({"summary":true})).await?;
     process.expect("provider.snapshot").await
 }
 
@@ -141,13 +188,17 @@ async fn negotiate(process: &mut Process, peer: &mut Option<LivePeer>, offer: &V
     Ok(())
 }
 
-async fn step(peer: &mut Option<LivePeer>) -> Result<(), String> {
+async fn step(peer: &mut Option<LivePeer>, echo: bool) -> Result<usize, String> {
+    let mut received = 0;
     let peer = peer.as_mut().ok_or("m2: missing remote media")?;
     if peer.ready() {
         while let Some(frame) = peer.pop_audio() {
-            peer.send_audio(frame, Instant::now().into_std())
-                .await
-                .map_err(|_| "m2: remote media echo")?;
+            received += 1;
+            if echo {
+                peer.send_audio(frame, Instant::now().into_std())
+                    .await
+                    .map_err(|_| "m2: remote media echo")?;
+            }
         }
     }
     let next = peer.flush().await.map_err(|_| "m2: remote media flush")?;
@@ -158,7 +209,7 @@ async fn step(peer: &mut Option<LivePeer>) -> Result<(), String> {
         },
         () = tokio::time::sleep_until(next.into()) => peer.timeout(Instant::now().into_std()).await.map_err(|_| "m2: remote media timeout")?,
     }
-    Ok(())
+    Ok(received)
 }
 
 pub(super) fn valid(snapshot: &Value) -> bool {

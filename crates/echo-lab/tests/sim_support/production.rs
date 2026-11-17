@@ -45,7 +45,7 @@ fn m1_prefix_selects_production_and_observes_ready_before_a_complete_wake() {
         .filter(|record| record["event"] == "sim.endpoint")
         .map(|record| record["address"].as_str().unwrap().parse().unwrap())
         .collect();
-    assert_eq!(addresses.len(), 5);
+    assert_eq!(addresses.len(), 6);
     session.owners_closed();
     assert!(!session.0.join("artifacts/configured.private").exists());
     assert!(!events.contains("synthetic-local-api"));
