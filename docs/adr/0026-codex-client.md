@@ -363,3 +363,28 @@ capture admission, error cleanup and missing/premature played. A combined
 component check uses actual MediaCall JSONL projection and the in-memory device
 port with controlled media. These checks do not select canonical voice startup
 or prove pinned app-server ordering, real Wyoming playback or any milestone.
+
+## Bridge conversation lifetime amendment (2026-11-17)
+
+The device conversation owner retains one connected `MediaCall` across played
+replies and subsequent wakes. Each completed reply renews the configured idle
+deadline. Expiry takes precedence over a queued wake at equality; a muted wake
+does not renew it. An unrepresentable idle deadline never expires, preserving
+the existing configuration behavior. Response and played durations must fit
+the monotonic clock before admission. Idle media belongs to the previous reply
+and is discarded before the next run; it is never replayed into later playback.
+
+The owner keeps polling the app-server and media while waiting for a wake.
+Device and control reads are fair; cancellation and expiry take precedence.
+Every return awaits bounded call stop and media cleanup, including observer
+failure, device/control EOF and cancellation during playback or idle. Automatic
+media cleanup on signaling failure marks the owner closed, preventing duplicate
+peer teardown during outer cleanup. The host still owns device close and child
+reaping. Cancellation must reach this owner inside the authenticated host
+callback when graceful signaling stop is required.
+
+Paused-clock component tests use memory-only JSONL, media and device ports to
+protect reuse, deadline renewal/equality, muted wakes, old-PCM exclusion,
+observer failure, cancellation and process EOF. These tests do not establish
+canonical CLI selection, kill-file observation, actual app-server/media or
+Wyoming behavior, real-pin M2 or any milestone. Those remain retained work.

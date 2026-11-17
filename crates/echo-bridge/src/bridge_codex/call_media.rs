@@ -61,6 +61,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         if result.is_err() {
             self.call.fail();
             let _ = self.peer.close().await;
+            self.closed = true;
         } else {
             self.active = true;
         }
@@ -131,6 +132,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             self.active = false;
             self.call.fail();
             let _ = self.peer.close().await;
+            self.closed = true;
         }
         result
     }

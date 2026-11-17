@@ -114,6 +114,9 @@ async fn media_call_ready_drain_is_nonblocking_ordered_and_distinguishes_eof() {
 #[path = "../bridge_voice/voice_media_cases.rs"]
 mod voice;
 
+#[path = "../bridge_voice/voice_session_cases.rs"]
+mod session;
+
 #[tokio::test(start_paused = true)]
 async fn media_call_waits_for_connected_sends_pcm_and_preserves_generation_after_close() {
     let (mut io, mut server) = fixture();
