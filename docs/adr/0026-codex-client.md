@@ -943,3 +943,46 @@ work before notification. Configured admission and exact interrupt RPC
 correlation retain their separate functional witnesses. Full canonical M4,
 its complete golden traces, latency and reverted missing-result seed remain
 required; this component does not replace them or close the full F24 criterion.
+
+### Canonical M4 provider and dispatch polling (2026-11-17)
+
+M4 now selects the real configured bridge, pinned app server, echo-media,
+finite hassmic-host capture and spoof MCP. Its local provider speaks the pin's
+V3 sideband and Responses streaming protocol. The delegated catalog is exactly
+`tool_0` through `tool_3`: `test.echo`, `test.wait`, `test.requires_approval` and
+`ui.show_emotion`, with the pin's lowered schemas and no built-in tools. An MCP
+HTTP 500 is injected after discovery and call connection, before delegation;
+model output and the native fallback append are checked exactly.
+
+The provider observes native `delegation.created` and
+`delegation.context.append`; bridge receipts supply the intervening
+`item/tool/call` and MCP attempt. The oracle joins these independent observations
+by the exact model call, thread, turn and run identities and the native
+delegation identity. Native receipts use causal anchors, not measured sideband
+wall-clock timestamps. The provider permits reply media only after verifying
+the returned tool output and matching native append. Speech comes from the
+actually sent transcript, never an expected string substituted for observation.
+
+The media fixture sends eleven paced Opus comfort-noise packets. Nine PCM
+frames precede transcript completion, then converter tail flush produces the
+same exact ten zero-valued Wyoming frames and 9600 host playback bytes as the
+original fixture. The bridge clock advances explicitly at the 20 ms media
+cadence even without UDP traffic. The remote quiesces before bridge shutdown,
+retaining its socket and sideband until the real owner closes. All children,
+peers and private external homes remain owned through cleanup.
+
+Canonical dispatch polling and execution futures have heap boundaries so the
+real-media and MCP call chain does not exhaust the Windows main stack. Work,
+cancellation, deadlines and the single process reader retain their owners.
+The lab process owner also retains partial JSONL bytes across cancelled reads;
+a control message cannot discard the beginning of a native receipt.
+
+Both complete M4 goldens change deliberately: `bridge.ready` replaces the old
+connection receipt; the native delegation/append replace the two legacy session
+events; the tool request receipt and thread/turn/call/request correlation join
+the MCP attempt; legacy mic phase and reply-start receipts disappear;
+`mic.completed` and `reply.played` carry the canonical counts; completion is
+`bridge.run_completed`, and shutdown closes the call without a stale run.
+Only incidental identity names, endpoints, elapsed times and the existing
+payload-free idle probes are normalized. Full-trace comparison remains exact.
+M6 retains its separate migration obligation; no legacy code is deleted.

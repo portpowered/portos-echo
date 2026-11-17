@@ -131,7 +131,8 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 self.settle(result)?;
                 Ok(other())
             },
-            event = self.port.next() => match event? {
+            // Keep nested real-media polling off the Windows main stack.
+            event = Box::pin(self.port.next()) => match event? {
                 MediaEvent::Control(event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => {
                     self.observed_control(event)
                 },
@@ -210,7 +211,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                     let outcome = tokio::select! {
                         biased;
                         _ = cancelled => None,
-                        outcome = dispatcher.dispatch(&call) => Some(outcome),
+                        outcome = Box::pin(dispatcher.dispatch(&call)) => Some(outcome),
                     };
                     (dispatcher, outcome)
                 }));
@@ -273,7 +274,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 's
         self.port.send(frame)
     }
     async fn next(&mut self) -> Result<MediaEvent, Error> {
-        Self::next(self).await
+        Box::pin(Self::next(self)).await
     }
     async fn ready_audio(&mut self) -> Result<Option<PcmFrame>, Error> {
         self.port.ready_audio().await

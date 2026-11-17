@@ -15,7 +15,7 @@ struct Names {
 impl Names {
     fn field(&mut self, key: &str, value: &mut Value) -> Result<(), String> {
         match key {
-            "run_id" | "call_id" | "delegation_id" if !value.is_null() => {
+            "run_id" | "call_id" | "delegation_id" | "thread_id" | "turn_id" if !value.is_null() => {
                 let text = value
                     .as_str()
                     .filter(|s| !s.is_empty())

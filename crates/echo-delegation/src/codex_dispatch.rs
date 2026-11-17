@@ -216,7 +216,11 @@ impl<H: ToolHost> Dispatcher<H> {
             call.call_id.len(),
             call.call_id
         );
-        let result = timeout_at(turn.deadline, self.host.call_tool(&name, call.arguments.clone(), &key)).await;
+        let result = timeout_at(
+            turn.deadline,
+            Box::pin(self.host.call_tool(&name, call.arguments.clone(), &key)),
+        )
+        .await;
         if Instant::now() >= turn.deadline || result.is_err() {
             return self.refusal(call, DispatchError::Deadline);
         }

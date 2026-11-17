@@ -1,0 +1,82 @@
+//! Causal join of independent native sideband, bridge dispatch and MCP witnesses.
+use crate::lab_run::sim::trace::Trace;
+use echo_spoof_mcp::{CallRecord, Snapshot};
+use serde_json::{Value, json};
+
+pub(super) fn merge(trace: &mut Trace, snapshot: &Value, mcp: &Snapshot, negative: bool) -> Result<(), String> {
+    if snapshot["delegations"] != json!(["delegation-local"]) {
+        return Err("m4: missing or duplicate native delegation.created".into());
+    }
+    if snapshot["appends"] != json!(["delegation-local"]) {
+        return Err("m4: missing verified tool result/delegation.context.append for delegation-local".into());
+    }
+    let expected = json!({"event":"provider.snapshot", "calls":[{
+        "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
+        "delegations":["delegation-local"], "appends":["delegation-local"],
+        "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::model::FALLBACK} else {super::super::model::SUCCESS}}],
+        "models":[{"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":0},
+                  {"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":1}]});
+    if snapshot != &expected {
+        return Err("m4: exact pinned provider/model observation mismatch".into());
+    }
+    if mcp.calls
+        != vec![CallRecord {
+            name: "test.echo".into(),
+            args: json!({"text":"delegated echo"}),
+            count: 1,
+        }]
+        || mcp.requests.iter().filter(|r| r.method == "tools/call").count() != 1
+    {
+        return Err("m4: expected exactly one observed MCP test.echo attempt".into());
+    }
+    let request = position(trace, "item/tool/call")?;
+    let attempt = position(trace, "tools/call")?;
+    let transcript = trace
+        .records
+        .iter()
+        .position(|r| r["event"] == "reply.played")
+        .ok_or("m4: missing played reply observation")?;
+    if request >= attempt || attempt >= transcript {
+        return Err("m4: dispatch/attempt/reply causal order mismatch".into());
+    }
+    let received = &trace.records[request];
+    let executed = &trace.records[attempt];
+    if received["name"] != "test.echo"
+        || received["call_id"] != "tool-local"
+        || received["run_id"] != "run-1"
+        || !["thread_id", "turn_id", "call_id", "run_id", "name"]
+            .into_iter()
+            .all(|key| !received[key].is_null() && received[key] == executed[key])
+    {
+        return Err("m4: native model/tool/host correlation mismatch".into());
+    }
+    // Native append is emitted only after the fake verified the returned model
+    // output, and before it permits the reply media/transcript. These receipts
+    // have causal anchors, not invented wall-clock measurements.
+    let native = |event: &str, anchor: &Value| {
+        json!({"event":event,"source":"provider.sideband",
+        "delegation_id":"delegation-local","run_id":anchor["run_id"],"thread_id":anchor["thread_id"],
+        "turn_id":anchor["turn_id"],"call_id":anchor["call_id"],
+        "elapsed_ms":anchor["elapsed_ms"],"provider_auth_mode":anchor["provider_auth_mode"]})
+    };
+    let created = native("delegation.created", received);
+    let appended = native("delegation.context.append", executed);
+    trace.records.insert(attempt + 1, appended);
+    trace.records.insert(request, created);
+    Ok(())
+}
+
+fn position(trace: &Trace, event: &str) -> Result<usize, String> {
+    let positions: Vec<_> = trace
+        .records
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r["event"] == event)
+        .map(|(index, _)| index)
+        .collect();
+    match positions.as_slice() {
+        [index] => Ok(*index),
+        _ => Err(format!("m4: expected exactly one {event} receipt")),
+    }
+}

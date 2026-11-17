@@ -79,6 +79,9 @@ impl<'a> M4<'a> {
     }
 
     fn journey(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
+        if !self.emotion {
+            return self.canonical_journey(artifacts);
+        }
         self.completed = false;
         self.transcript = None;
         self.run = None;
@@ -134,6 +137,28 @@ impl<'a> M4<'a> {
         }
     }
 
+    fn canonical_journey(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
+        self.completed = false;
+        self.transcript = None;
+        self.run = None;
+        let journey = self
+            .runtime
+            .block_on(Box::pin(super::codex::run(self.options, self.negative)))?;
+        self.world.trace = journey.trace;
+        self.world.speaking = journey.speaking;
+        self.samples.push(journey.timing.sample()?);
+        self.run = Some(
+            journey.completion["run_id"]
+                .as_str()
+                .ok_or("m4: missing completed run")?
+                .into(),
+        );
+        self.transcript = Some(journey.text);
+        self.completed = true;
+        let case = if self.negative { "http500" } else { "success" };
+        self.record(artifacts, case, &journey.timing)
+    }
+
     fn check_delegation(&self, run: &str) -> Result<(), String> {
         selectors::check(
             &self.world.trace.records,
@@ -163,7 +188,15 @@ impl<'a> M4<'a> {
         let lines = golden::normalize(&self.world.trace)?.join("\n") + "\n";
         std::fs::write(artifacts.root.join(&name), lines).map_err(|_| "m4: cannot retain normalized trace")?;
         artifacts.evidence.push(name.clone());
-        let evidence = json!({"event":"m4.case","case":case,"run_id":self.run,"delegation_id":"d-1",
+        let delegation = self
+            .world
+            .trace
+            .records
+            .iter()
+            .find(|record| record["event"] == "delegation.created")
+            .and_then(|record| record["delegation_id"].as_str())
+            .ok_or("m4: missing native delegation identity")?;
+        let evidence = json!({"event":"m4.case","case":case,"run_id":self.run,"delegation_id":delegation,
             "tools_call_count":1,"commentary_count":1,"screen":"speaking",
             "transcript":self.transcript,"capture_bytes":timing.captured,"reply_pcm_bytes":timing.played,
             "endpoint_to_first_pcm_us":timing.sample()?.as_micros()});

@@ -5,7 +5,7 @@ use std::{
 use tokio::process::Command;
 
 /// A private external fixture owner, never a repository credential directory.
-pub(super) struct Root(pub PathBuf);
+pub(in crate::lab_run::sim) struct Root(pub PathBuf);
 impl Root {
     pub fn new() -> Result<Self, String> {
         static NEXT: AtomicUsize = AtomicUsize::new(0);

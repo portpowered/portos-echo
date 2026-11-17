@@ -63,7 +63,7 @@ impl<H: ToolHost + Send + Sync> ToolHost for Policy<H> {
         {
             return Err(ToolError::Denied);
         }
-        let result = this.host.call_tool(name, args, key).await?;
+        let result = Box::pin(this.host.call_tool(name, args, key)).await?;
         if let Some((state, deadline)) =
             crate::bridge_runtime::bridge_screen::emotion::decode(name, &result.content, result.is_error)
         {
