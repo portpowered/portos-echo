@@ -1,6 +1,7 @@
 """T3 numeric protocol and lifecycle through native pipes and loopback sockets."""
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import queue
@@ -14,7 +15,7 @@ from unittest import mock
 
 import wsl_controller
 import wsl_relay
-from wsl_relay_test_support import BOOTSTRAP, CONTROLLER
+from wsl_relay_test_support import BOOTSTRAP, CONTROLLER, exercise_json_forward
 
 ROOT = Path(__file__).resolve().parent
 PAYLOAD = bytes(range(256)) * 1024
@@ -165,8 +166,233 @@ class NumericRelayTests(unittest.TestCase):
             self.assertFalse(connection.reader.is_alive())
             self.assertFalse(connection.writer.is_alive())
 
+    def test_t3_json_forward_holds_gap_until_exact_replacement_ready(self):
+        exercise_json_forward(self, ROOT)
+
+    def test_t3_ten_generation_gaps_hold_reconnects_and_collect_old_streams(self):
+        with socket.socket() as first, socket.socket() as second:
+            for host in (first, second):
+                host.bind(('127.0.0.1', 0))
+                host.listen()
+                host.settimeout(5)
+            argv = lambda host: [sys.executable, '-u', str(ROOT / 'wsl_relay.py'),
+                                 '--guest', str(host.getsockname()[1])]
+            relay = wsl_relay.Relay(argv(first))
+            port = int(relay.address.rsplit(':', 1)[1])
+            try:
+                for cycle in range(10):
+                    host = (first, second)[cycle % 2]
+                    relay.replace(argv(host))
+                    old = []
+                    with contextlib.ExitStack() as stack:
+                        for _ in range(2):
+                            client = stack.enter_context(socket.create_connection(('127.0.0.1', port), timeout=5))
+                            guest = stack.enter_context(host.accept()[0])
+                            guest.settimeout(5)
+                            client.sendall(b'old')
+                            self.assertEqual(guest.recv(3), b'old')
+                            old.append(client)
+                        owners = list(relay.connections)
+                        command = json.dumps({'action': ('kill', 'restart')[cycle % 2]}) + '\n'
+                        control = io.StringIO()
+                        wsl_relay.forward_command(command, control, [relay])
+                        self.assertEqual(control.getvalue(), command)
+                        for client in old:
+                            self.assertEqual(client.recv(1), b'')
+                        for owner in owners:
+                            self.assertEqual(owner.proc.poll(), 0)
+                            self.assertFalse(owner.reader.is_alive())
+                            self.assertFalse(owner.writer.is_alive())
+                        # TCP handshake succeeds into the listener backlog; no
+                        # guest is assigned until the next ready generation.
+                        pending = stack.enter_context(socket.create_connection(('127.0.0.1', port), timeout=5))
+                        payload = ('generation-' + str(cycle)).encode()
+                        pending.sendall(payload)
+                        pending.shutdown(socket.SHUT_WR)
+                        self.assertEqual(relay.connections, [])
+                        self.assertIsNone(relay.argv)
+                        target = (first, second)[(cycle // 2) % 2]
+                        ready = {'event': 'host.ready', 'address': '127.0.0.1:' + str(target.getsockname()[1])}
+                        wsl_relay.rewrite_ready(ready, argv(target)[:-1], [relay])
+                        self.assertEqual(ready, {'event': 'host.ready', 'address': relay.address})
+                        guest = stack.enter_context(target.accept()[0])
+                        guest.settimeout(5)
+                        self.assertEqual(guest.recv(65536), payload)
+                        self.assertEqual(guest.recv(1), b'')
+                        guest.sendall(payload[::-1])
+                        guest.shutdown(socket.SHUT_WR)
+                        self.assertEqual(pending.recv(65536), payload[::-1])
+                        self.assertEqual(pending.recv(1), b'')
+                self.assertLessEqual(len(relay.diagnostics), 64)
+            finally:
+                relay.close()
+            self.assertFalse(relay.thread.is_alive())
+            for owner in relay.connections:
+                self.assertEqual(owner.proc.poll(), 0)
+                self.assertFalse(owner.reader.is_alive())
+                self.assertFalse(owner.writer.is_alive())
+
+    def test_t3_reconnect_during_cleanup_waits_for_replacement(self):
+        with socket.socket() as host:
+            host.bind(('127.0.0.1', 0))
+            host.listen()
+            host.settimeout(5)
+            argv = [sys.executable, '-u', str(ROOT / 'wsl_relay.py'), '--guest', str(host.getsockname()[1])]
+            relay = wsl_relay.Relay(argv)
+            entered, release = threading.Event(), threading.Event()
+            errors = []
+            def replace():
+                try:
+                    relay.replace(argv)
+                except BaseException as error:
+                    errors.append(error)
+            worker = threading.Thread(target=replace)
+            try:
+                port = int(relay.address.rsplit(':', 1)[1])
+                with socket.create_connection(('127.0.0.1', port), timeout=5) as old, host.accept()[0] as guest:
+                    old.sendall(b'x')
+                    self.assertEqual(guest.recv(1), b'x')
+                    owner, = relay.connections
+                    close = owner.close
+                    def blocked_close():
+                        entered.set()
+                        if not release.wait(timeout=5):
+                            raise RuntimeError('cleanup barrier not released')
+                        close()
+                    with mock.patch.object(owner, 'close', side_effect=blocked_close):
+                        worker.start()
+                        self.assertTrue(entered.wait(timeout=5))
+                        with socket.create_connection(('127.0.0.1', port), timeout=5) as pending:
+                            pending.sendall(b'new')
+                            self.assertIsNone(relay.argv)
+                            release.set()
+                            worker.join(timeout=5)
+                            self.assertFalse(worker.is_alive())
+                            with host.accept()[0] as new:
+                                new.sendall(b'replacement')
+                                self.assertEqual(pending.recv(11), b'replacement')
+                    self.assertEqual(old.recv(1), b'')
+                    self.assertEqual(owner.proc.poll(), 0)
+                self.assertEqual(errors, [])
+            finally:
+                release.set()
+                if worker.ident is not None:
+                    worker.join(timeout=5)
+                relay.close()
+
+    def test_t3_numeric_gap_preserves_observer_and_serves_restarted_host(self):
+        proc, out, err, port, observer = self.launch()
+        for command in ('kill', 'stop'):
+            proc.stdin.write(command + '\n')
+            proc.stdin.flush()
+            self.assertEqual(out.get(timeout=5), command)
+            with socket.create_connection(('127.0.0.1', port), timeout=5) as pending:
+                pending.sendall(b'gap')
+                pending.shutdown(socket.SHUT_WR)
+                with socket.create_connection(('127.0.0.1', observer), timeout=5) as watch:
+                    self.assertEqual(watch.recv(65536), b'{"state":"controlled"}')
+                proc.stdin.write('restart\n')
+                proc.stdin.flush()
+                self.assertEqual(out.get(timeout=5), 'restart')
+                self.assertTrue(err.get(timeout=5).startswith('host pid: '))
+                self.assertEqual(pending.recv(3), b'pag')
+                self.assertEqual(pending.recv(1), b'')
+        self.finish(proc, out, err, port, observer)
+
+    def test_t3_close_suspended_relay_releases_backlog_without_spawning(self):
+        relay = wsl_relay.Relay(None)
+        port = int(relay.address.rsplit(':', 1)[1])
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=5) as pending:
+                relay.close()
+                try:
+                    self.assertEqual(pending.recv(1), b'')
+                except ConnectionResetError:
+                    pass  # Closing a dead listener can reset its unaccepted backlog.
+        finally:
+            relay.close()
+        self.assertEqual(relay.connections, [])
+        self.assertFalse(relay.thread.is_alive())
+
 
 class ControllerFailureTests(unittest.TestCase):
+    def test_json_and_numeric_invalidate_before_forwarding_lifecycle(self):
+        relay = mock.Mock()
+        stream = io.StringIO()
+        def invalidated(_, **_kwargs):
+            self.assertEqual(stream.getvalue(), '')
+        relay.replace.side_effect = invalidated
+        for action in ('kill', 'restart', 'stop', 'identity'):
+            with self.subTest(action=action):
+                stream.seek(0)
+                stream.truncate()
+                relay.reset_mock()
+                line = json.dumps({'action': action, 'pid': 17}) + '\n'
+                wsl_relay.forward_command(line, stream, [relay])
+                self.assertEqual(stream.getvalue(), line)
+                self.assertEqual(relay.replace.call_args_list,
+                                 [mock.call(None, awaiting_ready=True)] if action in ('kill', 'restart') else [])
+        owner = wsl_controller.Controller(mock.Mock(stdin=stream), ['guest'], False, queue.Queue())
+        owner.port = 12345
+        owner.relays['host'] = relay
+        for command in ('kill', 'stop', 'restart'):
+            stream.seek(0)
+            stream.truncate()
+            relay.reset_mock()
+            owner.command(command + '\n')
+            relay.replace.assert_called_once_with(None)
+            self.assertEqual(stream.getvalue(), command + '\n')
+
+    def test_cleanup_failure_leaves_target_unavailable_and_collects_every_owner(self):
+        relay = object.__new__(wsl_relay.Relay)
+        relay.guard, relay.mutation = threading.Lock(), threading.Lock()
+        relay.wake, relay.record = mock.Mock(), mock.Mock()
+        relay.argv, relay.closing = ['old', '12345'], False
+        relay.awaiting_ready = 0
+        first, second = mock.Mock(), mock.Mock()
+        first.close.side_effect = RuntimeError('controlled')
+        relay.connections = [first, second]
+        with self.assertRaisesRegex(RuntimeError, '^relay cleanup failed$'):
+            relay.replace(['guest', '12345'])
+        self.assertIsNone(relay.argv)
+        second.close.assert_called_once_with()
+
+    def test_superseded_json_readiness_cannot_resume_the_old_target(self):
+        relay = object.__new__(wsl_relay.Relay)
+        relay.guard, relay.mutation = threading.Lock(), threading.Lock()
+        relay.wake, relay.record = mock.Mock(), mock.Mock()
+        relay.closing, relay.awaiting_ready, relay.generation = False, 0, 1
+        relay.connections, relay.argv = [], ['guest', '1']
+        relay.address = '127.0.0.1:23456'
+        stream = io.StringIO()
+        for action in ('kill', 'restart'):
+            wsl_relay.forward_command(json.dumps({'action': action}), stream, [relay])
+        for port in (2, 3):
+            value = {'event': 'host.ready', 'address': '127.0.0.1:' + str(port)}
+            wsl_relay.rewrite_ready(value, ['guest'], [relay])
+            self.assertEqual(value['address'], relay.address)
+            self.assertEqual(relay.argv, None if port == 2 else ['guest', '3'])
+        self.assertEqual(relay.awaiting_ready, 0)
+
+    def test_sim_writer_invalidates_before_each_queued_lifecycle_command(self):
+        import runpy
+        host = runpy.run_path(str(ROOT.parent / 'crates/echo-lab/src/lab_run/sim/host.py'))
+        for action in ('kill', 'restart', 'stop', 'identity'):
+            with self.subTest(action=action):
+                commands, events = queue.Queue(), queue.Queue()
+                line = (json.dumps({'action': action}) + '\n').encode()
+                commands.put(line)
+                commands.put(None)
+                proc, relay = mock.Mock(), mock.Mock()
+                proc.stdin.write.return_value = len(line)
+                relay.replace.side_effect = lambda _, **_kwargs: proc.stdin.write.assert_not_called()
+                host['launcher_write'](proc, commands, events, [relay])
+                proc.stdin.write.assert_called_once_with(line)
+                proc.stdin.close.assert_called_once_with()
+                self.assertTrue(events.empty())
+                self.assertEqual(relay.replace.call_args_list,
+                                 [mock.call(None, awaiting_ready=True)] if action in ('kill', 'restart') else [])
+
     def test_empty_controller_cannot_report_success(self):
         proc = mock.Mock(stdin=io.StringIO(), stdout=io.StringIO(), stderr=io.StringIO())
         proc.wait.return_value = 0

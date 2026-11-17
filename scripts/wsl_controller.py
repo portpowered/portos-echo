@@ -9,7 +9,7 @@ import sys
 import threading
 
 from wsl_distro import resolve_wsl_distro
-from wsl_relay import Relay
+from wsl_relay import Relay, diagnostic_tail
 
 
 def lines(stream, name, events):
@@ -79,7 +79,7 @@ class Controller:
             # Startup failures must not send commands to an unready host.
             raise ValueError('controller is not ready')
         command = line.strip()
-        if command in ('stop', 'restart'):
+        if command in ('kill', 'stop', 'restart'):
             self.relays['host'].replace(None)
             self.pending_restart = command == 'restart'
         self.proc.stdin.write(line)
@@ -142,7 +142,10 @@ class Controller:
                     self.diagnostic(line)
             status = self.proc.wait()
         finally:
-            collect(self.proc, self.relays, readers)
+            try:
+                collect(self.proc, self.relays, readers)
+            finally:
+                diagnostic_tail(self.relays.values())
         if self.port is None and self.cleaned != 'startup-failed-cleaned\n':
             status = status or 1
         if self.cleaned and status == 0 and not cancelled:

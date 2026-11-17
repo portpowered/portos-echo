@@ -34,7 +34,7 @@ from wsl_distro import resolve_wsl_distro
 from wsl_host import LauncherError, LauncherChild, HostCancelled
 
 # Both T3 launchers share the native transport; the Linux Host stays direct.
-from wsl_relay import observations, guest
+from wsl_relay import observations, guest, diagnostic_tail
 
 
 def launcher_input(events):
@@ -73,7 +73,7 @@ def launcher_translation(proc, events):
         events.put(("error", None))
 
 
-def launcher_write(proc, commands, events):
+def launcher_write(proc, commands, events, relays=()):
     # Raw pipes avoid a buffered-writer lock in the cleanup owner. A blocked
     # write must not prevent the supervisor from observing caller EOF.
     try:
@@ -82,12 +82,15 @@ def launcher_write(proc, commands, events):
             if data is None:
                 proc.stdin.close()
                 return
+            if json.loads(data).get("action") in ("kill", "restart"):
+                for relay in relays:
+                    relay.replace(None, awaiting_ready=True)
             while data:
                 count = proc.stdin.write(data)
                 if not count:
                     raise OSError("launcher write failed")
                 data = data[count:]
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         events.put(("error", None))
 
 
@@ -191,7 +194,7 @@ def launcher_forward(events, translation, owners, distro=None):
                     owner.proc, ["wsl", "-d", distro or resolve_wsl_distro(), "--exec",
                                  "python3", "-u", value, "--relay"], relays, launcher_emit, events))
                 output.start()
-                writer = threading.Thread(target=launcher_write, args=(owner.proc, commands, events), daemon=True)
+                writer = threading.Thread(target=launcher_write, args=(owner.proc, commands, events, relays), daemon=True)
                 writer.start()
                 for line in pending:
                     commands.put_nowait(line)
@@ -221,6 +224,7 @@ def launcher_forward(events, translation, owners, distro=None):
                     relay.close()
                 except (OSError, ValueError, RuntimeError):
                     failed = True
+            diagnostic_tail(relays)
             if failed:
                 raise RuntimeError("launch: output cleanup failed")
 
