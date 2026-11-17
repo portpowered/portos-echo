@@ -11,6 +11,7 @@ mod emotion;
 mod failures;
 mod host_owner;
 mod mcp;
+mod milestone;
 mod production;
 mod suite;
 pub struct Session(pub PathBuf, host_owner::Host);
