@@ -39,8 +39,13 @@ review.
   from a script file with LF line endings that sources `/opt/pe-ci-env.sh`,
   holds `/var/tmp/pe-ci.lock` for every build or test, and builds into its own
   `/var/tmp` target deleted by an EXIT trap. Inside pe-ci, git cannot follow a
-  worktree's Windows `gitdir:` link: set `GIT_DIR` to the worktree's directory
-  under the main checkout's `.git/worktrees/` and pass `-c safe.directory='*'`.
+  worktree's absolute Windows `gitdir: C:/...` link. Rewrite your worktree's
+  `.git` file to the relative form `gitdir: ../../../.git/worktrees/<name>`
+  (Windows git reads it too) and pass `-c safe.directory='*'`. Never export
+  `GIT_DIR` or `GIT_WORK_TREE` in a script: `scripts/hassmic-host.sh` runs its
+  own `git init`, `fetch`, `sparse-checkout` and `checkout`, and an exported
+  `GIT_DIR` points them at the repository, which rewrites its config and your
+  worktree.
   Detached (`setsid`) pe-ci runners lose Windows interop and can die: for a run
   that outlives your visit, write the script, then park naming it so the
   coordinator runs it attached and relays the markers.
