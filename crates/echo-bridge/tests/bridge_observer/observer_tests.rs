@@ -90,3 +90,20 @@ async fn observer_pinned_host_snapshot_preserves_registration_and_cleanup() {
     assert!(snapshot.contains("wyoming on "), "{snapshot}");
     host.finish(0).await;
 }
+
+#[tokio::test]
+#[ignore = "T3 uses an owned sentinel listener and a native local child"]
+async fn failure_snapshot_never_probes_a_former_host_port() {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = Command::new("python");
+    command.args(["-u", "-c", "import sys; print('ready', flush=True); sys.stdin.read()"]);
+    let mut process =
+        Process::spawn(&mut command).with_host(listener.local_addr().unwrap().port(), directory.path().join("trace"));
+    assert_eq!(process.line().await, "ready");
+    let failure = process.observe(Duration::ZERO).await.unwrap_err();
+    assert!(failure.contains("TCP observer action: skipped (port does not establish ownership)"));
+    assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    process.finish(0).await;
+}

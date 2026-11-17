@@ -162,22 +162,9 @@ pub(super) async fn snapshot(process: &mut Process) -> String {
         } else {
             "unavailable: controlled peer or missing controller".into()
         };
-        // A separate observer connection, made only AFTER failure and log capture.
-        let connection = tokio::time::timeout(
-            Duration::from_secs(1),
-            tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)),
-        )
-        .await;
-        let reachable = match connection {
-            Ok(Ok(socket)) => {
-                drop(socket);
-                "accepts TCP connect"
-            }
-            Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => "refused",
-            Ok(Err(_)) => "unavailable: connect failed",
-            Err(_) => "timed-out",
-        };
-        write!(output, "\npinned host port reported: {port}\npinned host snapshot before TCP probe:\n{host}\nTCP observer action (not bridge connection): {reachable}").unwrap();
+        // A former port is not an ownership handle. Never dial whoever may
+        // have bound it after the owned host exited.
+        write!(output, "\npinned host port reported: {port}\npinned host snapshot:\n{host}\nTCP observer action: skipped (port does not establish ownership)").unwrap();
     } else {
         output.push_str("\npinned host port reported: unavailable");
     }
