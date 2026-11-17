@@ -380,6 +380,10 @@ mod tests {
         assert_eq!(receive.try_recv().unwrap(), UiState::Muted);
         view.observe(ServeNotice::Device(LinkEvent::MicrophoneDropped(4)))
             .unwrap();
+        view.observe(ServeNotice::Session(SessionNotice::Run(Notice::Device(
+            LinkEvent::MicrophoneDropped(1),
+        ))))
+        .unwrap();
         view.observe(ServeNotice::Session(SessionNotice::Run(Notice::ReplyStarted)))
             .unwrap();
         assert!(receive.try_recv().is_err());
@@ -397,13 +401,13 @@ mod tests {
             receive.try_recv().unwrap(),
             crate::bridge_runtime::bridge_screen::failure_state(true)
         );
-        assert_eq!(
-            rows(&path)
-                .iter()
-                .find(|row| row["event"] == "mic.mute_window")
-                .unwrap()["received_frames"],
-            4
-        );
+        let windows: Vec<_> = rows(&path)
+            .into_iter()
+            .filter(|row| row["event"] == "mic.mute_window")
+            .collect();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0]["received_frames"], 5);
+        assert_eq!(windows[0]["forwarded_frames"], 0);
         screen.presentation.refresh().unwrap();
         assert_eq!(view.failed(&Error::Authorization).await, Err(Error::Screen));
         assert_eq!(

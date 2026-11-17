@@ -182,7 +182,12 @@ async fn step<E: LinkEvents>(
 ) -> Result<(), Error> {
     tokio::select! {
         event = events.recv() => device(&event?.ok_or(Error::Wyoming)?, sink.is_none(), source, observe),
-        frame = microphone.recv(), if !source.microphone_finished => source.capture(frame?, port),
+        frame = microphone.recv(), if !source.microphone_finished => {
+            if source.capture(frame?, port)? {
+                observe(Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
+            }
+            Ok(())
+        },
         event = port.next() => media(event?, port, source, observe).await,
         frame = source.reply.next_frame(), if pending.is_none() && source.reply.has_frames() => {
             *pending = frame;
@@ -220,8 +225,11 @@ fn device<R>(
             LinkEvent::Played
         }
         LinkEvent::Mute(muted) => {
+            // Repeated snapshots must not erase partial PCM or filter history.
+            if source.muted != *muted {
+                source.microphone = None;
+            }
             source.muted = *muted;
-            source.microphone = None;
             observe(Notice::Device(LinkEvent::Mute(*muted)))?;
             return Ok(());
         }

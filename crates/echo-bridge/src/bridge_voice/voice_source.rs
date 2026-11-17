@@ -24,7 +24,9 @@ impl Source {
         })
     }
 
-    pub fn capture(&mut self, frame: Option<MicFrame>, port: &impl VoicePort) -> Result<(), Error> {
+    /// Return whether this chunk was suppressed by the defensive mute gate.
+    /// Adapter-suppressed chunks arrive separately as ordered device events.
+    pub fn capture(&mut self, frame: Option<MicFrame>, port: &impl VoicePort) -> Result<bool, Error> {
         let Some(frame) = frame else {
             self.microphone_finished = true;
             if let Some(microphone) = &mut self.microphone {
@@ -34,11 +36,11 @@ impl Source {
                 }
                 self.stats.microphone_tail = microphone.tail_samples();
             }
-            return Ok(());
+            return Ok(false);
         };
         self.stats.microphone_chunks += 1;
         if self.muted {
-            return Ok(());
+            return Ok(true);
         }
         if self.microphone.is_none() {
             self.microphone = Some(CaptureAudio::new(frame.format)?);
@@ -48,7 +50,7 @@ impl Source {
             port.send(frame)?;
             self.stats.microphone_frames += 1;
         }
-        Ok(())
+        Ok(false)
     }
 
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
