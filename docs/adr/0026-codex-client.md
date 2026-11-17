@@ -154,3 +154,32 @@ or a shut-down supervisor retains its lease, admission after drop, and the
 existing fresh-home and unsafe-path cases. Platform cases reject public Unix
 permissions, symlink redirection and public Windows ACLs. These are local
 controlled-process checks, not real sign-in or milestone proof.
+
+## Bridge account adapter amendment (2026-11-17)
+
+The cutover's `echo-signin` account adapter consumes the existing `echo-codex`
+bounded IO and account schema. This adds an internal workspace dependency edge
+and promotes already locked `serde_json` from test use to runtime use; it adds
+no third-party package. Legacy auth APIs remain dormant until their callers
+are migrated in the retained cutover story; this increment does not claim that
+the bridge CLI or the voice path has switched.
+
+Sign-in uses `account/login/start` and requires a successful
+`account/login/completed` with the matching login ID. Account updates and
+foreign completions cannot report success. The adapter presents the same
+device URL/code or browser URL to its writer and host-owned screen callback,
+with no invented expiry. An absolute host deadline bounds the entire operation;
+failure closes the IO generation, after which the host awaits supervisor
+shutdown. The host also owns cleanup when cancelling the command future.
+The API-key path serializes only a nominated `Secret` through account login
+and confirms the resulting account mode. ChatGPT account checks never acquire
+a bridge-managed token. Status uses `account/read` without refresh and masks
+account metadata entirely because the pin does not expose the former account
+ID or expiry fields. The legacy import command is refused by this adapter.
+
+Controlled JSONL peer checks exercise correlation, deadlines, public prompt
+output, malformed input, writer/screen failures, account status and API-key
+confirmation. A controlled stdio child exercises the actual supervisor and
+adapter, awaited shutdown, exclusive ownership and a new process reopening
+byte-identical synthetic auth. These protect the consumer boundary; they do
+not prove provider redemption, the bridge CLI, screen transport or M2.

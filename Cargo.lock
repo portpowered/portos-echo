@@ -1180,6 +1180,7 @@ dependencies = [
  "echo-agent-api",
  "echo-agent-loop",
  "echo-chatgpt-auth",
+ "echo-codex",
  "echo-config",
  "echo-contracts",
  "echo-live",
