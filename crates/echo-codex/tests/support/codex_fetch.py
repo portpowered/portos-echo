@@ -122,6 +122,36 @@ def external_worktree(temporary, cache, binary):
     print('symlink_cache=refused relative_gitdir=verified missing_metadata=refused')
 
 
+def windows_host_architecture(cache, binary):
+    if not WINDOWS:
+        print('wow64=SKIP reason=Windows-only host architecture regression')
+        return
+    cases = [('F1', 'AMD64', '', True), ('F2', 'x86', 'AMD64', True),
+             ('F3', 'x86', '', False), ('F4', 'ARM64', '', False),
+             ('F5', 'AMD64', 'ARM64', False)]
+    for case, architecture, host, accepted in cases:
+        environment = dict(os.environ, ECHO_CODEX_OFFLINE='1',
+                           ECHO_CODEX_CACHE_DIR=str(cache),
+                           ECHO_HELPER_TEST_PATH=str(ROOT / 'scripts/codex-app-server.ps1'),
+                           ECHO_TEST_ARCH=architecture, ECHO_TEST_HOST_ARCH=host)
+        # PowerShell normalizes architecture at startup; set it in the child.
+        script = ('$env:PROCESSOR_ARCHITECTURE = $env:ECHO_TEST_ARCH; '
+                  '$env:PROCESSOR_ARCHITEW6432 = $env:ECHO_TEST_HOST_ARCH; '
+                  '& $env:ECHO_HELPER_TEST_PATH; exit $LASTEXITCODE')
+        result = subprocess.run(
+            ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+            env=environment, capture_output=True, text=True, timeout=20)
+        assert result.returncode == (0 if accepted else 1), (
+            f'{case}: exit={result.returncode} stderr={result.stderr.strip()}')
+        if accepted:
+            assert successful(result) == binary, f'{case}: changed cached path'
+            assert result.stderr == '', f'{case}: unexpected stderr'
+        else:
+            assert result.stdout == '', f'{case}: unsupported host published a path'
+            assert result.stderr.strip() == 'codex-app-server: unsupported host', result.stderr
+    print('wow64=accepted native_path=same x86=refused arm64=refused host_precedence=verified')
+
+
 def main():
     source = successful(run())
     with tempfile.TemporaryDirectory(prefix='echo codex cache ') as temporary:
@@ -133,6 +163,7 @@ def main():
         binary = successful(run(cache))
         assert binary == published / source.name
         assert successful(run(cache)) == binary
+        windows_host_architecture(cache, binary)
         archives = list(published.glob('*.zip' if WINDOWS else '*.tar.gz'))
         assert len(archives) == 1
         corrupt_and_restore(archives[0], cache)
