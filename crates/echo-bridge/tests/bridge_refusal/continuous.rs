@@ -171,7 +171,10 @@ async fn bridge_refusal_continuously_ready_input_delivers_pre_pcm_error() {
     progress(&live.microphone_frames, 0).await;
     let before = input.frames.load(Ordering::SeqCst);
     live.send_acknowledged(json!({"type":"error"}).to_string()).await;
-    bridge_wire_auth_failure::wait_event(&directory.path().join("trace"), "run.failed").await;
+    bridge_wire_auth_failure::trace_wait::observe(&directory.path().join("trace"), "run.failed", || {
+        format!("in-process bridge task finished={}", runtime.is_finished())
+    })
+    .await;
     let commands = input.observer.commands();
     assert_eq!(
         commands
