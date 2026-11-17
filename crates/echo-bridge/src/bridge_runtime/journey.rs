@@ -230,6 +230,46 @@ struct PlaybackContext<'a, L: EchoLink> {
     kill: &'a super::bridge_kill::Kill<'a>,
 }
 impl<L: EchoLink> PlaybackContext<'_, L> {
+    async fn retire<T>(
+        &mut self,
+        operation: impl Future<Output = T>,
+        ports: (&mut <L::Events as LinkEvents>::Run, &mut L::Events),
+        source: &mut Source,
+        call: &mut impl LivePort,
+    ) -> Result<T, Error> {
+        let (run, events) = ports;
+        let mut ended = false;
+        let mut arbiter = Arbiter::default();
+        tokio::pin!(operation);
+        loop {
+            match arbiter
+                .next(
+                    async {
+                        if ended {
+                            std::future::pending().await
+                        } else {
+                            run.recv().await
+                        }
+                    },
+                    &mut operation,
+                    std::future::pending::<std::convert::Infallible>(),
+                    events.recv(),
+                )
+                .await
+            {
+                Work::Control(result) => return Ok(result),
+                Work::Microphone(frame) => {
+                    if self.cancellation == Cancellation::Response {
+                        ended = self.capture(source, frame?, call, false).await?;
+                    } else {
+                        ended = frame?.is_none();
+                    }
+                }
+                Work::Device(event) => self.device(source, &event?.ok_or(Error::Wyoming)?)?,
+                Work::Reply(never) => match never {},
+            }
+        }
+    }
     async fn settle_failure(&mut self, error: Error) -> Error {
         // Settle only an issued cut, under its original transport deadline.
         let _ = self.finish_cut().await;
@@ -305,7 +345,11 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             self.microphone(source, frame, call, lab).await?;
             Ok(false)
         } else {
-            source.finish_mic(call, self.screen).await?;
+            // A cancelled reply without new admitted input has no replacement
+            // response. Keep its partial microphone packet unflushed.
+            if !source.cancelled || self.continuing(source) {
+                source.finish_mic(call, self.screen).await?;
+            }
             Ok(true)
         }
     }

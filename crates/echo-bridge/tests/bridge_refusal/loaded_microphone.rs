@@ -20,6 +20,8 @@ struct Schedule {
     reply_polls: AtomicUsize,
     cut_pending: AtomicBool,
     cut_polls: AtomicUsize,
+    retiring: AtomicBool,
+    retirement_polls: AtomicUsize,
     blocked: AtomicBool,
     turns: AtomicUsize,
     run: Mutex<Option<echo_wyoming::Run>>,
@@ -33,6 +35,7 @@ struct Sink(echo_wyoming::adapter::Sink, Arc<Schedule>);
 
 impl ReplySink for Sink {
     async fn send(&self, frame: Vec<u8>) -> Result<(), echo_link::Error> {
+        self.1.reply_polls.fetch_add(1, Ordering::SeqCst);
         std::future::poll_fn(|cx| {
             if self.1.reply_pending.load(Ordering::SeqCst) {
                 self.1.reply_polls.fetch_add(1, Ordering::SeqCst);
@@ -46,7 +49,6 @@ impl ReplySink for Sink {
         self.0.send(frame).await
     }
 }
-
 impl Schedule {
     fn stats(&self) -> echo_wyoming::RunStats {
         self.run.lock().unwrap().as_ref().unwrap().stats()
@@ -140,7 +142,12 @@ impl EchoLink for Link {
         source: Self::ReplySource,
         deadline: Duration,
     ) -> Result<PlayOutcome, echo_link::Error> {
-        EchoLink::play_with_timeout(&self.0, format, source, deadline).await
+        let outcome = EchoLink::play_with_timeout(&self.0, format, source, deadline).await;
+        while self.1.retiring.load(Ordering::SeqCst) {
+            self.1.retirement_polls.fetch_add(1, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+        }
+        outcome
     }
     async fn cut_with_stats(&self) -> Result<CutStats, echo_link::Error> {
         let stats = EchoLink::cut_with_stats(&self.0).await?;
@@ -166,7 +173,6 @@ impl EchoLink for Link {
         EchoLink::close(&self.0).await
     }
 }
-
 async fn until(mut condition: impl FnMut() -> bool) {
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         while !condition() {
@@ -192,19 +198,16 @@ async fn offer(peer: &mut tokio::net::TcpStream, index: u16) {
     .await
     .unwrap();
 }
-
 #[tokio::test]
 #[ignore = "T3 production runtime, bounded capture and local Live/Wyoming sockets"]
 async fn loaded_microphone_device_notifications_do_not_starve_bounded_capture() {
     exercise(false).await;
 }
-
 #[tokio::test]
 #[ignore = "T3 production runtime, bounded capture and local Live/Wyoming sockets"]
 async fn loaded_microphone_genuine_overload_keeps_newest_and_exact_drops() {
     exercise(true).await;
 }
-
 async fn exercise(blocked: bool) {
     let directory = tempfile::tempdir().unwrap();
     let live = bridge_peer::Live::bind_frames(0).await;
@@ -233,7 +236,6 @@ async fn exercise(blocked: bool) {
     assert_eq!(runtime.await.unwrap(), Ok(()));
     assert_delivery(blocked, stats, &delivered);
 }
-
 fn assert_delivery(blocked: bool, stats: echo_wyoming::RunStats, delivered: &[u16]) {
     assert_eq!(stats.received, 64);
     let dropped = if blocked { 32 } else { 0 };
@@ -244,7 +246,6 @@ fn assert_delivery(blocked: bool, stats: echo_wyoming::RunStats, delivered: &[u1
     assert_eq!(delivered, &(u16::try_from(dropped).unwrap()..64).collect::<Vec<_>>());
     writeln!(std::io::stdout(), "loaded microphone: offered=64 received=64 delivered={} dropped={dropped} ordered={}..64 capacity=32 blocked={blocked}", delivered.len(), dropped).unwrap();
 }
-
 async fn start_capture<T>(peer: &mut tokio::net::TcpStream, directory: &Path, runtime: &tokio::task::JoinHandle<T>) {
     assert_eq!(bridge_short::read(peer).await.0["type"], "run-satellite");
     assert_eq!(bridge_short::read(peer).await.0["type"], "describe");
@@ -263,7 +264,6 @@ async fn start_capture<T>(peer: &mut tokio::net::TcpStream, directory: &Path, ru
     .await;
     assert_eq!(bridge_short::read_reply(peer).await.0["type"], "audio-start");
 }
-
 async fn offer_sequence(peer: &mut tokio::net::TcpStream, schedule: &Schedule) {
     for index in 0..64 {
         offer(peer, index).await;
@@ -298,12 +298,7 @@ async fn loaded_microphone_pending_reply_admission_keeps_capture_serviced() {
     // polls per independently received chunk expose the service gap without
     // elapsed-time assumptions or a deliberately blocked capture consumer.
     until(|| schedule.reply_polls.load(Ordering::SeqCst) > 0).await;
-    for index in 0..64 {
-        offer(&mut peer, index).await;
-        until(|| schedule.stats().received == u64::from(index) + 1).await;
-        let polls = schedule.reply_polls.load(Ordering::SeqCst);
-        until(|| schedule.reply_polls.load(Ordering::SeqCst) >= polls + 8).await;
-    }
+    poll_sequence(&mut peer, &schedule, 0, &schedule.reply_polls).await;
     schedule.reply_pending.store(false, Ordering::SeqCst);
     schedule.competing.store(false, Ordering::SeqCst);
     until(|| schedule.delivered.lock().unwrap().len() as u64 + schedule.stats().dropped == 64).await;
@@ -312,13 +307,6 @@ async fn loaded_microphone_pending_reply_admission_keeps_capture_serviced() {
     stop.send(true).unwrap();
     assert_eq!(runtime.await.unwrap(), Ok(()));
     assert_delivery(false, stats, &delivered);
-    writeln!(
-        std::io::stdout(),
-        "pending reply: offered_samples=20480 delivered_samples={} drops={}",
-        delivered.len() * 320,
-        stats.dropped
-    )
-    .unwrap();
 }
 
 #[tokio::test]
@@ -349,34 +337,13 @@ async fn loaded_microphone_pending_cut_receipt_keeps_capture_serviced() {
         .await
         .unwrap();
     until(|| schedule.cut_polls.load(Ordering::SeqCst) > 0).await;
-    for index in 0..64 {
-        offer(&mut peer, index).await;
-        until(|| schedule.stats().received == u64::from(index) + 1).await;
-        // Observe owner service opportunities, never successful capture receipt,
-        // before offering the next unchanged chunk.
-        let polls = schedule.cut_polls.load(Ordering::SeqCst);
-        until(|| schedule.cut_polls.load(Ordering::SeqCst) >= polls + 8).await;
-    }
-    writeln!(
-        std::io::stdout(),
-        "cut schedule: offered=64 received={} dropped={}",
-        schedule.stats().received,
-        schedule.stats().dropped
-    )
-    .unwrap();
+    poll_sequence(&mut peer, &schedule, 0, &schedule.cut_polls).await;
     schedule.cut_pending.store(false, Ordering::SeqCst);
     schedule.competing.store(false, Ordering::SeqCst);
     until(|| schedule.delivered.lock().unwrap().len() as u64 + schedule.stats().dropped == 64).await;
     let stats = schedule.stats();
     let delivered = schedule.delivered.lock().unwrap().clone();
     let packets = delivered.len();
-    writeln!(
-        std::io::stdout(),
-        "cut schedule: drained={} dropped={}",
-        delivered.len(),
-        stats.dropped
-    )
-    .unwrap();
     bridge_short::send(&mut peer, "audio-stop", json!({})).await;
     bridge_short::send(&mut peer, "played", json!({})).await;
     until(|| live.microphone_frames.load(Ordering::SeqCst) == packets).await;
@@ -385,4 +352,148 @@ async fn loaded_microphone_pending_cut_receipt_keeps_capture_serviced() {
     assert_eq!(runtime.await.unwrap(), Ok(()));
     writeln!(std::io::stdout(), "pending cut: offered=0..64 received={} delivered={delivered:?} offered_samples=20480 delivered_samples={} dropped={} fake_received={packets} capacity=32", stats.received, delivered.len()*320, stats.dropped).unwrap();
     assert_delivery(false, stats, &delivered);
+}
+
+#[tokio::test]
+#[ignore = "T3 production owner retirement, real bounded Wyoming and loopback Live"]
+async fn loaded_microphone_playback_retirement_drains_finished_capture() {
+    retirement(true).await;
+}
+
+#[tokio::test]
+#[ignore = "T3 production owner retirement, real bounded Wyoming and loopback Live"]
+async fn loaded_microphone_playback_retirement_forwards_active_capture() {
+    retirement(false).await;
+}
+
+async fn retirement(finished: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let live = bridge_peer::Live::bind_frames(3).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let schedule = Arc::new(Schedule::default());
+    schedule.retiring.store(true, Ordering::SeqCst);
+    schedule.reply_pending.store(finished, Ordering::SeqCst);
+    let (stop, shutdown) = tokio::sync::oneshot::channel();
+    let runtime = tokio::spawn(echo_bridge::bridge_runtime::execute_controlled(
+        settings(directory.path(), &live.url),
+        echo_bridge::bridge_runtime::Control {
+            utc_day: Arc::new(|| 0),
+            shutdown,
+        },
+        Connector(listener.local_addr().unwrap(), schedule.clone()),
+    ));
+    let mut peer = listener.accept().await.unwrap().0;
+    start_capture(&mut peer, directory.path(), &runtime).await;
+    let initial = if finished { 32 } else { 0 };
+    prepare_retirement(&mut peer, &schedule, &live, initial).await;
+    poll_sequence(&mut peer, &schedule, initial, &schedule.retirement_polls).await;
+    schedule.retiring.store(false, Ordering::SeqCst);
+    bridge_short::send(&mut peer, "audio-stop", json!({})).await;
+    finish_retirement(&mut peer, &live, initial).await;
+    bridge_wire_auth_failure::trace_wait::observe(&directory.path().join("trace"), "mic.completed", || {
+        format!("runtime finished={}", runtime.is_finished())
+    })
+    .await;
+    stop.send(true).unwrap();
+    assert_eq!(runtime.await.unwrap(), Ok(()));
+    assert_retirement(&schedule, &live, &directory.path().join("trace"), initial).await;
+}
+
+async fn assert_retirement(schedule: &Schedule, live: &bridge_peer::Live, path: &Path, initial: u16) {
+    let entries = trace(path);
+    let mic = entries.iter().find(|e| e["event"] == "mic.completed").unwrap();
+    assert_eq!(schedule.stats().received, u64::from(initial) + 64);
+    assert_eq!(schedule.stats().dropped, 0, "retirement evicted ready capture: {mic}");
+    assert_eq!(
+        schedule.delivered.lock().unwrap().as_slice(),
+        &(0..initial + 64).collect::<Vec<u16>>()
+    );
+    let active = if initial == 0 { 64 } else { 32 };
+    for (field, expected) in [
+        ("count", active),
+        ("input_samples", active * 320),
+        ("tail_samples", 0),
+        ("dropped_chunks", 0),
+    ] {
+        assert_eq!(mic[field], expected, "{mic}");
+    }
+    until(|| live.microphone_frames.load(Ordering::SeqCst) >= active).await;
+    assert_eq!(live.microphone_frames.load(Ordering::SeqCst), active);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.cut").count(), 1);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| e["event"] == "reply.played" && e["outcome"] == "cut")
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| e["event"] == "reply.played" && e["outcome"] == "played")
+            .count(),
+        usize::from(initial == 0)
+    );
+    writeln!(
+        std::io::stdout(),
+        "playback retirement: received={} drained={} dropped0 active{active} samples{} fake{active}",
+        initial + 64,
+        initial + 64,
+        active * 320
+    )
+    .unwrap();
+}
+
+async fn poll_sequence(peer: &mut tokio::net::TcpStream, schedule: &Schedule, start: u16, counter: &AtomicUsize) {
+    for index in start..start + 64 {
+        offer(peer, index).await;
+        until(|| schedule.stats().received == u64::from(index) + 1).await;
+        // Independent wire receipt and eight owner opportunities, never consumption.
+        let polls = counter.load(Ordering::SeqCst);
+        until(|| counter.load(Ordering::SeqCst) >= polls + 8).await;
+    }
+}
+
+async fn prepare_retirement(
+    peer: &mut tokio::net::TcpStream,
+    schedule: &Schedule,
+    live: &bridge_peer::Live,
+    initial: u16,
+) {
+    for index in 0..initial {
+        offer(peer, index).await;
+        until(|| schedule.delivered.lock().unwrap().len() == usize::from(index) + 1).await;
+    }
+    until(|| schedule.reply_polls.load(Ordering::SeqCst) > 0).await;
+    if initial > 0 {
+        live.events
+            .send(json!({"type":"response.audio.done"}).to_string())
+            .await
+            .unwrap();
+    }
+    live.events
+        .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
+        .await
+        .unwrap();
+    until(|| schedule.cut_polls.load(Ordering::SeqCst) > 0).await;
+    schedule.competing.store(false, Ordering::SeqCst);
+    while bridge_short::read_reply(peer).await.0["type"] != "audio-stop" {}
+    bridge_short::send(peer, "played", json!({})).await;
+    until(|| schedule.retirement_polls.load(Ordering::SeqCst) > 0).await;
+}
+
+async fn finish_retirement(peer: &mut tokio::net::TcpStream, live: &bridge_peer::Live, initial: u16) {
+    if initial > 0 {
+        while bridge_short::read(peer).await.0["type"] != "describe" {}
+        bridge_short::send(peer, "info", json!({})).await;
+    } else {
+        assert_eq!(bridge_short::read_reply(peer).await.0["type"], "audio-start");
+        until(|| live.microphone_frames.load(Ordering::SeqCst) == 64).await;
+        live.events
+            .send(json!({"type":"response.audio.done"}).to_string())
+            .await
+            .unwrap();
+        while bridge_short::read_reply(peer).await.0["type"] != "audio-stop" {}
+        bridge_short::send(peer, "played", json!({})).await;
+    }
 }

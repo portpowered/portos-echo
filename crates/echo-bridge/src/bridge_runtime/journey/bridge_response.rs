@@ -63,7 +63,14 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         context.speaking = false;
     }
     tokio::time::timeout(Duration::from_secs(1), async {
-        while run.recv().await?.is_some() {}
+        while let Some(frame) = run.recv().await? {
+            if !source.cancelled && context.cancellation == Cancellation::Response {
+                source.microphone(frame, call, false, context.screen).await?;
+            }
+        }
+        if !source.cancelled && context.cancellation == Cancellation::Response {
+            source.finish_mic(call, context.screen).await?;
+        }
         Ok::<_, Error>(())
     })
     .await
@@ -108,7 +115,9 @@ async fn play<L: EchoLink>(
     };
     tokio::pin!(play);
     let completion = complete_playback(&mut play, producer).await;
-    let outcome = context.finish_playback(play, completion).await?;
+    let outcome = context
+        .finish_playback(play, completion, (run, events), source, call)
+        .await?;
     if failure.is_some() && source.sent > 0 {
         // A failed response has no replacement answer to end continued capture.
         // Settle Played first, then return the same satellite to wake readiness.
@@ -152,10 +161,13 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         &mut self,
         play: impl std::future::Future<Output = Result<PlayOutcome, echo_link::Error>>,
         completion: Completion,
+        ports: (&mut <L::Events as LinkEvents>::Run, &mut L::Events),
+        source: &mut Source,
+        call: &mut impl LivePort,
     ) -> Result<PlayOutcome, Error> {
         let result = match completion {
             Completion::Playback(result) => result,
-            Completion::Producer(Ok(())) => play.await.map_err(Error::from),
+            Completion::Producer(Ok(())) => self.retire(play, ports, source, call).await?.map_err(Error::from),
             Completion::Producer(Err(error)) => {
                 if self.cut.is_none() {
                     // Settled cuts keep the original Played failure ceiling.
