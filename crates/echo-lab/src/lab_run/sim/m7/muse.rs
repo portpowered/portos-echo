@@ -39,8 +39,8 @@ impl Muse {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
-                .map_err(|_| "m7: private directory permissions")?;
+            let private = std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700));
+            private.map_err(|_| "m7: private directory permissions")?;
         }
         self.helper = Some(Process::start(
             tokio::process::Command::new(python)
