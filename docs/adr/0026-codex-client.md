@@ -588,3 +588,24 @@ These witnesses do not establish network confinement, a real pinned call or
 idle/reply timing through that pin. The local V3/media fake and canonical M2
 remain required integration work. Configured tools and simulated daily epochs
 still fail closed pending their retained dispatcher and budget integration.
+
+### Pinned signaling and real media component witness
+
+The bridge's `bridge_codex_media` T3 suite now also runs the verified offline
+Codex pin through `with_host_options` and `MediaCall`. A stdlib Python provider
+answers the call HTTP request with actual SDP from the existing loopback
+`echo-live::LivePeer`; the bridge uses production `echo-media`. The provider
+keeps the V3 sideband open and emits user and assistant transcript events only
+after the PCM round trip. The test checks the role/delta/done sequence, awaits
+realtime stop and supervisor reaping, then reacquires the same private home.
+The invoking Cargo build owns the test artifact; execution never downloads or
+builds the app server. The existing test-unit job provisions the verified pin.
+
+The pin's observed default call model is `gpt-live-1-codex`, whereas the research
+brief's main-branch default is `gpt-live-1.1-codex`; the pin wins. The witness
+checks the V3 `quicksilver=v2` header and exact call query. Process-local proxies
+refuse unexpected provider paths. This is routing evidence, not OS network
+confinement. It proves the signaling/media boundary with API-key RPC login
+using an inert local key; it does not prove ChatGPT authentication, Wyoming
+playback settlement, cross-channel reply ordering, idle reuse, or the M2
+scenario. Those retained obligations remain unsatisfied.

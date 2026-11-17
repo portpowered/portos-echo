@@ -1,6 +1,8 @@
 #![cfg(test)]
 //! T3 component: real echo-media versus the existing local fake's str0m peer.
-//! Controlled JSONL signaling only; not a real app-server or milestone witness.
+//! Controlled signaling and real pinned-server signaling; neither is a milestone witness.
+#[path = "pinned_media/mod.rs"]
+mod pinned_media;
 use echo_bridge::bridge_codex::{CaptureAudio, Event, MediaCall, MediaEvent, Options, ReplyAudio};
 use echo_codex::{codex_io::RpcIo, codex_rpc::Limits};
 use echo_live::LivePeer;
@@ -139,9 +141,9 @@ async fn round_trip() {
     assert!(io.begin_request("account/read", &json!({})).is_ok());
 }
 
-type ClientCall<'a> = MediaCall<'a, tokio::io::ReadHalf<DuplexStream>, tokio::io::WriteHalf<DuplexStream>>;
-
-async fn audio_round_trip(call: &mut ClientCall<'_>) {
+async fn audio_round_trip<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Unpin>(
+    call: &mut MediaCall<'_, R, W>,
+) {
     let clock = MediaClock::start();
     // A fixed PCM burst exercises framing/codec interoperability, not pacing.
     let waveform: [i16; 16] = [
