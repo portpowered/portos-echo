@@ -104,6 +104,10 @@ test-concurrency:
 COVERAGE_DEPENDENCY_SOURCES := \.cargo.(registry|git).|\.rustup.toolchains.|.rustc.[0-9a-f]{40}.
 COVERAGE_HOST_T3 := -p echo-wyoming --test wyoming_t3
 
+ifeq ($(OS),Windows_NT)
+coverage: export ECHO_COVERAGE_CHILD_PROFILES := $(shell python -c "from pathlib import Path; import uuid; print((Path('target/llvm-cov/child-profiles') / uuid.uuid4().hex).resolve())")
+endif
+
 coverage: hassmic-host
 	cargo build --locked -p echo-bridge --bins
 	if [ "$$(uname -s)" = Linux ]; then python scripts/test_coverage_profiles.py --instrumented; fi
@@ -115,6 +119,8 @@ coverage: hassmic-host
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --test sim_bridge_cli --locked --branch --no-report -- --ignored --nocapture
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --test sim_host --locked --branch --no-report -- --ignored --nocapture --test-threads=2
 	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --bin echo-lab --locked --branch --no-report -- --ignored --nocapture
+	python tests/test_windows_profraw.py --writer target/llvm-cov-target/debug/echo-lab-fake-adb
+	python tests/coverage_children.py
 	python scripts/coverage_profiles.py
 	cargo +nightly-2026-11-05 llvm-cov report --branch --no-default-ignore-filename-regex --ignore-filename-regex '$(COVERAGE_DEPENDENCY_SOURCES)' --fail-under-lines 80 --lcov --output-path target/llvm-cov/coverage.lcov
 	cargo xtask coverage-check target/llvm-cov/coverage.lcov "$(COVERAGE_BASE)"
