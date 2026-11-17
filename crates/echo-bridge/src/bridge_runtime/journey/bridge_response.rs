@@ -161,9 +161,16 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
                     // Settled cuts keep the original Played failure ceiling.
                     return Err(error);
                 }
-                // Producer EOF must not drop the playback progress that
-                // releases its outstanding receipt. Never recreate the cut.
-                let (outcome, original) = tokio::join!(play, self.settle_failure(error));
+                // Keep playback progressing only until the issued receipt
+                // settles. A connected satellite need not send Played after
+                // producer failure. Prefer an already-ready playback error.
+                tokio::pin!(play);
+                let outcome = tokio::select! {
+                    biased;
+                    outcome = &mut play => outcome,
+                    _ = self.finish_cut() => return Err(error),
+                };
+                let original = self.settle_failure(error).await;
                 return Err(outcome.err().map_or(original, Error::from));
             }
         };

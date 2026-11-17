@@ -73,6 +73,9 @@ impl<E: LinkEvents> LinkEvents for Events<E> {
     type Run = Run<E::Run>;
     async fn recv(&mut self) -> Result<Option<LinkEvent<Self::Run>>, Error> {
         let result = self.0.recv().await;
+        if self.1.queued.load(Ordering::SeqCst) && matches!(result, Ok(Some(LinkEvent::Wake(_)))) {
+            self.1.eof.notify_one();
+        }
         if matches!(result, Ok(None) | Err(_)) {
             self.1.producer_eof().await;
         }
@@ -197,6 +200,53 @@ async fn bridge_cut_secondary_receipt_error_preserves_playback_error() {
 #[ignore = "T3 configured application and loopback peers"]
 async fn bridge_cut_playback_error_precedes_retained_live_failure() {
     receipt_case(false, false, true).await;
+}
+#[tokio::test]
+#[ignore = "T3 controlled producer failure during pending cut"]
+async fn bridge_cut_pending_receipt_producer_error_keeps_control_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace");
+    let live = bridge_peer::Live::bind_frames(50).await;
+    let gate = Arc::new(Gate::default());
+    let (mut stream, mut worker, _stop) = start(&path, &live.url, gate.clone(), false).await;
+    assert_eq!(read(&mut stream).await.0["type"], "audio-start");
+    receive_initial(&mut stream, 10).await;
+    interrupt(&live, false).await;
+    let sent = 10 + drain_to_stop(&mut stream).await;
+    assert!(gate.queued.load(Ordering::SeqCst));
+    assert!(!gate.accepted.load(Ordering::SeqCst));
+    // A real second Wake fails the producer and releases the issued receipt.
+    // Keep the satellite connected without Played: cleanup must not wait for it.
+    let row: Value = serde_json::from_str(
+        include_str!("../../../../../tests/fixtures/wyoming/wake-word.jsonl")
+            .lines()
+            .nth(1)
+            .unwrap(),
+    )
+    .unwrap();
+    send(&mut stream, "run-pipeline", row["header"]["data"].clone()).await;
+    let result = tokio::time::timeout(Duration::from_secs(7), &mut worker).await;
+    writeln!(
+        std::io::stdout(),
+        "producer_error_result={result:?} receipt_accepted={} issued={}",
+        gate.accepted.load(Ordering::SeqCst),
+        gate.issued.load(Ordering::SeqCst)
+    )
+    .unwrap();
+    if result.is_err() {
+        worker.abort();
+    }
+    assert_eq!(result.unwrap().unwrap(), Err(echo_bridge::Error::Wyoming));
+    assert!(gate.accepted.load(Ordering::SeqCst));
+    assert_eq!(gate.issued.load(Ordering::SeqCst), 1);
+    assert_eq!(*gate.order.lock().unwrap(), ["receipt accepted"]);
+    assert_cut_failure(&path, sent, true);
+    let entries = trace(&path);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "reply.played").count(), 0);
+    assert_eq!(entries.iter().filter(|e| e["event"] == "wyoming.run_ended").count(), 0);
+    let cut = entries.iter().find(|e| e["event"] == "reply.cut").unwrap();
+    assert_eq!(cut["reply_frames"], 49);
+    assert_eq!(cut["bridge_evicted"], 0);
 }
 async fn receipt_case(device_first: bool, receipt_failure: bool, configured: bool) {
     let dir = tempfile::tempdir().unwrap();
