@@ -48,6 +48,11 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         )
         .await?;
         if !context.continuing(&source) {
+            if source.cancelled && source.sent > 0 {
+                client.pause().await?;
+                client.enable_capture().await?;
+                client.probe().await?;
+            }
             break;
         }
         // Reset only reply state. Keep forwarding the interrupting question
@@ -88,6 +93,13 @@ async fn play<L: EchoLink>(
         context.await_played(events, run, source, call).await
     };
     let (outcome, ()) = tokio::try_join!(async { play.await.map_err(Error::from) }, producer)?;
+    if failure.is_some() && source.sent > 0 {
+        // A failed response has no replacement answer to end continued capture.
+        // Settle Played first, then return the same satellite to wake readiness.
+        client.pause().await?;
+        client.enable_capture().await?;
+        client.probe().await?;
+    }
     failure.map_or(Ok(()), Err)?;
     let abandoned = context.delegation.abandon().await;
     context.screen.presentation.clear_emotion()?;

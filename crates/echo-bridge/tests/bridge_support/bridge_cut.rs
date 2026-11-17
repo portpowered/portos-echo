@@ -28,7 +28,7 @@ async fn bridge_cut_overload_excludes_earlier_evictions_from_retained_frames() {
         .unwrap();
     let sent = initial + drain_to_stop(&mut stream).await;
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
-    send(&mut stream, "played", json!({})).await;
+    complete_capture(&mut stream).await;
     assert_eq!(
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
@@ -179,7 +179,7 @@ async fn cut_reply(offered: u16, initial: u16) {
     }
     let sent = initial + drain_to_stop(&mut stream).await;
     assert_eq!(trace(&path).iter().filter(|e| e["event"] == "reply.played").count(), 0);
-    send(&mut stream, "played", json!({})).await;
+    complete_capture(&mut stream).await;
     assert_eq!(
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
@@ -187,6 +187,10 @@ async fn cut_reply(offered: u16, initial: u16) {
     assert_cut_trace(&path, offered, sent);
     bridge.finish(0).await;
     assert_closed(&mut stream).await;
+}
+async fn complete_capture(stream: &mut bridge_short::Satellite) {
+    send(stream, "played", json!({})).await;
+    send(stream, "audio-stop", json!({})).await;
 }
 async fn receive_initial(stream: &mut bridge_short::Satellite, initial: u16) {
     for _ in 0..initial {
@@ -199,7 +203,11 @@ async fn drain_to_stop(stream: &mut bridge_short::Satellite) -> u16 {
     let mut sent = 0;
     loop {
         let (header, payload) = read(stream).await;
-        if header["type"] == "audio-stop" {
+        if header["type"] == "hassmic-continue" {
+            assert_eq!(payload, Vec::<u8>::new());
+            let (stop, payload) = read(stream).await;
+            assert_eq!(stop["type"], "audio-stop");
+            assert_eq!(payload, Vec::<u8>::new());
             break;
         }
         assert_eq!(header["type"], "audio-chunk");

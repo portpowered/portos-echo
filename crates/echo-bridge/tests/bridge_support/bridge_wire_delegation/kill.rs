@@ -43,11 +43,9 @@ impl Rig {
             spoof,
         }
     }
-
     fn path(&self) -> PathBuf {
         self.directory.path().join("trace")
     }
-
     async fn command(&self, clear: bool) {
         let mut args = vec!["kill", "--config", "bridge.toml"];
         if clear {
@@ -65,7 +63,6 @@ impl Rig {
         )
         .await;
     }
-
     async fn wake(&mut self) {
         bridge_short::send(
             &mut self.satellite,
@@ -76,14 +73,18 @@ impl Rig {
         )
         .await;
     }
-
     async fn cut(&mut self) -> usize {
         let mut chunks = 0;
         loop {
             let (header, _) = bridge_short::read_reply(&mut self.satellite).await;
             match header["type"].as_str().unwrap() {
                 "audio-chunk" => chunks += 1,
-                "audio-stop" => break,
+                "hassmic-continue" => {
+                    let (stop, payload) = bridge_short::read_reply(&mut self.satellite).await;
+                    assert_eq!(stop["type"], "audio-stop");
+                    assert_eq!(payload, Vec::<u8>::new());
+                    break;
+                }
                 kind => assert_eq!(kind, "audio-chunk"),
             }
         }

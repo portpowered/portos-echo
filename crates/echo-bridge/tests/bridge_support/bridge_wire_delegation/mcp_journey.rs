@@ -205,6 +205,9 @@ pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::
                 );
                 errors += 1;
             }
+            "hassmic-continue" => {
+                continued_stop(&mut lines, &mut writer).await;
+            }
             "audio-stop" => {
                 bridge_short::send(&mut writer, "played", json!({})).await;
                 bridge_short::send(&mut writer, "audio-stop", json!({})).await;
@@ -212,4 +215,16 @@ pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::
             _ => assert_eq!(header["type"], "audio-start"),
         }
     }
+}
+
+async fn continued_stop(
+    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
+    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+) {
+    let stop = lines.next_line().await.unwrap().unwrap();
+    let stop: Value = serde_json::from_str(&stop).unwrap();
+    assert_eq!(stop["type"], "audio-stop");
+    assert_eq!(stop["payload_length"].as_u64().unwrap_or(0), 0);
+    bridge_short::send(writer, "played", json!({})).await;
+    bridge_short::send(writer, "audio-stop", json!({})).await;
 }
