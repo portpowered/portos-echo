@@ -102,7 +102,7 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn complete(&mut self) -> Result<(), String> {
+    pub async fn complete(&mut self, index: usize) -> Result<(), String> {
         let value = self.child()?.expect("bridge.run_completed").await?;
         let id = value["run_id"]
             .as_str()
@@ -112,15 +112,13 @@ impl Runtime {
             return Err("device: stale completed run".into());
         }
         self.run = Some(id.into());
-        self.observe()?;
-        selectors::check(
-            &self.trace.records,
-            &selectors::parse(&[
+        self.expect_trace(
+            &[
                 json!("wyoming.run_started"),
                 json!("wyoming.mic_frames {count_gte: 10}"),
                 json!("wyoming.run_ended"),
-            ])?,
-            self.run.as_deref(),
+            ],
+            index,
         )
     }
 

@@ -63,7 +63,7 @@ impl Driver for Configured<'_> {
                 let path = pcm::adapt(path, &artifacts.root, index)?;
                 self.bench.execute(&Step::SayFile(path), index, next, artifacts)?;
                 self.executor.block_on(runtime::controlled(
-                    self.state.complete(),
+                    self.state.complete(index),
                     self.options.cancel.as_deref(),
                 ))
             }

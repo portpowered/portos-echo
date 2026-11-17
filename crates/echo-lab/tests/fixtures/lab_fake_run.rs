@@ -1,4 +1,6 @@
 //! T3 fixture-only tool. Never forwards to a real executable or service.
+#[path = "lab_device_bridge.rs"]
+mod device_bridge;
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -6,6 +8,7 @@ use std::io::{self, Write};
 fn operation(args: &[String]) -> &str {
     match args.first().map(String::as_str) {
         Some("shell") => "firmware",
+        Some("--config") => "bridge",
         Some("exec-out") => "screencap",
         Some("-c") => args.get(2).map_or("unknown", String::as_str),
         Some("session") => args.get(1).map_or("unknown", String::as_str),
@@ -248,6 +251,9 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
 }
 
 fn configured_fixture(op: &str, args: &[String], fixture: &Value) -> Result<Option<u8>, Box<dyn std::error::Error>> {
+    if op == "bridge" && fixture["device_bridge_fault"].is_string() {
+        return device_bridge::run(args, fixture).map(Some);
+    }
     if op == "play"
         && let Ok(address) = std::env::var("ECHO_LAB_DEVICE_CONTROL")
     {

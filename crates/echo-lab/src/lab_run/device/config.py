@@ -1,7 +1,7 @@
 """Offline projection of an explicitly nominated TOML; never reads credentials.
 
-The production bridge remains the schema validator before dialing. This helper
-admits only the local, credential-free subset used by the device test journey.
+The caller validates both input and output with echo-config. This helper adds
+the local, credential-free restrictions used by the device test journey.
 """
 import json
 from pathlib import Path
