@@ -9,6 +9,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
 from wsl_distro import resolve_wsl_distro
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from relay import forward, guest
+
 
 def launch_windows():
     distro = None
@@ -17,16 +20,20 @@ def launch_windows():
         path = subprocess.check_output(
             ["wsl", "-d", distro, "--exec", "wslpath", "-u", str(Path(__file__).resolve())],
             text=True).strip()
-        status = subprocess.call(["wsl", "-d", distro, "--exec", "python3", "-u", path])
+        argv = ["wsl", "-d", distro, "--exec", "python3", "-u", path]
+        status = forward(argv, [*argv, "--relay"])
         if status:
             sys.stderr.write(f"WSL distro '{distro}': operation failed\n")
         return status
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         sys.stderr.write((f"WSL distro '{distro}': operation failed" if distro else str(error)) + "\n")
         return 1
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--relay":
+        guest(int(sys.argv[2]))
+        return 0
     if os.name == "nt":
         return launch_windows()
     source = Path(__file__).resolve().parents[2] / "src/lab_run/sim/host.py"
