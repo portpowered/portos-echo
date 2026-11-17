@@ -1,7 +1,12 @@
 //! T3 lifecycle through prebuilt production binaries and pinned host.
-use super::super::super::process::owners::{Completion, Host};
+use super::super::super::process::owners::Completion;
+#[cfg(unix)]
+use super::super::super::process::owners::Host;
 use super::*;
 
+// M7 runs Unix Muse services (muse::prebuilt refuses other platforms), so its T3 world tests
+// and their helpers exist only on Unix.
+#[cfg(unix)]
 fn binaries() -> PathBuf {
     // Cargo places tests under <profile>/deps or <profile>/build/<crate>/<hash>/out.
     // Follow the executable so llvm-cov's separate target uses its own artifacts.
@@ -27,6 +32,7 @@ fn binaries() -> PathBuf {
     directory
 }
 
+#[cfg(unix)]
 async fn start(world: &mut World, root: &Path, bridge: &Path, host: &Host) -> Result<(), String> {
     world.start(host.python(), bridge, root, false, &binaries()).await
 }
@@ -43,6 +49,7 @@ async fn close(world: &mut World) -> Result<(), String> {
     result
 }
 
+#[cfg(unix)]
 #[tokio::test]
 #[ignore = "T3 requires Linux, openssl, pinned hassmic-host and prebuilt bridge/Muse binaries"]
 async fn m7_partial_startup_reaps_daemon_helper_host_and_all_listeners() {
@@ -63,6 +70,7 @@ async fn m7_partial_startup_reaps_daemon_helper_host_and_all_listeners() {
     host_owner.assert_closed();
 }
 
+#[cfg(unix)]
 #[tokio::test]
 #[ignore = "T3 requires Linux, openssl, pinned hassmic-host and prebuilt bridge/Muse binaries"]
 async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
