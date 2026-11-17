@@ -355,7 +355,7 @@ fn wake_clip_failures_keep_caller_input_and_remove_staging_with_audio_retention(
         assert!(!session.0.join("artifacts/configured.private").exists());
         assert_eq!(session.report()["m1"]["plays"], json!([]));
         if fixture["hour"] == 8 {
-            failed(&result, "quiet hours: audio refused before 09:00 local time");
+            failed(&result, "quiet hours: audio refused");
             assert!(session.operations().iter().all(|op| op != "play"));
         }
     }
