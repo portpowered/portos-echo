@@ -1228,8 +1228,34 @@ def safe_identity_display(value):
     )
 
 
+def is_detached_planner(candidate, prd_name):
+    """Identify the lane's own detached planning source, never its destination."""
+    return (
+        candidate["record"]["detached"]
+        and candidate["worktree_path"].name == f"{normalize_branch(prd_name)}-plan"
+    )
+
+
+def validate_detached_planner_ancestry(repo_root, candidate):
+    """Require a readable planner HEAD reachable from the applicable main."""
+    baseline = "refs/remotes/origin/main" if has_origin_remote(repo_root) else "refs/heads/main"
+    baseline_head = resolve_revision_head(repo_root, baseline, "planner baseline")
+    head = resolve_checkout_head(candidate["worktree_path"])
+    if head is None:
+        raise RuntimeError("detached planner is ineligible: no readable HEAD")
+    result = run_git(
+        "merge-base", "--is-ancestor", head, baseline_head,
+        cwd=repo_root, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "detached planner is ineligible: HEAD ancestry check failed against "
+            f"{baseline}: {command_failure_details(result)}"
+        )
+
+
 def validate_nested_packet_freshness(repo_root, candidate, prd_name):
-    """Refuse attached packets with no positive evidence of a live lane."""
+    """Require a live attached lane or the lane's safe detached planner."""
     record = candidate["record"]
     packet_path = candidate["prd_json_path"]
     worktree_path = candidate["worktree_path"]
@@ -1249,9 +1275,10 @@ def validate_nested_packet_freshness(repo_root, candidate, prd_name):
         record["branch_ref"] == "refs/heads/main"
         and worktree_path.name == normalize_branch(prd_name)
     )
-    if record["detached"] or (
+    detached_planner = is_detached_planner(candidate, prd_name)
+    if not detached_planner and (record["detached"] or (
         record["branch_ref"] != expected_ref and not recoverable_main_ref
-    ):
+    )):
         observed_ref = "detached" if record["detached"] else record["branch_ref"]
         observed = safe_identity_display(observed_ref) if observed_ref else "missing"
         raise RuntimeError(
@@ -1264,6 +1291,9 @@ def validate_nested_packet_freshness(repo_root, candidate, prd_name):
             "registered worktree path is unavailable"
         )
 
+    if detached_planner:
+        validate_detached_planner_ancestry(repo_root, candidate)
+        return
     if recoverable_main_ref:
         return
 
@@ -2435,7 +2465,7 @@ def main():
     branch = f"{prd_name}"
     prd_json_path = selected_candidate["prd_json_path"]
     prd_md_path = selected_candidate["prd_md_path"]
-    if selected_candidate["is_root"]:
+    if selected_candidate["is_root"] or is_detached_planner(selected_candidate, prd_name):
         worktree_dir = repo_root / ".claude" / "worktrees" / normalize_branch(branch)
     else:
         worktree_dir = selected_candidate["worktree_path"]
