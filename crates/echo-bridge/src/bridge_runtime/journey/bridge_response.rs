@@ -125,3 +125,69 @@ async fn play<L: EchoLink>(
     )?;
     Ok(abandoned)
 }
+
+impl<L: EchoLink> PlaybackContext<'_, L> {
+    pub(super) async fn await_played(
+        &mut self,
+        events: &mut L::Events,
+        run: &mut <L::Events as LinkEvents>::Run,
+        source: &mut Source,
+        call: &mut impl LivePort,
+    ) -> Result<(), Error> {
+        self.await_transport(events, run, source, call, false).await
+    }
+    pub(super) async fn await_transport(
+        &mut self,
+        events: &mut L::Events,
+        run: &mut <L::Events as LinkEvents>::Run,
+        source: &mut Source,
+        call: &mut impl LivePort,
+        cut_only: bool,
+    ) -> Result<(), Error> {
+        let kill = self.kill;
+        let mut deadline = None;
+        let mut ended = false;
+        let mut arbiter = super::Arbiter::default();
+        while self.cut.is_some() || (!cut_only && !self.played) {
+            // Keep the issued cut alive while capture and device notifications
+            // share turns. The Played budget still starts after its receipt.
+            if self.cut.is_none() && deadline.is_none() {
+                deadline = Some(Instant::now() + bridge_timing::CONTROL);
+            }
+            let cutting = self.cut.is_some();
+            tokio::select! {
+                work = arbiter.next(
+                    async { if ended { std::future::pending().await } else { run.recv().await } },
+                    async { if cutting { self.finish_cut().await } else { std::future::pending().await } },
+                    std::future::pending::<std::convert::Infallible>(),
+                    events.recv(),
+                ) => match work {
+                    super::Work::Device(event) => self.device(source, &event?.ok_or(Error::Wyoming)?)?,
+                    super::Work::Control(result) => result?,
+                    super::Work::Reply(never) => match never {},
+                    super::Work::Microphone(frame) => {
+                        if let Some(frame) = frame? {
+                            if source.cancelled && self.cancellation == Cancellation::Response {
+                                self.microphone(source, frame, call, false).await?;
+                            }
+                        } else {
+                            ended = true;
+                        }
+                    },
+                },
+                () = async {
+                    if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; }
+                    else { std::future::pending().await }
+                } => return Err(Error::Deadline),
+                () = kill.wait(), if !source.cancelled => {
+                    self.kill.sync(self.trace).await?;
+                    self.cancellation = Cancellation::Shutdown;
+                    source.cancelled = true;
+                    self.delegation.abandon().await;
+                    call.close();
+                }
+            }
+        }
+        Ok(())
+    }
+}

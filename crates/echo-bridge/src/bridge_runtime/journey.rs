@@ -248,55 +248,13 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
         }
         Ok(())
     }
-    async fn await_played(
-        &mut self,
-        events: &mut L::Events,
-        run: &mut <L::Events as LinkEvents>::Run,
-        source: &mut Source,
-        call: &mut impl LivePort,
-    ) -> Result<(), Error> {
-        if self.played {
-            return Ok(());
-        }
-        let deadline = Instant::now() + bridge_timing::CONTROL;
-        let mut ended = false;
-        loop {
-            tokio::select! {
-                biased;
-                event = events.recv() => {
-                    let event = event?.ok_or(Error::Wyoming)?;
-                    self.screen.observe(&event, self.trace)?;
-                    match event {
-                        LinkEvent::Played => return Ok(()),
-                        LinkEvent::Wake(_) => return Err(Error::Wyoming),
-                        _ => (),
-                    }
-                },
-                frame = run.recv(), if !ended => {
-                    if let Some(frame) = frame? {
-                        if source.cancelled && self.cancellation == Cancellation::Response {
-                            self.microphone(source, frame, call, false).await?;
-                        }
-                    } else {
-                        ended = true;
-                    }
-                },
-                () = tokio::time::sleep_until(deadline) => return Err(Error::Deadline),
-                () = self.kill.wait(), if !source.cancelled => {
-                    self.kill.sync(self.trace).await?;
-                    self.cancellation = Cancellation::Shutdown;
-                    source.cancelled = true;
-                    self.delegation.abandon().await;
-                    call.close();
-                }
-            }
-        }
-    }
     async fn cancelled(
         &mut self,
         source: &mut Source,
         call: &mut impl LivePort,
         output: &mut Output<'_, L>,
+        run: &mut <L::Events as LinkEvents>::Run,
+        events: &mut L::Events,
     ) -> Result<bool, Error> {
         if self.kill.sync(self.trace).await? {
             self.cancellation = Cancellation::Shutdown;
@@ -308,7 +266,8 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             // These packets were admitted for the response being cancelled.
             // Drain them before cut can await Played and admit a replacement.
             while call.pop_audio().is_some() {}
-            self.cut(source, output.discard()).await?;
+            self.cut(source, output.discard());
+            self.await_transport(events, run, source, call, true).await?;
             self.delegation.abandon().await;
         }
         Ok(source.cancelled)
@@ -376,7 +335,7 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             Ok(())
         }
     }
-    async fn cut(&mut self, source: &mut Source, pending: u64) -> Result<(), Error> {
+    fn cut(&mut self, source: &mut Source, pending: u64) {
         let bridge_evicted = source.queue.drop_count();
         self.cut = Some((
             Box::pin(self.client.cut_with_stats()),
@@ -384,7 +343,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             bridge_evicted,
             source.framed,
         ));
-        self.finish_cut().await
     }
     async fn finish_cut(&mut self) -> Result<(), Error> {
         let Some((receipt, ..)) = &mut self.cut else {
@@ -432,7 +390,7 @@ async fn produce_turns<L: EchoLink>(
     let mut pressure_reported = false;
     let mut arbiter = Arbiter::default();
     loop {
-        if context.cancelled(source, call, &mut output).await? {
+        if context.cancelled(source, call, &mut output, run, events).await? {
             return Ok(());
         }
         context.delegation.service(call, context.trace, context.screen).await?;
