@@ -210,7 +210,6 @@ async fn stop_failed_producer<L: EchoLink>(
 enum Cancellation {
     Response,
     Shutdown,
-
 }
 struct PlaybackContext<'a, L: EchoLink> {
     client: &'a L,
@@ -412,6 +411,18 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
     }
 }
 async fn produce<L: EchoLink>(
+    source: &mut Source,
+    run: &mut <L::Events as LinkEvents>::Run,
+    events: &mut L::Events,
+    call: &mut impl LivePort,
+    tx: &L::ReplySink,
+    lab: (bool, u64),
+    context: &mut PlaybackContext<'_, L>,
+) -> Result<(), Error> {
+    // Keep the rotating owner future boxed without changing response lifecycle.
+    Box::pin(produce_turns(source, run, events, call, tx, lab, context)).await
+}
+async fn produce_turns<L: EchoLink>(
     source: &mut Source,
     run: &mut <L::Events as LinkEvents>::Run,
     events: &mut L::Events,
