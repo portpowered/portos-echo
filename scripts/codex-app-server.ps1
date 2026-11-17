@@ -19,8 +19,9 @@ function Get-VerifiedBinary([string] $Published, [string] $ArchiveName, [string]
 }
 try {
     if ($args.Count -ne 0) { throw 'takes no arguments' }
+    $hostArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
-        $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'unsupported host' }
+        $hostArchitecture -ne 'AMD64') { throw 'unsupported host' }
     $root = Split-Path $PSScriptRoot -Parent
     $commit = 'a956835d020762cb2b570053af06f643a11c0ecc'
     $target = 'x86_64-pc-windows-msvc'
