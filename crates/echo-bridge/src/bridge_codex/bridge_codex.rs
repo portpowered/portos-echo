@@ -65,6 +65,7 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     thread: Option<String>,
     early: VecDeque<Event>,
     interrupt: Option<(RequestId, Instant)>,
+    tool_trace: Option<crate::bridge_trace::ToolTrace>,
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
@@ -75,6 +76,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             thread: None,
             early: VecDeque::new(),
             interrupt: None,
+            tool_trace: None,
         }
     }
 

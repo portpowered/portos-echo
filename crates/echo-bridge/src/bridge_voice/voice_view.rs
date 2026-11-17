@@ -83,6 +83,7 @@ impl<'a> View<'a> {
     fn begin(&mut self) -> Result<(), Error> {
         self.sequence = self.sequence.checked_add(1).ok_or(Error::Unavailable)?;
         self.run = Some(format!("run-{}", self.sequence));
+        self.trace.tool_run(self.run.as_deref())?;
         self.trace
             .record("wyoming.run_started", self.run.as_deref(), json!({}))?;
         self.trace.record("run.started", self.run.as_deref(), json!({}))?;
@@ -139,10 +140,12 @@ impl<'a> View<'a> {
         self.trace.record("bridge.run_completed", Some(id), json!({}))?;
         crate::bridge_runtime::publish("bridge.run_completed", Some(id))?;
         self.run = None;
+        self.trace.tool_run(None)?;
         Ok(())
     }
 
     pub fn closed(&mut self, reason: &'static str) -> Result<(), Error> {
+        self.trace.tool_run(None)?;
         if self.connected {
             self.trace.record("live.closed", None, json!({"reason":reason}))?;
             self.connected = false;
@@ -349,6 +352,32 @@ mod tests {
                 message: "Echo Live ready".into()
             }
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tool_receipts_follow_reused_wakes_and_never_keep_a_finished_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
+        let mut trace = Trace::open(&path, "chatgpt").unwrap();
+        let mut effect = trace.clone();
+        let health = Health::offline();
+        let screen = Screen::bind(None).await.unwrap();
+        let mut view = View::new(&screen, &health, &mut trace);
+        view.observe(ServeNotice::Listening).unwrap();
+        effect.tool_attempt("test.echo", "1:t1:u1:c").unwrap();
+        view.observe(ServeNotice::Session(SessionNotice::Completed(Stats::default())))
+            .unwrap();
+        effect.tool_attempt("test.echo", "1:t1:u1:d").unwrap();
+        view.observe(ServeNotice::Session(SessionNotice::Started)).unwrap();
+        effect.tool_attempt("test.echo", "1:t1:v1:c").unwrap();
+        view.observe(ServeNotice::Kill(true)).unwrap();
+        effect.tool_attempt("test.echo", "1:t1:v1:d").unwrap();
+        let runs: Vec<_> = rows(&path)
+            .into_iter()
+            .filter(|row| row["event"] == "tools/call")
+            .map(|row| row["run_id"].clone())
+            .collect();
+        assert_eq!(runs, vec![json!("run-1"), json!(null), json!("run-2"), json!(null)]);
     }
 
     #[tokio::test(start_paused = true)]

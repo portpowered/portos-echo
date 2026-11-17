@@ -10,6 +10,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                 // Unknown or foreign requests are answered without an effect.
                 if method == "item/tool/call" && params["threadId"].as_str() == self.thread.as_deref() {
                     let call = serde_json::from_value(params).map_err(|_| Error::Decode)?;
+                    if let Some(trace) = &mut self.tool_trace {
+                        trace.request(&id, &call)?;
+                    }
                     return Ok(Event::Tool { id, call });
                 }
                 self.io

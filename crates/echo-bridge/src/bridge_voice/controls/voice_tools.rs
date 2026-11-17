@@ -14,20 +14,24 @@ use echo_mcp_client::McpClient;
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
 
-pub(super) struct Mcp(Option<McpClient<Token>>);
+pub(super) struct Mcp {
+    client: Option<McpClient<Token>>,
+    trace: Trace,
+}
 impl ToolHost for Mcp {
     async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
-        match &self.0 {
+        match &self.client {
             Some(host) => host.list_tools().await,
             None => Ok(vec![]),
         }
     }
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
-        self.0
-            .as_ref()
-            .ok_or(ToolError::Denied)?
-            .call_tool(name, args, key)
-            .await
+        let client = self.client.as_ref().ok_or(ToolError::Denied)?;
+        self.trace
+            .clone()
+            .tool_attempt(name, key)
+            .map_err(|_| ToolError::Transport)?;
+        client.call_tool(name, args, key).await
     }
 }
 
@@ -38,6 +42,7 @@ pub(super) struct Tools {
     allowed: Vec<String>,
     specs: Option<Vec<ToolSpec>>,
     runtime: Option<bridge_mcp::Runtime>,
+    trace: Option<Trace>,
 }
 
 impl Tools {
@@ -53,6 +58,7 @@ impl Tools {
                 .map_or_else(Vec::new, |server| server.allow_tools.clone()),
             specs: None,
             runtime: None,
+            trace: None,
         }
     }
 
@@ -82,7 +88,10 @@ impl Tools {
             })
             .transpose()?;
         let host = Policy::new(
-            Mcp(client),
+            Mcp {
+                client,
+                trace: trace.clone(),
+            },
             &self.allowed,
             &config.audit.log_dir,
             screen.approvals.clone(),
@@ -90,6 +99,7 @@ impl Tools {
         )
         .map_err(|_| Error::Unavailable)?;
         self.host = Some(host);
+        self.trace = Some(trace.clone());
         Ok(())
     }
 
@@ -140,6 +150,7 @@ where
             () = cancelled.as_mut() => return Err(Error::Control),
             result = tokio::time::timeout_at(options.deadline, tools.catalog()) => result.map_err(|_| Error::Deadline)??,
         };
+        call.trace_tools(tools.trace.as_ref().ok_or(Error::Unavailable)?.clone(), &catalog);
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),

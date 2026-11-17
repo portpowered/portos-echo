@@ -896,3 +896,27 @@ It does not exercise configured approval/ledger policy or pinned hassmic-host,
 and cannot replace M4's scenario, full golden, latency, daily-cap interruption
 measurement or reverted dropped-result seed. Those remain retained story 002
 work; no remote account, new dependency or shared contract is involved.
+
+### Canonical dispatch receipts (2026-11-17)
+
+Configured voice calls now record `item/tool/call` at the single process
+reader and `tools/call` at the MCP host attempt boundary, after durable
+reservation and required screen consent. Both carry the exact thread, turn
+and call IDs; the request receipt also retains its JSON-RPC request ID.
+Tool names come from the allowlisted catalog rather than arbitrary model
+names. Arguments, result bodies, SDP and transcripts are excluded. A trace
+write failure fails closed before the attempted MCP effect.
+
+Trace clones share the current voice run identity. Completion, call close,
+kill and failure clear that identity, so idle work cannot borrow a finished
+run. The host decodes the dispatcher's existing canonical length-prefixed
+idempotency key (byte lengths, including UTF-8) to recover its correlation;
+malformed, noncanonical or trailing data fails closed without being logged.
+
+These are bridge observations: the host receipt records an attempted MCP
+operation, not remote success. M4 must independently compare its real MCP
+observer and native fake-sideband delegation/append observations. Neither
+native event is inferred or fabricated here. Functional tests use the public
+configured owner, controlled stdio/media and real loopback MCP to verify exact
+receipt ordering/correlation, approval denial and persisted replay refusal.
+They do not replace actual-pin M4, its complete goldens, latency or seed proof.

@@ -31,6 +31,14 @@ pub struct MediaCall<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPe
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a, R, W, P> {
+    pub(crate) fn trace_tools(
+        &mut self,
+        trace: crate::bridge_trace::Trace,
+        catalog: &echo_delegation::codex_dispatch::Catalog,
+    ) {
+        self.call.tool_trace = Some(crate::bridge_trace::ToolTrace::new(trace, catalog));
+    }
+
     pub fn new(io: &'a mut RpcIo<R, W>, peer: P) -> Self {
         Self {
             call: Call::new(io),

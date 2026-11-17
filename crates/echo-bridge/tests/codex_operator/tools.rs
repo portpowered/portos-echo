@@ -162,6 +162,13 @@ async fn codex_configured_tools_correlate_catalog_mcp_and_persist_no_replay() {
         first,
         json!({"contentItems":[{"type":"inputText","text":"[{\"text\":\"delegated echo\",\"type\":\"text\"}]"}],"success":true})
     );
+    assert_eq!(
+        receipts(&fixture),
+        vec![
+            receipt("item/tool/call", "test.echo"),
+            receipt("tools/call", "test.echo")
+        ]
+    );
     std::fs::remove_file(fixture.home.join("tool-result")).unwrap();
     std::fs::remove_file(fixture.home.join("peer-port")).unwrap();
     let second = generation(&fixture, config, None).await;
@@ -179,6 +186,14 @@ async fn codex_configured_tools_correlate_catalog_mcp_and_persist_no_replay() {
         [("test.echo", 1)]
     );
     assert_eq!(snapshot.requests.iter().filter(|r| r.method == "tools/list").count(), 2);
+    assert_eq!(
+        receipts(&fixture),
+        vec![
+            receipt("item/tool/call", "test.echo"),
+            receipt("tools/call", "test.echo"),
+            receipt("item/tool/call", "test.echo")
+        ]
+    );
     spoof.shutdown().await.unwrap();
 }
 
@@ -194,6 +209,11 @@ async fn codex_configured_tools_approval_denial_has_no_mcp_and_acceptance_has_on
         let output = generation(&fixture, config(&fixture, spoof.url()), Some(accepted)).await;
         assert_eq!(output["success"], false);
         assert_eq!(spoof.snapshot().unwrap().calls.len(), usize::from(accepted));
+        let mut expected = vec![receipt("item/tool/call", "test.requires_approval")];
+        if accepted {
+            expected.push(receipt("tools/call", "test.requires_approval"));
+        }
+        assert_eq!(receipts(&fixture), expected);
         if accepted {
             assert!(output.to_string().contains("approval_required"));
         } else {
@@ -245,4 +265,27 @@ async fn codex_configured_tools_exhausted_call_admission_never_opens_media_or_mo
     );
     super::host::released(&fixture).await;
     spoof.shutdown().await.unwrap();
+}
+
+fn receipts(fixture: &Fixture) -> Vec<Value> {
+    let raw = std::fs::read_to_string(fixture.directory.path().join("tool-trace")).unwrap();
+    assert!(!raw.contains("delegated echo"), "tool arguments leaked into trace");
+    raw.lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|row| matches!(row["event"].as_str(), Some("item/tool/call" | "tools/call")))
+        .map(|mut row| {
+            assert!(row["elapsed_ms"].is_u64());
+            row["elapsed_ms"] = json!(0);
+            row
+        })
+        .collect()
+}
+
+fn receipt(event: &str, name: &str) -> Value {
+    let mut value = json!({"event":event,"name":name,"thread_id":"fixture-thread","turn_id":"fixture-turn",
+        "call_id":"fixture-call","run_id":"run-1","elapsed_ms":0,"provider_auth_mode":"chatgpt"});
+    if event == "item/tool/call" {
+        value["request_id"] = json!("fixture-tool");
+    }
+    value
 }
