@@ -13,7 +13,7 @@ session_idle_seconds = 120
 # Each new call receives a delimited snapshot after these instructions.
 # The authorized fallback explicitly labels UTC when local offset is unavailable.
 # instructions = """Client audio bridge. Answer directly when the conversation and call-start context are sufficient. Delegate only when a tool or external lookup is needed. The context is a call-start snapshot; UTC does not establish the user's local time zone."""
-# Optional keys in that same [codex] table; all default to unset:
+# Optional keys in that same codex table; all default to unset:
 # delegate_model = "fixture-model"
 # delegate_effort = "low"
 # time_zone = "Europe/Berlin"

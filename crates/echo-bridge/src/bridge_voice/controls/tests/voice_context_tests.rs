@@ -46,8 +46,8 @@ fn configured_zone_preserves_prefix_and_fixed_utc_snapshot() {
             let actual = call_instructions(prefix, now, zone).unwrap();
             assert_eq!(
                 actual,
-                format!("{prefix}\n[Call-start context: 2026-11-17 Tuesday 12:34:56 UTC+00:00; {suffix}]")
-            ); // lint-rules: allow-literal UTC calendar expectation, never an endpoint
+                format!("{prefix}\n[Call-start context: 2026-11-17 Tuesday 12:34:56 UTC+00:00; {suffix}]") // lint-rules: allow-literal UTC calendar expectation, never an endpoint
+            );
             writeln!(std::io::stdout(), "observed instructions: {actual}").unwrap();
         }
     }
