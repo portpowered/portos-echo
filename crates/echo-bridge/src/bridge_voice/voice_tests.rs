@@ -17,8 +17,12 @@ struct Port {
     ready: VecDeque<PcmFrame>,
     sent: Arc<Mutex<Vec<PcmFrame>>>,
     reject: Option<usize>,
+    retired: usize,
 }
 impl VoicePort for Port {
+    fn retire_audio(&mut self) {
+        self.retired += 1;
+    }
     fn send(&self, frame: PcmFrame) -> Result<(), Error> {
         let mut sent = self.sent.lock().unwrap();
         if self.reject == Some(sent.len()) {
@@ -42,6 +46,7 @@ fn port() -> (Port, mpsc::Sender<Result<MediaEvent, Error>>) {
             ready: VecDeque::new(),
             sent: Arc::default(),
             reject: None,
+            retired: 0,
         },
         tx,
     )
@@ -216,6 +221,7 @@ async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
     wake(&observer, 0);
     let mic = microphone(&mut events).await;
     let (mut port, tx) = port();
+    tx.send(Ok(MediaEvent::Audio(Box::new([456; 320])))).await.unwrap();
     tx.send(Ok(MediaEvent::Control(Event::Transcript {
         role: "user".into(),
         text: "question".into(),
@@ -236,6 +242,7 @@ async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
     )
     .await;
     assert_eq!(result, Err(Error::Deadline));
+    assert_eq!(port.retired, 0);
     assert_eq!(Instant::now(), end);
     assert!(observer.commands().contains(&Command::Cut(0)));
     assert!(!observer.commands().contains(&Command::Stop));

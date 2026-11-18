@@ -55,7 +55,9 @@ impl Source {
         if self.state != ReplyState::Speaking && !(self.state == ReplyState::Idle && self.delegation.turns > 0) {
             return Ok(());
         }
-        port.retire_audio();
+        if self.state == ReplyState::Speaking {
+            port.retire_audio();
+        }
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.reply = ReplyAudio::new(self.lead_ms)?;
         self.delegation = Delegation::default();
@@ -100,7 +102,8 @@ impl Source {
             && !self.reply.finished()
             && !self.delegation.abandoned
         {
-            self.state = ReplyState::Speaking;
+            // PCM has no utterance identity. Only ordered assistant control
+            // opens Speaking; the initial user transcript can lag audible RTP.
             self.reply.push(frame)?;
         }
         self.stats.reply_received += 1;

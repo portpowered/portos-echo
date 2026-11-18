@@ -186,6 +186,9 @@ async fn generation<L: EchoLink>(
     let (events, microphone) = input;
     let (source, drain) = context;
     let (sink, reply) = client.reply_channel(NonZeroUsize::MIN);
+    // Keep the producer alive until cut is acknowledged. Closing it first can
+    // race the cut command with an ordinary audio-stop in the device owner.
+    let mut sink = Some(sink);
     let ceiling = options.response_deadline.saturating_duration_since(Instant::now()) + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
     let playback_started = std::cell::Cell::new(false);
@@ -206,7 +209,7 @@ async fn generation<L: EchoLink>(
         tokio::select! {
             biased;
             () = cancelled => Err(Error::Control),
-            result = drive(events, microphone, port, sink, (source, drain), options, observe) => result,
+            result = drive(events, microphone, port, &mut sink, (source, drain), options, observe) => result,
         }
     };
     let result = timeout_at(options.response_deadline + options.played_timeout, async {
@@ -234,7 +237,7 @@ async fn drive<E: LinkEvents>(
     events: &mut E,
     microphone: &mut E::Run,
     port: &mut impl VoicePort,
-    sink: impl ReplySink,
+    sink: &mut Option<impl ReplySink>,
     context: (
         &mut Source,
         &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
@@ -243,7 +246,6 @@ async fn drive<E: LinkEvents>(
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let (source, drain) = context;
-    let mut sink = Some(sink);
     let mut pending = None;
     let mut deadline = options.response_deadline;
     loop {

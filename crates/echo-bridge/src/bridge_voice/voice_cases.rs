@@ -602,10 +602,13 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
         .await
         .unwrap();
     source.interrupt(&mut port).unwrap();
+    assert_eq!(port.retired, 0);
     assert!(source.state == ReplyState::Cutting);
     source = Source::new(200, false).unwrap();
     source.microphone_finished = true;
-    // One input frame is still held inside the streaming resampler.
+    media(said("old"), &mut port, &mut source, &mut |_| Ok(()))
+        .await
+        .unwrap();
     source.audio(&[123; 320]).unwrap();
     assert!(!source.reply.has_frames());
     let mut pending_frame = Some(vec![77; 960]);
@@ -622,20 +625,37 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     .await
     .unwrap();
     assert!(source.state == ReplyState::Cutting);
+    assert_eq!(port.retired, 1);
+    let mut sink = Some(Stalled);
+    assert_eq!(
+        drive(
+            &mut events,
+            &mut mic,
+            &mut port,
+            &mut sink,
+            (&mut source, &mut None),
+            &options(),
+            &mut |_| Ok(())
+        )
+        .await,
+        Err(Error::Control)
+    );
+    assert!(sink.is_some());
     assert!(!source.reply.finished());
     assert!(!source.reply.has_frames());
-    // drive exits on Cutting and drops its pending frame before the cut request.
+    assert_retired_and_replacement(&mut source, &mut port).await;
+}
+
+async fn assert_retired_and_replacement(source: &mut Source, port: &mut Port) {
     source.state = ReplyState::Retired;
-    media(done(), &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
+    media(done(), port, source, &mut |_| Ok(())).await.unwrap();
     source.audio(&[123; 320]).unwrap();
     source.audio(&[0; 320]).unwrap();
     assert!(!source.reply.has_frames());
     assert!(!source.reply.finished());
-    media(said("Yes"), &mut port, &mut source, &mut |_| Ok(()))
-        .await
-        .unwrap();
+    media(said("Yes"), port, source, &mut |_| Ok(())).await.unwrap();
     source.audio(&[456; 320]).unwrap();
-    media(done(), &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
+    media(done(), port, source, &mut |_| Ok(())).await.unwrap();
     assert!(source.reply.finished());
     assert_eq!(source.reply.next_frame().await.unwrap().len(), 960);
     assert!(!source.reply.has_frames());
