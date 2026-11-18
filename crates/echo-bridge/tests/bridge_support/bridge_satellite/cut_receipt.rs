@@ -124,6 +124,9 @@ impl<L: EchoLink> EchoLink for Link<L> {
     async fn fail_run(&self, code: RunFailure) -> Result<(), Error> {
         self.inner.fail_run(code).await
     }
+    async fn end_run(&self) -> Result<(), Error> {
+        self.inner.end_run().await
+    }
     async fn close(&self) -> Result<(), Error> {
         self.inner.close().await
     }

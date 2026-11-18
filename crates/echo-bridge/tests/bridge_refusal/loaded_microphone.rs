@@ -167,6 +167,9 @@ impl EchoLink for Link {
     async fn fail_run(&self, code: RunFailure) -> Result<(), echo_link::Error> {
         self.0.fail_run(code).await
     }
+    async fn end_run(&self) -> Result<(), echo_link::Error> {
+        EchoLink::end_run(&self.0).await
+    }
     async fn pause(&self) -> Result<(), echo_link::Error> {
         EchoLink::pause(&self.0).await
     }
