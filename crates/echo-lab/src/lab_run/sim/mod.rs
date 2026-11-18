@@ -206,6 +206,9 @@ impl Driver for Sim<'_> {
         artifacts: &mut Artifacts,
     ) -> Result<(), String> {
         if let Err(error) = self.attempt(step, artifacts) {
+            if self.world.bridge.is_none() {
+                return Err(error);
+            }
             let diagnostics = self.runtime.block_on(self.world.failure_diagnostics());
             return Err(format!("{error}; {diagnostics}"));
         }
