@@ -80,7 +80,8 @@ fn wire_replies(wire: &Value, turns: usize) -> Result<usize, String> {
     let complete = |s: &&Value| {
         s["ending"] == "stop"
             && !s["played_us"].is_null()
-            && s["pcm_bytes"] == 9600
+            // A later reply also carries the decoder's retained tail frame.
+            && s["pcm_bytes"].as_u64().is_some_and(|n| n >= 9600 && n % 960 == 0)
             && s["audible_samples"].as_u64().is_some_and(|n| n > 0)
     };
     if wire["run_opened_us"].as_array().map(Vec::len) != Some(1)

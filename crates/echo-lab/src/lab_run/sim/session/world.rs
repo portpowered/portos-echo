@@ -3,7 +3,7 @@
 use super::provider::{Control, Provider};
 use crate::lab_run::sim::{
     m2::codex::{collect_playout, config::Root},
-    m4::wire::Relay,
+    m4::wire::{Relay, Timing},
     process::{self, Process},
     production,
     trace::Trace,
@@ -124,7 +124,7 @@ impl World {
             }
             let timing = self.relay.as_ref().ok_or("session: missing wire")?.timing();
             let admitted = index > 0 || (connected(&self.clock) && timing.endpoint_seen());
-            let milliseconds = gates.advance(provider, timing.played, admitted).await?;
+            let milliseconds = gates.advance(provider, &timing, admitted).await?;
             self.step(milliseconds).await?;
             if gates.idle && self.played()? > index {
                 return Ok(());
@@ -273,21 +273,26 @@ impl Gates {
 
     /// Open the next gate when its condition holds and return the next clock
     /// step: zero while the released reply flows, else one media frame.
-    async fn advance(&mut self, provider: &Provider, played: usize, admitted: bool) -> Result<u64, String> {
+    async fn advance(&mut self, provider: &Provider, timing: &Timing, admitted: bool) -> Result<u64, String> {
+        let played = timing.played;
         let (control, next) = match self.phase {
             Phase::Admitting if admitted => (Control::Delegate(self.index), Phase::Delegated),
             Phase::Delegated if provider.count("appends") > self.index => (Control::Audio(0..5), Phase::Released),
             Phase::Released if played >= self.base + 2880 => (Control::Audio(5..11), Phase::Tail),
             Phase::Tail if played >= self.base + 8640 => (Control::Transcripts(self.index), Phase::Spoken),
-            _ => return Ok(self.clock(played)),
+            _ => return Ok(self.clock(timing)),
         };
         provider.control(control).await?;
         self.phase = next;
-        Ok(self.clock(played))
+        Ok(self.clock(timing))
     }
 
-    fn clock(&mut self, played: usize) -> u64 {
-        self.idle = self.phase == Phase::Spoken && played >= self.base + REPLY_BYTES;
+    /// Device playout runs on the wall clock: keep the media cadence until
+    /// the device reports this reply Played, then only the bridge clock remains.
+    fn clock(&mut self, timing: &Timing) -> u64 {
+        let played = timing.played;
+        self.idle =
+            self.phase == Phase::Spoken && played >= self.base + REPLY_BYTES && timing.replies_played() > self.index;
         if self.phase >= Phase::Released && played < self.base + REPLY_BYTES {
             0
         } else {

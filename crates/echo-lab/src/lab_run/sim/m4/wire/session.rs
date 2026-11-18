@@ -29,12 +29,16 @@ struct Playback {
 }
 
 impl Session {
-    fn checkpoint(&self, replies: usize, ends: usize) -> Result<bool, String> {
-        let played = self
-            .streams
+    /// Completed reply streams the device has reported Played.
+    fn played(&self) -> usize {
+        self.streams
             .iter()
             .filter(|stream| stream.played.is_some() && stream.ending == Some("stop") && !stream.earcon)
-            .count();
+            .count()
+    }
+
+    fn checkpoint(&self, replies: usize, ends: usize) -> Result<bool, String> {
+        let played = self.played();
         if played > replies || self.ended.len() > ends {
             return Err("wire: session advanced beyond expected reply/run boundary".into());
         }
@@ -128,6 +132,12 @@ impl super::Timing {
     /// Forwarded run, reply and capture boundaries for persistent journeys.
     pub fn session_observation(&self) -> Value {
         self.session.observation()
+    }
+
+    /// Replies the device reported Played. Until then its playout runs on the
+    /// wall clock, so a journey must not race the bridge's clock past it.
+    pub fn replies_played(&self) -> usize {
+        self.session.played()
     }
 }
 
