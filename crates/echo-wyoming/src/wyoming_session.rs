@@ -326,7 +326,11 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     }
 
     async fn fail_run(&mut self, code: String, text: String, reply: Reply<()>) -> Result<(), Error> {
-        self.retire_playback().await?;
+        // A cut already quiesced its producer. Keep its outstanding Played
+        // receipt alive when an unserved run is refused during shutdown.
+        if !self.play.as_ref().is_some_and(|play| play.cut) {
+            self.retire_playback().await?;
+        }
         self.end_device().await?;
         self.send(
             WyomingEvent::Error(serde_json::json!({"code":code,"text":text})),
