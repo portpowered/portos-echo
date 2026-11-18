@@ -244,6 +244,18 @@ mod tests {
         assert_eq!(source.controller.begin_close(false), Err(Error::Wyoming));
         source.controller.begin_close(true).unwrap();
         assert_eq!(source.controller.idle_deadline(), None);
+        assert_close_rejects_activity(&mut source);
+        assert_eq!(source.controller.finish_close(true), Err(Error::Wyoming));
+        source.controller.microphone_ended();
+        assert!(!source.controller.complete(true, true));
+        assert_eq!(source.controller.finish_close(false), Err(Error::Wyoming));
+        source.controller.finish_close(true).unwrap();
+        assert!(source.controller.complete(true, true));
+        assert_close_rejects_activity(&mut source);
+        assert_eq!(source.controller.finish_close(true), Err(Error::Wyoming));
+    }
+
+    fn assert_close_rejects_activity(source: &mut Source) {
         assert!(!source.controller.accepts_audio());
         assert!(!source.controller.interruptible(true));
         assert_eq!(source.resume_reply(), Err(Error::Control));
@@ -252,16 +264,6 @@ mod tests {
             Err(Error::Input)
         );
         assert_eq!(source.controller.begin_close(true), Err(Error::Wyoming));
-        assert_eq!(source.controller.finish_close(true), Err(Error::Wyoming));
-        source.controller.microphone_ended();
-        assert!(!source.controller.complete(true, true));
-        assert_eq!(source.controller.finish_close(false), Err(Error::Wyoming));
-        source.controller.finish_close(true).unwrap();
-        assert!(source.controller.complete(true, true));
-        assert_eq!(source.resume_reply(), Err(Error::Control));
-        assert!(!source.controller.accepts_audio());
-        assert_eq!(source.controller.begin_close(true), Err(Error::Wyoming));
-        assert_eq!(source.controller.finish_close(true), Err(Error::Wyoming));
     }
 
     #[tokio::test(start_paused = true)]
