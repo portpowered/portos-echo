@@ -196,7 +196,7 @@ async fn t3_m4_cleanup_observations_cannot_borrow_a_live_world() {
 
 #[tokio::test]
 async fn t3_m4_failed_child_collection_keeps_other_cleanup_and_error() {
-    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = tokio::process::Command::new("python3");
     command.args([
         "-u",
         "-c",

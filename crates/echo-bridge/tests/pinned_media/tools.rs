@@ -81,7 +81,7 @@ async fn exercise(negative: bool) {
 
 async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, model: &str) {
     let directory = tempfile::tempdir().unwrap();
-    private_parent(directory.path());
+
     let config = CodexConfig {
         binary: Some(binary()),
         home: Some(directory.path().join("home")),
@@ -92,7 +92,7 @@ async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, mode
     if negative {
         spoof.set_fault(Fault::Http500).unwrap();
     }
-    let mut provider = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let mut provider = Command::new("python3")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

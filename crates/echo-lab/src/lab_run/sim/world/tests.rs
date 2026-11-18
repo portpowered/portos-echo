@@ -14,7 +14,7 @@ async fn m1_restart_diagnostics_collects_real_exit_before_removing_private_trace
         b"{\"event\":\"bridge.error\",\"elapsed_ms\":1,\"reason\":\"wyoming\"}\n",
     )
     .unwrap();
-    let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = Command::new("python3");
     command.args(["-c", "import sys; sys.exit(7)"]);
     let mut child = Process::start(&mut command).unwrap();
     assert_eq!(child.line().await, Err("process: exited before observation".into()));
@@ -106,7 +106,7 @@ async fn before_startup<T>(
 }
 
 fn child_command(port: u16) -> Command {
-    let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = Command::new("python3");
     command.args(["-u", "-c", CHILD, &port.to_string()]);
     command
 }

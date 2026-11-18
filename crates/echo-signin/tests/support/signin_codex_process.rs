@@ -12,34 +12,7 @@ impl Fixture {
         let parent = std::env::temp_dir().join(format!("echo-account-process-{}", std::process::id()));
         fs::create_dir(&parent)?;
         let fixture = Self(parent);
-        #[cfg(windows)]
-        fixture.make_private()?;
         Ok(fixture)
-    }
-
-    #[cfg(windows)]
-    fn make_private(&self) -> Result {
-        let script = r"
-$ErrorActionPreference = 'Stop'
-$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = New-Object System.Security.AccessControl.DirectorySecurity
-$acl.SetOwner($user)
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($sid in @($user.Value, 'S-1-5-18', 'S-1-5-32-544')) {
-    $identity = New-Object System.Security.Principal.SecurityIdentifier $sid
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-    $acl.AddAccessRule($rule)
-}
-Set-Acl -LiteralPath $env:ECHO_ACCOUNT_TEST_PARENT -AclObject $acl
-";
-        let status = Command::new("powershell.exe")
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
-            .env_remove("PSModulePath")
-            .env("ECHO_ACCOUNT_TEST_PARENT", &self.0)
-            .status()?;
-        assert!(status.success());
-        Ok(())
     }
 }
 impl Drop for Fixture {
@@ -49,7 +22,7 @@ impl Drop for Fixture {
 }
 
 fn python_binary() -> Result<PathBuf> {
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = Command::new("python3")
         .args(["-c", "import sys; print(sys.executable)"])
         .output()?;
     assert!(output.status.success());

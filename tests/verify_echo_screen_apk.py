@@ -19,10 +19,7 @@ def main():
         env["PATH"] = str(Path(env["JAVA_HOME"]) / "bin") + os.pathsep + env["PATH"]
 
     def run(tool, *args):
-        if os.name == "nt" and tool == "apksigner":
-            command = ["java", "-jar", str(tools / "lib" / "apksigner.jar")]
-        else:
-            command = [str(tools / (tool + ".exe" if os.name == "nt" else tool))]
+        command = [str(tools / tool)]
         result = subprocess.run([*command, *args, str(apk)],
                                 check=True, capture_output=True, text=True, env=env)
         print(result.stdout, end="")

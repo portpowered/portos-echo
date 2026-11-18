@@ -131,11 +131,7 @@ pub(super) fn options() -> crate::lab_run::run_options::Options {
         .find(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("deps" | "build")))
         .and_then(std::path::Path::parent)
         .unwrap()
-        .join(if cfg!(windows) {
-            "echo-bridge.exe"
-        } else {
-            "echo-bridge"
-        });
+        .join("echo-bridge");
     crate::lab_run::run_options::parse(&[
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/scenarios/m2-live-connect.yaml")

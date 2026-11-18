@@ -55,19 +55,13 @@ The crate layout, `Makefile` and CI arrive with Phase F.
 ## Building
 
 Install Rust through rustup. `rust-toolchain.toml` pins Rust 1.100.0 with the minimal profile, clippy and rustfmt.
-On Windows, install ezwinports GNU Make 4.4, Python 3.12 and Git for Windows, with `make`, `python` and `git` on
-PATH. Invoke `make ci` from ordinary PowerShell; no profile or manual PATH adjustment is needed. Make discovers
-the first `git.exe` on its inherited PATH, checks that installation's `usr/bin` utilities, and uses its absolute
-`sh.exe`. Only Make and its children receive the POSIX tool directory; caller, user and machine PATH stay intact.
-Git's `cmd`, `bin`, `usr/bin` and `mingw64/bin` layouts are supported. An unsupported shim or missing tool fails
-before recipes with the tool, checked path and manual install/repair instruction; Make never downloads tools.
-If Python is missing, install it manually and ensure `python` is on PATH before retrying. Ubuntu continues to use
-native `sh -ec` and POSIX utilities on PATH, with Python 3 for the lint self-tests.
-For Windows WSL selection and locked validation, see [Windows WSL helpers](docs/README.md#windows-wsl-helpers).
+Linux is the only supported platform for building, testing and running Echo.
+Use native GNU Make, Python 3.12 (`python` and `python3` on PATH), Git and POSIX sh.
+See [Linux hosts](docs/README.md#linux-hosts) for local operation.
 
 The existing gates also require their provisioned tools: cargo-nextest, cargo-deny, shfmt, shellcheck, gitleaks,
 Node/npm and the documentation checkers. The pinned
-versions and setup commands are in `.github/actions/setup/action.yml`; the bootstrap does not install them.
+versions and setup commands are in `.github/actions/setup/action.yml`; the build does not install them.
 `make coverage` is no longer a gate; run by hand, it also needs cargo-llvm-cov and the pinned nightly toolchain.
 
 From the repository root, run:

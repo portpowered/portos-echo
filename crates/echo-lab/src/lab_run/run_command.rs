@@ -350,8 +350,6 @@ mod lifecycle_tests {
     fn success() -> std::process::ExitStatus {
         #[cfg(unix)]
         use std::os::unix::process::ExitStatusExt;
-        #[cfg(windows)]
-        use std::os::windows::process::ExitStatusExt;
         std::process::ExitStatus::from_raw(0)
     }
 
@@ -430,7 +428,7 @@ mod lifecycle_tests {
     // T3: actual local pipe/exit-status boundary; no runtime compilation or sleeps.
     #[test]
     fn t3_pending_drop_closes_stdin_collects_status_and_joins_reader() {
-        let python = if cfg!(windows) { "python" } else { "python3" };
+        let python = "python3";
         let mut pending = Pending::start(
             Path::new(python),
             &[
@@ -450,7 +448,7 @@ mod lifecycle_tests {
 
     #[test]
     fn t3_success_retains_exact_stdout_and_nonzero_stays_sanitized() {
-        let python = Path::new(if cfg!(windows) { "python" } else { "python3" });
+        let python = Path::new("python3");
         assert_eq!(
             bytes(
                 python,

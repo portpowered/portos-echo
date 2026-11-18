@@ -20,6 +20,11 @@ Instructions for the coordinator agent and every factory worker in this reposito
 - Never run against the Echo, the Ring or a real account. Tiers T0–T4 only.
 - Stop and report on: a contract change, a new dependency, a hardware question, or a rule you cannot meet.
 
+## Supported platform
+
+Linux is the only supported platform for building, testing and running Echo.
+Coordinator device runs use Linux pe-ci; workers never run hardware.
+
 ## Current phase
 
 Phase F, the repository harness (`docs/program/plan.md` section 10). Nothing else starts before milestone M0.

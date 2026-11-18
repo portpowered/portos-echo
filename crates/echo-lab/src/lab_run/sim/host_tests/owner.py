@@ -88,44 +88,7 @@ def main():
         sys.path[0] = str(Path(script).resolve().parent)
         runpy.run_path(script, run_name="__main__")
         return 0
-    if os.name != "nt":
-        return guest(script, directory)
-    namespace = runpy.run_path(script)
-    popen = subprocess.Popen
-    # Keep the delivered Windows launcher/guest collection behavior. Substitute
-    # only its Python guest entry to install the same pidfd observer in Linux.
-    code = ("import runpy,sys; from pathlib import Path; "
-            "ns=runpy.run_path(str(Path(sys.argv[1]).parent/'host_tests/owner.py')); "
-            "sys.exit(ns['guest'](sys.argv[1],sys.argv[2]))")
-
-    def boundary(argv, **kwargs):
-        if "python3" in argv and "--relay" not in argv:
-            index = argv.index("python3") + 2
-            argv = argv[:index] + ["-c", code, argv[index], directory, *argv[index + 1:]]
-        return popen(argv, **kwargs)
-
-    namespace["launch_windows"].__globals__["subprocess"].Popen = boundary
-    runtime = runtime_observer()
-    read = os.read
-    pending = b""
-
-    def observed_input(fd, size):
-        nonlocal pending
-        data = read(fd, size)
-        if fd == sys.stdin.fileno():
-            pending += data
-            while b"\n" in pending:
-                line, pending = pending.split(b"\n", 1)
-                if json.loads(line).get("action") == "registered":
-                    runtime.registered()
-        return data
-
-    os.read = observed_input
-    try:
-        return namespace["launch_windows"]()
-    finally:
-        os.read = read
-        runtime.close()
+    return guest(script, directory)
 
 
 if __name__ == "__main__":

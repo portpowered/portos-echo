@@ -8,15 +8,6 @@ for package; do
     has_binary=true
   fi
 done
-# Guest absolute outputs belong to WSL, never to the Windows POSIX namespace.
-platform=$(uname -s)
-case $platform in
-  MINGW* | MSYS* | CYGWIN*)
-    case ${CARGO_TARGET_DIR:-target} in
-      /*) exec sh "$(dirname -- "$0")/build-echo-wsl.sh" "$@" ;;
-    esac
-    ;;
-esac
 # Clean before provisioning probes as well as after any failed build/inspection.
 cleanup() {
   status=$?
@@ -28,12 +19,6 @@ trap cleanup 0
 if "$has_binary"; then
   rm -f -- "$binary"
 fi
-case $platform in
-  MINGW* | MSYS* | CYGWIN*)
-    sh "$(dirname -- "$0")/build-echo-wsl.sh" "$@"
-    exit $?
-    ;;
-esac
 fail() {
   printf 'build-echo: %s\n' "$1" >&2
   exit 1

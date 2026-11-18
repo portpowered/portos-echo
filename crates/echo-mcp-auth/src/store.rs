@@ -98,8 +98,7 @@ fn validate(record: &Record, options: &AuthOptions, issuer: &str) -> Result<(), 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AuthError> {
     let parent = path.parent().ok_or(AuthError::Storage)?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| AuthError::Storage)?;
-    // NamedTempFile starts with mode 0600 on Unix; Windows inherits the restricted
-    // directory ACL. Replacement never opens/truncates the old file.
+    // NamedTempFile starts with mode 0600. Replacement never opens/truncates the old file.
     temp.write_all(bytes).map_err(|_| AuthError::Storage)?;
     temp.as_file().sync_all().map_err(|_| AuthError::Storage)?;
     temp.persist(path).map_err(|_| AuthError::Storage)?;
@@ -114,30 +113,4 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AuthError> {
 fn restrict_directory(path: &Path) -> Result<(), AuthError> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|_| AuthError::Storage)
-}
-
-#[cfg(windows)]
-fn restrict_directory(path: &Path) -> Result<(), AuthError> {
-    use std::os::windows::process::CommandExt;
-    // Use the OS ACL API through its installed shell to keep this safe Rust.
-    // The path travels as a child-only environment value, never as shell code;
-    // neither the identity nor command output is included in diagnostics.
-    let script = r"$ErrorActionPreference = 'Stop'
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = [System.Security.AccessControl.DirectorySecurity]::new()
-$acl.SetOwner($sid)
-$acl.SetAccessRuleProtection($true, $false)
-$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-$acl.AddAccessRule($rule)
-[System.IO.Directory]::SetAccessControl($env:ECHO_AUTH_STORAGE_DIR, $acl)";
-    let result = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .env("ECHO_AUTH_STORAGE_DIR", path)
-        .creation_flags(0x0800_0000)
-        .output()
-        .map_err(|_| AuthError::Storage)?;
-    if !result.status.success() {
-        return Err(AuthError::Storage);
-    }
-    Ok(())
 }

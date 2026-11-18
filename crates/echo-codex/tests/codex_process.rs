@@ -30,8 +30,6 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&parent)?;
-        #[cfg(windows)]
-        private_test_parent(&parent, false)?;
         let home = parent.join("home");
         let mut config = SupervisorConfig::new(binary, home.clone());
         config.request_timeout = Duration::from_secs(5);
@@ -80,34 +78,6 @@ impl Drop for Fixture {
         }
     }
 }
-#[cfg(windows)]
-fn private_test_parent(path: &std::path::Path, public: bool) -> Result {
-    let script = r"
-$ErrorActionPreference = 'Stop'
-$sidType = [System.Security.Principal.SecurityIdentifier]
-$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = New-Object System.Security.AccessControl.DirectorySecurity
-$acl.SetOwner($user)
-$acl.SetAccessRuleProtection($true, $false)
-$identities = @($user.Value, 'S-1-5-18', 'S-1-5-32-544')
-if ($env:ECHO_CODEX_TEST_PUBLIC -eq 'true') { $identities += 'S-1-1-0' }
-foreach ($sid in $identities) {
-    $identity = New-Object $sidType $sid
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-    $acl.AddAccessRule($rule)
-}
-Set-Acl -LiteralPath $env:ECHO_CODEX_TEST_PARENT -AclObject $acl
-";
-    let status = Command::new("powershell.exe")
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
-        .env_remove("PSModulePath")
-        .env("ECHO_CODEX_TEST_PARENT", path)
-        .env("ECHO_CODEX_TEST_PUBLIC", public.to_string())
-        .status()?;
-    assert!(status.success());
-    Ok(())
-}
 #[tokio::test]
 async fn t3_handshake_private_environment_argv_and_shutdown() -> Result {
     let mut fixture = Fixture::new("normal")?;
@@ -134,7 +104,7 @@ async fn t3_handshake_private_environment_argv_and_shutdown() -> Result {
         result["argv"],
         json!(["--listen", "stdio://", "-c", "test.argument=\"space ; $literal\""])
     );
-    let allowed = "SYSTEMROOT WINDIR PATH TEMP TMP COMSPEC HOME USERPROFILE CODEX_HOME NO_PROXY LC_CTYPE"
+    let allowed = "PATH TEMP TMP HOME CODEX_HOME NO_PROXY LC_CTYPE"
         .split_whitespace()
         .collect::<Vec<_>>();
     for key in result["environment"].as_array().ok_or("expected array")? {
@@ -219,7 +189,7 @@ async fn observe_exit(
     tokio::process::Child,
     tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
 )> {
-    let mut observer = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let mut observer = tokio::process::Command::new("python3")
         .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/support/codex_watch.py"))
         .arg(pid.to_string())
         .stdout(std::process::Stdio::piped())
@@ -366,7 +336,7 @@ async fn t3_clean_shutdown_reopens_home_without_mutating_auth_or_work() -> Resul
     Ok(())
 }
 fn python_binary() -> Result<PathBuf> {
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = Command::new("python3")
         .args(["-c", "import sys; print(sys.executable)"])
         .output()?;
     assert!(output.status.success());
@@ -446,21 +416,6 @@ fn t3_rejects_public_or_redirected_home_and_marker() -> Result {
     rejected(redirect.join("new-home"))?;
     Ok(())
 }
-#[cfg(windows)]
-#[test]
-fn t3_rejects_public_windows_acl_without_mutating_auth() -> Result {
-    let mut fixture = Fixture::new("normal")?;
-    drop(fixture.supervisor.take());
-    fs::write(fixture.home.join("auth.json"), b"synthetic-local-only")?;
-    private_test_parent(&fixture.home, true)?;
-    assert!(matches!(
-        Supervisor::new(SupervisorConfig::new(std::env::current_exe()?, fixture.home.clone())),
-        Err(ProcessError::PrivateHome)
-    ));
-    assert_eq!(fs::read(fixture.home.join("auth.json"))?, b"synthetic-local-only");
-    Ok(())
-}
-
 #[tokio::test]
 async fn t3_refresh_override_accepts_only_single_prelaunch_numeric_loopback_token_route() -> Result {
     let key = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";

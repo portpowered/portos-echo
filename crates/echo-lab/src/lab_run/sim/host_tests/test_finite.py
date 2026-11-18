@@ -213,6 +213,7 @@ class FiniteControls(unittest.TestCase):
                     return predicate()
                 with mock.patch.object(self.host.condition, "wait_for", side_effect=delivery), \
                         mock.patch.object(CONTROLLER, "emit") as emit:
-                    with self.assertRaises((RuntimeError, ValueError)):
+                    expected = CONTROLLER.HostCancelled if failure == "cancel" else (RuntimeError, ValueError)
+                    with self.assertRaises(expected):
                         self.host.command({"action": "playback", "wait_flush": True})
                 emit.assert_not_called()

@@ -30,7 +30,7 @@ async fn exercise() {
 
 async fn rejection(expired: bool, mode: LiveMode) {
     let directory = tempfile::tempdir().unwrap();
-    private_parent(directory.path());
+
     let home = directory.path().join("home");
     let config = CodexConfig {
         binary: Some(binary()),
@@ -94,7 +94,7 @@ async fn provider() -> (
     tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     String,
 ) {
-    let mut provider = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let mut provider = Command::new("python3")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -125,7 +125,7 @@ async fn t3_pinned_invalid_executable_relinks_before_wyoming_admission() {
 
 async fn executable_rejection(expired: bool) {
     let directory = tempfile::tempdir().unwrap();
-    private_parent(directory.path());
+
     let root = directory.path();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let config = super::voice::configure(root, listener.local_addr().unwrap().port());

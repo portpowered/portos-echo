@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 17
+last modified: 2026, november, 18
 status: current main overview; W4 deployment and in-progress changes are labelled
 ---
 
@@ -15,8 +15,8 @@ The [program plan, sections 1–3](program/plan.md#1-what-we-are-building),
 [section 6](program/plan.md#6-the-bridge-what-it-runs-and-where) and
 [W4](program/plan.md#12-phase-order-after-m0) define placement: **the Echo detects “Computer” locally**,
 captures microphones and plays replies through hassmic; its screen app displays the bridge's page.
-Today echo-bridge and its pinned Codex app-server child run on the operator's PC, natively on Windows or on
-Linux in WSL. OpenAI hosts Live and the delegated model; Port OS hosts home control and its authorization
+Today echo-bridge and its pinned Codex app-server child run on the operator's Linux host. OpenAI hosts Live and the
+delegated model; Port OS hosts home control and its authorization
 service. The [2026-11-16 decisions](program/decisions.md#decided) select the app server and permit credentials
 on the Echo. W4 moves the bridge, media peer, child process and private stores onto the Echo; the PC remains
 the development/bench host. A cross-built artifact alone does not establish that device deployment.
@@ -165,7 +165,7 @@ from pinned Codex `voice-host`, using webrtc/rtc 0.21.1, Opus and Rubato (see [A
 
 #### Where it runs — echo-bridge
 
-One PC process today, native Windows or Linux/WSL; pe-ci is the supported Linux test host. W4 targets the
+One Linux PC process today; pe-ci is the supported local Linux test host. W4 targets the
 Echo under its own user, with private credential storage and a child app server beside it. This move is
 planned; it is not established by the current PC journeys.
 
@@ -473,7 +473,6 @@ flowchart LR
     H[Pinned hassmic-host - file audio backend]
     F[Local V3 Live and Responses fakes]
     P[echo-spoof-mcp and OAuth fixture]
-    RELAY[Windows-only WSL relay]
     LAB -->|scenario actions and measured reports| SIM
     SIM -->|spawn and control pipes| B
     B <-->|stdio JSON-RPC| A
@@ -481,15 +480,12 @@ flowchart LR
     B <-->|loopback WebRTC| F
     B <-->|loopback MCP and OAuth HTTP| P
     B <-->|Wyoming TCP on Linux| H
-    B <-->|native Windows loopback TCP| RELAY
-    RELAY <-->|framed WSL stdio to guest TCP| H
     SIM -->|FIFO PCM and host wake/restart controls| H
 ```
 
 These are T3 local substitutes, not cloud or acoustic proof. `echo-lab` is our Rust CLI; sim also uses
-Python owners. `hassmic-host` is the pinned fork's C file-audio build. On Linux it is reached directly;
-native Windows tests use [wsl_relay.py](../scripts/wsl_relay.py) to reach the selected pe-ci guest, replacing
-dead host connections when a restarted fixture is ready. The relay is test-only. Scripts consume prebuilt
+Python owners. `hassmic-host` is the pinned fork's C file-audio build. It is reached directly as a Linux
+child process. Scripts consume prebuilt
 artifacts; no Echo, Ring or real account is part of this documentation witness.
 
 ## Key concepts
@@ -1359,8 +1355,7 @@ sequenceDiagram
 
 Transport reconnection does not guarantee recovery of an already failed configured conversation. A failed
 idle probe or active run terminates this borrower; there is no automatic app-server restart or replay.
-The lab restarts its pinned host/bridge as explicit scenario actions. Its Windows relay drops stale sockets
-and switches guest generation on readiness; it is not a device recovery service. Merged PR 190
+The lab restarts its pinned host/bridge as explicit scenario actions. Merged PR 190
 (`el-f-m1-host-restart-flake`) fixes the lab restart witness; it does not add automatic product recovery.
 Provider `thread/realtime/error` becomes a terminal fixed error. Missing/invalid OpenAI auth displays relink;
 MCP authorization failure has its own link overlay and grant owner. Mute may mask either until unmuted.
@@ -1380,4 +1375,4 @@ error indicator is separate from the page and is not a promised spoken explanati
 | (f) Overlap | [notification projection](../crates/echo-bridge/src/bridge_codex/call_events.rs), [voice loop](../crates/echo-bridge/src/bridge_voice/bridge_voice.rs), [cut control](../crates/echo-wyoming/src/wyoming_session.rs), [legacy M3 wire](../crates/echo-lab/src/lab_run/sim/m3/wire.rs) |
 | (g) Tools | [call tools](../crates/echo-bridge/src/bridge_codex/call_tools.rs), [catalog/lifetime](../crates/echo-bridge/src/bridge_voice/controls/voice_tools.rs), [policy](../crates/echo-bridge/src/bridge_voice/controls/tool_policy.rs), [dispatcher](../crates/echo-delegation/src/codex_dispatch.rs), [native test receipts](../crates/echo-lab/src/lab_run/sim/m4/codex/receipts.rs) |
 | (h) Close | [session](../crates/echo-bridge/src/bridge_voice/voice_session.rs), [call stop](../crates/echo-bridge/src/bridge_codex/bridge_codex.rs), [media close](../crates/echo-bridge/src/bridge_codex/call_media.rs), [device cleanup](../crates/echo-bridge/src/bridge_voice/voice_host.rs) |
-| (i) Recover | [reconnect](../crates/echo-wyoming/src/wyoming_session/wyoming_reconnect.rs), [idle probe owner](../crates/echo-bridge/src/bridge_voice/voice_admission.rs), [failure view](../crates/echo-bridge/src/bridge_voice/voice_view.rs), [lab host](../crates/echo-lab/src/lab_run/sim/host.py), [WSL relay](../scripts/wsl_relay.py) |
+| (i) Recover | [reconnect](../crates/echo-wyoming/src/wyoming_session/wyoming_reconnect.rs), [idle probe owner](../crates/echo-bridge/src/bridge_voice/voice_admission.rs), [failure view](../crates/echo-bridge/src/bridge_voice/voice_view.rs), [lab host](../crates/echo-lab/src/lab_run/sim/host.py) |

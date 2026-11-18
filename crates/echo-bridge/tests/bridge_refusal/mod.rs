@@ -116,22 +116,8 @@ async fn bridge_refusal_t3_unavailable() {
 }
 
 pub(super) fn host_script(script: &str) -> Command {
-    let shell = if cfg!(windows) {
-        let result = std::process::Command::new("python")
-            .arg(root().join("scripts/make-posix.py"))
-            .output()
-            .unwrap();
-        assert!(result.status.success());
-        PathBuf::from(String::from_utf8(result.stdout).unwrap().trim()).join("sh.exe")
-    } else {
-        "sh".into()
-    };
-    let mut command = Command::new(&shell);
-    if cfg!(windows) {
-        let inherited = std::env::var_os("PATH").unwrap();
-        let paths = std::iter::once(shell.parent().unwrap().to_path_buf()).chain(std::env::split_paths(&inherited));
-        command.env("PATH", std::env::join_paths(paths).unwrap());
-    }
+    let mut command = Command::new("sh");
+
     command.arg(script).current_dir(root());
     command
 }

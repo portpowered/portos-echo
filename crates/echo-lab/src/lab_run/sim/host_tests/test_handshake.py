@@ -1,7 +1,7 @@
 """Fixture T3: controlled Host/observer boundary, real children and pipe readers.
 
 Unique processes and directories per case; signal gates, never timing sleeps.
-These faults prove fixture ownership, not real WSL or pinned-host readiness.
+These faults prove fixture ownership, not pinned-host readiness.
 """
 import contextlib
 import json
@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_controls import CONTROLLER, real_wsl_launcher_fixture
+from test_controls import CONTROLLER, host_observer_fixture
 from owner import instrument
 from runtime_owner import Owner, Runtime
 
@@ -158,7 +158,7 @@ class FixtureHandshake(unittest.TestCase):
         with mock.patch.object(runpy, "run_path", return_value={"Host": Host}), \
                 mock.patch.object(sys, "argv", ["fixture", CONTROLLER.__file__, "owned"]):
             self.namespace = {"__name__": "instrumentation"}
-            exec(real_wsl_launcher_fixture(), self.namespace)
+            exec(host_observer_fixture(), self.namespace)
         self.host = Host()
         self.worker = None
         self.addCleanup(self.cleanup)
@@ -231,7 +231,7 @@ class FixtureHandshake(unittest.TestCase):
             self.assertFalse(self.spawned.is_set())
             self.unblock()
             self.assertTrue(self.spawned.wait(1))
-            self.assertEqual(self.observer_proc.stderr.readline(), b"entered\r\n" if sys.platform == "win32" else b"entered\n")
+            self.assertEqual(self.observer_proc.stderr.readline(), b"entered\n")
             self.assertEqual(self.events, [{"event": "backend.ready"}])
             self.observer_proc.stdin.write(b"R\n")
             self.observer_proc.stdin.flush()
@@ -323,13 +323,6 @@ class FixtureHandshake(unittest.TestCase):
                                      {"event": "fixture.failed", "stage": "guest.observer"}])
         self.assert_closed()
 
-    def test_unavailable_translation_reports_stage_through_fixture_entry(self):
-        with mock.patch.object(CONTROLLER, "emit") as emitted, \
-                mock.patch.object(subprocess, "Popen", side_effect=OSError("synthetic private marker")):
-            with self.assertRaises(SystemExit) as exited:
-                real_wsl_launcher_fixture("owned")
-        self.assertEqual(exited.exception.code, 1)
-        emitted.assert_called_once_with({"event": "fixture.failed", "stage": "translation"})
 
     def test_t3_reader_start_failure_collects_acquired_observer(self):
         self.release.set()

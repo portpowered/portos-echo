@@ -26,8 +26,6 @@ impl Directory {
             match builder.create(&path) {
                 Ok(()) => {
                     let directory = Self(path);
-                    #[cfg(windows)]
-                    protect(&directory.0)?;
                     return Ok(directory);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -40,30 +38,5 @@ impl Directory {
 impl Drop for Directory {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
-    }
-}
-#[cfg(windows)]
-fn protect(path: &Path) -> Result<(), AuthError> {
-    use std::os::windows::process::CommandExt;
-    // An empty directory is protected before any credential bytes exist.
-    let script = r"$ErrorActionPreference='Stop';
-$p=$env:ECHO_AUTH_PRIVATE_DIR;
-$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;
-$acl=[System.Security.AccessControl.DirectorySecurity]::new();
-$acl.SetOwner($sid);
-$acl.SetAccessRuleProtection($true,$false);
-$rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow');
-$acl.AddAccessRule($rule);
-[System.IO.Directory]::SetAccessControl($p,$acl);";
-    let result = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .env("ECHO_AUTH_PRIVATE_DIR", path)
-        .creation_flags(0x0800_0000)
-        .output()
-        .map_err(|_| AuthError::Storage)?;
-    if result.status.success() {
-        Ok(())
-    } else {
-        Err(AuthError::Storage)
     }
 }

@@ -29,11 +29,7 @@ impl Root {
             builder.mode(0o700);
             builder.create(&path).map_err(|_| "m2: cannot create private root")?;
         }
-        #[cfg(not(unix))]
-        builder.create(&path).map_err(|_| "m2: cannot create private root")?;
         let root = Self(path);
-        #[cfg(windows)]
-        private_parent(&root.0)?;
         Ok(root)
     }
 }
@@ -87,37 +83,4 @@ pub(super) fn configure(
     ]);
     command.arg(trace);
     Ok(())
-}
-
-#[cfg(windows)]
-fn private_parent(path: &Path) -> Result<(), String> {
-    let script = r"
-$ErrorActionPreference = 'Stop'
-$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = New-Object System.Security.AccessControl.DirectorySecurity
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($sid in @($user.Value, 'S-1-5-18', 'S-1-5-32-544')) {
-    $identity = New-Object System.Security.Principal.SecurityIdentifier $sid
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-    $acl.AddAccessRule($rule)
-}
-[System.IO.Directory]::SetAccessControl($env:ECHO_LAB_PRIVATE_PARENT, $acl)
-";
-    let mut command = std::process::Command::new("powershell.exe");
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().eq_ignore_ascii_case("PSModulePath") {
-            command.env_remove(key);
-        }
-    }
-    let status = command
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
-        .env("ECHO_LAB_PRIVATE_PARENT", path)
-        .status()
-        .map_err(|_| "m2: private ACL unavailable")?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("m2: private ACL unavailable".into())
-    }
 }

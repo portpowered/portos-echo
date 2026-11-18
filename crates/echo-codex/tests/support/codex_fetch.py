@@ -9,10 +9,7 @@ import tempfile
 
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
-WINDOWS = sys.platform == 'win32'
-COMMAND = (['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-            str(ROOT / 'scripts/codex-app-server.ps1')] if WINDOWS else
-           ['sh', str(ROOT / 'scripts/codex-app-server.sh')])
+COMMAND = ['sh', str(ROOT / 'scripts/codex-app-server.sh')]
 
 
 def run(cache=None, command=COMMAND, offline=True):
@@ -58,8 +55,6 @@ def corrupt_and_restore(path, cache):
 
 
 def host_cache_integrity(published, cache):
-    if WINDOWS:
-        return  # Windows bundles the companion; its helper is unchanged.
     host = published / 'codex-code-mode-host'
     record = published / 'code-mode-host.sha256'
     corrupt_and_restore(host, cache)
@@ -82,8 +77,6 @@ def host_cache_integrity(published, cache):
 
 
 def legacy_cache_requires_provisioning(published, cache):
-    if WINDOWS:
-        return
     legacy = published.with_name(published.name.split('-', 1)[0])
     published.rename(legacy)
     try:
@@ -105,24 +98,17 @@ def writer_lock(published, cache):
     cold_published = cold_cache / pathlib.Path(*published.parts[-3:])
     cold_published.parent.mkdir(parents=True)
     lock = cold_published.with_name(cold_published.name + '.lock')
-    if WINDOWS:
-        lock.write_text('fixture-owned', encoding='ascii')
-    else:
-        lock.mkdir()
+    lock.mkdir()
     try:
         refused(run(cold_cache), 'binary missing; provision before testing')
         refused(run(cold_cache, offline=False), 'codex-app-server:')
         assert lock.exists(), 'helper deleted another writer lease'
-        if WINDOWS:
-            assert lock.read_text(encoding='ascii') == 'fixture-owned'
         assert list(cold_published.parent.iterdir()) == [lock]
     finally:
-        lock.unlink() if WINDOWS else lock.rmdir()
+        lock.rmdir()
 
 
 def external_worktree(temporary, cache, binary):
-    if WINDOWS:
-        return  # This regression is in the Linux helper.
     checkout = temporary / 'main checkout'
     checkout.mkdir()
     (checkout / 'scripts').mkdir()
@@ -160,36 +146,6 @@ def external_worktree(temporary, cache, binary):
     print('symlink_cache=refused relative_gitdir=verified missing_metadata=refused')
 
 
-def windows_host_architecture(cache, binary):
-    if not WINDOWS:
-        print('wow64=SKIP reason=Windows-only host architecture regression')
-        return
-    cases = [('F1', 'AMD64', '', True), ('F2', 'x86', 'AMD64', True),
-             ('F3', 'x86', '', False), ('F4', 'ARM64', '', False),
-             ('F5', 'AMD64', 'ARM64', False)]
-    for case, architecture, host, accepted in cases:
-        environment = dict(os.environ, ECHO_CODEX_OFFLINE='1',
-                           ECHO_CODEX_CACHE_DIR=str(cache),
-                           ECHO_HELPER_TEST_PATH=str(ROOT / 'scripts/codex-app-server.ps1'),
-                           ECHO_TEST_ARCH=architecture, ECHO_TEST_HOST_ARCH=host)
-        # PowerShell normalizes architecture at startup; set it in the child.
-        script = ('$env:PROCESSOR_ARCHITECTURE = $env:ECHO_TEST_ARCH; '
-                  '$env:PROCESSOR_ARCHITEW6432 = $env:ECHO_TEST_HOST_ARCH; '
-                  '& $env:ECHO_HELPER_TEST_PATH; exit $LASTEXITCODE')
-        result = subprocess.run(
-            ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-            env=environment, capture_output=True, text=True, timeout=20)
-        assert result.returncode == (0 if accepted else 1), (
-            f'{case}: exit={result.returncode} stderr={result.stderr.strip()}')
-        if accepted:
-            assert successful(result) == binary, f'{case}: changed cached path'
-            assert result.stderr == '', f'{case}: unexpected stderr'
-        else:
-            assert result.stdout == '', f'{case}: unsupported host published a path'
-            assert result.stderr.strip() == 'codex-app-server: unsupported host', result.stderr
-    print('wow64=accepted native_path=same x86=refused arm64=refused host_precedence=verified')
-
-
 def main():
     source = successful(run())
     with tempfile.TemporaryDirectory(prefix='echo codex cache ') as temporary:
@@ -201,9 +157,8 @@ def main():
         binary = successful(run(cache))
         assert binary == published / source.name
         assert successful(run(cache)) == binary
-        windows_host_architecture(cache, binary)
-        archives = list(published.glob('*.zip' if WINDOWS else '*.tar.gz'))
-        assert len(archives) == (1 if WINDOWS else 2)
+        archives = list(published.glob('*.tar.gz'))
+        assert len(archives) == 2
         for archive in archives:
             corrupt_and_restore(archive, cache)
         corrupt_and_restore(binary, cache)

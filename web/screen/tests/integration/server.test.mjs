@@ -9,7 +9,7 @@ import { chromium } from "playwright";
 
 // One prebuilt process/browser for this integration file, isolated page contexts.
 const executable = new URL(
-    `../../../../target/debug/examples/screen_fixture${process.platform === "win32" ? ".exe" : ""}`,
+    `../../../../target/debug/examples/screen_fixture`,
     import.meta.url,
 );
 const fixture = spawn(fileURLToPath(executable), [], {

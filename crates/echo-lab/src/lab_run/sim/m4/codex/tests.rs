@@ -282,11 +282,7 @@ pub(super) fn options() -> Options {
         .find(|p| matches!(p.file_name().and_then(|n| n.to_str()), Some("deps" | "build")))
         .and_then(Path::parent)
         .unwrap()
-        .join(if cfg!(windows) {
-            "echo-bridge.exe"
-        } else {
-            "echo-bridge"
-        });
+        .join("echo-bridge");
     crate::lab_run::run_options::parse(&[
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/scenarios/m4-spoof-tool.yaml")

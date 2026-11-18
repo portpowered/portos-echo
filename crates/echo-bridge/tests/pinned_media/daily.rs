@@ -20,7 +20,7 @@ struct Provider {
 }
 impl Provider {
     async fn start() -> Self {
-        let mut child = Command::new(if cfg!(windows) { "python" } else { "python3" })
+        let mut child = Command::new("python3")
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -177,7 +177,7 @@ async fn t3_pinned_configured_daily_cap_interrupts_matching_turn_and_resumes_nex
 async fn journey() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    private_parent(root);
+
     let spoof = echo_spoof_mcp::Spoof::start(echo_spoof_mcp::Options::default())
         .await
         .unwrap();
@@ -321,7 +321,7 @@ async fn t3_pinned_configured_exhausted_call_has_zero_model_requests() {
 async fn refused() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    private_parent(root);
+
     let spoof = echo_spoof_mcp::Spoof::start(echo_spoof_mcp::Options::default())
         .await
         .unwrap();

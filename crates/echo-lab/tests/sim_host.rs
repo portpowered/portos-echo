@@ -331,11 +331,7 @@ fn observation_projection_excludes_private_payloads_and_preserves_explicit_zero(
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host and echo-bridge"]
 fn m4_cli_both_cases_and_wrong_count_report_exact_results_and_cleanup() {
-    let bridge = std::path::Path::new(env!("CARGO_BIN_EXE_echo-lab")).with_file_name(if cfg!(windows) {
-        "echo-bridge.exe"
-    } else {
-        "echo-bridge"
-    });
+    let bridge = std::path::Path::new(env!("CARGO_BIN_EXE_echo-lab")).with_file_name("echo-bridge");
     for seeded in [false, true] {
         let session = Session::new();
         let original = include_str!("../../../tests/scenarios/m4-spoof-tool.yaml");

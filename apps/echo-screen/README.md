@@ -19,8 +19,7 @@ its password. Keep that key outside the repository. Losing the signing key means
 an existing installation cannot be updated with `install -r` using a new key.
 Build work directories and private tool logs also stay under `target/echo-screen/`.
 A failed build leaves the previously published APK intact.
-On Git Bash with the Windows SDK, the build invokes the SDK's d8/apksigner jars
-directly instead of their batch launchers; the SDK inputs and API level match CI.
+Build on Linux with the installed Android SDK tools; the SDK inputs and API level match CI.
 
 Launch component `org.portos.echoscreen/.MainActivity` with string extra `url`
 containing the entire paired page URL, including nested `events` and `actions`
@@ -54,8 +53,7 @@ after execution. Do not use shell tracing, which would disclose the URL.
 uninstalling the package. Each operation stops on the first failure. A failed
 home setup or launch can leave a partially configured installation; fix the
 cause and rerun, or uninstall. The script does not restore an unknown previous
-home app. On Git Bash it disables MSYS argument conversion for device paths
-and converts only the local APK path for native adb.
+home app. Use Linux adb with the local APK path supplied literally.
 
 `make test-echo-screen-install` builds the existing fake adb once and exercises
 the real installer with isolated per-case PATH, APK, fixture and argv ledger.

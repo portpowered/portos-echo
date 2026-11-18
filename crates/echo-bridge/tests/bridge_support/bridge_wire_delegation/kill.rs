@@ -383,43 +383,6 @@ fn assert_control(output: &std::process::Output) {
     assert_eq!(output.stderr, b"echo-bridge: control\n");
 }
 
-#[cfg(windows)]
-#[tokio::test]
-#[ignore = "T3 requires prebuilt echo-bridge; Windows sharing removal denial"]
-async fn bridge_wire_kill_denied_clear_has_no_success_and_preserves_latch() {
-    use std::os::windows::fs::OpenOptionsExt;
-    let directory = tempfile::tempdir().unwrap();
-    bridge_wire_screen::setup(directory.path(), 1);
-    bridge_wire_auth::invoke(
-        directory.path(),
-        &["kill", "--config", "bridge.toml"],
-        0,
-        "kill-switch: on\n",
-    )
-    .await;
-    let marker = directory.path().join("logs/audit/bridge-kill");
-    let held = std::fs::OpenOptions::new()
-        .read(true)
-        .share_mode(1)
-        .open(&marker)
-        .unwrap();
-    let result = bridge_wire_auth::command(directory.path(), &["kill", "--config", "bridge.toml", "--clear"])
-        .output()
-        .await
-        .unwrap();
-    drop(held);
-    assert_control(&result);
-    assert_eq!(std::fs::metadata(&marker).unwrap().len(), 0);
-    bridge_wire_auth::invoke(
-        directory.path(),
-        &["kill", "--config", "bridge.toml", "--clear"],
-        0,
-        "kill-switch: off\n",
-    )
-    .await;
-    assert!(!marker.exists());
-}
-
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_wire_kill_waiting_for_played_abandons_pending_model_before_ack() {

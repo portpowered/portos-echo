@@ -9,12 +9,7 @@ fn t3_pinned_codex_local_call_and_delegation() -> Result<(), Box<dyn Error>> {
         return journey::run(&config);
     }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut helper = if cfg!(windows) {
-        let mut command = Command::new("powershell.exe");
-        command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
-        command.arg(root.join("scripts/codex-app-server.ps1"));
-        command
-    } else {
+    let mut helper = {
         let mut command = Command::new("sh");
         command.arg(root.join("scripts/codex-app-server.sh"));
         command
@@ -28,7 +23,7 @@ fn t3_pinned_codex_local_call_and_delegation() -> Result<(), Box<dyn Error>> {
         String::from_utf8_lossy(&resolved.stderr)
     );
     let binary = String::from_utf8(resolved.stdout)?;
-    let isolation = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let isolation = Command::new("python3")
         .arg(root.join("crates/echo-codex/tests/support/codex_isolation.py"))
         .arg(binary.trim())
         .arg(std::env::current_exe()?)
@@ -64,7 +59,7 @@ fn t3_pinned_codex_local_call_and_delegation() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_probe(root: &std::path::Path, binary: &str, case: &str) -> Result<(), Box<dyn Error>> {
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = Command::new("python3")
         .arg(root.join("crates/echo-codex/tests/support/codex_probe.py"))
         .arg(binary)
         .arg("--rust-client")

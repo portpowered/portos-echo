@@ -98,7 +98,7 @@ def root_failure(writer, root):
     env = {**os.environ, "ECHO_COVERAGE_CHILD_PROFILES": str(blocked),
            "LLVM_PROFILE_FILE": str(root / "failure-owner-%p-%m.profraw"),
            "ECHO_LAB_FAKE_LEDGER": str(ledger)}
-    binary = writer.with_name("echo-lab.exe" if os.name == "nt" else "echo-lab")
+    binary = writer.with_name("echo-lab")
     result = subprocess.run(
         [str(binary), "calibrate", "--adb", str(writer), "--out", str(root / "failed-output")],
         env=env, capture_output=True, text=True, timeout=10, check=False,
@@ -156,10 +156,8 @@ def main():
                         help="report input directory (default: prebuilt writer's target directory)")
     args = parser.parse_args()
     writer = args.writer.resolve()
-    if os.name == "nt" and writer.suffix != ".exe":
-        writer = writer.with_suffix(".exe")
     require(writer.is_file(), f"prebuilt writer unavailable: {writer}")
-    suffix = ".exe" if os.name == "nt" else ""
+    suffix = ""
     candidates = list((writer.parent / "deps").glob(f"probe_cli-*{suffix}"))
     candidates += list((writer.parent / "build/echo-lab").glob(f"*/out/probe_cli-*{suffix}"))
     candidates = [p for p in candidates if p.is_file() and (p.suffix == suffix if suffix else not p.suffix)]

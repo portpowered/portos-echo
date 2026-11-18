@@ -15,7 +15,7 @@ struct Child {
 impl Child {
     fn new(stdout: &str, stderr: &str, exit: u8) -> Self {
         let directory = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-        let program = directory.path().join(if cfg!(windows) { "fake.exe" } else { "fake" });
+        let program = directory.path().join("fake");
         // Link the prebuilt artifact without a writable executable handle during parallel spawns.
         std::fs::hard_link(env!("CARGO_BIN_EXE_echo-muse-fake-gadget"), &program).unwrap();
         std::fs::write(
@@ -39,7 +39,7 @@ async fn t3_exact_argv_stdin_and_wait_endpoints_preserve_text_without_shell() {
     for wait in [1, 600] {
         let child = Child::new("answer\n", "", 0);
         let session = SideChat::fresh().unwrap();
-        let text = "spaces 水 \"quotes\" ; $(touch unwanted) & | > unwanted";
+        let text = "spaces æ°´ \"quotes\" ; $(touch unwanted) & | > unwanted";
         assert_eq!(
             child.gadget.send_user_msg(session, text, wait).await.unwrap(),
             Reply {

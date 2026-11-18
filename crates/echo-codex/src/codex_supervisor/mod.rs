@@ -156,7 +156,7 @@ impl Supervisor {
             command.arg("-c").arg(format!("{key}={value}"));
         }
         command.env_clear();
-        for key in ["SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "COMSPEC"] {
+        for key in ["PATH", "TEMP", "TMP"] {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
             }
@@ -164,7 +164,6 @@ impl Supervisor {
         command.envs(self.environment.iter().map(|(k, v)| (k, v)));
         command.env("CODEX_HOME", &self.config.codex_home);
         command.env("HOME", &self.config.codex_home);
-        command.env("USERPROFILE", &self.config.codex_home);
         command.current_dir(self.config.cwd());
         command
             .stdin(Stdio::piped())

@@ -108,7 +108,7 @@ async fn t3_m3_cleanup_joins_only_its_own_listeners_and_is_idempotent() {
 }
 
 async fn child(code: u8) -> (Process, std::sync::mpsc::Receiver<std::process::ExitStatus>) {
-    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = tokio::process::Command::new("python3");
     command.args([
         "-u",
         "-c",

@@ -44,11 +44,7 @@ pub fn default_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
 fn prebuilt(name: &str) -> Result<PathBuf, String> {
     let bridge = std::env::current_exe()
         .map_err(|_| "sim: cannot locate prebuilt bridge")?
-        .with_file_name(if cfg!(windows) {
-            format!("{name}.exe")
-        } else {
-            name.into()
-        });
+        .with_file_name(name);
     if !bridge.is_file() {
         let packages = if name == "echo-bridge" {
             "-p echo-lab -p echo-bridge"
@@ -66,11 +62,7 @@ fn prebuilt(name: &str) -> Result<PathBuf, String> {
 pub fn production_bridge() -> Result<PathBuf, String> {
     let bridge = std::env::current_exe()
         .map_err(|_| "M5: cannot locate production bridge")?
-        .with_file_name(if cfg!(windows) {
-            "echo-bridge.exe"
-        } else {
-            "echo-bridge"
-        });
+        .with_file_name("echo-bridge");
     if !bridge.is_file() {
         return Err("M5: prebuilt echo-bridge missing; run cargo build --locked -p echo-bridge --bins".into());
     }
@@ -212,11 +204,7 @@ pub fn scenario_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> 
     }
     let bridge = std::env::current_exe()
         .map_err(|_| "m4: cannot locate prebuilt bridge")?
-        .with_file_name(if cfg!(windows) {
-            "echo-bridge.exe"
-        } else {
-            "echo-bridge"
-        });
+        .with_file_name("echo-bridge");
     if !bridge.is_file() {
         return Err("m4: missing prebuilt echo-bridge; run cargo build -p echo-bridge --bins --locked".into());
     }

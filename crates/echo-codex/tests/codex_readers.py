@@ -25,21 +25,16 @@ def concurrent_readers(published, cache, fixture):
 def check_warm(published, cache, fixture):
     concurrent_readers(published, cache, fixture)
     lock = published.with_name(published.name + '.lock')
-    if fixture.WINDOWS:
-        lock.write_text('fixture-owned', encoding='ascii')
-    else:
-        lock.mkdir()
+    lock.mkdir()
     try:
         concurrent_readers(published, cache, fixture)
-        binary = published / ('codex-x86_64-pc-windows-msvc.exe' if fixture.WINDOWS
-                              else 'codex-x86_64-unknown-linux-musl')
-        if not fixture.WINDOWS:
-            mode = binary.stat().st_mode
-            binary.chmod(mode & ~0o111)
-            try:
-                fixture.refused(fixture.run(cache), 'invalid cached executable')
-            finally:
-                binary.chmod(mode)
+        binary = published / 'codex-x86_64-unknown-linux-musl'
+        mode = binary.stat().st_mode
+        binary.chmod(mode & ~0o111)
+        try:
+            fixture.refused(fixture.run(cache), 'invalid cached executable')
+        finally:
+            binary.chmod(mode)
         for name in ('LICENSE', 'NOTICE'):
             notice = published / name
             retained = published / (name + '.retained')
@@ -49,10 +44,8 @@ def check_warm(published, cache, fixture):
             finally:
                 retained.rename(notice)
         assert lock.exists(), 'helper deleted another writer lease'
-        if fixture.WINDOWS:
-            assert lock.read_text(encoding='ascii') == 'fixture-owned'
     finally:
-        lock.unlink() if fixture.WINDOWS else lock.rmdir()
+        lock.rmdir()
     assert sorted(path.name for path in published.parent.iterdir()) == [published.name]
     print('readers=8 identical_paths=true foreign_lease=retained')
     print('CONCURRENT_READERS_PASS')

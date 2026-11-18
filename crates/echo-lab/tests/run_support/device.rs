@@ -49,7 +49,7 @@ fn device_unsafe_or_unreadable_config_never_invokes_bench_tools() {
                 "--bridge-config",
                 "./bridge.toml",
                 "--python",
-                if cfg!(windows) { "python" } else { "python3" },
+                "python3",
                 "--out",
                 "artifacts",
             ])

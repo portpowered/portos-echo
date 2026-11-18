@@ -75,11 +75,7 @@ fn m1_native_muted_say_measures_zero_and_unmuted_next_wake_streams() {
             std::path::Path::new(env!("CARGO_BIN_EXE_echo-lab"))
                 .parent()
                 .unwrap()
-                .join(if cfg!(windows) {
-                    "echo-bridge.exe"
-                } else {
-                    "echo-bridge"
-                })
+                .join("echo-bridge")
                 .to_str()
                 .unwrap(),
         )
@@ -118,11 +114,7 @@ fn m1_independent_restart_steps_preserve_prior_generation_oracles() {
         ]),
         json!({}),
     );
-    let bridge = std::path::Path::new(env!("CARGO_BIN_EXE_echo-lab")).with_file_name(if cfg!(windows) {
-        "echo-bridge.exe"
-    } else {
-        "echo-bridge"
-    });
+    let bridge = std::path::Path::new(env!("CARGO_BIN_EXE_echo-lab")).with_file_name("echo-bridge");
     let output = session.command(bridge.to_str().unwrap()).output().unwrap();
     assert_eq!(
         output.status.code(),

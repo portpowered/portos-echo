@@ -182,7 +182,7 @@ fn python_adapter() -> Option<std::process::ExitCode> {
     if !arguments.first().is_some_and(|arg| arg == "-c" || arg == "-u") {
         return None;
     }
-    let mut command = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = std::process::Command::new("python3");
     if arguments[0] == "-u" {
         command
             .arg("-u")

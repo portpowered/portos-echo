@@ -1,7 +1,7 @@
 //! Independent `ChatGPT` device credentials. Claims are decoded without verifying
 //! JWT signatures: the configured issuer is trusted over TLS. Callers own code
 //! display; this library never launches a browser or discovers a home auth file.
-//! Store permissions: Unix 0600; Windows a protected current-user-only DACL,
+//! Store permissions: Linux 0600 files in private mode-0700 staging directories,
 //! installed on an empty temporary directory before credential bytes are written.
 mod auth_browser;
 mod auth_clock;

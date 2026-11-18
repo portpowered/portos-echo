@@ -101,8 +101,10 @@ The factory was proven on two sample items and a loopback before any program wor
 
 Required hosted CI on the pushed final head is the quality gate. Require focused changed-path signs of life
 and clean architecture following `rules.md`. No story requires a soak, native-load or flake cohort. Lane
-payloads must not demand per-PR Windows-native WSL cohorts: Windows is a temporary host. Retain existing
-Windows jobs; only the owner changes required checks. Milestone T5 and release T6 definitions remain.
+payloads target Linux only for building, testing and running Echo. Windows support is retired by the
+2026-11-18 owner decision; only the owner changes required checks. Coordinator device runs use Linux
+pe-ci with explicit Linux adb/port paths and existing forwarding/safety assumptions. Physical reachability
+remains coordinator T5 proof. Milestone T5 and release T6 definitions remain.
 pe-ci stays coordinator-scheduled for T5 and rare hosted-unsupported work.
 
 Lanes dispatch directly (either selector is optional; at least one is required):

@@ -357,25 +357,21 @@ To reproduce B0 safely in PowerShell, build the tools once in this worktree,
 then run in a fresh external directory. The synthetic speech endpoint/model
 are explicit because the source-pinned CLI has no text-to-speech defaults:
 
-```powershell
-$repo = (Get-Location).Path
+```sh
+repo=$(pwd)
 cargo build -p echo-lab --bins --locked
-$fake = Join-Path $repo 'target/debug/echo-lab-fake-run.exe'
-$run = Join-Path $env:TEMP ('lab-b0-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory $run | Out-Null
-Push-Location $run
-$env:ECHO_LAB_RING = 'fixture-ring'
-$env:ECHO_LAB_RUN_FIXTURE = Join-Path $run 'fixture.json'
-$env:ECHO_LAB_RUN_LEDGER = Join-Path $run 'ledger.jsonl'
-'{"transcript":"The time is 7:49 p.m.","record_waits_for_frame":true}' |
-  Set-Content $env:ECHO_LAB_RUN_FIXTURE
-cargo run --manifest-path "$repo/Cargo.toml" -p echo-lab -- run `
-  "$repo/tests/scenarios/b0-stock-time.yaml" --driver device --bench ring `
-  --port $fake --adb $fake --stt $fake --python $fake `
+fake="$repo/target/debug/echo-lab-fake-run"
+run=$(mktemp -d)
+cd "$run"
+export ECHO_LAB_RING=fixture-ring
+export ECHO_LAB_RUN_FIXTURE="$run/fixture.json"
+export ECHO_LAB_RUN_LEDGER="$run/ledger.jsonl"
+printf '%s\n' '{"transcript":"The time is 7:49 p.m.","record_waits_for_frame":true}' >"$ECHO_LAB_RUN_FIXTURE"
+"$repo/target/debug/echo-lab" run "$repo/tests/scenarios/b0-stock-time.yaml" \
+  --driver device --bench ring --port "$fake" --adb "$fake" --stt "$fake" --python "$fake" \
   --speech-endpoint fixture-speech --speech-model fixture-model --out artifacts
-Get-Content ledger.jsonl
-Get-Content artifacts/report.json
-Pop-Location
+cat ledger.jsonl artifacts/report.json
+cd "$repo"
 ```
 
 Expected exit is 0 with `result: pass`. Repeat in another fresh external
@@ -402,7 +398,7 @@ cargo build -p echo-lab --bins --locked
 target/debug/echo-lab probe --adb /absolute/path/to/target/debug/echo-lab-fake-adb --out /tmp/new-probe
 ```
 
-On Windows, both executable names end in `.exe`. Supply an explicit executable
+Supply an explicit Linux executable
 path; there is no default adb lookup. The output directory must be new and its
 parent must exist. Keep probe artifacts outside the repository.
 
@@ -474,8 +470,7 @@ M4 remains not runnable until the W2 assembled bridge and agent integration.
 
 Build once with `make hassmic-host` and `cargo build -p echo-lab --bins --locked`.
 The host requires the development packages documented by
-`scripts/hassmic-host.sh`; Windows selects its guest as documented in
-[Windows WSL helpers](../../docs/README.md#windows-wsl-helpers).
+`scripts/hassmic-host.sh`; see [Linux hosts](../../docs/README.md#linux-hosts).
 The runner never builds binaries, installs packages or accesses hardware.
 
 ```text
@@ -483,10 +478,10 @@ cargo run -p echo-lab -- run tests/scenarios/w1-wake-stream.yaml --driver sim --
 cargo run -p echo-lab -- run --all --driver sim
 ```
 
-On Windows the explicit bridge path ends in `.exe`. `--bridge` is one executable
+`--bridge` is one Linux executable
 path, including spaces, with native argv and no shell evaluation. Use a wrapper
-for fixed arguments. `--python` selects Python (`python` on Windows, `python3`
-on Linux). A fresh `--cancel-file` can be created to cancel a pending run; it
+for fixed arguments. `--python` selects Python (`python3` by default). A fresh `--cancel-file` can be created to
+cancel a pending run; it
 remains after cleanup. One scenario has a 120-second safety ceiling; cleanup
 has its own bounded deadline and runs independently of cancellation.
 
@@ -507,9 +502,8 @@ the controller reaps its own Linux process group and feeder/log threads.
 The upstream host retains its real audio clock. Its accepted limitation appears
 in every sim report verbatim:
 `pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)`.
-Our connections and listeners use literal `127.0.0.1` only. Windows WSL may
-retain a forwarding socket after the Linux listener closes; cleanup tests
-require EOF/reset without a Wyoming response, and native fake sockets refuse
+Our connections and listeners use literal `127.0.0.1` only. Cleanup tests
+require EOF/reset without a Wyoming response, and local fake sockets refuse
 connections. T3 proves no provider, acoustic wake, hardware mute or physical
 milestone behavior.
 

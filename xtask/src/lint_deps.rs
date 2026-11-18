@@ -403,12 +403,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    fn failure_status() -> std::process::ExitStatus {
-        use std::os::windows::process::ExitStatusExt;
-        std::process::ExitStatus::from_raw(1)
-    }
-
     #[cfg(unix)]
     fn failure_status() -> std::process::ExitStatus {
         use std::os::unix::process::ExitStatusExt;

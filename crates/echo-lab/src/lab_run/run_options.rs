@@ -199,13 +199,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
         port: PathBuf::new(),
         adb: PathBuf::new(),
         stt: PathBuf::new(),
-        python: flags.get("--python").cloned().unwrap_or_else(|| {
-            if cfg!(windows) {
-                "python".into()
-            } else {
-                "python3".into()
-            }
-        }),
+        python: flags.get("--python").cloned().unwrap_or_else(|| "python3".into()),
         ring: String::new(),
         out,
         keep_audio: false,
