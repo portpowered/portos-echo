@@ -25,6 +25,8 @@ fn runtime_options<'a>(
                 voice: Some("alloy"),
                 instructions: "synthetic fixture",
                 model: None,
+                effort: None,
+                time_zone: None,
             },
             tools: vec![],
             session: bridge_voice::SessionOptions {

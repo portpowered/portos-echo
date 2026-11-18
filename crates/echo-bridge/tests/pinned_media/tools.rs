@@ -169,6 +169,8 @@ async fn client(
                     voice: None,
                     instructions: "Client audio bridge",
                     model: Some("gpt-5.4"),
+                    effort: None,
+                    time_zone: None,
                 },
                 catalog.tools().to_vec(),
                 Instant::now() + Duration::from_secs(10),

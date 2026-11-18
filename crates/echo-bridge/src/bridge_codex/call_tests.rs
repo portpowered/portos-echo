@@ -1,6 +1,7 @@
 //! T1: signaling component with in-memory JSONL IO and a paused clock.
 use super::*;
 use serde_json::Value;
+use std::io::Write;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 
@@ -21,6 +22,8 @@ pub(super) fn options() -> Options<'static> {
         voice: Some("alloy"),
         instructions: "Client audio bridge",
         model: Some("fixture-model"),
+        effort: None,
+        time_zone: None,
     }
 }
 
@@ -47,6 +50,7 @@ pub(super) async fn notification(server: &mut Server, method: &str, params: Valu
 pub(super) async fn thread(server: &mut Server) -> Value {
     let request = read(server).await;
     assert_eq!(request["method"], "thread/start");
+    writeln!(std::io::stdout(), "observed thread/start: {request}").unwrap();
     assert_eq!(request.get("jsonrpc"), None);
     write(
         server,
@@ -328,7 +332,16 @@ async fn call_start_deadline_includes_sdp_wait_and_prevents_generation_reuse() {
     let client = async {
         let mut call = Call::new(&mut io);
         assert_eq!(
-            call.start(&options(), vec![], "fixture-offer", deadline()).await,
+            call.start(
+                &Options {
+                    effort: Some("low"),
+                    ..options()
+                },
+                vec![],
+                "fixture-offer",
+                deadline()
+            )
+            .await,
             Err(Error::Deadline)
         );
     };
@@ -362,6 +375,7 @@ async fn call_cancellation_closes_generation_without_a_replayed_start() {
     let remote = async {
         let request = read(&mut server).await;
         assert_eq!(request["method"], "thread/start");
+        writeln!(std::io::stdout(), "observed thread/start: {request}").unwrap();
         let mut line = String::new();
         assert_eq!(server.read_line(&mut line).await.unwrap(), 0);
     };
@@ -434,30 +448,51 @@ async fn call_stop_requires_matching_closed_and_bounds_missing_confirmation() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn call_matching_error_is_sanitized_and_foreign_error_is_ignored() {
-    let (mut io, mut server) = fixture();
-    let client = async {
-        let mut call = Call::new(&mut io);
-        call.start(&options(), vec![], "fixture-offer", deadline())
-            .await
-            .unwrap();
-        assert!(matches!(call.next().await.unwrap(), Event::Other));
-        assert!(matches!(call.next().await, Err(Error::Unavailable)));
-    };
-    let remote = async {
-        start(&mut server).await;
-        for thread in ["foreign", "thread-1"] {
-            notification(
-                &mut server,
-                "thread/realtime/error",
-                json!({"threadId":thread,"message":"private provider payload"}),
-            )
-            .await;
-        }
-    };
-    tokio::join!(client, remote);
-    assert_eq!(
-        io.begin_request("account/read", &json!({})),
-        Err(RpcError::Disconnected)
-    );
+async fn call_profile_fields_are_independent_and_unset_request_is_unchanged() {
+    for (model, effort) in [
+        (None, None),
+        (Some("fixture-model"), Some("low")),
+        (None, Some("low")),
+        (Some("fixture-model"), None),
+    ] {
+        let (mut io, mut server) = fixture();
+        let client = async {
+            let mut call = Call::new(&mut io);
+            let options = Options {
+                model,
+                effort,
+                time_zone: Some("Europe/Berlin"),
+                ..options()
+            };
+            assert_eq!(
+                call.start(&options, vec![], "fixture-offer", deadline()).await.unwrap(),
+                "fixture-answer"
+            );
+            call.stop(deadline()).await.unwrap();
+        };
+        let remote = async {
+            // start asserts the full realtime request, including the absence of profile/zone keys.
+            let params = start(&mut server).await;
+            let mut expected = json!({
+                "ephemeral": true, "approvalPolicy": "never", "sandbox": "read-only",
+                "environments": [], "dynamicTools": [], "baseInstructions": "Client audio bridge",
+                "config": {
+                    "features.shell_tool": false, "features.unified_exec": false,
+                    "features.multi_agent": false, "features.multi_agent_v2": false,
+                    "features.goals": false, "tools.experimental_request_user_input.enabled": false,
+                    "tools.update_plan.enabled": false, "web_search": "disabled", "mcp_servers": {}
+                }
+            });
+            if let Some(model) = model {
+                expected["model"] = model.into();
+            }
+            if let Some(effort) = effort {
+                expected["config"]["model_reasoning_effort"] = effort.into();
+            }
+            assert_eq!(params, expected);
+            stop(&mut server).await;
+        };
+        tokio::join!(client, remote);
+        assert!(io.begin_request("account/read", &json!({})).is_ok());
+    }
 }

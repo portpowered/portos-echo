@@ -82,7 +82,16 @@ async fn call_bad_thread_or_remote_failure_closes_before_realtime_start() {
         let client = async {
             let mut call = Call::new(&mut io);
             assert_eq!(
-                call.start(&options(), vec![], "fixture-offer", deadline()).await,
+                call.start(
+                    &Options {
+                        effort: Some("low"),
+                        ..options()
+                    },
+                    vec![],
+                    "fixture-offer",
+                    deadline()
+                )
+                .await,
                 Err(Error::Decode)
             );
         };
@@ -98,7 +107,16 @@ async fn call_bad_thread_or_remote_failure_closes_before_realtime_start() {
     let client = async {
         let mut call = Call::new(&mut io);
         assert_eq!(
-            call.start(&options(), vec![], "fixture-offer", deadline()).await,
+            call.start(
+                &Options {
+                    effort: Some("low"),
+                    ..options()
+                },
+                vec![],
+                "fixture-offer",
+                deadline()
+            )
+            .await,
             Err(Error::Unavailable)
         );
     };
@@ -306,6 +324,35 @@ async fn call_malformed_tool_request_never_reaches_dispatcher() {
             json!({"id":42,"method":"item/tool/call","params":{"threadId":"thread-1"}}),
         )
         .await;
+    };
+    tokio::join!(client, remote);
+    assert_eq!(
+        io.begin_request("account/read", &json!({})),
+        Err(RpcError::Disconnected)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn call_matching_error_is_sanitized_and_foreign_error_is_ignored() {
+    let (mut io, mut server) = fixture();
+    let client = async {
+        let mut call = Call::new(&mut io);
+        call.start(&options(), vec![], "fixture-offer", deadline())
+            .await
+            .unwrap();
+        assert!(matches!(call.next().await.unwrap(), Event::Other));
+        assert!(matches!(call.next().await, Err(Error::Unavailable)));
+    };
+    let remote = async {
+        start(&mut server).await;
+        for thread in ["foreign", "thread-1"] {
+            notification(
+                &mut server,
+                "thread/realtime/error",
+                json!({"threadId":thread,"message":"private provider payload"}),
+            )
+            .await;
+        }
     };
     tokio::join!(client, remote);
     assert_eq!(

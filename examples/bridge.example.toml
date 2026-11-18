@@ -13,6 +13,21 @@ session_idle_seconds = 120
 # Each new call receives a delimited snapshot after these instructions.
 # The authorized fallback explicitly labels UTC when local offset is unavailable.
 # instructions = """Client audio bridge. Answer directly when the conversation and call-start context are sufficient. Delegate only when a tool or external lookup is needed. The context is a call-start snapshot; UTC does not establish the user's local time zone."""
+# Optional keys in that same codex table; all default to unset:
+# delegate_model = "fixture-model"
+# delegate_effort = "low"
+# time_zone = "Europe/Berlin"
+# delegate_model selects the Codex thread model used by delegated turns.
+# Precedence: delegate_model, codex.model, agent.model, then the pin's default.
+# It does not select the realtime audio model. No default model is chosen here.
+# delegate_effort sets thread/start config.model_reasoning_effort.
+# The pin recognises none/minimal/low/medium/high/xhigh/max/ultra/persistent.
+# It also accepts custom nonempty strings; model support is checked at runtime.
+# time_zone is checked for IANA-name syntax only, without a time-zone database.
+# Unknown syntax-valid names are accepted, including single-component UTC.
+# It adds the zone name and an answer-in-that-zone instruction to the UTC snapshot.
+# Unset time_zone keeps UTC wording; the bridge does not compute local time or DST.
+# Remove these new keys before rolling back to a binary that predates them.
 
 [agent]
 max_tool_calls = 8
