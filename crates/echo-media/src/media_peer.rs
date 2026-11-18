@@ -154,18 +154,7 @@ impl Peer {
     }
 
     pub(crate) fn begin(&self) -> Result<(), Error> {
-        self.shared.check()?;
-        let changed = self.shared.state.send_if_modified(|state| {
-            if *state == PeerState::New {
-                *state = PeerState::Connecting;
-                true
-            } else {
-                false
-            }
-        });
-        if !changed {
-            return Err(Error::State);
-        }
+        self.shared.begin()?;
         let shared = self.shared.clone();
         let duration = self.config.negotiation_timeout;
         let connection = self.connection()?.clone();
@@ -243,6 +232,9 @@ impl MediaPeer for Peer {
     fn states(&self) -> tokio::sync::watch::Receiver<PeerState> {
         self.shared.state.subscribe()
     }
+    fn observe_setup(&self, observer: crate::SetupObserver) -> Result<(), Error> {
+        self.shared.observe_setup(observer)
+    }
     fn send(&self, frame: PcmFrame) -> Result<(), Error> {
         self.shared.check()?;
         if *self.shared.state.borrow() != PeerState::Connected {
@@ -266,8 +258,7 @@ impl MediaPeer for Peer {
         }
     }
     async fn close(&mut self) -> Result<(), Error> {
-        self.shared.state.send_replace(PeerState::Closed);
-        self.shared.clear();
+        self.shared.close();
         let tasks = std::mem::take(
             &mut *self
                 .shared
@@ -293,8 +284,7 @@ impl MediaPeer for Peer {
 
 impl Drop for Peer {
     fn drop(&mut self) {
-        self.shared.state.send_replace(PeerState::Closed);
-        self.shared.clear();
+        self.shared.close();
         for task in self
             .shared
             .tasks

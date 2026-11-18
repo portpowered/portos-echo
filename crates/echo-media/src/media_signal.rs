@@ -1,6 +1,6 @@
 // Copyright 2025 OpenAI. SPDX-License-Identifier: Apache-2.0
 // Adapted from Codex voice-host transport.rs; Modified by Port OS.
-use crate::{Error, PeerConfig, media_state::Shared};
+use crate::{Error, PeerConfig, SetupStage, media_state::Shared};
 use std::{
     collections::HashSet,
     future::Future,
@@ -12,8 +12,8 @@ use tokio::sync::Notify;
 use webrtc::{
     data_channel::{DataChannel, DataChannelEvent},
     peer_connection::{
-        PeerConnectionEventHandler, RTCIceCandidateInit, RTCIceGatheringState, RTCPeerConnectionState,
-        RTCSessionDescription,
+        PeerConnectionEventHandler, RTCIceCandidateInit, RTCIceConnectionState, RTCIceGatheringState,
+        RTCPeerConnectionState, RTCSessionDescription,
     },
 };
 type BoxFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
@@ -93,6 +93,20 @@ pub(crate) struct Events {
     pub(crate) answerer: bool,
 }
 impl PeerConnectionEventHandler for Events {
+    fn on_ice_connection_state_change<'a, 'b>(&'a self, state: RTCIceConnectionState) -> BoxFuture<'b>
+    where
+        'a: 'b,
+        Self: 'b,
+    {
+        Box::pin(async move {
+            if matches!(
+                state,
+                RTCIceConnectionState::Connected | RTCIceConnectionState::Completed
+            ) {
+                self.shared.setup_stage(SetupStage::IceConnected);
+            }
+        })
+    }
     fn on_ice_gathering_state_change<'a, 'b>(&'a self, state: RTCIceGatheringState) -> BoxFuture<'b>
     where
         'a: 'b,
@@ -139,7 +153,10 @@ pub(crate) fn observe(shared: &Arc<Shared>, channel: Arc<dyn DataChannel>) {
     shared.task(tokio::spawn(async move {
         while let Some(event) = channel.poll().await {
             match event {
-                DataChannelEvent::OnOpen => state.connected(false),
+                DataChannelEvent::OnOpen => {
+                    state.setup_stage(SetupStage::DataChannelOpen);
+                    state.connected(false);
+                }
                 DataChannelEvent::OnError | DataChannelEvent::OnClosing | DataChannelEvent::OnClose => break,
                 _ => {}
             }

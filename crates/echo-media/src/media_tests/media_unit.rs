@@ -3,6 +3,137 @@
 use crate::{Error, MediaPeer, Peer, PeerConfig, PeerState, media_queue::Queue, media_signal};
 
 #[tokio::test]
+async fn setup_observer_is_once_per_peer_and_terminal_after_close() {
+    use crate::SetupStage::{DataChannelOpen, IceConnected};
+    let mut a = Peer::controlled();
+    let mut b = Peer::controlled();
+    let first = super::setup_observations(&a);
+    let second = super::setup_observations(&b);
+    assert_eq!(a.observe_setup(std::sync::Arc::new(|_| Ok(()))), Err(Error::State));
+    a.shared.begin().unwrap();
+    b.shared.begin().unwrap();
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let shared = &a.shared;
+            scope.spawn(move || shared.setup_stage(IceConnected));
+        }
+    });
+    assert_eq!(*first.lock().unwrap(), [IceConnected]);
+    assert_eq!(*a.states().borrow(), PeerState::Connecting);
+    assert_eq!(*second.lock().unwrap(), []);
+    a.shared.setup_stage(DataChannelOpen);
+    a.shared.connected(false);
+    assert_eq!(*a.states().borrow(), PeerState::Connecting);
+    a.shared.connected(true);
+    assert_eq!(*a.states().borrow(), PeerState::Connected);
+    a.shared.setup_stage(DataChannelOpen);
+    assert_eq!(*first.lock().unwrap(), [IceConnected, DataChannelOpen]);
+    b.shared.setup_stage(IceConnected);
+    assert_eq!(*second.lock().unwrap(), [IceConnected]);
+    a.close().await.unwrap();
+    b.close().await.unwrap();
+    for peer in [&a, &b] {
+        peer.shared.setup_stage(DataChannelOpen);
+        peer.shared.setup_stage(IceConnected);
+        peer.shared.connected(true);
+        assert_eq!(*peer.states().borrow(), PeerState::Closed);
+    }
+    assert_eq!(*first.lock().unwrap(), [IceConnected, DataChannelOpen]);
+    assert_eq!(*second.lock().unwrap(), [IceConnected]);
+}
+
+#[tokio::test]
+async fn setup_observer_rejects_late_installation_and_failure_prevents_connected() {
+    use crate::SetupStage::{DataChannelOpen, IceConnected};
+    let mut peer = Peer::controlled();
+    peer.shared.begin().unwrap();
+    assert_eq!(peer.observe_setup(std::sync::Arc::new(|_| Ok(()))), Err(Error::State));
+    peer.close().await.unwrap();
+    assert_eq!(peer.observe_setup(std::sync::Arc::new(|_| Ok(()))), Err(Error::State));
+    let mut peer = Peer::controlled();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    peer.observe_setup(std::sync::Arc::new(move |_| {
+        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(Error::State)
+    }))
+    .unwrap();
+    peer.shared.begin().unwrap();
+    peer.shared.setup_stage(IceConnected);
+    peer.shared.setup_stage(DataChannelOpen);
+    peer.shared.connected(true);
+    peer.shared.connected(false);
+    assert_eq!(*peer.states().borrow(), PeerState::Failed);
+    assert_eq!(peer.send([0; 320]), Err(Error::Transport));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    peer.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn setup_ice_callbacks_deduplicate_connected_and_completed_without_readiness() {
+    use webrtc::peer_connection::{PeerConnectionEventHandler, RTCIceConnectionState};
+    let mut peer = Peer::controlled();
+    let stages = super::setup_observations(&peer);
+    let events = media_signal::Events {
+        shared: peer.shared.clone(),
+        gathered: std::sync::Arc::new(tokio::sync::Notify::new()),
+        answerer: false,
+    };
+    peer.shared.begin().unwrap();
+    for state in [
+        RTCIceConnectionState::Checking,
+        RTCIceConnectionState::Connected,
+        RTCIceConnectionState::Completed,
+        RTCIceConnectionState::Connected,
+    ] {
+        events.on_ice_connection_state_change(state).await;
+        assert_eq!(*peer.states().borrow(), PeerState::Connecting);
+    }
+    assert_eq!(*stages.lock().unwrap(), [crate::SetupStage::IceConnected]);
+    peer.close().await.unwrap();
+    events
+        .on_ice_connection_state_change(RTCIceConnectionState::Connected)
+        .await;
+    assert_eq!(*stages.lock().unwrap(), [crate::SetupStage::IceConnected]);
+}
+
+#[test]
+fn setup_close_waits_for_inflight_observer_and_discards_late_notifications() {
+    use crate::{SetupStage::IceConnected, media_state::Shared};
+    use std::sync::{
+        Arc, Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let shared = Shared::new(1);
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let count = Arc::new(AtomicUsize::new(0));
+    let (callback_entered, callback_release, calls) = (entered.clone(), release.clone(), count.clone());
+    shared
+        .observe_setup(Arc::new(move |_| {
+            callback_entered.wait();
+            callback_release.wait();
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }))
+        .unwrap();
+    shared.begin().unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| shared.setup_stage(IceConnected));
+        entered.wait();
+        let close = scope.spawn(|| {
+            shared.close();
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        });
+        release.wait();
+        close.join().unwrap();
+    });
+    shared.setup_stage(crate::SetupStage::DataChannelOpen);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(*shared.state.borrow(), PeerState::Closed);
+}
+
+#[tokio::test]
 async fn queue_oldest_order_exact_count_and_close() {
     let queue = Queue::new(3);
     for marker in 0..3 {
