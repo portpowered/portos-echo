@@ -142,8 +142,11 @@ Consequences:
   describe. `echo-agent-loop`, our own Live call path in `echo-live` and the sign-in in `echo-chatgpt-auth` retire
   once the cutover passes M2 and M4 with `--driver sim`.
 - **No code of ours runs as root on the Echo.** The screen client is an ordinary app; hassmic is upstream's.
-- **One turn per wake word in v1.** With `-D` a run ends at the reply's `audio-stop`; the Live call stays open for
-  `session_idle_seconds`, so the next wake word continues the same conversation.
+- **One persistent session per wake word.** With `-D` the run and its capture stay open after each reply is Played,
+  listening for `voice.session_listen_seconds` (default 15 s); speech in that window continues the same run. The run
+  ends at idle expiry, right after the current reply when the agent calls `end_session`, or at the
+  `voice.session_max_seconds` cap on waiting the agent grants with `extend_session` (`docs/program/decisions.md`).
+  The Live call stays open for `session_idle_seconds`, so the next wake word continues the same conversation.
 
 ### 3.1 Spikes (W1)
 

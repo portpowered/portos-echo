@@ -188,14 +188,23 @@ fn extend(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
     {
         return Err(format!("session: extend receipts {receipts:?}"));
     }
+    // The cap counts from the controller's admission of the run, after the
+    // wake opened it and before the agent's first grant. It ends exactly there.
     let opened = summary["run_opened_ms"].as_u64().ok_or("session: missing run open")?;
+    let granted = receipts[0]["elapsed_ms"]
+        .as_u64()
+        .ok_or("session: missing receipt time")?;
     let end = ended(summary)?;
-    at(opened + 12000, end, "extend cap")?;
+    let admitted = end.checked_sub(12000).filter(|at| (opened..=granted).contains(at));
+    let admitted = admitted.ok_or_else(|| format!("session: cap end {end} ms outside run {opened}..{granted} ms"))?;
     let played = last_played(summary)?;
     if end <= played + LISTEN_MS {
         return Err("session: extension did not outlive the default listen window".into());
     }
-    Ok(json!({"results":results,"receipts":receipts,"default_deadline_ms":played + LISTEN_MS}))
+    Ok(
+        json!({"results":results,"receipts":receipts,"controller_admitted_ms":admitted,
+        "default_deadline_ms":played + LISTEN_MS}),
+    )
 }
 
 fn end(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
