@@ -155,7 +155,7 @@ mod tests {
         .await
         .unwrap();
         for _ in 0..12 {
-            tx.send(MediaEvent::Audio([level; 320])).await.unwrap();
+            tx.send(MediaEvent::Audio(Box::new([level; 320]))).await.unwrap();
         }
         tx.send(MediaEvent::Control(Event::ReplyDone { text: "fixture".into() }))
             .await
@@ -287,7 +287,7 @@ mod tests {
     }
 
     async fn idle_noise(tx: &mpsc::Sender<MediaEvent>) {
-        tx.send(MediaEvent::Audio([7000; 320])).await.unwrap();
+        tx.send(MediaEvent::Audio(Box::new([7000; 320]))).await.unwrap();
         tx.send(MediaEvent::Control(Event::ReplyDone { text: "stale".into() }))
             .await
             .unwrap();
