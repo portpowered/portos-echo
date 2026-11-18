@@ -13,6 +13,7 @@ fn label(notice: &ServeNotice) -> Option<&'static str> {
 
 #[tokio::test(start_paused = true)]
 async fn kill_refuses_wake_then_stops_active_call_and_allows_fresh_call_on_clear() {
+    let began = std::time::SystemTime::now();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("kill");
     std::fs::write(&path, []).unwrap();
@@ -41,7 +42,7 @@ async fn kill_refuses_wake_then_stops_active_call_and_allows_fresh_call_on_clear
             Ok(())
         },
     );
-    let remote = interrupted_then_reply(&mut server);
+    let remote = interrupted_then_reply(&mut server, began);
     let mut work = Box::pin(async {
         tokio::select! { result = work => result, () = remote => unreachable!() }
     });
@@ -71,10 +72,10 @@ async fn kill_refuses_wake_then_stops_active_call_and_allows_fresh_call_on_clear
     assert!(io.begin_request("account/read", &json!({})).is_ok());
 }
 
-async fn interrupted_then_reply(server: &mut Server) {
-    start(server).await;
+async fn interrupted_then_reply(server: &mut Server, began: std::time::SystemTime) {
+    admitted_start(server, began).await;
     stop(server).await;
-    start(server).await;
+    admitted_start(server, began).await;
     reply(server).await;
     stop(server).await;
     std::future::pending::<()>().await;
@@ -116,6 +117,7 @@ async fn exercise_clear_and_active_kill<F: Future>(
 
 #[tokio::test(start_paused = true)]
 async fn kill_stop_without_acknowledgement_is_terminal_not_ready_or_retried() {
+    let began = std::time::SystemTime::now();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("kill");
     let (mut io, mut server) = fixture();
@@ -140,7 +142,7 @@ async fn kill_stop_without_acknowledgement_is_terminal_not_ready_or_retried() {
         },
     );
     let remote = async {
-        start(&mut server).await;
+        admitted_start(&mut server, began).await;
         let request = read(&mut server).await;
         assert_eq!(request["method"], "thread/realtime/stop");
         std::future::pending::<()>().await;
@@ -209,6 +211,7 @@ async fn malformed_kill_marker_fails_closed_before_peer_and_clear_is_observed_wi
 
 #[tokio::test(start_paused = true)]
 async fn kill_during_ice_closes_generation_without_connected_or_readmission() {
+    let began = std::time::SystemTime::now();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("kill");
     let (mut io, mut server) = fixture();
@@ -233,7 +236,7 @@ async fn kill_during_ice_closes_generation_without_connected_or_readmission() {
         },
     );
     let remote = async {
-        start(&mut server).await;
+        admitted_start(&mut server, began).await;
         std::future::pending::<()>().await;
     };
     let mut work = Box::pin(async {

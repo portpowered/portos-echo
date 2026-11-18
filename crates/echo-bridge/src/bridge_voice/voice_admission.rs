@@ -18,6 +18,24 @@ pub struct ServeOptions<'a> {
     pub connect_timeout: Duration,
 }
 
+impl<'o> ServeOptions<'o> {
+    pub(super) fn conversation<'a>(&self, instructions: &'a str, deadline: Instant) -> ConversationOptions<'a>
+    where
+        'o: 'a,
+    {
+        ConversationOptions {
+            call: bridge_codex::Options {
+                voice: self.call.voice,
+                instructions,
+                model: self.call.model,
+            },
+            tools: self.tools.clone(),
+            deadline,
+            session: self.session,
+        }
+    }
+}
+
 /// Ready means authenticated device readiness, never media connectivity.
 pub enum ServeNotice {
     Ready,
@@ -105,7 +123,7 @@ where
                 }
             },
             &mut observe,
-            tools.as_deref_mut(),
+            (tools.as_deref_mut(), std::time::SystemTime::now),
         ))
         .await;
         if killed.get() && result == Err(Error::Control) {
@@ -130,7 +148,10 @@ async fn admitted<L, R, W, P>(
     peer: &mut impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
-    tools: Option<&mut super::voice_tools::Tools>,
+    context: (
+        Option<&mut super::voice_tools::Tools>,
+        impl FnOnce() -> std::time::SystemTime,
+    ),
 ) -> Result<(), Error>
 where
     L: EchoLink,
@@ -138,6 +159,7 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
+    let (tools, clock) = context;
     tokio::pin!(cancelled);
     if let Some(tools) = &tools {
         tools.budget.check_call()?;
@@ -146,21 +168,16 @@ where
     let deadline = Instant::now()
         .checked_add(options.connect_timeout)
         .ok_or(Error::Input)?;
-    let media = tokio::select! {
+    let (media, instructions) = tokio::select! {
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
-        result = timeout_at(deadline, peer()) => result.map_err(|_| Error::Deadline)??,
+        result = async {
+            let instructions = super::voice_config::call_instructions(options.call.instructions, clock())?;
+            let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
+            Ok::<_, Error>((media, instructions))
+        } => result?,
     };
-    let options_call = ConversationOptions {
-        call: bridge_codex::Options {
-            voice: options.call.voice,
-            instructions: options.call.instructions,
-            model: options.call.model,
-        },
-        tools: options.tools.clone(),
-        deadline,
-        session: options.session,
-    };
+    let options_call = options.conversation(&instructions, deadline);
     let mut observer = |notice| {
         if let SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))) = &notice {
             options.session.muted = *value;
@@ -256,12 +273,99 @@ async fn probe(client: &impl EchoLink) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::voice_config::tests::{MemoryPeer, admission_options as options, check_context};
     use super::*;
     use echo_link::{
         LinkConnector, MicrophoneRun,
         fake::{Command, FakeConnector, Observer},
     };
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[tokio::test(start_paused = true)]
+    async fn admission_samples_fresh_context_in_both_fields_without_accumulation() {
+        let samples = std::cell::Cell::new(0);
+        let mut options = options();
+        for seconds in [0, 86_400] {
+            let (stream, server) = tokio::io::duplex(16_384);
+            let (read, write) = tokio::io::split(stream);
+            let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+            let observer = Observer::default();
+            let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+            let mut events = client.events().unwrap();
+            observer.wake("admit", vec![]);
+            let LinkEvent::Wake(run) = events.recv().await.unwrap().unwrap() else {
+                unreachable!()
+            };
+            let now = std::time::UNIX_EPOCH + Duration::from_secs(seconds);
+            let started = tokio::sync::Notify::new();
+            let mut completed = 0;
+            let mut peer = async || Ok(MemoryPeer);
+            let mut observe = super::super::voice_config::tests::retained_observer(&observer, &started, &mut completed);
+            let work = admitted(
+                (&client, &mut events, run),
+                &mut io,
+                &mut options,
+                &mut peer,
+                std::future::pending(),
+                &mut observe,
+                (None, || {
+                    samples.set(samples.get() + 1);
+                    now
+                }),
+            );
+            let remote = check_context(
+                (server, &observer, &started),
+                super::super::voice_config::call_instructions("configured\n\u{8a9e} \n", now).unwrap(),
+            );
+            let (result, ()) = tokio::join!(work, remote);
+            drop(observe);
+            assert_eq!((result, completed), (Ok(()), 2));
+            assert_eq!(options.call.instructions, "configured\n\u{8a9e} \n");
+        }
+        assert_eq!(samples.get(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn admission_invalid_clock_and_ready_cancellation_emit_no_rpc_or_peer() {
+        for cancelled in [false, true] {
+            let (stream, mut server) = tokio::io::duplex(4096);
+            let (read, write) = tokio::io::split(stream);
+            let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+            let observer = Observer::default();
+            let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+            let mut events = client.events().unwrap();
+            observer.wake("admit", vec![]);
+            let LinkEvent::Wake(run) = events.recv().await.unwrap().unwrap() else {
+                unreachable!()
+            };
+            let samples = std::cell::Cell::new(0);
+            let result = admitted(
+                (&client, &mut events, run),
+                &mut io,
+                &mut options(),
+                &mut async || -> Result<MemoryPeer, Error> { unreachable!() },
+                async {
+                    if !cancelled {
+                        std::future::pending::<()>().await;
+                    }
+                },
+                &mut |_| Ok(()),
+                (None, || {
+                    samples.set(samples.get() + 1);
+                    std::time::UNIX_EPOCH + Duration::from_hours(70_389_528)
+                }),
+            )
+            .await;
+            assert_eq!(result, Err(if cancelled { Error::Control } else { Error::Input }));
+            assert_eq!(samples.get(), usize::from(!cancelled));
+            drop(io);
+            let mut bytes = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut server, &mut bytes)
+                .await
+                .unwrap();
+            assert_eq!(bytes, Vec::<u8>::new());
+        }
+    }
 
     #[tokio::test(start_paused = true)]
     async fn idle_polls_control_refuses_unsolicited_tools_and_probes_before_wake() {
