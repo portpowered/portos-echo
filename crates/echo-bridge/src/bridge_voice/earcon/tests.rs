@@ -5,6 +5,43 @@ use echo_link::{
 };
 use std::io::Write;
 
+struct PreemptAfterSend<S>(S, Context);
+
+impl<S: ReplySink> ReplySink for PreemptAfterSend<S> {
+    async fn send(&self, frame: Vec<u8>) -> Result<(), echo_link::Error> {
+        self.0.send(frame).await?;
+        self.1.state().stop = true;
+        self.1.changed.notify_waiters();
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wake_earcon_cut_duration_excludes_accepted_but_unsent_frames() {
+    let observer = Observer::default();
+    let client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let context = Context::default();
+    let (sink, source) = client.reply_channel(NonZeroUsize::MIN);
+    let playback = client.play_with_timeout(crate::bridge_audio::format(24_000), source, SETTLE);
+    let producer = async {
+        let result = produce(&client, &PreemptAfterSend(sink, context.clone()), &context).await;
+        observer.finish(Ok(()));
+        result
+    };
+    let (outcome, duration) = tokio::join!(biased; playback, producer);
+    assert_eq!(outcome, Ok(PlayOutcome::Cut));
+    assert_eq!(duration, Ok(Duration::ZERO));
+    assert_eq!(
+        observer.commands(),
+        [
+            Command::Connect,
+            Command::Start(crate::bridge_audio::format(24_000), SETTLE),
+            Command::Cut(1),
+            Command::Stop,
+        ]
+    );
+}
+
 #[test]
 fn wake_earcon_waveform_has_bounded_peak_fades_dc_and_rising_tones() {
     let samples = waveform::samples();
@@ -65,8 +102,31 @@ async fn acknowledge_cut(observer: &Observer) {
     }
 }
 
+async fn first_frame_without_clock_tick(observer: &Observer, origin: Instant) {
+    for _ in 0..100 {
+        if observer
+            .commands()
+            .iter()
+            .any(|command| matches!(command, Command::Frame(_)))
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        observer
+            .commands()
+            .iter()
+            .any(|command| matches!(command, Command::Frame(_)))
+    );
+    assert_eq!(Instant::now(), origin);
+}
+
 #[tokio::test(start_paused = true)]
 async fn wake_earcon_full_waveform_waits_for_playout_and_own_receipt() {
+    // A sub-millisecond wake must not wait for Tokio's next timer tick.
+    tokio::time::advance(Duration::from_nanos(1)).await;
+    let origin = Instant::now();
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -78,6 +138,7 @@ async fn wake_earcon_full_waveform_waits_for_playout_and_own_receipt() {
         Ok(())
     };
     let remote = async {
+        first_frame_without_clock_tick(&observer, origin).await;
         // Explicitly advance the clock only after each paced frame is observed.
         for count in 1..=8 {
             while observer
@@ -89,7 +150,9 @@ async fn wake_earcon_full_waveform_waits_for_playout_and_own_receipt() {
             {
                 tokio::task::yield_now().await;
             }
-            tokio::time::advance(FRAME).await;
+            // Timers round up to a millisecond; the wake deliberately is not
+            // on that boundary, so advance past the next paced deadline.
+            tokio::time::advance(FRAME + Duration::from_millis(1)).await;
         }
         assert!(
             !observer

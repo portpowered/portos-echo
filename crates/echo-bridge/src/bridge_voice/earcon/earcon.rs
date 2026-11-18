@@ -249,7 +249,10 @@ async fn produce(client: &impl EchoLink, sink: &impl ReplySink, context: &Contex
             biased;
             () = context.until(|state| state.stop || state.closing) => break,
             result = async {
-                tokio::time::sleep_until(origin + FRAME * sent).await;
+                // A wake between timer ticks must not defer its first chunk.
+                if sent != 0 {
+                    tokio::time::sleep_until(origin + FRAME * sent).await;
+                }
                 timeout(SETTLE, sink.send(frame)).await.map_err(|_| echo_link::Error::Timeout)?
             } => result?,
         }
@@ -269,5 +272,6 @@ async fn produce(client: &impl EchoLink, sink: &impl ReplySink, context: &Contex
     if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
         clock.discarded_earcon(cut.dropped_frames)?;
     }
-    Ok(FRAME * sent)
+    let dropped = u32::try_from(cut.dropped_frames).map_err(|_| Error::Wyoming)?;
+    Ok(FRAME * sent.checked_sub(dropped).ok_or(Error::Wyoming)?)
 }
