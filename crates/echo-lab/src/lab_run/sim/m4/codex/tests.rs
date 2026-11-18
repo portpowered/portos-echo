@@ -1,6 +1,8 @@
 //! T3 component: same canonical runner, real pin/media/MCP, controlled Wyoming.
 //! The complete milestone still requires the native hassmic-host scenario.
 use super::*;
+#[path = "phase.rs"]
+mod phase;
 use echo_contracts::wyoming::{Event, Header, encode};
 use std::io::Write;
 use tokio::{
@@ -83,16 +85,18 @@ async fn exercise(negative: bool) {
 }
 
 async fn exercise_mode(negative: bool, emotion: bool) {
+    let measurement = phase::Measurement::new(negative, emotion);
     let options = options();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (wake, awakened) = oneshot::channel();
-    let satellite = tokio::spawn(satellite(listener, awakened));
+    let satellite = tokio::spawn(satellite(listener, awakened, measurement));
     let mut case = Case {
         emotion,
         ..Case::default()
     };
     case.connect(&options, negative, address).await.unwrap();
+    measurement.mark("bridge ready");
     let path = case.root.as_ref().unwrap().0.clone();
     let mut screen = Screen::connect(&path).await.unwrap();
     screen.expect("ready").await.unwrap();
@@ -109,12 +113,13 @@ async fn exercise_mode(negative: bool, emotion: bool) {
                 ready,
                 &mut case.clock
             ),
-            presentation(&mut screen, spoof, negative, connected, emotion, replies)
+            presentation(&mut screen, spoof, (negative, emotion), connected, replies, measurement)
         )
     })
     .await;
     let timing = case.relay.as_ref().unwrap().timing();
     let closed = case.close().await;
+    measurement.mark("receipts collected");
     assert_eq!(closed, Ok(()), "work: {observed:?}");
     assert_eq!(
         observed.as_ref().unwrap().as_ref().unwrap().0,
@@ -122,11 +127,15 @@ async fn exercise_mode(negative: bool, emotion: bool) {
     );
     assert_results(&case, &timing, negative, emotion);
     assert_eq!(satellite.await.unwrap(), 9600);
+    assert_presentation(&observed.as_ref().unwrap().as_ref().unwrap().1, negative, emotion);
+    assert!(!path.exists());
+}
+
+fn assert_presentation(frames: &[Value], negative: bool, emotion: bool) {
     if emotion && !negative {
-        assert_animation(observed.as_ref().unwrap().as_ref().unwrap().1.clone());
+        assert_animation(frames.to_vec());
     }
     if emotion && negative {
-        let frames = &observed.as_ref().unwrap().as_ref().unwrap().1;
         let states: Vec<_> = frames.iter().map(|f| f["state"].clone()).collect();
         assert_eq!(
             states,
@@ -138,10 +147,9 @@ async fn exercise_mode(negative: bool, emotion: bool) {
             ]
         );
     }
-    assert!(!path.exists());
 }
 
-async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>) -> usize {
+async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>, measurement: phase::Measurement) -> usize {
     let mut socket = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut socket).await.0["type"], "run-satellite");
     assert_eq!(read(&mut socket).await.0["type"], "describe");
@@ -160,6 +168,7 @@ async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>) -> usize 
     send(&mut socket, "run-pipeline", row["header"]["data"].clone(), vec![]).await;
     capture(&mut socket).await;
     let count = playback(&mut socket).await;
+    measurement.mark("media done");
     assert_eq!(socket.read(&mut [0]).await.unwrap(), 0);
     count
 }
@@ -255,14 +264,27 @@ pub(super) fn options() -> Options {
 async fn presentation(
     screen: &mut Screen,
     spoof: &Spoof,
-    negative: bool,
+    mode: (bool, bool),
     connected: oneshot::Sender<()>,
-    emotion: bool,
     replies: tokio::sync::mpsc::Sender<Control>,
+    measurement: phase::Measurement,
 ) -> Result<Vec<Value>, String> {
+    let (negative, emotion) = mode;
     let mut states = vec![];
     observe(screen, &mut states, "listening").await?;
     observe(screen, &mut states, "connected").await?;
+    measurement.mark("provider/session ready");
+    // Catalog discovery precedes session startup. This is an observation upper
+    // bound at connected, not an invented tools/list arrival timestamp.
+    if spoof
+        .snapshot()
+        .map_err(|_| "m4: missing MCP timing observation")?
+        .requests
+        .iter()
+        .any(|request| request.method == "tools/list")
+    {
+        measurement.mark("tools listed (observed by connected)");
+    }
     if negative {
         spoof.set_fault(Fault::Http500).unwrap();
     }
