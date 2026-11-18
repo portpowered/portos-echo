@@ -53,7 +53,7 @@ impl World {
         self.private = Some(super::super::m2::codex::config::Root::create(root.into())?);
         self.root = root.into();
         self.host = Some(Process::start(process::host(python).arg("--finite"))?);
-        let ready = self.host.as_mut().ok_or("M3: missing host")?.expect("host.ready");
+        let ready = host_ready(self.host.as_mut().ok_or("M3: missing host")?);
         let address = process::admit_host(
             &mut self.endpoints,
             ready,
@@ -243,8 +243,11 @@ impl World {
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(format!(
-                    "M3 {phase}: missing observation before 5000 ms deadline; capture_tail_bytes={} continues={}",
-                    state.tail_bytes, state.continues
+                    "M3 {phase}: missing observation before 5000 ms deadline; capture_chunks={} Live_frames={} capture_tail_bytes={} continues={}",
+                    state.capture_frames,
+                    self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().frames,
+                    state.tail_bytes,
+                    state.continues
                 ));
             }
             tick.tick().await;
@@ -271,8 +274,42 @@ impl World {
         Ok(())
     }
 
+    fn retain_trace(&self) -> Result<(), String> {
+        let parent = self.root.parent().ok_or("M3: missing artifact parent")?;
+        std::fs::copy(self.root.join("bridge.private.jsonl"), parent.join("m3.trace.jsonl"))
+            .map(|_| ())
+            .map_err(|_| "M3: cannot retain payload-free bridge trace".into())
+    }
+
+    async fn idle(&mut self) -> Result<(), String> {
+        self.live.as_ref().ok_or("M3: missing Live")?.quiesce().await?;
+        let bridge = self.bridge.as_mut().ok_or("M3: missing bridge")?;
+        bridge
+            .send(&json!({"action":"advance_clock","milliseconds":120_000}))
+            .await?;
+        let advanced = bridge.expect("bridge.clock_advanced").await?;
+        if advanced["milliseconds"] != 120_000 {
+            return Err("M3: invalid idle clock receipt".into());
+        }
+        bridge.expect("bridge.ready").await?;
+        self.read_trace()?;
+        let closed: Vec<_> = self
+            .trace
+            .records
+            .iter()
+            .filter(|row| row["event"] == "live.closed")
+            .collect();
+        if closed.len() != 1 || closed[0]["reason"] != "idle" {
+            return Err("M3: expected exactly one healthy idle close".into());
+        }
+        Ok(())
+    }
+
     pub async fn close(&mut self) -> Result<(), String> {
         let mut failures = Vec::new();
+        if self.second_pcm.is_some() {
+            failures.extend(self.idle().await.err());
+        }
         if let Some(live) = &self.live {
             live.prepare_close();
         }
@@ -283,6 +320,7 @@ impl World {
             self.record_release("bridge", &closed);
             failures.extend(closed.err());
             failures.extend(self.read_trace().err());
+            failures.extend(self.retain_trace().err());
             for record in self.trace.records.iter().filter(|r| r["event"] == "bridge.error") {
                 failures.push(format!("M3 bridge: {}", record["reason"]));
             }
@@ -348,4 +386,13 @@ fn configure(command: &mut tokio::process::Command, root: &Path, port: u16, orig
     .map_err(|_| "M3: cannot configure Codex")?;
     command.arg("--sim-clock");
     Ok(())
+}
+
+async fn host_ready(host: &mut Process) -> Result<Value, String> {
+    let value = host.line().await?;
+    match value["event"].as_str() {
+        Some("host.ready") => Ok(value),
+        Some("host.failed") => Err("M3: pinned hassmic-host startup failed before readiness".into()),
+        _ => Err("M3: unexpected hassmic-host startup observation".into()),
+    }
 }

@@ -23,10 +23,30 @@ pub struct Received {
     pub failure: Option<String>,
 }
 
+enum Request {
+    Snapshot(oneshot::Sender<Received>),
+    Quiesce(oneshot::Sender<()>),
+}
+
+impl Request {
+    fn respond(self, observed: &watch::Sender<Received>) -> bool {
+        match self {
+            Self::Snapshot(reply) => {
+                let _ = reply.send(observed.borrow().clone());
+                false
+            }
+            Self::Quiesce(reply) => {
+                let _ = reply.send(());
+                true
+            }
+        }
+    }
+}
+
 pub struct Live {
     pub origin: String,
     pub observed: watch::Sender<Received>,
-    snapshots: mpsc::Sender<oneshot::Sender<Received>>,
+    snapshots: mpsc::Sender<Request>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), String>>,
     closing: Arc<AtomicBool>,
@@ -83,10 +103,21 @@ impl Live {
     pub fn prepare_close(&self) {
         self.closing.store(true, Ordering::Release);
     }
+    pub async fn quiesce(&self) -> Result<(), String> {
+        let (reply, received) = oneshot::channel();
+        self.snapshots
+            .send(Request::Quiesce(reply))
+            .await
+            .map_err(|_| "M3: media owner ended")?;
+        tokio::time::timeout(Duration::from_secs(2), received)
+            .await
+            .map_err(|_| "M3: media quiesce deadline")?
+            .map_err(|_| "M3: media did not quiesce".into())
+    }
     pub async fn snapshot(&self) -> Result<u64, String> {
         let (reply, received) = oneshot::channel();
         self.snapshots
-            .send(reply)
+            .send(Request::Snapshot(reply))
             .await
             .map_err(|_| "M3 mute: Live observer ended")?;
         let state = tokio::time::timeout(Duration::from_secs(2), received)
@@ -117,7 +148,7 @@ async fn session(
     process: &mut Process,
     wire: watch::Sender<Ledger>,
     observed: &watch::Sender<Received>,
-    requests: mpsc::Receiver<oneshot::Sender<Received>>,
+    requests: mpsc::Receiver<Request>,
 ) -> Result<(), String> {
     let offer = process.expect("provider.offer").await?;
     let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
@@ -142,12 +173,18 @@ async fn replay(
     process: &mut Process,
     wire: watch::Sender<Ledger>,
     observed: &watch::Sender<Received>,
-    mut requests: mpsc::Receiver<oneshot::Sender<Received>>,
+    mut requests: mpsc::Receiver<Request>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut frames = 0;
     let mut phase = 0;
+    let mut quiesced = false;
     loop {
+        if quiesced {
+            let request = requests.recv().await.ok_or("M3: media control ended")?;
+            request.respond(observed);
+            continue;
+        }
         drive(peer, deadline).await?;
         while peer.pop_text().is_some() {}
         while peer.pop_audio().is_some() {
@@ -158,9 +195,11 @@ async fn replay(
             state.active = true;
         });
         while let Ok(reply) = requests.try_recv() {
-            let _ = reply.send(observed.borrow().clone());
+            quiesced |= reply.respond(observed);
         }
-        respond(peer, process, &wire, observed, frames, &mut phase).await?;
+        if !quiesced {
+            respond(peer, process, &wire, observed, frames, &mut phase).await?;
+        }
     }
 }
 
