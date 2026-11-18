@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
-
+mod shared;
 pub const GATES: &[(&str, &str)] = &[
     ("format", "fmt-check"),
     ("lint-rust", "lint-rust"),
@@ -22,8 +22,7 @@ pub const GATES: &[(&str, &str)] = &[
 
 const PREFIX: &str = "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\npermissions:\n  contents: read\ndefaults:\n  run:\n    shell: sh\njobs:\n";
 
-// This intentionally accepts only the reviewed, explicit job grammar. YAML
-// aliases, matrices, conditional gates and arbitrary shell are not equivalent.
+// Only the reviewed job grammar is accepted; aliases, matrices and conditional gates are not equivalent.
 fn job(name: &str, target: &str) -> String {
     let mut block = format!(
         "  {name}:\n    name: {name}\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n      - uses: ./.github/actions/setup\n        with:\n          target: {target}\n      - name: {name}\n        run: make {target}\n"
@@ -244,6 +243,7 @@ fn check_workflows() -> Result<(), String> {
 pub fn run() -> Result<(), String> {
     let makefile = fs::read_to_string("Makefile").map_err(|error| format!("Makefile: {error}"))?;
     let workflow = fs::read_to_string(".github/workflows/ci.yml").map_err(|error| format!("ci.yml: {error}"))?;
+    let workflow = shared::expand(&workflow.replace("\r\n", "\n"))?;
     evaluate(&makefile.replace("\r\n", "\n"), &workflow.replace("\r\n", "\n"))?;
     check_workflows()?;
     println!("ci-parity: ok (16 checks)");

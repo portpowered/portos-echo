@@ -219,22 +219,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           target: test-sim
-      - name: Host build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: .cache/hassmic-host
-          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}
-      - name: Build pinned hassmic-host
-        run: make hassmic-host
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ~/.cache/portos-echo/codex
-          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
-      - name: Provision verified pinned Codex
-        run: sh scripts/codex-app-server.sh
-      - name: Enable isolated Codex network namespace
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sim: 'true'
       - name: test-sim
         run: make test-sim
   test-concurrency:
