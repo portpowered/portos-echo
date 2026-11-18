@@ -34,6 +34,7 @@ pub enum Command {
 #[derive(Default)]
 struct State {
     commands: Vec<Command>,
+    capture_failsafe: Option<u32>,
     initial_mute: Option<()>,
     mute_drain: Option<Arc<Mutex<bool>>>,
     events: VecDeque<LinkEvent<FakeRun>>,
@@ -51,6 +52,12 @@ struct State {
 #[derive(Clone, Default)]
 pub struct Observer(Arc<Mutex<State>>);
 impl Observer {
+    /// Last successfully admitted device watchdog, in seconds.
+    #[must_use]
+    pub fn capture_failsafe(&self) -> Option<u32> {
+        lock(&self.0).capture_failsafe
+    }
+
     /// Script an explicit-end failure without changing capture or playback.
     pub fn end_failure(&self, error: Error) {
         lock(&self.0).end_failure = Some(error);
@@ -323,7 +330,9 @@ impl EchoLink for FakeLink {
         std::future::ready(if failsafe_seconds == 0 || failsafe_seconds > i32::MAX as u32 {
             Err(Error::InvalidOptions)
         } else {
-            lock(&self.observer.0).commands.push(Command::Capture);
+            let mut state = lock(&self.observer.0);
+            state.capture_failsafe = Some(failsafe_seconds);
+            state.commands.push(Command::Capture);
             Ok(())
         })
     }

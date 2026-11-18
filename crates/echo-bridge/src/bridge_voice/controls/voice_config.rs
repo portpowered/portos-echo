@@ -203,6 +203,33 @@ pub(super) mod tests {
 
     mod voice_context_tests;
 
+    #[test]
+    fn configured_capture_watchdog_covers_wait_work_and_playback_with_saturation() {
+        for (maximum, response, played, expected) in [
+            (600, 30, 5, 605),
+            (60, 90, 5, 95),
+            (3, 3, 5, 8),
+            (2_147_483_647, 30, 5, 2_147_483_647),
+            (600, u64::MAX, 5, 2_147_483_647),
+            (600, 30, u64::MAX, 2_147_483_647),
+        ] {
+            let mut prepared = configured();
+            prepared.config.voice.session_max_seconds = maximum;
+            prepared.config.agent.task_deadline_seconds = response;
+            let mut options = prepared.options(None, vec![]);
+            options.voice.session.played_timeout = Duration::from_secs(played);
+            assert_eq!(options.capture_failsafe_seconds(), expected);
+            // Between-wakes reuse and controller listen are independent timers.
+            prepared.config.live.session_idle_seconds = 300;
+            prepared.config.voice.session_listen_seconds = 3;
+            let mut options = prepared.options(None, vec![]);
+            options.voice.session.played_timeout = Duration::from_secs(played);
+            assert_eq!(options.capture_failsafe_seconds(), expected);
+            options.delegation = None;
+            assert_eq!(options.capture_failsafe_seconds(), 30);
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn configured_call_options_include_context_and_preserve_policy() {
         let prepared = configured().with_mcp_epoch(Some(123));

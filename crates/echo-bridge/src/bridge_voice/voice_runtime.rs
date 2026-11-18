@@ -1,5 +1,5 @@
 //! Presentation lifetime encloses authenticated device and conversation cleanup.
-use super::{HostOptions, ServeOptions, voice_view::View, with_device};
+use super::{HostOptions, ServeOptions, voice_host::with_capture, voice_view::View};
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_config::{LiveMode, ScreenConfig};
 use echo_link::LinkConnector;
@@ -16,6 +16,18 @@ pub struct RuntimeOptions<'a> {
     pub delegation: Option<&'a echo_config::BridgeConfig>,
     pub utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
     pub mcp_epoch: Option<u64>,
+}
+
+impl RuntimeOptions<'_> {
+    /// Device stalled-progress protection exceeds either waiting or active work.
+    /// It is separate from controller idle policy and between-wakes call reuse.
+    pub(super) fn capture_failsafe_seconds(&self) -> u32 {
+        let Some(config) = self.delegation else { return 30 };
+        let seconds = u64::from(config.voice.session_max_seconds)
+            .max(self.voice.session.response_timeout.as_secs())
+            .saturating_add(self.voice.session.played_timeout.as_secs());
+        u32::try_from(seconds.min(i32::MAX as u64)).unwrap_or(i32::MAX as u32)
+    }
 }
 
 /// Compose the Codex voice service with the existing screen, health and trace
@@ -98,9 +110,11 @@ async fn work<C: LinkConnector, P: MediaPeer>(
     tokio::pin!(cancelled);
     let termination = super::voice_kill::Termination::default();
     let kill_path = options.voice.kill_path;
-    let result = with_device(
+    let failsafe_seconds = options.capture_failsafe_seconds();
+    let result = with_capture(
         options.host,
         connector,
+        failsafe_seconds,
         cancelled.as_mut(),
         async |io, client, stopping| {
             let mut tools = options.delegation.map(|config| super::voice_tools::Tools::new(config, options.utc_day));
