@@ -28,10 +28,12 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
             .windows(2)
             .all(|p| p[0]["seq"].as_u64() < p[1]["seq"].as_u64())
     );
-    assert_eq!(
-        case.playback,
-        Some(json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0}))
-    );
+    let playback = case.playback.as_ref().unwrap();
+    assert_eq!(playback["event"], "host.ack");
+    assert_eq!(playback["pcm_bytes"], 9600);
+    assert!(playback["nonzero_bytes"].as_u64().unwrap() > 0);
+    assert!(playback["nonzero_samples"].as_u64().unwrap() >= 2400);
+    assert!(playback["audible_samples"].as_u64().unwrap() >= 2400);
     owners.closed().await;
 }
 

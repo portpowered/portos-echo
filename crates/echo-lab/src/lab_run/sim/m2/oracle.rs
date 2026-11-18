@@ -97,6 +97,7 @@ pub fn check(measured: &Value) -> Result<(), String> {
         trace(measured, &[json!("auth.relink_required"), json!("run.refused")], true)?;
         if measured["runtime"] == "codex" {
             codex_pcm(records)?;
+            super::super::m4::wire::audible_pcm(&measured["reply_pcm"])?;
         }
     } else {
         rejection(measured, records)?;
@@ -114,7 +115,7 @@ fn codex_pcm(records: &[Value]) -> Result<(), String> {
         || microphone["dropped_chunks"] != 0
         || microphone["tail_samples"] != 0
         || reply["outcome"] != "played"
-        || reply["frames"].as_u64().is_none_or(|count| count < 1)
+        || reply["frames"] != 10
         || reply["frames"] != reply["received_frames"]
         || reply["dropped_frames"] != 0
     {

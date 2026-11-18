@@ -75,17 +75,10 @@ impl Timing {
         let measured = serde_json::json!({"pcm_bytes":self.played,
             "nonzero_samples":self.nonzero_samples,"audible_samples":self.audible_samples,
             "host":host});
-        if self.failure.is_some()
-            || self.played != 9600
-            || self.nonzero_samples < 2400
-            || self.audible_samples < 2400
-            || host["pcm_bytes"] != 9600
-            || host["nonzero_bytes"].as_u64().is_none_or(|n| n == 0)
-        {
-            return Err(format!(
-                "wire: expected audible 9600-byte reply with >=2400 signed samples; observed {measured}"
-            ));
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
         }
+        audible_measurement(&measured)?;
         Ok(measured)
     }
 
@@ -99,6 +92,35 @@ impl Timing {
             .checked_sub(endpoint)
             .ok_or_else(|| "wire: reply precedes utterance endpoint".into())
     }
+}
+
+/// Validate retained observations too: missing counters never count as silence
+/// or success, and byte-level host evidence cannot substitute for signed PCM.
+pub fn audible_measurement(measured: &serde_json::Value) -> Result<(), String> {
+    audible_pcm(measured)?;
+    let host = &measured["host"];
+    if host["pcm_bytes"] != 9600 || host["nonzero_bytes"].as_u64().is_none_or(|n| !(1..=9600).contains(&n)) {
+        return Err(format!(
+            "wire: expected audible 9600-byte host playback; observed {host}"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate signed samples at the emitted reply boundary, independently of the sink.
+pub fn audible_pcm(measured: &serde_json::Value) -> Result<(), String> {
+    let nonzero = measured["nonzero_samples"].as_u64();
+    let audible = measured["audible_samples"].as_u64();
+    if measured["pcm_bytes"] != 9600
+        || nonzero.is_none_or(|n| !(2400..=4800).contains(&n))
+        || audible.is_none_or(|n| !(2400..=4800).contains(&n))
+        || audible > nonzero
+    {
+        return Err(format!(
+            "wire: expected audible 9600-byte reply with >=2400 signed samples; observed {measured}"
+        ));
+    }
+    Ok(())
 }
 
 fn pcm(event: &Event, rate: u32) -> bool {

@@ -275,6 +275,7 @@ async fn exercise() {
     state.start_bridge(&options, port).await.unwrap();
     wake.send(()).unwrap();
     let settled = state.settle().await;
+    let timing = state.relay.as_ref().unwrap().timing();
     let observed = state.close().await.unwrap();
     assert_eq!(settled, Ok(()), "{:?}", state.trace.records);
     assert!(provider::valid(&observed), "{observed}");
@@ -282,7 +283,9 @@ async fn exercise() {
     assert_eq!(frames, 10, "finite synthetic reply frames");
     assert!(energy > 480 * 1000_i64.pow(2), "decoded reply energy {energy}");
     let measured = json!({"case":"success", "runtime":"codex", "calls":1, "provider_wire":true, "refreshes":0,
-        "trace":state.trace.records, "frames":state.frames.lock().unwrap().clone()});
+        "trace":state.trace.records, "frames":state.frames.lock().unwrap().clone(),
+        "reply_pcm":{"pcm_bytes":timing.played,"nonzero_samples":timing.nonzero_samples,
+            "audible_samples":timing.audible_samples}});
     assert_eq!(oracle::check(&measured), Ok(()), "{measured}");
     let replies: Vec<_> = state
         .trace

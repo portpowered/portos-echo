@@ -290,3 +290,36 @@ fn signed_reply_samples_reject_absent_silent_threshold_only_short_and_wrong_size
         }
     }
 }
+
+#[test]
+fn signed_measurements_require_both_counts_with_exact_byte_and_sample_bounds() {
+    let valid = serde_json::json!({"pcm_bytes":9600,"nonzero_samples":2400,"audible_samples":2400});
+    assert_eq!(audible_pcm(&valid), Ok(()));
+    for field in ["pcm_bytes", "nonzero_samples", "audible_samples"] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(audible_pcm(&missing).is_err(), "missing {field}");
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(-1),
+            serde_json::json!(2400.5),
+        ] {
+            let mut malformed = valid.clone();
+            malformed[field] = value;
+            assert!(audible_pcm(&malformed).is_err(), "invalid {field}");
+        }
+    }
+    for (bytes, nonzero, audible, pass) in [
+        (9598, 4800, 4800, false),
+        (9602, 4800, 4800, false),
+        (9600, 2399, 2399, false),
+        (9600, 4801, 4800, false),
+        (9600, 2400, 2401, false),
+        (9600, 4800, 2399, false),
+        (9600, 4800, 4801, false),
+        (9600, 4800, 4800, true),
+    ] {
+        let value = serde_json::json!({"pcm_bytes":bytes,"nonzero_samples":nonzero,"audible_samples":audible});
+        assert_eq!(audible_pcm(&value).is_ok(), pass, "{value}");
+    }
+}
