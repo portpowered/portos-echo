@@ -4,6 +4,9 @@ inputs:
   target:
     description: Make target being provisioned
     required: true
+  sim:
+    description: Provision pinned simulation dependencies
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -88,3 +91,6 @@ runs:
       with:
         tool: cargo-llvm-cov@0.9.1
         fallback: none
+    - name: Simulation dependencies
+      if: inputs.sim == 'true'
+      uses: ./.github/actions/sim

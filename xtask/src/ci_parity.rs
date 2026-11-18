@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
+mod shared;
 pub const GATES: &[(&str, &str)] = &[
     ("format", "fmt-check"),
     ("lint-rust", "lint-rust"),
@@ -19,9 +20,7 @@ pub const GATES: &[(&str, &str)] = &[
     ("build-echo", "build-echo"),
 ];
 const PREFIX: &str = "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\npermissions:\n  contents: read\ndefaults:\n  run:\n    shell: sh\njobs:\n";
-
-// This intentionally accepts only the reviewed, explicit job grammar. YAML
-// aliases, matrices, conditional gates and arbitrary shell are not equivalent.
+// Only the reviewed job grammar is accepted; aliases, matrices and conditional gates are not equivalent.
 fn job(name: &str, target: &str) -> String {
     let timeout = match name {
         "test-unit" => 15,
@@ -244,6 +243,7 @@ fn check_workflows() -> Result<(), String> {
 pub fn run() -> Result<(), String> {
     let makefile = fs::read_to_string("Makefile").map_err(|error| format!("Makefile: {error}"))?;
     let workflow = fs::read_to_string(".github/workflows/ci.yml").map_err(|error| format!("ci.yml: {error}"))?;
+    let workflow = shared::expand(&workflow.replace("\r\n", "\n"))?;
     evaluate(&makefile.replace("\r\n", "\n"), &workflow.replace("\r\n", "\n"))?;
     check_workflows()?;
     println!("ci-parity: ok (16 checks)");

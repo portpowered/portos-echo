@@ -119,6 +119,14 @@ mod tests {
     fn parity_cli_accepts_matching_contract_and_rejects_drift() {
         let session = Session::new();
         session.write("Makefile", include_str!("../../Makefile"));
+        session.write(
+            ".github/actions/setup/action.yml",
+            include_str!("../../.github/actions/setup/action.yml"),
+        );
+        session.write(
+            ".github/actions/sim/action.yml",
+            include_str!("../../.github/actions/sim/action.yml"),
+        );
         let (code, text) = session.run(&["ci-parity"]);
         assert_eq!(code, 1);
         assert!(text.contains("ci.yml:"));
@@ -138,6 +146,14 @@ mod tests {
     fn parity_cli_secondary_workflows_reject_and_recover() {
         let session = Session::new();
         session.write("Makefile", include_str!("../../Makefile"));
+        session.write(
+            ".github/actions/setup/action.yml",
+            include_str!("../../.github/actions/setup/action.yml"),
+        );
+        session.write(
+            ".github/actions/sim/action.yml",
+            include_str!("../../.github/actions/sim/action.yml"),
+        );
         session.write(
             ".github/workflows/ci.yml",
             include_str!("../../.github/workflows/ci.yml"),
