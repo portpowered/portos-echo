@@ -97,6 +97,7 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
     crate::config_codex::validate(&config.codex)?;
+    crate::config_codex::validate_voice(config)?;
     crate::config_muse::validate(config)?;
     config.chatgpt_auth.validate()?;
     validate_mcp(&config.mcp)?;

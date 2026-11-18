@@ -9,6 +9,7 @@ pub(super) struct Source {
     pub muted: bool,
     pub reply: ReplyAudio,
     pub played: bool,
+    pub delegation: Delegation,
     pub stats: Stats,
 }
 
@@ -20,6 +21,7 @@ impl Source {
             muted,
             reply: ReplyAudio::new(lead_ms)?,
             played: false,
+            delegation: Delegation::default(),
             stats: Stats::default(),
         })
     }
@@ -53,11 +55,24 @@ impl Source {
         Ok(false)
     }
 
+    /// WebRTC media is continuous: quiet frames keep arriving after the
+    /// assistant transcript is done and the reply was flushed. They are counted
+    /// as received but not queued; audible late media still fails closed
+    /// rather than truncating the reply silently, except an abandoned
+    /// delegated answer.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
-        self.reply.push(frame)?;
+        let dropped = self.delegation.abandoned || quiet(frame);
+        if !(self.reply.finished() && dropped) {
+            self.reply.push(frame)?;
+        }
         self.stats.reply_received += 1;
         Ok(())
     }
+}
+
+/// Peak at most 64 (about -54 dBFS): decoded silence, not speech.
+fn quiet(frame: &PcmFrame) -> bool {
+    frame.iter().all(|sample| sample.unsigned_abs() <= 64)
 }
 
 /// Preserve playback ownership until the device acknowledges an interrupted
@@ -78,5 +93,51 @@ pub(super) async fn settle_cut(
         Some(Ok(_)) => Ok(()),
         Some(Err(error)) => Err(error.into()),
         None => Err(Error::Wyoming),
+    }
+}
+
+/// Delegated Codex turns and the assistant utterance they bracket. An utterance
+/// begun while a turn runs is the filler ("one sec"); its done holds the reply
+/// open for the answer spoken once the turn completes. Notification order
+/// between the filler's done and turn/completed varies between calls, so the
+/// utterance is classified by its first delta, not by its done.
+#[derive(Default)]
+pub struct Delegation {
+    turns: usize,
+    filler: Option<bool>,
+    held: bool,
+    abandoned: bool,
+}
+
+impl Delegation {
+    pub fn started(&mut self) {
+        self.turns += 1;
+    }
+
+    pub fn completed(&mut self) {
+        self.turns = self.turns.saturating_sub(1);
+    }
+
+    pub fn spoke(&mut self) {
+        let busy = self.turns > 0;
+        self.filler.get_or_insert(busy);
+    }
+
+    /// True when this assistant done ends the reply rather than a filler.
+    pub fn answered(&mut self) -> bool {
+        self.held = self.filler.take().unwrap_or(false);
+        !self.held
+    }
+
+    /// A filler done is holding the reply open for a delegated answer.
+    #[must_use]
+    pub fn held(&self) -> bool {
+        self.held && !self.abandoned
+    }
+
+    /// The response deadline passed first: the reply ends after the filler and
+    /// the answer, if it still comes, is dropped instead of failing the run.
+    pub fn abandon(&mut self) {
+        self.abandoned = true;
     }
 }

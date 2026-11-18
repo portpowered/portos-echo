@@ -320,3 +320,151 @@ async fn voice_late_media_is_an_error_instead_of_silent_reply_truncation() {
     assert_eq!(frames(&observer).len(), 0);
     assert!(observer.commands().contains(&Command::Cut(0)));
 }
+
+#[tokio::test(start_paused = true)]
+async fn voice_quiet_webrtc_media_after_done_is_not_queued_and_audible_media_still_fails() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    tx.send(Ok(done())).await.unwrap();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        options(),
+        std::future::pending(),
+        |_| Ok(()),
+    ));
+    pending(work.as_mut()).await;
+    for frame in [[0; 320], [64; 320], [-64; 320]] {
+        tx.send(Ok(MediaEvent::Audio(Box::new(frame)))).await.unwrap();
+        pending(work.as_mut()).await;
+    }
+    assert_eq!(frames(&observer).len(), 0);
+    tx.send(Ok(MediaEvent::Audio(Box::new([65; 320])))).await.unwrap();
+    assert_eq!(work.await, Err(Error::Audio));
+    assert_eq!(frames(&observer).len(), 0);
+}
+
+fn turn(started: bool) -> MediaEvent {
+    let (thread, turn) = ("thread-1".to_owned(), "turn-1".to_owned());
+    MediaEvent::Control(if started {
+        Event::TurnStarted { thread, turn }
+    } else {
+        Event::TurnCompleted { thread, turn }
+    })
+}
+
+fn said(text: &str) -> MediaEvent {
+    MediaEvent::Control(Event::Transcript {
+        role: "assistant".into(),
+        text: text.into(),
+        done: false,
+    })
+}
+
+async fn send(tx: &mpsc::Sender<Result<MediaEvent, Error>>, events: impl IntoIterator<Item = MediaEvent>) {
+    for event in events {
+        tx.send(Ok(event)).await.unwrap();
+    }
+}
+
+fn audible(count: usize) -> Vec<MediaEvent> {
+    (0..count).map(|_| MediaEvent::Audio(Box::new([123; 320]))).collect()
+}
+
+async fn tick<F: Future>(mut work: Pin<&mut F>, frames: usize) {
+    for _ in 0..frames {
+        tokio::time::advance(Duration::from_millis(20)).await;
+        pending(work.as_mut()).await;
+    }
+}
+
+/// Live calls showed both orders: the filler's done before turn/completed, and
+/// turn/completed while the filler was still being spoken.
+async fn delegated_answer(filler: Vec<MediaEvent>) -> (u64, u64) {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        options(),
+        std::future::pending(),
+        |_| Ok(()),
+    ));
+    send(&tx, filler).await;
+    pending(work.as_mut()).await;
+    // Audible media after the filler is still the reply, not late media.
+    send(&tx, audible(12)).await;
+    pending(work.as_mut()).await;
+    assert_eq!(frames(&observer).len(), 10);
+    send(&tx, [said("It's three."), done()]).await;
+    tick(work.as_mut(), 2).await;
+    // Only the answer's done ends the reply: every frame plays, then audio-stop.
+    assert_eq!(frames(&observer).len(), 12);
+    assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    observer.finish(Ok(()));
+    let stats = work.await.unwrap();
+    (stats.reply_received, stats.reply_sent)
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_filler_done_before_the_delegated_turn_completes_keeps_the_reply_open() {
+    let filler = vec![turn(true), said("One sec."), done(), turn(false)];
+    assert_eq!(delegated_answer(filler).await, (12, 12));
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_filler_done_after_the_delegated_turn_completes_keeps_the_reply_open() {
+    let filler = vec![turn(true), said("One sec."), turn(false), done()];
+    assert_eq!(delegated_answer(filler).await, (12, 12));
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_without_failing() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    send(&tx, [turn(true), said("One sec."), done()]).await;
+    send(&tx, audible(12)).await;
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        options(),
+        std::future::pending(),
+        |_| Ok(()),
+    ));
+    pending(work.as_mut()).await;
+    tokio::time::advance(Duration::from_secs(9)).await;
+    pending(work.as_mut()).await;
+    // The filler played up to the resampler's held tail; the reply stays open.
+    assert_eq!(frames(&observer).len(), 11);
+    assert_ne!(observer.commands().last(), Some(&Command::Stop));
+    tokio::time::advance(Duration::from_secs(1)).await;
+    pending(work.as_mut()).await;
+    tick(work.as_mut(), 1).await;
+    // The deadline flushes the tail and ends the reply instead of failing.
+    assert_eq!(frames(&observer).len(), 12);
+    assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    // The abandoned answer arriving late is dropped, not a fatal late-media error.
+    send(&tx, audible(1)).await;
+    pending(work.as_mut()).await;
+    observer.finish(Ok(()));
+    let stats = work.await.unwrap();
+    assert_eq!((stats.reply_received, stats.reply_sent), (13, 12));
+}

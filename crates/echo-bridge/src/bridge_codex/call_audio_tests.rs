@@ -112,7 +112,7 @@ async fn reply_flush_retains_exact_pcm_duration_and_never_implies_played() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn reply_paces_ten_frames_then_twenty_ms_and_does_not_catch_up() {
+async fn reply_paces_ten_frames_then_twenty_ms_and_restarts_the_lead_after_the_device_ran_dry() {
     let mut reply = ReplyAudio::new(200).unwrap();
     for _ in 0..14 {
         reply.push(&[0; 320]).unwrap();
@@ -126,10 +126,78 @@ async fn reply_paces_ten_frames_then_twenty_ms_and_does_not_catch_up() {
     assert_eq!(reply.next_frame().await.unwrap().len(), 960);
     assert_eq!(Instant::now() - start, Duration::from_millis(20));
     tokio::time::advance(Duration::from_secs(1)).await;
-    assert_eq!(reply.next_frame().await.unwrap().len(), 960);
     let late = Instant::now();
-    assert_eq!(reply.next_frame().await.unwrap().len(), 960);
-    assert_eq!(Instant::now() - late, Duration::from_millis(20));
+    for _ in 0..3 {
+        assert_eq!(reply.next_frame().await.unwrap().len(), 960);
+    }
+    assert_eq!(Instant::now(), late);
+    assert!(reply.drained());
+}
+
+#[tokio::test(start_paused = true)]
+async fn real_time_reply_goes_out_on_arrival_without_a_prebuffer_delay() {
+    let mut reply = ReplyAudio::new(200).unwrap();
+    let start = Instant::now();
+    let mut sent = Vec::new();
+    for _ in 0..60 {
+        reply.push(&[0; 320]).unwrap();
+        while reply.has_frames() {
+            reply.next_frame().await.unwrap();
+            sent.push(Instant::now() - start);
+        }
+        tokio::time::advance(Duration::from_millis(20)).await;
+    }
+    // The converter holds one frame of filter delay; 59 left for playback.
+    assert_eq!(sent.len(), 59);
+    // Time to first audio is not delayed by the lead: each frame leaves as it arrives.
+    for (index, at) in sent.iter().enumerate() {
+        assert_eq!(*at, Duration::from_millis(20 * (index as u64 + 1)));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_burst_after_a_stall_is_sent_at_most_the_lead_ahead_of_the_clock() {
+    let mut reply = ReplyAudio::new(200).unwrap();
+    for _ in 0..31 {
+        reply.push(&[0; 320]).unwrap();
+    }
+    let start = Instant::now();
+    let mut sent = Vec::new();
+    while reply.has_frames() {
+        reply.next_frame().await.unwrap();
+        sent.push(Instant::now() - start);
+    }
+    assert_eq!(sent.len(), 30);
+    // Ten frames (the 200 ms lead) go at once, then one per 20 ms of clock.
+    assert_eq!(sent[9], Duration::ZERO);
+    for (index, at) in sent.iter().enumerate().skip(10) {
+        assert_eq!(*at, Duration::from_millis(20 * (index as u64 - 9)));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_wakeups_catch_up_on_the_audio_clock_instead_of_stretching_frames() {
+    let mut reply = ReplyAudio::new(200).unwrap();
+    for _ in 0..61 {
+        reply.push(&[0; 320]).unwrap();
+    }
+    reply.finish().unwrap();
+    let start = Instant::now();
+    let mut count = 0_u64;
+    while let Some(frame) = reply.next_frame().await {
+        assert_eq!(frame.len(), 960);
+        count += 1;
+        // A coarse OS timer: every send is followed by an 11 ms stall.
+        tokio::time::advance(Duration::from_millis(11)).await;
+    }
+    assert_eq!(count, 61);
+    // An end-relative pacer takes 61 * 31 ms; the clock keeps real time.
+    assert!(
+        Instant::now() - start <= Duration::from_millis(20 * 61),
+        "{:?}",
+        Instant::now() - start
+    );
+    assert!(reply.drained());
 }
 
 #[tokio::test(start_paused = true)]
