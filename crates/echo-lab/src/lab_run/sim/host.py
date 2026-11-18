@@ -59,7 +59,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from wsl_distro import resolve_wsl_distro
 from wsl_host import LauncherError, LauncherChild, HostCancelled
 
-# Both T3 launchers share the native transport; the Linux Host stays direct.
 from wsl_relay import observations, guest, diagnostic_tail
 
 def launcher_input(events):
@@ -459,9 +458,8 @@ class Host:
                 raise RuntimeError("host thread cleanup failed")
         self.closed = True
 def host_input(host, events):
-    # Read EOF independently of log/FIFO waits. Only the main owner closes the
-    # host: interrupt its wait, then let its finally stop and collect the group
-    # before the Windows client's retained four-second deadline expires.
+    # Read EOF independently; the main owner interrupts waits and collects the
+    # host group before the Windows client's retained four-second deadline.
     clean = False
     try:
         clean = launcher_input(events)

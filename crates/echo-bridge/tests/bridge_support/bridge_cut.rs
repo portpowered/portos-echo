@@ -6,7 +6,7 @@ use std::io::Write;
 mod cut_receipt;
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
-async fn bridge_cut_duplicate_cancel_emits_one_stop_and_waits_for_played() {
+async fn bridge_cut_duplicate_cancel_emits_one_flush_and_waits_for_played() {
     cut_reply(3, 2).await;
 }
 #[tokio::test]
@@ -192,10 +192,11 @@ async fn drain_to_stop(stream: &mut bridge_short::Satellite) -> u16 {
     let mut sent = 0;
     loop {
         let (header, payload) = read(stream).await;
-        if header["type"] == "hassmic-continue" {
-            assert_eq!(payload, Vec::<u8>::new());
-            let (stop, payload) = read(stream).await;
-            assert_eq!(stop["type"], "audio-stop");
+        if header["type"] == "hassmic-flush" {
+            assert_eq!(
+                header,
+                json!({"type":"hassmic-flush","data":null,"data_length":0,"payload_length":0})
+            );
             assert_eq!(payload, Vec::<u8>::new());
             break;
         }

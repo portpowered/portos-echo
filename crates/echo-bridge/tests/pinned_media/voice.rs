@@ -162,7 +162,7 @@ async fn settle(
         end,
         json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0})
     );
-    assert!(payload.is_empty());
+    assert_eq!(payload, [] as [u8; 0]);
     let mut pending = false;
     let mut completed = false;
     // Played can precede the delayed mouth boundary. Keep the same clock moving,

@@ -50,6 +50,10 @@ fn expected_tag(event: &WyomingEvent) -> &str {
         WyomingEvent::Played(_) => "played",
         WyomingEvent::Ping(_) => "ping",
         WyomingEvent::Pong(_) => "pong",
+        WyomingEvent::Other(kind, data) if kind == "hassmic-end" => {
+            assert_eq!(data, &json!({}));
+            "hassmic-end"
+        }
         _ => "unexpected",
     }
 }
@@ -63,6 +67,7 @@ fn fixture_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     paths.retain(|p| p.extension().is_some_and(|e| e == "jsonl"));
     paths.sort();
     let mut total = 0;
+    let mut other = 0;
     let mut stdout = std::io::stdout().lock();
     for path in &paths {
         let mut count = 0;
@@ -83,6 +88,7 @@ fn fixture_round_trip() -> Result<(), Box<dyn std::error::Error>> {
             decoder.finish()?;
             let typed = frames[0].typed()?;
             assert_eq!(expected_tag(&typed), event.header.r#type);
+            other += usize::from(matches!(typed, WyomingEvent::Other(_, _)));
             let wire = serde_json::to_value(&typed)?;
             assert_eq!(wire, json!({"type":event.header.r#type,"data":event.header.data}));
             assert_eq!(serde_json::from_value::<WyomingEvent>(wire)?, typed);
@@ -91,10 +97,10 @@ fn fixture_round_trip() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(stdout, "{}: lines={count}", path.file_name().unwrap().display())?;
         total += count;
     }
-    assert_eq!((paths.len(), total), (9, 214));
+    assert_eq!((paths.len(), total, other), (9, 215, 4));
     writeln!(
         stdout,
-        "fixture_round_trip: files={} lines={total} typed={total} other=0",
+        "fixture_round_trip: files={} lines={total} typed={total} other={other}",
         paths.len()
     )?;
     Ok(())
