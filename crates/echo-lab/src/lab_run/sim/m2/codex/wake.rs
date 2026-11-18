@@ -175,3 +175,60 @@ pub(super) async fn acknowledge(stream: &mut TcpStream) {
         }
     }
 }
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_wake_earcon_reuses_live_call_with_distinct_chimes_and_no_connected_republication() {
+    tokio::time::timeout(
+        DEADLINE,
+        Box::pin(async {
+            let mut owner = super::lifecycle::Owner::start(120, true).await;
+            owner.run(1).await;
+            owner.run(2).await;
+            let trace = owner.trace();
+            let chimes: Vec<_> = trace
+                .records
+                .iter()
+                .filter(|r| r["event"] == "wake.earcon_played")
+                .collect();
+            assert_eq!(chimes.len(), 2);
+            for (index, chime) in chimes.iter().enumerate() {
+                assert_eq!(chime["run_id"], format!("run-{}", index + 1));
+                assert_eq!(chime["duration_ms"], 160);
+            }
+            assert_eq!(
+                trace
+                    .records
+                    .iter()
+                    .filter(|r| r["event"] == "call.live_connected")
+                    .count(),
+                1
+            );
+            assert_eq!(trace.records.iter().filter(|r| r["event"] == "reply.played").count(), 2);
+            writeln!(std::io::stdout(), "T3-WAKE reused {}", json!(chimes)).unwrap();
+            owner.close(2).await;
+        }),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_wake_earcon_call_refusal_and_bad_sdp_with_missing_played_cleanup_without_success() {
+    tokio::time::timeout(
+        DEADLINE,
+        Box::pin(async {
+            for fault in ["call_refused", "malformed_sdp"] {
+                super::lifecycle::failed_call(fault, true).await;
+                writeln!(
+                    std::io::stdout(),
+                    "T3-WAKE {fault}: no connected/chime/reply success; child, socket and home released"
+                )
+                .unwrap();
+            }
+        }),
+    )
+    .await
+    .unwrap();
+}

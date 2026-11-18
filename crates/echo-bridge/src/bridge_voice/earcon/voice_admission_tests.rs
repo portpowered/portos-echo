@@ -223,3 +223,112 @@ async fn idle_eof_and_ready_cancellation_fail_without_admitting_queued_wake() {
         assert_eq!(observer.commands(), [Command::Connect]);
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn wake_earcon_enabled_service_refuses_muted_killed_and_unconfirmed_traffic() {
+    for refusal in ["muted", "kill", "unconfirmed"] {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("kill");
+        if refusal == "kill" {
+            std::fs::write(&marker, b"invalid marker").unwrap();
+        }
+        let (stream, _server) = tokio::io::duplex(4096);
+        let (read, write) = tokio::io::split(stream);
+        let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+        let observer = Observer::default();
+        let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        let mut options = options();
+        options.session.muted = refusal == "muted";
+        options.kill_path = Some(&marker);
+        if refusal != "unconfirmed" {
+            observer.wake("refused", vec![]);
+        }
+        observer.microphone_dropped(7);
+        let stop = tokio::sync::Notify::new();
+        let mut drops = 0;
+        let result = service(
+            &mut client,
+            &mut io,
+            options,
+            async || -> Result<MemoryPeer, Error> { unreachable!("refused wake created peer") },
+            stop.notified(),
+            |notice| {
+                match notice {
+                    ServeNotice::Probe => stop.notify_one(),
+                    ServeNotice::Device(LinkEvent::MicrophoneDropped(count)) => drops += count,
+                    ServeNotice::Ready | ServeNotice::Kill(true) => (),
+                    _ => unreachable!("refused wake admitted or played"),
+                }
+                Ok(())
+            },
+            (None, None, true),
+        )
+        .await;
+        assert_eq!(result, Err(Error::Control));
+        assert_eq!(drops, 7);
+        let mut expected = vec![Command::Connect];
+        if refusal == "kill" {
+            expected.push(Command::FailRun(echo_link::RunFailure::KillSwitch));
+        }
+        expected.push(Command::Probe);
+        assert_eq!(observer.commands(), expected);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wake_earcon_admission_peer_deadline_cuts_without_success_or_connected() {
+    let (stream, _server) = tokio::io::duplex(4096);
+    let (read, write) = tokio::io::split(stream);
+    let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    observer.wake("deadline", vec![]);
+    let LinkEvent::Wake(run) = events.recv().await.unwrap().unwrap() else {
+        unreachable!()
+    };
+    let mut options = options();
+    options.connect_timeout = Duration::from_millis(40);
+    let mut listening = 0;
+    let mut peer = async || std::future::pending::<Result<MemoryPeer, Error>>().await;
+    let mut observe = |notice| {
+        assert!(matches!(notice, ServeNotice::Listening));
+        listening += 1;
+        Ok(())
+    };
+    let work = admitted(
+        (&client, &mut events, run),
+        &mut io,
+        &mut options,
+        &mut peer,
+        std::future::pending(),
+        &mut observe,
+        (None, || std::time::UNIX_EPOCH, None),
+    );
+    let remote = async {
+        while !observer.commands().iter().any(|c| matches!(c, Command::Cut(_))) {
+            tokio::time::advance(Duration::from_millis(20)).await;
+            tokio::task::yield_now().await;
+        }
+        observer.finish(Ok(()));
+    };
+    let (result, ()) = tokio::join!(super::super::earcon::scope(&client, true, work), remote);
+    assert_eq!(result, Err(Error::Deadline));
+    assert_eq!(listening, 1);
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Cut(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Start(..)))
+            .count(),
+        1
+    );
+}

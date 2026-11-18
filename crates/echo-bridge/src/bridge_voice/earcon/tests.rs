@@ -456,3 +456,45 @@ async fn wake_earcon_mute_during_negotiation_cuts_and_preserves_control_authorit
         1
     );
 }
+struct BlockedSink(tokio::sync::Notify);
+impl ReplySink for BlockedSink {
+    async fn send(&self, _: Vec<u8>) -> Result<(), echo_link::Error> {
+        self.0.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wake_earcon_backpressured_send_remains_cancellable_and_deadline_bounded() {
+    for cancelled in [false, true] {
+        let observer = Observer::default();
+        let client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        let context = Context::default();
+        let sink = BlockedSink(tokio::sync::Notify::new());
+        let origin = Instant::now();
+        let remote = async {
+            sink.0.notified().await;
+            if cancelled {
+                context.state().closing = true;
+                context.changed.notify_waiters();
+            }
+        };
+        let (result, ()) = tokio::join!(produce(&client, &sink, &context), remote);
+        assert_eq!(
+            result,
+            if cancelled {
+                Ok(Duration::ZERO)
+            } else {
+                Err(Error::Deadline)
+            }
+        );
+        assert!(context.state().completed.is_none());
+        assert_eq!(origin.elapsed(), if cancelled { Duration::ZERO } else { SETTLE });
+        let expected = if cancelled {
+            vec![Command::Connect, Command::Cut(0)]
+        } else {
+            vec![Command::Connect]
+        };
+        assert_eq!(observer.commands(), expected);
+    }
+}

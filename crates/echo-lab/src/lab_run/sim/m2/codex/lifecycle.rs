@@ -21,7 +21,7 @@ fn playout_receipts_keep_earcon_separate_and_reject_unknown_or_missing_sources()
 }
 use tokio::{net::TcpListener, sync::mpsc};
 
-struct Owner {
+pub(super) struct Owner {
     root: config::Root,
     output: tempfile::TempDir,
     bridge: Process,
@@ -35,7 +35,7 @@ struct Owner {
 }
 
 impl Owner {
-    async fn start(idle: u16) -> Self {
+    pub(super) async fn start(idle: u16, earcon: bool) -> Self {
         let options = super::super::tests::options();
         let root = config::Root::new().unwrap();
         let output = tempfile::tempdir().unwrap();
@@ -54,11 +54,12 @@ impl Owner {
         let text = std::fs::read_to_string(&path).unwrap();
         std::fs::write(
             path,
-            text.replace("session_idle_seconds = 0", &format!("session_idle_seconds = {idle}")),
+            text.replace("session_idle_seconds = 0", &format!("session_idle_seconds = {idle}"))
+                .replace("wake_earcon = false", &format!("wake_earcon = {earcon}")),
         )
         .unwrap();
         let (wake, requested) = mpsc::channel(1);
-        let satellite = tokio::spawn(satellite(listener, requested));
+        let satellite = tokio::spawn(satellite(listener, requested, earcon));
         let mut bridge = Process::start(&mut command).unwrap();
         let collected = bridge.observe_collection();
         bridge.expect("bridge.ready").await.unwrap();
@@ -77,7 +78,7 @@ impl Owner {
         }
     }
 
-    async fn run(&mut self, index: usize) {
+    pub(super) async fn run(&mut self, index: usize) {
         self.wake.send(()).await.unwrap();
         if index > 1 {
             self.provider.next_capture().await;
@@ -93,11 +94,11 @@ impl Owner {
             assert_eq!(self.screen.next().await.unwrap()["state"]["state"], *state);
         }
     }
-    fn trace(&self) -> Trace {
+    pub(super) fn trace(&self) -> Trace {
         read_trace(&self.output.path().join("bridge.private.jsonl")).unwrap()
     }
 
-    async fn close(mut self, expected_calls: usize) {
+    pub(super) async fn close(mut self, expected_calls: usize) {
         self.provider.quiesce().await.unwrap();
         assert_eq!(self.bridge.close().await, Ok(()));
         drop(self.bridge);
@@ -115,7 +116,7 @@ impl Owner {
     }
 }
 
-async fn satellite(listener: Arc<TcpListener>, mut requested: mpsc::Receiver<()>) -> usize {
+async fn satellite(listener: Arc<TcpListener>, mut requested: mpsc::Receiver<()>, earcon: bool) -> usize {
     use super::tests::{continuous_playback, read, send};
     let mut stream = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
@@ -136,6 +137,9 @@ async fn satellite(listener: Arc<TcpListener>, mut requested: mpsc::Receiver<()>
         send(&mut stream, "run-pipeline", wake["header"]["data"].clone(), vec![]).await;
         let format = json!({"rate":16000,"width":2,"channels":1});
         send(&mut stream, "audio-start", format.clone(), vec![]).await;
+        if earcon {
+            super::wake::acknowledge(&mut stream).await;
+        }
         let (returned, frames) = continuous_playback(stream, format).await;
         stream = returned;
         assert_eq!(frames, 0);
@@ -150,7 +154,7 @@ async fn codex_lifecycle_reuses_call_then_stops_once_at_idle() {
     tokio::time::timeout(
         super::DEADLINE,
         Box::pin(async {
-            let mut owner = Owner::start(1).await;
+            let mut owner = Owner::start(1, false).await;
             owner.run(1).await;
             owner.run(2).await;
             owner.provider.quiesce().await.unwrap();
@@ -173,7 +177,7 @@ async fn codex_lifecycle_kill_aborts_reused_active_run_without_success_or_late_a
     tokio::time::timeout(
         super::DEADLINE,
         Box::pin(async {
-            let mut owner = Owner::start(120).await;
+            let mut owner = Owner::start(120, false).await;
             owner.run(1).await;
             owner.provider.quiesce().await.unwrap();
             owner.wake.send(()).await.unwrap();
@@ -220,7 +224,7 @@ async fn codex_lifecycle_two_owners_survivor_reuses_own_call_after_other_closes(
     tokio::time::timeout(
         super::DEADLINE,
         Box::pin(async {
-            let (mut first, mut second) = tokio::join!(Owner::start(120), Owner::start(120));
+            let (mut first, mut second) = tokio::join!(Owner::start(120, false), Owner::start(120, false));
             assert_ne!(first.address, second.address);
             assert_ne!(first.provider.origin, second.provider.origin);
             assert_ne!(first.root.0, second.root.0);
@@ -245,7 +249,7 @@ async fn codex_lifecycle_call_refusal_and_malformed_sdp_never_connect_or_play() 
         super::DEADLINE,
         Box::pin(async {
             for fault in ["call_refused", "malformed_sdp"] {
-                failed_call(fault).await;
+                failed_call(fault, false).await;
             }
         }),
     )
@@ -253,7 +257,7 @@ async fn codex_lifecycle_call_refusal_and_malformed_sdp_never_connect_or_play() 
     .unwrap();
 }
 
-async fn failed_call(fault: &str) {
+pub(super) async fn failed_call(fault: &str, earcon: bool) {
     let options = super::super::tests::options();
     let root = config::Root::new().unwrap();
     let output = tempfile::tempdir().unwrap();
@@ -267,8 +271,15 @@ async fn failed_call(fault: &str) {
         address,
         &provider.origin,
     );
+    let config = root.0.join("configured.private/bridge.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        config,
+        text.replace("wake_earcon = false", &format!("wake_earcon = {earcon}")),
+    )
+    .unwrap();
     let (wake, requested) = tokio::sync::oneshot::channel();
-    let satellite = tokio::spawn(failure_satellite(listener, requested));
+    let satellite = tokio::spawn(failure_satellite(listener, requested, earcon));
     let mut bridge = Process::start(&mut command).unwrap();
     let collected = bridge.observe_collection();
     bridge.expect("bridge.ready").await.unwrap();
@@ -287,7 +298,7 @@ async fn failed_call(fault: &str) {
     remove_root(root);
 }
 
-async fn failure_satellite(listener: Arc<TcpListener>, wake: tokio::sync::oneshot::Receiver<()>) {
+async fn failure_satellite(listener: Arc<TcpListener>, wake: tokio::sync::oneshot::Receiver<()>, earcon: bool) {
     use super::tests::{read, send};
     let mut stream = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
@@ -303,8 +314,12 @@ async fn failure_satellite(listener: Arc<TcpListener>, wake: tokio::sync::onesho
     .await;
     while stream.peek(&mut [0]).await.unwrap() != 0 {
         let (row, bytes) = read(&mut stream).await;
-        assert_ne!(row["type"], "audio-chunk");
-        assert_eq!(bytes, [] as [u8; 0]);
+        assert_eq!(
+            bytes.len(),
+            if row["type"] == "audio-chunk" && earcon { 960 } else { 0 }
+        );
+        // Withhold Played: neither a failed call nor an unacknowledged
+        // acknowledgement may manufacture successful playback.
     }
 }
 
@@ -321,7 +336,14 @@ fn failure_receipts(observed: &Value, path: &Path) {
     );
     assert_eq!(observed["external"], 0);
     assert_eq!(observed["refreshes"], 0);
-    for event in ["reply.started", "reply.played", "bridge.run_completed", "tools/call"] {
+    for event in [
+        "reply.started",
+        "reply.played",
+        "bridge.run_completed",
+        "tools/call",
+        "wake.earcon_played",
+        "call.live_connected",
+    ] {
         assert_eq!(trace.records.iter().filter(|r| r["event"] == event).count(), 0);
     }
 }
