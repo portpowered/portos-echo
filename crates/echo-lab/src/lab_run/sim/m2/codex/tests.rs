@@ -328,7 +328,7 @@ pub(super) async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
 async fn t3_mouth_sync_uses_completed_pcm_writes_and_confirmed_states_on_one_epoch() {
-    tokio::time::timeout(DEADLINE, Box::pin(super::timing::exercise(false)))
+    tokio::time::timeout(DEADLINE, Box::pin(super::timing::exercise(false, false)))
         .await
         .unwrap();
 }
@@ -452,7 +452,15 @@ async fn m2_codex_negative_cases_reject_before_admission_and_release_private_hom
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
 async fn t3_mouth_sync_quiet_edges_and_early_played_never_open_early_or_extend_the_mouth() {
-    tokio::time::timeout(DEADLINE, Box::pin(super::timing::exercise(true)))
+    tokio::time::timeout(DEADLINE, Box::pin(super::timing::exercise(true, false)))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_mouth_sync_pcm_arriving_after_zero_snapshot_cannot_advance_admission() {
+    tokio::time::timeout(DEADLINE, Box::pin(super::timing::exercise(false, true)))
         .await
         .unwrap();
 }

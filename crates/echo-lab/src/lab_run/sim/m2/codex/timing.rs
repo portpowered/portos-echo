@@ -2,7 +2,7 @@
 use super::*;
 use tokio::{net::TcpListener, sync::oneshot};
 
-pub(super) async fn exercise(quiet_edges: bool) {
+pub(super) async fn exercise(quiet_edges: bool, force_interleaving: bool) {
     let options = super::super::tests::options();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -14,8 +14,13 @@ pub(super) async fn exercise(quiet_edges: bool) {
     }
     state.start_bridge(&options, port).await.unwrap();
     wake.send(()).unwrap();
-    let (pcm, states) = settle(&mut state).await;
+    let (pcm, states) = settle(&mut state, force_interleaving).await;
     assert_quiet_edges(&pcm, quiet_edges);
+    let admission_epoch = pcm.first().unwrap()["epoch_ms"].clone();
+    assert!(
+        pcm.iter().all(|row| row["epoch_ms"] == admission_epoch),
+        "external scheduling must not advance finite reply admission: {pcm:?}"
+    );
     let reply = state.relay.as_ref().unwrap().timing();
     state.provider.as_mut().unwrap().quiesce().await.unwrap();
     advance(state.bridge.as_mut().unwrap(), 120_000).await.unwrap();
@@ -58,45 +63,50 @@ fn corroborate(state: &Case, pcm: &[Value], states: &[Value], reply: &crate::lab
     .unwrap();
 }
 
-async fn settle(state: &mut Case) -> (Vec<Value>, Vec<Value>) {
-    let (mut pcm, mut states) = (vec![], vec![]);
+async fn settle(state: &mut Case, force_interleaving: bool) -> (Vec<Value>, Vec<Value>) {
+    let mut clock = json!({"epoch_ms":0,"pcm":[],"states":[]});
     let (mut done, mut transcript, mut tail) = (false, false, false);
+    let mut released = false;
     while !done {
         state.provider.as_mut().unwrap().tick().await.unwrap();
+        if !released {
+            released = release_between_snapshot_and_clock(state, &clock, force_interleaving).await;
+        }
         let played = state.relay.as_ref().unwrap().timing().played;
-        if state.relay.as_ref().unwrap().timing().played >= 2880 && !tail {
+        if played >= 2880 && !tail {
             state.provider.as_ref().unwrap().tail().await.unwrap();
             tail = true;
         }
-        if state.relay.as_ref().unwrap().timing().played >= 8640 && !transcript {
+        if played >= 8640 && !transcript {
             state.provider.as_ref().unwrap().transcripts().await.unwrap();
             transcript = true;
         }
-        let bridge = state.bridge.as_mut().unwrap();
-        let milliseconds = if played > 0 && played < 9600 { 0 } else { 20 };
-        bridge
-            .send(&json!({"action":"advance_playout","milliseconds":milliseconds}))
+        let milliseconds = if released && played < 9600 { 0 } else { 20 };
+        done = collect_playout(state.bridge.as_mut().unwrap(), &mut clock, milliseconds)
             .await
-            .unwrap();
-        loop {
-            let row = bridge.line().await.unwrap();
-            match row["event"].as_str().unwrap() {
-                "bridge.run_completed" => {
-                    assert_eq!(row["run_id"], "run-1");
-                    done = true;
-                }
-                "bridge.clock_advanced" => {
-                    assert_eq!(row["milliseconds"], milliseconds);
-                    assert_eq!(row["epoch_ms"].as_u64().unwrap() % 20, 0);
-                    pcm.extend(row["pcm"].as_array().unwrap().iter().cloned());
-                    states.extend(row["states"].as_array().unwrap().iter().cloned());
-                    break;
-                }
-                other => assert_eq!(other, "expected clock or completion receipt", "{row}"),
-            }
-        }
+            .unwrap()
+            .is_some();
     }
-    (pcm, states)
+    (
+        clock["pcm"].as_array().unwrap().clone(),
+        clock["states"].as_array().unwrap().clone(),
+    )
+}
+
+// Force F1's interleaving: the relay snapshot is zero, then real PCM arrives
+// before the next clock command. The provider gate must freeze admission time.
+async fn release_between_snapshot_and_clock(state: &mut Case, clock: &Value, force_interleaving: bool) -> bool {
+    if !connected(clock) {
+        return false;
+    }
+    let relay = state.relay.as_ref().unwrap();
+    assert_eq!(relay.timing().played, 0, "closed gate must emit no reply PCM");
+    state.provider.as_ref().unwrap().reply().await.unwrap();
+    if force_interleaving {
+        relay.wait_for_pcm(2880).await.unwrap();
+        assert!(relay.timing().played >= 2880, "PCM precedes clock control");
+    }
+    true
 }
 
 use std::io::Write;

@@ -13,6 +13,7 @@ pub(super) enum Control {
     Complete,
     Tail,
     Reply,
+    Release,
     Quiesce(oneshot::Sender<()>),
     Close,
 }
@@ -176,7 +177,12 @@ async fn conversation(
         if let Some(value) = value {
             observation(observed, &value)?;
             if value["event"] == "provider.append" {
-                append(peer, &mut reply, allow_reply).await?;
+                if std::mem::replace(&mut reply, true) {
+                    return Err("m4: duplicate native append".into());
+                }
+                if allow_reply {
+                    observed.send_modify(|state| state["reply_ready"] = json!(true));
+                }
             }
         } else {
             match action {
@@ -184,10 +190,12 @@ async fn conversation(
                 Some(Control::Reply) if emotion && !allow_reply => {
                     allow_reply = true;
                     if reply {
-                        send_reply(peer, 0..5).await?;
+                        observed.send_modify(|state| state["reply_ready"] = json!(true));
                     }
                 }
                 Some(Control::Reply) => return Err("m6: premature reply release".into()),
+                Some(Control::Release) if reply && allow_reply => send_reply(peer, 0..5).await?,
+                Some(Control::Release) => return Err("m4: release before reply admission".into()),
                 Some(Control::Tail) => send_reply(peer, 5..11).await?,
                 Some(Control::Complete) => process.send(&json!({"complete":true})).await?,
                 Some(Control::Quiesce(done)) => {
@@ -198,16 +206,6 @@ async fn conversation(
             }
         }
     }
-}
-
-async fn append(peer: &mut LivePeer, reply: &mut bool, allow_reply: bool) -> Result<(), String> {
-    if std::mem::replace(reply, true) {
-        return Err("m4: duplicate native append".into());
-    }
-    if allow_reply {
-        send_reply(peer, 0..5).await?;
-    }
-    Ok(())
 }
 
 fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), String> {

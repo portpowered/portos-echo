@@ -133,8 +133,14 @@ impl Case {
         let mut done = false;
         let mut transcript = false;
         let mut tail = false;
+        let mut released = false;
         while !done {
             self.provider.as_mut().ok_or("m2: missing provider")?.tick().await?;
+            if !released && connected(&self.clock) {
+                // Freeze before authorizing any RTP, including the first burst.
+                released = true;
+                self.provider.as_ref().ok_or("m2: missing provider")?.reply().await?;
+            }
             let played = self.relay.as_ref().ok_or("m2: missing relay")?.timing().played;
             if played >= 2880 && !tail {
                 self.provider.as_ref().ok_or("m2: missing provider")?.tail().await?;
@@ -153,7 +159,7 @@ impl Case {
             done = collect_playout(
                 self.bridge.as_mut().ok_or("m2: missing bridge")?,
                 &mut self.clock,
-                if played > 0 && played < 9600 { 0 } else { 20 },
+                if released && played < 9600 { 0 } else { 20 },
             )
             .await?
             .is_some();
@@ -337,4 +343,10 @@ pub(in crate::lab_run::sim) async fn collect_playout(
             _ => return Err("playout: unexpected bridge clock observation".into()),
         }
     }
+}
+
+fn connected(clock: &Value) -> bool {
+    clock["states"]
+        .as_array()
+        .is_some_and(|states| states.iter().any(|row| row["state"]["state"] == "connected"))
 }

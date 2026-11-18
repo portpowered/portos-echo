@@ -10,6 +10,7 @@ use tokio::{
 
 enum Control {
     Transcripts,
+    Reply,
     Tail,
     Quiesce(oneshot::Sender<()>),
     Close,
@@ -65,6 +66,12 @@ impl Provider {
     }
     pub async fn tick(&mut self) -> Result<(), String> {
         self.ticks.recv().await.ok_or("m2: provider media driver ended".into())
+    }
+    pub async fn reply(&self) -> Result<(), String> {
+        self.commands
+            .send(Control::Reply)
+            .await
+            .map_err(|_| "m2: reply gate closed".into())
     }
     pub async fn tail(&self) -> Result<(), String> {
         self.commands
@@ -139,6 +146,7 @@ async fn drive(
     let mut quiesced = peer.is_none();
     let mut reply = false;
     let mut started = false;
+    let mut released = false;
     let mut tail = false;
     let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
     loop {
@@ -151,11 +159,13 @@ async fn drive(
         };
         let progress = progress(work, process, commands, ticks, &mut clock, quiesced).await?;
         match progress {
-            Progress::Media(received, released) => {
-                tail |= released;
-                if received > 0 && !started {
-                    started = true;
+            Progress::Media(received, tail_released, reply_released) => {
+                tail |= tail_released;
+                released |= reply_released;
+                started |= received > 0;
+                if started && released {
                     reply = true;
+                    released = false;
                 }
             }
             Progress::Quiesced => quiesced = true,
@@ -167,7 +177,7 @@ async fn drive(
 }
 
 enum Progress {
-    Media(usize, bool),
+    Media(usize, bool, bool),
     Quiesced,
     Closed,
 }
@@ -184,12 +194,14 @@ async fn progress(
 ) -> Result<Progress, String> {
     tokio::pin!(work);
     let mut tail = false;
+    let mut reply = false;
     loop {
         tokio::select! {
-            result = &mut work => return result.map(|received| Progress::Media(received, tail)),
+            result = &mut work => return result.map(|received| Progress::Media(received, tail, reply)),
             _ = clock.tick(), if !quiesced => { let _ = ticks.try_send(()); },
             control = commands.recv() => match control {
                 Some(Control::Tail) => tail = true,
+                Some(Control::Reply) => reply = true,
                 Some(Control::Transcripts) => process.send(&json!({"transcripts":true})).await?,
                 Some(Control::Quiesce(done)) => {
                     let _ = done.send(());
@@ -235,7 +247,7 @@ async fn repeat(
                 Some(Control::Close) | None => break,
                 #[cfg(test)]
                 Some(Control::NextCapture) => { received = 0; quiesced = false; },
-                Some(Control::Transcripts | Control::Tail) => return Err("m1: automatic transcript ownership".into()),
+                Some(Control::Transcripts | Control::Tail | Control::Reply) => return Err("m1: automatic transcript ownership".into()),
             },
         }
     }
@@ -356,7 +368,7 @@ mod tests {
             progress(work, &mut process, &mut receive, &ticks, &mut clock, false),
             controls
         );
-        assert!(matches!(result.unwrap(), Progress::Media(11, true)));
+        assert!(matches!(result.unwrap(), Progress::Media(11, true, false)));
         assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(process.line().await.unwrap(), json!({"transcripts":true}));
         // The external process exits on wall time; only media progress used fake time.

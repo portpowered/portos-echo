@@ -215,6 +215,24 @@ impl Relay {
         self.observed.borrow().clone()
     }
 
+    #[cfg(test)]
+    pub async fn wait_for_pcm(&self, minimum: usize) -> Result<(), String> {
+        let mut observed = self.observed.clone();
+        loop {
+            let timing = observed.borrow_and_update().clone();
+            if let Some(error) = timing.failure {
+                return Err(error);
+            }
+            if timing.played >= minimum {
+                return Ok(());
+            }
+            observed
+                .changed()
+                .await
+                .map_err(|_| "wire: observer ended before PCM")?;
+        }
+    }
+
     pub async fn close(mut self) -> Result<Timing, String> {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
