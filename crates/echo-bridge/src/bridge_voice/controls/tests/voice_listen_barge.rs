@@ -64,6 +64,21 @@ async fn journey(
     poll(work.as_mut()).await;
     let prefix = frames(observer);
     assert!(prefix > 12);
+    cut(work, tx, observer, receipts, paused, prefix).await;
+    replacement(work, tx, observer, receipts).await;
+    assert_eq!(frames(observer), prefix + 12);
+    before_expiry(work, observer).await;
+    prefix
+}
+
+async fn cut(
+    work: &mut Pin<Box<impl Future<Output = Result<super::super::super::Stats, Error>>>>,
+    tx: &mpsc::Sender<MediaEvent>,
+    observer: &Observer,
+    receipts: &Cell<usize>,
+    paused: &Cell<usize>,
+    prefix: usize,
+) {
     tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
     poll(work.as_mut()).await;
     assert_eq!(cuts(observer), 1);
@@ -75,13 +90,16 @@ async fn journey(
     idle_noise(tx).await;
     poll(work.as_mut()).await;
     assert_eq!(frames(observer), prefix);
-    replacement(work, tx, observer, receipts).await;
-    assert_eq!(frames(observer), prefix + 12);
+}
+
+async fn before_expiry(
+    work: &mut Pin<Box<impl Future<Output = Result<super::super::super::Stats, Error>>>>,
+    observer: &Observer,
+) {
     assert!(!observer.commands().contains(&Command::EndRun));
     tokio::time::advance(Duration::from_millis(2999)).await;
     poll(work.as_mut()).await;
     assert!(!observer.commands().contains(&Command::EndRun));
-    prefix
 }
 
 async fn unfinished(tx: &mpsc::Sender<MediaEvent>) {
