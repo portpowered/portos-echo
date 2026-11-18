@@ -316,12 +316,52 @@ impl Drop for Peer {
 }
 
 fn settings(config: &PeerConfig) -> webrtc::peer_connection::SettingEngine {
+    use rtc::ice::mdns::MulticastDnsMode;
+
+    // Explicit loopback transports cannot need remote .local resolution. Avoid
+    // opening a multicast socket on hosts with no multicast-capable interface.
+    let mdns = if !config.interface_allowlist.is_empty()
+        && config.interface_allowlist.iter().all(std::net::IpAddr::is_loopback)
+    {
+        MulticastDnsMode::Disabled
+    } else {
+        MulticastDnsMode::QueryOnly
+    };
     let attempts = u16::try_from(config.negotiation_timeout.as_millis() / 200)
         .unwrap_or(u16::MAX)
         .max(10);
     SettingEngineBuilder::new()
+        .with_multicast_dns_mode(mdns)
         .with_include_loopback_candidate(config.allow_loopback)
         .with_sctp_max_receive_buffer_size(64 * 1024)
         .with_ice_connection_attempts(Some(Duration::from_millis(200)), Some(attempts))
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rtc::ice::mdns::MulticastDnsMode::{Disabled, QueryOnly};
+
+    #[test]
+    fn mdns_policy_requires_explicit_entirely_loopback_allowlist() {
+        for (addresses, expected) in [
+            (vec![], QueryOnly),
+            (vec!["127.0.0.1"], Disabled),
+            (vec!["127.0.0.2"], Disabled),
+            (vec!["::1"], Disabled), // lint-rules: allow-literal inert socket-free settings assertion
+            (vec!["127.0.0.1", "::1"], Disabled), // lint-rules: allow-literal inert socket-free settings assertion
+            (vec!["192.0.2.10"], QueryOnly), // lint-rules: allow-literal inert socket-free settings assertion
+            (vec!["127.0.0.1", "192.0.2.10"], QueryOnly), // lint-rules: allow-literal inert socket-free settings assertion
+        ] {
+            for allow_loopback in [false, true] {
+                let config = PeerConfig {
+                    interface_allowlist: addresses.iter().map(|a| a.parse().unwrap()).collect(),
+                    allow_loopback,
+                    ..PeerConfig::default()
+                };
+                assert_eq!(settings(&config).multicast_dns().mode, expected);
+            }
+        }
+    }
 }

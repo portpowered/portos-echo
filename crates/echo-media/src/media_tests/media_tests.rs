@@ -46,6 +46,30 @@ async fn pair() -> (Peer, Peer) {
 }
 
 #[tokio::test]
+async fn t3_explicit_loopback_create_offer_close_without_multicast() {
+    // Also run in a lo-only network namespace: no multicast interface or route.
+    let mut peer = Peer::create(config()).await.unwrap();
+    assert_eq!(*peer.states().borrow(), PeerState::New);
+    let offer = peer.offer().await.unwrap();
+    assert_eq!(offer.lines().filter(|l| l.starts_with("m=audio ")).count(), 1);
+    assert!(offer.contains("opus/48000/2"));
+    assert_eq!(offer.lines().filter(|l| l.starts_with("m=application ")).count(), 1);
+    let mut protocols = std::collections::BTreeSet::new();
+    for line in offer.lines().filter(|l| l.starts_with("a=candidate:")) {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        assert_eq!(fields[4].parse::<IpAddr>().unwrap(), Ipv4Addr::LOCALHOST);
+        assert_eq!(fields[7], "host");
+        protocols.insert(fields[2].to_ascii_lowercase());
+    }
+    assert_eq!(protocols, ["tcp".to_owned(), "udp".to_owned()].into());
+    peer.close().await.unwrap();
+    assert_eq!(*peer.states().borrow(), PeerState::Closed);
+    assert_eq!(peer.send([0; 320]), Err(crate::Error::Closed));
+    assert_eq!(peer.recv().await, Ok(None));
+    peer.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn t3_peer_lifecycle_close_connected_and_isolation() {
     let ((mut a, mut b), (mut c, mut d)) = tokio::join!(pair(), pair());
     // Distinct public PCM journeys on simultaneous independent peers.
