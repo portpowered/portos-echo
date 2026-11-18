@@ -80,8 +80,7 @@ async fn cut_server<T: AsyncRead + AsyncWrite + Unpin>(mut peer: T) {
     )
     .await;
     mic_five(&mut peer).await;
-    assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-continue");
-    assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
+    assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-flush");
     assert_eq!(receive(&mut peer).await.header.r#type, "describe");
     send(&mut peer, "info", json!({"cut":true}), vec![]).await;
     send(
@@ -148,6 +147,7 @@ pub async fn pause_resume<T: AsyncRead + AsyncWrite + Unpin>(mut client: Wyoming
         let pipeline = json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"alexa"});
         assert_eq!(receive(&mut peer).await.header.r#type, "run-satellite");
         send(&mut peer, "run-pipeline", pipeline.clone(), vec![]).await;
+        assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-end");
         assert_eq!(receive(&mut peer).await.header.r#type, "pause-satellite");
         assert_eq!(receive(&mut peer).await.header.r#type, "describe");
         send(&mut peer, "run-pipeline", pipeline.clone(), vec![]).await;
@@ -161,6 +161,7 @@ pub async fn pause_resume<T: AsyncRead + AsyncWrite + Unpin>(mut client: Wyoming
         send(&mut peer, "info", json!({"paused":true}), vec![]).await;
         assert_eq!(receive(&mut peer).await.header.r#type, "run-satellite");
         send(&mut peer, "run-pipeline", pipeline, vec![]).await;
+        assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-end");
         assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
     };
     tokio::join!(caller, server);

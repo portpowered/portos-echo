@@ -69,7 +69,7 @@ class FiniteControls(unittest.TestCase):
         (self.host.folder / "play.raw").write_bytes(bytes([0, 0, 1, 2]))
         with mock.patch.object(CONTROLLER, "emit") as emit:
             self.host.command({"action": "playback"})
-        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 4, "nonzero_bytes": 2})
+        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 4, "nonzero_bytes": 2, "flush": None})
         (self.host.folder / "play.raw").write_bytes(bytes(CONTROLLER.LIMIT + 2))
         with self.assertRaisesRegex(ValueError, "invalid playback observation"):
             self.host.command({"action": "playback"})
@@ -123,3 +123,18 @@ class FiniteControls(unittest.TestCase):
                 self.host.command({"action": "muted", "pcm": pcm})
             emit.assert_called_once_with({"event": "host.ack"})
             self.host.proc.send_signal.assert_called_once_with(10)
+
+    def test_playback_reports_native_flush_counters_and_rejects_ambiguous_evidence(self):
+        self.host.finite_mode = True
+        (self.host.folder / "play.raw").write_bytes(bytes([1, 0]) * 960)
+        record = b"duplex flush: receipt_ms=100 closed_ms=119 before=960 written=1920 discarded=9600\n"
+        self.host.log = bytearray(record)
+        with mock.patch.object(CONTROLLER, "emit") as emit:
+            self.host.command({"action": "playback"})
+        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 1920, "nonzero_bytes": 960,
+                                     "flush": {"receipt_ms": 100, "closed_ms": 119, "before": 960,
+                                               "written": 1920, "discarded": 9600}})
+        for invalid in [record + record, record[:-1], b"duplex flush: malformed\n"]:
+            self.host.log = bytearray(invalid)
+            with self.assertRaisesRegex(ValueError, "one native flush observation"):
+                self.host.command({"action": "playback"})

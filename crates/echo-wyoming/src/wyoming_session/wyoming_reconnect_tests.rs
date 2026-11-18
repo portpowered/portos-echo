@@ -208,6 +208,7 @@ async fn repeated_outages_reset_backoff_and_paused_capture_is_not_registered() {
         let reader = async {
             assert_eq!(peer::receive(&mut server).await.header.r#type, "run-satellite");
             if paused {
+                assert_eq!(peer::receive(&mut server).await.header.r#type, "hassmic-end");
                 assert_eq!(peer::receive(&mut server).await.header.r#type, "pause-satellite");
             }
         };
@@ -293,6 +294,7 @@ async fn paused_next_generation(
     tokio::join!(caller, reader);
     if !paused {
         let (result, ()) = tokio::join!(client.pause(), async {
+            assert_eq!(peer::receive(&mut next).await.header.r#type, "hassmic-end");
             assert_eq!(peer::receive(&mut next).await.header.r#type, "pause-satellite");
         });
         result.unwrap();
@@ -326,6 +328,7 @@ async fn playback_override_survives_twelve_seconds_without_extending_describe_ti
         assert_eq!(peer::receive(&mut server).await.header.r#type, "audio-stop");
         tokio::time::sleep(Duration::from_secs(12)).await;
         peer::send(&mut server, "played", json!({}), vec![]).await;
+        assert_eq!(peer::receive(&mut server).await.header.r#type, "hassmic-end");
         assert_eq!(peer::receive(&mut server).await.header.r#type, "describe");
         assert_eq!(tokio::io::AsyncReadExt::read(&mut server, &mut [0]).await.unwrap(), 0);
     };

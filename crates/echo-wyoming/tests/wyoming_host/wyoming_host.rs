@@ -173,11 +173,12 @@ pub(super) async fn controls() {
             }
             assert!(!matches!(event.event, WyomingEvent::RunPipeline(_)));
         }
+        mic_after_cut += capture_after_played(&mut events).await;
         assert!(mic_after_cut >= 1);
         assert!(second.stats().received > before);
         writeln!(
             std::io::stdout(),
-            "host control: pause_resume=true cut=early-stop played=1 duplex_chunks_after_cut={mic_after_cut}"
+            "host control: pause_resume=true cut=flush played=1 duplex_chunks_after_cut={mic_after_cut}"
         )
         .unwrap();
     };
@@ -186,6 +187,17 @@ pub(super) async fn controls() {
     drop(tx);
     client.close().await.unwrap();
     host.finish();
+}
+
+// Flush can finish before the next capture slot: require capture after Played.
+async fn capture_after_played(events: &mut EventStream) -> usize {
+    loop {
+        let event = events.recv().await.unwrap().unwrap();
+        assert!(!matches!(event.event, WyomingEvent::RunPipeline(_)));
+        if matches!(event.event, WyomingEvent::AudioChunk(_)) {
+            return 1;
+        }
+    }
 }
 
 fn controller() -> Command {

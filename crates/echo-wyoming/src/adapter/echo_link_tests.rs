@@ -108,8 +108,7 @@ async fn echo_link_cut_is_idempotent_and_preserves_tail_through_played() {
                 CutStats { dropped_frames: 0 }
             );
         }
-        assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-continue");
-        assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
+        assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-flush");
         send(&mut peer, "played", json!(null), vec![]).await;
     };
     let (result, ()) = tokio::join!(play, server);
@@ -179,7 +178,9 @@ async fn reply_server(peer: &mut tokio::io::DuplexStream) {
     assert_eq!(chunk.payload, [5, 6]);
     assert_eq!(receive(peer).await.header.r#type, "audio-stop");
     send(peer, "played", json!(null), vec![]).await;
-    assert_eq!(receive(peer).await.header.r#type, "pause-satellite");
+    for expected in ["hassmic-end", "hassmic-end", "pause-satellite"] {
+        assert_eq!(receive(peer).await.header.r#type, expected);
+    }
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
 }
 
@@ -209,6 +210,7 @@ async fn run_failure_literal_frames_then_describe_keep_the_same_stream() {
             );
         };
         let server = async {
+            assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-end");
             let mut bytes = vec![0; expected.len()];
             peer.read_exact(&mut bytes).await.unwrap();
             assert_eq!(bytes, expected.as_bytes());
@@ -229,6 +231,7 @@ async fn run_failure_retires_mic_and_trailing_audio_never_enters_next_run() {
     let mut first = events.recv().await.unwrap().unwrap().run.unwrap();
     client.fail_run(RunFailure::Unavailable).await.unwrap();
     assert_eq!(first.recv().await.unwrap(), None);
+    assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-end");
     assert_eq!(receive(&mut peer).await.header.r#type, "error");
     send(
         &mut peer,

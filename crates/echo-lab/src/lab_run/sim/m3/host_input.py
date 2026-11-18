@@ -30,3 +30,14 @@ def finite_input(host, value, wake_signal):
                 lambda: host.fed >= target or host.error or host.cancelled.is_set(), 20)
             if not ready or host.error or host.cancelled.is_set():
                 raise RuntimeError("muted native capture consumption failed")
+
+
+def flush_observation(host):
+    """Native worker receipt/close and independent discarded PCM, never relay estimates."""
+    import re
+    with host.condition:
+        records = re.findall(rb"duplex flush: receipt_ms=(\d+) closed_ms=(\d+) before=(\d+) written=(\d+) discarded=(\d+)\n", host.log)
+    if len(records) != 1:
+        raise ValueError("expected one native flush observation")
+    keys = ("receipt_ms", "closed_ms", "before", "written", "discarded")
+    return dict(zip(keys, map(int, records[0])))

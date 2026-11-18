@@ -111,6 +111,7 @@ async fn microphone_frames<T: AsyncRead + AsyncWrite + Unpin>(peer: &mut T) {
         vec![9, 10],
     )
     .await;
+    assert_kind(peer, "hassmic-end").await;
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
 }
 
@@ -173,12 +174,13 @@ async fn playback_server<T: AsyncRead + AsyncWrite + Unpin>(peer: &mut T) {
         for _ in 0..count {
             let chunk = receive(peer).await;
             assert_eq!(chunk.header.r#type, "audio-chunk");
-            assert_eq!(chunk.payload, [1, 0].repeat(2400));
+            assert_pcm(&chunk.payload);
         }
         assert_kind(peer, "audio-stop").await;
         send(peer, "ping", Value::Null, vec![]).await;
         assert_kind(peer, "describe").await;
         send(peer, "played", Value::Null, vec![]).await;
+        assert_kind(peer, "hassmic-end").await;
         send(peer, "info", json!({"ack":count}), vec![]).await;
     }
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
@@ -211,4 +213,8 @@ async fn next_control(events: &mut echo_wyoming::EventStream) -> echo_wyoming::R
         }
         assert_eq!(event.payload, Vec::<u8>::new());
     }
+}
+
+fn assert_pcm(payload: &[u8]) {
+    assert_eq!(payload, [1, 0].repeat(2400));
 }

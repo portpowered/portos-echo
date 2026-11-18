@@ -12,12 +12,14 @@ use tokio::{
 #[derive(Clone, Debug, Default)]
 pub struct Ledger {
     pub inputs: usize,
-    pub continues: usize,
+    pub flushes: usize,
     pub tail_bytes: usize,
     pub live_tail_frames: u64,
     pub runs: usize,
     pub capture_frames: u64,
     pub old_sink_pcm: Option<u64>,
+    pub flush_observation: Option<serde_json::Value>,
+    pub ends: usize,
     pub bytes: [usize; 2],
     pub started: usize,
     pub stops: usize,
@@ -34,25 +36,26 @@ impl Ledger {
     fn reply(&mut self, event: &Event) -> Result<(), String> {
         match event.header.r#type.as_str() {
             "audio-start" => {
-                if self.started >= 2 || self.started != self.stops {
+                if self.started >= 2 || self.started != self.stops + self.flushes {
                     return Err("M3 wire: unexpected reply start".into());
                 }
                 self.started += 1;
             }
-            "hassmic-continue" => {
-                if self.started != 1 || self.stops != 0 || self.continues != 0 {
-                    return Err("M3 wire: continuation must precede the cut stop exactly once".into());
+            "hassmic-flush" => {
+                if self.started != 1 || self.stops != 0 || self.flushes != 0 {
+                    return Err("M3 wire: flush must cut the first reply exactly once".into());
                 }
-                self.continues += 1;
+                self.flushes += 1;
             }
             "audio-stop" => self.stops += 1,
+            "hassmic-end" => self.ends += 1,
             "audio-chunk" => {
                 let phase = self.started.checked_sub(1).ok_or("M3 wire: PCM before start")?;
                 if phase >= 2 || event.payload.len() != 960 {
                     return Err("M3 wire: expected complete 20 ms reply PCM".into());
                 }
                 self.bytes[phase] += event.payload.len();
-                if self.stops == self.started {
+                if self.stops + self.flushes == self.started {
                     self.after_stop += event.payload.len();
                 }
                 if phase == 0 && self.cancel.is_some_and(|at| at.elapsed() >= Duration::from_millis(200)) {

@@ -11,7 +11,8 @@ import tempfile
 import threading
 import time
 
-finite_input = runpy.run_path(str(Path(__file__).with_name("m3") / "host_input.py"))["finite_input"]
+_m3 = runpy.run_path(str(Path(__file__).with_name("m3") / "host_input.py"))
+finite_input, flush_observation = _m3["finite_input"], _m3["flush_observation"]
 playback_counts = runpy.run_path(str(Path(__file__).with_name("m2") / "host_playback.py"))["playback_counts"]
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -396,7 +397,9 @@ class Host:
                 data = recording.read(LIMIT + 1)
             if len(data) > LIMIT or len(data) % 2:
                 raise ValueError("invalid playback observation")
-            emit(playback_counts(data, value.get("wake_earcon", False)))
+            result = playback_counts(data, value.get("wake_earcon", False))
+            result["flush"] = flush_observation(self) if b"duplex flush:" in self.log else None
+            emit(result)
             return
         elif action in ("finite", "inject", "muted"):
             finite_input(self, value, signal.SIGUSR1)

@@ -157,6 +157,7 @@ async fn reconnect_server(
     connections: mpsc::Sender<std::io::Result<tokio::io::DuplexStream>>,
 ) {
     kind(&mut peer, "run-satellite").await;
+    kind(&mut peer, "hassmic-end").await;
     kind(&mut peer, "pause-satellite").await;
     drop(peer);
     let (io, mut peer) = duplex(65536);

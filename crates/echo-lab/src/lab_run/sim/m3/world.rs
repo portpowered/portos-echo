@@ -152,9 +152,8 @@ impl World {
         let old_pcm = played["pcm_bytes"]
             .as_u64()
             .ok_or("M3 cut: missing decoded old sink PCM")?;
-        if usize::try_from(old_pcm).ok() != Some(old.bytes[0]) {
-            return Err("M3 cut: host decoded PCM does not match the stopped old reply".into());
-        }
+        let flush = played["flush"].clone();
+        super::oracle::flush(&flush, old.bytes[0], old_pcm)?;
         // The prefix triggered cancellation. Its distinguishable tail is fed
         // only after native Played, without another wake or run-pipeline.
         self.control(json!({"action":"inject","pcm":fixture().iter().map(|byte| !byte).collect::<Vec<_>>()}))
@@ -163,9 +162,14 @@ impl World {
             .as_ref()
             .ok_or("M3: missing wire")?
             .observed
-            .send_modify(|state| state.old_sink_pcm = Some(old_pcm));
-        self.wait("second answer Played after overlapping input", |s| s.played.len() == 2)
-            .await?;
+            .send_modify(|state| {
+                state.old_sink_pcm = Some(old_pcm);
+                state.flush_observation = Some(flush);
+            });
+        self.wait("second answer Played and explicit end", |s| {
+            s.played.len() == 2 && s.ends == 1
+        })
+        .await?;
         let played = self.control(json!({"action":"playback"})).await?;
         self.second_pcm = Some(
             played["pcm_bytes"]
@@ -219,9 +223,9 @@ impl World {
             result = relay.wait(property) => result,
             result = failure => result,
             () = tokio::time::sleep(std::time::Duration::from_secs(5)) => Err(format!(
-                "M3 {phase}: missing observation before 5000 ms deadline; capture_tail_bytes={} continues={} Live_frames={}",
+                "M3 {phase}: missing observation before 5000 ms deadline; capture_tail_bytes={} flushes={} Live_frames={}",
                 relay.observed.borrow().tail_bytes,
-                relay.observed.borrow().continues,
+                relay.observed.borrow().flushes,
                 self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().frames,
             )),
         }
