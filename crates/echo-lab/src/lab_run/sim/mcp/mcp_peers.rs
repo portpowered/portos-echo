@@ -22,7 +22,7 @@ impl Peers {
         command
             .arg("-u")
             .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m4/codex/provider.py"));
-        let mut process = Process::start(&mut command)?;
+        let mut process = Process::start_observed(&mut command)?;
         let ready = process.expect("provider.ready").await?;
         let tool = echo_spoof_mcp::catalog()[0].clone();
         process
@@ -112,7 +112,10 @@ async fn owned(
     if let Some(peer) = &mut peer {
         peer.close();
     }
-    let cleanup = process.close().await;
+    let cleanup = process
+        .close()
+        .await
+        .map_err(|error| format!("{error}; {}", process.exit_summary()));
     result.and_then(|value| cleanup.map(|()| value))
 }
 async fn drive(

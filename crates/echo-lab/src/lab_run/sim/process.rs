@@ -4,6 +4,7 @@ use std::process::Stdio;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+mod diagnostic;
 mod line;
 
 #[cfg(test)]
@@ -19,6 +20,7 @@ pub struct Process {
     status: Option<std::process::ExitStatus>,
     stopping: Option<(std::time::Instant, tokio::time::Instant)>,
     forced: bool,
+    diagnostic: diagnostic::Diagnostic,
     #[cfg(test)]
     collected: Option<std::sync::mpsc::Sender<std::process::ExitStatus>>,
 }
@@ -32,13 +34,20 @@ impl Process {
     }
 
     pub fn start(command: &mut Command) -> Result<Self, String> {
+        Self::launch(command, false)
+    }
+    pub(super) fn start_observed(command: &mut Command) -> Result<Self, String> {
+        Self::launch(command, true)
+    }
+    fn launch(command: &mut Command, observed: bool) -> Result<Self, String> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(if observed { Stdio::piped() } else { Stdio::null() })
             .spawn()
             .map_err(|_| "launch: cannot spawn owned process")?;
         let input = child.stdin.take();
+        let diagnostic = diagnostic::Diagnostic::start(child.stderr.take());
         let Some(output) = child.stdout.take() else {
             drop(input);
             super::super::run_command::stop_child(&mut child, super::super::run_command::CLEANUP, false)?;
@@ -52,6 +61,7 @@ impl Process {
             status: None,
             stopping: None,
             forced: false,
+            diagnostic,
             #[cfg(test)]
             collected: None,
         })
@@ -64,7 +74,13 @@ impl Process {
     pub(super) fn exit_summary(&self) -> String {
         self.status.map_or_else(
             || "unavailable".into(),
-            |status| format!("{status}; forced={}", self.forced),
+            |status| {
+                format!(
+                    "{status}; forced={}; diagnostic={}",
+                    self.forced,
+                    self.diagnostic.summary()
+                )
+            },
         )
     }
 
@@ -114,6 +130,7 @@ impl Process {
             .map_err(|_| "cleanup: cannot reap owned child")?;
             self.status = Some(status);
         }
+        self.diagnostic.finish(deadline).await;
         if self.status.is_some_and(|status| status.success()) {
             Ok(())
         } else {
