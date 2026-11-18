@@ -61,6 +61,13 @@ impl Process {
         self.child.id()
     }
 
+    pub(super) fn exit_summary(&self) -> String {
+        self.status.map_or_else(
+            || "unavailable".into(),
+            |status| format!("{status}; forced={}", self.forced),
+        )
+    }
+
     pub async fn line(&mut self) -> Result<Value, String> {
         line::read(&mut self.output, &mut self.pending).await
     }

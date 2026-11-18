@@ -76,7 +76,7 @@ async fn ready_barrier(script: &Value) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<u8, Box<dyn std::error::Error>> {
     let script: Value = serde_json::from_slice(&std::fs::read(env("ECHO_LAB_SIM_SCRIPT")?)?)?;
     let client = endpoints().await?;
     let path = PathBuf::from(env("ECHO_LAB_TRACE_PATH")?);
@@ -101,6 +101,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
     io::stdout().flush()?;
+    if let Some(code) = script["exit_code"].as_u64() {
+        client.close().await?;
+        return Ok(u8::try_from(code)?);
+    }
     if script["cancel"] == true {
         std::fs::write(env("ECHO_LAB_SIM_CANCEL")?, b"cancel")?;
     }
@@ -123,7 +127,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if script["fail_close"] == true {
         return Err("controlled close failure".into());
     }
-    Ok(())
+    Ok(0)
 }
 
 // A private copy beside the prebuilt CLI forwards to the selected real binary.
@@ -203,5 +207,5 @@ fn main() -> std::process::ExitCode {
         .build()
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })
         .and_then(|r| r.block_on(run()));
-    std::process::ExitCode::from(u8::from(result.is_err()))
+    std::process::ExitCode::from(result.unwrap_or(1))
 }
