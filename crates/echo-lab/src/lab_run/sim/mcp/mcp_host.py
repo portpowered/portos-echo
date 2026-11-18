@@ -27,6 +27,7 @@ def serve():
         connection, _ = listener.accept()
         current = connection
         try:
+            playing = False
             stream = connection.makefile('rb')
             while line := stream.readline():
                 header = json.loads(line)
@@ -34,11 +35,16 @@ def serve():
                 stream.read(header.get('payload_length', 0))
                 if header['type'] == 'describe':
                     send(connection, 'info', {'satellite': {'name': 'synthetic'}})
-                elif header['type'] == 'audio-stop':
-                    send(connection, 'played', {})
-                elif header['type'] == 'hassmic-end':
-                    assert header == {'type': 'hassmic-end', 'data': None,
+                elif header['type'] == 'audio-start':
+                    playing = True
+                elif header['type'] in ('audio-stop', 'hassmic-flush', 'hassmic-end'):
+                    assert header == {'type': header['type'], 'data': None,
                                       'data_length': 0, 'payload_length': 0}
+                    # A flush settles the reply, not the run; later stop/end
+                    # must not acknowledge the same playback a second time.
+                    if playing:
+                        send(connection, 'played', {})
+                        playing = False
         finally:
             connection.close()
 
