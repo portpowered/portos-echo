@@ -185,3 +185,75 @@ fn run_failure_records_cause_ends_capture_and_keeps_connection() {
     ready(link.close()).unwrap();
     assert_eq!(ready(link.fail_run(RunFailure::Unavailable)), Err(Error::Closed));
 }
+
+#[test]
+fn end_run_is_idempotent_drains_capture_and_keeps_future_wakes() {
+    let observer = Observer::default();
+    let mut link = ready(FakeConnector::new(observer.clone()).connect()).unwrap();
+    let mut events = link.events().unwrap();
+    ready(link.end_run()).unwrap();
+    for value in [1, 2] {
+        observer.wake(
+            "Computer",
+            vec![MicFrame {
+                format: PcmFormat {
+                    rate: 16000,
+                    width: 2,
+                    channels: 1,
+                },
+                payload: vec![value],
+            }],
+        );
+        let Some(LinkEvent::Wake(mut run)) = ready(events.recv()).unwrap() else {
+            unreachable!()
+        };
+        ready(link.end_run()).unwrap();
+        ready(link.end_run()).unwrap();
+        assert_eq!(ready(run.recv()).unwrap().unwrap().payload, vec![value]);
+        assert_eq!(ready(run.recv()), Ok(None));
+        ready(link.probe()).unwrap();
+    }
+    assert_eq!(
+        observer.commands(),
+        vec![
+            Command::Connect,
+            Command::EndRun,
+            Command::Probe,
+            Command::EndRun,
+            Command::Probe
+        ]
+    );
+    ready(link.close()).unwrap();
+    assert_eq!(ready(link.end_run()), Err(Error::Closed));
+}
+
+#[test]
+fn end_run_refuses_unsettled_playback_without_a_second_effect() {
+    let observer = Observer::default();
+    let mut link = ready(FakeConnector::new(observer.clone()).connect()).unwrap();
+    let mut events = link.events().unwrap();
+    observer.wake("Computer", vec![]);
+    assert!(matches!(ready(events.recv()), Ok(Some(LinkEvent::Wake(_)))));
+    let (tx, rx) = link.reply_channel(NonZeroUsize::MIN);
+    drop(tx);
+    let format = PcmFormat {
+        rate: 24000,
+        width: 2,
+        channels: 1,
+    };
+    let mut play = Box::pin(link.play_with_timeout(format, rx, Duration::from_secs(1)));
+    assert!(play.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+    assert_eq!(ready(link.end_run()), Err(Error::Busy));
+    assert_eq!(
+        observer.commands(),
+        vec![
+            Command::Connect,
+            Command::Start(format, Duration::from_secs(1)),
+            Command::Stop
+        ]
+    );
+    observer.finish(Ok(()));
+    assert_eq!(ready(play), Ok(PlayOutcome::Played));
+    ready(link.end_run()).unwrap();
+    assert_eq!(observer.commands().last(), Some(&Command::EndRun));
+}

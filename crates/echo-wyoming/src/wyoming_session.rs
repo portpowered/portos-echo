@@ -25,6 +25,7 @@ pub(crate) enum Command {
     #[cfg(test)]
     Cut(Reply<()>),
     CutWithStats(Reply<CutStats>),
+    EndRun(Reply<()>),
     Error(String, String, Reply<()>),
     Pause(Reply<()>),
     Close(Reply<()>),
@@ -39,6 +40,7 @@ struct Session<W> {
     registered: bool,
     paused: bool,
     closing: bool,
+    run_open: bool,
 }
 
 struct ReaderTask(JoinHandle<()>);
@@ -98,6 +100,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         registered: *enabled,
         paused: false,
         closing: false,
+        run_open: false,
     };
     reset.borrow_and_update();
     let work = async {
@@ -199,6 +202,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             self.end_device().await?;
         }
         match self.router.route_with_capture(frame, capture_continues)? {
+            WyomingEvent::RunPipeline(_) => self.run_open = true,
             event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
                     let _ = reply.send(Ok(event));
@@ -261,6 +265,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 self.pause_capture().await?;
                 let _ = reply.send(Ok(()));
             }
+            Some(Command::EndRun(reply)) => self.end_run(reply).await?,
             Some(Command::Error(code, text, reply)) => {
                 self.fail_run(code, text, reply).await?;
             }
@@ -291,6 +296,19 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
+    async fn end_run(&mut self, reply: Reply<()>) -> Result<(), Error> {
+        if self.play.is_some() {
+            let _ = reply.send(Err(Error::Busy));
+            return Ok(());
+        }
+        let result = if self.run_open { self.end_device().await } else { Ok(()) };
+        if result.is_ok() {
+            self.router.end(Ok(()));
+        }
+        let _ = reply.send(result);
+        result
+    }
+
     async fn retire_playback(&mut self) -> Result<(), Error> {
         if let Some(mut play) = self.play.take() {
             play.quiesce().await?;
@@ -318,7 +336,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
 
     async fn end_device(&mut self) -> Result<(), Error> {
         self.send(WyomingEvent::Other("hassmic-end".into(), Value::Null), vec![])
-            .await
+            .await?;
+        self.run_open = false;
+        Ok(())
     }
 
     async fn end_device_if_active(&mut self) -> Result<(), Error> {

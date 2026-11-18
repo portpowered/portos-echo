@@ -105,6 +105,11 @@ pub trait EchoLink: Send + Sync {
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.
     fn cut_with_stats(&self) -> impl Future<Output = Result<CutStats, Error>> + Send;
+    /// End a successful current run, keeping the connection and wake registration.
+    /// Repeated calls without a current run have no effect. Playback must settle first.
+    /// # Errors
+    /// Busy while playback is unsettled, or a fixed transport failure category.
+    fn end_run(&self) -> impl Future<Output = Result<(), Error>> + Send;
     /// End the current run on the device; the connection stays up.
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.

@@ -186,6 +186,15 @@ impl WyomingClient {
         self.request(Command::CutWithStats(tx), rx).await
     }
 
+    /// Successfully end the current run without pausing wake registration.
+    /// Capture closes only after the device has accepted the complete end frame.
+    /// # Errors
+    /// Busy until playback settles; connection failure or operation timeout.
+    pub async fn end_run(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::EndRun(tx), rx).await
+    }
+
     /// Pause microphone capture and end the local run. Repeated calls are
     /// idempotent; `run_satellite` explicitly resumes capture.
     /// # Errors
