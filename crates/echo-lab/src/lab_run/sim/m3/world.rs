@@ -125,7 +125,7 @@ impl World {
 
     pub async fn first(&mut self) -> Result<(), String> {
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
-        self.wait("first reply PCM", |s| s.bytes[0] >= 960).await?;
+        self.wait("long reply overlap point", |s| s.bytes[0] >= 3840).await?;
         loop {
             let played = self.control(json!({"action":"playback"})).await?;
             let bytes = played["pcm_bytes"]
@@ -234,6 +234,7 @@ impl World {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
         loop {
+            self.read_trace()?;
             let state = self.relay.as_ref().ok_or("M3: missing wire")?.observed.borrow().clone();
             self.relay.as_ref().ok_or("M3: missing wire")?.wait(|_| true).await?;
             if property(&state) {
@@ -282,6 +283,18 @@ impl World {
         trace.append(&bytes)?;
         trace.finish()?;
         if let Some(relay) = &self.relay {
+            let resets = trace
+                .records
+                .iter()
+                .filter(|row| row["event"] == "call.receive_reset")
+                .count();
+            relay.observed.send_if_modified(|state| {
+                if state.receive_resets == resets {
+                    return false;
+                }
+                state.receive_resets = resets;
+                true
+            });
             trace.records.extend(relay.observed.borrow().observations());
         }
         self.trace = trace;

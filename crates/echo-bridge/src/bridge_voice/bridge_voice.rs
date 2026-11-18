@@ -50,6 +50,8 @@ pub trait VoicePort {
     fn next(&mut self) -> impl Future<Output = Result<MediaEvent, Error>>;
     /// Never wait for future audio. EOF/error must be an error, not an empty queue.
     fn ready_audio(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, Error>>;
+    /// Mark the interrupted media generation for retirement at replacement.
+    fn retire_audio(&mut self) {}
     /// Cancel the owned delegated turn once; ports without turns do nothing.
     /// # Errors
     /// Reports the existing bounded interrupt admission failure.
@@ -67,6 +69,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> VoicePort for Me
     }
     async fn ready_audio(&mut self) -> Result<Option<PcmFrame>, Error> {
         Self::ready_audio(self).await
+    }
+    fn retire_audio(&mut self) {
+        Self::retire_audio(self);
     }
 }
 

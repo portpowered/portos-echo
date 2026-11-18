@@ -17,6 +17,8 @@ struct State {
     offer_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
     offer_error: Mutex<Option<echo_media::Error>>,
     closes: AtomicUsize,
+    resets: AtomicUsize,
+    reset_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
     observer: Mutex<Option<echo_media::SetupObserver>>,
     applied: tokio::sync::Notify,
     ready: bool,
@@ -36,6 +38,8 @@ fn peer(ready: bool, answer_error: Option<echo_media::Error>) -> (Controlled, Ar
         offer_gate: Mutex::default(),
         offer_error: Mutex::default(),
         closes: AtomicUsize::new(0),
+        resets: AtomicUsize::new(0),
+        reset_gate: Mutex::default(),
         observer: Mutex::default(),
         applied: tokio::sync::Notify::new(),
         ready,
@@ -98,6 +102,15 @@ impl MediaPeer for Controlled {
     }
     async fn recv(&mut self) -> Result<Option<PcmFrame>, echo_media::Error> {
         Ok(self.audio.recv().await)
+    }
+    async fn reset_receive(&mut self) -> Result<(), echo_media::Error> {
+        let gate = self.state.reset_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+        while self.audio.try_recv().is_ok() {}
+        self.state.resets.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
     fn dropped_frames(&self) -> DropCounts {
         DropCounts::default()

@@ -294,6 +294,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 's
     async fn ready_audio(&mut self) -> Result<Option<PcmFrame>, Error> {
         self.port.ready_audio().await
     }
+    fn retire_audio(&mut self) {
+        self.port.retire_audio();
+    }
     fn interrupt_turn(&mut self) -> Result<(), Error> {
         let Some(active) = self.active.clone() else {
             return Ok(());

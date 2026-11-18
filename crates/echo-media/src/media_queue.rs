@@ -56,6 +56,15 @@ impl<T> Queue<T> {
             ready.await;
         }
     }
+    pub(crate) fn discard(&self) {
+        self.discard_with(|| {});
+    }
+    pub(crate) fn discard_with(&self, applied: impl FnOnce()) {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.frames.clear();
+        // Serialize ingress admission with acknowledgement of the boundary.
+        applied();
+    }
     pub(crate) fn close(&self) {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.closed = true;

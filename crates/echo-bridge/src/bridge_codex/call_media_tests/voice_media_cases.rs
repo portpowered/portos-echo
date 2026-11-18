@@ -382,3 +382,50 @@ async fn setup_callback_recording_failure_returns_trace_after_cleanup_and_keeps_
         );
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn replacement_waits_for_receive_ack_across_cancelled_polls_and_reuses_call() {
+    let (mut io, mut server) = fixture();
+    let (peer, state, tx) = peer(true, None);
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *state.reset_gate.lock().unwrap() = Some(gate.clone());
+    let client = async {
+        let mut call = MediaCall::new(&mut io, peer);
+        call.start(&options(), vec![], deadline()).await.unwrap();
+        for expected in 1..=3 {
+            call.retire_audio();
+            call.retire_audio();
+            let boundary = MediaEvent::Control(Event::Transcript {
+                role: "assistant".into(),
+                text: "same replacement".into(),
+                done: false,
+            });
+            // Store a real ordered control boundary, then cancel its reset wait.
+            let mut pending = Box::pin(call.accept_media(boundary));
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(pending.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            drop(pending);
+            tx.send([123; 320]).await.unwrap();
+            assert_eq!(state.resets.load(Ordering::SeqCst), expected - 1);
+            gate.notify_one();
+            assert!(
+                matches!(call.next().await.unwrap(), MediaEvent::Control(Event::Transcript { text, .. }) if text == "same replacement")
+            );
+            assert_eq!(state.resets.load(Ordering::SeqCst), expected);
+            assert_eq!(call.ready_audio().await.unwrap(), None);
+            tx.send([456; 320]).await.unwrap();
+            assert!(matches!(call.next().await.unwrap(), MediaEvent::Audio(frame) if *frame == [456;320]));
+        }
+        call.close(deadline()).await.unwrap();
+        assert_eq!(state.offers.load(Ordering::SeqCst), 1);
+        assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+    };
+    let remote = async {
+        start(&mut server).await;
+        stop(&mut server).await;
+    };
+    tokio::join!(client, remote);
+}

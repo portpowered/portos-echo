@@ -347,3 +347,114 @@ fn failure_codec_corruption_duplicate_and_out_of_order() {
     packet.payload = vec![0xff].into();
     assert_eq!(decoder.decode(&packet), Err(Error::Audio));
 }
+
+fn packet(sequence: u16, payload: &[u8]) -> rtc::rtp::Packet {
+    let mut packet = rtc::rtp::Packet::default();
+    packet.header.payload_type = 111;
+    packet.header.ssrc = 7;
+    packet.header.sequence_number = sequence;
+    packet.payload = payload.to_vec().into();
+    packet
+}
+
+fn encoded(level: i16) -> Vec<u8> {
+    let mut encoder = crate::media_audio::Encoder::new().unwrap();
+    loop {
+        if let Some(data) = encoder.encode(&[level; 320]).unwrap() {
+            return data;
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn receive_reset_reuses_call_discards_queued_ingress_and_pcm_across_replacements() {
+    let mut peer = Peer::controlled();
+    peer.shared.state.send_replace(PeerState::Connected);
+    let state = peer.shared.clone();
+    peer.shared.task(tokio::spawn(async move {
+        state.receive(crate::media_audio::Decoder::new().unwrap()).await;
+    }));
+    let old = encoded(12000);
+    let new = encoded(-6000);
+    let mut progress = peer.shared.received.subscribe();
+    peer.shared.ingress.push(packet(1, &old));
+    progress.wait_for(|p| p.0 == 1).await.unwrap();
+    for generation in 0..3_u16 {
+        // Admission is cancelled before the worker runs: a following call must
+        // await the same reset, not request a second boundary.
+        let mut reset = Box::pin(peer.reset_receive());
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(reset.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        drop(reset);
+        // Ingress racing an admitted reset and decoded-but-undelivered PCM.
+        peer.shared.ingress.push(packet(2 + generation * 12, &old));
+        peer.shared.recv.push([12345; 320]);
+        peer.reset_receive().await.unwrap();
+        assert_eq!(*peer.states().borrow(), PeerState::Connected);
+        assert_eq!(peer.dropped_frames(), crate::DropCounts::default());
+        let mut reference = crate::media_audio::Decoder::new().unwrap();
+        for offset in 0..3_u16 {
+            let packet = packet(3 + generation * 12 + offset, &new);
+            let expected = reference.decode(&packet).unwrap();
+            let before = progress.borrow().0;
+            peer.shared.ingress.push(packet);
+            progress.wait_for(|p| p.0 == before + 1).await.unwrap();
+            if let Some(expected) = expected {
+                assert_eq!(peer.recv().await.unwrap(), Some(expected));
+            }
+        }
+        assert!(
+            std::future::poll_fn(|cx| {
+                let mut receive = std::pin::pin!(peer.recv());
+                std::task::Poll::Ready(std::future::Future::poll(receive.as_mut(), cx).is_pending())
+            })
+            .await
+        );
+    }
+    peer.close().await.unwrap();
+    assert_eq!(peer.reset_receive().await, Err(Error::Closed));
+}
+
+#[test]
+fn receive_reset_preserves_replay_rejection_sequence_wrap_and_ssrc() {
+    let mut decoder = crate::media_audio::Decoder::new().unwrap();
+    let payload = encoded(12000);
+    let last = packet(u16::MAX, &payload);
+    decoder.decode(&last).unwrap();
+    for _ in 0..3 {
+        decoder.reset().unwrap();
+        assert_eq!(decoder.decode(&last), Ok(None));
+        assert_eq!(decoder.decode(&packet(u16::MAX - 1, &payload)), Ok(None));
+    }
+    let mut foreign = packet(0, &payload);
+    foreign.header.ssrc = 8;
+    assert_eq!(decoder.decode(&foreign), Err(Error::Transport));
+    let mut fresh = crate::media_audio::Decoder::new().unwrap();
+    for sequence in 0..3 {
+        let packet = packet(sequence, &payload);
+        assert_eq!(decoder.decode(&packet), fresh.decode(&packet));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn receive_reset_retains_absolute_ack_deadline_after_cancelled_poll() {
+    let mut peer = Peer::controlled();
+    assert_eq!(peer.reset_receive().await, Err(Error::NotConnected));
+    peer.shared.state.send_replace(PeerState::Connected);
+    let mut reset = Box::pin(peer.reset_receive());
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(reset.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(reset);
+    tokio::time::advance(std::time::Duration::from_secs(2)).await;
+    let at_deadline = tokio::time::Instant::now();
+    assert_eq!(peer.reset_receive().await, Err(Error::Deadline));
+    assert_eq!(tokio::time::Instant::now(), at_deadline);
+    peer.close().await.unwrap();
+    assert_eq!(peer.reset_receive().await, Err(Error::Closed));
+}

@@ -100,6 +100,13 @@ pub trait MediaPeer: Sized {
     /// Returns `NotConnected` before readiness, the fixed failure category, or Closed.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
     fn recv(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, Error>> + Send;
+    /// Retire queued ingress/PCM and codec history without reopening the call.
+    /// Cancellation retains the pending acknowledgement for the next invocation.
+    /// # Errors
+    /// Unsupported peers return State; failed/closed peers retain their error.
+    fn reset_receive(&mut self) -> impl Future<Output = Result<(), Error>> + Send {
+        async { Err(Error::State) }
+    }
     fn dropped_frames(&self) -> DropCounts;
     fn close(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
 }

@@ -19,12 +19,21 @@ pub enum MediaEvent {
     Audio(Box<PcmFrame>),
 }
 
+#[derive(Default, PartialEq, Eq)]
+enum ReceiveState {
+    #[default]
+    Current,
+    Retired,
+    Resetting,
+}
+
 /// One call owns its media peer and exclusively borrows initialized app-server IO.
 /// Always await close, then supervisor shutdown, on host failure/cancellation.
 pub struct MediaCall<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer = Peer> {
     call: Call<'a, R, W>,
     peer: P,
     early: VecDeque<Event>,
+    receive_state: ReceiveState,
     started: bool,
     active: bool,
     closed: bool,
@@ -81,6 +90,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             call: Call::new(io),
             peer,
             early: VecDeque::new(),
+            receive_state: ReceiveState::Current,
             started: false,
             active: false,
             closed: false,
@@ -207,8 +217,11 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         if !self.active {
             return Err(Error::Unavailable);
         }
+        if self.receive_state == ReceiveState::Resetting {
+            self.finish_receive_reset().await?;
+        }
         if let Some(event) = self.early.pop_front() {
-            return Ok(MediaEvent::Control(event));
+            return self.accept_media(MediaEvent::Control(event)).await;
         }
         let (result, source) = tokio::select! {
             event = self.call.next() => (event.map(MediaEvent::Control), "call.control_failed"),
@@ -226,7 +239,40 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             self.closed = true;
             return result.and_then(|event| diagnostic.map(|()| event));
         }
-        result
+        self.accept_media(result?).await
+    }
+
+    pub(crate) fn retire_audio(&mut self) {
+        if self.receive_state == ReceiveState::Current {
+            self.receive_state = ReceiveState::Retired;
+        }
+    }
+
+    async fn finish_receive_reset(&mut self) -> Result<(), Error> {
+        self.peer.reset_receive().await.map_err(media_error)?;
+        self.receive_state = ReceiveState::Current;
+        self.record_stage("call.receive_reset")
+    }
+
+    async fn accept_media(&mut self, event: MediaEvent) -> Result<MediaEvent, Error> {
+        if self.receive_state == ReceiveState::Retired
+            && matches!(&event, MediaEvent::Control(Event::Transcript { role, done: false, .. }) if role == "assistant")
+        {
+            let MediaEvent::Control(event) = event else {
+                return Err(Error::Input);
+            };
+            // Retain the boundary across cancelled next() polls. Replacement
+            // control and PCM cannot escape until the receive task acknowledges.
+            self.early.push_front(event);
+            self.receive_state = ReceiveState::Resetting;
+            self.finish_receive_reset().await?;
+            return self
+                .early
+                .pop_front()
+                .map(MediaEvent::Control)
+                .ok_or(Error::Unavailable);
+        }
+        Ok(event)
     }
 
     /// # Errors

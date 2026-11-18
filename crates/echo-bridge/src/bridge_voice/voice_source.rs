@@ -55,6 +55,7 @@ impl Source {
         if self.state != ReplyState::Speaking && !(self.state == ReplyState::Idle && self.delegation.turns > 0) {
             return Ok(());
         }
+        port.retire_audio();
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.reply = ReplyAudio::new(self.lead_ms)?;
         self.delegation = Delegation::default();

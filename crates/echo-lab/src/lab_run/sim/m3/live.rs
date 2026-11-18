@@ -268,23 +268,28 @@ async fn replacement(
         let tail = verify_tail(&state, frames)?;
         wire.send_modify(|state| state.live_tail_frames = tail);
         transcript(process, "assistant", "The day is Monday.", false).await?;
+        *phase = 4;
+    }
+    // The production receive task acknowledges its boundary before this fake
+    // provider emits replacement RTP. No sleep or packet-number inference.
+    if *phase == 4 && state.receive_resets == 1 {
         answer(peer, 53..58).await?;
         observed.send_modify(|state| {
             state.second = true;
             state.transcript = Some("The day is Monday.".into());
         });
-        *phase = 4;
+        *phase = 5;
     }
-    if *phase == 4 && state.bytes[1] >= 2880 {
+    if *phase == 5 && state.bytes[1] >= 2880 {
         // Match M2's eleven-packet finite reply: the remote decoder/resampler
         // retains one packet, so ten packets cannot reach the nine-frame
         // pre-done barrier. Keep the final 9600-byte oracle unchanged.
         answer(peer, 58..64).await?;
-        *phase = 5;
-    }
-    if *phase == 5 && state.bytes[1] >= 8640 {
-        transcript(process, "assistant", "The day is Monday.", true).await?;
         *phase = 6;
+    }
+    if *phase == 6 && state.bytes[1] >= 8640 {
+        transcript(process, "assistant", "The day is Monday.", true).await?;
+        *phase = 7;
     }
     Ok(())
 }

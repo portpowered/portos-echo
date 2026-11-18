@@ -14,12 +14,15 @@ use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, RTCConfigurationBuilder, RTCIceServer, SettingEngineBuilder,
 };
 
+type ReceiveAck = (tokio::time::Instant, tokio::sync::oneshot::Receiver<Result<(), Error>>);
+
 /// One caller-owned peer. Call close to await resource release; Drop cancels workers.
 pub struct Peer {
     pub(crate) shared: Arc<Shared>,
     connection: Option<Arc<dyn PeerConnection>>,
     gathered: Arc<Notify>,
     config: PeerConfig,
+    reset_ack: Option<ReceiveAck>,
     #[cfg(test)]
     pub(crate) runtime: Arc<crate::media_runtime::MediaRuntime>,
 }
@@ -73,6 +76,7 @@ impl Peer {
             connection: Some(connection),
             gathered,
             config,
+            reset_ack: None,
             #[cfg(test)]
             runtime,
         };
@@ -119,28 +123,10 @@ impl Peer {
                 });
             }
         }));
-        let mut decoder = Decoder::new()?;
+        let decoder = Decoder::new()?;
         let state = self.shared.clone();
-        self.shared.task(tokio::spawn(async move {
-            while let Some(packet) = state.ingress.pop().await {
-                let expansion = decoder.decode(&packet);
-                #[cfg(test)]
-                let emitted = expansion.as_ref().is_ok_and(Option::is_some);
-                match expansion {
-                    Ok(Some(frame)) => state.recv.push(frame),
-                    Ok(None) => {}
-                    Err(error) => {
-                        state.fail(error);
-                        break;
-                    }
-                }
-                #[cfg(test)]
-                state.received.send_modify(|p| {
-                    p.0 += 1;
-                    p.1 += u32::from(emitted);
-                });
-            }
-        }));
+        self.shared
+            .task(tokio::spawn(async move { state.receive(decoder).await }));
         Ok(())
     }
 
@@ -155,6 +141,7 @@ impl Peer {
             connection: None,
             gathered: Arc::new(Notify::new()),
             config: PeerConfig::default(),
+            reset_ack: None,
             #[cfg(test)]
             runtime: Arc::new(crate::media_runtime::MediaRuntime::default()),
         }
@@ -257,6 +244,24 @@ impl MediaPeer for Peer {
         }
         self.shared.check()?;
         Ok(frame)
+    }
+    async fn reset_receive(&mut self) -> Result<(), Error> {
+        self.shared.check()?;
+        if *self.shared.state.borrow() != PeerState::Connected {
+            return Err(Error::NotConnected);
+        }
+        if self.reset_ack.is_none() {
+            let (ack, received) = tokio::sync::oneshot::channel();
+            self.shared.resets.push(ack);
+            self.reset_ack = Some((tokio::time::Instant::now() + Duration::from_secs(2), received));
+        }
+        let (deadline, received) = self.reset_ack.as_mut().ok_or(Error::State)?;
+        let result = tokio::time::timeout_at(*deadline, received)
+            .await
+            .map_err(|_| Error::Deadline)?;
+        self.reset_ack = None;
+        self.shared.check()?;
+        result.map_err(|_| Error::Closed)?
     }
     fn dropped_frames(&self) -> DropCounts {
         DropCounts {
