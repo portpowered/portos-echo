@@ -4,6 +4,68 @@ use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
 #[tokio::test(start_paused = true)]
+async fn m1_restart_regression_wake_before_info_preserves_played() {
+    for info_first in [false, true] {
+        let (sender, receiver) = crate::wyoming_events::channel(32);
+        let (_terminal, terminal) = tokio::sync::watch::channel(Some(crate::Error::Protocol));
+        let mut events = Events::new(EventStream { receiver, terminal }, true);
+        let mut router = crate::wyoming_route::Router {
+            generation: std::sync::Arc::new(()),
+            current: None,
+            events: sender,
+            capacity: 16,
+            muted: false,
+        };
+        let frame = crate::wyoming_test_support::frame;
+        router.route(frame("info", json!({}), vec![])).unwrap();
+        assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));
+        router.generation = std::sync::Arc::new(());
+        if info_first {
+            router.route(frame("info", json!({}), vec![])).unwrap();
+            assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));
+        }
+        router
+            .route(frame(
+                "run-pipeline",
+                json!({"start_stage":"asr","end_stage":"tts",
+            "restart_on_end":false,"wake_word_name":"Computer"}),
+                vec![],
+            ))
+            .unwrap();
+        for n in 0..10 {
+            router
+                .route(frame(
+                    "audio-chunk",
+                    json!({"rate":16000,"width":2,"channels":1}),
+                    vec![n, 0],
+                ))
+                .unwrap();
+        }
+        router.route(frame("played", json!({}), vec![])).unwrap();
+        router.end(Ok(()));
+        drop(router);
+        let Some(LinkEvent::Wake(mut run)) = events.recv().await.unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(run.wake_phrase(), "Computer");
+        for n in 0..10 {
+            assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload, [n, 0]);
+        }
+        assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
+        assert_eq!(
+            MicrophoneRun::stats(&run),
+            RunStats {
+                received: 10,
+                dropped: 0
+            }
+        );
+        assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));
+        assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Played)));
+        assert!(matches!(events.recv().await, Err(Error::Protocol)));
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn echo_link_queued_microphone_drains_before_transport_or_protocol_failure() {
     for malformed in [false, true] {
         let (io, mut peer) = duplex(65536);

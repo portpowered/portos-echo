@@ -11,6 +11,7 @@ use super::{
     process::{self, Process},
     trace::Trace,
 };
+mod diagnostics;
 
 #[derive(Default)]
 pub struct World {
@@ -257,6 +258,24 @@ impl World {
         }
     }
 
+    pub async fn failure_diagnostics(&mut self) -> String {
+        let collection = if self.refresh().await.is_ok() {
+            "available"
+        } else {
+            "unavailable"
+        };
+        let status = if let Some(bridge) = &mut self.bridge {
+            let _ = bridge.exited();
+            bridge.exit_summary()
+        } else {
+            "unavailable".into()
+        };
+        format!(
+            "{}; diagnostic collection: {collection}",
+            diagnostics::summary(&status, &self.trace)
+        )
+    }
+
     pub async fn refresh(&mut self) -> Result<(), String> {
         let mut file = tokio::fs::File::open(&self.trace_path)
             .await
@@ -293,7 +312,7 @@ impl World {
         if let Some(provider) = self.canonical.take() {
             match provider.close().await {
                 Ok(snapshot) if super::production::valid_provider(&snapshot, &self.trace, &self.history) => {}
-                _ => failures.push("cleanup: canonical M1 provider observations disagree"),
+                _ => failures.push("cleanup: canonical M1 provider observations disagree".into()),
             }
         }
         self.private.take();
@@ -303,15 +322,15 @@ impl World {
         if let Some(spoof) = self.spoof.take()
             && spoof.shutdown().await.is_err()
         {
-            failures.push("cleanup: spoof shutdown failed");
+            failures.push("cleanup: spoof shutdown failed".into());
         }
         if let Some(host) = self.host.take()
             && !close_process(host).await
         {
-            failures.push("cleanup: host failed to close");
+            failures.push("cleanup: host failed to close".into());
         }
         if self.remove_private().await.is_err() {
-            failures.push("cleanup: cannot remove private observation");
+            failures.push("cleanup: cannot remove private observation".into());
         }
         if failures.is_empty() {
             Ok(())
@@ -320,18 +339,24 @@ impl World {
         }
     }
 
-    pub(super) async fn close_bridge(&mut self) -> Vec<&'static str> {
+    pub(super) async fn close_bridge(&mut self) -> Vec<String> {
         let mut failures = Vec::new();
-        if let Some(bridge) = self.bridge.take() {
-            if !close_process(bridge).await {
-                failures.push("cleanup: bridge failed to close");
+        if let Some(mut bridge) = self.bridge.take() {
+            if bridge.close().await.is_err() {
+                failures.push("cleanup: bridge failed to close".into());
             }
             if let Err(error) = self.refresh().await.and_then(|()| self.trace.finish()) {
-                failures.push(if error.starts_with("trace: incomplete") {
-                    "trace: incomplete final JSON line"
-                } else {
-                    "trace: invalid final trace"
-                });
+                failures.push(
+                    if error.starts_with("trace: incomplete") {
+                        "trace: incomplete final JSON line"
+                    } else {
+                        "trace: invalid final trace"
+                    }
+                    .into(),
+                );
+            }
+            if !failures.is_empty() {
+                failures.push(diagnostics::summary(&bridge.exit_summary(), &self.trace));
             }
         }
         failures

@@ -127,8 +127,11 @@ mod tools;
 async fn media_call_waits_for_connected_sends_pcm_and_preserves_generation_after_close() {
     let (mut io, mut server) = fixture();
     let (peer, state, tx) = peer(true, None);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
     let client = async {
         let mut call = MediaCall::new(&mut io, peer);
+        call.trace = Some(crate::bridge_trace::Trace::open(&path, "api_key").unwrap());
         assert_eq!(call.send([1; 320]), Err(Error::Unavailable));
         assert_eq!(call.start(&options(), vec![], deadline()).await, Ok(()));
         call.send([123; 320]).unwrap();
@@ -149,6 +152,7 @@ async fn media_call_waits_for_connected_sends_pcm_and_preserves_generation_after
     assert_eq!(*state.answers.lock().unwrap(), vec!["fixture-answer"]);
     assert_eq!(state.closes.load(Ordering::SeqCst), 1);
     assert!(io.begin_request("account/read", &json!({})).is_ok());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "");
 }
 
 #[tokio::test(start_paused = true)]
@@ -219,8 +223,11 @@ async fn media_call_invalid_answer_or_failed_peer_never_becomes_active() {
     ] {
         let (mut io, mut server) = fixture();
         let (peer, state, _tx) = peer(true, Some(error));
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
         let client = async {
             let mut call = MediaCall::new(&mut io, peer);
+            call.trace = Some(crate::bridge_trace::Trace::open(&path, "api_key").unwrap());
             assert_eq!(
                 call.start(&options(), vec![], deadline()).await,
                 Err(media_error(error))
@@ -232,6 +239,20 @@ async fn media_call_invalid_answer_or_failed_peer_never_becomes_active() {
         };
         tokio::join!(client, remote);
         assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+        let rows: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["event"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["call.start_failed"]
+        );
+        assert_eq!(rows[0]["stage"], "answer_received");
+        assert_eq!(rows[0]["media_state"], "Connecting");
+        assert_eq!(rows[0].as_object().unwrap().len(), 5);
     }
 }
 
