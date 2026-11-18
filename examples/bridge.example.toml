@@ -9,6 +9,11 @@ credential_file = "credentials/live.json"
 voice = "default"
 session_idle_seconds = 120
 
+[codex]
+# Each new call receives a delimited snapshot after these instructions.
+# The authorized fallback explicitly labels UTC when local offset is unavailable.
+instructions = """Client audio bridge. Answer directly when the conversation and call-start context are sufficient. Delegate only when a tool or external lookup is needed. The context is a call-start snapshot; UTC does not establish the user's local time zone."""
+
 [agent]
 max_tool_calls = 8
 task_deadline_seconds = 60
