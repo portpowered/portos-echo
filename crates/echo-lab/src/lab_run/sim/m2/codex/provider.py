@@ -16,7 +16,7 @@ transcript_count = 0
 observed = {'calls': [], 'sidebands': 0, 'external': 0, 'refreshes': 0}
 output_lock = threading.Lock()
 fault = sys.argv[1] if len(sys.argv) == 2 else None
-assert fault in (None, 'call_refused', 'malformed_sdp')
+assert fault in (None, 'call_refused', 'malformed_sdp', 'pending_call')
 
 
 def emit(value):
@@ -67,6 +67,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             'nominated_key': self.headers.get('Authorization') == 'Bearer dummy-local-only',
             'account_header': self.headers.get('ChatGPT-Account-Id'),
         })
+        if fault == 'pending_call':
+            # The call stays pending until cancellation closes the real HTTP edge.
+            self.connection.recv(1)
+            self.close_connection = True
+            return
         if fault == 'call_refused':
             self.respond(400, b'{"error":"synthetic private provider body"}')
             return

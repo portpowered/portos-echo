@@ -32,6 +32,8 @@ pub fn fixture() -> Vec<u8> {
 pub fn configure(root: &Path, port: u16, spoof: &Spoof) -> Result<(), String> {
     let config = format!(
         r#"
+# M4/M6 retain their reply-only oracle; enabled acknowledgement is proved by M2.
+wake_earcon = false
 [echo]
 host = "127.0.0.1"
 wyoming_port = {port}

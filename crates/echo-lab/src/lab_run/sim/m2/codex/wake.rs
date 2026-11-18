@@ -232,3 +232,213 @@ async fn t3_wake_earcon_call_refusal_and_bad_sdp_with_missing_played_cleanup_wit
     .await
     .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_wake_earcon_active_shutdown_never_fabricates_success() {
+    tokio::time::timeout(DEADLINE, Box::pin(interrupted("shutdown")))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_wake_earcon_active_kill_never_fabricates_success() {
+    tokio::time::timeout(DEADLINE, Box::pin(interrupted("kill")))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_wake_earcon_active_mute_never_fabricates_success() {
+    tokio::time::timeout(DEADLINE, Box::pin(interrupted("mute")))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_wake_earcon_active_eof_never_fabricates_success() {
+    tokio::time::timeout(DEADLINE, Box::pin(interrupted("eof")))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_wake_earcon_active_missing_played_never_fabricates_success() {
+    tokio::time::timeout(DEADLINE, Box::pin(interrupted("missing_played")))
+        .await
+        .unwrap();
+}
+
+async fn interrupted(fault: &'static str) {
+    let options = super::super::tests::options();
+    let root = config::Root::new().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let (listener, lifetime) = super::lifecycle::observed_listener().await;
+    let provider = provider::Provider::start_fault(&options.python, "pending_call")
+        .await
+        .unwrap();
+    let binary = options.bridge.as_ref().unwrap();
+    let mut command = tests::continuous_command(
+        binary,
+        &root.0,
+        output.path(),
+        listener.local_addr().unwrap(),
+        &provider.origin,
+    );
+    let config = root.0.join("configured.private/bridge.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, text.replace("wake_earcon = false", "wake_earcon = true")).unwrap();
+    let (wake, requested) = oneshot::channel();
+    let (active, first_frame) = oneshot::channel();
+    let satellite = tokio::spawn(interrupted_satellite(listener, requested, active, fault));
+    let mut bridge = Process::start(&mut command).unwrap();
+    let collected = bridge.observe_collection();
+    bridge.expect("bridge.ready").await.unwrap();
+    let path = output.path().join("bridge.private.jsonl");
+    let mut screen = super::lifecycle::paired_screen(&path).await;
+    wake.send(()).unwrap();
+    first_frame.await.unwrap();
+    assert_eq!(screen.next().await.unwrap()["state"]["state"], "listening");
+    interrupt_control(binary, &root.0, &mut screen, fault).await;
+    interrupted_cleanup(bridge, collected, fault).await;
+    let frames = satellite.await.unwrap();
+    assert!((1..=8).contains(&frames), "{fault}: {frames}");
+    let observed = provider.close().await.unwrap();
+    interrupted_provider(&observed);
+    interrupted_receipts(&path, fault);
+    assert!(lifetime.upgrade().is_none());
+    release_home(binary, root).await;
+    writeln!(
+        std::io::stdout(),
+        "T3-WAKE {fault}: frames={frames}; no success; child/socket/home released"
+    )
+    .unwrap();
+}
+
+async fn release_home(binary: &Path, root: config::Root) {
+    super::lifecycle::reopened_status(binary, &root.0).await;
+    let home = root.0.clone();
+    drop(root);
+    assert!(!home.exists());
+}
+
+async fn interrupted_cleanup(
+    mut bridge: Process,
+    collected: std::sync::mpsc::Receiver<std::process::ExitStatus>,
+    fault: &str,
+) {
+    if !matches!(fault, "shutdown" | "kill") {
+        assert_eq!(bridge.line().await, Err("process: exited before observation".into()));
+    }
+    let result = bridge.close().await;
+    drop(bridge);
+    let status = collected.try_recv().unwrap();
+    if fault == "shutdown" {
+        assert_eq!(result, Ok(()));
+        assert!(status.success());
+    } else {
+        assert_eq!(result, Err("cleanup: owned child exited nonzero".into()));
+        assert_eq!(status.code(), Some(1));
+    }
+}
+
+async fn interrupted_satellite(
+    listener: Arc<TcpListener>,
+    wake: oneshot::Receiver<()>,
+    active: oneshot::Sender<()>,
+    fault: &str,
+) -> usize {
+    let mut stream = interrupted_open(listener, wake).await;
+    assert_eq!(tests::read(&mut stream).await.0["type"], "audio-start");
+    let (header, bytes) = tests::read(&mut stream).await;
+    assert_eq!(header["type"], "audio-chunk");
+    assert_eq!(bytes.len(), 960);
+    active.send(()).unwrap();
+    if fault == "eof" {
+        return 1;
+    }
+    if fault == "mute" {
+        tests::send(&mut stream, "hassmic-mute", json!({"muted":true}), vec![]).await;
+    }
+    drain_unacknowledged(&mut stream).await
+}
+
+async fn drain_unacknowledged(stream: &mut TcpStream) -> usize {
+    let mut frames = 1;
+    while stream.peek(&mut [0]).await.unwrap() != 0 {
+        let (header, bytes) = tests::read(stream).await;
+        if header["type"] == "audio-chunk" {
+            assert_eq!(bytes.len(), 960);
+            frames += 1;
+        } else {
+            assert_eq!(bytes, Vec::<u8>::new());
+        }
+        // Deliberately withhold Played, including after a cut. The owner's
+        // real settlement deadline must collect an unacknowledged operation.
+    }
+    frames
+}
+
+async fn interrupt_control(binary: &Path, root: &Path, screen: &mut Screen, fault: &str) {
+    if fault == "kill" {
+        let result = tokio::process::Command::new(binary)
+            .current_dir(root.join("configured.private"))
+            .args(["kill", "--config", "bridge.toml"])
+            .output()
+            .await
+            .unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"kill-switch: on\n");
+        assert_eq!(result.stderr, b"");
+        assert_eq!(screen.next().await.unwrap()["state"]["state"], "error");
+    }
+}
+
+fn interrupted_receipts(path: &Path, fault: &str) {
+    let trace = read_trace(path).unwrap();
+    for event in [
+        "wake.earcon_played",
+        "reply.started",
+        "reply.played",
+        "bridge.run_completed",
+    ] {
+        assert_eq!(
+            trace.records.iter().filter(|r| r["event"] == event).count(),
+            0,
+            "{fault}: {event}"
+        );
+    }
+    assert!(!std::fs::read_to_string(path).unwrap().contains("synthetic private"));
+}
+
+async fn interrupted_open(listener: Arc<TcpListener>, wake: oneshot::Receiver<()>) -> TcpStream {
+    let mut stream = listener.accept().await.unwrap().0;
+    assert_eq!(tests::read(&mut stream).await.0["type"], "run-satellite");
+    assert_eq!(tests::read(&mut stream).await.0["type"], "describe");
+    tests::send(&mut stream, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await;
+    wake.await.unwrap();
+    tests::send(
+        &mut stream,
+        "run-pipeline",
+        json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"alexa"}),
+        vec![],
+    )
+    .await;
+    tests::send(
+        &mut stream,
+        "audio-start",
+        json!({"rate":16000,"width":2,"channels":1}),
+        vec![],
+    )
+    .await;
+    stream
+}
+
+fn interrupted_provider(observed: &Value) {
+    assert_eq!(observed["external"], 0);
+    assert_eq!(observed["refreshes"], 0);
+}

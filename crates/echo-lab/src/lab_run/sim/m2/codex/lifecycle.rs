@@ -348,7 +348,7 @@ fn failure_receipts(observed: &Value, path: &Path) {
     }
 }
 
-async fn paired_screen(path: &Path) -> Screen {
+pub(super) async fn paired_screen(path: &Path) -> Screen {
     let trace = read_trace(path).unwrap();
     let address = trace.records.iter().find(|r| r["event"] == "screen.listening").unwrap()["address"]
         .as_str()
@@ -360,7 +360,7 @@ async fn paired_screen(path: &Path) -> Screen {
     screen
 }
 
-async fn reopened_status(binary: &Path, root: &Path) {
+pub(super) async fn reopened_status(binary: &Path, root: &Path) {
     let status = tokio::process::Command::new(binary)
         .current_dir(root.join("configured.private"))
         .args(["status", "--config", "bridge.toml"])
