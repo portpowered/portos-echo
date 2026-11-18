@@ -48,6 +48,15 @@ pub(crate) struct VoiceDrain {
 }
 
 impl VoiceDrain {
+    /// A successful terminal owner has no work left to drain. A dropped or
+    /// cancelled owner deliberately leaves its pending requests unacknowledged.
+    pub(crate) fn finish(mut self) {
+        self.receive.close();
+        while let Ok(request) = self.receive.try_recv() {
+            let _ = request.send(());
+        }
+    }
+
     /// Polled only after due timers and ready voice work, never before them.
     pub(crate) async fn acknowledge(&mut self) {
         if let Some(request) = self.receive.recv().await {

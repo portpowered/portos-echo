@@ -55,6 +55,23 @@ async fn voice_receipt_waits_for_explicit_acknowledgement_and_closed_owner_fails
 }
 
 #[tokio::test(start_paused = true)]
+async fn successful_voice_completion_acknowledges_a_pending_drain_before_retiring() {
+    let context = Context::new();
+    let voice = context.voice().unwrap();
+    let mut publisher = context.publisher().unwrap();
+    let drain = context.drain();
+    tokio::pin!(drain);
+    assert!(std::future::poll_fn(|cx| Poll::Ready(drain.as_mut().poll(cx).is_pending())).await);
+    voice.finish();
+    // The step must reach the publisher request, rather than fail on a lost
+    // voice receipt. A missing screen is checked only after that acknowledgement.
+    assert!(std::future::poll_fn(|cx| Poll::Ready(drain.as_mut().poll(cx).is_pending())).await);
+    publisher.acknowledge().await;
+    assert_eq!(drain.await, Err(Error::Control));
+    assert!(context.voice().is_ok());
+}
+
+#[tokio::test(start_paused = true)]
 async fn unmatched_completed_pcm_write_fails_the_step() {
     let context = Context::new();
     context.wrote(&65_i16.to_le_bytes().repeat(480)).unwrap();

@@ -209,6 +209,9 @@ async fn drive<E: LinkEvents>(
             }, if pending.is_none() => {},
         }
         if source.played && source.microphone_finished && sink.is_none() && source.mouth.due().is_none() {
+            if let Some(drain) = drain.take() {
+                drain.finish();
+            }
             return Ok(());
         }
     }
