@@ -429,7 +429,11 @@ fn configure(command: &mut tokio::process::Command, root: &Path, port: u16, orig
         .replace("session_idle_seconds = 0", "session_idle_seconds = 120");
     std::fs::write(
         path,
-        format!("{text}\n[codex]\nhome = '{}'\n", root.join("home").display()),
+        // Match the controlled Responses provider rather than the pin's default.
+        format!(
+            "{text}\n[codex]\nhome = '{}'\ndelegate_model = 'gpt-5.4'\n",
+            root.join("home").display()
+        ),
     )
     .map_err(|_| "M3: cannot configure Codex")?;
     command.arg("--sim-clock");

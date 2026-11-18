@@ -210,6 +210,35 @@ fn native_observations(order: super::super::CutOrder, name: &str, rows: Vec<Valu
 }
 
 #[tokio::test]
+async fn t3_m3_model_mismatch_reports_failure_without_starting_pending_work() {
+    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    command
+        .arg("-u")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m3/provider.py"));
+    let mut provider = Process::start(&mut command).unwrap();
+    let ready = provider.expect("provider.ready").await.unwrap();
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/v1/responses", ready["origin"].as_str().unwrap()))
+        .json(&json!({"model":"unexpected-fixture-model", "input":[], "tools":[]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        provider.expect("provider.failure").await.unwrap()["reason"],
+        "wrong_model"
+    );
+    provider.send(&json!({"snapshot":true})).await.unwrap();
+    let snapshot = provider.expect("provider.snapshot").await.unwrap();
+    assert_eq!(snapshot["models"], 0);
+    assert_eq!(snapshot["released"], 0);
+    assert_eq!(provider.close().await, Ok(()));
+}
+
+#[tokio::test]
 async fn t3_m3_model_boundary_holds_completion_until_explicit_release() {
     let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
     command

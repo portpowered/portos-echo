@@ -53,7 +53,11 @@ impl CutOrder {
             .await?;
         let mut observations = Vec::new();
         for _ in 0..2 {
-            observations.push(process.line().await?["event"].as_str().unwrap_or_default().to_owned());
+            let observation = process.line().await?;
+            if observation["event"] == "provider.failure" {
+                return Err("M3 delegation: controlled provider rejected the model request".into());
+            }
+            observations.push(observation["event"].as_str().unwrap_or_default().to_owned());
         }
         observations.sort();
         if observations != ["provider.model_started", "provider.sent"] {

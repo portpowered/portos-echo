@@ -56,9 +56,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         if self.path == '/v1/responses':
+            if body.get('model') != 'gpt-5.4':
+                emit({'event': 'provider.failure', 'reason': 'wrong_model'})
+                self.respond(400, b'{"error":{"message":"wrong fixture model"}}')
+                return
             observed['models'] += 1
             assert observed['models'] == 1, 'unexpected model retry'
-            assert body['model'] == 'gpt-5.4', 'wrong delegated model'
             emit({'event': 'provider.model_started'})
             assert release_model.wait(20), 'late model release deadline'
             item = {'type': 'message', 'id': 'stale-message', 'role': 'assistant', 'status': 'completed',
