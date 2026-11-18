@@ -15,9 +15,11 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '4'
       ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-      CODEX_ARMV7_WORK_DIR: ${{ runner.temp }}/codex-armv7-work
-      CODEX_ARMV7_OUTPUT_DIR: ${{ runner.temp }}/codex-armv7-output
     steps:
+      - name: Set build directories
+        run: |
+          echo "CODEX_ARMV7_WORK_DIR=$RUNNER_TEMP/codex-armv7-work" >> "$GITHUB_ENV"
+          echo "CODEX_ARMV7_OUTPUT_DIR=$RUNNER_TEMP/codex-armv7-output" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
