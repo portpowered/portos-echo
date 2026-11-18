@@ -395,6 +395,7 @@ fn statistics(root: &Path, runs: usize) {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
+    lifecycle::setup_stages(&rows);
     let microphone: Vec<_> = rows.iter().filter(|row| row["event"] == "mic.completed").collect();
     assert_eq!(microphone.len(), runs);
     for row in microphone {

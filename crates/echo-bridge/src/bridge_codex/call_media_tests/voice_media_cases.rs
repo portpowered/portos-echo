@@ -89,3 +89,91 @@ async fn media_call_runs_device_capture_reply_drain_and_played_on_one_io_owner()
     tokio::join!(client, remote);
     assert_eq!(state.closes.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn setup_stages_share_epoch_and_keep_only_completed_private_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    let mut trace = crate::bridge_trace::Trace::open(&path, "api_key").unwrap();
+    tokio::time::advance(std::time::Duration::from_millis(7)).await;
+    trace.record("call.peer_created", None, json!({})).unwrap();
+    let (mut io, mut server) = fixture();
+    let (peer, state, _tx) = peer(false, None);
+    let client = async {
+        let mut call = MediaCall::new(&mut io, peer);
+        call.trace_setup(trace).unwrap();
+        call.start(&options(), vec![], deadline()).await.unwrap();
+        call.close(deadline()).await.unwrap();
+    };
+    let remote = async {
+        start(&mut server).await;
+        state.applied.notified().await;
+        tokio::time::advance(std::time::Duration::from_millis(3)).await;
+        for stage in [
+            echo_media::SetupStage::IceConnected,
+            echo_media::SetupStage::DataChannelOpen,
+        ] {
+            state.observer.lock().unwrap().as_ref().unwrap()(stage).unwrap();
+        }
+        state.states.send_replace(PeerState::Connected);
+        stop(&mut server).await;
+    };
+    tokio::join!(client, remote);
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|row| serde_json::from_str(row).unwrap())
+        .collect();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "call.peer_created",
+            "call.offer_ready",
+            "call.realtime_start_sent",
+            "call.answer_received",
+            "call.answer_applied",
+            "call.ice_connected",
+            "call.data_channel_open",
+            "call.live_connected",
+        ]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["elapsed_ms"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [7, 7, 7, 7, 7, 10, 10, 10]
+    );
+    for row in rows {
+        assert_eq!(row.as_object().unwrap().len(), 3);
+        assert_eq!(row["provider_auth_mode"], "api_key");
+    }
+    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn setup_expired_deadline_closes_without_offer_or_rpc() {
+    let (mut io, server) = fixture();
+    let (peer, state, _tx) = peer(true, None);
+    let mut call = MediaCall::new(&mut io, peer);
+    assert_eq!(
+        call.start(&options(), vec![], Instant::now()).await,
+        Err(Error::Deadline)
+    );
+    assert_eq!(state.offers.load(Ordering::SeqCst), 0);
+    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(call.send([0; 320]), Err(Error::Unavailable));
+    call.close(deadline()).await.unwrap();
+    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+    drop(call);
+    assert_eq!(
+        io.begin_request("account/read", &json!({})),
+        Err(echo_codex::codex_rpc::RpcError::Disconnected)
+    );
+    let mut bytes = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut server.into_inner(), &mut bytes)
+        .await
+        .unwrap();
+    assert_eq!(bytes, Vec::<u8>::new());
+}

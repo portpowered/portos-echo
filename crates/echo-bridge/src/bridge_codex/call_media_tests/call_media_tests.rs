@@ -15,6 +15,8 @@ struct State {
     answers: Mutex<Vec<String>>,
     offers: AtomicUsize,
     closes: AtomicUsize,
+    observer: Mutex<Option<echo_media::SetupObserver>>,
+    applied: tokio::sync::Notify,
     ready: bool,
     answer_error: Option<echo_media::Error>,
 }
@@ -30,6 +32,8 @@ fn peer(ready: bool, answer_error: Option<echo_media::Error>) -> (Controlled, Ar
         answers: Mutex::default(),
         offers: AtomicUsize::new(0),
         closes: AtomicUsize::new(0),
+        observer: Mutex::default(),
+        applied: tokio::sync::Notify::new(),
         ready,
         answer_error,
     });
@@ -57,10 +61,19 @@ impl MediaPeer for Controlled {
         if let Some(error) = self.state.answer_error {
             return std::future::ready(Err(error));
         }
+        self.state.applied.notify_one();
         if self.state.ready {
             self.state.states.send_replace(PeerState::Connected);
         }
         std::future::ready(Ok(()))
+    }
+    fn observe_setup(&self, observer: echo_media::SetupObserver) -> Result<(), echo_media::Error> {
+        let mut stored = self.state.observer.lock().unwrap();
+        if stored.is_some() {
+            return Err(echo_media::Error::State);
+        }
+        *stored = Some(observer);
+        Ok(())
     }
     fn states(&self) -> watch::Receiver<PeerState> {
         self.state.states.subscribe()

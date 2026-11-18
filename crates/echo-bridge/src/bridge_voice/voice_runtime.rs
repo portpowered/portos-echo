@@ -91,10 +91,11 @@ async fn work<C: LinkConnector, P: MediaPeer>(
                 () = stopped(stopping.clone()) => Err(Error::Control),
                 result = tokio::time::timeout(std::time::Duration::from_secs(15), setup) => result.unwrap_or(Err(Error::Deadline)),
             };
+            let setup_trace = view.setup_trace();
             let result = match ready {
                 Ok(()) => super::voice_admission::service(client, io, options.voice, peer, stopped(stopping), |notice| {
                 view.observe(notice)
-                }, tools.as_mut()).await,
+                }, (tools.as_mut(), Some(setup_trace))).await,
                 Err(error) => Err(error),
             };
             if let Some(tools) = &mut tools { tools.close().await; }

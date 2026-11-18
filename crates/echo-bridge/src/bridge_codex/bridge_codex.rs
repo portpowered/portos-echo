@@ -69,6 +69,7 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     interrupt: Option<(RequestId, Instant)>,
     interrupted: Option<TurnInterrupt>,
     tool_trace: Option<crate::bridge_trace::ToolTrace>,
+    setup_trace: Option<crate::bridge_trace::Trace>,
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
@@ -81,6 +82,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             interrupt: None,
             interrupted: None,
             tool_trace: None,
+            setup_trace: None,
         }
     }
 
@@ -147,8 +149,16 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             .io
             .begin_request("thread/realtime/start", &params)
             .map_err(rpc_error)?;
+        self.io.flush().await.map_err(rpc_error)?;
+        if let Some(trace) = &mut self.setup_trace {
+            trace.record("call.realtime_start_sent", None, json!({}))?;
+        }
         self.io.wait_reply(&request).await.map_err(rpc_error)?;
-        self.answer().await
+        let answer = self.answer().await?;
+        if let Some(trace) = &mut self.setup_trace {
+            trace.record("call.answer_received", None, json!({}))?;
+        }
+        Ok(answer)
     }
 
     async fn answer(&mut self) -> Result<String, Error> {

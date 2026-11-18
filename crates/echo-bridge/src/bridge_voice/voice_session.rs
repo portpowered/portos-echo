@@ -37,6 +37,26 @@ pub struct ConversationOptions<'a> {
     pub session: SessionOptions,
 }
 
+impl<'o> super::ServeOptions<'o> {
+    pub(super) fn conversation<'a>(&self, instructions: &'a str, deadline: Instant) -> ConversationOptions<'a>
+    where
+        'o: 'a,
+    {
+        ConversationOptions {
+            call: crate::bridge_codex::Options {
+                voice: self.call.voice,
+                instructions,
+                model: self.call.model,
+                effort: self.call.effort,
+                time_zone: self.call.time_zone,
+            },
+            tools: self.tools.clone(),
+            deadline,
+            session: self.session,
+        }
+    }
+}
+
 /// Negotiate media on the host's initialized IO and drive its admitted wake.
 /// Connected is emitted only after signaling AND media readiness. Cancellation
 /// takes priority over admission; every return awaits call/media cleanup. The
@@ -51,6 +71,23 @@ pub async fn open_conversation<L, R, W, P>(
     peer: P,
     options: ConversationOptions<'_>,
     cancelled: impl Future<Output = ()>,
+    observe: impl FnMut(SessionNotice) -> Result<(), Error>,
+) -> Result<u64, Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+{
+    open_traced(device, io, peer, (options, None), cancelled, observe).await
+}
+
+pub(super) async fn open_traced<L, R, W, P>(
+    device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
+    io: &mut RpcIo<R, W>,
+    peer: P,
+    options: (ConversationOptions<'_>, Option<crate::bridge_trace::Trace>),
+    cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error>
 where
@@ -59,6 +96,7 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
+    let (options, trace) = options;
     let mut call = MediaCall::new(io, peer);
     tokio::pin!(cancelled);
     let work = async {
@@ -69,6 +107,7 @@ where
             result = async {
                 if Instant::now() >= options.deadline { return Err(Error::Deadline); }
                 validate(&options.session)?;
+                if let Some(trace) = trace { call.trace_setup(trace)?; }
                 call.start(&options.call, options.tools, options.deadline).await
             } => result?,
         }
@@ -169,6 +208,19 @@ fn settled(result: Result<u64, Error>, cleanup: Result<(), Error>) -> Result<u64
     } else {
         result.and_then(|completed| cleanup.map(|()| completed))
     }
+}
+
+pub(super) async fn peer_created(
+    peer: &mut impl MediaPeer,
+    trace: &mut Option<crate::bridge_trace::Trace>,
+) -> Result<(), Error> {
+    if let Some(trace) = trace
+        && let Err(error) = trace.record("call.peer_created", None, serde_json::json!({}))
+    {
+        let _ = peer.close().await;
+        return Err(error);
+    }
+    Ok(())
 }
 
 pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {

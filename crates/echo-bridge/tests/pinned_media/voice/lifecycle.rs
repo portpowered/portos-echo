@@ -1,5 +1,6 @@
 //! Repeated wakes retain one actual pinned call until idle or operator kill.
 use super::*;
+use std::io::Write;
 
 #[derive(Clone, Copy)]
 pub(super) enum Ending {
@@ -171,5 +172,50 @@ pub(super) async fn presentation(screen: &mut Screen, ending: Ending) {
     }
     for (index, state) in expected.iter().enumerate() {
         assert_eq!(next_frame(screen).await, Some(json!({"seq":index + 1,"state":state})));
+    }
+}
+
+// One sequence per call, including two-wake reuse, idle expiry and operator kill.
+pub(super) fn setup_stages(rows: &[Value]) {
+    let expected = [
+        "call.peer_created",
+        "call.offer_ready",
+        "call.realtime_start_sent",
+        "call.answer_received",
+        "call.answer_applied",
+        "call.ice_connected",
+        "call.data_channel_open",
+        "call.live_connected",
+    ];
+    let stages: Vec<_> = rows
+        .iter()
+        .filter(|row| expected.contains(&row["event"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        stages
+            .iter()
+            .map(|row| row["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    let wake = rows.iter().find(|row| row["event"] == "wyoming.run_started").unwrap()["elapsed_ms"]
+        .as_u64()
+        .unwrap();
+    let mut previous = wake;
+    for row in stages {
+        let current = row["elapsed_ms"].as_u64().unwrap();
+        assert!(current >= previous);
+        assert_eq!(row["provider_auth_mode"], "api_key");
+        let mut keys: Vec<_> = row.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["elapsed_ms", "event", "provider_auth_mode"]);
+        writeln!(
+            std::io::stdout(),
+            "setup_stage={} elapsed_ms={current} delta_ms={}",
+            row["event"].as_str().unwrap(),
+            current - previous
+        )
+        .unwrap();
+        previous = current;
     }
 }
