@@ -4,6 +4,8 @@ stdin commands own the lifecycle; EOF (including a Rust panic) reaps the group.
 Only fixed status lines cross stdout. Temporary synthetic audio is deleted.
 """
 import contextlib
+from concurrent.futures import Future
+import ctypes
 import hashlib
 import os
 from pathlib import Path
@@ -55,6 +57,42 @@ def _allocation_guard(deadline):
         yield
     finally:
         owner.close()
+
+
+def parent_death_guard():
+    """Prepare libc before fork; the child only arms and checks its parent."""
+    expected = os.getpid()
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                      ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    def arm():
+        if prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "parent-death guard failed")
+        if os.getppid() != expected:
+            os.kill(os.getpid(), signal.SIGKILL)
+    return arm
+
+
+@contextlib.contextmanager
+def controller_signals(message="controller cancelled by signal"):
+    if os.name == "nt":
+        yield
+        return
+    signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    def cancelled(signum, _frame):
+        # A second handled signal must not interrupt collection/unstaging.
+        for sig in signals:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(f"{message} {signum}")
+    previous = {sig: signal.getsignal(sig) for sig in signals}
+    try:
+        for sig in signals:
+            signal.signal(sig, cancelled)
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def safe_tail(raw, truncated=False):
@@ -185,11 +223,12 @@ class Host:
                 with LAUNCH_GUARD:
                     binary = self.stage()
                     self.release_reservation()
-                    self.proc = subprocess.Popen(
+                    self.launch(
                         [str(binary), "-P", "wyoming", "-D", "-p", str(self.port),
                          "-n", "Wyoming Test", *failure],
                         cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE, start_new_session=True)
+                        stderr=subprocess.PIPE, start_new_session=True,
+                        preexec_fn=parent_death_guard())
                 self.logged(b"wyoming on ")
         except BaseException as error:
             if isinstance(error, Exception) and not isinstance(error, ReadinessFailure):
@@ -201,6 +240,27 @@ class Host:
                 # Keep the original startup evidence distinct from cleanup.
                 raise self.failure("cleanup-failed") from error
             raise error from None
+
+    def launch(self, *args, **kwargs):
+        launched = Future()
+        def owner():
+            try:
+                proc = subprocess.Popen(*args, **kwargs)
+            except BaseException as error:
+                launched.set_exception(error)
+                return
+            launched.set_result(proc)
+            # Linux PDEATHSIG follows the spawning thread, which must outlive
+            # a caller's executor worker. Collection also ends this owner.
+            proc.wait()
+        threading.Thread(target=owner, daemon=True).start()
+        try:
+            self.proc = launched.result()
+        except BaseException:
+            # A handled controller signal must collect an in-flight launch
+            # before start's existing failure cleanup can release its stage.
+            self.proc = launched.result()
+            raise
 
     def stage(self):
         pinned = Path(subprocess.check_output(
@@ -284,6 +344,7 @@ class Host:
         print(command, flush=True)
 
 
+@controller_signals()
 def main():
     failed = False
     with tempfile.TemporaryDirectory(prefix="wyoming-t3-") as folder:

@@ -3,17 +3,9 @@
 Linux/WSL only below the launcher. The upstream audio-file backend has a real
 clock; FIFO consumption and log markers provide readiness without sleep oracles.
 """
-import contextlib
-import json
-import os
+import contextlib, ctypes, hashlib, json, os, queue, runpy, select, shutil
 from pathlib import Path
-import queue
-import runpy
-import select
-import signal
-import socket
-import struct
-import subprocess
+import signal, socket, struct, subprocess
 import sys
 import tempfile
 import threading
@@ -24,10 +16,42 @@ finite_input = runpy.run_path(str(Path(__file__).with_name("m3") / "host_input.p
 ROOT = Path(__file__).resolve().parents[5]
 LIMIT = 65536
 
+def parent_death_guard():
+    """Prepare libc before fork; the child only arms and checks its parent."""
+    expected = os.getpid()
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                      ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    def arm():
+        if prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "parent-death guard failed")
+        if os.getppid() != expected:
+            os.kill(os.getpid(), signal.SIGKILL)
+    return arm
+
+@contextlib.contextmanager
+def controller_signals(message="controller cancelled by signal"):
+    if os.name == "nt":
+        yield
+        return
+    signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    def cancelled(signum, _frame):
+        # A second handled signal must not interrupt collection/unstaging.
+        for sig in signals:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(f"{message} {signum}")
+    previous = {sig: signal.getsignal(sig) for sig in signals}
+    try:
+        for sig in signals:
+            signal.signal(sig, cancelled)
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 def emit(value):
     print(json.dumps(value), flush=True)
-
 
 sys.path.insert(0, str(ROOT / "scripts"))
 from wsl_distro import resolve_wsl_distro
@@ -35,7 +59,6 @@ from wsl_host import LauncherError, LauncherChild, HostCancelled
 
 # Both T3 launchers share the native transport; the Linux Host stays direct.
 from wsl_relay import observations, guest, diagnostic_tail
-
 
 def launcher_input(events):
     try:
@@ -59,7 +82,6 @@ def launcher_input(events):
         events.put(("error", None))
         return False
 
-
 def launcher_translation(proc, events):
     try:
         data = proc.stdout.read(LIMIT + 1)
@@ -71,7 +93,6 @@ def launcher_translation(proc, events):
         events.put(("translated", path))
     except (OSError, ValueError, UnicodeError):
         events.put(("error", None))
-
 
 def launcher_write(proc, commands, events, relays=()):
     # Raw pipes avoid a buffered-writer lock in the cleanup owner. A blocked
@@ -92,8 +113,6 @@ def launcher_write(proc, commands, events, relays=()):
                 data = data[count:]
     except (OSError, ValueError, RuntimeError):
         events.put(("error", None))
-
-
 def launch_windows():
     events = queue.Queue()
     owner = None
@@ -144,13 +163,9 @@ def launch_windows():
             sys.stderr.write(f"WSL distro '{distro}': cleanup failed\n")
             emit({"event": "host.failed"})
             return 1
-
-
 def launcher_emit(value):
     sys.stdout.buffer.write((json.dumps(value) + "\n").encode("utf-8"))
     sys.stdout.buffer.flush()
-
-
 def launcher_forward(events, translation, owners, distro=None):
     owner = translation
     pending = []
@@ -227,13 +242,12 @@ def launcher_forward(events, translation, owners, distro=None):
             diagnostic_tail(relays)
             if failed:
                 raise RuntimeError("launch: output cleanup failed")
-
-
 class Host:
     def __init__(self, folder, finite_mode=False):
         self.folder = Path(folder)
         self.finite_mode = finite_mode
         self.proc = None
+        self.staged = None
         self.stop = threading.Event()
         self.cancelled = threading.Event()
         self.condition = threading.Condition()
@@ -250,7 +264,19 @@ class Host:
         self.error = False
         self.closed = False
         self.port = None
-
+    def stage(self):
+        pinned = Path(subprocess.check_output(
+            ["sh", str(ROOT / "scripts/hassmic-host.sh"), "path"], text=True,
+            timeout=20).strip())
+        self.staged = tempfile.TemporaryDirectory(prefix="hassmic-exec-", dir="/tmp")
+        folder = Path(self.staged.name).resolve()
+        if folder == Path("/mnt") or Path("/mnt") in folder.parents:
+            raise RuntimeError("stage requires Linux storage")
+        binary = folder / "hassmic-host"
+        shutil.copy2(pinned, binary)
+        if hashlib.sha256(binary.read_bytes()).digest() != hashlib.sha256(pinned.read_bytes()).digest():
+            raise RuntimeError("stage hash mismatch")
+        return binary
     def logs(self):
         while not self.stop.is_set():
             if not select.select([self.proc.stderr], [], [], 0.1)[0]:
@@ -264,7 +290,6 @@ class Host:
                 self.log.extend(data)
                 self.keys_ready = self.keys_ready or b"buttons: EVIOCGRAB" in self.log
                 self.condition.notify_all()
-
     def logged(self, marker):
         with self.condition:
             ready = self.condition.wait_for(
@@ -274,7 +299,6 @@ class Host:
             if self.cancelled.is_set():
                 raise HostCancelled("host command cancelled")
             self.log = self.log[self.log.index(marker) + len(marker):]
-
     def feed(self):
         while not self.stop.is_set():
             with self.condition:
@@ -293,7 +317,6 @@ class Host:
                     self.pending = self.pending[count:]
                 self.fed += count
                 self.condition.notify_all()
-
     def start(self):
         (self.folder / "state").mkdir(exist_ok=True)
         config = "even_volume=off\n"
@@ -319,10 +342,11 @@ class Host:
                    HASSMIC_PLAY=str(self.folder / "play.raw"), HASSMIC_FAKE_LED=str(self.folder / "led"),
                    HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_ARB_RIVALS="0",
                    HASSMIC_FAKE_ADDRS=str(self.folder / "addrs"), HASSMIC_MDNS_FILE=str(self.folder / "no-mdns"))
+        binary = self.stage()
         self.proc = subprocess.Popen(
-            ["sh", str(ROOT / "scripts/hassmic-host.sh"), "run", "-P", "wyoming", "-D", "-p", str(port),
-             "-b", str(self.folder / "keys"), "-n", "Lab Sim " + self.folder.name], cwd=self.folder, env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
+            [str(binary), "-P", "wyoming", "-D", "-p", str(port),
+             "-b", str(self.folder / "keys"), "-n", "Lab Sim " + self.folder.name], cwd=binary.parent, env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True, preexec_fn=parent_death_guard())
         for target in [self.logs, self.feed]:
             thread = threading.Thread(target=target, daemon=True)
             thread.start()
@@ -336,7 +360,6 @@ class Host:
             if self.cancelled.is_set():
                 raise HostCancelled("host command cancelled")
         emit({"event": "host.ready", "address": "127.0.0.1:" + str(port)})
-
     def mute(self):
         # Linux input_event uses the guest's native timeval, not the launcher's
         # Windows ABI. KEY_MUTE toggles the host board's software fallback on up.
@@ -346,7 +369,6 @@ class Host:
         muted = not self.muted
         self.logged(f"mic mute button: {int(muted)}\n".encode())
         self.muted = muted
-
     def command(self, value):
         if self.cancelled.is_set():
             if self.error:
@@ -399,16 +421,16 @@ class Host:
                        "pair": signal.SIGWINCH, "stop": signal.SIGHUP}
             self.proc.send_signal(signals[action])
         emit({"event": "host.ack"})
-
     def close(self):
         if self.closed:
             return
         self.stop.set()
-        deadline = time.monotonic() + 4
+        interrupted = isinstance(sys.exc_info()[1], SystemExit)
+        deadline = time.monotonic() + (1.5 if interrupted else 4)
         try:
             if self.proc and self.proc.poll() is None:
                 with contextlib.suppress(ProcessLookupError):
-                    os.killpg(self.proc.pid, signal.SIGTERM)
+                    os.killpg(self.proc.pid, signal.SIGKILL if interrupted else signal.SIGTERM)
                 try:
                     self.proc.wait(timeout=3)
                 except subprocess.TimeoutExpired:
@@ -428,11 +450,12 @@ class Host:
             if self.keys is not None:
                 os.close(self.keys)
                 self.keys = None
+            if self.staged is not None:
+                self.staged.cleanup()
+                self.staged = None
             if failed:
                 raise RuntimeError("host thread cleanup failed")
         self.closed = True
-
-
 def host_input(host, events):
     # Read EOF independently of log/FIFO waits. Only the main owner closes the
     # host: interrupt its wait, then let its finally stop and collect the group
@@ -445,8 +468,7 @@ def host_input(host, events):
             host.error = host.error or not clean
             host.cancelled.set()
             host.condition.notify_all()
-
-
+@controller_signals()
 def main():
     failed = False
     with tempfile.TemporaryDirectory(prefix="echo-lab-sim-") as folder:
@@ -471,8 +493,6 @@ def main():
             host.close()
     emit({"event": "host.closed"})
     return int(failed)
-
-
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--relay":
         guest(int(sys.argv[2]))

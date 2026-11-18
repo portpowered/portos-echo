@@ -4,6 +4,7 @@ Each phase retains its first microphone chunk; intervening identical streaming
 chunks are consumed and checked, not stored. Timestamps become zero and versions
 become <version>; data_length describes the normalized compact JSON data.
 """
+import ctypes, runpy
 import argparse, base64, contextlib, hashlib, io, json, os, select, shutil, signal
 import socket, subprocess, sys, tempfile, threading, time, unittest
 from pathlib import Path
@@ -12,6 +13,42 @@ ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ("describe", "wake-word", "duplex-reply", "pause", "wake-while-speaking")
 FORMAT = {"rate": 24000, "width": 2, "channels": 1}
 TIMEOUT = 15
+def parent_death_guard():
+    """Prepare libc before fork; the child only arms and checks its parent."""
+    expected = os.getpid()
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                      ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    def arm():
+        if prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "parent-death guard failed")
+        if os.getppid() != expected:
+            os.kill(os.getpid(), signal.SIGKILL)
+    return arm
+
+
+@contextlib.contextmanager
+def controller_signals(message="controller cancelled by signal"):
+    if os.name == "nt":
+        yield
+        return
+    signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    def cancelled(signum, _frame):
+        # A second handled signal must not interrupt collection/unstaging.
+        for sig in signals:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(f"{message} {signum}")
+    previous = {sig: signal.getsignal(sig) for sig in signals}
+    try:
+        for sig in signals:
+            signal.signal(sig, cancelled)
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def encoded(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
 def exact(stream, length):
@@ -60,12 +97,27 @@ class Session:
         self.rows = []
         self.log = bytearray()
         self.deadline = time.monotonic() + TIMEOUT
+        self.staged = None
         self.proc = self.sock = self.stream = None
         self.fed = 0
         self.pipe_capacity = 65536
         self.feed_condition = threading.Condition()
         self.stop_feed = threading.Event()
         self.feeder = None
+    def stage(self):
+        pinned = Path(subprocess.check_output(
+            ["sh", str(ROOT / "scripts/hassmic-host.sh"), "path"], text=True,
+            timeout=20).strip())
+        self.staged = tempfile.TemporaryDirectory(prefix="hassmic-exec-", dir="/tmp")
+        folder = Path(self.staged.name).resolve()
+        if folder == Path("/mnt") or Path("/mnt") in folder.parents:
+            raise RuntimeError("stage requires Linux storage")
+        binary = folder / "hassmic-host"
+        shutil.copy2(pinned, binary)
+        if hashlib.sha256(binary.read_bytes()).digest() != hashlib.sha256(pinned.read_bytes()).digest():
+            raise RuntimeError("stage hash mismatch")
+        return binary
+
     def feed(self):
         import fcntl  # Capture runs on Linux/WSL; offline wire tests are portable.
         try:
@@ -114,11 +166,12 @@ class Session:
             env["HASSMIC_CAP"] = str(self.folder / "capture.fifo")
             self.feeder = threading.Thread(target=self.feed, daemon=True)
             self.feeder.start()
+            binary = self.stage()
             self.proc = subprocess.Popen(
-                ["sh", str(ROOT / "scripts/hassmic-host.sh"), "run", "-P", "wyoming",
+                [str(binary), "-P", "wyoming",
                  "-D", "-p", str(port), "-n", "Capture Echo"],
-                cwd=self.folder, env=env, stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE, start_new_session=True)
+                cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE, start_new_session=True, preexec_fn=parent_death_guard())
             while self.sock is None:
                 self.remaining()
                 try:
@@ -142,20 +195,28 @@ class Session:
             self.stream.close()
         if self.sock:
             self.sock.close()
-        if self.proc:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(self.proc.pid, signal.SIGTERM)
-            try:
-                self.proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(self.proc.pid, signal.SIGKILL)
-                self.proc.wait(timeout=3)
-            self.proc.stderr.close()
-        if self.feeder:
-            self.feeder.join(timeout=1)
-        if hasattr(self, "feed_fd"):
-            os.close(self.feed_fd)
+        try:
+            if self.proc:
+                if self.proc.poll() is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(self.proc.pid, signal.SIGKILL if isinstance(sys.exc_info()[1], SystemExit)
+                                  else signal.SIGTERM)
+                try:
+                    self.proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(self.proc.pid, signal.SIGKILL)
+                    self.proc.wait(timeout=3)
+        finally:
+            if self.proc:
+                self.proc.stderr.close()
+            if self.feeder:
+                self.feeder.join(timeout=1)
+            if hasattr(self, "feed_fd"):
+                os.close(self.feed_fd)
+            if self.staged is not None:
+                self.staged.cleanup()
+                self.staged = None
     def logs(self, ceiling=0):
         if select.select([self.proc.stderr], [], [], min(ceiling, self.remaining()))[0]:
             self.log.extend(os.read(self.proc.stderr.fileno(), 65536))
@@ -301,7 +362,7 @@ def publish(output, producer=capture):
                 (stage / (kind + ".jsonl")).write_bytes(b"".join(encoded(r) + b"\n" for r in rows))
             backup = Path(temp) / "previous"
             # Block handled cancellation during the two-rename transaction.
-            previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+            previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
             try:
                 try:
                     if output.exists():
@@ -319,105 +380,6 @@ def publish(output, producer=capture):
                     shutil.rmtree(output)
                 raise
     print("capture-wyoming: five real-wire fixtures published")
-class WireTests(unittest.TestCase):
-    def test_fragmented_utf8_and_payload(self):
-        class Fragmented(io.BytesIO):
-            def read(self, n=-1):
-                return super().read(min(n, 1))
-        data = {"text": "\u00e9"}
-        payload = bytes(range(80))
-        wire = encoded({"type": "test", "data_length": len(encoded(data)), "payload_length": 80})
-        event, actual = read_event(Fragmented(wire + b"\n" + encoded(data) + payload))
-        self.assertEqual(event, {"type": "test", "data": data})
-        self.assertEqual(actual, payload)
-        row = record("echo->bridge", event, actual)
-        self.assertEqual(row["payload_sha256"], hashlib.sha256(payload).hexdigest())
-        self.assertEqual(base64.b64decode(row["payload_prefix_b64"]), payload[:32])
-    def test_header_only_inline_and_invalid_lengths(self):
-        self.assertEqual(read_event(io.BytesIO(b'{"type":"pong"}\n')), ({"type": "pong", "data": {}}, b""))
-        self.assertEqual(read_event(io.BytesIO(b'{"type":"x","data":{"a":1}}\n'))[0]["data"], {"a": 1})
-        for n in (-1, 1048577, True, 1.5):
-            with self.assertRaises(ValueError):
-                read_event(io.BytesIO(encoded({"type": "x", "payload_length": n}) + b"\n"))
-        for raw in (b"", b'{"type":"x","data_length":2}\n{', b'{"type":"x","payload_length":2}\nx'):
-            with self.assertRaises(EOFError):
-                read_event(io.BytesIO(raw))
-    def test_normalization_and_zero_payload(self):
-        value = {"timestamp": 123, "satellite": {"version": "volatile"}}
-        self.assertEqual(normalize(value), {"timestamp": 0, "satellite": {"version": "<version>"}})
-        self.assertEqual(normalize(normalize(value)), normalize(value))
-        self.assertEqual(record("echo->bridge", {"type": "pong", "data": {}}),
-                         {"dir": "echo->bridge", "header": {"type": "pong", "data": {}, "data_length": 0, "payload_length": 0}})
-    def test_publication_byte_maps(self):
-        rows = {k: [json.loads(line) for line in raw.splitlines()]
-                for k, raw in fixture_bytes().items() if k[:-6] in SCENARIOS}
-        fresh = {k + ".jsonl": b"".join(encoded(r) + b"\n" for r in rows[k + ".jsonl"]) for k in SCENARIOS}
-        def producer(kind, _):
-            return rows[kind + ".jsonl"]
-        with tempfile.TemporaryDirectory() as temp:
-            output = Path(temp) / "fixtures"
-            publish(output, producer)
-            self.assertEqual(fixture_bytes(output), fresh)
-            publish(output, producer)
-            self.assertEqual(fixture_bytes(output), fresh)
-            (output / "nested").mkdir()
-            (output / "nested/unrelated").write_bytes(b"sibling")
-            for name, raw in fixture_bytes().items():
-                (output / name).write_bytes(b"stale" if name in fresh else raw)
-            old = fixture_bytes(output)
-            for failure in (EOFError, TimeoutError, InterruptedError, KeyboardInterrupt):
-                def failed(kind, folder):
-                    if kind == SCENARIOS[1]:
-                        raise failure("capture interrupted")
-                    return producer(kind, folder)
-                with self.assertRaises(failure):
-                    publish(output, failed)
-                self.assertEqual(fixture_bytes(output), old)
-                self.assertEqual(list(Path(temp).iterdir()), [output])
-            with publication(output) as lock:
-                (lock / "owner").write_bytes(b"owner")
-                with self.assertRaises(FileExistsError):
-                    publish(output, lambda *_: self.fail("contender called producer"))
-                self.assertEqual((lock / "owner").read_bytes(), b"owner")
-                self.assertEqual(fixture_bytes(output), old)
-                (lock / "owner").unlink()
-            rename, mask = Path.rename, signal.pthread_sigmask
-            def fail_rename(path, target):
-                if path.name == "fixtures" and path.parent != output.parent:
-                    raise OSError("stage rename failed")
-                return rename(path, target)
-            def cancel(how, signals):
-                result = mask(how, signals)
-                if how == signal.SIG_SETMASK:
-                    raise InterruptedError("pending cancellation")
-                return result
-            for target, effect in (("shutil.copytree", OSError("copy failed")),
-                                   ("pathlib.Path.write_bytes", OSError("write failed")),
-                                   ("pathlib.Path.rename", fail_rename),
-                                   ("signal.pthread_sigmask", cancel)):
-                with mock.patch(target, side_effect=effect, autospec=True), self.assertRaises(OSError):
-                    publish(output, producer)
-                self.assertEqual(fixture_bytes(output), old)
-                self.assertEqual(list(Path(temp).iterdir()), [output])
-            publish(output, producer)
-            self.assertEqual(fixture_bytes(output), {**old, **fresh})
-            self.assertEqual(list(Path(temp).iterdir()), [output])
-    def test_flattened_or_extra_header_fields_fail(self):
-        row = record("echo->bridge", {"type": "info", "data": {}})
-        for changed in ({"dir": row["dir"], **row["header"]},
-                        {**row, "type": "info"},
-                        {**row, "header": {**row["header"], "payload": "forbidden"}}):
-            with self.assertRaises(ValueError):
-                validate([changed], "describe")
-    def test_microphone_start_and_interrupted_wake_sequence_fail(self):
-        output = ROOT / "tests/fixtures/wyoming"
-        for kind in SCENARIOS[1:]:
-            rows = [json.loads(line) for line in (output / (kind + ".jsonl")).read_bytes().splitlines()]
-            pipeline = next(i for i, row in enumerate(rows) if row["header"]["type"] == "run-pipeline")
-            for kind_added in ("audio-start", "pong"):
-                changed = rows[:pipeline + 1] + [record("echo->bridge", {"type": kind_added, "data": {}})] + rows[pipeline + 1:]
-                with self.subTest(scenario=kind, inserted=kind_added), self.assertRaises(AssertionError):
-                    validate(changed, kind)
 def fixture_bytes(output=ROOT / "tests/fixtures/wyoming"):
     return {str(p.relative_to(output)): p.read_bytes() for p in output.rglob("*") if p.is_file()}
 def verify_output_cli():
@@ -432,7 +394,8 @@ children = []
 original = subprocess.Popen
 def start(*a, **kw):
     child = original(*a, **kw)
-    children.append(child)
+    if a[0][-1] != "path":
+        children.append(child)
     return child
 def fail(*a, **kw):
     if mode == 'cancel':
@@ -473,6 +436,7 @@ finally:
         assert fixture_bytes(destination) == before, "isolated CLI capture differs"
     assert fixture_bytes() == before
     print("capture-wyoming CLI: five refreshed; siblings retained; default unchanged")
+@controller_signals("capture cancelled by signal")
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
@@ -480,7 +444,9 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=ROOT / "tests/fixtures/wyoming")
     args = parser.parse_args()
     if args.self_test:
-        suite = unittest.defaultTestLoader.loadTestsFromTestCase(WireTests)
+        cases = runpy.run_path(str(ROOT / "crates/echo-lab/src/lab_run/sim/host_tests/capture_wire.py"),
+                               init_globals=globals())["WireTests"]
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(cases)
         return 0 if unittest.TextTestRunner().run(suite).wasSuccessful() else 1
     if args.smoke:
         with tempfile.TemporaryDirectory() as temp:
@@ -491,9 +457,6 @@ def main():
         publish(args.output_dir)
     return 0
 if __name__ == "__main__":
-    def cancelled(signum, _frame):
-        raise InterruptedError(f"capture cancelled by signal {signum}")
-    signal.signal(signal.SIGTERM, cancelled)
     try:
         raise SystemExit(main())
     except (OSError, ValueError, RuntimeError, AssertionError) as error:
