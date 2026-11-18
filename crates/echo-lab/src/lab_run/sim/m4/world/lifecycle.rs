@@ -122,7 +122,14 @@ async fn t3_m4_parallel_world_failure_does_not_borrow_success_or_leave_listeners
     let (failure, success) = tokio::join!(failed.speak(), passed.speak());
     assert!(failure.is_err());
     assert!(failed.speaking.is_none());
-    assert_eq!(success.unwrap().0["run_id"], "run-1");
+    let success = match success {
+        Ok(success) => success,
+        Err(error) => {
+            let closed = passed.close().await;
+            panic!("{}", passed.failure(&format!("{error}; close: {closed:?}")));
+        }
+    };
+    assert_eq!(success.0["run_id"], "run-1");
     let (failure, success) = tokio::join!(failed.close(), passed.close());
     let failure = failure.unwrap_err();
     assert!(
