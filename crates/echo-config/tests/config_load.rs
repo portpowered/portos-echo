@@ -95,13 +95,13 @@ fn codex_defaults_and_override_precedence_are_offline() {
     assert_eq!(original.codex_voice(), None);
     assert_eq!(original.codex_model(), None);
     let input = MINIMAL
-        .replace("[live]", "[live]\nvoice='legacy-voice'")
+        .replace("[live]", "[live]\nvoice='cedar'")
         .replace("[agent]", "[agent]\nmodel='legacy-model'");
     let legacy = BridgeConfig::from_toml_str(&input).unwrap();
-    assert_eq!(legacy.codex_voice(), Some("legacy-voice"));
+    assert_eq!(legacy.codex_voice(), Some("cedar"));
     assert_eq!(legacy.codex_model(), Some("legacy-model"));
     let input = format!(
-        "{input}\n[codex]\nhome='{}'\nbinary='{}'\nvoice='codex-voice'\nmodel='thread-model'\ninstructions='Local instructions'\n",
+        "{input}\n[codex]\nhome='{}'\nbinary='{}'\nvoice='marin'\nmodel='thread-model'\ninstructions='Local instructions'\n",
         home.display(),
         binary.display()
     );
@@ -110,12 +110,55 @@ fn codex_defaults_and_override_precedence_are_offline() {
     assert_eq!(config, BridgeConfig::from_toml_str(&input).unwrap());
     assert_eq!(config.codex.home, Some(home.clone()));
     assert_eq!(config.codex.binary, Some(binary.clone()));
-    assert_eq!(config.codex_voice(), Some("codex-voice"));
+    assert_eq!(config.codex_voice(), Some("marin"));
     assert_eq!(config.codex_model(), Some("thread-model"));
     assert_eq!(config.codex.instructions, "Local instructions");
     assert!(!home.exists());
     assert!(!binary.exists());
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+}
+
+fn voices(live: Option<&str>, codex: Option<&str>) -> String {
+    let mut input = MINIMAL.to_owned();
+    if let Some(voice) = live {
+        input = input.replace(
+            "[live]",
+            &format!(
+                "[live]
+voice='{voice}'"
+            ),
+        );
+    }
+    if let Some(voice) = codex {
+        input = format!(
+            "{input}
+[codex]
+voice='{voice}'
+"
+        );
+    }
+    input
+}
+
+#[test]
+fn default_voice_is_omitted_and_unknown_voices_are_refused_offline() {
+    let example = BridgeConfig::from_toml_str(EXAMPLE).unwrap();
+    assert_eq!(example.live.voice.as_deref(), Some("default"));
+    assert_eq!(example.codex_voice(), None);
+    let load = |live, codex| BridgeConfig::from_toml_str(&voices(live, codex));
+    assert_eq!(load(Some("alloy"), Some("default")).unwrap().codex_voice(), None);
+    assert_eq!(load(Some("alloy"), Some("cove")).unwrap().codex_voice(), Some("cove"));
+    for (live, codex, field) in [
+        (Some("Default"), None, "live.voice"),
+        (Some("synthetic-voice"), None, "live.voice"),
+        (Some("alloy"), Some("alloy "), "codex.voice"),
+        (None, Some("synthetic-voice"), "codex.voice"),
+    ] {
+        assert_eq!(
+            load(live, codex).unwrap_err().to_string(),
+            format!("{field}: expected default or a pinned realtime voice")
+        );
+    }
 }
 
 #[test]
