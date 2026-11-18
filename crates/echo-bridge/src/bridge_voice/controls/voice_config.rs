@@ -397,7 +397,7 @@ pub(super) mod tests {
         let mut config = BridgeConfig::from_toml_str(
             &include_str!("../../../../../examples/bridge.example.toml")
                 .replace(
-                    "# Optional Codex instructions (add a [codex] section to customize):",
+                    "# Optional Codex instructions (add a table named codex to customize):",
                     "[codex]",
                 )
                 .replace("# instructions =", "instructions ="),
