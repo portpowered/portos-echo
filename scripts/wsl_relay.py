@@ -93,7 +93,7 @@ class Connection:
         self.stop_read, self.stop_write = socket.socketpair()
         try:
             self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=subprocess.DEVNULL, bufsize=0)
+                                         stderr=None, bufsize=0)
         except BaseException:
             self.stop_read.close()
             self.stop_write.close()

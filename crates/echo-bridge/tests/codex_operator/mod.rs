@@ -53,7 +53,11 @@ fn presentation_released(path: &Path, mode: &str, screen: bool) {
         expected
     );
     for receipt in receipts {
-        assert_eq!(receipt.as_object().unwrap().len(), 3);
+        let screen = receipt["event"] == "screen.released";
+        assert_eq!(receipt.as_object().unwrap().len(), if screen { 4 } else { 3 });
+        if screen {
+            assert_eq!(receipt["dropped_clients"], 0);
+        }
         assert_eq!(receipt["provider_auth_mode"], mode);
         assert!(receipt["elapsed_ms"].is_u64());
     }
