@@ -135,7 +135,7 @@ impl WyomingClient {
 
     /// Enable capture with the pin's stalled-progress watchdog, in seconds.
     /// # Errors
-    /// InvalidOptions before any write for zero or values above signed 32-bit;
+    /// `InvalidOptions` before any write for zero or values above signed 32-bit;
     /// otherwise connection failure or operation timeout.
     pub async fn run_satellite_with_failsafe(&self, seconds: u32) -> Result<(), Error> {
         if seconds == 0 || seconds > i32::MAX as u32 {

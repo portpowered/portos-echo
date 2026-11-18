@@ -41,7 +41,7 @@ struct Session<W> {
     registration: Value,
     paused: bool,
     closing: bool,
-    run_open: bool,
+    run_open: Option<()>,
 }
 
 struct ReaderTask(JoinHandle<()>);
@@ -102,7 +102,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         registration: enabled.clone().unwrap_or(Value::Null),
         paused: false,
         closing: false,
-        run_open: false,
+        run_open: None,
     };
     reset.borrow_and_update();
     let work = async {
@@ -204,7 +204,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             self.end_device().await?;
         }
         match self.router.route_with_capture(frame, capture_continues)? {
-            WyomingEvent::RunPipeline(_) => self.run_open = true,
+            WyomingEvent::RunPipeline(_) => self.run_open = Some(()),
             event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
                     let _ = reply.send(Ok(event));
@@ -309,7 +309,11 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             let _ = reply.send(Err(Error::Busy));
             return Ok(());
         }
-        let result = if self.run_open { self.end_device().await } else { Ok(()) };
+        let result = if self.run_open.is_some() {
+            self.end_device().await
+        } else {
+            Ok(())
+        };
         if result.is_ok() {
             self.router.end(Ok(()));
         }
@@ -345,7 +349,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     async fn end_device(&mut self) -> Result<(), Error> {
         self.send(WyomingEvent::Other("hassmic-end".into(), Value::Null), vec![])
             .await?;
-        self.run_open = false;
+        self.run_open = None;
         Ok(())
     }
 
