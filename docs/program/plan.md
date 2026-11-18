@@ -197,6 +197,10 @@ need, since the Echo's disk is small.
   servers in Codex's config, `approvalPolicy: never` with a read-only sandbox. The result goes back as
   `delegation.context.append` without bridge code. The bridge enforces the 8-call and deadline caps and ends an
   over-budget turn with `turn/interrupt`.
+  The pin's native code mode may carry those tools: `functions.exec`, `functions.wait`,
+  `functions.request_user_input_async` and `clock.sleep` wrap them. "Only the bridge's tools" means the effect
+  surface: inside `exec` the only callables are the bridge's declared tools and `clock__curr_time`. T3
+  (`pinned_media/tools_provider.py`) fails if either list widens (decision 2026-11-17).
 - **Audio.** The media peer's track is Opus at 48 kHz; the bridge resamples hassmic's 16 kHz to it and back with
   `rubato`, as `voice-host` does.
 - **Not yet known (each answered by a W2d lane, measured, recorded in `docs/program/baselines.md`).** Whether the
