@@ -4,6 +4,7 @@ stdin commands own the lifecycle; EOF (including a Rust panic) reaps the group.
 Only fixed status lines cross stdout. Temporary synthetic audio is deleted.
 """
 import contextlib
+from concurrent.futures import Future
 import ctypes
 import hashlib
 import os
@@ -222,7 +223,7 @@ class Host:
                 with LAUNCH_GUARD:
                     binary = self.stage()
                     self.release_reservation()
-                    self.proc = subprocess.Popen(
+                    self.launch(
                         [str(binary), "-P", "wyoming", "-D", "-p", str(self.port),
                          "-n", "Wyoming Test", *failure],
                         cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
@@ -239,6 +240,27 @@ class Host:
                 # Keep the original startup evidence distinct from cleanup.
                 raise self.failure("cleanup-failed") from error
             raise error from None
+
+    def launch(self, *args, **kwargs):
+        launched = Future()
+        def owner():
+            try:
+                proc = subprocess.Popen(*args, **kwargs)
+            except BaseException as error:
+                launched.set_exception(error)
+                return
+            launched.set_result(proc)
+            # Linux PDEATHSIG follows the spawning thread, which must outlive
+            # a caller's executor worker. Collection also ends this owner.
+            proc.wait()
+        threading.Thread(target=owner, daemon=True).start()
+        try:
+            self.proc = launched.result()
+        except BaseException:
+            # A handled controller signal must collect an in-flight launch
+            # before start's existing failure cleanup can release its stage.
+            self.proc = launched.result()
+            raise
 
     def stage(self):
         pinned = Path(subprocess.check_output(

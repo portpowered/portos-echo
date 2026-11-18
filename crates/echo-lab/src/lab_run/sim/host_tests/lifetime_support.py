@@ -105,7 +105,12 @@ class Controller:
         self.identify()
 
     def identify(self):
-        children = Path(f'/proc/{self.proc.pid}/task/{self.proc.pid}/children').read_text().split()
+        # Linux records children under their spawning task, including retained
+        # owner threads. Keep attribution to this controller before stage scans.
+        children = set()
+        for task in Path(f'/proc/{self.proc.pid}/task').iterdir():
+            with contextlib.suppress(FileNotFoundError):
+                children.update((task / 'children').read_text().split())
         for child in children:
             try:
                 path = Path(os.readlink(f'/proc/{child}/exe'))

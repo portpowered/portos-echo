@@ -4,6 +4,7 @@ Run explicitly with python3 -m unittest discover -s tests -p 'test_host_teardown
 No build, hardware, real credentials, retries, or non-loopback clients.
 """
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import os
@@ -146,6 +147,17 @@ class PinnedHost(unittest.TestCase):
         conn.sendall(b'{"type":"describe"}\n')
         self.assertIn(b'"info"', conn.recv(65536))
         return conn
+
+    def test_host_outlives_start_worker_and_stop_collects_child(self):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(self.host.start).result(timeout=20)
+        # The spawning owner, unlike the executor worker, remains until exit.
+        self.connect()
+        proc = self.host.proc
+        self.host.stop()
+        self.assertEqual(proc.returncode, -signal.SIGKILL)
+        self.assertIsNone(self.host.proc)
+        self.assertIsNone(self.host.staged)
 
     def test_actual_identity_collect_restart_and_socket_closure(self):
         self.host.start()
