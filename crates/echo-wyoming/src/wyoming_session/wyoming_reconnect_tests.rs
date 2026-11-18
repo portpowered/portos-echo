@@ -173,7 +173,7 @@ fn disconnected_commands_fail_without_retaining_audio() {
     for kind in 0..5 {
         let (reply, rx) = oneshot::channel();
         let command = match kind {
-            0 => Command::Register(reply),
+            0 => Command::Register(serde_json::Value::Null, reply),
             1 => Command::Cut(reply),
             2 => Command::Pause(reply),
             3 => Command::EndRun(reply),
@@ -334,4 +334,49 @@ async fn playback_override_survives_twelve_seconds_without_extending_describe_ti
         assert_eq!(tokio::io::AsyncReadExt::read(&mut server, &mut [0]).await.unwrap(), 0);
     };
     tokio::join!(caller, server);
+}
+
+#[tokio::test(start_paused = true)]
+async fn configured_watchdog_survives_reconnect_without_duplicate_registration() {
+    let (mut client, mut server, connections) = pair();
+    let mut events = client.events().unwrap();
+    let caller = async {
+        for seconds in [0, 2_147_483_648, u32::MAX] {
+            assert_eq!(
+                client.run_satellite_with_failsafe(seconds).await,
+                Err(Error::InvalidOptions)
+            );
+        }
+        client.run_satellite_with_failsafe(605).await.unwrap();
+        client.run_satellite_with_failsafe(605).await.unwrap();
+        assert!(matches!(
+            client.describe().await.unwrap(),
+            echo_contracts::wyoming::WyomingEvent::Info(_)
+        ));
+        loop {
+            let event = events.recv().await.unwrap().unwrap();
+            if event.event == echo_contracts::wyoming::WyomingEvent::Ping(json!("fresh")) {
+                break;
+            }
+        }
+        client.run_satellite_with_failsafe(605).await.unwrap();
+        client.close().await.unwrap();
+    };
+    let device = async {
+        let registration = peer::receive(&mut server).await;
+        assert_eq!(registration.header.r#type, "run-satellite");
+        assert_eq!(registration.header.data, Some(json!({"hassmic_failsafe_seconds":605})));
+        assert_eq!(peer::receive(&mut server).await.header.r#type, "describe");
+        // Let describe settle before replacing the generation.
+        peer::send(&mut server, "info", json!({}), vec![]).await;
+        drop(server);
+        let (io, mut fresh) = duplex(4096);
+        connections.send(Ok(io)).await.unwrap();
+        let registration = peer::receive(&mut fresh).await;
+        assert_eq!(registration.header.r#type, "run-satellite");
+        assert_eq!(registration.header.data, Some(json!({"hassmic_failsafe_seconds":605})));
+        peer::send(&mut fresh, "ping", json!("fresh"), vec![]).await;
+        assert_eq!(tokio::io::AsyncReadExt::read(&mut fresh, &mut [0]).await.unwrap(), 0);
+    };
+    tokio::join!(caller, device);
 }

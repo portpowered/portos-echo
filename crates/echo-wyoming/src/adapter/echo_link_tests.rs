@@ -36,8 +36,8 @@ async fn echo_link_capture_probe_wake_reply_pause_close_preserve_wire_order() {
     let mut events = EchoLink::events(&mut client).unwrap();
     assert_eq!(EchoLink::events(&mut client).err(), Some(Error::Busy));
     let caller = async {
-        client.enable_capture().await.unwrap();
-        client.enable_capture().await.unwrap();
+        client.enable_capture(30).await.unwrap();
+        client.enable_capture(30).await.unwrap();
         client.probe().await.unwrap();
         assert!(matches!(
             LinkEvents::recv(&mut events).await.unwrap(),

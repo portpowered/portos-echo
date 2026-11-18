@@ -90,7 +90,9 @@ pub trait EchoLink: Send + Sync {
     fn reply_channel(&self, capacity: NonZeroUsize) -> (Self::ReplySink, Self::ReplySource);
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.
-    fn enable_capture(&self) -> impl Future<Output = Result<(), Error>> + Send;
+    /// The stalled-progress watchdog must be in 1..=2147483647 seconds.
+    /// Invalid values fail before any device effect.
+    fn enable_capture(&self, failsafe_seconds: u32) -> impl Future<Output = Result<(), Error>> + Send;
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.
     fn probe(&self) -> impl Future<Output = Result<(), Error>> + Send;

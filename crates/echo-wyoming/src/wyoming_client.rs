@@ -130,7 +130,20 @@ impl WyomingClient {
     /// Connection failure or operation timeout.
     pub async fn run_satellite(&self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
-        self.request(Command::Register(tx), rx).await
+        self.request(Command::Register(serde_json::Value::Null, tx), rx).await
+    }
+
+    /// Enable capture with the pin's stalled-progress watchdog, in seconds.
+    /// # Errors
+    /// InvalidOptions before any write for zero or values above signed 32-bit;
+    /// otherwise connection failure or operation timeout.
+    pub async fn run_satellite_with_failsafe(&self, seconds: u32) -> Result<(), Error> {
+        if seconds == 0 || seconds > i32::MAX as u32 {
+            return Err(Error::InvalidOptions);
+        }
+        let (tx, rx) = oneshot::channel();
+        let data = serde_json::json!({"hassmic_failsafe_seconds": seconds});
+        self.request(Command::Register(data, tx), rx).await
     }
 
     /// Take the sole event receiver.

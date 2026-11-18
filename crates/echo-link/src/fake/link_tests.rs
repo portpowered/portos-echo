@@ -16,7 +16,7 @@ fn bounded_reply_resumes_sender_and_requires_acknowledgment() {
     let mut link = ready(FakeConnector::new(observer.clone()).connect()).unwrap();
     let mut events = link.events().unwrap();
     assert_eq!(link.events().err(), Some(Error::Busy));
-    ready(link.enable_capture()).unwrap();
+    ready(link.enable_capture(30)).unwrap();
     ready(link.probe()).unwrap();
     let (tx, rx) = link.reply_channel(NonZeroUsize::new(1).unwrap());
     ready(tx.send(vec![1, 2])).unwrap();
@@ -256,4 +256,16 @@ fn end_run_refuses_unsettled_playback_without_a_second_effect() {
     assert_eq!(ready(play), Ok(PlayOutcome::Played));
     ready(link.end_run()).unwrap();
     assert_eq!(observer.commands().last(), Some(&Command::EndRun));
+}
+
+#[test]
+fn invalid_capture_watchdog_has_no_device_effect() {
+    let observer = Observer::default();
+    let link = ready(FakeConnector::new(observer.clone()).connect()).unwrap();
+    for seconds in [0, 2_147_483_648, u32::MAX] {
+        assert_eq!(ready(link.enable_capture(seconds)), Err(Error::InvalidOptions));
+    }
+    assert_eq!(observer.commands(), vec![Command::Connect]);
+    assert_eq!(ready(link.enable_capture(2_147_483_647)), Ok(()));
+    assert_eq!(observer.commands(), vec![Command::Connect, Command::Capture]);
 }

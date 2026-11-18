@@ -51,7 +51,7 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         if !context.continuing(&source) {
             if source.cancelled && source.sent > 0 {
                 client.pause().await?;
-                client.enable_capture().await?;
+                client.enable_capture(30).await?;
                 client.probe().await?;
             }
             break;
@@ -122,7 +122,7 @@ async fn play<L: EchoLink>(
         // A failed response has no replacement answer to end continued capture.
         // Settle Played first, then return the same satellite to wake readiness.
         client.pause().await?;
-        client.enable_capture().await?;
+        client.enable_capture(30).await?;
         client.probe().await?;
     }
     failure.map_or(Ok(()), Err)?;

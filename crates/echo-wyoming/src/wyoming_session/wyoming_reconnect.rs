@@ -58,7 +58,7 @@ impl Supervisor {
         F: FnMut() -> Fut,
         Fut: Future<Output = std::io::Result<T>>,
     {
-        let mut enabled = false;
+        let mut enabled = None;
         loop {
             let (error, closing) = generation(
                 socket,
@@ -114,7 +114,7 @@ fn reject(command: Option<Command>) -> bool {
             let _ = reply.send(Err(Error::Disconnected));
         }
         Some(
-            Command::Register(reply) | Command::EndRun(reply) | Command::Pause(reply) | Command::Error(_, _, reply),
+            Command::Register(_, reply) | Command::EndRun(reply) | Command::Pause(reply) | Command::Error(_, _, reply),
         ) => {
             let _ = reply.send(Err(Error::Disconnected));
         }

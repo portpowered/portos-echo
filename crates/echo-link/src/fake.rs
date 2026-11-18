@@ -313,8 +313,10 @@ impl EchoLink for FakeLink {
         }));
         (Sink(queue.clone()), Source(queue))
     }
-    fn enable_capture(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        std::future::ready({
+    fn enable_capture(&self, failsafe_seconds: u32) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::ready(if failsafe_seconds == 0 || failsafe_seconds > i32::MAX as u32 {
+            Err(Error::InvalidOptions)
+        } else {
             lock(&self.observer.0).commands.push(Command::Capture);
             Ok(())
         })

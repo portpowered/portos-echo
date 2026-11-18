@@ -78,7 +78,7 @@ async fn device<C: LinkConnector, T, R: AsyncRead + Unpin, W: AsyncWrite + Unpin
         result = timeout_at(deadline, connector.connect()) => result.map_err(|_| Error::Deadline)??,
     };
     let startup = async {
-        client.enable_capture().await?;
+        client.enable_capture(30).await?;
         client.probe().await.map_err(Error::from)
     };
     let ready = tokio::select! {

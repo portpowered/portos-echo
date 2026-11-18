@@ -92,8 +92,8 @@ impl EchoLink for Link {
     fn reply_channel(&self, capacity: NonZeroUsize) -> (fake::Sink, fake::Source) {
         self.0.reply_channel(capacity)
     }
-    async fn enable_capture(&self) -> Result<(), echo_link::Error> {
-        self.0.enable_capture().await
+    async fn enable_capture(&self, failsafe_seconds: u32) -> Result<(), echo_link::Error> {
+        self.0.enable_capture(failsafe_seconds).await
     }
     async fn probe(&self) -> Result<(), echo_link::Error> {
         self.0.probe().await

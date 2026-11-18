@@ -109,8 +109,8 @@ impl<L: EchoLink> EchoLink for RunLink<'_, L> {
             source,
         )
     }
-    async fn enable_capture(&self) -> Result<(), echo_link::Error> {
-        self.client.enable_capture().await
+    async fn enable_capture(&self, failsafe_seconds: u32) -> Result<(), echo_link::Error> {
+        self.client.enable_capture(failsafe_seconds).await
     }
     async fn probe(&self) -> Result<(), echo_link::Error> {
         self.client.probe().await
@@ -362,7 +362,7 @@ mod run_tests {
         let client = FakeConnector::new(observer.clone()).connect().await.unwrap();
         let mut link = RunLink::new(&client);
         assert!(matches!(link.events(), Err(echo_link::Error::Busy)));
-        link.enable_capture().await.unwrap();
+        link.enable_capture(30).await.unwrap();
         link.probe().await.unwrap();
         let (sink, source) = link.reply_channel(NonZeroUsize::new(2).unwrap());
         sink.send(vec![]).await.unwrap();

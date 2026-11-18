@@ -131,8 +131,8 @@ impl EchoLink for Link {
         let (tx, rx) = self.0.reply_channel(size);
         (Sink(tx, self.1.clone()), rx)
     }
-    async fn enable_capture(&self) -> Result<(), echo_link::Error> {
-        self.0.enable_capture().await
+    async fn enable_capture(&self, failsafe_seconds: u32) -> Result<(), echo_link::Error> {
+        self.0.enable_capture(failsafe_seconds).await
     }
     async fn probe(&self) -> Result<(), echo_link::Error> {
         self.0.probe().await

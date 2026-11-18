@@ -19,7 +19,7 @@ mod wyoming_cut_tests;
 
 pub(crate) enum Command {
     Describe(Reply<WyomingEvent>),
-    Register(Reply<()>),
+    Register(Value, Reply<()>),
     Play(AudioFormat, mpsc::Receiver<Vec<u8>>, Reply<PlayOutcome>),
     // Retain the legacy internal command exercised by the unchanged W1 tests.
     #[cfg(test)]
@@ -38,6 +38,7 @@ struct Session<W> {
     describe: Option<Reply<WyomingEvent>>,
     play: Option<Playback>,
     registered: bool,
+    registration: Value,
     paused: bool,
     closing: bool,
     run_open: bool,
@@ -59,7 +60,7 @@ pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     end: watch::Sender<Option<Error>>,
 ) {
     let (_reset, mut reset) = watch::channel(0_u64);
-    let mut enabled = false;
+    let mut enabled = None;
     let (result, _) = generation(io, opts, &mut commands, events, &mut reset, &mut enabled).await;
     end.send_replace(Some(result));
 }
@@ -70,7 +71,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     commands: &mut mpsc::Receiver<Command>,
     events: wyoming_events::Sender,
     reset: &mut watch::Receiver<u64>,
-    enabled: &mut bool,
+    enabled: &mut Option<Value>,
 ) -> (Error, bool) {
     let (reader, writer) = tokio::io::split(io);
     let (tx, mut incoming) = mpsc::channel(1);
@@ -97,15 +98,16 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         opts,
         describe: None,
         play: None,
-        registered: *enabled,
+        registered: enabled.is_some(),
+        registration: enabled.clone().unwrap_or(Value::Null),
         paused: false,
         closing: false,
         run_open: false,
     };
     reset.borrow_and_update();
     let work = async {
-        if *enabled {
-            if let Err(error) = session.send(WyomingEvent::RunSatellite(Value::Null), vec![]).await {
+        if enabled.is_some() {
+            if let Err(error) = session.register(session.registration.clone()).await {
                 return error;
             }
             session.registered = true;
@@ -117,7 +119,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         _ = reset.changed() => Error::Timeout,
         result = work => result,
     };
-    *enabled = session.registered;
+    *enabled = session.registered.then_some(session.registration.clone());
     session.router.end(if session.closing { Ok(()) } else { Err(result) });
     if let Some(reply) = session.describe.take() {
         let _ = reply.send(Err(result));
@@ -236,11 +238,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                     self.send(WyomingEvent::Describe(Value::Null), vec![]).await?;
                 }
             }
-            Some(Command::Register(reply)) => {
+            Some(Command::Register(data, reply)) => {
                 if !self.registered {
-                    self.send(WyomingEvent::RunSatellite(Value::Null), vec![]).await?;
-                    self.registered = true;
-                    self.paused = false;
+                    self.register(data).await?;
                 }
                 let _ = reply.send(Ok(()));
             }
@@ -281,6 +281,14 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 return Err(Error::Closed);
             }
         }
+        Ok(())
+    }
+
+    async fn register(&mut self, data: Value) -> Result<(), Error> {
+        self.send(WyomingEvent::RunSatellite(data.clone()), vec![]).await?;
+        self.registration = data;
+        self.registered = true;
+        self.paused = false;
         Ok(())
     }
 
