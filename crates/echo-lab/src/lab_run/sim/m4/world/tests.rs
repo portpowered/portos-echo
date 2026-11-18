@@ -1,5 +1,6 @@
 //! T3 native capture, screen, exact provider/MCP output and owned cleanup.
 use super::*;
+use std::io::Write;
 
 async fn journey(negative: bool) {
     let (mut case, owners) = lifecycle::start(false, negative).await;
@@ -9,7 +10,11 @@ async fn journey(negative: bool) {
     assert_eq!(timing.played, 9600);
     let sample = timing.sample();
     let instrumented = option_env!("CARGO_LLVM_COV").is_some();
-    eprintln!("M4_SAMPLE negative={negative} instrumented={instrumented} sample={sample:?}");
+    writeln!(
+        std::io::stdout(),
+        "M4_SAMPLE negative={negative} instrumented={instrumented} sample={sample:?}"
+    )
+    .unwrap();
     reply_latency(sample, instrumented).unwrap();
     assert_eq!(case.close().await, Ok(()));
     assert_eq!(
