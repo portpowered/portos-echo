@@ -139,10 +139,24 @@ impl World {
                 .ok_or("M3 first reply: missing host PCM count")?;
             if bytes > 0 {
                 self.first_pcm = Some(bytes);
-                return self.read_trace();
+                return self.first_started().await;
             }
             tokio::task::yield_now().await;
         }
+    }
+
+    async fn first_started(&mut self) -> Result<(), String> {
+        // PCM can reach the device before the bridge observes its send receipt.
+        // Speaking is published after reply.started is written, so it is the
+        // causal barrier for the next exact trace assertion.
+        let screen = self.screen.as_mut().ok_or("M3: missing screen")?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            screen.expect(&json!({"state":"speaking"})),
+        )
+        .await
+        .map_err(|_| "M3 first reply: missing Speaking before 5000 ms deadline")??;
+        self.read_trace()
     }
 
     pub async fn second(&mut self) -> Result<(), String> {
