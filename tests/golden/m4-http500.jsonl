@@ -21,3 +21,5 @@
 {"elapsed_ms":0,"event":"wyoming.run_ended","provider_auth_mode":"api_key","run_id":"run_id-1"}
 {"elapsed_ms":0,"event":"bridge.run_completed","provider_auth_mode":"api_key","run_id":"run_id-1"}
 {"elapsed_ms":0,"event":"live.closed","provider_auth_mode":"api_key","reason":"shutdown"}
+{"elapsed_ms":0,"event":"health.released","provider_auth_mode":"api_key"}
+{"elapsed_ms":0,"event":"screen.released","provider_auth_mode":"api_key"}
