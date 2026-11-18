@@ -6,6 +6,9 @@ pub(super) struct Fixture {
     pub home: PathBuf,
     pub binary: PathBuf,
     pub screen: std::net::SocketAddr,
+    lifetimes: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tokio::net::TcpStream>>,
+    lifetime_task: tokio::task::JoinHandle<()>,
+    observed: std::sync::atomic::AtomicUsize,
 }
 
 impl Fixture {
@@ -23,15 +26,26 @@ impl Fixture {
         let owner = Supervisor::new(SupervisorConfig::new(binary.clone(), home.clone())).unwrap();
         std::fs::write(home.join("work/app-server"), include_str!("peer.py")).unwrap();
         std::fs::write(home.join("mode"), mode).unwrap();
+        let lifetimes = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::write(
+            home.join("lifetime-port"),
+            lifetimes.local_addr().unwrap().port().to_string(),
+        )
+        .unwrap();
+        lifetimes.set_nonblocking(true).unwrap();
         drop(owner);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let screen = listener.local_addr().unwrap();
         drop(listener);
+        let (lifetimes, lifetime_task) = watch_children(tokio::net::TcpListener::from_std(lifetimes).unwrap());
         let fixture = Self {
             directory,
             home,
             binary,
             screen,
+            lifetimes: tokio::sync::Mutex::new(lifetimes),
+            lifetime_task,
+            observed: std::sync::atomic::AtomicUsize::new(0),
         };
         fixture.configure(mode);
         fixture
@@ -61,6 +75,32 @@ impl Fixture {
 
     pub fn owner(&self) -> Supervisor {
         Supervisor::new(SupervisorConfig::new(self.binary.clone(), self.home.clone())).unwrap()
+    }
+
+    pub async fn child_lifetime(&self) -> tokio::net::TcpStream {
+        self.lifetimes.lock().await.recv().await.unwrap()
+    }
+
+    pub async fn children_released(&self) {
+        use std::sync::atomic::Ordering;
+        let launches = std::fs::read_to_string(self.home.join("launches"))
+            .unwrap()
+            .lines()
+            .count();
+        for _ in self.observed.load(Ordering::SeqCst)..launches {
+            Self::child_closed(self.child_lifetime().await).await;
+            self.observed.fetch_add(1, Ordering::SeqCst);
+        }
+        assert_eq!(self.observed.load(Ordering::SeqCst), launches);
+    }
+
+    pub async fn child_closed(mut stream: tokio::net::TcpStream) {
+        // TerminateProcess resets held TCP connections on Windows; both EOF
+        // and reset prove destruction of this child's connected socket.
+        match stream.read(&mut [0]).await {
+            Ok(count) => assert_eq!(count, 0),
+            Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset),
+        }
     }
 
     pub async fn invoke(&self, args: &[&str], code: i32, stdout: &str, stderr: &str) {
@@ -96,6 +136,34 @@ impl Fixture {
             .await
             .unwrap()
     }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.lifetime_task.abort();
+    }
+}
+
+fn watch_children(
+    listener: tokio::net::TcpListener,
+) -> (
+    tokio::sync::mpsc::UnboundedReceiver<tokio::net::TcpStream>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (send, receive) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            assert_eq!(stream.read_u8().await.unwrap(), b'O');
+            // Admit the child only once its instance-owned connection is held
+            // by this test. Windows may discard unread bytes on process kill.
+            stream.write_all(b"A").await.unwrap();
+            if send.send(stream).is_err() {
+                break;
+            }
+        }
+    });
+    (receive, task)
 }
 
 #[cfg(windows)]

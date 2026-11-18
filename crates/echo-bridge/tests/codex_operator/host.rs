@@ -16,17 +16,38 @@ fn config(fixture: &Fixture) -> CodexConfig {
 
 pub(super) async fn released(fixture: &Fixture) {
     drop(fixture.owner());
-    assert!(
-        tokio::net::TcpStream::connect((
-            std::net::Ipv4Addr::LOCALHOST,
-            std::fs::read_to_string(fixture.home.join("peer-port"))
-                .unwrap()
-                .parse::<u16>()
-                .unwrap(),
-        ))
+    tokio::time::timeout(OBSERVATION_TIMEOUT, fixture.children_released())
         .await
-        .is_err()
-    );
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn codex_host_child_lifetime_stays_open_until_owned_process_cleanup() {
+    let fixture = Fixture::new("chatgpt");
+    let stream = with_host(
+        &config(&fixture),
+        LiveMode::Chatgpt,
+        None,
+        Instant::now() + OBSERVATION_TIMEOUT,
+        std::future::pending(),
+        async |_| {
+            let stream = fixture.child_lifetime().await;
+            assert_eq!(
+                stream.try_read(&mut [0]).unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+            assert!(matches!(
+                Supervisor::new(SupervisorConfig::new(fixture.binary.clone(), fixture.home.clone())),
+                Err(ProcessError::PrivateHome)
+            ));
+            Ok(stream)
+        },
+    )
+    .await
+    .unwrap();
+    drop(fixture.owner());
+    Fixture::child_closed(stream).await;
 }
 
 #[tokio::test]

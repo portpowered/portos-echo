@@ -24,6 +24,12 @@ assert "OPENAI_ACCESS_TOKEN" not in os.environ
 control = socket.socket()
 control.bind(("127.0.0.1", 0))
 control.listen(1)
+# Kept for the entire child lifetime, never used by a protocol handler. The
+# test holds the other end; EOF identifies this child rather than a reusable
+# listening address. The supervisor also joins/reaps before releasing home.
+lifetime = socket.create_connection(("127.0.0.1", int(home.joinpath("lifetime-port").read_text())))
+lifetime.sendall(b"O")
+assert lifetime.recv(1) == b"A"
 home.joinpath("peer-port").write_text(str(control.getsockname()[1]))
 home.joinpath("peer-pid").write_text(str(os.getpid()))
 with home.joinpath("launches").open("a") as launches:
