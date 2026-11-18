@@ -51,7 +51,7 @@ pub(super) async fn replies<L: EchoLink>(
         previous = totals;
         observe(Notice::ReplySettled(stats))?;
         observe(Notice::ReplyPlayed)?;
-        if !listen((events, microphone), port, source, cancelled.as_mut(), observe).await? {
+        if !listen((events, microphone), port, (source, drain), cancelled.as_mut(), observe).await? {
             return Ok(());
         }
         generation_options.response_deadline = source.controller.replacement_deadline()?;
@@ -61,11 +61,15 @@ pub(super) async fn replies<L: EchoLink>(
 async fn listen<E: LinkEvents>(
     input: (&mut E, &mut E::Run),
     port: &mut impl VoicePort,
-    source: &mut Source,
+    context: (
+        &mut Source,
+        &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
+    ),
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<bool, Error> {
     let (events, microphone) = input;
+    let (source, drain) = context;
     let deadline = source.controller.idle_deadline().ok_or(Error::Input)?;
     tokio::pin!(cancelled);
     loop {
@@ -75,7 +79,15 @@ async fn listen<E: LinkEvents>(
             () = tokio::time::sleep_until(deadline) => return Ok(false),
             result = listening_step(events, microphone, port, source, observe) => {
                 if result? { return Ok(true); }
-            }
+            },
+            // Keep the same clock owner across replies. Acknowledge only after
+            // due idle expiry, cancellation and ready capture/control work.
+            () = async {
+                match drain {
+                    Some(drain) => drain.acknowledge().await,
+                    None => std::future::pending().await,
+                }
+            } => {},
         }
         tokio::task::yield_now().await;
     }
@@ -324,6 +336,67 @@ mod tests {
         tx.send(MediaEvent::Control(Event::ReplyDone { text: "stale".into() }))
             .await
             .unwrap();
+    }
+
+    // T1: the real idle loop must release the guarded clock's voice fence.
+    // No screen is installed: Control proves the fence reached screen admission;
+    // a missing voice acknowledgement instead leaves the receipt pending.
+    #[tokio::test(start_paused = true)]
+    async fn voice_listen_acknowledges_clock_without_renewing_idle_and_expiry_wins() {
+        let context = crate::bridge_mcp::bridge_clock::receipt::Context::for_voice_test();
+        let observer = Observer::default();
+        let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        let mut events = client.events().unwrap();
+        observer.wake("Computer", vec![]);
+        let Some(LinkEvent::Wake(mut microphone)) = events.recv().await.unwrap() else {
+            unreachable!()
+        };
+        let (_tx, rx) = mpsc::channel(1);
+        let mut port = Port(rx);
+        let mut source = Source::new(200, false).unwrap();
+        source.controller.reply_started();
+        source.controller.played(true).unwrap();
+        source.controller.listen_after_reply(Duration::from_secs(3)).unwrap();
+        let deadline = source.controller.idle_deadline().unwrap();
+        let mut drain = Some(context.voice().unwrap());
+        let mut observe = |_| Ok(());
+        let mut listening = Box::pin(listen(
+            (&mut events, &mut microphone),
+            &mut port,
+            (&mut source, &mut drain),
+            std::future::pending(),
+            &mut observe,
+        ));
+        clock_fence(listening.as_mut(), &context).await;
+        tokio::time::advance(Duration::from_secs(3) - Duration::from_nanos(1)).await;
+        clock_fence(listening.as_mut(), &context).await;
+        let mut step = Box::pin(context.next_step());
+        assert!(poll_fn(|cx| Poll::Ready(step.as_mut().poll(cx).is_pending())).await);
+        tokio::time::advance(Duration::from_nanos(1)).await;
+        assert_eq!(listening.await, Ok(false));
+        assert!(poll_fn(|cx| Poll::Ready(step.as_mut().poll(cx).is_pending())).await);
+        assert_eq!(Instant::now(), deadline);
+        assert_eq!(source.controller.idle_deadline(), Some(deadline));
+        assert_eq!(observer.commands(), [Command::Connect]);
+    }
+
+    async fn clock_fence(
+        mut listening: Pin<&mut impl Future<Output = Result<bool, Error>>>,
+        context: &crate::bridge_mcp::bridge_clock::receipt::Context,
+    ) {
+        let mut step = Box::pin(context.next_step());
+        for _ in 0..128 {
+            let result = poll_fn(|cx| {
+                assert!(listening.as_mut().poll(cx).is_pending());
+                Poll::Ready(step.as_mut().poll(cx))
+            })
+            .await;
+            if let Poll::Ready(result) = result {
+                assert_eq!(result, Err(Error::Control));
+                return;
+            }
+        }
+        unreachable!("listening must acknowledge the voice fence before the screen check");
     }
 
     #[tokio::test(start_paused = true)]
