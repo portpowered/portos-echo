@@ -207,10 +207,10 @@ jobs:
           target: test-contract
       - name: test-contract
         run: make test-contract
-  test-sim:
-    name: test-sim
+  test-sim-suites:
+    name: test-sim-suites
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -218,10 +218,25 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
-          target: test-sim
+          target: test-sim-suites
           sim: 'true'
-      - name: test-sim
-        run: make test-sim
+      - name: test-sim-suites
+        run: make test-sim-suites
+  test-sim-host:
+    name: test-sim-host
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-sim-host
+          sim: 'true'
+      - name: test-sim-host
+        run: make test-sim-host
   test-concurrency:
     name: test-concurrency
     runs-on: ubuntu-latest

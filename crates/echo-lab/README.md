@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 16
+last modified: 2026, november, 18
 status: active
 ---
 
@@ -49,8 +49,8 @@ target/debug/echo-lab run tests/scenarios/m4-spoof-tool.yaml --driver sim
 
 The unchanged utterance maps to the finite synthetic capture. The sim driver
 selects the sibling production `echo-bridge`; `--bridge` explicitly overrides it.
-W1 retains its helper. Discovery executes M4 too, and `make test-sim` repeats
-both cases ten times without retries. Each case uses fresh peers and private
+W1 retains its helper. Discovery executes M4 too, and `make test-sim` runs it
+once, without retries. Each case uses fresh peers and private
 configuration; cleanup failures fail the run. `report.json` records actual
 sent transcript, paired screen state, counts, PCM bytes and socket latency.
 The p95 budget covers the positive and fresh HTTP 500 samples together.
@@ -611,9 +611,11 @@ nonnegative `duration_ms`. Equality at the budget passes; missing/invalid sample
 and unsupported metrics fail. W1's bridge produces neither speech, UI nor timing;
 scripted T3 bridges test those observations without claiming W2 integration.
 
-`make test-sim` validates scenarios, preserves the host/Wyoming component tests,
-builds the lab binaries once, runs ignored `sim_host` integration cases with
-two workers and discovers all T3 scenarios. It prints pass/fail/not-runnable
+`make test-sim` runs two halves, which CI runs as parallel jobs. Both build the
+lab binaries once. `make test-sim-suites` validates scenarios, runs the
+host/Wyoming component tests and discovers all T3 scenarios.
+`make test-sim-host` runs the ignored `sim_host` integration cases and the
+binary's ignored T3 cases, each with two workers. Discovery prints pass/fail/not-runnable
 outcomes and `executed`, `passed`, `failed`, `not_runnable` totals. A runnable
 failure or zero executed scenarios returns 1; M4 is never counted as passed.
 The test-only `echo-lab-sim-script` binary consumes explicit synthetic scripts

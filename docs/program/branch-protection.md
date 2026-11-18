@@ -21,7 +21,8 @@ these exact GitHub Actions check names required, and branches up to date before 
 - `lint-self-tests`
 - `test-unit`
 - `test-contract`
-- `test-sim`
+- `test-sim-suites`
+- `test-sim-host`
 - `test-concurrency`
 - `build-host`
 
@@ -33,7 +34,7 @@ The owner proves that a red required check prevents merging after protection is 
 This document requests settings; it does not apply them.
 
 Each job in `.github/workflows/ci.yml` invokes one corresponding Make target.
-`make ci` executes all 15 targets in the same order, enforced by `cargo xtask ci-parity`.
+`make ci` executes all 16 targets in the same order, enforced by `cargo xtask ci-parity`.
 `make lint` also runs parity and both existing lint self-tests.
 Local execution needs the tools pinned in `.github/actions/setup/action.yml`, GNU Make,
 POSIX sh, Python 3.12, Node 24 and the stable compiler in `rust-toolchain.toml`.

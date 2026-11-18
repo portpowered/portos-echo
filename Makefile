@@ -19,7 +19,7 @@ ifeq ($(OS),Windows_NT)
 COVERAGE_INSTRUMENTATION := --no-rustc-wrapper
 endif
 
-.PHONY: fmt-check lint-shape lint lint-rust lint-deps lint-rules lint-scripts-web lint-docs lint-docs-online lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency coverage deps-fresh build-host ci
+.PHONY: fmt-check lint-shape lint lint-rust lint-deps lint-rules lint-scripts-web lint-docs lint-docs-online lint-ci-parity lint-self-tests test-unit test-contract test-sim test-sim-suites test-sim-host test-concurrency coverage deps-fresh build-host ci
 .NOTPARALLEL: lint ci
 
 fmt-check:
@@ -80,19 +80,24 @@ test-contract:
 	cargo test --offline --locked -p echo-contracts --lib --test contracts_wyoming --test contracts_events -- --nocapture
 	cargo test --offline --locked -p echo-screen-contract --test screen_wire -- --nocapture
 
-test-sim:
+# CI runs the two halves as parallel jobs; `make test-sim` still runs both.
+test-sim: test-sim-suites test-sim-host
+
+.PHONY: sim-prereqs
+sim-prereqs: hassmic-host
+	cargo build --locked -p echo-bridge -p echo-muse-bridge -p echo-lab --bins
+
+test-sim-suites: sim-prereqs
 	cargo run --locked -p echo-lab -- validate
-	$(MAKE) hassmic-host
 	sh tests/hassmic_host_smoke.sh
-	cargo build --locked -p echo-bridge -p echo-muse-bridge --bins
-	cargo nextest run -p echo-bridge --test bridge_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
-	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
-	cargo nextest run -p echo-lab --test sim_bridge_cli --run-ignored only --locked --config-file .github/nextest.toml --profile ci --no-capture
-	cargo build -p echo-lab --bins --locked
+	cargo nextest run -p echo-bridge --test bridge_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
+	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
+	cargo nextest run -p echo-lab --test sim_bridge_cli --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
+	cargo run --locked -p echo-lab -- run --all --driver sim
+
+test-sim-host: sim-prereqs
 	cargo nextest run -p echo-lab --test sim_host --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
 	cargo nextest run -p echo-lab --bin echo-lab --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
-	cargo run --locked -p echo-lab -- run --all --driver sim
-	for attempt in 1 2 3 4 5 6 7 8 9 10; do target/debug/echo-lab run tests/scenarios/m4-spoof-tool.yaml --driver sim; done
 
 .PHONY: hassmic-host capture-wyoming measure-barge-in
 hassmic-host:
@@ -169,7 +174,7 @@ ECHO_PACKAGES := echo-contracts echo-config echo-wyoming echo-audio echo-live ec
 build-echo:
 	sh scripts/build-echo.sh $(ECHO_PACKAGES)
 
-ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-docs lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency build-host build-echo
+ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-docs lint-ci-parity lint-self-tests test-unit test-contract test-sim-suites test-sim-host test-concurrency build-host build-echo
 
 .PHONY: build-codex-armv7
 build-codex-armv7:

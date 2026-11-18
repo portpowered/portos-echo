@@ -13,7 +13,8 @@ pub const GATES: &[(&str, &str)] = &[
     ("lint-self-tests", "lint-self-tests"),
     ("test-unit", "test-unit"),
     ("test-contract", "test-contract"),
-    ("test-sim", "test-sim"),
+    ("test-sim-suites", "test-sim-suites"),
+    ("test-sim-host", "test-sim-host"),
     ("test-concurrency", "test-concurrency"),
     ("build-host", "build-host"),
     ("build-echo", "build-echo"),
@@ -22,8 +23,7 @@ const PREFIX: &str = "name: CI\non:\n  pull_request:\n  push:\n    branches: [ma
 // Only the reviewed job grammar is accepted; aliases, matrices and conditional gates are not equivalent.
 fn job(name: &str, target: &str) -> String {
     let timeout = match name {
-        "test-unit" => 15,
-        "test-sim" => 25,
+        "test-unit" | "test-sim-suites" | "test-sim-host" => 15,
         "lint-self-tests" => 20,
         _ => 10,
     };
@@ -40,12 +40,12 @@ fn job(name: &str, target: &str) -> String {
         }
         block = block.replace(&step, &format!("{provision}{step}"));
     }
-    if name == "test-sim" {
+    if matches!(name, "test-sim-suites" | "test-sim-host") {
         let step = format!("      - name: {name}\n");
         let host = "      - name: Host build dependencies\n        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/hassmic-host\n          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n      - name: Build pinned hassmic-host\n        run: make hassmic-host\n";
         block = block.replace(&step, &format!("{host}{step}"));
     }
-    if matches!(name, "test-unit" | "test-sim") {
+    if matches!(name, "test-unit" | "test-sim-suites" | "test-sim-host") {
         let step = format!("      - name: {name}\n");
         let codex = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: ~/.cache/portos-echo/codex\n          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}\n      - name: Provision verified pinned Codex\n        run: sh scripts/codex-app-server.sh\n";
         let namespace = "      - name: Enable isolated Codex network namespace\n        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n";
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn codex_provisioning_cannot_be_removed_or_made_optional() {
         let (makefile, workflow) = fixture();
-        for name in ["test-unit", "test-sim"] {
+        for name in ["test-unit", "test-sim-suites", "test-sim-host"] {
             let block = job(name, name);
             for replacement in ["", "        run: sh scripts/codex-app-server.sh || true\n"] {
                 let changed = block.replace("        run: sh scripts/codex-app-server.sh\n", replacement);
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn host_jobs_require_each_exact_host_step() {
         let (makefile, workflow) = fixture();
-        for name in ["test-sim"] {
+        for name in ["test-sim-suites", "test-sim-host"] {
             let host_job = job(name, name);
             let gate = format!("        run: make {name}\n");
             let fragments = [
