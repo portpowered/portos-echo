@@ -1,4 +1,22 @@
 //! Explicit fake-time driver for guarded loopback runs only.
+//!
+//! `advance_playout {milliseconds: u64}` is the opt-in receipt contract.
+//! Success emits `bridge.clock_advanced {milliseconds, epoch_ms, pcm, states}`.
+//! PCM rows contain `epoch_ms/pcm_bytes/nonzero_samples/audible_samples` after
+//! completed writes through the guarded local Wyoming forwarder. State rows
+//! contain `epoch_ms/state` at projected publication; the step flushes the screen
+//! snapshot before acknowledging. Epoch is paused Tokio time since owner startup.
+//! Both pre-advance and post-advance drains require a voice-owner acknowledgement,
+//! matching submitted/written PCM counts, and a screen publication receipt.
+//! Missing/failed acknowledgements, overflow, a missing screen or a five-second
+//! wall-clock watchdog expiry fail Control without a success receipt. This proves
+//! bridge clock alignment, not socket delivery timing. Independent relay/SSE
+//! observations corroborate bytes/order. Legacy `advance_clock` stays compatible.
+mod proxy;
+pub(crate) mod receipt;
+#[cfg(test)]
+#[path = "bridge_clock/tests.rs"]
+mod receipt_tests;
 use crate::{
     Error,
     bridge_input::Settings,
@@ -20,36 +38,58 @@ pub fn execute(settings: Settings) -> Result<(), Error> {
     if !settings.sim_clock || settings.model_url.is_none() || settings.lab {
         return Err(Error::Input);
     }
-    let mut commands = input()?;
+    let commands = input()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .start_paused(true)
         .build()
         .map_err(|_| Error::Control)?;
-    runtime.block_on(drive(async move {
-        let (stop, shutdown) = oneshot::channel();
-        let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
-        let work = bridge_runtime::execute_with_control(
-            settings,
-            Control {
-                utc_day: std::sync::Arc::new(|| 0),
-                shutdown,
-            },
-            connector,
-        );
-        tokio::pin!(work);
-        loop {
-            tokio::select! {
-                result = &mut work => return result,
-                command = commands.recv() => match command {
-                    Some(Ok(Some(milliseconds))) => advance(milliseconds).await?,
-                    Some(Ok(None)) => { let _ = stop.send(true); return work.await; }
-                    Some(Err(error)) => { let _ = stop.send(false); let _ = work.await; return Err(error); }
-                    None => return Err(Error::Control),
-                }
+    runtime.block_on(async {
+        let context = receipt::Context::new();
+        receipt::CURRENT
+            .scope(context.clone(), drive(run(settings, commands, context)))
+            .await
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Advance {
+    milliseconds: u64,
+    observed: bool,
+}
+
+async fn run(
+    mut settings: Settings,
+    mut commands: mpsc::Receiver<Result<Option<Advance>, Error>>,
+    context: receipt::Context,
+) -> Result<(), Error> {
+    let proxy = proxy::Proxy::bind(settings.wyoming, context.clone()).await?;
+    settings.wyoming = proxy.address;
+    let (stop, shutdown) = oneshot::channel();
+    let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
+    let work = bridge_runtime::execute_with_control(
+        settings,
+        Control {
+            utc_day: std::sync::Arc::new(|| 0),
+            shutdown,
+        },
+        connector,
+    );
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            result = &mut work => return result,
+            command = commands.recv() => match command {
+                Some(Ok(Some(command))) => tokio::select! {
+                    result = &mut work => return result,
+                    result = advance_control(command, &context) => result?,
+                },
+                Some(Ok(None)) => { let _ = stop.send(true); return work.await; }
+                Some(Err(error)) => { let _ = stop.send(false); let _ = work.await; return Err(error); }
+                None => return Err(Error::Control),
             }
         }
-    }))
+    }
 }
 
 async fn drive<F: Future>(future: F) -> F::Output {
@@ -70,13 +110,24 @@ async fn advance(milliseconds: u64) -> Result<(), Error> {
         .checked_add(duration)
         .ok_or(Error::Control)?;
     tokio::time::advance(duration).await;
-    let value = json!({"event":"bridge.clock_advanced", "milliseconds":milliseconds});
+    emit(&json!({"event":"bridge.clock_advanced", "milliseconds":milliseconds}))
+}
+
+async fn advance_control(command: Advance, context: &receipt::Context) -> Result<(), Error> {
+    if !command.observed {
+        return advance(command.milliseconds).await;
+    }
+    let value = receipt::bounded(context.advance(command.milliseconds), Duration::from_secs(5)).await?;
+    emit(&value)
+}
+
+fn emit(value: &Value) -> Result<(), Error> {
     writeln!(std::io::stdout(), "{value}")
         .and_then(|()| std::io::stdout().flush())
         .map_err(|_| Error::Control)
 }
 
-fn input() -> Result<mpsc::Receiver<Result<Option<u64>, Error>>, Error> {
+fn input() -> Result<mpsc::Receiver<Result<Option<Advance>, Error>>, Error> {
     let (send, receive) = mpsc::channel(1);
     std::thread::Builder::new()
         .name("bridge-sim-control".into())
@@ -108,12 +159,17 @@ fn line(input: &mut impl Read) -> Result<Option<Vec<u8>>, Error> {
     }
 }
 
-fn parse(bytes: &[u8]) -> Result<u64, Error> {
+fn parse(bytes: &[u8]) -> Result<Advance, Error> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| Error::Control)?;
-    if value.as_object().is_none_or(|object| object.len() != 2) || value["action"] != "advance_clock" {
+    if value.as_object().is_none_or(|object| object.len() != 2)
+        || !matches!(value["action"].as_str(), Some("advance_clock" | "advance_playout"))
+    {
         return Err(Error::Control);
     }
-    value["milliseconds"].as_u64().ok_or(Error::Control)
+    Ok(Advance {
+        milliseconds: value["milliseconds"].as_u64().ok_or(Error::Control)?,
+        observed: value["action"] == "advance_playout",
+    })
 }
 
 #[cfg(test)]
@@ -122,7 +178,13 @@ mod tests {
 
     #[test]
     fn mcp_link_sim_clock_accepts_only_bounded_complete_unsigned_controls() {
-        assert_eq!(parse(br#"{"action":"advance_clock","milliseconds":5000}"#), Ok(5000));
+        assert_eq!(
+            parse(br#"{"action":"advance_clock","milliseconds":5000}"#),
+            Ok(Advance {
+                milliseconds: 5000,
+                observed: false
+            })
+        );
         for text in [
             r#"{"action":"advance_clock","milliseconds":-1}"#,
             r#"{"action":"advance_clock","milliseconds":1.5}"#,

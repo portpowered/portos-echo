@@ -15,6 +15,8 @@ use tokio::{
 pub struct Timing {
     pub captured: usize,
     pub played: usize,
+    pub nonzero_samples: usize,
+    pub audible_samples: usize,
     endpoint: Option<Duration>,
     first_pcm: Option<Duration>,
     run: bool,
@@ -59,9 +61,25 @@ impl Timing {
                 .played
                 .checked_add(event.payload.len())
                 .ok_or("wire: playback overflow")?;
+            for bytes in event.payload.as_chunks::<2>().0 {
+                let sample = i16::from_le_bytes(*bytes);
+                self.nonzero_samples += usize::from(sample != 0);
+                self.audible_samples += usize::from(sample.unsigned_abs() > 64);
+            }
             self.first_pcm.get_or_insert(now);
         }
         Ok(())
+    }
+
+    pub fn audible_reply(&self, host: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let measured = serde_json::json!({"pcm_bytes":self.played,
+            "nonzero_samples":self.nonzero_samples,"audible_samples":self.audible_samples,
+            "host":host});
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+        audible_measurement(&measured)?;
+        Ok(measured)
     }
 
     pub fn sample(&self) -> Result<Duration, String> {
@@ -74,6 +92,35 @@ impl Timing {
             .checked_sub(endpoint)
             .ok_or_else(|| "wire: reply precedes utterance endpoint".into())
     }
+}
+
+/// Validate retained observations too: missing counters never count as silence
+/// or success, and byte-level host evidence cannot substitute for signed PCM.
+pub fn audible_measurement(measured: &serde_json::Value) -> Result<(), String> {
+    audible_pcm(measured)?;
+    let host = &measured["host"];
+    if host["pcm_bytes"] != 9600 || host["nonzero_bytes"].as_u64().is_none_or(|n| !(1..=9600).contains(&n)) {
+        return Err(format!(
+            "wire: expected audible 9600-byte host playback; observed {host}"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate signed samples at the emitted reply boundary, independently of the sink.
+pub fn audible_pcm(measured: &serde_json::Value) -> Result<(), String> {
+    let nonzero = measured["nonzero_samples"].as_u64();
+    let audible = measured["audible_samples"].as_u64();
+    if measured["pcm_bytes"] != 9600
+        || nonzero.is_none_or(|n| !(2400..=4800).contains(&n))
+        || audible.is_none_or(|n| !(2400..=4800).contains(&n))
+        || audible > nonzero
+    {
+        return Err(format!(
+            "wire: expected audible 9600-byte reply with >=2400 signed samples; observed {measured}"
+        ));
+    }
+    Ok(())
 }
 
 fn pcm(event: &Event, rate: u32) -> bool {
@@ -132,6 +179,13 @@ impl Relay {
         .await
     }
 
+    pub async fn bind_reply(host: SocketAddr) -> Result<Self, String> {
+        if host.ip() != std::net::Ipv4Addr::LOCALHOST || host.port() == 0 {
+            return Err("wire: host must be bound on 127.0.0.1".into());
+        }
+        Self::start(host, Endpoint::Reply).await
+    }
+
     async fn start(host: SocketAddr, endpoint: Endpoint) -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -159,6 +213,24 @@ impl Relay {
 
     pub fn timing(&self) -> Timing {
         self.observed.borrow().clone()
+    }
+
+    #[cfg(test)]
+    pub async fn wait_for_pcm(&self, minimum: usize) -> Result<(), String> {
+        let mut observed = self.observed.clone();
+        loop {
+            let timing = observed.borrow_and_update().clone();
+            if let Some(error) = timing.failure {
+                return Err(error);
+            }
+            if timing.played >= minimum {
+                return Ok(());
+            }
+            observed
+                .changed()
+                .await
+                .map_err(|_| "wire: observer ended before PCM")?;
+        }
     }
 
     pub async fn close(mut self) -> Result<Timing, String> {
@@ -201,6 +273,7 @@ async fn serve(
 }
 
 enum Endpoint {
+    Reply,
     #[cfg(test)]
     Count(usize),
     Fixture {
@@ -212,6 +285,7 @@ enum Endpoint {
 impl Endpoint {
     fn observe(&mut self, state: &mut Timing, event: &Event, now: Duration) -> Result<(), String> {
         match self {
+            Self::Reply => state.capture(event, usize::MAX, now),
             #[cfg(test)]
             Self::Count(target) => state.capture(event, *target, now),
             Self::Fixture { bytes, tail } => {

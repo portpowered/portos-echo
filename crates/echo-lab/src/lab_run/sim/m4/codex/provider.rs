@@ -1,6 +1,6 @@
 //! Single owner of provider JSONL, sideband observations, and real Opus media.
 use crate::lab_run::sim::process::Process;
-use echo_live::{AudioFrame, LivePeer};
+use echo_live::LivePeer;
 use serde_json::{Value, json};
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -11,7 +11,9 @@ use tokio::{
 pub(super) enum Control {
     Delegate,
     Complete,
+    Tail,
     Reply,
+    Release,
     Quiesce(oneshot::Sender<()>),
     Close,
 }
@@ -153,7 +155,6 @@ async fn conversation(
 ) -> Result<(), String> {
     let mut reply = false;
     let mut allow_reply = !emotion;
-    let mut remaining = None;
     let mut quiesced = false;
     // Drive the bridge's explicit clock at the media frame cadence even when
     // the remote has no UDP traffic. Sparse ICE timers must not stall its clock.
@@ -167,7 +168,7 @@ async fn conversation(
             loop {
                 tokio::select! {
                     value = &mut line => break Some(value?),
-                    result = step(peer, &mut remaining), if !quiesced => { result?; },
+                    result = step(peer), if !quiesced => { result?; },
                     _ = clock.tick(), if !quiesced => {let _ = ticks.try_send(());},
                     control = commands.recv() => { action = control; break None; },
                 }
@@ -176,12 +177,11 @@ async fn conversation(
         if let Some(value) = value {
             observation(observed, &value)?;
             if value["event"] == "provider.append" {
-                if reply {
+                if std::mem::replace(&mut reply, true) {
                     return Err("m4: duplicate native append".into());
                 }
-                reply = true;
                 if allow_reply {
-                    remaining = Some((0, Instant::now()));
+                    observed.send_modify(|state| state["reply_ready"] = json!(true));
                 }
             }
         } else {
@@ -190,10 +190,13 @@ async fn conversation(
                 Some(Control::Reply) if emotion && !allow_reply => {
                     allow_reply = true;
                     if reply {
-                        remaining = Some((0, Instant::now()));
+                        observed.send_modify(|state| state["reply_ready"] = json!(true));
                     }
                 }
                 Some(Control::Reply) => return Err("m6: premature reply release".into()),
+                Some(Control::Release) if reply && allow_reply => send_reply(peer, 0..5).await?,
+                Some(Control::Release) => return Err("m4: release before reply admission".into()),
+                Some(Control::Tail) => send_reply(peer, 5..11).await?,
                 Some(Control::Complete) => process.send(&json!({"complete":true})).await?,
                 Some(Control::Quiesce(done)) => {
                     quiesced = true;
@@ -225,28 +228,26 @@ fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), Str
     Ok(())
 }
 
-async fn step(peer: &mut LivePeer, remaining: &mut Option<(u16, Instant)>) -> Result<(), String> {
-    while peer.pop_audio().is_some() {}
-    if peer.ready()
-        && let Some((sequence, due)) = *remaining
-        && Instant::now() >= due
-    {
+/// Each bounded burst fits the production ingress. Release the second only
+/// after actual PCM writes prove the first has been consumed.
+async fn send_reply(peer: &mut LivePeer, sequences: std::ops::Range<u16>) -> Result<(), String> {
+    if !peer.ready() {
+        return Err("m4: reply before media readiness".into());
+    }
+    for sequence in sequences {
         peer.send_audio(
-            AudioFrame {
-                sequence,
-                timestamp: u32::from(sequence) * 960,
-                payload: vec![0xf8, 0xff, 0xfe],
-            },
+            crate::lab_run::sim::m2::codex::tone::packet(sequence).ok_or("m4: invalid tone sequence")?,
             Instant::now().into_std(),
         )
         .await
         .map_err(|_| "m4: reply media")?;
-        *remaining = (sequence < 10).then_some((sequence + 1, due + std::time::Duration::from_millis(20)));
     }
-    let mut next = Instant::from_std(peer.flush().await.map_err(|_| "m4: media flush")?);
-    if let Some((_, due)) = remaining {
-        next = next.min(*due);
-    }
+    Ok(())
+}
+
+async fn step(peer: &mut LivePeer) -> Result<(), String> {
+    while peer.pop_audio().is_some() {}
+    let next = Instant::from_std(peer.flush().await.map_err(|_| "m4: media flush")?);
     tokio::select! {
         ready = peer.readable() => {
             ready.map_err(|_| "m4: media readiness")?;

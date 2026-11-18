@@ -76,6 +76,7 @@ fn case(path: &std::path::Path, name: &str) -> Value {
         json!({"state":"listening"}),
     ];
     if name == "success" {
+        audible_reply(&measured["reply_pcm"]);
         assert_eq!(closes[0]["reason"], "idle");
         assert!(
             !trace
@@ -151,4 +152,12 @@ fn rejection(measured: &Value, trace: &[Value]) {
     ] {
         assert_eq!(trace.iter().filter(|v| v["event"] == event).count(), 0);
     }
+}
+
+fn audible_reply(audio: &Value) {
+    assert_eq!(audio["pcm_bytes"], 9600);
+    assert_eq!(audio["host"]["pcm_bytes"], 9600);
+    assert!(audio["nonzero_samples"].as_u64().unwrap() >= 2400);
+    assert!(audio["audible_samples"].as_u64().unwrap() >= 2400);
+    assert!(audio["host"]["nonzero_bytes"].as_u64().unwrap() > 0);
 }

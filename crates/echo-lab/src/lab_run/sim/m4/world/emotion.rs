@@ -28,10 +28,12 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
             .windows(2)
             .all(|p| p[0]["seq"].as_u64() < p[1]["seq"].as_u64())
     );
-    assert_eq!(
-        case.playback,
-        Some(json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0}))
-    );
+    let playback = case.playback.as_ref().unwrap();
+    assert_eq!(playback["event"], "host.ack");
+    assert_eq!(playback["pcm_bytes"], 9600);
+    assert!(playback["nonzero_bytes"].as_u64().unwrap() > 0);
+    assert!(playback["nonzero_samples"].as_u64().unwrap() >= 2400);
+    assert!(playback["audible_samples"].as_u64().unwrap() >= 2400);
     owners.closed().await;
 }
 
@@ -55,11 +57,31 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
         }
     };
     tokio::join!(observation, interrupted);
+    // Stop advancing the bridge clock at the animation, then finish the native
+    // tool-result round trip before EOF. Its progress is independent of the
+    // paused expiry timer and must not select a different partial-run oracle.
+    let observed = &mut case.provider.as_mut().unwrap().observed;
+    observed
+        .wait_for(|snapshot| snapshot["appends"] == json!(["delegation-local"]))
+        .await
+        .unwrap();
     let timing = case.relay.as_ref().unwrap().timing();
     assert_eq!(timing.played, 0);
     assert!(case.speaking.is_none());
     let result = case.close().await;
-    assert!(result.as_ref().unwrap_err().contains("m4: missing"), "{result:?}");
+    assert_eq!(
+        result,
+        Err("m4: exact pinned provider/model observation mismatch".into())
+    );
+    assert_eq!(case.snapshot["delegations"], json!(["delegation-local"]));
+    assert_eq!(case.snapshot["appends"], json!(["delegation-local"]));
+    assert_eq!(
+        case.snapshot["models"],
+        json!([
+            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
+            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}
+        ])
+    );
     assert_eq!(case.snapshot["transcripts"], json!([]));
     assert_eq!(screen.next().await, Err("screen: EOF before observation".into()));
     assert!(!case.trace.records.iter().any(|r| r["event"] == "bridge.run_completed"));

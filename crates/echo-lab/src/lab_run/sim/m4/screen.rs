@@ -24,12 +24,13 @@ impl Screen {
         let mut socket = TcpStream::connect(address)
             .await
             .map_err(|_| "screen: connection failed")?;
+        // Request an EOF-delimited body so SSE completeness excludes HTTP chunk framing.
         socket
-            .write_all(b"GET /events?token=test-pair HTTP/1.1\r\nHost: local\r\n\r\n")
+            .write_all(b"GET /events?token=test-pair HTTP/1.0\r\nHost: local\r\nConnection: close\r\n\r\n")
             .await
             .map_err(|_| "screen: request failed")?;
         let mut screen = Self(socket);
-        if screen.line().await? != "HTTP/1.1 200 OK" {
+        if !matches!(screen.line().await?.as_str(), "HTTP/1.0 200 OK" | "HTTP/1.1 200 OK") {
             return Err("screen: paired SSE unauthorized".into());
         }
         Ok(screen)
@@ -71,6 +72,24 @@ impl Screen {
             }
         }
         Err("screen: missing state within frame limit".into())
+    }
+
+    /// After the bridge is collected, retain every remaining publication up to EOF.
+    pub async fn remaining(self) -> Result<Vec<Value>, String> {
+        let mut bytes = Vec::new();
+        self.0
+            .take(65537)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| "screen: final collection failed")?;
+        if bytes.len() > 65536 || (!bytes.is_empty() && bytes != b"\n" && !bytes.ends_with(b"\n\n")) {
+            return Err("screen: incomplete or oversized final publication".into());
+        }
+        let text = std::str::from_utf8(&bytes).map_err(|_| "screen: malformed final publication")?;
+        text.lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|data| serde_json::from_str(data).map_err(|_| "screen: malformed state".into()))
+            .collect()
     }
 }
 

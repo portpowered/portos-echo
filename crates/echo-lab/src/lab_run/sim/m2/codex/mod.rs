@@ -6,6 +6,9 @@ pub(in crate::lab_run::sim) mod provider;
 pub(super) mod rejection;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timing;
+pub(in crate::lab_run::sim) mod tone;
 
 use super::{DEADLINE, oracle};
 use crate::lab_run::{
@@ -26,6 +29,9 @@ use std::{
 #[derive(Default)]
 struct Case {
     host: Option<Process>,
+    relay: Option<crate::lab_run::sim::m4::wire::Relay>,
+    playback: Value,
+    clock: Value,
     bridge: Option<Process>,
     provider: Option<provider::Provider>,
     collector: Option<tokio::task::JoinHandle<Result<(), String>>>,
@@ -61,9 +67,14 @@ impl Case {
         if self.trace_path.as_os_str().is_empty() {
             self.trace_path = root.0.join("trace");
         }
-        self.provider = Some(provider::Provider::start(&options.python).await?);
+        if self.provider.is_none() {
+            self.provider = Some(provider::Provider::start(&options.python).await?);
+        }
         let origin = &self.provider.as_ref().ok_or("m2: missing provider")?.origin;
         let mut command = tokio::process::Command::new(options.bridge.as_deref().ok_or("m2: missing bridge")?);
+        let relay = crate::lab_run::sim::m4::wire::Relay::bind_reply(([127, 0, 0, 1], port).into()).await?;
+        let port = relay.address.port();
+        self.relay = Some(relay);
         config::configure(&mut command, &root.0, port, origin, &self.trace_path)?;
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
@@ -104,21 +115,40 @@ impl Case {
         let host = self.host.as_mut().ok_or("m2: missing host")?;
         host.send(&json!({"action":"finite","pcm":pcm})).await?;
         host.expect("host.ack").await?;
-        self.settle().await
+        self.settle().await?;
+        let host = self.host.as_mut().ok_or("m2: missing host")?;
+        host.send(&json!({"action":"playback"})).await?;
+        let playback = host.expect("host.ack").await?;
+        self.playback = self
+            .relay
+            .as_ref()
+            .ok_or("m2: missing relay")?
+            .timing()
+            .audible_reply(&playback)?;
+        self.playback["playout_clock"] = self.clock.clone();
+        Ok(())
     }
 
     async fn settle(&mut self) -> Result<(), String> {
         let mut done = false;
         let mut transcript = false;
+        let mut tail = false;
+        let mut released = false;
         while !done {
             self.provider.as_mut().ok_or("m2: missing provider")?.tick().await?;
-            let speaking = self
-                .frames
-                .lock()
-                .map_err(|_| "m2: frame lock")?
-                .iter()
-                .any(|f| f["state"]["state"] == "speaking");
-            if speaking && !transcript {
+            if !released && connected(&self.clock) {
+                // Freeze before authorizing any RTP, including the first burst.
+                released = true;
+                self.provider.as_ref().ok_or("m2: missing provider")?.reply().await?;
+            }
+            let played = self.relay.as_ref().ok_or("m2: missing relay")?.timing().played;
+            if played >= 2880 && !tail {
+                self.provider.as_ref().ok_or("m2: missing provider")?.tail().await?;
+                tail = true;
+            }
+            // Nine frames prove all eleven packets reached the real converter.
+            // Transcript completion flushes its held final frame.
+            if played >= 8640 && !transcript {
                 self.provider
                     .as_mut()
                     .ok_or("m2: missing provider")?
@@ -126,7 +156,13 @@ impl Case {
                     .await?;
                 transcript = true;
             }
-            done = advance(self.bridge.as_mut().ok_or("m2: missing bridge")?, 20).await?;
+            done = collect_playout(
+                self.bridge.as_mut().ok_or("m2: missing bridge")?,
+                &mut self.clock,
+                if released && played < 9600 { 0 } else { 20 },
+            )
+            .await?
+            .is_some();
         }
         // Keep the remote's socket alive but stop its RTP driver before closing
         // the production media owner. The pin's sideband stays until idle stop.
@@ -138,6 +174,12 @@ impl Case {
             .expect("bridge.ready")
             .await?;
         Ok(())
+    }
+
+    async fn close_relay(&mut self, errors: &mut Vec<String>) {
+        if let Some(relay) = self.relay.take() {
+            errors.extend(relay.close().await.err());
+        }
     }
 
     async fn close(&mut self) -> Result<Value, String> {
@@ -167,6 +209,7 @@ impl Case {
         if let Some(mut host) = self.host.take() {
             errors.extend(host.close().await.err());
         }
+        self.close_relay(&mut errors).await;
         if self.trace_path.is_file() {
             self.trace = read_trace(&self.trace_path)?;
         }
@@ -197,7 +240,8 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
     let measured = json!({"case":"success", "runtime":"codex", "credential_mode":"api_key",
         "calls":observed["calls"].as_array().map(Vec::len),
         "provider_wire":provider::valid(&observed), "refreshes":0, "provider":observed,
-        "frames":state.frames.lock().ok().map(|f| f.clone()), "trace":state.trace.records});
+        "frames":state.frames.lock().ok().map(|f| f.clone()), "trace":state.trace.records,
+        "reply_pcm":state.playback, "playout_clock":state.clock});
     let cleanup = if state.trace_path.is_file() {
         std::fs::remove_file(&state.trace_path)
             .and_then(|()| std::fs::remove_dir(&output))
@@ -261,4 +305,48 @@ async fn advance(bridge: &mut Process, milliseconds: u64) -> Result<bool, String
             _ => return Err("m2: unexpected bridge observation while advancing clock".into()),
         }
     }
+}
+
+/// Hold fake time while collecting a bounded reply from external processes.
+/// Process scheduling latency must not manufacture a gap in simulated audio.
+pub(in crate::lab_run::sim) async fn collect_playout(
+    bridge: &mut Process,
+    clock: &mut Value,
+    milliseconds: u64,
+) -> Result<Option<Value>, String> {
+    bridge
+        .send(&json!({"action":"advance_playout","milliseconds":milliseconds}))
+        .await?;
+    let mut completed = None;
+    loop {
+        let row = bridge.line().await?;
+        match row["event"].as_str() {
+            Some("bridge.run_completed") if row["run_id"] == "run-1" => completed = Some(row),
+            Some("bridge.clock_advanced") if row["milliseconds"] == milliseconds => {
+                let previous = clock["epoch_ms"].as_u64().unwrap_or(0);
+                if row["epoch_ms"].as_u64() != previous.checked_add(milliseconds) {
+                    return Err("playout: clock receipt epoch mismatch".into());
+                }
+                if clock.is_null() {
+                    *clock = json!({"pcm":[],"states":[]});
+                }
+                clock["epoch_ms"] = row["epoch_ms"].clone();
+                for key in ["pcm", "states"] {
+                    let values = row[key].as_array().ok_or("playout: missing receipt observations")?;
+                    clock[key]
+                        .as_array_mut()
+                        .ok_or("playout: malformed stored clock")?
+                        .extend(values.iter().cloned());
+                }
+                return Ok(completed);
+            }
+            _ => return Err("playout: unexpected bridge clock observation".into()),
+        }
+    }
+}
+
+fn connected(clock: &Value) -> bool {
+    clock["states"]
+        .as_array()
+        .is_some_and(|states| states.iter().any(|row| row["state"]["state"] == "connected"))
 }

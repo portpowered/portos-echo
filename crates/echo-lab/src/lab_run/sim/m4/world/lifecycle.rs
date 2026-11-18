@@ -90,11 +90,11 @@ async fn t3_m4_cancel_active_reply_reaps_children_listeners_and_private_files() 
     );
     assert_eq!(result.err(), Some("sim: cancelled".into()));
     let closed = case.close().await;
-    assert_eq!(
-        closed,
-        Err("m4: exact pinned provider/model observation mismatch".into())
-    );
-    assert_eq!(case.snapshot["appends"], json!(["delegation-local"]));
+    // The full bounded reply and transcript are collected before its mouth
+    // opens. Cancellation still forbids claiming a settled played reply.
+    assert_eq!(closed, Err("m4: missing played reply observation".into()));
+    assert_eq!(case.snapshot, receipts::expected(false, false));
+    assert!(!case.trace.records.iter().any(|r| r["event"] == "reply.played"));
     assert!(!case.trace.records.iter().any(|r| r["event"] == "bridge.run_completed"));
     owners.closed().await;
     assert_eq!(case.close().await, Ok(()));

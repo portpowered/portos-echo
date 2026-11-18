@@ -2,11 +2,65 @@
 //! The complete milestone still requires the native hassmic-host scenario.
 use super::*;
 use echo_contracts::wyoming::{Event, Header, encode};
+use std::io::Write;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
+
+#[test]
+fn failed_journey_retains_primary_error_exit_and_independent_observations() {
+    let mut case = Case {
+        bridge_exit: Some("exit status: 1; forced=false".into()),
+        snapshot: json!({"models":[{"outputs":0}],"appends":[],"transcripts":[]}),
+        clock: json!({"epoch_ms":480,"pcm":[],"states":[]}),
+        ..Case::default()
+    };
+    case.trace.records.push(json!({"event":"tools/call","elapsed_ms":480}));
+    let error = case.failure("process: exited before observation; cleanup: owned child exited nonzero");
+    let (primary, observed) = error.split_once("; m4 failure observations: ").unwrap();
+    assert_eq!(
+        primary,
+        "process: exited before observation; cleanup: owned child exited nonzero"
+    );
+    let observed: Value = serde_json::from_str(observed).unwrap();
+    assert_eq!(observed["bridge_exit"], "exit status: 1; forced=false");
+    assert_eq!(observed["bridge_trace"], json!(case.trace.records));
+    assert_eq!(observed["provider"], case.snapshot);
+    assert_eq!(observed["provider_expected"], receipts::expected(false, false));
+    assert_eq!(observed["playout_clock"], case.clock);
+    assert!(
+        case.failure("cancelled")
+            .starts_with("cancelled; m4 failure observations: ")
+    );
+}
+
+#[test]
+fn paired_sequence_rejects_a_discarded_late_mouth_interval() {
+    let states: Vec<_> = ["ready", "speaking", "ready", "speaking", "ready"]
+        .iter()
+        .enumerate()
+        .map(|(index, state)| json!({"epoch_ms":index * 20,"state":{"state":state}}))
+        .collect();
+    let frames: Vec<_> = states
+        .iter()
+        .enumerate()
+        .map(|(index, stamp)| json!({"seq":index + 1,"state":stamp["state"]}))
+        .collect();
+    let clock = json!({"states":states});
+    assert_eq!(receipts::screen(&frames, &clock), Ok(()));
+    assert_eq!(
+        receipts::screen(&frames[..3], &clock),
+        Err("m4: incomplete paired screen sequence".into())
+    );
+    let mut wrong = frames;
+    wrong[3]["state"] = json!({"state":"ready"});
+    assert_eq!(
+        receipts::screen(&wrong, &clock),
+        Err("m4: paired screen/clock sequence mismatch".into())
+    );
+}
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production bridge and offline Codex pin"]
@@ -52,7 +106,8 @@ async fn exercise_mode(negative: bool, emotion: bool) {
                 case.bridge.as_mut().unwrap(),
                 case.provider.as_mut().unwrap(),
                 case.relay.as_ref().unwrap(),
-                ready
+                ready,
+                &mut case.clock
             ),
             presentation(&mut screen, spoof, negative, connected, emotion, replies)
         )
@@ -127,7 +182,17 @@ async fn playback(socket: &mut TcpStream) -> usize {
         }
     }
     assert_eq!(pcm.len(), 9600);
-    assert!(pcm.iter().all(|byte| *byte == 0));
+    let samples: Vec<_> = pcm.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
+    let nonzero = samples.iter().filter(|&&s| s != 0).count();
+    let audible = samples.iter().filter(|&&s| s.unsigned_abs() > 64).count();
+    writeln!(
+        std::io::stdout(),
+        "M4 reply: pcm_bytes={} nonzero_samples={nonzero} audible_samples={audible}",
+        pcm.len()
+    )
+    .unwrap();
+    assert!(nonzero >= 2400);
+    assert!(audible >= 2400);
     pcm.len()
 }
 async fn send(socket: &mut TcpStream, kind: &str, data: Value, payload: Vec<u8>) {

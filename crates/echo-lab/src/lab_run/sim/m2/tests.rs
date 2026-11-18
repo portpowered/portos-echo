@@ -98,6 +98,32 @@ fn m2_unknown_injections_are_rejected_before_effects() {
     }
 }
 
+#[test]
+fn m2_codex_oracle_requires_exact_frames_and_measured_audibility() {
+    let mut valid = measured("success");
+    valid["runtime"] = json!("codex");
+    valid["reply_pcm"] = json!({"pcm_bytes":9600,"nonzero_samples":4800,"audible_samples":2400});
+    valid["trace"].as_array_mut().unwrap().extend([
+        json!({"event":"mic.completed","count":10,"dropped_chunks":0,"tail_samples":0}),
+        json!({"event":"reply.played","outcome":"played","frames":10,"received_frames":10,"dropped_frames":0}),
+    ]);
+    assert_eq!(oracle::check(&valid), Ok(()));
+    for field in ["pcm_bytes", "nonzero_samples", "audible_samples"] {
+        let mut wrong = valid.clone();
+        wrong["reply_pcm"].as_object_mut().unwrap().remove(field);
+        assert!(oracle::check(&wrong).is_err(), "missing {field}");
+        wrong = valid.clone();
+        wrong["reply_pcm"][field] = json!(0);
+        assert!(oracle::check(&wrong).is_err(), "zero {field}");
+    }
+    for count in [0, 9, 11] {
+        let mut wrong = valid.clone();
+        wrong["trace"][2]["frames"] = json!(count);
+        wrong["trace"][2]["received_frames"] = json!(count);
+        assert!(oracle::check(&wrong).is_err(), "wrong frame count {count}");
+    }
+}
+
 pub(super) fn options() -> crate::lab_run::run_options::Options {
     let executable = std::env::current_exe().unwrap();
     let binary = executable

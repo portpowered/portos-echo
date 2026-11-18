@@ -36,6 +36,7 @@ struct Case {
     negative: bool,
     emotion: bool,
     ui_states: Vec<Value>,
+    screen: Option<Screen>,
     root: Option<Root>,
     host: Option<Process>,
     bridge: Option<Process>,
@@ -46,7 +47,9 @@ struct Case {
     speaking: Option<Value>,
     transcript: Option<String>,
     snapshot: Value,
+    bridge_exit: Option<String>,
     playback: Option<Value>,
+    clock: Value,
 }
 pub(super) struct Journey {
     pub trace: Trace,
@@ -74,11 +77,12 @@ pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, St
     .await;
     let close = case.close().await;
     let (completion, timing) = match (work, close) {
-        (Err(primary), Err(cleanup)) => return Err(format!("{primary}; {cleanup}")),
-        (Err(error), _) | (_, Err(error)) => return Err(error),
+        (Err(primary), Err(cleanup)) => return Err(case.failure(&format!("{primary}; {cleanup}"))),
+        (Err(error), _) | (_, Err(error)) => return Err(case.failure(&error)),
         (Ok(value), Ok(())) => value,
     };
     let text = case.transcript.ok_or("m4: missing observed assistant transcript")?;
+    receipts::screen(&case.ui_states, &case.clock)?;
     Ok(Journey {
         trace: case.trace,
         speaking: case.speaking,
@@ -91,6 +95,20 @@ pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, St
 }
 
 impl Case {
+    // These are local synthetic-fixture observations, never credential files,
+    // raw process stderr or arbitrary model requests. Keep them after cleanup
+    // so a failed CLI journey retains its primary evidence in the caller's log.
+    fn failure(&self, error: &str) -> String {
+        let observations = json!({
+            "bridge_exit":self.bridge_exit,
+            "bridge_trace":self.trace.records,
+            "provider_expected":receipts::expected(self.negative, self.emotion),
+            "provider":self.snapshot,
+            "playout_clock":self.clock,
+        });
+        format!("{error}; m4 failure observations: {observations}")
+    }
+
     async fn start(&mut self, options: &Options, negative: bool) -> Result<(), String> {
         self.start_host(options, negative, &options.python).await
     }
@@ -189,16 +207,18 @@ impl Case {
             observe(&mut screen, states, "ready").await?;
             Ok::<_, String>(speaking)
         };
-        let (completion, speaking) = tokio::try_join!(settle(bridge, provider, relay, ready), presentation)?;
+        let (completion, speaking) =
+            tokio::try_join!(settle(bridge, provider, relay, ready, &mut self.clock), presentation)?;
         self.speaking = Some(speaking);
+        self.screen = Some(screen);
         let playback = self.host_control(json!({"action":"playback"})).await?;
-        if playback != json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0}) {
-            return Err(format!(
-                "m4: expected exact decoded host playback PCM, observed {playback}"
-            ));
-        }
-        self.playback = Some(playback);
         let timing = self.relay.as_ref().ok_or("m4: missing relay")?.timing();
+        let samples = timing.audible_reply(&playback)?;
+        let mut playback = playback;
+        playback["nonzero_samples"] = samples["nonzero_samples"].clone();
+        playback["audible_samples"] = samples["audible_samples"].clone();
+        playback["playout_clock"] = self.clock.clone();
+        self.playback = Some(playback);
         timing.sample()?;
         Ok((completion, timing))
     }
@@ -209,6 +229,7 @@ impl Case {
             errors.extend(provider.quiesce().await.err());
         }
         self.close_bridge(&mut errors).await;
+        errors.extend(self.collect_screen().await.err());
         let mut snapshot = Value::Null;
         if let Some(provider) = self.provider.take() {
             match provider.close().await {
@@ -232,9 +253,16 @@ impl Case {
             Err(errors.join("; "))
         }
     }
+    async fn collect_screen(&mut self) -> Result<(), String> {
+        if let Some(screen) = self.screen.take() {
+            self.ui_states.extend(screen.remaining().await?);
+        }
+        Ok(())
+    }
     async fn close_bridge(&mut self, errors: &mut Vec<String>) {
         if let Some(mut bridge) = self.bridge.take() {
             errors.extend(bridge.close().await.err());
+            self.bridge_exit = Some(bridge.exit_summary());
             if let Some(root) = &self.root {
                 let read = std::fs::read(root.0.join("trace")).map_err(|_| "m4: missing final trace".to_owned());
                 errors.extend(read.and_then(|bytes| self.trace.append(&bytes)).err());
@@ -284,10 +312,13 @@ async fn settle(
     provider: &mut Provider,
     relay: &Relay,
     mut connected: tokio::sync::oneshot::Receiver<()>,
+    clock: &mut Value,
 ) -> Result<Value, String> {
     let mut admitted = false;
     let mut delegated = false;
     let mut completed = false;
+    let mut tail = false;
+    let mut released = false;
     loop {
         provider.tick().await?;
         if !admitted {
@@ -299,12 +330,21 @@ async fn settle(
                 }
             };
         }
+        if !released && provider.observed.borrow()["reply_ready"] == true {
+            // This owner freezes time before opening the provider's RTP gate.
+            released = true;
+            provider.control(Control::Release).await?;
+        }
         let timing = relay.timing();
         if admitted && timing.endpoint_seen() && !delegated {
             provider.control(Control::Delegate).await?;
             delegated = true;
         }
-        // Eleven CNG packets yield nine frames before converter tail flush.
+        if timing.played >= 2880 && !tail {
+            provider.control(Control::Tail).await?;
+            tail = true;
+        }
+        // Eleven synthetic tone packets yield nine frames before converter tail flush.
         if timing.played >= 8640 && !completed {
             if provider.observed.borrow()["appends"] != json!(["delegation-local"]) {
                 return Err("m4: reply media before verified native append".into());
@@ -312,18 +352,8 @@ async fn settle(
             provider.control(Control::Complete).await?;
             completed = true;
         }
-        bridge
-            .send(&json!({"action":"advance_clock","milliseconds":20}))
-            .await?;
-        let mut result = None;
-        loop {
-            let value = bridge.line().await?;
-            match value["event"].as_str() {
-                Some("bridge.run_completed") => result = Some(value),
-                Some("bridge.clock_advanced") if value["milliseconds"] == 20 => break,
-                _ => return Err("m4: unexpected bridge clock observation".into()),
-            }
-        }
+        let milliseconds = if released && timing.played < 9600 { 0 } else { 20 };
+        let result = crate::lab_run::sim::m2::codex::collect_playout(bridge, clock, milliseconds).await?;
         if let Some(result) = result {
             return Ok(result);
         }

@@ -48,7 +48,7 @@ pub(super) async fn replies(
         }
         capture(satellite, input, output).await;
         playback(root, satellite, commands, input, output, clock).await;
-        settle(root, satellite, output, run).await;
+        settle(root, satellite, input, output, clock, run).await;
     }
 }
 

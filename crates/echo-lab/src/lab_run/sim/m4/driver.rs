@@ -101,12 +101,25 @@ impl<'a> M4<'a> {
         self.transcript = Some(journey.text);
         self.completed = true;
         let case = if self.negative { "http500" } else { "success" };
+        self.record_audio(artifacts, case, &journey.timing)?;
         if self.emotion {
             artifacts.m6 = Some(super::emotion::measurement(&self.world));
             super::emotion::ordered(&self.world.ui_states, &json!({"sequence":super::emotion::sequence()}))
         } else {
             self.record(artifacts, case, &journey.timing)
         }
+    }
+
+    fn record_audio(&self, artifacts: &mut Artifacts, case: &str, timing: &wire::Timing) -> Result<(), String> {
+        let host = self.world.playback.as_ref().ok_or("m4: missing host playback")?;
+        let audio = json!({"case":case,"run_id":self.run,
+            "audibility":timing.audible_reply(host)?,"ui_states":self.world.ui_states});
+        let milestone = if self.emotion { "m6" } else { "m4" };
+        let name = format!("{milestone}-{case}-audible.json");
+        std::fs::write(artifacts.root.join(&name), audio.to_string())
+            .map_err(|_| "m4: cannot retain audible playback observations")?;
+        artifacts.evidence.push(name);
+        Ok(())
     }
 
     fn record(&self, artifacts: &mut Artifacts, case: &str, timing: &wire::Timing) -> Result<(), String> {

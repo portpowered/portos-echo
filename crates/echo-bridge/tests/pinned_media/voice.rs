@@ -1,5 +1,6 @@
 //! T3 public executable: pin + real media + loopback Wyoming, controlled clock.
 use super::*;
+use std::io::Write as _;
 pub(super) mod lifecycle;
 use echo_contracts::wyoming::{Event as WireEvent, Header, encode};
 use lifecycle::Ending;
@@ -145,18 +146,49 @@ async fn executable(
 async fn settle(
     root: &Path,
     satellite: &mut TcpStream,
+    input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    clock: &mut mpsc::Receiver<()>,
     run: usize,
 ) {
     assert_eq!(count(root, "reply.played"), run - 1);
     assert_eq!(count(root, "bridge.run_completed"), run - 1);
     send(satellite, "played", json!({}), vec![]).await;
-    let completed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    assert_eq!(
-        completed,
-        json!({"event":"bridge.run_completed", "run_id":format!("run-{run}")})
-    );
+    let mut pending = false;
+    let mut completed = false;
+    // Played can precede the delayed mouth boundary. Keep the same clock moving,
+    // and drain its receipt even when completion is published before the receipt.
+    while !completed || pending {
+        tokio::select! {
+            line = output.next_line() => {
+                let observed: Value = serde_json::from_str(&line.unwrap().unwrap()).unwrap();
+                settle_receipt(&observed, &mut pending, &mut completed, run);
+            },
+            tick = clock.recv(), if !pending && !completed => {
+                assert_eq!(tick, Some(()));
+                input.write_all(b"{\"action\":\"advance_playout\",\"milliseconds\":20}\n").await.unwrap();
+                pending = true;
+            },
+        }
+    }
     assert_eq!(count(root, "reply.played"), run);
+}
+
+fn settle_receipt(observed: &Value, pending: &mut bool, completed: &mut bool, run: usize) {
+    if observed["event"] == "bridge.clock_advanced" {
+        assert!(*pending);
+        assert_eq!(observed["milliseconds"], 20);
+        assert!(observed["epoch_ms"].as_u64().is_some());
+        writeln!(std::io::stdout(), "PINNED-CLOCK {observed}").unwrap();
+        *pending = false;
+    } else {
+        assert!(!*completed);
+        assert_eq!(
+            observed,
+            &json!({"event":"bridge.run_completed", "run_id":format!("run-{run}")})
+        );
+        *completed = true;
+    }
 }
 
 pub(super) fn launch(root: &Path, origin: &str) -> tokio::process::Child {
@@ -229,9 +261,11 @@ async fn capture(
     for _ in 0..8 {
         let pcm = (0..320).flat_map(|n| wave[n % 16].to_le_bytes()).collect();
         send(satellite, "audio-chunk", format.clone(), pcm).await;
-        advance(input, output).await;
     }
     send(satellite, "audio-stop", json!({}), vec![]).await;
+    // Eight capture frames fit the uplink lead. Admit the finite utterance at
+    // one epoch so its echoed reply cannot acquire fixture-induced gaps.
+    advance(input, output).await;
 }
 
 async fn playback(
@@ -246,7 +280,14 @@ async fn playback(
     let mut frames = 0;
     let mut pcm = Vec::new();
     loop {
-        let (header, bytes) = clocked_read(satellite, input, output, clock).await;
+        // All finite reply frames fit the configured 200 ms lead. Once the
+        // first frame arrives, collect the rest and transcript-flushed tail at
+        // this epoch; the external pin's scheduling is not a playout gap.
+        let (header, bytes) = if frames == 0 {
+            clocked_read(satellite, input, output, clock).await
+        } else {
+            read_wire(satellite).await
+        };
         match header["type"].as_str().unwrap() {
             "describe" => send(satellite, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
             "audio-start" => assert_eq!(header["data"], json!({"rate":24000,"width":2,"channels":1})),
@@ -374,11 +415,14 @@ async fn advance(
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
 ) {
     input
-        .write_all(b"{\"action\":\"advance_clock\",\"milliseconds\":20}\n")
+        .write_all(b"{\"action\":\"advance_playout\",\"milliseconds\":20}\n")
         .await
         .unwrap();
     let observed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    assert_eq!(observed, json!({"event":"bridge.clock_advanced","milliseconds":20}));
+    assert_eq!(observed["event"], "bridge.clock_advanced");
+    assert_eq!(observed["milliseconds"], 20);
+    assert!(observed["epoch_ms"].as_u64().is_some());
+    writeln!(std::io::stdout(), "PINNED-CLOCK {observed}").unwrap();
 }
 
 fn loopback_offer(offer: &str) {

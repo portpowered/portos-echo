@@ -22,7 +22,11 @@ fn world(negative: bool) -> World {
         world.trace.records[3]["retryable"] = json!(false);
     }
     world.completion = json!({"event":"bridge.run_completed","run_id":"run-1"});
-    world.playback = json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0});
+    world.playback = json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":9000});
+    world.audibility = json!({"pcm_bytes":9600,"nonzero_samples":4800,"audible_samples":4700,"host":world.playback});
+    world.ui_states = ["ready", "listening", "connected", "speaking", "ready"]
+        .map(|state| json!({"state":state}))
+        .into();
     world.muse.calls = vec![
         json!({"argv":["send-user-msg","--session-id","00000000-0000-4000-8000-000000000001","--wait","1",
         "Execute the delegated request and report its result.\nContext: {\"delegation\":{\"id\":\"d-1\",\"target\":\"client\"}}\nTask ID: t-1\nWhen you are finished, call the echo.report.result command with task_id t-1, status completed or failed, and a short summary. Do not report success any other way."],"stdin":""}),
@@ -41,7 +45,7 @@ fn world(negative: bool) -> World {
         DialogueSent::Audio(echo_live::AudioFrame {
             sequence,
             timestamp: u32::from(sequence) * 960,
-            payload: vec![0xf8, 0xff, 0xfe],
+            payload: crate::lab_run::sim::m2::codex::tone::packet(sequence).unwrap().payload,
         })
     }));
     world.dialogue = vec![echo_live::fake::DialogueCall {
@@ -150,4 +154,43 @@ fn m7_wrong_missing_or_stale_identity_and_extra_outcomes_are_rejected() {
     let mut wrong = world(true);
     wrong.muse.reports.push(json!({"accepted":true}));
     assert!(observe(&wrong, true).is_err());
+}
+
+#[test]
+fn m7_rejects_missing_silent_short_and_misordered_playback() {
+    for field in ["pcm_bytes", "nonzero_samples", "audible_samples", "host"] {
+        let mut wrong = world(false);
+        wrong.audibility.as_object_mut().unwrap().remove(field);
+        assert!(observe(&wrong, false).is_err(), "missing {field}");
+    }
+    for (field, value) in [
+        ("pcm_bytes", 9598),
+        ("pcm_bytes", 9602),
+        ("nonzero_samples", 2399),
+        ("audible_samples", 2399),
+    ] {
+        let mut wrong = world(false);
+        wrong.audibility[field] = json!(value);
+        assert!(observe(&wrong, false).is_err(), "{field}={value}");
+    }
+    let mut wrong = world(false);
+    wrong.playback["nonzero_bytes"] = json!(0);
+    wrong.audibility["host"] = wrong.playback.clone();
+    assert!(observe(&wrong, false).is_err());
+    for index in 0..5 {
+        let mut wrong = world(false);
+        wrong.ui_states.remove(index);
+        assert!(observe(&wrong, false).is_err(), "missing state {index}");
+    }
+    let mut wrong = world(false);
+    wrong.ui_states.swap(2, 3);
+    assert!(observe(&wrong, false).is_err());
+}
+
+#[test]
+fn m7_audibility_accepts_exact_thresholds() {
+    let mut actual = world(false);
+    actual.audibility["nonzero_samples"] = json!(2400);
+    actual.audibility["audible_samples"] = json!(2400);
+    assert!(observe(&actual, false).is_ok());
 }

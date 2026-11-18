@@ -3,6 +3,26 @@ use crate::lab_run::sim::trace::Trace;
 use echo_spoof_mcp::{CallRecord, Snapshot};
 use serde_json::{Value, json};
 
+/// Every projected clock receipt must have a matching paired SSE publication.
+pub(super) fn screen(frames: &[Value], clock: &Value) -> Result<(), String> {
+    let states = clock["states"].as_array().ok_or("m4: missing screen clock receipts")?;
+    if frames.len() != states.len() {
+        return Err("m4: incomplete paired screen sequence".into());
+    }
+    let mut previous = 0;
+    for (index, (frame, stamp)) in frames.iter().zip(states).enumerate() {
+        let epoch = stamp["epoch_ms"].as_u64().ok_or("m4: missing screen timestamp")?;
+        if frame["seq"].as_u64() != u64::try_from(index + 1).ok()
+            || frame["state"] != stamp["state"]
+            || epoch < previous
+        {
+            return Err("m4: paired screen/clock sequence mismatch".into());
+        }
+        previous = epoch;
+    }
+    Ok(())
+}
+
 pub(super) fn merge_mode(
     trace: &mut Trace,
     snapshot: &Value,
@@ -22,14 +42,7 @@ pub(super) fn merge_mode(
     if snapshot["appends"] != json!(["delegation-local"]) {
         return Err("m4: missing verified tool result/delegation.context.append for delegation-local".into());
     }
-    let expected = json!({"event":"provider.snapshot", "calls":[{
-        "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
-        "delegations":["delegation-local"], "appends":["delegation-local"],
-        "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::model::FALLBACK} else if emotion {super::super::emotion::REPLY} else {super::super::model::SUCCESS}}],
-        "models":[{"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
-                  {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}]});
-    if snapshot != &expected {
+    if snapshot != &expected(negative, emotion) {
         return Err("m4: exact pinned provider/model observation mismatch".into());
     }
     check_mcp(mcp, name, args)?;
@@ -68,6 +81,16 @@ pub(super) fn merge_mode(
     trace.records.insert(attempt + 1, appended);
     trace.records.insert(request, created);
     Ok(())
+}
+
+pub(super) fn expected(negative: bool, emotion: bool) -> Value {
+    json!({"event":"provider.snapshot", "calls":[{
+        "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
+        "delegations":["delegation-local"], "appends":["delegation-local"],
+        "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::model::FALLBACK} else if emotion {super::super::emotion::REPLY} else {super::super::model::SUCCESS}}],
+        "models":[{"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
+                  {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}]})
 }
 
 fn position(trace: &Trace, event: &str) -> Result<usize, String> {

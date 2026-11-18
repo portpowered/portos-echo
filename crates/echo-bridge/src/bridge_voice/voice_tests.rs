@@ -97,7 +97,6 @@ fn done() -> MediaEvent {
 
 #[path = "voice_cases.rs"]
 mod cases;
-
 #[tokio::test(start_paused = true)]
 async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played() {
     let observer = Observer::default();
@@ -120,6 +119,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
         |notice| {
             notices.push(match notice {
                 Notice::ReplyStarted => "speaking",
+                Notice::ReplyPaused => "paused",
                 Notice::ReplyPlayed => "played",
                 Notice::Transcript { .. } => "transcript",
                 Notice::Device(_) => "device",
@@ -153,37 +153,61 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
             reply_dropped: 0
         }
     );
-    assert_eq!(notices, vec!["transcript", "speaking", "device", "played"]);
+    // Silence never opens the mouth.
+    assert_eq!(notices, vec!["transcript", "device", "played"]);
 }
-
 #[tokio::test(start_paused = true)]
-async fn voice_empty_reply_still_requires_stop_and_played() {
-    let observer = Observer::default();
-    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
-    let mut events = client.events().unwrap();
-    wake(&observer, 1);
-    let mic = microphone(&mut events).await;
-    let (mut port, tx) = port();
-    tx.send(Ok(done())).await.unwrap();
-    let mut work = Box::pin(run(
-        &client,
-        &mut events,
-        mic,
-        &mut port,
-        options(),
-        std::future::pending(),
-        |_| Ok(()),
-    ));
-    pending(work.as_mut()).await;
-    assert_eq!(frames(&observer), Vec::<Vec<u8>>::new());
-    assert_eq!(observer.commands().last(), Some(&Command::Stop));
-    observer.finish(Ok(()));
-    let stats = work.await.unwrap();
-    assert_eq!(stats.microphone_frames, 0);
-    assert_eq!(stats.microphone_tail, 1);
-    assert_eq!(stats.reply_sent, 0);
+async fn voice_short_or_empty_reply_waits_for_played_without_early_mouth_open() {
+    for count in [0, 1] {
+        let observer = Observer::default();
+        let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        let mut events = client.events().unwrap();
+        wake(&observer, 1);
+        let mic = microphone(&mut events).await;
+        let (mut port, tx) = port();
+        port.ready = (0..count).map(|_| [123; 320]).collect();
+        tx.send(Ok(done())).await.unwrap();
+        let start = Instant::now();
+        let transitions = std::cell::RefCell::new(Vec::new());
+        let mut work = Box::pin(run(
+            &client,
+            &mut events,
+            mic,
+            &mut port,
+            options(),
+            std::future::pending(),
+            |notice| {
+                let open = match notice {
+                    Notice::ReplyStarted => Some(true),
+                    Notice::ReplyPaused => Some(false),
+                    _ => None,
+                };
+                if let Some(open) = open {
+                    transitions.borrow_mut().push((Instant::now() - start, open));
+                }
+                Ok(())
+            },
+        ));
+        pending(work.as_mut()).await;
+        assert_eq!(frames(&observer).len(), count);
+        assert_eq!(observer.commands().last(), Some(&Command::Stop));
+        assert!(transitions.borrow().is_empty());
+        observer.finish(Ok(())); // Deliberately earlier than the output delay.
+        if count == 1 {
+            pending(work.as_mut()).await;
+            assert!(transitions.borrow().is_empty());
+        }
+        let stats = work.await.unwrap();
+        assert_eq!((stats.microphone_frames, stats.microphone_tail), (0, 1));
+        assert_eq!(stats.reply_sent, u64::try_from(count).unwrap());
+        let expected = if count == 0 {
+            vec![]
+        } else {
+            vec![(Duration::from_millis(200), true), (Duration::from_millis(220), false)]
+        };
+        assert_eq!(*transitions.borrow(), expected);
+    }
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
     let observer = Observer::default();
@@ -216,7 +240,6 @@ async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
     assert!(observer.commands().contains(&Command::Cut(0)));
     assert!(!observer.commands().contains(&Command::Stop));
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_missing_played_hits_its_own_deadline() {
     let observer = Observer::default();
@@ -244,7 +267,6 @@ async fn voice_missing_played_hits_its_own_deadline() {
     assert!(observer.commands().contains(&Command::Stop));
     assert!(observer.commands().contains(&Command::Cut(0)));
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_eof_cancellation_and_callback_failure_cannot_publish_played() {
     for failure in [Error::Unavailable, Error::Control, Error::Screen] {
@@ -295,7 +317,6 @@ async fn voice_eof_cancellation_and_callback_failure_cannot_publish_played() {
         assert!(observer.commands().contains(&Command::Cut(0)));
     }
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_late_media_is_an_error_instead_of_silent_reply_truncation() {
     let observer = Observer::default();
@@ -320,7 +341,6 @@ async fn voice_late_media_is_an_error_instead_of_silent_reply_truncation() {
     assert_eq!(frames(&observer).len(), 0);
     assert!(observer.commands().contains(&Command::Cut(0)));
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_quiet_webrtc_media_after_done_is_not_queued_and_audible_media_still_fails() {
     let observer = Observer::default();
@@ -404,50 +424,42 @@ async fn delegated_answer(filler: Vec<MediaEvent>, answer: MediaEvent) -> (u64, 
     ));
     send(&tx, filler).await;
     pending(work.as_mut()).await;
-    // Audible media after the filler is still the reply, not late media.
     send(&tx, audible(12)).await;
     pending(work.as_mut()).await;
     assert_eq!(frames(&observer).len(), 10);
     send(&tx, [answer, done()]).await;
     tick(work.as_mut(), 2).await;
-    // Only the answer's done ends the reply: every frame plays, then audio-stop.
     assert_eq!(frames(&observer).len(), 12);
     assert_eq!(observer.commands().last(), Some(&Command::Stop));
     observer.finish(Ok(()));
     let stats = work.await.unwrap();
     (stats.reply_received, stats.reply_sent)
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_filler_done_before_the_delegated_turn_completes_keeps_the_reply_open() {
     let filler = vec![turn(true), said("One sec."), done(), turn(false)];
     assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_filler_done_after_the_delegated_turn_completes_keeps_the_reply_open() {
     let filler = vec![turn(true), said("One sec."), turn(false), done()];
     assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_answer_begun_before_turn_completed_still_ends_the_reply() {
     let filler = vec![turn(true), said("One sec."), done(), said("It's")];
     assert_eq!(delegated_answer(filler, turn(false)).await, (12, 12));
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_filler_running_on_into_the_answer_ends_the_reply_at_its_done() {
     let filler = vec![turn(true), said("One sec."), turn(false)];
     assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_utterance_in_progress_when_the_turn_starts_is_the_filler() {
     let filler = vec![said("One sec."), turn(true), done(), turn(false)];
     assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
 }
-
 #[tokio::test(start_paused = true)]
 async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_without_failing() {
     let observer = Observer::default();

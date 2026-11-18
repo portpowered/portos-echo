@@ -8,6 +8,7 @@ pub(crate) const RELINK: &str = "Run echo-bridge link with your config to relink
 
 #[derive(Clone)]
 pub(crate) struct Presentation {
+    clock: Option<super::bridge_clock::receipt::Context>,
     states: Option<mpsc::Sender<UiState>>,
     current: Arc<Mutex<Projection>>,
     emotion_changed: Arc<tokio::sync::Notify>,
@@ -37,6 +38,7 @@ impl Projection {
 impl Presentation {
     pub fn new(states: Option<mpsc::Sender<UiState>>) -> Self {
         Self {
+            clock: super::bridge_clock::receipt::Context::current(),
             states,
             emotion_changed: Arc::default(),
             current: Arc::new(Mutex::new(Projection {
@@ -154,7 +156,11 @@ impl Presentation {
 
     fn send(&self, state: UiState) -> Result<(), Error> {
         if let Some(states) = &self.states {
+            let projected = self.clock.as_ref().map(|_| state.clone());
             states.try_send(state).map_err(|_| Error::Screen)?;
+            if let (Some(clock), Some(projected)) = (&self.clock, projected) {
+                clock.projected(&projected)?;
+            }
         }
         Ok(())
     }

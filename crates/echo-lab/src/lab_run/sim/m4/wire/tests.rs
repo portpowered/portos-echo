@@ -255,3 +255,71 @@ async fn reset_is_eof_only_at_a_complete_frame_boundary() {
     assert_eq!(frame(&mut input).await.unwrap().unwrap().0, bytes);
     assert_eq!(frame(&mut input).await.unwrap(), None);
 }
+
+#[test]
+fn signed_reply_samples_reject_absent_silent_threshold_only_short_and_wrong_sized_audio() {
+    let host = serde_json::json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":9000});
+    for (bytes, level, valid) in [
+        (0, 0_i16, false),
+        (9600, 0, false),
+        (9600, 64, false),
+        (9600, -64, false),
+        (9598, 65, false),
+        (9602, -65, false),
+        (9600, 65, true),
+        (9600, -65, true),
+        (9600, i16::MIN, true),
+    ] {
+        let mut state = Timing {
+            run: true,
+            ..Timing::default()
+        };
+        if bytes != 0 {
+            let mut event = reply(bytes);
+            event.payload = level.to_le_bytes().repeat(bytes / 2);
+            state.playback(&event, Duration::ZERO).unwrap();
+        }
+        assert_eq!(state.audible_reply(&host).is_ok(), valid, "{bytes} bytes at {level}");
+        if valid {
+            assert_eq!(state.nonzero_samples, 4800);
+            assert_eq!(state.audible_samples, 4800);
+            assert!(state.audible_reply(&serde_json::json!({})).is_err());
+            let mut silent_host = host.clone();
+            silent_host["nonzero_bytes"] = 0.into();
+            assert!(state.audible_reply(&silent_host).is_err());
+        }
+    }
+}
+
+#[test]
+fn signed_measurements_require_both_counts_with_exact_byte_and_sample_bounds() {
+    let valid = serde_json::json!({"pcm_bytes":9600,"nonzero_samples":2400,"audible_samples":2400});
+    assert_eq!(audible_pcm(&valid), Ok(()));
+    for field in ["pcm_bytes", "nonzero_samples", "audible_samples"] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(audible_pcm(&missing).is_err(), "missing {field}");
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(-1),
+            serde_json::json!(2400.5),
+        ] {
+            let mut malformed = valid.clone();
+            malformed[field] = value;
+            assert!(audible_pcm(&malformed).is_err(), "invalid {field}");
+        }
+    }
+    for (bytes, nonzero, audible, pass) in [
+        (9598, 4800, 4800, false),
+        (9602, 4800, 4800, false),
+        (9600, 2399, 2399, false),
+        (9600, 4801, 4800, false),
+        (9600, 2400, 2401, false),
+        (9600, 4800, 2399, false),
+        (9600, 4800, 4801, false),
+        (9600, 4800, 4800, true),
+    ] {
+        let value = serde_json::json!({"pcm_bytes":bytes,"nonzero_samples":nonzero,"audible_samples":audible});
+        assert_eq!(audible_pcm(&value).is_ok(), pass, "{value}");
+    }
+}
