@@ -29,6 +29,9 @@ Signaling starts one microsecond before the initial injected tick to accommodate
 rtc's strict positive elapsed-time check for host nomination, including Windows
 clock resolution. Subsequent input, media and timeout times remain exactly the
 caller's; a frozen bridge clock can negotiate with an advancing remote peer.
+The adapter also drains event-triggered DTLS/SCTP work to quiescence, servicing
+the initial DTLS flight at the last supplied instant. Sequential calls can
+negotiate and deliver events with both clocks frozen, without a timer advance.
 
 The canonical bridge path uses Codex and echo-media. Legacy/Muse bridge calls,
 M3, and simulator fake peers still consume echo-live. Sign-in and Responses

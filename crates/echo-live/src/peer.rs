@@ -134,19 +134,34 @@ impl LivePeer {
     /// Returns closed/protocol/I/O/receive-pressure errors.
     pub async fn flush(&mut self) -> Result<Instant, Error> {
         self.open()?;
-        while let Some(packet) = self.rtc.poll_write() {
-            self.socket
-                .as_ref()
-                .ok_or(Error::Closed)?
-                .send_to(&packet.message, packet.transport.peer_addr)
-                .await
-                .map_err(|_| Error::Io)?;
-        }
-        while let Some(event) = self.rtc.poll_event() {
-            self.event(&event);
-        }
-        while let Some(packet) = self.rtc.poll_read() {
-            self.message(packet.message)?;
+        loop {
+            // Event handling can create a DTLS endpoint whose initial flight
+            // is collected by handle_timeout, even before its next deadline.
+            // Service it at the last supplied instant, without advancing time.
+            self.rtc.handle_timeout(self.now).map_err(|_| Error::Protocol)?;
+            let mut progressed = false;
+            while let Some(packet) = self.rtc.poll_write() {
+                progressed = true;
+                self.socket
+                    .as_ref()
+                    .ok_or(Error::Closed)?
+                    .send_to(&packet.message, packet.transport.peer_addr)
+                    .await
+                    .map_err(|_| Error::Io)?;
+            }
+            while let Some(event) = self.rtc.poll_event() {
+                progressed = true;
+                self.event(&event);
+            }
+            while let Some(packet) = self.rtc.poll_read() {
+                progressed = true;
+                self.message(packet.message)?;
+            }
+            // Draining events can start DTLS/SCTP and enqueue more writes.
+            // Finish that work before waiting for another datagram or tick.
+            if !progressed {
+                break;
+            }
         }
         Ok(self.rtc.poll_timeout().unwrap_or(self.now + Duration::from_hours(24)))
     }
