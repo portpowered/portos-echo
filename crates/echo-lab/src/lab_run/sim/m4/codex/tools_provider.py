@@ -3,6 +3,27 @@ import json
 import struct
 from copy import deepcopy
 
+# The production bridge appends its two session builtins after MCP discovery.
+SESSION_TOOLS = [
+    {'name': 'extend_session', 'description': 'Extend listening for this voice session within its configured bound.',
+     'inputSchema': {'type': 'object', 'properties': {'seconds': {'type': 'integer', 'minimum': 1}},
+                     'required': ['seconds'], 'additionalProperties': False}},
+    {'name': 'end_session', 'description': 'End this voice session after its current reply has played.',
+     'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
+]
+SESSION_NAMES = [tool['name'] for tool in SESSION_TOOLS]
+
+
+def function_tools(tools):
+    expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
+                 # rust-v0.160.0 closes each dynamic object schema on the wire.
+                 'parameters': {**deepcopy(tool['inputSchema']), 'additionalProperties': False},
+                 'strict': False} for tool in tools + SESSION_TOOLS]
+    # The same pin drops numeric minimum while lowering JSON schema to its
+    # tool-schema type. Assert that measured representation exactly.
+    expected[-2]['parameters']['properties']['seconds'].pop('minimum')
+    return expected
+
 
 def exact(connection, count):
     result = b''
@@ -51,12 +72,7 @@ class Delegation:
             'content': [{'type': 'input_text', 'text': 'Call ui_show_emotion with name happy and report the result.' if self.emotion else 'Call test_echo with text delegated echo and report the result.'}]}}
 
     def respond(self, body):
-        expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
-                     # rust-v0.160.0 closes each dynamic object schema on the wire.
-                     'parameters': {**deepcopy(tool['inputSchema']), 'additionalProperties': False},
-                     'strict': False} for tool in self.tools]
-        # The same pin drops numeric minimum while lowering JSON schema to its
-        # tool-schema type. Assert that measured representation exactly.
+        expected = function_tools(self.tools)
         expected[1]['parameters']['properties']['ms'].pop('minimum')
         assert body['tools'] == expected, 'model exposed tools beyond exact dynamic catalog'
         assert body['model'] == 'gpt-5.4', 'wrong delegated model'
@@ -128,10 +144,8 @@ class McpDelegation:
             'content': [{'type': 'input_text', 'text': 'Call test_echo with text m5-linked and report the result.'}]}}
 
     def respond(self, body):
-        expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
-                     'parameters': {**deepcopy(tool['inputSchema']), 'additionalProperties': False},
-                     'strict': False} for tool in self.tools]
-        assert body['tools'] == expected and len(expected) == 1, 'M5 exact dynamic catalog mismatch'
+        expected = function_tools(self.tools)
+        assert body['tools'] == expected and len(self.tools) == 1, 'M5 exact dynamic catalog mismatch'
         assert body['model'] == 'gpt-5.4', 'M5 wrong delegated model'
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
         index = len(self.models)

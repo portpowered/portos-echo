@@ -17,6 +17,7 @@ use std::{
 fn session_options() -> SessionOptions {
     SessionOptions {
         listen_timeout: None,
+        session_max: Duration::from_secs(600),
         idle: Duration::from_secs(5),
         response_timeout: Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),

@@ -17,6 +17,8 @@ use tokio::{
 pub struct SessionOptions {
     /// None retains one reply per wake; Some retains capture between replies.
     pub listen_timeout: Option<Duration>,
+    /// Ceiling for tool-granted waiting, measured from each run's opening.
+    pub session_max: Duration,
     pub idle: Duration,
     pub response_timeout: Duration,
     pub played_timeout: Duration,
@@ -203,10 +205,39 @@ where
     P: MediaPeer,
     H: echo_agent_api::ToolHost + 'static,
 {
+    session_conversation(device, call, tools, None, options, cancelled, observe).await
+}
+
+/// Production composes a host that forwards session tool requests to this
+/// same run owner through `requests`.
+pub(super) async fn session_conversation<L, R, W, P, H>(
+    device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
+    call: &mut MediaCall<'_, R, W, P>,
+    tools: (
+        H,
+        echo_delegation::codex_dispatch::Catalog,
+        echo_config::AgentConfig,
+        crate::bridge_codex::ToolBudget,
+    ),
+    requests: Option<tokio::sync::mpsc::Receiver<crate::bridge_codex::SessionRequest>>,
+    mut options: SessionOptions,
+    cancelled: impl Future<Output = ()>,
+    mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
+) -> Result<u64, Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+    H: echo_agent_api::ToolHost + 'static,
+{
     let work = async {
         validate(&options)?;
         let (host, catalog, config, budget) = tools;
         let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, config, budget)?;
+        if let Some(requests) = requests {
+            session = session.with_session(requests);
+        }
         drive(device, &mut session, &mut options, cancelled, &mut observe).await
     };
     let result = work.await;
@@ -244,6 +275,8 @@ pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
         || options
             .listen_timeout
             .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+        || options.session_max.is_zero()
+        || Instant::now().checked_add(options.session_max).is_none()
     {
         return Err(Error::Input);
     }
@@ -280,6 +313,7 @@ async fn drive<L: EchoLink>(
             call,
             Options {
                 listen_timeout: options.listen_timeout,
+                session_max: options.session_max,
                 response_deadline: deadline,
                 played_timeout: options.played_timeout,
                 reply_lead_ms: options.reply_lead_ms,
@@ -371,6 +405,9 @@ async fn idle_step<E: LinkEvents>(
             }
         },
         event = call.next() => match event? {
+            MediaEvent::Control(Event::Session(request)) => {
+                super::session_tools::inactive(request, |notice| observe(SessionNotice::Run(notice)))?;
+            }
             MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
             // Neither an idle transcript nor old PCM starts a new reply.
             MediaEvent::Control(_) | MediaEvent::Audio(_) => (),

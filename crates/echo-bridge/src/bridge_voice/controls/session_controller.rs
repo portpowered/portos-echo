@@ -40,6 +40,17 @@ impl Controller {
         self.idle_deadline
     }
 
+    /// A granted deadline can only lengthen an armed listen interval.
+    pub fn extend_idle(&mut self, deadline: Instant) {
+        if let Some(current) = &mut self.idle_deadline {
+            *current = (*current).max(deadline);
+        }
+    }
+
+    pub fn closing(&self) -> bool {
+        matches!(self.state, State::Closing | State::Closed)
+    }
+
     /// Ordered speech or assistant activity admits the next response window.
     pub fn resume(&mut self) -> Result<(), Error> {
         if matches!(self.state, State::Closing | State::Closed) {

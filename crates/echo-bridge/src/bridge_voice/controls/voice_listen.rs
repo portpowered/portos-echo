@@ -42,6 +42,10 @@ pub(super) async fn replies<L: EchoLink>(
             return Ok(());
         };
         source.controller.listen_after_reply(timeout)?;
+        // Waiting granted during the reply outlives it, within the run's cap.
+        if let Some(granted) = source.session.granted() {
+            source.controller.extend_idle(granted);
+        }
         let mut stats = source.stats.clone();
         stats.reply_dropped += source.reply.dropped_frames();
         let totals = stats.clone();
@@ -51,6 +55,10 @@ pub(super) async fn replies<L: EchoLink>(
         previous = totals;
         observe(Notice::ReplySettled(stats))?;
         observe(Notice::ReplyPlayed)?;
+        // A requested end closes right after this reply settles; no idle wait.
+        if source.session.ending() {
+            return Ok(());
+        }
         if !listen((events, microphone), port, (source, drain), cancelled.as_mut(), observe).await? {
             return Ok(());
         }
@@ -70,9 +78,13 @@ async fn listen<E: LinkEvents>(
 ) -> Result<bool, Error> {
     let (events, microphone) = input;
     let (source, drain) = context;
-    let deadline = source.controller.idle_deadline().ok_or(Error::Input)?;
     tokio::pin!(cancelled);
     loop {
+        // A granted extension moves the deadline; a requested end closes now.
+        let deadline = source.controller.idle_deadline().ok_or(Error::Input)?;
+        if source.session.ending() {
+            return Ok(false);
+        }
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
@@ -117,6 +129,9 @@ async fn listening_step<E: LinkEvents>(
                 return Ok(true);
             }
             match event {
+                MediaEvent::Control(Event::Session(request)) => {
+                    super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
+                }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
                 // Continuous RTP and stale done frames cannot renew listening.
                 MediaEvent::Control(_) | MediaEvent::Audio(_) => (),

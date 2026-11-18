@@ -104,7 +104,7 @@ for line in sys.stdin:
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     elif method == "thread/start":
         assert home.joinpath("mode").read_text().startswith("tool-")
-        assert [tool["name"] for tool in request["params"]["dynamicTools"]] == ["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"]
+        assert [tool["name"] for tool in request["params"]["dynamicTools"]] == ["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion", "extend_session", "end_session"]
         home.joinpath("thread-config").write_text(json.dumps(request["params"]))
         emit({"id": request["id"], "result": {"thread": {"id": "fixture-thread"}}})
     elif method == "thread/realtime/start":

@@ -22,6 +22,7 @@ async fn voice_listen_barge_after_settled_reply_retains_run_and_fresh_idle_deadl
         &mut port,
         Options {
             listen_timeout: Some(Duration::from_secs(3)),
+            session_max: Duration::from_secs(600),
             reply_lead_ms: 200,
             response_deadline: Instant::now() + Duration::from_secs(10),
             played_timeout: Duration::from_secs(1),

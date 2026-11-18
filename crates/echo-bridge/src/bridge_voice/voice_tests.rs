@@ -54,6 +54,7 @@ fn port() -> (Port, mpsc::Sender<Result<MediaEvent, Error>>) {
 fn options() -> Options {
     Options {
         listen_timeout: None,
+        session_max: Duration::from_secs(600),
         reply_lead_ms: 200,
         response_deadline: Instant::now() + Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),
@@ -131,6 +132,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
                 Notice::ReplyPlayed | Notice::ReplySettled(_) => "played",
                 Notice::Transcript { .. } => "transcript",
                 Notice::Device(_) => "device",
+                Notice::SessionTool(_) => "session_tool",
             });
             Ok(())
         },

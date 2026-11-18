@@ -18,6 +18,7 @@ pub(super) struct Source {
     pub delegation: Delegation,
     pub mouth: Mouth,
     pub stats: Stats,
+    pub session: super::session_tools::Grants,
 }
 
 impl Source {
@@ -41,6 +42,7 @@ impl Source {
             delegation: Delegation::default(),
             mouth: Mouth::default(),
             stats: Stats::default(),
+            session: super::session_tools::Grants::default(),
         })
     }
 

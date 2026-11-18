@@ -122,6 +122,7 @@ fn preemption_notice(notice: &Notice) -> &'static str {
         Notice::ReplyPlayed | Notice::ReplySettled(_) => "played",
         Notice::Transcript { .. } => "transcript",
         Notice::Device(_) => "device",
+        Notice::SessionTool(_) => "session_tool",
     }
 }
 

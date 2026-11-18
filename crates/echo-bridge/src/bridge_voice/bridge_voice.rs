@@ -3,6 +3,8 @@
 mod earcon;
 #[path = "controls/session_controller.rs"]
 mod session_controller;
+#[path = "controls/session_tools.rs"]
+mod session_tools;
 #[path = "controls/tool_ledger.rs"]
 mod tool_ledger;
 #[path = "controls/tool_policy.rs"]
@@ -95,12 +97,14 @@ pub enum Notice {
     ReplyPlayed,
     /// Per-reply counters while a persistent run retains capture.
     ReplySettled(Stats),
+    SessionTool(session_tools::Receipt),
 }
 
 #[derive(Clone, Copy)]
 pub struct Options {
     /// None retains the explicit one-reply boundary for existing callers.
     pub listen_timeout: Option<Duration>,
+    pub session_max: Duration,
     pub reply_lead_ms: u16,
     pub response_deadline: Instant,
     pub played_timeout: Duration,
@@ -148,10 +152,12 @@ pub async fn run<L: EchoLink>(
         || options
             .listen_timeout
             .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+        || Instant::now().checked_add(options.session_max).is_none()
     {
         return Err(Error::Deadline);
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
+    source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
     source.controller.admit_response(options.response_deadline)?;
     // A cut replaces playback, while the run still owns pending clock receipts.
     let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
@@ -461,6 +467,9 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStarted) => source.interrupt(port),
+        MediaEvent::Control(Event::Session(request)) => {
+            session_tools::answer(request, &mut source.session, &mut source.controller, observe)
+        }
         MediaEvent::Control(Event::Other) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }

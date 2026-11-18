@@ -78,8 +78,8 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
     assert_eq!(
         case.snapshot["models"],
         json!([
-            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
-            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}
+            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":0},
+            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":1}
         ])
     );
     assert_eq!(case.snapshot["transcripts"], json!([]));

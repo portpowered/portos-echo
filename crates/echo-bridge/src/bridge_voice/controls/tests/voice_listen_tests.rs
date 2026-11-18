@@ -79,6 +79,7 @@ async fn voice_listen_two_replies_keep_one_run_then_expire_without_noise_renewal
         &mut port,
         Options {
             listen_timeout: Some(Duration::from_secs(3)),
+            session_max: Duration::from_secs(600),
             reply_lead_ms: 200,
             response_deadline: Instant::now() + Duration::from_secs(10),
             played_timeout: Duration::from_secs(1),
@@ -286,6 +287,7 @@ async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
         &mut port,
         Options {
             listen_timeout: Some(Duration::from_secs(3)),
+            session_max: Duration::from_secs(600),
             reply_lead_ms: 200,
             response_deadline: Instant::now() + Duration::from_secs(10),
             played_timeout: Duration::from_secs(1),
@@ -334,6 +336,7 @@ async fn voice_listen_empty_reply_requires_receipt_then_waits_without_audible_fr
         &mut port,
         Options {
             listen_timeout: Some(Duration::from_secs(3)),
+            session_max: Duration::from_secs(600),
             reply_lead_ms: 200,
             response_deadline: Instant::now() + Duration::from_secs(10),
             played_timeout: Duration::from_secs(1),
