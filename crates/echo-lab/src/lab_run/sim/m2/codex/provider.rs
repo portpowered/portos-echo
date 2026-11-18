@@ -124,7 +124,7 @@ async fn drive(
     };
     negotiate(process, peer, &offer).await?;
     let mut quiesced = peer.is_none();
-    let mut reply = None;
+    let mut reply = false;
     let mut started = false;
     let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
     loop {
@@ -132,7 +132,7 @@ async fn drive(
             result = step(peer, &mut reply), if !quiesced => {
                 if result? > 0 && !started {
                     started = true;
-                    reply = Some((0, Instant::now()));
+                    reply = true;
                 }
             },
             _ = clock.tick(), if !quiesced => { let _ = ticks.try_send(()); },
@@ -158,7 +158,7 @@ async fn repeat(
     peer: &mut Option<LivePeer>,
 ) -> Result<Value, String> {
     let mut received = 0;
-    let mut reply = None;
+    let mut reply = false;
     let mut quiesced = true;
     loop {
         tokio::select! {
@@ -213,27 +213,26 @@ async fn negotiate(process: &mut Process, peer: &mut Option<LivePeer>, offer: &V
     Ok(())
 }
 
-async fn step(peer: &mut Option<LivePeer>, reply: &mut Option<(u16, Instant)>) -> Result<usize, String> {
+async fn step(peer: &mut Option<LivePeer>, reply: &mut bool) -> Result<usize, String> {
     let mut received = 0;
     let peer = peer.as_mut().ok_or("m2: missing remote media")?;
     if peer.ready() {
         while peer.pop_audio().is_some() {
             received += 1;
         }
-        if let Some((sequence, due)) = *reply
-            && Instant::now() >= due
-        {
-            let frame = super::tone::packet(sequence).ok_or("m2: invalid tone sequence")?;
-            peer.send_audio(frame, Instant::now().into_std())
-                .await
-                .map_err(|_| "m2: synthetic reply media")?;
-            *reply = (sequence < 10).then_some((sequence + 1, due + std::time::Duration::from_millis(20)));
+        if std::mem::take(reply) {
+            // Admit the entire finite utterance before advancing its consumer's
+            // clock. RTP timestamps retain 20 ms spacing; the production bridge
+            // owns playback pacing. Host scheduling cannot manufacture a gap.
+            for sequence in 0..11 {
+                let frame = super::tone::packet(sequence).ok_or("m2: invalid tone sequence")?;
+                peer.send_audio(frame, Instant::now().into_std())
+                    .await
+                    .map_err(|_| "m2: synthetic reply media")?;
+            }
         }
     }
-    let mut next = Instant::from_std(peer.flush().await.map_err(|_| "m2: remote media flush")?);
-    if let Some((_, due)) = reply {
-        next = next.min(*due);
-    }
+    let next = Instant::from_std(peer.flush().await.map_err(|_| "m2: remote media flush")?);
     tokio::select! {
         ready = peer.readable() => {
             ready.map_err(|_| "m2: remote media readiness")?;
