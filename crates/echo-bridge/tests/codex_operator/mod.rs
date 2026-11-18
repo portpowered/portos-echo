@@ -125,7 +125,7 @@ async fn codex_operator_signin_screen_matching_completion_and_reopened_status() 
         process.collect(0).await;
         assert_eq!(process.stderr().await, "");
         assert!(process.lines.next_line().await.unwrap().is_none());
-        drop(screen);
+        voice_entry::screen_ended(&mut screen).await;
         let before = std::fs::read(fixture.home.join("auth.json")).unwrap();
         assert_eq!(before, b"{\"synthetic\":\"local-only\"}\n");
         fixture
@@ -138,7 +138,8 @@ async fn codex_operator_signin_screen_matching_completion_and_reopened_status() 
             .await;
         assert_eq!(std::fs::read(fixture.home.join("auth.json")).unwrap(), before);
         assert!(!fixture.directory.path().join("credential").exists());
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+        // Collection destroys this executable's exclusively owned listeners.
+        assert_eq!(process.child.id(), None);
         drop(fixture.owner());
     }
 }
@@ -172,7 +173,8 @@ async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_reso
             b"synthetic prior state"
         );
         drop(fixture.owner());
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+        assert_eq!(process.child.id(), None);
+        voice_entry::screen_ended(&mut screen).await;
     }
 }
 

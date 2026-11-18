@@ -72,7 +72,7 @@ async fn codex_voice_entry_binary_authenticates_before_ready_and_reaps_after_eof
         assert_eq!(rows.iter().filter(|row| row["event"] == "bridge.ready").count(), 1);
         assert_eq!(rows.iter().filter(|row| row["event"] == "live.connected").count(), 0);
         super::host::released(&fixture).await;
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+        super::presentation_released(&fixture.directory.path().join("trace"), mode, true);
     }
 }
 
@@ -110,7 +110,8 @@ async fn codex_voice_entry_binary_missing_configuration_never_dials_wyoming() {
         assert!(process.lines.next_line().await.unwrap().is_none());
         assert!(!fixture.home.join("launches").exists());
         assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+        // The collected executable exclusively owns any listeners it acquired.
+        assert_eq!(process.child.id(), None);
         assert_eq!(
             trace_if_present(&fixture.directory.path().join("trace"))
                 .iter()
@@ -171,7 +172,7 @@ async fn rejected_account(mode: &str) {
     completed(&mut process, 1, "echo-bridge: authorization\n").await;
     assert_eq!(std::fs::read(fixture.home.join("auth.json")).unwrap(), auth);
     super::host::released(&fixture).await;
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    super::presentation_released(&fixture.directory.path().join("trace"), "chatgpt", true);
     screen_ended(&mut screen).await;
     rejected_trace(&fixture);
     recover(&fixture, &listener).await;
@@ -219,7 +220,7 @@ fn rejected_trace(fixture: &Fixture) {
     );
 }
 
-async fn screen_ended(screen: &mut Lines<BufReader<tokio::net::TcpStream>>) {
+pub(super) async fn screen_ended(screen: &mut Lines<BufReader<tokio::net::TcpStream>>) {
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         // HTTP chunk/SSE separators may remain after the last parsed frame.
         while let Some(line) = screen.next_line().await.unwrap() {
@@ -263,6 +264,7 @@ fn methods(fixture: &Fixture, expected: &[&str]) {
 
 async fn recover(fixture: &Fixture, listener: &TcpListener) {
     std::fs::write(fixture.home.join("mode"), "chatgpt").unwrap();
+    std::fs::remove_file(fixture.directory.path().join("trace")).unwrap();
     let mut process = Process::spawn(&mut command(fixture));
     let _satellite = admitted(&mut process, listener).await;
     let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
@@ -273,7 +275,7 @@ async fn recover(fixture: &Fixture, listener: &TcpListener) {
     completed(&mut process, 0, "").await;
     recovered_process(fixture);
     super::host::released(fixture).await;
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    super::presentation_released(&fixture.directory.path().join("trace"), "chatgpt", true);
     screen_ended(&mut screen).await;
 }
 
@@ -440,7 +442,7 @@ async fn codex_voice_entry_binary_local_routes_reach_only_owned_child_before_rea
             ["started"]
         );
         super::host::released(&fixture).await;
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+        super::presentation_released(&fixture.directory.path().join("trace"), mode, true);
     }
     assert_eq!(std::env::var_os("HTTP_PROXY"), inherited);
 }
