@@ -152,7 +152,7 @@ fn report(state: &Case, reply_bytes: usize, enabled: bool) -> Value {
 }
 
 pub(super) async fn acknowledge(stream: &mut TcpStream) {
-    let (mut frames, mut continued) = (0, false);
+    let mut frames = 0;
     loop {
         let (header, bytes) = tests::read(stream).await;
         match header["type"].as_str().unwrap() {
@@ -161,12 +161,11 @@ pub(super) async fn acknowledge(stream: &mut TcpStream) {
                 assert_eq!(bytes.len(), 960);
                 frames += 1;
             }
-            "hassmic-continue" => {
-                assert!(!continued);
-                continued = true;
-            }
-            "audio-stop" => {
-                assert!(continued);
+            // The earcon ends with the capture-preserving device flush, never
+            // a reply audio-stop or run end; the device acknowledges it once.
+            "hassmic-flush" => {
+                let expected = json!({"type":"hassmic-flush","data":null,"data_length":0,"payload_length":0});
+                assert_eq!((header, bytes), (expected, vec![]));
                 assert_eq!(frames, 8);
                 tests::send(stream, "played", json!({}), vec![]).await;
                 return;
