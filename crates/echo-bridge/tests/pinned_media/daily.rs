@@ -3,9 +3,9 @@
 use super::*;
 use echo_bridge::bridge_voice::Configured;
 use echo_link::fake::{Command as LinkCommand, FakeConnector, Observer};
-use echo_media::{PcmFrame, PeerState};
+use echo_media::{PcmFrame, PeerState, SetupObserver, SetupStage};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::{oneshot, watch};
@@ -74,21 +74,30 @@ impl Provider {
 
 // SDP is opaque to the app server. This controlled peer makes no network calls;
 // the independently retained M4 witness owns real ICE/DTLS/Opus evidence.
-struct Media(watch::Sender<PeerState>);
+struct Media(watch::Sender<PeerState>, OnceLock<SetupObserver>);
 impl MediaPeer for Media {
     fn create(_: PeerConfig) -> impl Future<Output = Result<Self, echo_media::Error>> {
-        std::future::ready(Ok(Self(watch::channel(PeerState::New).0)))
+        std::future::ready(Ok(Self(watch::channel(PeerState::New).0, OnceLock::new())))
     }
     fn offer(&self) -> impl Future<Output = Result<String, echo_media::Error>> {
         std::future::ready(Ok("fixture-offer".into()))
     }
     fn apply_answer(&self, answer: &str) -> impl Future<Output = Result<(), echo_media::Error>> {
         assert_eq!(answer, "fixture-answer");
-        self.0.send_replace(PeerState::Connected);
-        std::future::ready(Ok(()))
+        std::future::ready((|| {
+            if let Some(observer) = self.1.get() {
+                observer(SetupStage::IceConnected)?;
+                observer(SetupStage::DataChannelOpen)?;
+            }
+            self.0.send_replace(PeerState::Connected);
+            Ok(())
+        })())
     }
     fn states(&self) -> watch::Receiver<PeerState> {
         self.0.subscribe()
+    }
+    fn observe_setup(&self, observer: SetupObserver) -> Result<(), echo_media::Error> {
+        self.1.set(observer).map_err(|_| echo_media::Error::State)
     }
     fn send(&self, _: PcmFrame) -> Result<(), echo_media::Error> {
         Ok(())
