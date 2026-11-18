@@ -6,6 +6,8 @@
 //! prior evictions nor partial tails belong to the retained `dropped_frames`.
 //! `reply.overflow` records the first bridge reply eviction per run, with its
 //! fixed frame capacity. Final eviction totals remain in `reply.cut`.
+//! `health.released` and `screen.released` have only the existing envelope and
+//! acknowledge acquired listener owners after their shutdown has been joined.
 use crate::Error;
 use serde_json::{Map, Value};
 use std::{
@@ -84,6 +86,33 @@ impl Trace {
 mod bridge_spine_tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test(start_paused = true)]
+    async fn bridge_trace_release_receipts_have_only_fixed_envelope() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
+        for mode in ["chatgpt", "api_key"] {
+            let mut trace = Trace::open(&path, mode).unwrap();
+            for event in ["health.released", "screen.released"] {
+                trace.record(event, None, json!({})).unwrap();
+            }
+        }
+        let rows: Vec<Value> = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            rows,
+            ["chatgpt", "api_key"]
+                .into_iter()
+                .flat_map(|mode| {
+                    ["health.released", "screen.released"]
+                        .map(|event| json!({"event":event,"elapsed_ms":0,"provider_auth_mode":mode}))
+                })
+                .collect::<Vec<_>>()
+        );
+    }
 
     #[tokio::test(start_paused = true)]
     async fn bridge_trace_probe_success_has_only_fixed_envelope() {

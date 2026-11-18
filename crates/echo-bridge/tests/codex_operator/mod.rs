@@ -8,6 +8,39 @@ mod tools;
 mod voice_entry;
 use fixture::Fixture;
 
+fn presentation_owned(path: &Path) {
+    assert!(
+        trace(path)
+            .iter()
+            .all(|row| row["event"] != "health.released" && row["event"] != "screen.released")
+    );
+}
+
+fn presentation_released(path: &Path, mode: &str, screen: bool) {
+    let rows = trace(path);
+    let receipts: Vec<_> = rows
+        .iter()
+        .filter(|row| matches!(row["event"].as_str(), Some("health.released" | "screen.released")))
+        .collect();
+    let expected = if screen {
+        vec!["health.released", "screen.released"]
+    } else {
+        vec!["health.released"]
+    };
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|row| row["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    for receipt in receipts {
+        assert_eq!(receipt.as_object().unwrap().len(), 3);
+        assert_eq!(receipt["provider_auth_mode"], mode);
+        assert!(receipt["elapsed_ms"].is_u64());
+    }
+}
+
 #[tokio::test]
 #[ignore = "T3 requires local Python"]
 async fn codex_operator_cancellation_and_output_failure_await_cleanup() {

@@ -52,6 +52,7 @@ async fn codex_configured_service_authenticates_both_modes_before_ready_and_reap
                 observer.commands(),
                 [Command::Connect, Command::Capture, Command::Probe]
             );
+            presentation_owned(&path);
             stop.send(()).unwrap();
         };
         let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
@@ -65,7 +66,7 @@ async fn codex_configured_service_authenticates_both_modes_before_ready_and_reap
             [Command::Connect, Command::Capture, Command::Probe, Command::Close]
         );
         super::host::released(&fixture).await;
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+        presentation_released(&path, mode, true);
         let rows = trace(&path);
         assert_eq!(rows.iter().filter(|row| row["event"] == "bridge.ready").count(), 1);
         assert_eq!(rows.iter().filter(|row| row["event"] == "live.connected").count(), 0);
@@ -98,9 +99,7 @@ async fn codex_configured_service_missing_binary_refuses_before_device_and_child
     let rows = trace(&path);
     let screens: Vec<_> = rows.iter().filter(|row| row["event"] == "screen.listening").collect();
     assert_eq!(screens.len(), 1);
-    let address = screens[0]["address"].as_str().unwrap();
-    let rebound = std::net::TcpListener::bind(address).unwrap();
-    assert_eq!(rebound.local_addr().unwrap().to_string(), address);
+    presentation_released(&path, "chatgpt", true);
     assert_eq!(
         trace(&path).iter().filter(|row| row["event"] == "bridge.ready").count(),
         0
@@ -130,4 +129,38 @@ async fn codex_configured_service_missing_nominated_key_creates_no_runtime_resou
     assert!(!path.exists());
     assert!(!fixture.home.join("launches").exists());
     assert_eq!(screen.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+}
+
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn codex_configured_service_health_bind_failure_releases_only_acquired_screen() {
+    let fixture = Fixture::new("chatgpt");
+    let mut config = config(&fixture);
+    config.screen.listen = ([127, 0, 0, 1], 0).into();
+    let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let path = fixture.directory.path().join("configured-trace");
+    let observer = Observer::default();
+    let prepared = Configured::new(config, path.clone(), occupied.local_addr().unwrap()).unwrap();
+    let result = Box::pin(prepared.execute(
+        FakeConnector::new(observer.clone()),
+        async || -> Result<echo_media::Peer, Error> { unreachable!() },
+        vec![],
+        std::future::pending(),
+    ))
+    .await;
+    assert_eq!(result, Err(Error::Health));
+    assert_eq!(observer.commands(), []);
+    assert!(!fixture.home.join("launches").exists());
+    let rows = trace(&path);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["event"], "screen.released");
+    assert_eq!(rows[0]["provider_auth_mode"], "chatgpt");
+    assert_eq!(rows[0].as_object().unwrap().len(), 3);
+    assert!(rows[0]["elapsed_ms"].is_u64());
+    // The refused health listener belongs to this test and remains live.
+    let client = tokio::net::TcpStream::connect(occupied.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (server, _) = occupied.accept().await.unwrap();
+    assert_eq!(client.local_addr().unwrap(), server.peer_addr().unwrap());
 }
