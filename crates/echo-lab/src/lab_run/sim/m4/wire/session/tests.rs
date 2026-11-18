@@ -83,6 +83,21 @@ fn cut_receipts_remain_ordered_and_missing_receipts_are_not_success() {
     assert_eq!(session.observation()["unmatched_played"], 1);
 }
 
+#[test]
+fn flushed_reply_receipt_does_not_count_as_successful_reply_before_capture() {
+    let mut session = Session::default();
+    session.playback(&event("audio-start", 0), at(10), false);
+    session.playback(&pcm(1200), at(11), false);
+    session.playback(&event("hassmic-flush", 0), at(12), false);
+    session.capture(&event("played", 0), at(13));
+    session.capture(&event("audio-chunk", 640), at(14));
+    assert_eq!(session.observation()["capture_chunks_after_reply_played"], 0);
+    reply(&mut session, 20, -2400);
+    session.capture(&event("played", 0), at(30));
+    session.capture(&event("audio-chunk", 640), at(31));
+    assert_eq!(session.observation()["capture_chunks_after_reply_played"], 1);
+}
+
 // T3: the actual loopback relay forwards both replies and the explicit end.
 // A write failure must not record an unforwarded frame as a device command.
 #[tokio::test]

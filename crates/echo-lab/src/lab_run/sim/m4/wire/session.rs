@@ -43,7 +43,7 @@ impl Session {
                 if self
                     .streams
                     .iter()
-                    .any(|stream| stream.played.is_some() && !stream.earcon) =>
+                    .any(|stream| stream.played.is_some() && stream.ending == Some("stop") && !stream.earcon) =>
             {
                 self.capture_after_played += 1;
             }
