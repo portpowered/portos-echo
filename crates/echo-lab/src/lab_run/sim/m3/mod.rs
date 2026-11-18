@@ -10,6 +10,26 @@ use serde_json::Value;
 pub const FIRST: &str = "Computer, what time is it?";
 pub const SECOND: &str = "Computer, what day is it?";
 
+/// Fixture-local control ordering; never a bridge or scenario configuration.
+#[derive(Clone, Copy)]
+pub(super) enum CutOrder {
+    DoneFirst,
+    #[cfg(test)]
+    TranscriptFirst,
+}
+
+impl CutOrder {
+    fn events(self) -> Vec<Value> {
+        let done = serde_json::json!({"type":"turn.done", "turn":{"role":"assistant", "transcript":"The time"}});
+        let user = serde_json::json!({"type":"input_transcript.added", "item":{"text":"What day is it?"}});
+        match self {
+            Self::DoneFirst => vec![done, user],
+            #[cfg(test)]
+            Self::TranscriptFirst => vec![user, done],
+        }
+    }
+}
+
 pub fn utterance(value: &str) -> Result<Step, String> {
     if !matches!(value, FIRST | SECOND) {
         return Err("M3: no synthetic marker for this utterance".into());

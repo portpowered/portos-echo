@@ -1,5 +1,6 @@
 //! T3: real task joins and child collection behind the CLI's `world_closed` check.
 use super::*;
+use std::io::Write;
 use tokio::io::AsyncWriteExt;
 
 async fn first_screen() -> (Screen, tokio::net::TcpStream) {
@@ -70,6 +71,7 @@ async fn t3_m3_missing_admission_presentation_keeps_original_deadline() {
     assert_eq!(world.trace.records, [] as [Value; 0]);
 }
 
+
 impl World {
     pub(super) fn record_release<T, E>(&mut self, owner: &'static str, result: &Result<T, E>) {
         if result.is_ok() {
@@ -80,13 +82,88 @@ impl World {
 
 async fn listening() -> World {
     let relay = Relay::bind("127.0.0.1:1".parse().unwrap(), &fixture()).await.unwrap();
-    let live = Live::bind(if cfg!(windows) { "python" } else { "python3" }, relay.observed.clone())
-        .await
-        .unwrap();
+    let live = Live::bind(
+        if cfg!(windows) { "python" } else { "python3" },
+        relay.observed.clone(),
+        super::super::CutOrder::DoneFirst,
+    )
+    .await
+    .unwrap();
     World {
         relay: Some(relay),
         live: Some(live),
         ..World::default()
+    }
+}
+
+#[test]
+fn barge_fixture_preserves_both_control_orders_and_exact_payloads() {
+    use super::super::CutOrder;
+    let done_first = CutOrder::DoneFirst.events();
+    let user_first = CutOrder::TranscriptFirst.events();
+    assert_eq!(done_first.len(), 2);
+    assert_eq!(user_first, [done_first[1].clone(), done_first[0].clone()]);
+    assert_eq!(done_first[0]["type"], "turn.done");
+    assert_eq!(
+        done_first[0]["turn"],
+        json!({"role":"assistant", "transcript":"The time"})
+    );
+    assert_eq!(done_first[1]["type"], "input_transcript.added");
+    assert_eq!(done_first[1]["item"], json!({"text":"What day is it?"}));
+}
+
+#[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host and Codex"]
+fn t3_m3_transcript_before_done_plays_replacement_and_closes_on_idle() {
+    use crate::lab_run::{Driver, run_options, run_report::Artifacts};
+    let executable = std::env::current_exe().unwrap();
+    let profile = executable
+        .ancestors()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "debug" || name == "release")
+        })
+        .unwrap();
+    let bridge = profile.join(if cfg!(windows) {
+        "echo-bridge.exe"
+    } else {
+        "echo-bridge"
+    });
+    let scenario = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/scenarios/m3-full-duplex.yaml");
+    let root = tempfile::tempdir().unwrap();
+    let options = run_options::parse(&[
+        scenario.to_string_lossy().into_owned(),
+        "--driver".into(),
+        "sim".into(),
+        "--bridge".into(),
+        bridge.to_string_lossy().into_owned(),
+        "--out".into(),
+        root.path().join("artifacts").to_string_lossy().into_owned(),
+    ])
+    .unwrap();
+    let (_, _, steps) = crate::lab_run::load(&options).unwrap();
+    let mut artifacts = Artifacts::create(options.out.clone()).unwrap();
+    let mut driver = super::super::M3::new(&options).unwrap();
+    driver.world.cut_order = Some(super::super::CutOrder::TranscriptFirst);
+    let journey = steps
+        .iter()
+        .enumerate()
+        .try_for_each(|(index, step)| driver.execute(step, index, steps.get(index + 1), &mut artifacts));
+    let cleanup = driver.close(&mut artifacts);
+    if journey.is_err() || cleanup.is_err() {
+        let retained = root.keep();
+        assert!(
+            journey.is_ok() && cleanup.is_ok(),
+            "journey={journey:?} cleanup={cleanup:?} artifacts={retained:?}"
+        );
+    }
+    assert_eq!(artifacts.checks.get("m3_duplex"), Some(&true));
+    assert_eq!(artifacts.checks.get("m3_mute"), Some(&true));
+    let events = std::fs::read_to_string(options.out.join("events.jsonl")).unwrap();
+    for row in events.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()) {
+        if matches!(row["event"].as_str(), Some("m3.wire" | "m3.duplex" | "m3.mute")) {
+            writeln!(std::io::stdout(), "case=transcript_before_done {row}").unwrap();
+        }
     }
 }
 

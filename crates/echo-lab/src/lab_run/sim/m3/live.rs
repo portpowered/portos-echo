@@ -53,7 +53,7 @@ pub struct Live {
     closing: Arc<AtomicBool>,
 }
 impl Live {
-    pub async fn bind(python: &str, wire: watch::Sender<Ledger>) -> Result<Self, String> {
+    pub async fn bind(python: &str, wire: watch::Sender<Ledger>, order: super::CutOrder) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
@@ -72,7 +72,7 @@ impl Live {
         let owner_closing = closing.clone();
         let task = tokio::spawn(async move {
             let result = tokio::select! {
-                result = session(&mut process, wire, &sender, requests) => result,
+                result = session(&mut process, wire, &sender, requests, order) => result,
                 _ = stopped => Ok(()),
             };
             let closed = process.close().await;
@@ -150,6 +150,7 @@ async fn session(
     wire: watch::Sender<Ledger>,
     observed: &watch::Sender<Received>,
     requests: mpsc::Receiver<Request>,
+    order: super::CutOrder,
 ) -> Result<(), String> {
     let offer = process.expect("provider.offer").await?;
     let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
@@ -162,7 +163,7 @@ async fn session(
             .map_err(|_| "M3 Live: invalid offer")?;
         process.send(&json!({"answer":answer})).await?;
         process.expect("provider.sideband").await?;
-        replay(&mut peer, process, wire, observed, requests).await
+        replay(&mut peer, process, wire, observed, requests, order).await
     }
     .await;
     peer.close();
@@ -175,6 +176,7 @@ async fn replay(
     wire: watch::Sender<Ledger>,
     observed: &watch::Sender<Received>,
     mut requests: mpsc::Receiver<Request>,
+    order: super::CutOrder,
 ) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut frames = 0;
@@ -199,7 +201,7 @@ async fn replay(
             quiesced |= reply.respond(observed);
         }
         if !quiesced {
-            respond(peer, process, &wire, observed, frames, &mut phase).await?;
+            respond(peer, process, &wire, observed, frames, &mut phase, order).await?;
             observed.send_modify(|state| state.phase = phase);
         }
     }
@@ -212,6 +214,7 @@ async fn respond(
     observed: &watch::Sender<Received>,
     frames: u64,
     phase: &mut u8,
+    order: super::CutOrder,
 ) -> Result<(), String> {
     let state = wire.borrow().clone();
     if *phase == 0 && frames > 0 && state.inputs == 1 {
@@ -233,18 +236,22 @@ async fn respond(
         if state.stops != 0 || !state.played.is_empty() {
             return Err("M3 overlap: interrupting input arrived after first reply closed".into());
         }
-        // The old converter still holds its filter tail. Done precedes
-        // the user transcript, followed by audible PCM on the independent RTP
-        // path. The pinned V3 parser does not forward speech-start events.
+        // Exercise both ordered control boundaries without inferring an
+        // utterance identity from text. Late audible RTP follows independently.
+        // The pinned V3 parser does not forward speech-start events.
         wire.send_modify(|state| {
             state.cancel = Some(Instant::now());
             state.cut_frames = Some(frames);
         });
-        transcript(process, "assistant", "The time", true).await?;
-        process
-            .send(&json!({"tag":"barge", "events":[{"type":"input_transcript.added", "item":{"text":"What day is it?"}}]}))
-            .await?;
-        process.expect("provider.sent").await?;
+        for event in order.events() {
+            let tag = if event["type"] == "turn.done" {
+                "transcript"
+            } else {
+                "barge"
+            };
+            process.send(&json!({"tag":tag, "events":[event]})).await?;
+            process.expect("provider.sent").await?;
+        }
         answer(peer, 51..53).await?;
         *phase = 3;
     }

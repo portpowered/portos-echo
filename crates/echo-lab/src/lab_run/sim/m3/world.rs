@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub struct World {
+    #[cfg(test)]
+    pub(super) cut_order: Option<super::CutOrder>,
     pub relay: Option<Relay>,
     pub live: Option<Live>,
     host: Option<Process>,
@@ -47,6 +49,19 @@ pub fn fixture() -> Vec<u8> {
 
 impl World {
     pub async fn start(&mut self, python: &str, bridge: &Path, root: &Path) -> Result<(), String> {
+        let order = super::CutOrder::DoneFirst;
+        #[cfg(test)]
+        let order = self.cut_order.unwrap_or(order);
+        self.start_case(python, bridge, root, order).await
+    }
+
+    async fn start_case(
+        &mut self,
+        python: &str,
+        bridge: &Path,
+        root: &Path,
+        order: super::CutOrder,
+    ) -> Result<(), String> {
         if !production::selected(bridge) {
             return Err("M3 requires the prebuilt production echo-bridge".into());
         }
@@ -63,7 +78,7 @@ impl World {
         .await?;
         self.relay = Some(Relay::bind(address, &fixture()).await?);
         let relay = self.relay.as_ref().ok_or("M3: missing wire")?;
-        self.live = Some(Live::bind(python, relay.observed.clone()).await?);
+        self.live = Some(Live::bind(python, relay.observed.clone(), order).await?);
         self.endpoints.push(relay.address);
         self.endpoints.push(
             self.live
