@@ -85,7 +85,9 @@ async fn codex_voice_runtime_prewake_ready_and_cancel_reap_before_presentation_c
             [Command::Connect, Command::Capture, Command::Probe]
         );
         presentation_owned(&path);
+        let stalled = stalled_screen_body(fixture.screen).await;
         stop.send(()).unwrap();
+        screen_eof(stalled).await;
     };
     let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::join!(work, inspect)
@@ -107,6 +109,25 @@ async fn codex_voice_runtime_prewake_ready_and_cancel_reap_before_presentation_c
         trace(&path).iter().filter(|row| row["event"] == "run.started").count(),
         0
     );
+}
+
+async fn stalled_screen_body(address: std::net::SocketAddr) -> BufReader<tokio::net::TcpStream> {
+    let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    socket.write_all(b"POST /actions?token=synthetic-screen-pair HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n").await.unwrap();
+    let mut reader = BufReader::new(socket);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    assert_eq!(line, "HTTP/1.1 100 Continue\r\n");
+    line.clear();
+    reader.read_line(&mut line).await.unwrap();
+    assert_eq!(line, "\r\n");
+    reader
+}
+
+async fn screen_eof(mut stream: BufReader<tokio::net::TcpStream>) {
+    let mut tail = Vec::new();
+    stream.read_to_end(&mut tail).await.unwrap();
+    assert_eq!(tail, [] as [u8; 0]);
 }
 
 #[tokio::test]

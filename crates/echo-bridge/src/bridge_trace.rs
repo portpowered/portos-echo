@@ -6,8 +6,8 @@
 //! prior evictions nor partial tails belong to the retained `dropped_frames`.
 //! `reply.overflow` records the first bridge reply eviction per run, with its
 //! fixed frame capacity. Final eviction totals remain in `reply.cut`.
-//! `health.released` and `screen.released` have only the existing envelope and
-//! acknowledge acquired listener owners after their shutdown has been joined.
+//! Release events acknowledge acquired listener owners after shutdown is joined.
+//! Voice runtime `screen.released` also counts clients dropped at the drain bound.
 use crate::Error;
 use serde_json::{Map, Value};
 use std::{
@@ -88,13 +88,18 @@ mod bridge_spine_tests {
     use serde_json::json;
 
     #[tokio::test(start_paused = true)]
-    async fn bridge_trace_release_receipts_have_only_fixed_envelope() {
+    async fn bridge_trace_release_receipts_have_fixed_envelope_and_drop_count() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("trace");
         for mode in ["chatgpt", "api_key"] {
             let mut trace = Trace::open(&path, mode).unwrap();
             for event in ["health.released", "screen.released"] {
-                trace.record(event, None, json!({})).unwrap();
+                let fields = if event == "screen.released" {
+                    json!({"dropped_clients":3})
+                } else {
+                    json!({})
+                };
+                trace.record(event, None, fields).unwrap();
             }
         }
         let rows: Vec<Value> = std::fs::read_to_string(path)
@@ -107,8 +112,13 @@ mod bridge_spine_tests {
             ["chatgpt", "api_key"]
                 .into_iter()
                 .flat_map(|mode| {
-                    ["health.released", "screen.released"]
-                        .map(|event| json!({"event":event,"elapsed_ms":0,"provider_auth_mode":mode}))
+                    ["health.released", "screen.released"].map(|event| {
+                        let mut row = json!({"event":event,"elapsed_ms":0,"provider_auth_mode":mode});
+                        if event == "screen.released" {
+                            row["dropped_clients"] = json!(3);
+                        }
+                        row
+                    })
                 })
                 .collect::<Vec<_>>()
         );
