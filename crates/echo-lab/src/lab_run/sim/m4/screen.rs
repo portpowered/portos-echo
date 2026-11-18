@@ -24,12 +24,13 @@ impl Screen {
         let mut socket = TcpStream::connect(address)
             .await
             .map_err(|_| "screen: connection failed")?;
+        // Request an EOF-delimited body so SSE completeness excludes HTTP chunk framing.
         socket
-            .write_all(b"GET /events?token=test-pair HTTP/1.1\r\nHost: local\r\n\r\n")
+            .write_all(b"GET /events?token=test-pair HTTP/1.0\r\nHost: local\r\nConnection: close\r\n\r\n")
             .await
             .map_err(|_| "screen: request failed")?;
         let mut screen = Self(socket);
-        if screen.line().await? != "HTTP/1.1 200 OK" {
+        if !matches!(screen.line().await?.as_str(), "HTTP/1.0 200 OK" | "HTTP/1.1 200 OK") {
             return Err("screen: paired SSE unauthorized".into());
         }
         Ok(screen)
