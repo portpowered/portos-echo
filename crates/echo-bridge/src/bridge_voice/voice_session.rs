@@ -27,6 +27,8 @@ pub enum SessionNotice {
     Connected,
     Started,
     Run(Notice),
+    /// Capture EOF settled; this is independent of individual reply receipts.
+    MicrophoneCompleted(Stats),
     /// One reply settled; capture and the run may remain active.
     ReplyCompleted(Stats),
     /// Explicit run end and capture EOF settled successfully.
@@ -285,6 +287,7 @@ async fn drive<L: EchoLink>(
         )
         .await?;
         completed = completed.checked_add(1).ok_or(Error::Unavailable)?;
+        observe(SessionNotice::MicrophoneCompleted(stats.clone()))?;
         observe(SessionNotice::ReplyCompleted(stats.clone()))?;
         observe(SessionNotice::Completed(stats))?;
         let expires = Instant::now().checked_add(options.idle);

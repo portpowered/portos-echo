@@ -144,12 +144,13 @@ impl<'a> View<'a> {
                 self.screen.ready()
             }
             SessionNotice::Run(Notice::ReplyPlayed | Notice::Transcript { .. }) => Ok(()),
+            SessionNotice::MicrophoneCompleted(stats) => self.microphone_completed(&stats),
             SessionNotice::ReplyCompleted(stats) => self.reply_completed(&stats),
-            SessionNotice::Completed(stats) => self.completed(&stats),
+            SessionNotice::Completed(_) => self.completed(),
         }
     }
 
-    fn completed(&mut self, stats: &Stats) -> Result<(), Error> {
+    fn microphone_completed(&mut self, stats: &Stats) -> Result<(), Error> {
         let id = self.run.as_deref().ok_or(Error::Unavailable)?;
         self.trace
             .record("wyoming.mic_frames", Some(id), json!({"count":stats.received_chunks}))?;
@@ -160,7 +161,11 @@ impl<'a> View<'a> {
                 "count":stats.microphone_frames, "received_chunks":stats.received_chunks,
                 "dropped_chunks":stats.dropped_chunks, "tail_samples":stats.microphone_tail
             }),
-        )?;
+        )
+    }
+
+    fn completed(&mut self) -> Result<(), Error> {
+        let id = self.run.as_deref().ok_or(Error::Unavailable)?;
         self.trace.record("wyoming.run_ended", Some(id), json!({}))?;
         self.health.state.send_modify(|state| state.live = "idle");
         if !self.mouth_paused {

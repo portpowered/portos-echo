@@ -323,6 +323,8 @@ fn complete(view: &mut View<'_>, receive: &mut mpsc::Receiver<UiState>) {
         reply_dropped: 1,
         ..Stats::default()
     };
+    view.observe(ServeNotice::Session(SessionNotice::MicrophoneCompleted(stats.clone())))
+        .unwrap();
     view.observe(ServeNotice::Session(SessionNotice::ReplyCompleted(stats.clone())))
         .unwrap();
     view.observe(ServeNotice::Session(SessionNotice::Completed(stats)))
