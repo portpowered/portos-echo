@@ -1,0 +1,116 @@
+//! Post-write observations distinguish speaker streams from explicit run end.
+//! Keep signed sample statistics only; no captured or reply PCM is retained.
+use echo_contracts::wyoming::Event;
+use serde_json::{Value, json};
+use std::{collections::VecDeque, time::Duration};
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct Session {
+    opened: Vec<Duration>,
+    ended: Vec<Duration>,
+    capture_after_played: usize,
+    unmatched_played: usize,
+    streams: Vec<Playback>,
+    active: Option<usize>,
+    pending: VecDeque<usize>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Playback {
+    started: Option<Duration>,
+    stopped: Option<Duration>,
+    played: Option<Duration>,
+    ending: Option<&'static str>,
+    earcon: bool,
+    bytes: usize,
+    audible_samples: usize,
+    minimum: Option<i16>,
+    maximum: Option<i16>,
+}
+
+impl Session {
+    pub fn capture(&mut self, event: &Event, now: Duration) {
+        match event.header.r#type.as_str() {
+            "run-pipeline" => self.opened.push(now),
+            "played" => {
+                if let Some(index) = self.pending.pop_front() {
+                    self.streams[index].played = Some(now);
+                } else {
+                    self.unmatched_played += 1;
+                }
+            }
+            "audio-chunk"
+                if self
+                    .streams
+                    .iter()
+                    .any(|stream| stream.played.is_some() && !stream.earcon) =>
+            {
+                self.capture_after_played += 1;
+            }
+            _ => (),
+        }
+    }
+
+    pub fn playback(&mut self, event: &Event, now: Duration, earcon: bool) {
+        match event.header.r#type.as_str() {
+            "audio-start" => {
+                self.streams.push(Playback {
+                    started: Some(now),
+                    ..Playback::default()
+                });
+                self.active = Some(self.streams.len() - 1);
+            }
+            "audio-chunk" => {
+                // A missing start stays missing in evidence; never synthesize it.
+                let index = *self.active.get_or_insert_with(|| {
+                    self.streams.push(Playback::default());
+                    self.streams.len() - 1
+                });
+                let stream = &mut self.streams[index];
+                stream.earcon |= earcon;
+                stream.bytes += event.payload.len();
+                for bytes in event.payload.as_chunks::<2>().0 {
+                    let sample = i16::from_le_bytes(*bytes);
+                    stream.minimum = Some(stream.minimum.map_or(sample, |old| old.min(sample)));
+                    stream.maximum = Some(stream.maximum.map_or(sample, |old| old.max(sample)));
+                    stream.audible_samples += usize::from(sample.unsigned_abs() > 64);
+                }
+            }
+            "audio-stop" => self.stop(now, "stop"),
+            "hassmic-flush" => self.stop(now, "flush"),
+            "hassmic-end" => self.ended.push(now),
+            _ => (),
+        }
+    }
+
+    fn stop(&mut self, now: Duration, ending: &'static str) {
+        if let Some(index) = self.active.take() {
+            self.streams[index].stopped = Some(now);
+            self.streams[index].ending = Some(ending);
+            self.pending.push_back(index);
+        }
+    }
+
+    pub fn observation(&self) -> Value {
+        let times = |values: &[Duration]| values.iter().map(Duration::as_micros).collect::<Vec<_>>();
+        let streams = self
+            .streams
+            .iter()
+            .map(|stream| {
+                json!({
+                    "started_us":stream.started.map(|time| time.as_micros()),
+                    "stopped_us":stream.stopped.map(|time| time.as_micros()),
+                    "played_us":stream.played.map(|time| time.as_micros()),
+                    "ending":stream.ending,"earcon":stream.earcon,"pcm_bytes":stream.bytes,
+                    "audible_samples":stream.audible_samples,"minimum":stream.minimum,"maximum":stream.maximum,
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({"run_opened_us":times(&self.opened),"explicit_end_us":times(&self.ended),
+            "capture_chunks_after_reply_played":self.capture_after_played,
+            "unmatched_played":self.unmatched_played,"streams":streams})
+    }
+}
+
+#[cfg(test)]
+mod tests;

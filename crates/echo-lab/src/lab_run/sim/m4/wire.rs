@@ -2,6 +2,7 @@
 //! socket writes, never from capture FIFO writes or playback-file growth.
 use std::{net::SocketAddr, time::Duration};
 mod earcon;
+mod session;
 
 use echo_contracts::wyoming::{Decoder, Event, Header, WyomingEvent};
 use tokio::{
@@ -14,6 +15,7 @@ use tokio::{
 
 #[derive(Clone, Debug, Default)]
 pub struct Timing {
+    session: session::Session,
     pub captured: usize,
     captured_chunks: usize,
     endpoint_sample: Option<usize>,
@@ -47,6 +49,7 @@ impl Timing {
     }
 
     fn capture(&mut self, event: &Event, target: usize, now: Duration) -> Result<(), String> {
+        self.session.capture(event, now);
         match event.header.r#type.as_str() {
             "run-pipeline" if self.run => return Err("wire: multiple runs in one world".into()),
             "run-pipeline" => {
@@ -85,6 +88,7 @@ impl Timing {
 
     fn playback(&mut self, event: &Event, now: Duration) -> Result<(), String> {
         let earcon = self.earcon.observe(event, now)?;
+        self.session.playback(event, now, earcon);
         if event.header.r#type == "audio-chunk" {
             if !self.run || !pcm(event, 24000) {
                 return Err("wire: invalid reply PCM".into());
@@ -111,6 +115,7 @@ impl Timing {
             "nonzero_samples":self.nonzero_samples,"audible_samples":self.audible_samples,
             "wake":self.wake_observation(),
             "capture":self.capture_observation(),
+            "session":self.session.observation(),
             "host":host});
         if let Some(error) = &self.failure {
             return Err(error.clone());
