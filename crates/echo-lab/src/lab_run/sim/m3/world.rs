@@ -27,6 +27,9 @@ pub struct World {
     root: PathBuf,
     #[cfg(test)]
     released: Vec<&'static str>,
+    private: Option<super::super::m2::codex::config::Root>,
+    clock: Value,
+    completed: bool,
 }
 
 // A finite deterministic marker, interpreted only by the synthetic scenario.
@@ -47,7 +50,7 @@ impl World {
         if !production::selected(bridge) {
             return Err("M3 requires the prebuilt production echo-bridge".into());
         }
-        std::fs::create_dir(root).map_err(|_| "M3: private directory acquisition failed")?;
+        self.private = Some(super::super::m2::codex::config::Root::create(root.into())?);
         self.root = root.into();
         self.host = Some(Process::start(process::host(python).arg("--finite"))?);
         let ready = self.host.as_mut().ok_or("M3: missing host")?.expect("host.ready");
@@ -60,7 +63,7 @@ impl World {
         .await?;
         self.relay = Some(Relay::bind(address, &fixture()).await?);
         let relay = self.relay.as_ref().ok_or("M3: missing wire")?;
-        self.live = Some(Live::bind(relay.observed.clone()).await?);
+        self.live = Some(Live::bind(python, relay.observed.clone()).await?);
         self.endpoints.push(relay.address);
         self.endpoints.push(
             self.live
@@ -72,21 +75,12 @@ impl World {
                 .map_err(|_| "M3: invalid Live endpoint")?,
         );
         let mut command = tokio::process::Command::new(bridge);
-        production::configure(
+        configure(
             &mut command,
             root,
-            relay.address,
+            relay.address.port(),
             &self.live.as_ref().ok_or("M3: missing Live")?.origin,
-            "http://127.0.0.1:1/mcp",
         )?;
-        // M3 observes the same provider through the later native mute span.
-        let config = root.join("configured.private/bridge.toml");
-        let contents = std::fs::read_to_string(&config).map_err(|_| "M3: missing configuration")?;
-        std::fs::write(
-            config,
-            contents.replace("session_idle_seconds = 0", "session_idle_seconds = 120"),
-        )
-        .map_err(|_| "M3: cannot retain Live session")?;
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
             .as_mut()
@@ -192,11 +186,15 @@ impl World {
                 .and_then(|count| count.checked_sub(old_pcm))
                 .ok_or("M3 second answer: missing or backwards host PCM count")?,
         );
-        self.bridge
-            .as_mut()
-            .ok_or("M3: missing bridge")?
-            .expect("bridge.run_completed")
-            .await?;
+        while !self.completed {
+            self.completed = super::super::m2::codex::collect_playout(
+                self.bridge.as_mut().ok_or("M3: missing bridge")?,
+                &mut self.clock,
+                20,
+            )
+            .await?
+            .is_some();
+        }
         self.read_trace()
     }
 
@@ -223,26 +221,41 @@ impl World {
         Ok(())
     }
 
-    pub async fn wait(&self, phase: &str, property: impl Fn(&Ledger) -> bool) -> Result<Ledger, String> {
-        let relay = self.relay.as_ref().ok_or("M3: missing wire")?;
-        let mut live = self.live.as_ref().ok_or("M3: missing Live")?.observed.subscribe();
-        let failure = async {
-            loop {
-                if let Some(error) = live.borrow().failure.clone() {
-                    return Err(error);
-                }
-                live.changed().await.map_err(|_| "M3: Live observer ended")?;
+    pub async fn wait(&mut self, phase: &str, property: impl Fn(&Ledger) -> bool) -> Result<Ledger, String> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
+        loop {
+            let state = self.relay.as_ref().ok_or("M3: missing wire")?.observed.borrow().clone();
+            self.relay.as_ref().ok_or("M3: missing wire")?.wait(|_| true).await?;
+            if property(&state) {
+                return Ok(state);
             }
-        };
-        tokio::select! {
-            result = relay.wait(property) => result,
-            result = failure => result,
-            () = tokio::time::sleep(std::time::Duration::from_secs(5)) => Err(format!(
-                "M3 {phase}: missing observation before 5000 ms deadline; capture_tail_bytes={} flushes={} Live_frames={}",
-                relay.observed.borrow().tail_bytes,
-                relay.observed.borrow().flushes,
-                self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().frames,
-            )),
+            if let Some(error) = self
+                .live
+                .as_ref()
+                .ok_or("M3: missing Live")?
+                .observed
+                .borrow()
+                .failure
+                .clone()
+            {
+                return Err(error);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "M3 {phase}: missing observation before 5000 ms deadline; capture_tail_bytes={} continues={}",
+                    state.tail_bytes, state.continues
+                ));
+            }
+            tick.tick().await;
+            let result = super::super::m2::codex::collect_playout(
+                self.bridge.as_mut().ok_or("M3: missing bridge")?,
+                &mut self.clock,
+                20,
+            )
+            .await?;
+            self.completed |= result.is_some();
+
         }
     }
 
@@ -251,6 +264,9 @@ impl World {
         let mut trace = Trace::default();
         trace.append(&bytes)?;
         trace.finish()?;
+        if let Some(relay) = &self.relay {
+            trace.records.extend(relay.observed.borrow().observations());
+        }
         self.trace = trace;
         Ok(())
     }
@@ -291,7 +307,8 @@ impl World {
             self.record_release("host", &closed);
             failures.extend(closed.err());
         }
-        if !self.root.as_os_str().is_empty() {
+        self.private.take();
+        if !self.root.as_os_str().is_empty() && self.root.exists() {
             failures.extend(
                 std::fs::remove_dir_all(&self.root)
                     .err()
@@ -309,3 +326,26 @@ impl World {
 #[cfg(test)]
 #[path = "lifecycle.rs"]
 mod tests;
+fn configure(command: &mut tokio::process::Command, root: &Path, port: u16, origin: &str) -> Result<(), String> {
+    production::configure(
+        command,
+        root,
+        ([127, 0, 0, 1], port).into(),
+        origin,
+        "http://127.0.0.1:1/mcp",
+    )?;
+    let path = root.join("configured.private/bridge.toml");
+    let template = std::fs::read_to_string(&path).map_err(|_| "M3: missing configuration")?;
+    let start = template.find("[[mcp.server]]").ok_or("M3: missing example MCP")?;
+    let end = start + template[start..].find("[screen]").ok_or("M3: missing example screen")?;
+    let text = format!("{}[mcp]\nserver = []\n\n{}", &template[..start], &template[end..])
+        .replace("voice = \"alloy\"\n", "")
+        .replace("session_idle_seconds = 0", "session_idle_seconds = 120");
+    std::fs::write(
+        path,
+        format!("{text}\n[codex]\nhome = '{}'\n", root.join("home").display()),
+    )
+    .map_err(|_| "M3: cannot configure Codex")?;
+    command.arg("--sim-clock");
+    Ok(())
+}

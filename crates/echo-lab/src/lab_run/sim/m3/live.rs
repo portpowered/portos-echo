@@ -1,14 +1,13 @@
 //! Lane-local controlled provider using the existing public WebRTC boundary.
+use super::super::{m2::codex::tone, process::Process};
 use super::wire::Ledger;
-use echo_live::{AudioFrame, LivePeer};
-use serde_json::{Value, json};
+use echo_live::LivePeer;
+use serde_json::json;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot, watch},
     task::JoinHandle,
     time::{Duration, Instant},
@@ -33,14 +32,17 @@ pub struct Live {
     closing: Arc<AtomicBool>,
 }
 impl Live {
-    pub async fn bind(wire: watch::Sender<Ledger>) -> Result<Self, String> {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|_| "M3 Live: bind failed")?;
-        let origin = format!(
-            "http://{}",
-            listener.local_addr().map_err(|_| "M3 Live: address failed")?
-        );
+    pub async fn bind(python: &str, wire: watch::Sender<Ledger>) -> Result<Self, String> {
+        let mut command = tokio::process::Command::new(python);
+        command
+            .arg("-u")
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m3/provider.py"));
+        let mut process = Process::start(&mut command)?;
+        let ready = process.expect("provider.ready").await?;
+        let origin = ready["origin"]
+            .as_str()
+            .ok_or("M3: provider origin missing")?
+            .to_owned();
         let (observed, _) = watch::channel(Received::default());
         let sender = observed.clone();
         let (stop, stopped) = oneshot::channel();
@@ -49,9 +51,11 @@ impl Live {
         let owner_closing = closing.clone();
         let task = tokio::spawn(async move {
             let result = tokio::select! {
-                result = session(listener, wire, &sender, requests) => result,
+                result = session(&mut process, wire, &sender, requests) => result,
                 _ = stopped => Ok(()),
             };
+            let closed = process.close().await;
+            let result = result.and(closed);
             sender.send_modify(|state| state.active = false);
             if let Err(error) = &result {
                 if owner_closing.load(Ordering::Acquire) {
@@ -110,54 +114,41 @@ impl Drop for Live {
 }
 
 async fn session(
-    listener: TcpListener,
+    process: &mut Process,
     wire: watch::Sender<Ledger>,
     observed: &watch::Sender<Received>,
     requests: mpsc::Receiver<oneshot::Sender<Received>>,
 ) -> Result<(), String> {
-    let (mut socket, _) = listener
-        .accept()
+    let offer = process.expect("provider.offer").await?;
+    let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
         .await
-        .map_err(|_| "M3 Live: signaling accept failed")?;
-    drop(listener);
-    let request = request(&mut socket).await?;
-    let offer = request["sdp"].as_str().ok_or("M3 Live: missing offer")?;
-    let mut peer = Box::pin(LivePeer::bind(
-        "127.0.0.1:0".parse().map_err(|_| "M3 Live: address")?,
-        Instant::now().into_std(),
-    ))
-    .await
-    .map_err(|_| "M3 Live: peer bind failed")?;
-    let answer = peer.answer(offer).await.map_err(|_| "M3 Live: invalid offer")?;
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
-        answer.len()
-    );
-    socket
-        .write_all(response.as_bytes())
-        .await
-        .map_err(|_| "M3 Live: signaling write failed")?;
-    drop(socket);
-    replay(&mut peer, wire, observed, requests).await
+        .map_err(|_| "M3 Live: peer bind failed")?;
+    let result = async {
+        let answer = peer
+            .answer(offer["offer"].as_str().ok_or("M3 Live: missing offer")?)
+            .await
+            .map_err(|_| "M3 Live: invalid offer")?;
+        process.send(&json!({"answer":answer})).await?;
+        process.expect("provider.sideband").await?;
+        replay(&mut peer, process, wire, observed, requests).await
+    }
+    .await;
+    peer.close();
+    result
 }
 
 async fn replay(
     peer: &mut LivePeer,
+    process: &mut Process,
     wire: watch::Sender<Ledger>,
     observed: &watch::Sender<Received>,
     mut requests: mpsc::Receiver<oneshot::Sender<Received>>,
 ) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let mut frames = 0;
     let mut phase = 0;
-    let mut sequence = 0;
     loop {
         drive(peer, deadline).await?;
-        while peer
-            .receive(Instant::now().into_std())
-            .await
-            .map_err(|_| "M3 Live: snapshot receive failed")?
-        {}
         while peer.pop_text().is_some() {}
         while peer.pop_audio().is_some() {
             frames += 1;
@@ -166,44 +157,94 @@ async fn replay(
             state.frames = frames;
             state.active = true;
         });
-        // Acknowledge only from the receiving loop, after servicing the peer.
-        // World requests the closing snapshot after native input consumption.
         while let Ok(reply) = requests.try_recv() {
             let _ = reply.send(observed.borrow().clone());
         }
-        let state = wire.borrow().clone();
-        if phase == 0 && frames >= 44 && state.inputs == 1 {
-            answer(peer, &mut sequence, 120, "The time is twelve.").await?;
-            observed.send_modify(|state| {
-                state.first = true;
-                state.transcript = Some("The time is twelve.".into());
-            });
-            phase = 1;
-        }
-        if phase == 1 && frames >= 49 && state.inputs == 2 {
-            if state.stops != 0 || !state.played.is_empty() {
-                return Err("M3 overlap: interrupting input arrived after first reply closed".into());
-            }
-            peer.send_text(&json!({"type":"response.done","response":{"id":"old","status":"cancelled"}}).to_string())
-                .await
-                .map_err(|_| "M3 Live: cancel send failed")?;
-            wire.send_modify(|state| state.cancel = Some(Instant::now()));
-            phase = 2;
-        }
-        if phase == 2 && frames >= 54 && state.played.len() == 1 && state.old_sink_pcm.is_some() {
-            verify_tail(&state, frames)?;
-            wire.send_modify(|state| state.live_tail_frames = frames - 49);
-            answer(peer, &mut sequence, 10, "The day is Monday.").await?;
-            peer.send_text(r#"{"type":"response.audio.done"}"#)
-                .await
-                .map_err(|_| "M3 Live: audio completion failed")?;
-            observed.send_modify(|state| {
-                state.second = true;
-                state.transcript = Some("The day is Monday.".into());
-            });
-            phase = 3;
-        }
+        respond(peer, process, &wire, observed, frames, &mut phase).await?;
     }
+}
+
+async fn respond(
+    peer: &mut LivePeer,
+    process: &mut Process,
+    wire: &watch::Sender<Ledger>,
+    observed: &watch::Sender<Received>,
+    frames: u64,
+    phase: &mut u8,
+) -> Result<(), String> {
+    let state = wire.borrow().clone();
+    if *phase == 0 && frames >= 44 && state.inputs == 1 {
+        transcript(process, "assistant", "The time is twelve.", false).await?;
+        answer(peer, 0..5).await?;
+        observed.send_modify(|state| {
+            state.first = true;
+            state.transcript = Some("The time is twelve.".into());
+        });
+        *phase = 1;
+    }
+    if *phase == 1 && state.bytes[0] >= 2880 {
+        answer(peer, 5..11).await?;
+        *phase = 2;
+    }
+    if *phase == 2 && frames >= 49 && state.inputs == 2 {
+        if state.stops != 0 || !state.played.is_empty() {
+            return Err("M3 overlap: interrupting input arrived after first reply closed".into());
+        }
+        // The old converter still holds its filter tail. Done precedes
+        // the speech signal, followed by audible PCM on the independent RTP path.
+        transcript(process, "assistant", "The time", true).await?;
+        process
+            .send(&json!({"tag":"barge", "events":[{"type":"input_audio_buffer.speech_started"}]}))
+            .await?;
+        process.expect("provider.sent").await?;
+        wire.send_modify(|state| state.cancel = Some(Instant::now()));
+        answer(peer, 11..13).await?;
+        *phase = 3;
+    }
+    replacement(peer, process, wire, observed, frames, phase).await
+}
+
+async fn replacement(
+    peer: &mut LivePeer,
+    process: &mut Process,
+    wire: &watch::Sender<Ledger>,
+    observed: &watch::Sender<Received>,
+    frames: u64,
+    phase: &mut u8,
+) -> Result<(), String> {
+    let state = wire.borrow().clone();
+    if *phase == 3 && frames >= 54 && state.played.len() == 1 && state.old_sink_pcm.is_some() {
+        verify_tail(&state, frames)?;
+        wire.send_modify(|state| state.live_tail_frames = frames - 49);
+        transcript(process, "assistant", "The day is Monday.", false).await?;
+        answer(peer, 13..18).await?;
+        observed.send_modify(|state| {
+            state.second = true;
+            state.transcript = Some("The day is Monday.".into());
+        });
+        *phase = 4;
+    }
+    if *phase == 4 && state.bytes[1] >= 2880 {
+        answer(peer, 18..23).await?;
+        *phase = 5;
+    }
+    if *phase == 5 && state.bytes[1] >= 8640 {
+        transcript(process, "assistant", "The day is Monday.", true).await?;
+        *phase = 6;
+    }
+    Ok(())
+}
+
+async fn transcript(process: &mut Process, role: &str, text: &str, done: bool) -> Result<(), String> {
+    let value = if done {
+        json!({"type":"turn.done", "turn":{"role":role, "transcript":text}})
+    } else {
+        json!({"type":if role == "user" {"input_transcript.added"} else {"output_transcript.added"},
+            "item":{"text":text}})
+    };
+    process.send(&json!({"tag":"transcript", "events":[value]})).await?;
+    process.expect("provider.sent").await?;
+    Ok(())
 }
 
 fn verify_tail(state: &Ledger, frames: u64) -> Result<(), String> {
@@ -215,30 +256,14 @@ fn verify_tail(state: &Ledger, frames: u64) -> Result<(), String> {
     Ok(())
 }
 
-async fn answer(peer: &mut LivePeer, sequence: &mut u16, count: u16, text: &str) -> Result<(), String> {
-    peer.send_text(&json!({"type":"response.audio_transcript.done","transcript":text}).to_string())
-        .await
-        .map_err(|_| "M3 Live: transcript send failed")?;
-    for _ in 0..count {
-        peer.send_audio(
-            AudioFrame {
-                sequence: *sequence,
-                timestamp: u32::from(*sequence) * 960,
-                payload: vec![0xf8, 0xff, 0xfe],
-            },
-            Instant::now().into_std(),
-        )
-        .await
-        .map_err(|_| "M3 Live: reply send failed")?;
-        *sequence += 1;
-        if count == 10 {
-            // Match the existing dialogue fixture's real media interval. Done
-            // must not overtake RTP on the independent reliable data channel.
-            let next = Instant::now() + Duration::from_millis(20);
-            while Instant::now() < next {
-                drive(peer, next).await?;
-            }
-        }
+async fn answer(peer: &mut LivePeer, sequences: std::ops::Range<u16>) -> Result<(), String> {
+    for sequence in sequences {
+        let mut packet = tone::packet(sequence % 11).ok_or("M3: missing tone packet")?;
+        packet.sequence = sequence;
+        packet.timestamp = u32::from(sequence) * 960;
+        peer.send_audio(packet, Instant::now().into_std())
+            .await
+            .map_err(|_| "M3 Live: reply send failed")?;
     }
     Ok(())
 }
@@ -261,39 +286,6 @@ async fn drive(peer: &mut LivePeer, deadline: Instant) -> Result<(), String> {
         () = tokio::time::sleep_until(next.into()) => { peer.timeout(Instant::now().into_std()).await.map_err(|_| "M3 Live: peer timer failed")?; }
     }
     Ok(())
-}
-
-async fn request(socket: &mut TcpStream) -> Result<Value, String> {
-    let mut bytes = Vec::new();
-    let end = loop {
-        if let Some(at) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
-            break at + 4;
-        }
-        if bytes.len() >= 65536 {
-            return Err("M3 Live: oversized signaling".into());
-        }
-        bytes.push(socket.read_u8().await.map_err(|_| "M3 Live: incomplete signaling")?);
-    };
-    let header = std::str::from_utf8(&bytes).map_err(|_| "M3 Live: invalid header")?;
-    let length = header
-        .lines()
-        .find_map(|line| {
-            line.split_once(':')
-                .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-                .map(|(_, value)| value.trim())
-        })
-        .ok_or("M3 Live: missing length")?
-        .parse::<usize>()
-        .map_err(|_| "M3 Live: invalid length")?;
-    if length > 65536 {
-        return Err("M3 Live: oversized body".into());
-    }
-    bytes.resize(end + length, 0);
-    socket
-        .read_exact(&mut bytes[end..])
-        .await
-        .map_err(|_| "M3 Live: incomplete body")?;
-    serde_json::from_slice(&bytes[end..]).map_err(|_| "M3 Live: invalid body".into())
 }
 
 #[cfg(test)]

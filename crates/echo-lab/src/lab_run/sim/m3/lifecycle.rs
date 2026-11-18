@@ -80,7 +80,7 @@ impl World {
 
 async fn listening() -> World {
     let relay = Relay::bind("127.0.0.1:1".parse().unwrap(), &fixture()).await.unwrap();
-    let live = Live::bind(relay.observed.clone()).await.unwrap();
+    let live = Live::bind(if cfg!(windows) { "python" } else { "python3" }, relay.observed.clone()).await.unwrap();
     World {
         relay: Some(relay),
         live: Some(live),

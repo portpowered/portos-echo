@@ -33,6 +33,29 @@ pub struct Ledger {
 }
 
 impl Ledger {
+    /// Scenario observations come from native protocol facts. An ordinary stop
+    /// or a provider signal alone never establishes an acknowledged cut.
+    pub fn observations(&self) -> Vec<serde_json::Value> {
+        let mut records = Vec::new();
+        let mut record = |event, outcome| {
+            let mut value = serde_json::json!({"event":event, "run_id":"run-1", "source":"wyoming-wire"});
+            if let Some(outcome) = outcome {
+                value["outcome"] = serde_json::json!(outcome);
+            }
+            records.push(value);
+        };
+        if self.bytes[0] > 0 {
+            record("reply.started", None::<&str>);
+        }
+        if self.cancel.is_some() && self.continues == 1 && self.stops > 0 {
+            record("reply.cut", None);
+            if !self.played.is_empty() {
+                record("reply.played", Some("cut"));
+            }
+        }
+        records
+    }
+
     fn reply(&mut self, event: &Event) -> Result<(), String> {
         match event.header.r#type.as_str() {
             "audio-start" => {
@@ -262,5 +285,27 @@ mod tests {
         for bytes in [0, 1, 959, 961, 1920] {
             assert!(state.reply(&event("audio-chunk", bytes)).is_err());
         }
+    }
+
+    #[test]
+    fn cut_observations_require_native_continuation_stop_and_played() {
+        let mut state = Ledger {
+            cancel: Some(Instant::now()),
+            bytes: [960, 0],
+            stops: 1,
+            played: vec![Instant::now()],
+            ..Ledger::default()
+        };
+        assert_eq!(state.observations().len(), 1);
+        state.continues = 1;
+        let records = state.observations();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[1]["event"], "reply.cut");
+        assert_eq!(records[2]["event"], "reply.played");
+        assert_eq!(records[2]["outcome"], "cut");
+        state.played.clear();
+        assert_eq!(state.observations().len(), 2);
+        state.stops = 0;
+        assert_eq!(state.observations().len(), 1);
     }
 }
