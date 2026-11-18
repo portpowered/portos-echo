@@ -331,9 +331,8 @@ class Host:
         (self.folder / "keys").unlink(missing_ok=True)
         os.mkfifo(self.folder / "keys")
         self.keys = os.open(self.folder / "keys", os.O_RDWR | os.O_NONBLOCK)
-        if self.finite_mode:
-            import fcntl
-            fcntl.fcntl(self.fd, fcntl.F_SETPIPE_SZ, 4096)
+        import fcntl  # One-page pipe: a say waits 0.4 s, not 2.3 s, behind queued audio.
+        fcntl.fcntl(self.fd, fcntl.F_SETPIPE_SZ, 4096)
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             port = self.port or reservation.getsockname()[1]
