@@ -73,6 +73,8 @@ pub struct AuthSource {
     client: reqwest::Client,
     clock: Arc<dyn auth_clock::Clock>,
     operation: tokio::sync::Mutex<()>,
+    #[cfg(test)]
+    browser_listener: std::sync::Mutex<std::sync::Weak<tokio::net::TcpListener>>,
 }
 
 impl AuthSource {
@@ -109,6 +111,8 @@ impl AuthSource {
             client,
             clock: Arc::new(auth_clock::SystemClock::new()),
             operation: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
+            browser_listener: std::sync::Mutex::new(std::sync::Weak::new()),
         })
     }
 

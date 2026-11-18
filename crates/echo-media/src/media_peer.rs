@@ -20,6 +20,8 @@ pub struct Peer {
     connection: Option<Arc<dyn PeerConnection>>,
     gathered: Arc<Notify>,
     config: PeerConfig,
+    #[cfg(test)]
+    pub(crate) runtime: Arc<crate::media_runtime::MediaRuntime>,
 }
 impl Peer {
     pub(crate) async fn build(config: PeerConfig, answerer: bool) -> Result<Self, Error> {
@@ -41,10 +43,11 @@ impl Peer {
                 ..Default::default()
             })
             .collect();
+        let runtime = Arc::new(crate::media_runtime::MediaRuntime::default());
         let connection: Arc<dyn PeerConnection> = Arc::new(
             Box::pin(
                 PeerConnectionBuilder::new()
-                    .with_runtime(Arc::new(crate::media_runtime::MediaRuntime::default()))
+                    .with_runtime(runtime.clone())
                     .with_configuration(RTCConfigurationBuilder::new().with_ice_servers(servers).build())
                     .with_media_engine(media)
                     .with_setting_engine(settings)
@@ -70,6 +73,8 @@ impl Peer {
             connection: Some(connection),
             gathered,
             config,
+            #[cfg(test)]
+            runtime,
         };
         if let Err(error) = peer.attach(track, answerer).await {
             let _ = peer.connection()?.close().await;
@@ -150,6 +155,8 @@ impl Peer {
             connection: None,
             gathered: Arc::new(Notify::new()),
             config: PeerConfig::default(),
+            #[cfg(test)]
+            runtime: Arc::new(crate::media_runtime::MediaRuntime::default()),
         }
     }
 

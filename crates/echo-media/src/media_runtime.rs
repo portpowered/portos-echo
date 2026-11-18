@@ -27,6 +27,10 @@ type AcceptedStreams = Arc<Mutex<Vec<Weak<dyn AsyncTcpStream>>>>;
 #[derive(Debug, Default)]
 pub(crate) struct MediaRuntime {
     accepted: AcceptedStreams,
+    #[cfg(test)]
+    pub(crate) udp: Mutex<Vec<Weak<dyn AsyncUdpSocket>>>,
+    #[cfg(test)]
+    pub(crate) tcp: Mutex<Vec<Weak<dyn AsyncTcpListener>>>,
 }
 
 impl Runtime for MediaRuntime {
@@ -39,12 +43,18 @@ impl Runtime for MediaRuntime {
     }
 
     fn wrap_udp_socket(&self, socket: std::net::UdpSocket) -> io::Result<Arc<dyn AsyncUdpSocket>> {
-        TokioRuntime.wrap_udp_socket(socket)
+        let socket = TokioRuntime.wrap_udp_socket(socket)?;
+        #[cfg(test)]
+        self.udp.lock().unwrap().push(Arc::downgrade(&socket));
+        Ok(socket)
     }
 
     fn wrap_tcp_listener(&self, listener: std::net::TcpListener) -> io::Result<Arc<dyn AsyncTcpListener>> {
+        let listener = TokioRuntime.wrap_tcp_listener(listener)?;
+        #[cfg(test)]
+        self.tcp.lock().unwrap().push(Arc::downgrade(&listener));
         Ok(Arc::new(LimitedListener {
-            inner: TokioRuntime.wrap_tcp_listener(listener)?,
+            inner: listener,
             accepted: self.accepted.clone(),
         }))
     }
