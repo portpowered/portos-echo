@@ -70,7 +70,7 @@ async fn journey(phase: &std::cell::Cell<&str>) {
     assert_eq!(session.released, ["bridge"]); // only the pre-restart generation collected
     let cleanup = session.close().await;
     assert_eq!(result, Ok(()));
-    assert_eq!(cleanup, Ok(()));
+    assert_eq!(cleanup, Ok(()), "M5: collected owners: {:?}", session.released);
     assert_closed(&session);
     assert!(!path.exists());
 }
