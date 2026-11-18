@@ -475,7 +475,6 @@ async fn voice_late_audible_media_after_done_is_discarded() {
     assert_eq!(frames(&observer).len(), 0);
     assert!(!observer.commands().contains(&Command::Cut(0)));
 }
-
 /// T1: a real cut receipt must settle before the replacement playback starts.
 #[tokio::test(start_paused = true)]
 async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() {
@@ -646,7 +645,6 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     assert!(!source.reply.has_frames());
     assert_retired_and_replacement(&mut source, &mut port).await;
 }
-
 async fn assert_retired_and_replacement(source: &mut Source, port: &mut Port) {
     source.state = ReplyState::Retired;
     media(done(), port, source, &mut |_| Ok(())).await.unwrap();
@@ -658,10 +656,15 @@ async fn assert_retired_and_replacement(source: &mut Source, port: &mut Port) {
     source.audio(&[456; 320]).unwrap();
     media(done(), port, source, &mut |_| Ok(())).await.unwrap();
     assert!(source.reply.finished());
-    assert_eq!(source.reply.next_frame().await.unwrap().len(), 960);
+    let mut fresh = crate::bridge_codex::ReplyAudio::new(200).unwrap();
+    fresh.push(&[456; 320]).unwrap();
+    fresh.finish().unwrap();
+    assert_eq!(
+        source.reply.next_frame().await.unwrap(),
+        fresh.next_frame().await.unwrap()
+    );
     assert!(!source.reply.has_frames());
 }
-
 fn same_text_done() -> MediaEvent {
     MediaEvent::Control(Event::ReplyDone { text: "Yes.".into() })
 }
