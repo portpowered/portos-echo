@@ -3,6 +3,68 @@ use serde_json::json;
 
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host"]
+fn m1_restart_diagnostics_preserve_child_exit_reason_and_cleanup() {
+    for missing in [false, true] {
+        let session = Session::new();
+        session.scenario(json!([{"say":"fixture.pcm"}]), json!({}));
+        let output = session.script(&json!({"exit_code":7,"missing_trace":missing,
+            "records":[{"event":"bridge.error","elapsed_ms":1,"reason":"wyoming",
+                "payload":"synthetic-secret-sentinel"}]}));
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("step 0:"), "{stderr}");
+        assert!(
+            stderr.contains("exit status: 7") || stderr.contains("exit code: 7"),
+            "{stderr}"
+        );
+        if missing {
+            assert!(stderr.contains("\"trace\":\"unavailable\""), "{stderr}");
+            assert!(!stderr.contains("\"event\":\"bridge.error\""), "{stderr}");
+        } else {
+            assert!(stderr.contains("\"event\":\"bridge.error\""), "{stderr}");
+            assert!(stderr.contains("\"reason\":\"wyoming\""), "{stderr}");
+        }
+        assert!(!stderr.contains("synthetic-secret-sentinel"));
+        assert_eq!(session.report()["result"], "fail");
+        session.endpoints();
+    }
+}
+
+#[test]
+#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
+fn m1_restart_diagnostics_incomplete_trace_and_cancellation_keep_original_failure() {
+    for cancelled in [false, true] {
+        let session = Session::new();
+        session.scenario(json!([{"expect_screen":{"state":"speaking"}}]), json!({}));
+        let script = json!({"records":[{"event":"bridge.error","reason":"wyoming","elapsed_ms":1}],
+            "no_ready":cancelled,"cancel":cancelled,
+            "raw_tail":"{\"payload\":\"synthetic-secret-sentinel"});
+        std::fs::write(session.0.join("script.json"), script.to_string()).unwrap();
+        let output = session
+            .command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
+            .args(["--cancel-file", "cancel"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(if cancelled {
+                "sim: cancelled"
+            } else {
+                "step 0: screen expectation"
+            }),
+            "{stderr}"
+        );
+        assert!(stderr.contains("\"trace\":\"incomplete or invalid\""), "{stderr}");
+        assert!(stderr.contains("\"reason\":\"wyoming\""), "{stderr}");
+        assert!(!stderr.contains("synthetic-secret-sentinel"));
+        assert_eq!(session.report()["result"], "fail");
+        session.endpoints();
+    }
+}
+
+#[test]
+#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
 fn unlaunchable_bridge_closes_the_world_and_a_fresh_run_ignores_old_artifacts() {
     let failed = Session::new();
     failed.scenario(json!([{"press":"action"}]), json!({}));
@@ -141,7 +203,7 @@ fn missing_wrong_and_unsupported_observations_fail_without_following_steps() {
                     let output = session.script(&fixture);
                     assert_eq!(output.status.code(), Some(1));
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    assert_eq!(stderr.trim(), format!("echo-lab: scenario.yaml: {error}"));
+                    assert!(stderr.starts_with(&format!("echo-lab: scenario.yaml: {error}; bridge diagnostics:")));
                     let report = session.report();
                     assert_eq!(report["result"], "fail");
                     assert_eq!(report["checks"][if has_budget { "step_1" } else { "step_0" }], false);

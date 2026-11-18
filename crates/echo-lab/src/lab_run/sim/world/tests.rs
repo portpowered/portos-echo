@@ -4,6 +4,39 @@ use tokio::{
     net::TcpListener,
 };
 
+// T3: actual child status and private-file cleanup, with no pinned host needed.
+#[tokio::test]
+async fn m1_restart_diagnostics_collects_real_exit_before_removing_private_trace() {
+    let root = Root::new();
+    let path = root.0.join("bridge.private.jsonl");
+    std::fs::write(
+        &path,
+        b"{\"event\":\"bridge.error\",\"elapsed_ms\":1,\"reason\":\"wyoming\"}\n",
+    )
+    .unwrap();
+    let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+    command.args(["-c", "import sys; sys.exit(7)"]);
+    let mut child = Process::start(&mut command).unwrap();
+    assert_eq!(child.line().await, Err("process: exited before observation".into()));
+    let collected = child.observe_collection();
+    let mut world = World {
+        bridge: Some(child),
+        trace_path: path.clone(),
+        ..World::default()
+    };
+    let error = world.close().await.unwrap_err();
+    assert!(
+        error.contains("exit status: 7") || error.contains("exit code: 7"),
+        "{error}"
+    );
+    assert!(error.contains("\"event\":\"bridge.error\""), "{error}");
+    assert!(error.contains("\"reason\":\"wyoming\""), "{error}");
+    assert_eq!(collected.try_recv().unwrap().code(), Some(7));
+    assert!(!path.exists());
+    assert!(world.bridge.is_none());
+    assert_eq!(world.close().await, Ok(()));
+}
+
 // T3: a real owned child binds an ephemeral loopback socket, announces it
 // before listen(), and waits on an independent control connection.
 const CHILD: &str = r"

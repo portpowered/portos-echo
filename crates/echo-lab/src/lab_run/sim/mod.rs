@@ -205,7 +205,13 @@ impl Driver for Sim<'_> {
         _: Option<&Step>,
         artifacts: &mut Artifacts,
     ) -> Result<(), String> {
-        self.attempt(step, artifacts)?;
+        if let Err(error) = self.attempt(step, artifacts) {
+            if self.world.bridge.is_none() {
+                return Err(error);
+            }
+            let diagnostics = self.runtime.block_on(self.world.failure_diagnostics());
+            return Err(format!("{error}; {diagnostics}"));
+        }
         if self.m1 && self.mute.skipped(step) {
             artifacts
                 .blocked
