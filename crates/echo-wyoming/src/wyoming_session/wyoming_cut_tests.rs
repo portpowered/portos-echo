@@ -1,5 +1,5 @@
 //! T1: public cut boundary over in-memory duplex, with no sockets or clock sleeps.
-use crate::{ClientOptions, CutStats, PlayOutcome, WyomingClient, wyoming_test_support as peer};
+use crate::{ClientOptions, CutStats, Error, PlayOutcome, WyomingClient, wyoming_test_support as peer};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::{io::duplex, sync::mpsc};
