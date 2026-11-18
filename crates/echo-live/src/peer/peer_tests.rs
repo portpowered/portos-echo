@@ -201,15 +201,21 @@ async fn t3_drop_occupied_bind_and_queued_close() {
     while b.audio.items_empty() || b.text.items_empty() {
         step(&mut a, &mut b).await.unwrap();
     }
+    let socket = b.socket_owner();
+    assert!(socket.upgrade().is_some());
     b.close();
     b.close();
     assert_eq!(b.pop_audio(), Some(frame(1, 1)));
     assert_eq!(b.pop_text().as_deref(), Some("queued"));
     assert_eq!((b.pop_audio(), b.pop_text()), (None, None));
-    let rebound = LivePeer::bind(address, now()).await.unwrap();
-    drop(rebound);
-    let rebound = LivePeer::bind(address, now()).await.unwrap();
-    assert_eq!(rebound.local_addr(), address);
+    assert!(socket.upgrade().is_none());
+    // Drop must release an open peer too, independently of the closed peer.
+    let other = peer().await;
+    let socket = other.socket_owner();
+    assert!(socket.upgrade().is_some());
+    drop(other);
+    assert!(socket.upgrade().is_none());
+    assert!(a.socket_owner().upgrade().is_some());
 }
 
 #[tokio::test(start_paused = true)]
@@ -307,8 +313,22 @@ async fn t3_elapsed_ticks_keep_exact_delivery_and_dead_remote_loses_readiness() 
     assert!(!a.ready());
     assert_eq!(a.send_text("undeliverable").await, Err(Error::NotReady));
     assert_eq!((a.pop_text(), b.pop_text()), (None, None));
-    let address = a.local_addr();
+    let socket = a.socket_owner();
+    assert!(socket.upgrade().is_some());
     a.close();
-    let rebound = tokio::net::UdpSocket::bind(address).await.unwrap();
-    assert_eq!(rebound.local_addr().unwrap(), address);
+    assert!(socket.upgrade().is_none());
+}
+
+// T3: a retained real socket must prevent release proof even after peer close.
+#[tokio::test]
+async fn t3_socket_release_witness_follows_last_actual_owner() {
+    let mut peer = peer().await;
+    let socket = peer.socket_owner();
+    let retained = socket.upgrade().unwrap();
+    peer.close();
+    assert!(socket.upgrade().is_some());
+    drop(retained);
+    assert!(socket.upgrade().is_none());
+    peer.close();
+    assert!(socket.upgrade().is_none());
 }

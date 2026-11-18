@@ -28,7 +28,10 @@ pub struct AudioFrame {
 pub struct LivePeer {
     rtc: RTCPeerConnection,
     now: Instant,
+    #[cfg(not(test))]
     socket: Option<UdpSocket>,
+    #[cfg(test)]
+    socket: Option<std::sync::Arc<UdpSocket>>,
     address: SocketAddr,
     negotiation: Negotiation,
     channel: Option<RTCDataChannelId>,
@@ -48,6 +51,8 @@ impl LivePeer {
         // A nanosecond rounds to zero at Windows Instant's counter resolution.
         let now = now.checked_sub(Duration::from_micros(1)).ok_or(Error::Protocol)?;
         let rtc = crate::negotiation::connection(address, now)?;
+        #[cfg(test)]
+        let socket = std::sync::Arc::new(socket);
         let mut peer = Self {
             rtc,
             now,
@@ -67,6 +72,13 @@ impl LivePeer {
     #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
         self.address
+    }
+
+    // Observe the actual socket allocation without retaining it or adding a
+    // shipping API. A separate lifecycle flag could outlive the wrong owner.
+    #[cfg(test)]
+    pub(crate) fn socket_owner(&self) -> std::sync::Weak<UdpSocket> {
+        std::sync::Arc::downgrade(self.socket.as_ref().unwrap())
     }
 
     #[must_use]
@@ -390,3 +402,7 @@ fn datagram(bytes: &[u8]) -> Result<(), Error> {
 #[cfg(test)]
 #[path = "peer/peer_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "peer/transport_tests.rs"]
+mod transport_tests;

@@ -3,7 +3,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use echo_live::{AudioFrame, Error, LivePeer};
+use crate::{AudioFrame, Error, LivePeer};
 
 fn now() -> Instant {
     tokio::time::Instant::now().into_std()
@@ -206,7 +206,8 @@ async fn t3_bidirectional_opus_and_events() -> Result<(), Error> {
 async fn t3_unanswered_offer_deadline_and_cancel() -> Result<(), Error> {
     let mut a = peer().await?;
     let mut b = peer().await?;
-    let address = a.local_addr();
+    let socket = a.socket_owner();
+    assert!(socket.upgrade().is_some());
     a.offer().await?;
     let deadline = now() + Duration::from_secs(1);
     while now() < deadline {
@@ -228,15 +229,15 @@ async fn t3_unanswered_offer_deadline_and_cancel() -> Result<(), Error> {
     a.close();
     b.close();
     assert_eq!(a.readable().await, Err(Error::Closed));
-    let rebound = tokio::net::UdpSocket::bind(address).await.map_err(|_| Error::Io)?;
-    assert_eq!(rebound.local_addr().map_err(|_| Error::Io)?, address);
+    assert!(socket.upgrade().is_none());
     Ok(())
 }
 
 #[tokio::test(start_paused = true)]
 async fn t3_close_preserves_delivery_and_releases_socket() -> Result<(), Error> {
     let (mut a, mut b) = Box::pin(pair()).await?;
-    let address = a.local_addr();
+    let socket = a.socket_owner();
+    assert!(socket.upgrade().is_some());
     let mut invalid = frame(0, 42);
     invalid.payload.clear();
     assert_eq!(a.send_audio(invalid, now()).await, Err(Error::Payload));
@@ -271,8 +272,7 @@ async fn t3_close_preserves_delivery_and_releases_socket() -> Result<(), Error> 
     assert_eq!(a.readable().await, Err(Error::Closed));
     assert_eq!(a.timeout(now()).await, Err(Error::Closed));
     assert_eq!((b.pop_audio(), b.pop_text()), (None, None));
-    let rebound = tokio::net::UdpSocket::bind(address).await.map_err(|_| Error::Io)?;
-    assert_eq!(rebound.local_addr().map_err(|_| Error::Io)?, address);
+    assert!(socket.upgrade().is_none());
     Ok(())
 }
 

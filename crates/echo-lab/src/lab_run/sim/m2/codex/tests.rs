@@ -49,7 +49,7 @@ async fn continuous_capture() {
     let options = super::super::tests::options();
     let root = config::Root::new().unwrap();
     let output = tempfile::tempdir().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (listener, listener_lifetime) = super::lifecycle::observed_listener().await;
     let address = listener.local_addr().unwrap();
     let provider = provider::Provider::start_m1(&options.python).await.unwrap();
     let mut command = continuous_command(
@@ -64,11 +64,12 @@ async fn continuous_capture() {
     let mut bridge = Process::start(&mut command).unwrap();
     bridge.expect("bridge.ready").await.unwrap();
     continuous_wakes(&mut bridge, &wake).await;
+    assert!(listener_lifetime.upgrade().is_some());
     let closed = bridge.close().await;
     let observed = provider.close().await.unwrap();
     assert_eq!(closed, Ok(()));
     assert_eq!(satellite.await.unwrap(), 0);
-    drop(TcpListener::bind(address).await.unwrap());
+    assert!(listener_lifetime.upgrade().is_none());
     assert_eq!(
         observed,
         json!({"event":"provider.snapshot", "calls":2,
@@ -141,7 +142,7 @@ fn continuous_receipts(trace: &Trace) {
     }
 }
 
-async fn continuous_satellite(listener: TcpListener, mut requested: tokio::sync::mpsc::Receiver<()>) -> usize {
+async fn continuous_satellite(listener: Arc<TcpListener>, mut requested: tokio::sync::mpsc::Receiver<()>) -> usize {
     let mut stream = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
     assert_eq!(read(&mut stream).await.0["type"], "describe");
