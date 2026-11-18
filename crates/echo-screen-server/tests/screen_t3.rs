@@ -5,6 +5,29 @@ use support::{Result, TOKEN, events, frame, post, report, request, server};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 
 #[tokio::test]
+async fn t3_terminal_publication_survives_graceful_close_200_times() -> Result {
+    for iteration in 0..200 {
+        let (mut server, tx) = server().await?;
+        let mut stream = events(server.bound_addr).await?;
+        let state = UiState::Error {
+            message: format!("synthetic terminal {iteration}"),
+            relink: false,
+        };
+        tx.send(state.clone()).await?;
+        server
+            .flush(tokio::time::Instant::now() + std::time::Duration::from_secs(5))
+            .await?;
+        assert_eq!(server.shutdown_gracefully().await?, 0);
+        assert_eq!(frame(&mut stream).await?, ScreenFrame { seq: 1, state });
+        let mut tail = String::new();
+        stream.read_to_string(&mut tail).await?;
+        assert!(!tail.contains("data:"));
+    }
+    report("terminal publication then graceful close: 200/200 exact terminal frames followed by EOF");
+    Ok(())
+}
+
+#[tokio::test]
 async fn t3_exact_sequence_actions_and_reconnect() -> Result {
     let (mut server, tx) = server().await?;
     let mut a = events(server.bound_addr).await?;
