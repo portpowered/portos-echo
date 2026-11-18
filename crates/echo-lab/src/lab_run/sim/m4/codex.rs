@@ -367,6 +367,7 @@ async fn settle(
         let milliseconds = if released && timing.played < 9600 { 0 } else { 20 };
         let result = crate::lab_run::sim::m2::codex::collect_playout(bridge, clock, milliseconds).await?;
         if let Some(result) = result {
+            relay.wait_session(1, 1).await?;
             return Ok(result);
         }
     }

@@ -184,6 +184,11 @@ impl Case {
             .await?
             .is_some();
         }
+        self.relay
+            .as_ref()
+            .ok_or("m2: missing relay")?
+            .wait_session(1, 1)
+            .await?;
         // Keep the remote's socket alive but stop its RTP driver before closing
         // the production media owner. The pin's sideband stays until idle stop.
         self.provider.as_mut().ok_or("m2: missing provider")?.quiesce().await?;

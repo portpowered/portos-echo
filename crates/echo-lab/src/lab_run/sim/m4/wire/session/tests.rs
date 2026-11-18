@@ -64,6 +64,28 @@ fn two_reply_receipts_and_continued_capture_never_imply_run_end() {
 }
 
 #[test]
+fn session_boundary_requires_exact_played_receipts_and_explicit_end() {
+    let mut session = Session::default();
+    assert_eq!(session.checkpoint(1, 0), Ok(false));
+    reply(&mut session, 10, 1200);
+    assert_eq!(session.checkpoint(1, 0), Ok(false));
+    session.capture(&event("played", 0), at(20));
+    assert_eq!(session.checkpoint(1, 0), Ok(true));
+    assert_eq!(session.checkpoint(1, 1), Ok(false));
+    assert_eq!(session.checkpoint(2, 0), Ok(false));
+    session.playback(&event("hassmic-end", 0), at(30), false);
+    assert_eq!(session.checkpoint(1, 1), Ok(true));
+    assert_eq!(
+        session.checkpoint(1, 0),
+        Err("wire: session advanced beyond expected reply/run boundary".into())
+    );
+    assert_eq!(
+        session.checkpoint(0, 1),
+        Err("wire: session advanced beyond expected reply/run boundary".into())
+    );
+}
+
+#[test]
 fn cut_receipts_remain_ordered_and_missing_receipts_are_not_success() {
     let mut session = Session::default();
     session.playback(&event("audio-start", 0), at(10), false);
@@ -113,23 +135,32 @@ async fn socket_journey() {
     let relay = crate::lab_run::sim::m4::wire::Relay::bind_reply(address).await.unwrap();
     let mut bridge = tokio::net::TcpStream::connect(relay.address).await.unwrap();
     let mut host = listener.accept().await.unwrap().0;
-    exchange_run(&mut bridge, &mut host).await;
-    let mut receipts = relay.observed.clone();
-    receipts
-        .wait_for(|timing| {
-            timing.session.ended.len() == 1 && timing.session.streams.iter().all(|stream| stream.played.is_some())
-        })
-        .await
-        .unwrap();
+    exchange_run(&mut bridge, &mut host, &relay).await;
+    check_observation(&relay.wait_session(2, 1).await.unwrap());
+    assert_eq!(
+        relay.wait_session(2, 0).await,
+        Err("wire: session advanced beyond expected reply/run boundary".into())
+    );
+    drop((bridge, host));
+    assert_eq!(
+        relay.wait_session(3, 1).await,
+        Err("wire: observer ended before session boundary".into())
+    );
     check_observation(&relay.close().await.unwrap().session.observation());
 }
 
-async fn exchange_run(bridge: &mut tokio::net::TcpStream, host: &mut tokio::net::TcpStream) {
+async fn exchange_run(
+    bridge: &mut tokio::net::TcpStream,
+    host: &mut tokio::net::TcpStream,
+    relay: &crate::lab_run::sim::m4::wire::Relay,
+) {
     let wake = event("run-pipeline", 0);
     host.write_all(&encode(&wake)).await.unwrap();
     assert_eq!(frame(bridge).await.unwrap().unwrap().1, wake);
-    for level in [1200, -2400] {
+    for (index, level) in [1200, -2400].into_iter().enumerate() {
         exchange_reply(bridge, host, level).await;
+        let boundary = relay.wait_session(index + 1, 0).await.unwrap();
+        assert_eq!(boundary["explicit_end_us"], json!([]));
         let capture = event("audio-chunk", 640);
         host.write_all(&encode(&capture)).await.unwrap();
         assert_eq!(frame(bridge).await.unwrap().unwrap().1, capture);

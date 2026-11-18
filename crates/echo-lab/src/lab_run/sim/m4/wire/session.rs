@@ -29,6 +29,18 @@ struct Playback {
 }
 
 impl Session {
+    fn checkpoint(&self, replies: usize, ends: usize) -> Result<bool, String> {
+        let played = self
+            .streams
+            .iter()
+            .filter(|stream| stream.played.is_some() && stream.ending == Some("stop") && !stream.earcon)
+            .count();
+        if played > replies || self.ended.len() > ends {
+            return Err("wire: session advanced beyond expected reply/run boundary".into());
+        }
+        Ok(played == replies && self.ended.len() == ends)
+    }
+
     pub fn capture(&mut self, event: &Event, now: Duration) {
         match event.header.r#type.as_str() {
             "run-pipeline" => self.opened.push(now),
@@ -109,6 +121,28 @@ impl Session {
         json!({"run_opened_us":times(&self.opened),"explicit_end_us":times(&self.ended),
             "capture_chunks_after_reply_played":self.capture_after_played,
             "unmatched_played":self.unmatched_played,"streams":streams})
+    }
+}
+
+impl super::Relay {
+    /// Wait for forwarded device receipts, independently of bridge projections.
+    /// An early end or an extra reply fails rather than satisfying a stale gate.
+    /// The journey owner supplies its existing cancellation/deadline ceiling.
+    pub async fn wait_session(&self, replies: usize, ends: usize) -> Result<Value, String> {
+        let mut observed = self.observed.clone();
+        loop {
+            let timing = observed.borrow_and_update().clone();
+            if let Some(error) = timing.failure {
+                return Err(error);
+            }
+            if timing.session.checkpoint(replies, ends)? {
+                return Ok(timing.session.observation());
+            }
+            observed
+                .changed()
+                .await
+                .map_err(|_| "wire: observer ended before session boundary")?;
+        }
     }
 }
 
