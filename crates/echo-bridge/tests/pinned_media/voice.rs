@@ -162,6 +162,8 @@ async fn settle(
     let mut completed = false;
     // Played can precede the delayed mouth boundary. Keep the same clock moving,
     // and drain its receipt even when completion is published before the receipt.
+    // After Played the persistent run listens until its configured deadline with
+    // no media pacing the remote, so a short wall interval also releases a step.
     while !completed || pending {
         tokio::select! {
             line = output.next_line() => {
@@ -173,10 +175,14 @@ async fn settle(
                 input.write_all(b"{\"action\":\"advance_playout\",\"milliseconds\":20}\n").await.unwrap();
                 pending = true;
             },
+            () = tokio::time::sleep(Duration::from_millis(5)), if !pending && !completed => {
+                input.write_all(b"{\"action\":\"advance_playout\",\"milliseconds\":20}\n").await.unwrap();
+                pending = true;
+            },
         }
     }
-    // The controller ends only after Played AND the delayed mouth boundary.
-    // Advance that clock before awaiting the explicit device end command.
+    // The controller ends only after Played, the delayed mouth boundary and the
+    // configured listen deadline. Then await the explicit device end command.
     let (end, payload) = read_wire(satellite).await;
     assert_eq!(
         end,
