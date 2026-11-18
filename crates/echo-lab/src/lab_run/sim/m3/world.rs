@@ -148,7 +148,8 @@ impl World {
     pub async fn second(&mut self) -> Result<(), String> {
         self.control(json!({"action":"inject","pcm":fixture()})).await?;
         let old = self.wait("old reply Played", |s| s.played.len() == 1).await?;
-        let played = self.control(json!({"action":"playback"})).await?;
+        // Socket Played and the complete native stderr record have separate readers.
+        let played = self.control(json!({"action":"playback","wait_flush":true})).await?;
         let old_pcm = played["pcm_bytes"]
             .as_u64()
             .ok_or("M3 cut: missing decoded old sink PCM")?;

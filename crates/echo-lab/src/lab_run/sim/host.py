@@ -392,12 +392,13 @@ class Host:
         elif action == "mute":
             self.mute()
         elif action == "playback" and self.finite_mode:
+            flush = flush_observation(self, wait=value.get("wait_flush", False))
             with (self.folder / "play.raw").open("rb") as recording:
                 data = recording.read(LIMIT + 1)
             if len(data) > LIMIT or len(data) % 2:
                 raise ValueError("invalid playback observation")
             result = playback_counts(data, value.get("wake_earcon", False))
-            result["flush"] = flush_observation(self) if b"duplex flush:" in self.log else None
+            result["flush"] = flush
             emit(result)
             return
         elif action in ("finite", "inject", "muted"):
