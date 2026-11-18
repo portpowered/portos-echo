@@ -8,7 +8,7 @@ use tokio::time::{Duration, Instant};
 /// Samples at or below this level are WebRTC silence, not speech.
 const QUIET: u16 = 64;
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(super) enum ReplyState {
     #[default]
     Idle,
@@ -25,6 +25,7 @@ pub(super) struct Source {
     pub played: bool,
     pub state: ReplyState,
     pub cut_receipts: usize,
+    pub failure: &'static str,
     lead_ms: u16,
     pub delegation: Delegation,
     pub mouth: Mouth,
@@ -41,6 +42,7 @@ impl Source {
             played: false,
             state: ReplyState::Idle,
             cut_receipts: 0,
+            failure: "playback",
             lead_ms,
             delegation: Delegation::default(),
             mouth: Mouth::default(),
@@ -130,6 +132,47 @@ pub(super) async fn settle_cut(
         Some(Err(error)) => Err(error.into()),
         None => Err(Error::Wyoming),
     }
+}
+
+/// Failure-only, closed-vocabulary diagnostics: never include device frames,
+/// provider text, addresses or credentials. Preserve the original failure.
+pub(super) async fn cut_generation(
+    client: &impl echo_link::EchoLink,
+    playback: impl std::future::Future<Output = Result<(), Error>>,
+    result: &std::cell::Cell<Option<Result<echo_link::PlayOutcome, echo_link::Error>>>,
+    deadline: std::time::Duration,
+    source: &Source,
+    sink_open: bool,
+) -> Result<(), Error> {
+    let cut = tokio::time::timeout(std::time::Duration::from_secs(1), client.cut_with_stats()).await;
+    let settled = async {
+        cut.map_err(|_| Error::Deadline)??;
+        settle_cut(playback, result, deadline).await
+    }
+    .await;
+    if let Err(error) = &settled {
+        playback_failure("cut_ack", error, source, sink_open, result.get());
+    }
+    settled
+}
+
+pub(super) fn playback_failure(
+    stage: &'static str,
+    error: &Error,
+    source: &Source,
+    sink_open: bool,
+    playback: Option<Result<echo_link::PlayOutcome, echo_link::Error>>,
+) {
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr(),
+        "echo-bridge: wyoming stage={stage} error={error:?} state={:?} sink_open={sink_open} finished={} drained={} played={} cut_receipts={} playback={playback:?}",
+        source.state,
+        source.reply.finished(),
+        source.reply.drained(),
+        source.played,
+        source.cut_receipts,
+    );
 }
 
 /// Delegated Codex turns and the assistant utterance they bracket. Each

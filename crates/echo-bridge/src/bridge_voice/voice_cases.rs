@@ -603,7 +603,7 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
         .unwrap();
     source.interrupt(&mut port).unwrap();
     assert_eq!(port.retired, 0);
-    assert!(source.state == ReplyState::Cutting);
+    assert_eq!(source.state, ReplyState::Cutting);
     source = Source::new(200, false).unwrap();
     source.microphone_finished = true;
     media(said("old"), &mut port, &mut source, &mut |_| Ok(()))
@@ -624,7 +624,7 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     )
     .await
     .unwrap();
-    assert!(source.state == ReplyState::Cutting);
+    assert_eq!(source.state, ReplyState::Cutting);
     assert_eq!(port.retired, 1);
     let mut sink = Some(Stalled);
     assert_eq!(

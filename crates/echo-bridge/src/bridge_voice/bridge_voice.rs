@@ -218,15 +218,26 @@ async fn generation<L: EchoLink>(
     .await
     .unwrap_or(Err(Error::Deadline));
     if let Err(error) = result {
+        if error == Error::Wyoming {
+            voice_source::playback_failure(source.failure, &error, source, sink.is_some(), playback_result.get());
+        }
         // The earcon scope still owns the speaker until reply playback starts.
         // Its joined supervisor cuts/collects that operation on borrower exit.
         if !playback_started.get() {
             return Err(error);
         }
-        let cut = timeout(Duration::from_secs(1), client.cut_with_stats()).await;
         if error == Error::Control {
-            cut.map_err(|_| Error::Deadline)??;
-            voice_source::settle_cut(playback.as_mut(), &playback_result, options.played_timeout).await?;
+            voice_source::cut_generation(
+                client,
+                playback.as_mut(),
+                &playback_result,
+                options.played_timeout,
+                source,
+                sink.is_some(),
+            )
+            .await?;
+        } else {
+            let _ = timeout(Duration::from_secs(1), client.cut_with_stats()).await;
         }
         return Err(error);
     }
@@ -304,9 +315,14 @@ async fn step<E: LinkEvents>(
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     tokio::select! {
-        event = events.recv() => device(&event?.ok_or(Error::Wyoming)?, sink.is_none(), source, observe),
+        event = events.recv() => match event {
+            Ok(Some(event)) => device(&event, sink.is_none(), source, observe),
+            Ok(None) => { source.failure = "events_eof"; Err(Error::Wyoming) },
+            Err(error) => { source.failure = "events_recv"; Err(error.into()) },
+        },
         frame = earcon::microphone(microphone), if !source.microphone_finished => {
-            if source.capture(frame?, port)? {
+            let frame = frame.map_err(|error| { source.failure = "microphone_recv"; Error::from(error) })?;
+            if source.capture(frame, port)? {
                 observe(Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
             }
             Ok(())
@@ -317,7 +333,7 @@ async fn step<E: LinkEvents>(
             Ok(())
         },
         result = forward(sink, pending.as_deref()), if pending.is_some() => {
-            result?;
+            result.inspect_err(|_| { source.failure = "reply_send"; })?;
             if let Some(frame) = pending.take() {
                 source.mouth.wrote(&frame, Instant::now());
                 if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
@@ -355,6 +371,7 @@ fn device<R>(
                 return Ok(());
             }
             if !stopped {
+                source.failure = "premature_played";
                 return Err(Error::Wyoming);
             }
             source.played = true;
@@ -371,7 +388,10 @@ fn device<R>(
         }
         LinkEvent::MicrophoneDropped(count) => LinkEvent::MicrophoneDropped(*count),
         LinkEvent::Other => LinkEvent::Other,
-        LinkEvent::Wake(_) => return Err(Error::Wyoming),
+        LinkEvent::Wake(_) => {
+            source.failure = "unexpected_wake";
+            return Err(Error::Wyoming);
+        }
     };
     observe(Notice::Device(event))
 }
