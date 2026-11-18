@@ -177,8 +177,9 @@ pub(super) async fn continuous_playback(stream: TcpStream, format: Value) -> (Tc
     // the bridge ends the run; a fixed finite burst could precede media readiness.
     let mut cadence = tokio::time::interval(std::time::Duration::from_millis(20));
     let mut frames = 0;
+    let mut replying = false;
     loop {
-        let (row, _) = {
+        let (row, bytes) = {
             let next = read(&mut input);
             tokio::pin!(next);
             loop {
@@ -190,9 +191,13 @@ pub(super) async fn continuous_playback(stream: TcpStream, format: Value) -> (Tc
         };
         match row["type"].as_str().unwrap() {
             "describe" => send(&mut output, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
-            "audio-start" => {}
-            "hassmic-continue" => assert!(row["data"].is_null()),
+            "audio-start" => replying = true,
             "audio-chunk" => frames += 1,
+            "hassmic-flush" | "hassmic-end" => {
+                if continuous_control(row, bytes, &mut output, &mut replying).await {
+                    break;
+                }
+            }
             "audio-stop" => {
                 send(&mut output, "audio-stop", json!({}), vec![]).await;
                 send(&mut output, "played", json!({}), vec![]).await;
@@ -204,6 +209,26 @@ pub(super) async fn continuous_playback(stream: TcpStream, format: Value) -> (Tc
         }
     }
     (input.reunite(output).unwrap(), frames)
+}
+
+async fn continuous_control(
+    row: Value,
+    bytes: Vec<u8>,
+    output: &mut tokio::net::tcp::OwnedWriteHalf,
+    replying: &mut bool,
+) -> bool {
+    let ended = row["type"] == "hassmic-end";
+    let kind = if ended { "hassmic-end" } else { "hassmic-flush" };
+    let expected = json!({"type":kind,"data":null,"data_length":0,"payload_length":0});
+    assert_eq!((row, bytes), (expected, vec![]));
+    if ended {
+        send(output, "audio-stop", json!({}), vec![]).await;
+    }
+    if *replying {
+        send(output, "played", json!({}), vec![]).await;
+        *replying = false;
+    }
+    ended
 }
 
 #[tokio::test]
