@@ -21,6 +21,14 @@ pub(super) struct Source {
 }
 
 impl Source {
+    pub fn resume_reply(&mut self) -> Result<(), Error> {
+        self.reply = ReplyAudio::new(self.lead_ms)?;
+        self.delegation = Delegation::default();
+        self.mouth = Mouth::default();
+        self.controller.resume();
+        Ok(())
+    }
+
     pub fn new(lead_ms: u16, muted: bool) -> Result<Self, Error> {
         Ok(Self {
             microphone: None,

@@ -272,6 +272,7 @@ async fn drive<L: EchoLink>(
             microphone,
             call,
             Options {
+                listen_timeout: None,
                 response_deadline: deadline,
                 played_timeout: options.played_timeout,
                 reply_lead_ms: options.reply_lead_ms,

@@ -15,6 +15,8 @@ pub(crate) mod voice_entry;
 mod voice_host;
 #[path = "controls/voice_kill.rs"]
 mod voice_kill;
+#[path = "controls/voice_listen.rs"]
+mod voice_listen;
 mod voice_runtime;
 mod voice_session;
 mod voice_source;
@@ -93,7 +95,10 @@ pub enum Notice {
     ReplyPlayed,
 }
 
+#[derive(Clone, Copy)]
 pub struct Options {
+    /// None retains the explicit one-reply boundary for existing callers.
+    pub listen_timeout: Option<Duration>,
     pub reply_lead_ms: u16,
     pub response_deadline: Instant,
     pub played_timeout: Duration,
@@ -117,6 +122,9 @@ pub struct Stats {
 /// handoff, the device Played event AND the playback operation's Played result.
 /// Poll control/capture while pacing, under playback backpressure and awaiting
 /// played. A stopped source, empty queue or transcript alone cannot finish.
+/// An admitted listen interval retains capture after each reply; ordered user
+/// speech or assistant activity starts the next response window. Idle media
+/// cannot renew it. None keeps the explicit one-reply lifetime.
 ///
 /// # Errors
 /// Tools without a dispatcher, unexpected
@@ -129,11 +137,16 @@ pub async fn run<L: EchoLink>(
     events: &mut L::Events,
     mut microphone: <L::Events as LinkEvents>::Run,
     port: &mut impl VoicePort,
-    mut options: Options,
+    options: Options,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<Stats, Error> {
-    if options.played_timeout.is_zero() || Instant::now() >= options.response_deadline {
+    if options.played_timeout.is_zero()
+        || Instant::now() >= options.response_deadline
+        || options
+            .listen_timeout
+            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+    {
         return Err(Error::Deadline);
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
@@ -143,26 +156,16 @@ pub async fn run<L: EchoLink>(
         .map(|clock| clock.voice())
         .transpose()?;
     tokio::pin!(cancelled);
-    loop {
-        let result = generation(
-            client,
-            (events, &mut microphone),
-            port,
-            (&mut source, &mut drain),
-            &options,
-            cancelled.as_mut(),
-            &mut observe,
-        )
-        .await;
-        if result == Err(Error::Control) && source.controller.cutting() {
-            source.controller.cut_settled();
-            options.response_deadline = source.controller.replacement_deadline()?;
-            observe(Notice::ReplyPaused)?;
-        } else {
-            result?;
-            break;
-        }
-    }
+    voice_listen::replies(
+        client,
+        (events, &mut microphone),
+        port,
+        (&mut source, &mut drain),
+        &options,
+        cancelled.as_mut(),
+        &mut observe,
+    )
+    .await?;
     session_controller::close(
         client,
         (events, &mut microphone),
@@ -176,7 +179,9 @@ pub async fn run<L: EchoLink>(
     if let Some(drain) = drain.take() {
         drain.finish();
     }
-    observe(Notice::ReplyPlayed)?;
+    if options.listen_timeout.is_none() {
+        observe(Notice::ReplyPlayed)?;
+    }
     source.stats.received_chunks = microphone.stats().received;
     source.stats.dropped_chunks = microphone.stats().dropped;
     source.stats.reply_dropped += source.reply.dropped_frames();

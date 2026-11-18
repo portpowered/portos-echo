@@ -53,6 +53,7 @@ fn port() -> (Port, mpsc::Sender<Result<MediaEvent, Error>>) {
 }
 fn options() -> Options {
     Options {
+        listen_timeout: None,
         reply_lead_ms: 200,
         response_deadline: Instant::now() + Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),

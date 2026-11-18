@@ -11,7 +11,6 @@ enum State {
     Retired,
 }
 
-/// The preserving extraction retains the one-reply completion boundary.
 /// A cut acknowledgment belongs to the retired playback, even when its ordered
 /// device event arrives after the replacement playback has started.
 #[derive(Debug, Default)]
@@ -21,9 +20,30 @@ pub(super) struct Controller {
     cut_receipts: usize,
     microphone_finished: bool,
     response_window: Option<Duration>,
+    idle_deadline: Option<Instant>,
 }
 
 impl Controller {
+    /// Start idle only after both speaker acknowledgments and mouth drain.
+    pub fn listen_after_reply(&mut self, timeout: Duration) -> Result<(), Error> {
+        if timeout.is_zero() || !self.ready_to_close(true, true) {
+            return Err(Error::Input);
+        }
+        self.idle_deadline = Some(Instant::now().checked_add(timeout).ok_or(Error::Input)?);
+        self.state = State::Listening;
+        Ok(())
+    }
+
+    pub fn idle_deadline(&self) -> Option<Instant> {
+        self.idle_deadline
+    }
+
+    /// Ordered speech or assistant activity admits the next response window.
+    pub fn resume(&mut self) {
+        self.idle_deadline = None;
+        self.played = false;
+    }
+
     /// Retain the admitted response budget independently of any one reply.
     pub fn admit_response(&mut self, deadline: Instant) -> Result<(), Error> {
         let window = deadline
@@ -58,7 +78,7 @@ impl Controller {
     }
 
     pub fn accepts_audio(&self) -> bool {
-        !matches!(self.state, State::Cutting | State::Retired)
+        self.idle_deadline.is_none() && !matches!(self.state, State::Cutting | State::Retired)
     }
 
     pub fn reply_started(&mut self) {
@@ -179,6 +199,38 @@ mod tests {
         async fn ready_audio(&mut self) -> Result<Option<echo_media::PcmFrame>, Error> {
             std::future::pending().await
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn session_controller_listening_requires_settlement_and_renews_only_on_activity() {
+        let mut controller = Controller::default();
+        let interval = Duration::from_secs(3);
+        assert_eq!(controller.listen_after_reply(interval), Err(Error::Input));
+        controller
+            .admit_response(Instant::now() + Duration::from_secs(10))
+            .unwrap();
+        controller.reply_started();
+        controller.played(true).unwrap();
+        assert_eq!(controller.listen_after_reply(Duration::ZERO), Err(Error::Input));
+        let first = Instant::now();
+        controller.listen_after_reply(interval).unwrap();
+        assert_eq!(controller.idle_deadline(), Some(first + interval));
+        assert!(!controller.accepts_audio());
+        assert!(controller.ready_to_close(true, true));
+        tokio::time::advance(Duration::from_secs(2)).await;
+        controller.resume();
+        assert_eq!(controller.idle_deadline(), None);
+        assert!(controller.accepts_audio());
+        assert!(!controller.has_played());
+        assert!(!controller.ready_to_close(true, true));
+        assert_eq!(
+            controller.replacement_deadline(),
+            Ok(Instant::now() + Duration::from_secs(10))
+        );
+        controller.reply_started();
+        controller.played(true).unwrap();
+        controller.listen_after_reply(interval).unwrap();
+        assert_eq!(controller.idle_deadline(), Some(first + Duration::from_secs(5)));
     }
 
     #[tokio::test(start_paused = true)]
