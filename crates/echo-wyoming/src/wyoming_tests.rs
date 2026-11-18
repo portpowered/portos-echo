@@ -1,4 +1,6 @@
 use crate::wyoming_test_support as wyoming_peer;
+use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc};
 
 use crate::{ClientOptions, Error, WyomingClient, wyoming_wire};
 use tokio::io::{AsyncWriteExt, duplex};
@@ -7,12 +9,14 @@ use tokio::io::{AsyncWriteExt, duplex};
 async fn first_reconnected_wake_completes_with_lifecycle_consumer_held() {
     use echo_contracts::wyoming::WyomingEvent;
     use serde_json::json;
-    use std::sync::Arc;
-    use tokio::sync::{Mutex, mpsc};
     let (io, mut old) = duplex(4096);
     let (connections, incoming) = mpsc::channel(1);
     let incoming = Arc::new(Mutex::new(incoming));
-    let mut client = WyomingClient::reconnecting(io, ClientOptions::default(), move || {
+    let options = ClientOptions {
+        mic_capacity: 32,
+        ..ClientOptions::default()
+    };
+    let mut client = WyomingClient::reconnecting(io, options, move || {
         let incoming = incoming.clone();
         async move { incoming.lock().await.recv().await.unwrap() }
     });

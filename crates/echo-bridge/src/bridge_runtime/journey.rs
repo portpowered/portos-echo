@@ -1,7 +1,7 @@
 pub(super) mod bridge_live;
 use super::bridge_pacing::LeadPacer;
 use super::bridge_refusal::{Arbiter, Work};
-use super::bridge_timing;
+use super::{bridge_screen::Screen, bridge_timing};
 use crate::{
     Error,
     bridge_audio::{self, Microphone, Reply},
@@ -54,7 +54,7 @@ impl Source {
         frame: MicFrame,
         call: &mut impl LivePort,
         lab: bool,
-        screen: &super::bridge_screen::Screen,
+        screen: &Screen,
     ) -> Result<(), Error> {
         self.chunks += 1;
         if screen.muted()? {
@@ -71,18 +71,27 @@ impl Source {
             self.mic = Some(mic);
         }
         let mic = self.mic.as_mut().ok_or(Error::Audio)?;
-        let packets = mic.process(&format, &frame.payload)?;
+        // Validate the entire frame before lab-only clipping can hide malformed input.
+        if lab && (frame.payload.len() > 8192 || !frame.payload.len().is_multiple_of(2)) {
+            return Err(Error::Audio);
+        }
+        let bytes = if lab {
+            frame
+                .payload
+                .len()
+                .min(usize::try_from(10240 - mic.input_samples).map_err(|_| Error::Audio)? * 2)
+        } else {
+            frame.payload.len()
+        };
+        let packets = mic.process(&format, &frame.payload[..bytes])?;
+        let complete = lab && mic.input_samples == 10240;
         send(call, packets, screen, &mut self.sent).await?;
-        if lab && self.chunks == 10 {
+        if complete {
             self.finish_mic(call, screen).await?;
         }
         Ok(())
     }
-    async fn finish_mic(
-        &mut self,
-        call: &mut impl LivePort,
-        screen: &super::bridge_screen::Screen,
-    ) -> Result<(), Error> {
+    async fn finish_mic(&mut self, call: &mut impl LivePort, screen: &Screen) -> Result<(), Error> {
         if !self.finished {
             if let Some(mic) = &mut self.mic {
                 send(call, mic.finish()?, screen, &mut self.sent).await?;
@@ -121,7 +130,7 @@ impl Source {
         drained: bool,
         echo_done: bool,
         call: &mut impl LivePort,
-        screen: &super::bridge_screen::Screen,
+        screen: &Screen,
     ) -> Result<bool, Error> {
         if completed || !drained || !(self.audio_done || echo_done) {
             return Ok(completed);
@@ -218,7 +227,7 @@ struct PlaybackContext<'a, L: EchoLink> {
     trace: &'a mut Trace,
     id: &'a str,
     lead_ms: u16,
-    screen: &'a super::bridge_screen::Screen,
+    screen: &'a Screen,
     speaking: bool,
     microphone: bool,
     microphone_at_reply: Option<u64>,

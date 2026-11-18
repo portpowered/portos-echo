@@ -405,3 +405,80 @@ async fn bridge_link_invalid_or_rejected_first_input_keeps_zero() {
         assert_eq!(live.sent.len(), 0);
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn lab_microphone_post_drop_samples() {
+    let screen = Screen::bind(None).await.unwrap();
+    for (lab, short, samples, packets, tail) in [
+        (true, true, 10240, 32, 0),
+        (true, false, 10240, 32, 0),
+        (false, true, 10752, 33, 576),
+    ] {
+        let mut source = Source::new().unwrap();
+        let mut live = Live::default();
+        for index in 0..11 {
+            let frame = MicFrame {
+                format: bridge_audio::format(16_000),
+                payload: vec![0; if short && index == 7 { 1024 } else { 2048 }],
+            };
+            source.microphone(frame, &mut live, lab, &screen).await.unwrap();
+        }
+        assert_eq!(source.finished, lab);
+        source.finish_mic(&mut live, &screen).await.unwrap();
+        let mic = source.mic.as_ref().unwrap();
+        assert_eq!(
+            (source.sent, mic.input_samples, mic.tail_samples()),
+            (packets, samples, tail)
+        );
+        assert_eq!(live.sent.len() as u64, packets);
+        for (index, packet) in live.sent.iter().enumerate() {
+            assert_eq!(usize::from(packet.sequence), index);
+            assert_eq!(packet.timestamp, u32::try_from(index).unwrap() * 960);
+        }
+        source.finish_mic(&mut live, &screen).await.unwrap();
+        assert_eq!(source.sent, packets);
+        assert_eq!(live.sent.len() as u64, packets);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn lab_microphone_validates_entire_crossing_frame_before_clipping() {
+    let screen = Screen::bind(None).await.unwrap();
+    for (bytes, rate) in [(2049, 16_000), (8194, 16_000), (2048, 24_000)] {
+        let mut source = Source::new().unwrap();
+        let mut live = Live::default();
+        for _ in 0..9 {
+            source
+                .microphone(
+                    MicFrame {
+                        format: bridge_audio::format(16_000),
+                        payload: vec![0; 2048],
+                    },
+                    &mut live,
+                    true,
+                    &screen,
+                )
+                .await
+                .unwrap();
+        }
+        let before = source.sent;
+        assert_eq!(
+            source
+                .microphone(
+                    MicFrame {
+                        format: bridge_audio::format(rate),
+                        payload: vec![0; bytes],
+                    },
+                    &mut live,
+                    true,
+                    &screen
+                )
+                .await,
+            Err(Error::Audio)
+        );
+        assert_eq!(source.mic.as_ref().unwrap().input_samples, 9216);
+        assert_eq!(source.sent, before);
+        assert_eq!(live.sent.len() as u64, before);
+        assert!(!source.finished);
+    }
+}
