@@ -111,6 +111,7 @@ impl<'a> View<'a> {
             }
             SessionNotice::Run(Notice::Device(event)) => self.screen.observe(&event, self.trace).map(|_| ()),
             SessionNotice::Run(Notice::ReplyStarted) => self.screen.publish(UiState::Speaking),
+            SessionNotice::Run(Notice::ReplyPaused) => self.screen.publish(UiState::Listening),
             SessionNotice::Run(Notice::ReplyPlayed | Notice::Transcript { .. }) => Ok(()),
             SessionNotice::Completed(stats) => self.completed(&stats),
         }

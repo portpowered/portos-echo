@@ -65,8 +65,15 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> VoicePort for Me
 /// No payload-bearing observation implements Debug or Display.
 pub enum Notice {
     Device(LinkEvent<()>),
-    Transcript { role: String, text: String, done: bool },
+    Transcript {
+        role: String,
+        text: String,
+        done: bool,
+    },
+    /// Audible reply audio reached the Echo's speaker.
     ReplyStarted,
+    /// The speaker went quiet: the mouth closes until audio resumes.
+    ReplyPaused,
     ReplyPlayed,
 }
 
@@ -148,6 +155,9 @@ pub async fn run<L: EchoLink>(
         }
         return Err(error);
     }
+    if source.mouth.flush() {
+        observe(Notice::ReplyStarted)?;
+    }
     observe(Notice::ReplyPlayed)?;
     source.stats.received_chunks = microphone.stats().received;
     source.stats.dropped_chunks = microphone.stats().dropped;
@@ -185,6 +195,11 @@ async fn drive<E: LinkEvents>(
                 source.reply.finish()?;
                 deadline = Instant::now() + options.played_timeout;
             },
+            () = tokio::time::sleep_until(source.mouth.due().unwrap_or(deadline)), if source.mouth.due().is_some() => {
+                if let Some(open) = source.mouth.poll(Instant::now()) {
+                    observe(if open { Notice::ReplyStarted } else { Notice::ReplyPaused })?;
+                }
+            },
             result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,
         }
         if source.played && source.microphone_finished && sink.is_none() {
@@ -217,9 +232,10 @@ async fn step<E: LinkEvents>(
         },
         result = forward(sink, pending.as_deref()), if pending.is_some() => {
             result?;
-            *pending = None;
+            if let Some(frame) = pending.take() {
+                source.mouth.wrote(&frame, Instant::now());
+            }
             source.stats.reply_sent += 1;
-            if source.stats.reply_sent == 1 { observe(Notice::ReplyStarted)?; }
             Ok(())
         },
     }
