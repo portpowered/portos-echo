@@ -103,22 +103,6 @@ impl Fixture {
         }
     }
 
-    pub async fn invoke(&self, args: &[&str], code: i32, stdout: &str, stderr: &str) {
-        let output = tokio::time::timeout(
-            OBSERVATION_TIMEOUT,
-            bridge_wire_auth::command(self.directory.path(), args)
-                .env("OPENAI_API_KEY", "synthetic-inherited-key")
-                .env("OPENAI_ACCESS_TOKEN", "synthetic-inherited-token")
-                .output(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(output.status.code(), Some(code));
-        assert_eq!(String::from_utf8(output.stdout).unwrap(), stdout);
-        assert_eq!(String::from_utf8(output.stderr).unwrap(), stderr);
-    }
-
     pub async fn control(&self) -> tokio::net::TcpStream {
         let port = tokio::time::timeout(OBSERVATION_TIMEOUT, async {
             loop {

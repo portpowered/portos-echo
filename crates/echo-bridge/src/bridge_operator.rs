@@ -117,7 +117,14 @@ pub async fn execute_controlled(
             .and_then(|()| writer.flush())
             .map_err(|_| Error::Control);
     }
-    codex_operator::execute(command, writer, cancelled).await
+    codex_operator::execute(
+        command,
+        writer,
+        cancelled,
+        #[cfg(test)]
+        None,
+    )
+    .await
 }
 
 #[cfg(test)]

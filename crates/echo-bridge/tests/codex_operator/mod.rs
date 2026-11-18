@@ -8,6 +8,24 @@ mod tools;
 mod voice_entry;
 use fixture::Fixture;
 
+impl Fixture {
+    pub async fn invoke(&self, args: &[&str], code: i32, stdout: &str, stderr: &str) {
+        let output = tokio::time::timeout(
+            OBSERVATION_TIMEOUT,
+            bridge_wire_auth::command(self.directory.path(), args)
+                .env("OPENAI_API_KEY", "synthetic-inherited-key")
+                .env("OPENAI_ACCESS_TOKEN", "synthetic-inherited-token")
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(output.status.code(), Some(code));
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), stdout);
+        assert_eq!(String::from_utf8(output.stderr).unwrap(), stderr);
+    }
+}
+
 fn presentation_owned(path: &Path) {
     assert!(
         trace(path)
@@ -39,59 +57,6 @@ fn presentation_released(path: &Path, mode: &str, screen: bool) {
         assert_eq!(receipt["provider_auth_mode"], mode);
         assert!(receipt["elapsed_ms"].is_u64());
     }
-}
-
-#[tokio::test]
-#[ignore = "T3 requires local Python"]
-async fn codex_operator_cancellation_and_output_failure_await_cleanup() {
-    let fixture = Fixture::new("chatgpt");
-    let args = vec![
-        "signin".into(),
-        "--config".into(),
-        fixture.directory.path().join("bridge.toml").display().to_string(),
-    ];
-    let prepare = || {
-        echo_bridge::bridge_operator::parse(&args, false)
-            .unwrap()
-            .unwrap()
-            .prepare()
-            .unwrap()
-    };
-    let (cancel, cancelled) = tokio::sync::oneshot::channel();
-    let operation = async {
-        let mut output = Vec::new();
-        let result = echo_bridge::bridge_operator::execute_controlled(prepare(), &mut output, async {
-            let _ = cancelled.await;
-        })
-        .await;
-        (result, output)
-    };
-    let observer = async {
-        let control = fixture.control().await;
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
-        loop {
-            let state = bridge_wire_screen::state(&mut screen).await;
-            if state["message"] == "code: TEST-CODE\nurl: http://127.0.0.1:12345/verify\n" {
-                break;
-            }
-        }
-        cancel.send(()).unwrap();
-        drop(control);
-    };
-    let ((result, output), ()) = tokio::join!(operation, observer);
-    assert_eq!(result, Err(echo_bridge::Error::Control));
-    assert_eq!(output, b"code: TEST-CODE\nurl: http://127.0.0.1:12345/verify\n");
-    assert!(!fixture.home.join("auth.json").exists());
-    drop(fixture.owner());
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
-    let mut writer = std::io::Cursor::new([0_u8; 0]);
-    assert_eq!(
-        echo_bridge::bridge_operator::execute(prepare(), &mut writer).await,
-        Err(echo_bridge::Error::Control)
-    );
-    drop(fixture.owner());
-    assert!(!fixture.home.join("auth.json").exists());
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
 }
 
 #[tokio::test]
