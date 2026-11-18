@@ -82,6 +82,9 @@ impl Events {
             return Ok(Some(LinkEvent::Mute(muted)));
         }
         if let Some(run) = event.run {
+            // A registered peer may wake before the next idle describe probe.
+            // Once admitted, its completion must not be filtered as pre-Info noise.
+            self.barrier = false;
             self.current = Some(run.queue.clone());
             self.capture = if self.muted { Capture::Ended } else { Capture::Open };
             return Ok(Some(LinkEvent::Wake(run)));

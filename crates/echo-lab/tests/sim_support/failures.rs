@@ -32,6 +32,39 @@ fn m1_restart_diagnostics_preserve_child_exit_reason_and_cleanup() {
 
 #[test]
 #[ignore = "T3 requires the prebuilt pinned hassmic-host"]
+fn m1_restart_diagnostics_incomplete_trace_and_cancellation_keep_original_failure() {
+    for cancelled in [false, true] {
+        let session = Session::new();
+        session.scenario(json!([{"expect_screen":{"state":"speaking"}}]), json!({}));
+        let script = json!({"records":[{"event":"bridge.error","reason":"wyoming"}],
+            "no_ready":cancelled,"cancel":cancelled,
+            "raw_tail":"{\"payload\":\"synthetic-secret-sentinel"});
+        std::fs::write(session.0.join("script.json"), script.to_string()).unwrap();
+        let output = session
+            .command(env!("CARGO_BIN_EXE_echo-lab-sim-script"))
+            .args(["--cancel-file", "cancel"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(if cancelled {
+                "sim: cancelled"
+            } else {
+                "step 0: screen expectation"
+            }),
+            "{stderr}"
+        );
+        assert!(stderr.contains("\"trace\":\"incomplete or invalid\""), "{stderr}");
+        assert!(stderr.contains("\"reason\":\"wyoming\""), "{stderr}");
+        assert!(!stderr.contains("synthetic-secret-sentinel"));
+        assert_eq!(session.report()["result"], "fail");
+        session.endpoints();
+    }
+}
+
+#[test]
+#[ignore = "T3 requires the prebuilt pinned hassmic-host"]
 fn unlaunchable_bridge_closes_the_world_and_a_fresh_run_ignores_old_artifacts() {
     let failed = Session::new();
     failed.scenario(json!([{"press":"action"}]), json!({}));
