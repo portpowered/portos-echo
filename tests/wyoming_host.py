@@ -4,6 +4,7 @@ stdin commands own the lifecycle; EOF (including a Rust panic) reaps the group.
 Only fixed status lines cross stdout. Temporary synthetic audio is deleted.
 """
 import contextlib
+import ctypes
 import hashlib
 import os
 from pathlib import Path
@@ -55,6 +56,42 @@ def _allocation_guard(deadline):
         yield
     finally:
         owner.close()
+
+
+def parent_death_guard():
+    """Prepare libc before fork; the child only arms and checks its parent."""
+    expected = os.getpid()
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                      ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    def arm():
+        if prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "parent-death guard failed")
+        if os.getppid() != expected:
+            os.kill(os.getpid(), signal.SIGKILL)
+    return arm
+
+
+@contextlib.contextmanager
+def controller_signals(message="controller cancelled by signal"):
+    if os.name == "nt":
+        yield
+        return
+    signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    def cancelled(signum, _frame):
+        # A second handled signal must not interrupt collection/unstaging.
+        for sig in signals:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(f"{message} {signum}")
+    previous = {sig: signal.getsignal(sig) for sig in signals}
+    try:
+        for sig in signals:
+            signal.signal(sig, cancelled)
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def safe_tail(raw, truncated=False):
@@ -189,7 +226,8 @@ class Host:
                         [str(binary), "-P", "wyoming", "-D", "-p", str(self.port),
                          "-n", "Wyoming Test", *failure],
                         cwd=binary.parent, env=env, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE, start_new_session=True)
+                        stderr=subprocess.PIPE, start_new_session=True,
+                        preexec_fn=parent_death_guard())
                 self.logged(b"wyoming on ")
         except BaseException as error:
             if isinstance(error, Exception) and not isinstance(error, ReadinessFailure):
@@ -284,6 +322,7 @@ class Host:
         print(command, flush=True)
 
 
+@controller_signals()
 def main():
     failed = False
     with tempfile.TemporaryDirectory(prefix="wyoming-t3-") as folder:
