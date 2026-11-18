@@ -20,7 +20,6 @@ pub const GATES: &[(&str, &str)] = &[
     ("build-echo", "build-echo"),
 ];
 const PREFIX: &str = "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\npermissions:\n  contents: read\ndefaults:\n  run:\n    shell: sh\njobs:\n";
-
 // Only the reviewed job grammar is accepted; aliases, matrices and conditional gates are not equivalent.
 fn job(name: &str, target: &str) -> String {
     let timeout = match name {
