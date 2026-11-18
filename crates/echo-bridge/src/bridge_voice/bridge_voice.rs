@@ -129,7 +129,7 @@ pub async fn run<L: EchoLink>(
     events: &mut L::Events,
     mut microphone: <L::Events as LinkEvents>::Run,
     port: &mut impl VoicePort,
-    options: Options,
+    mut options: Options,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<Stats, Error> {
@@ -137,6 +137,7 @@ pub async fn run<L: EchoLink>(
         return Err(Error::Deadline);
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
+    source.controller.admit_response(options.response_deadline)?;
     // A cut replaces playback, while the run still owns pending clock receipts.
     let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
         .map(|clock| clock.voice())
@@ -155,6 +156,7 @@ pub async fn run<L: EchoLink>(
         .await;
         if result == Err(Error::Control) && source.controller.cutting() {
             source.controller.cut_settled();
+            options.response_deadline = source.controller.replacement_deadline()?;
             observe(Notice::ReplyPaused)?;
         } else {
             result?;

@@ -1,6 +1,54 @@
 //! T1: reply generations retired by a truncated done or a user barge.
 use super::{cases::Stalled, *};
 
+/// T1: a late barge must not leave its replacement on the retired deadline.
+#[tokio::test(start_paused = true)]
+async fn voice_barge_replacement_gets_a_fresh_response_window_after_settled_cut() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 640);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    let start = Instant::now();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        options(),
+        std::future::pending(),
+        |_| Ok(()),
+    ));
+    send(&tx, [said("old reply")]).await;
+    pending(work.as_mut()).await;
+    tokio::time::advance(Duration::from_secs(9)).await;
+    send(&tx, [MediaEvent::Control(Event::SpeechStarted)]).await;
+    pending(work.as_mut()).await;
+    assert_eq!(command_count(&observer, false), 1);
+    observer.finish(Ok(()));
+    pending(work.as_mut()).await;
+    assert_eq!(command_count(&observer, true), 2);
+    // Cross the original response deadline, but stay in the replacement budget.
+    tokio::time::advance(Duration::from_secs(3)).await;
+    pending(work.as_mut()).await;
+    send(&tx, [said("replacement")]).await;
+    send(&tx, audible(3)).await;
+    send(&tx, [done()]).await;
+    pending(work.as_mut()).await;
+    assert_eq!(frames(&observer).len(), 3);
+    assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    tokio::time::advance(Duration::from_millis(400)).await;
+    pending(work.as_mut()).await;
+    observer.finish(Ok(()));
+    let stats = work.await.unwrap();
+    assert_eq!(stats.reply_sent, 3);
+    assert_eq!(stats.microphone_frames, 2);
+    assert_eq!(command_count(&observer, false), 1);
+    assert_eq!(observer.commands().last(), Some(&Command::EndRun));
+    assert_eq!(start.elapsed(), Duration::from_millis(12_400));
+}
+
 #[tokio::test(start_paused = true)]
 async fn voice_late_audible_media_after_done_is_discarded() {
     let observer = Observer::default();

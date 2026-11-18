@@ -1,5 +1,6 @@
 //! Run lifecycle decisions, independent of PCM conversion and device IO.
 use super::Error;
+use tokio::time::{Duration, Instant};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 enum State {
@@ -19,9 +20,27 @@ pub(super) struct Controller {
     played: bool,
     cut_receipts: usize,
     microphone_finished: bool,
+    response_window: Option<Duration>,
 }
 
 impl Controller {
+    /// Retain the admitted response budget independently of any one reply.
+    pub fn admit_response(&mut self, deadline: Instant) -> Result<(), Error> {
+        let window = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|window| !window.is_zero())
+            .ok_or(Error::Deadline)?;
+        self.response_window = Some(window);
+        Ok(())
+    }
+
+    /// A settled cut starts a fresh response window for the replacement.
+    pub fn replacement_deadline(&self) -> Result<Instant, Error> {
+        Instant::now()
+            .checked_add(self.response_window.ok_or(Error::Input)?)
+            .ok_or(Error::Input)
+    }
+
     pub fn speaking(&self) -> bool {
         self.state == State::Replying
     }
@@ -160,6 +179,26 @@ mod tests {
         async fn ready_audio(&mut self) -> Result<Option<echo_media::PcmFrame>, Error> {
             std::future::pending().await
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn session_controller_replacement_budget_is_bounded_and_requires_admission() {
+        let mut controller = Controller::default();
+        let start = Instant::now();
+        assert_eq!(controller.replacement_deadline(), Err(Error::Input));
+        for deadline in [start - Duration::from_secs(1), start] {
+            assert_eq!(controller.admit_response(deadline), Err(Error::Deadline));
+            assert_eq!(controller.replacement_deadline(), Err(Error::Input));
+        }
+        controller.admit_response(start + Duration::from_secs(10)).unwrap();
+        tokio::time::advance(Duration::from_secs(9)).await;
+        controller.reply_started();
+        controller.cut();
+        controller.cut_settled();
+        let deadline = controller.replacement_deadline().unwrap();
+        assert_eq!(deadline, start + Duration::from_secs(19));
+        tokio::time::sleep_until(deadline).await;
+        assert_eq!(start.elapsed(), Duration::from_secs(19));
     }
 
     #[tokio::test(start_paused = true)]
