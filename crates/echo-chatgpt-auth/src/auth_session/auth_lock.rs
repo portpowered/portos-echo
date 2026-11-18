@@ -4,9 +4,28 @@ use std::{
     path::Path,
 };
 
+pub(crate) struct Lock(File);
+
+impl std::ops::Deref for Lock {
+    type Target = File;
+
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // A concurrent process spawn can inherit the open file description until
+        // exec. Closing only our handle would leave its flock held in that child.
+        // End ownership explicitly, including on error and future cancellation.
+        let _ = self.0.unlock();
+    }
+}
+
 // Keep the empty lock file: unlinking it would let another caller lock a new
 // inode while a previous caller still owns the old one. OS releases on crash.
-pub(crate) fn lock(path: &Path) -> Result<File, AuthError> {
+pub(crate) fn lock(path: &Path) -> Result<Lock, AuthError> {
     if path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(AuthError::InvalidConfig);
     }
@@ -32,7 +51,7 @@ pub(crate) fn lock(path: &Path) -> Result<File, AuthError> {
         TryLockError::WouldBlock => AuthError::Busy,
         TryLockError::Error(_) => AuthError::Storage,
     })?;
-    Ok(file)
+    Ok(Lock(file))
 }
 
 pub(crate) fn pending(file: &File) -> Result<bool, AuthError> {
@@ -42,4 +61,31 @@ pub(crate) fn mark(file: &File, pending: bool) -> Result<(), AuthError> {
     file.set_len(u64::from(pending))
         .and_then(|()| file.sync_all())
         .map_err(|_| AuthError::Storage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn released_operation_unlocks_even_with_a_duplicate_handle() {
+        let directory = crate::auth_private::Directory::new(&std::env::temp_dir()).unwrap();
+        let path = directory.0.join("credential");
+        let owner = lock(&path).unwrap();
+        mark(&owner, true).unwrap();
+        // A fork duplicates the open file description before CLOEXEC closes it.
+        // Model that interval without unsafe fork/pre_exec or timing a child.
+        let inherited = owner.try_clone().unwrap();
+        assert_eq!(lock(&path).err(), Some(AuthError::Busy));
+        drop(owner);
+        let next = lock(&path).unwrap();
+        assert!(pending(&next).unwrap());
+        drop(inherited);
+        // Closing the duplicate must not release the next owner's lock.
+        assert_eq!(lock(&path).err(), Some(AuthError::Busy));
+        drop(next);
+        let next = lock(&path).unwrap();
+        assert!(pending(&next).unwrap());
+        assert_eq!(std::fs::read(path.with_file_name("credential.lock")).unwrap(), [0]);
+    }
 }

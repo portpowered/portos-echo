@@ -34,6 +34,7 @@ async fn import_writer_failure_keeps_committed_copy_and_lock_contention_is_safe(
     );
     assert_eq!(output, b"");
     assert!(!live.credential_file.exists());
+    lock.unlock().unwrap();
     drop(lock);
     let mut output = Writer::new(&mock, 0);
     assert_eq!(
