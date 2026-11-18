@@ -1,7 +1,7 @@
 use super::super::{controlled, observers, selectors};
 use super::{muse, world::World};
 use crate::lab_run::{Driver, Step, run_options::Options, run_report::Artifacts};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::time::Duration;
 
 pub struct M7<'a> {
@@ -70,7 +70,16 @@ impl<'a> M7<'a> {
             (Err(error), _) | (_, Err(error)) => return Err(error),
             _ => {}
         }
-        let value = self.world.observation(self.negative)?;
+        let mut value = self.world.observation(self.negative)?;
+        let audio_name = format!("m7-{case}-audible.json");
+        let audio = json!({"audibility":value["audibility"],"ui_states":value["ui_states"]});
+        std::fs::write(artifacts.root.join(&audio_name), audio.to_string())
+            .map_err(|_| "m7: audio retention failed")?;
+        artifacts.evidence.push(audio_name);
+        if let Some(object) = value.as_object_mut() {
+            object.remove("audibility");
+            object.remove("ui_states");
+        }
         if let Some(previous) = previous {
             for field in ["task_id", "gadget_session_id"] {
                 if previous[field] == value[field] {

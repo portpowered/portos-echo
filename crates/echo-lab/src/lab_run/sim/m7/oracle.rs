@@ -73,6 +73,7 @@ pub fn observe(world: &World, negative: bool) -> Result<Value, String> {
         "failed_count":usize::from(negative),"spoken_reply_count":1,"commentary_count":1,
         "gadget_submit_count":world.muse.calls.len(),"report_accepted_count":world.muse.reports.len(),
         "report_attempt_count":world.muse.reports.len(),"reply_pcm_bytes":world.playback["pcm_bytes"],
+        "audibility":world.audibility,"ui_states":world.ui_states,
         "client_tool_call_count":world.tool_calls,"responses_request_count":world.model_requests,
         "retryable":if negative {json!(false)} else {Value::Null},"deadline_seconds":10}),
     )
@@ -95,10 +96,24 @@ fn playback(world: &World, run: &str) -> Result<(), String> {
     equal("reply start run", &started["run_id"], &json!(run))?;
     let reply = one(records, "reply.played")?;
     equal("reply run", &reply["run_id"], &json!(run))?;
+    let audio = &world.audibility;
+    if world.playback["pcm_bytes"] != 9600
+        || world.playback["nonzero_bytes"].as_u64().is_none_or(|n| n == 0)
+        || audio["pcm_bytes"] != 9600
+        || audio["nonzero_samples"].as_u64().is_none_or(|n| n < 2400)
+        || audio["audible_samples"].as_u64().is_none_or(|n| n < 2400)
+        || audio["host"] != world.playback
+    {
+        return Err(format!(
+            "m7: expected audible 9600-byte reply; observed {audio}, host {}",
+            world.playback
+        ));
+    }
+    let states: Vec<_> = world.ui_states.iter().map(|state| state["state"].clone()).collect();
     equal(
-        "decoded host PCM",
-        &world.playback,
-        &json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0}),
+        "screen sequence",
+        &json!(states),
+        &json!(["ready", "listening", "connected", "speaking", "ready"]),
     )?;
     equal("client model requests", &json!(world.model_requests), &json!(0))?;
     equal("client tool calls", &json!(world.tool_calls), &json!(0))?;

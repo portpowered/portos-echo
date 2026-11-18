@@ -9,8 +9,8 @@ use super::super::{
     process::{self, Process},
     trace::Trace,
 };
-use super::{muse::Muse, oracle};
-use echo_live::fake::{DialogueCall, DialogueLive, DialogueScript, FakeLive};
+use super::{live::Live, muse::Muse, oracle};
+use echo_live::fake::DialogueCall;
 use echo_spoof_mcp::{Options, Spoof};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -24,7 +24,7 @@ pub struct World {
     host: Option<Process>,
     bridge: Option<Process>,
     relay: Option<Relay>,
-    live: Option<DialogueLive>,
+    live: Option<Live>,
     model: Option<Model>,
     spoof: Option<Spoof>,
     root: PathBuf,
@@ -33,6 +33,8 @@ pub struct World {
     pub dialogue: Vec<DialogueCall>,
     pub completion: Value,
     pub playback: Value,
+    pub audibility: Value,
+    pub ui_states: Vec<Value>,
     pub model_requests: usize,
     pub tool_calls: usize,
 }
@@ -63,18 +65,7 @@ impl World {
         );
         self.model = Some(Model::bind_controlled(false, async { Ok(()) }, None).await?);
         let text = if negative { DEADLINE } else { SUCCESS };
-        self.live = Some(
-            FakeLive::bind_dialogue(DialogueScript {
-                delegation_id: "m7-d-1".into(),
-                input: "Ask Muse to run the test job".into(),
-                commentary: text.into(),
-                transcript: text.into(),
-                audio_frames: 10,
-                initial_after_audio_frames: 44,
-            })
-            .await
-            .map_err(|_| "m7: Live startup failed")?,
-        );
+        self.live = Some(Live::bind(text).await?);
         self.configure()?;
         self.bridge = Some(Process::start(&mut world::command(
             root,
@@ -122,28 +113,33 @@ impl World {
 
     pub async fn speak(&mut self, negative: bool) -> Result<(), String> {
         let mut screen = Screen::connect(&self.root).await?;
-        screen.expect("ready").await?;
+        self.ui_states.push(screen.expect("ready").await?);
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
-        screen.expect("listening").await?;
-        screen.expect("connected").await?;
+        self.ui_states.push(screen.expect("listening").await?);
+        self.ui_states.push(screen.expect("connected").await?);
         let id = self.progress().await?;
         self.muse.terminal(&id, negative).await?;
-        self.speaking = Some(screen.expect("speaking").await?);
+        let speaking = screen.expect("speaking").await?;
+        self.ui_states.push(speaking.clone());
+        self.speaking = Some(speaking);
         self.completion = self
             .bridge
             .as_mut()
             .ok_or("m7: missing bridge")?
             .expect("bridge.run_completed")
             .await?;
-        screen.expect("ready").await?;
+        self.ui_states.push(screen.expect("ready").await?);
         self.playback = self.control(json!({"action":"playback"})).await?;
         self.relay.as_ref().ok_or("m7: missing relay")?.timing().sample()?;
-        let observer = self.live.as_ref().ok_or("m7: missing Live")?.observer();
-        observer
-            .wait_for(0, |call| call.reply_completed)
-            .await
-            .map_err(|_| "m7: incomplete Live reply")?;
-        self.dialogue = observer.calls().map_err(|_| "m7: missing Live observations")?;
+        self.audibility = self
+            .relay
+            .as_ref()
+            .ok_or("m7: missing relay")?
+            .timing()
+            .audible_reply(&self.playback)?;
+        let live = self.live.as_mut().ok_or("m7: missing Live")?;
+        live.completed().await?;
+        self.dialogue = live.calls();
         self.muse.collect()
     }
 

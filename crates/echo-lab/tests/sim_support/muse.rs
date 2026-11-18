@@ -29,6 +29,11 @@ fn m7_cli_both_cases_and_seeded_wrong_terminal_count_publish_exact_reports() {
         assert_eq!(cases.len(), if seeded { 1 } else { 2 });
         for (index, case) in cases.iter().enumerate() {
             check(case, index == 1);
+            let name = format!("m7-{}-audible.json", if index == 1 { "no_report" } else { "success" });
+            assert!(report["evidence"].as_array().unwrap().contains(&json!(name)));
+            let audio: Value =
+                serde_json::from_slice(&std::fs::read(session.0.join("artifacts").join(name)).unwrap()).unwrap();
+            check_audio(&audio);
         }
         if seeded {
             assert!(String::from_utf8_lossy(&output.stderr).contains("expected 2 occurrences, observed 1"));
@@ -105,4 +110,18 @@ fn m7_cli_missing_muse_binary_fails_before_starting_private_world() {
     );
     assert_eq!(std::fs::read_dir(session.0.join("artifacts")).unwrap().count(), 1);
     assert!(session.0.join("artifacts/events.jsonl").is_file());
+}
+
+fn check_audio(case: &Value) {
+    assert_eq!(case["audibility"]["pcm_bytes"], 9600);
+    assert!(case["audibility"]["nonzero_samples"].as_u64().unwrap() >= 2400);
+    assert!(case["audibility"]["audible_samples"].as_u64().unwrap() >= 2400);
+    assert!(case["audibility"]["host"]["nonzero_bytes"].as_u64().unwrap() > 0);
+    let states: Vec<_> = case["ui_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|state| state["state"].as_str().unwrap())
+        .collect();
+    assert_eq!(states, ["ready", "listening", "connected", "speaking", "ready"]);
 }

@@ -1,5 +1,6 @@
 //! Authored M7 success/deadline scenario through prebuilt production processes.
 mod driver;
+mod live;
 mod muse;
 mod oracle;
 mod world;
