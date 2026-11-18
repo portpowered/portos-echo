@@ -53,7 +53,7 @@ pub(super) async fn observed_satellite(
         stream = run_playback(stream, earcon, &mut observer, completed == 1).await;
         completed += 1;
         if completed == 2 {
-            notify(&observer, Phase::PlaybackEnded);
+            notify(observer.as_ref(), Phase::PlaybackEnded);
         }
     }
     // Socket EOF does not release this test-owned listener. The controller
@@ -70,7 +70,7 @@ async fn run_playback(
     observer: &mut Option<Observer>,
     second: bool,
 ) -> tokio::net::TcpStream {
-    use super::super::tests::{read, send};
+    use super::super::tests::send;
     let format = json!({"rate":16000,"width":2,"channels":1});
     send(&mut stream, "audio-start", format.clone(), vec![]).await;
     if earcon {
@@ -85,33 +85,22 @@ async fn run_playback(
         match row["type"].as_str().unwrap() {
             "describe" => send(&mut output, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
             "audio-start" => replying = true,
-            "audio-chunk" => panic!("capture-only lifecycle must receive zero reply PCM"),
+            "audio-chunk" => assert_eq!(row["type"], "expected zero reply PCM"),
             "hassmic-end" if cut => {
-                control(&row, &bytes, &mut output, observer).await;
+                control(&row, &bytes, &mut output, observer.as_ref()).await;
                 send(&mut output, "audio-stop", json!({}), vec![]).await;
                 break;
             }
             "hassmic-flush" | "hassmic-end" => {
-                if end_capture(row, bytes, &mut output, &mut replying).await {
+                if cut_control(row, bytes, &mut output, &mut replying, observer, second).await {
                     break;
                 }
                 cut = true;
-                if second {
-                    checkpoint(observer, Phase::CutAcknowledged).await;
-                }
             }
             "audio-stop" => {
-                if second {
-                    checkpoint(observer, Phase::ReplyStopped).await;
-                    if observer.is_some() {
-                        continue;
-                    }
+                if stopped(&mut input, &mut output, observer, second).await {
+                    break;
                 }
-                send(&mut output, "audio-stop", json!({}), vec![]).await;
-                send(&mut output, "played", json!({}), vec![]).await;
-                let (end, payload) = read(&mut input).await;
-                assert!(valid_end(&end, &payload));
-                break;
             }
             other => assert_eq!(other, "expected reply end"),
         }
@@ -129,7 +118,7 @@ async fn end_capture(
     let ended = row["type"] == "hassmic-end";
     let kind = if ended { "hassmic-end" } else { "hassmic-flush" };
     assert_eq!(row, json!({"type":kind,"data":null,"data_length":0,"payload_length":0}));
-    assert!(bytes.is_empty());
+    assert_eq!(bytes, [] as [u8; 0]);
     if ended {
         send(output, "audio-stop", json!({}), vec![]).await;
     }
@@ -170,7 +159,7 @@ pub(super) async fn wait_for_wake(
             ready = stream.peek(&mut byte) => if ready.unwrap() == 0 { return false; },
         }
         let (row, payload) = read(stream).await;
-        control(&row, &payload, stream, observer).await;
+        control(&row, &payload, stream, observer.as_ref()).await;
     }
 }
 
@@ -188,7 +177,7 @@ pub(super) fn valid_control(row: &Value, payload: &[u8]) -> bool {
     }
 }
 
-fn notify(observer: &Option<Observer>, phase: Phase) {
+fn notify(observer: Option<&Observer>, phase: Phase) {
     if let Some(observer) = observer {
         observer.events.send(phase).unwrap();
     }
@@ -198,7 +187,7 @@ async fn control(
     row: &Value,
     payload: &[u8],
     output: &mut (impl tokio::io::AsyncWrite + Unpin),
-    observer: &Option<Observer>,
+    observer: Option<&Observer>,
 ) {
     assert!(valid_control(row, payload), "invalid idle control: {row}");
     if row["type"] == "describe" {
@@ -225,4 +214,41 @@ async fn capture_frame(
             _ = cadence.tick() => send(output, "audio-chunk", format.clone(), vec![0;640]).await,
         }
     }
+}
+
+async fn stopped(
+    input: &mut tokio::net::tcp::OwnedReadHalf,
+    output: &mut tokio::net::tcp::OwnedWriteHalf,
+    observer: &mut Option<Observer>,
+    second: bool,
+) -> bool {
+    use super::super::tests::{read, send};
+    if second {
+        checkpoint(observer, Phase::ReplyStopped).await;
+        if observer.is_some() {
+            return false;
+        }
+    }
+    send(output, "audio-stop", json!({}), vec![]).await;
+    send(output, "played", json!({}), vec![]).await;
+    let (end, payload) = read(input).await;
+    assert!(valid_end(&end, &payload));
+    true
+}
+
+async fn cut_control(
+    row: Value,
+    bytes: Vec<u8>,
+    output: &mut tokio::net::tcp::OwnedWriteHalf,
+    replying: &mut bool,
+    observer: &mut Option<Observer>,
+    second: bool,
+) -> bool {
+    if end_capture(row, bytes, output, replying).await {
+        return true;
+    }
+    if second {
+        checkpoint(observer, Phase::CutAcknowledged).await;
+    }
+    false
 }

@@ -35,10 +35,10 @@ async fn kill_schedule(collect_first: bool) {
     owner.wake.send(()).await.unwrap();
     assert_eq!(owner.screen.next().await.unwrap()["state"]["state"], "listening");
     owner.provider.next_capture().await;
-    while observed.recv().await.unwrap() != Phase::ReplyStopped {}
+    at_phase(&mut observed, Phase::ReplyStopped).await;
     kill(&mut owner).await;
     resume.send(()).await.unwrap();
-    while observed.recv().await.unwrap() != Phase::CutAcknowledged {}
+    at_phase(&mut observed, Phase::CutAcknowledged).await;
     assert_killed(&mut owner).await;
     collect(owner, observed, resume, collect_first).await;
 }
@@ -50,22 +50,10 @@ async fn collect(
     collect_first: bool,
 ) {
     let mut wake = Some(owner.wake);
-    let mut idle_ends = 0;
-    let mut refusals = 0;
+    let mut counts = Counts::default();
     if !collect_first {
         resume.send(()).await.unwrap();
-        loop {
-            match observed.recv().await.unwrap() {
-                Phase::Control(kind) if kind == "hassmic-end" => idle_ends += 1,
-                Phase::Control(kind) if kind == "error" => {
-                    refusals += 1;
-                    break;
-                }
-                Phase::Control(kind) => assert_eq!(kind, "describe"),
-                Phase::PlaybackEnded => (),
-                phase => panic!("unexpected peer phase: {phase:?}"),
-            }
-        }
+        through(&mut observed, &mut counts, Phase::Control("error".into())).await;
     }
     assert_eq!(owner.bridge.close().await, Ok(()));
     drop(owner.bridge);
@@ -75,18 +63,9 @@ async fn collect(
         drop(wake.take());
         resume.send(()).await.unwrap();
     }
-    loop {
-        match observed.recv().await.unwrap() {
-            Phase::Control(kind) if kind == "hassmic-end" => idle_ends += 1,
-            Phase::Control(kind) if kind == "error" => refusals += 1,
-            Phase::Control(kind) => assert_eq!(kind, "describe"),
-            Phase::PlaybackEnded => (),
-            Phase::Eof => break,
-            phase => panic!("unexpected peer phase: {phase:?}"),
-        }
-    }
-    assert_eq!(refusals, 1);
-    assert!(idle_ends >= 1, "shutdown end must be consumed in idle phase");
+    through(&mut observed, &mut counts, Phase::Eof).await;
+    assert_eq!(counts.refusals, 1);
+    assert!(counts.ends >= 1, "shutdown end must be consumed in idle phase");
     assert!(owner.listener_lifetime.upgrade().is_some());
     if !collect_first {
         drop(wake.take());
@@ -94,7 +73,7 @@ async fn collect(
     resume.send(()).await.unwrap();
     assert_eq!(owner.satellite.await.unwrap(), 2);
     assert!(owner.listener_lifetime.upgrade().is_none());
-    finish(owner.root, owner.output, owner.provider, collect_first, idle_ends).await;
+    finish(owner.root, owner.output, owner.provider, collect_first, counts.ends).await;
 }
 
 async fn finish(
@@ -195,4 +174,44 @@ async fn t3_codex_lifecycle_idle_end_is_validated_and_listener_waits_for_collect
     })
     .await
     .unwrap();
+}
+
+#[derive(Default)]
+struct Counts {
+    ends: usize,
+    refusals: usize,
+}
+
+impl Counts {
+    fn record(&mut self, phase: Phase) {
+        match phase {
+            Phase::Control(kind) if kind == "hassmic-end" => self.ends += 1,
+            Phase::Control(kind) if kind == "error" => self.refusals += 1,
+            Phase::Control(kind) => assert_eq!(kind, "describe"),
+            other => assert_eq!(other, Phase::PlaybackEnded),
+        }
+    }
+}
+
+async fn through(observed: &mut mpsc::UnboundedReceiver<Phase>, counts: &mut Counts, until: Phase) {
+    loop {
+        let phase = observed.recv().await.unwrap();
+        if phase == until {
+            if phase != Phase::Eof {
+                counts.record(phase);
+            }
+            return;
+        }
+        counts.record(phase);
+    }
+}
+
+async fn at_phase(observed: &mut mpsc::UnboundedReceiver<Phase>, until: Phase) {
+    loop {
+        let phase = observed.recv().await.unwrap();
+        if phase == until {
+            return;
+        }
+        assert_eq!(phase, Phase::Control("describe".into()));
+    }
 }
