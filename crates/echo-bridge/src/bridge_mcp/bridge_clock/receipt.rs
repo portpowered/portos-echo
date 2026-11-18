@@ -33,6 +33,7 @@ struct Shared {
 struct State {
     submitted: u64,
     written: u64,
+    completed_at: Option<Instant>,
     failed: bool,
     pcm: Vec<Value>,
     states: Vec<Value>,
@@ -103,6 +104,23 @@ impl Context {
         Ok(())
     }
 
+    /// Guarded voice timing starts at the actual completed socket write.
+    pub(crate) async fn handoff(&self) -> Result<Instant, Error> {
+        loop {
+            let changed = self.0.changed.notified();
+            {
+                let state = self.0.state.lock().map_err(|_| Error::Control)?;
+                if state.failed || state.written > state.submitted {
+                    return Err(Error::Control);
+                }
+                if state.written == state.submitted {
+                    return state.completed_at.ok_or(Error::Control);
+                }
+            }
+            changed.await;
+        }
+    }
+
     pub(crate) fn projected(&self, projected: &UiState) -> Result<(), Error> {
         let mut state = self.0.state.lock().map_err(|_| Error::Control)?;
         if state.states.len() >= 8192 {
@@ -127,6 +145,7 @@ impl Context {
             return Err(Error::Control);
         }
         state.written = state.written.checked_add(1).ok_or(Error::Control)?;
+        state.completed_at = Some(Instant::now());
         state.pcm.push(json!({"epoch_ms":self.epoch()?, "pcm_bytes":frame.len(),
             "nonzero_samples":nonzero,"audible_samples":audible}));
         self.0.changed.notify_one();

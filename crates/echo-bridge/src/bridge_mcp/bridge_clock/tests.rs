@@ -6,6 +6,23 @@ use crate::Error;
 use serde_json::json;
 use std::{future::Future, task::Poll, time::Duration};
 
+#[tokio::test(start_paused = true)]
+async fn handoff_uses_completed_write_time_and_rejects_missing_or_failed_writes() {
+    let context = Context::new();
+    assert_eq!(context.handoff().await, Err(Error::Control));
+    context.submitted().unwrap();
+    let handoff = context.handoff();
+    tokio::pin!(handoff);
+    assert!(std::future::poll_fn(|cx| Poll::Ready(handoff.as_mut().poll(cx).is_pending())).await);
+    tokio::time::advance(Duration::from_millis(20)).await;
+    let written = tokio::time::Instant::now();
+    context.wrote(&65_i16.to_le_bytes().repeat(480)).unwrap();
+    tokio::time::advance(Duration::from_millis(20)).await;
+    assert_eq!(handoff.await, Ok(written));
+    context.failed();
+    assert_eq!(context.handoff().await, Err(Error::Control));
+}
+
 #[test]
 fn playout_control_rejects_malformed_and_keeps_legacy_compatible() {
     assert_eq!(
