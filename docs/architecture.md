@@ -105,7 +105,7 @@ audio tests substitute the device front end, so Amazon AEC effectiveness remains
 #### Language — hassmic
 
 C, from the `portpowered/echo-dot-assist` fork; [hassmic.pin](../hassmic.pin) selects
-`1ed455839983aa7ed50c52a11dd676db1853670c`. Amazon's mixer and Pryon libraries/models are firmware binaries.
+`1e9a0c3d3d637fcb54759a26bdecea3299fc5ee5`. Amazon's mixer and Pryon libraries/models are firmware binaries.
 The installed-device baseline records an older release; a pin change does not prove installation.
 
 #### Responsibilities — hassmic
