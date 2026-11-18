@@ -61,7 +61,7 @@ where
         peer,
         cancelled,
         observe,
-        (None, None, false),
+        (None, None, false, None),
     ))
     .await
 }
@@ -77,6 +77,7 @@ pub(super) async fn service<L, R, W, P>(
         Option<&mut super::voice_tools::Tools>,
         Option<crate::bridge_trace::Trace>,
         bool,
+        Option<&super::voice_kill::Termination>,
     ),
 ) -> Result<(), Error>
 where
@@ -85,7 +86,7 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
-    let (mut tools, trace, wake_earcon) = context;
+    let (mut tools, trace, wake_earcon, termination) = context;
     super::voice_session::validate(&options.session)?;
     if options.connect_timeout.is_zero() || Instant::now().checked_add(options.connect_timeout).is_none() {
         return Err(Error::Input);
@@ -119,17 +120,16 @@ where
                 io,
                 &mut options,
                 &mut peer,
-                async {
-                    tokio::select! {
-                        biased;
-                        () = cancelled.as_mut() => (),
-                        () = gate.wait() => killed.set(true),
-                    }
-                },
+                gate.cancel(cancelled.as_mut(), &killed),
                 &mut observe,
                 (tools.as_deref_mut(), std::time::SystemTime::now, trace.clone()),
             ))
             .await;
+            if killed.get()
+                && let Some(termination) = termination
+            {
+                termination.trip();
+            }
             if killed.get() && result == Err(Error::Control) {
                 // Cancelled negotiation can invalidate IO. Never resume that
                 // generation or present readiness after an unsuccessful stop.
