@@ -405,3 +405,46 @@ async fn voice_overflow_counts_oldest_evictions_and_sends_only_retained_frames()
     assert_eq!(stats.reply_dropped, 172);
     assert_eq!(frames(&observer).concat(), vec![0; 128 * 960]);
 }
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_during_earcon_collects_only_the_started_speaker_owner() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, _tx) = port();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let mut notices = Vec::new();
+    let work = super::super::earcon::scope(&client, true, async {
+        super::super::earcon::start()?;
+        run(
+            &client,
+            &mut events,
+            mic,
+            &mut port,
+            options(),
+            async {
+                stopped.await.unwrap();
+            },
+            |notice| {
+                notices.push(preemption_notice(&notice));
+                Ok(())
+            },
+        )
+        .await
+        .map(|_| ())
+    });
+    let mut work = Box::pin(work);
+    pending(work.as_mut()).await;
+    assert_eq!(frames(&observer).len(), 1);
+    stop.send(()).unwrap();
+    pending(work.as_mut()).await;
+    observer.finish(Ok(()));
+    assert_eq!(work.await, Err(Error::Control));
+    assert_speaker_operations(&observer, 1, 1);
+    assert_eq!(frames(&observer).len(), 1);
+    assert_eq!(notices, [] as [&str; 0]);
+    client.close().await.unwrap();
+    assert_eq!(observer.commands().last(), Some(&Command::Close));
+}

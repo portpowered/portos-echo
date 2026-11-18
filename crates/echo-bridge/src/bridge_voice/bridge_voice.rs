@@ -127,8 +127,10 @@ pub async fn run<L: EchoLink>(
     let (sink, reply) = client.reply_channel(NonZeroUsize::MIN);
     let ceiling = options.response_deadline.saturating_duration_since(Instant::now()) + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
+    let playback_started = std::cell::Cell::new(false);
     let playback = async {
         earcon::idle().await?;
+        playback_started.set(true);
         let result = client
             .play_with_timeout(crate::bridge_audio::format(24_000), reply, ceiling)
             .await;
@@ -152,6 +154,11 @@ pub async fn run<L: EchoLink>(
     .await
     .unwrap_or(Err(Error::Deadline));
     if let Err(error) = result {
+        // The earcon scope still owns the speaker until reply playback starts.
+        // Its joined supervisor cuts/collects that operation on borrower exit.
+        if !playback_started.get() {
+            return Err(error);
+        }
         let cut = timeout(Duration::from_secs(1), client.cut_with_stats()).await;
         if error == Error::Control {
             cut.map_err(|_| Error::Deadline)??;
