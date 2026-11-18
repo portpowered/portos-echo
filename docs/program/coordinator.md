@@ -83,10 +83,42 @@ The factory was proven on two sample items and a loopback before any program wor
    run for `main` instead of running a full local `make ci`. A Codex session doing that from a fresh clone died
    at about 18 minutes, twice, on the W1 loopback (2026-11-15).
    Lane payloads say the same: the quality gate is hosted CI's required checks on the final head, never a local
-   or pe-ci `make ci` (owner, 2026-11-17). A payload asks for pe-ci only for repeated or discriminating runs of
-   named tests, a Windows-native run through WSL interop, or a measurement on that machine.
+   or pe-ci `make ci` (owner, 2026-11-17). Lanes dispatch focused/repeated Linux tests themselves on hosted
+   Ubuntu, never park for coordinator Linux proof. pe-ci stays coordinator-scheduled for T5 and rare
+   hosted-unsupported work.
 4. **Item name = branch = pull request title = worktree directory**, kebab-case with the plan item's prefix
    (`el-f2-rust-strict`).
+
+### Hosted targeted witnesses
+
+Required hosted CI on the pushed final head is the quality gate. Require focused changed-path signs of life
+and clean architecture following `rules.md`. No story requires a soak, native-load or flake cohort. Lane
+payloads must not demand per-PR Windows-native WSL cohorts: Windows is a temporary host. Retain existing
+Windows jobs; only the owner changes required checks. Milestone T5 and release T6 definitions remain.
+pe-ci stays coordinator-scheduled for T5 and rare hosted-unsupported work.
+
+Lanes dispatch directly (either selector is optional; at least one is required):
+
+```sh
+gh workflow run targeted.yml --ref <lane-branch> -f 'nextest_filter=test(t3_m3_)' -f repeat=2
+gh workflow run targeted.yml --ref <lane-branch> -f scenarios=m4-spoof-tool
+# Selectors combine; ignored defaults true, repeat defaults 1 (integer 1-10).
+gh run list --workflow targeted.yml --branch <lane-branch> --event workflow_dispatch
+gh run view <id> --json headSha,url,status,conclusion
+gh run view <id> --log
+gh run download <id> --pattern 'targeted-reports-*' --dir <local-report-directory>
+```
+
+Match branch, dispatch time and head SHA; link the run in a PR comment. Review inspects each
+`TARGETED_RESULT repeat=<n> exit=<code>` and downloaded scenario `report.json`. Scenarios are space-separated
+names from `tests/scenarios`, with optional `.yaml` suffix. Each repeat executes both requested selections
+once with zero test retries. Any failed repeat fails the job even if a later repeat passes. Reports upload
+on failure too. Deliberately failing witnesses belong on isolated scratch branches.
+
+One intermittent hosted failure permits `gh run rerun <id> --failed` once; file a persistent flake as its own
+lane. Required red still blocks merge; no timer, deadline or test weakening. The processor stops after final
+head pushed, non-draft PR open, CI started and feedback addressed. Review owns terminal checks, independent
+proof and merge; do not wait or recheck terminal CI after the processor finish line.
 
 ### A payload
 
