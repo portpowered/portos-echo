@@ -99,6 +99,8 @@ fn done() -> MediaEvent {
     })
 }
 
+#[path = "voice_barge_cases.rs"]
+mod barge_cases;
 #[path = "voice_cases.rs"]
 mod cases;
 #[tokio::test(start_paused = true)]
