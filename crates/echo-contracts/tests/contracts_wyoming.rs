@@ -1,5 +1,5 @@
 //! T2 normalized capture replay; original data section placement is not retained.
-use echo_contracts::wyoming::{Decoder, Event, Header, WyomingEvent, encode};
+use echo_contracts::wyoming::{AudioFormat, Decoder, Event, Header, WyomingEvent, encode};
 use serde_json::{Value, json};
 use std::{fs, io::Write, path::Path};
 
@@ -50,7 +50,8 @@ fn expected_tag(event: &WyomingEvent) -> &str {
         WyomingEvent::Played(_) => "played",
         WyomingEvent::Ping(_) => "ping",
         WyomingEvent::Pong(_) => "pong",
-        WyomingEvent::Other(kind, data) if kind == "hassmic-end" => {
+        WyomingEvent::Other(kind, data) => {
+            assert_eq!(kind, "hassmic-end");
             assert_eq!(data, &json!({}));
             "hassmic-end"
         }
@@ -117,12 +118,15 @@ fn projection_merges_external_over_inline_without_changing_raw() -> Result<(), B
         data: Some(json!({"rate":24000,"external":true})),
         payload: vec![],
     };
-    let WyomingEvent::AudioStart(format) = event.typed().unwrap() else {
-        return Err("wrong arm".into());
-    };
-    assert_eq!((format.rate, format.width, format.channels), (24000, 2, 1));
-    assert_eq!(format.extra["inline"], true);
-    assert_eq!(format.extra["external"], true);
+    assert_eq!(
+        event.typed()?,
+        WyomingEvent::AudioStart(AudioFormat {
+            rate: 24000,
+            width: 2,
+            channels: 1,
+            extra: [("inline".into(), json!(true)), ("external".into(), json!(true))].into(),
+        })
+    );
     assert_eq!(event.header.data.unwrap()["rate"], 16000);
     Ok(())
 }
