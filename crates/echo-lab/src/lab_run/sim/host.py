@@ -12,7 +12,7 @@ import threading
 import time
 
 _m3 = runpy.run_path(str(Path(__file__).with_name("m3") / "host_input.py"))
-finite_input, flush_observation = _m3["finite_input"], _m3["flush_observation"]
+finite_input, playback_observation = _m3["finite_input"], _m3["playback_observation"]
 playback_counts = runpy.run_path(str(Path(__file__).with_name("m2") / "host_playback.py"))["playback_counts"]
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -392,14 +392,9 @@ class Host:
         elif action == "mute":
             self.mute()
         elif action == "playback" and self.finite_mode:
-            flush = flush_observation(self, wait=value.get("wait_flush", False))
-            with (self.folder / "play.raw").open("rb") as recording:
-                data = recording.read(LIMIT + 1)
-            if len(data) > LIMIT or len(data) % 2:
-                raise ValueError("invalid playback observation")
-            result = playback_counts(data, value.get("wake_earcon", False))
-            result["flush"] = flush
-            emit(result)
+            emit(playback_observation(self, LIMIT, playback_counts,
+                                      wait=value.get("wait_flush", False),
+                                      earcon=value.get("wake_earcon", False)))
             return
         elif action in ("finite", "inject", "muted"):
             finite_input(self, value, signal.SIGUSR1)

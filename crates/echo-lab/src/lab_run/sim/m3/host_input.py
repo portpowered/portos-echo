@@ -54,3 +54,15 @@ def flush_observation(host, wait=False):
             raise ValueError("expected one native flush observation")
     keys = ("receipt_ms", "closed_ms", "before", "written", "discarded")
     return dict(zip(keys, map(int, records[0])))
+
+
+def playback_observation(host, limit, counts, wait=False, earcon=False):
+    """Observe native flush readiness before taking the bounded PCM snapshot."""
+    flush = flush_observation(host, wait=wait)
+    with (host.folder / "play.raw").open("rb") as recording:
+        data = recording.read(limit + 1)
+    if len(data) > limit or len(data) % 2:
+        raise ValueError("invalid playback observation")
+    result = counts(data, earcon)
+    result["flush"] = flush
+    return result
