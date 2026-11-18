@@ -130,13 +130,17 @@ pub async fn run<L: EchoLink>(
         return Err(Error::Deadline);
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
+    // A cut replaces playback, while the run still owns pending clock receipts.
+    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
+        .map(|clock| clock.voice())
+        .transpose()?;
     tokio::pin!(cancelled);
     loop {
         let result = generation(
             client,
             (events, &mut microphone),
             port,
-            &mut source,
+            (&mut source, &mut drain),
             &options,
             cancelled.as_mut(),
             &mut observe,
@@ -152,6 +156,9 @@ pub async fn run<L: EchoLink>(
             break;
         }
     }
+    if let Some(drain) = drain.take() {
+        drain.finish();
+    }
     observe(Notice::ReplyPlayed)?;
     source.stats.received_chunks = microphone.stats().received;
     source.stats.dropped_chunks = microphone.stats().dropped;
@@ -163,12 +170,16 @@ async fn generation<L: EchoLink>(
     client: &L,
     input: (&mut L::Events, &mut <L::Events as LinkEvents>::Run),
     port: &mut impl VoicePort,
-    source: &mut Source,
+    context: (
+        &mut Source,
+        &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
+    ),
     options: &Options,
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let (events, microphone) = input;
+    let (source, drain) = context;
     let (sink, reply) = client.reply_channel(NonZeroUsize::MIN);
     let ceiling = options.response_deadline.saturating_duration_since(Instant::now()) + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
@@ -190,7 +201,7 @@ async fn generation<L: EchoLink>(
         tokio::select! {
             biased;
             () = cancelled => Err(Error::Control),
-            result = drive(events, microphone, port, sink, source, options, observe) => result,
+            result = drive(events, microphone, port, sink, (source, drain), options, observe) => result,
         }
     };
     let result = timeout_at(options.response_deadline + options.played_timeout, async {
@@ -219,14 +230,15 @@ async fn drive<E: LinkEvents>(
     microphone: &mut E::Run,
     port: &mut impl VoicePort,
     sink: impl ReplySink,
-    source: &mut Source,
+    context: (
+        &mut Source,
+        &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
+    ),
     options: &Options,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    let (source, drain) = context;
     let mut sink = Some(sink);
-    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
-        .map(|clock| clock.voice())
-        .transpose()?;
     let mut pending = None;
     let mut deadline = options.response_deadline;
     loop {
@@ -258,7 +270,7 @@ async fn drive<E: LinkEvents>(
             },
             result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,
             () = async {
-                match &mut drain {
+                match drain {
                     Some(drain) => drain.acknowledge().await,
                     None => std::future::pending().await,
                 }
@@ -270,9 +282,6 @@ async fn drive<E: LinkEvents>(
             && sink.is_none()
             && source.mouth.due().is_none()
         {
-            if let Some(drain) = drain.take() {
-                drain.finish();
-            }
             return Ok(());
         }
     }

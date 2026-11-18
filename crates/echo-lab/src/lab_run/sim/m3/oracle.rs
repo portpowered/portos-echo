@@ -34,8 +34,9 @@ pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) ->
             wire.bytes[1]
         ));
     }
+    let timing = stimulus_timing(wire)?;
     Ok(format!(
-        "first_reply_played=true barge_in_cut_ms={cut_ms:.3} barge_in_budget_ms=600 reply_send_window_ms=200 reply_bytes_after_cancel_window=0 second_answer_played=true flushes=1 {flush} post_played_tail_bytes=3200 live_tail_frames=5"
+        "{timing} first_reply_played=true barge_in_cut_ms={cut_ms:.3} barge_in_budget_ms=600 reply_send_window_ms=200 reply_bytes_after_cancel_window=0 second_answer_played=true flushes=1 {flush} post_played_tail_bytes=3200 live_tail_frames=5"
     ))
 }
 
@@ -90,6 +91,28 @@ pub fn flush(value: &Value, sent: usize, sink: u64) -> Result<String, String> {
     ))
 }
 
+fn stimulus_timing(wire: &Ledger) -> Result<String, String> {
+    let stimulus = wire.stimulus.ok_or("M3 timing: missing input stimulus")?;
+    let transcript = wire.cancel.ok_or("M3 timing: missing transcript stimulus")?;
+    let cut = wire.cut_stop.ok_or("M3 timing: missing acknowledged cut stop")?;
+    let last = wire.last_old_reply.ok_or("M3 timing: missing old reply frame")?;
+    let elapsed = |end: tokio::time::Instant| {
+        end.checked_duration_since(stimulus)
+            .map(|duration| duration.as_secs_f64() * 1000.0)
+            .ok_or("M3 timing: observation precedes stimulus")
+    };
+    if last > cut || cut < transcript {
+        return Err("M3 timing: reply frame after cut or cut before transcript".into());
+    }
+    Ok(format!(
+        "fixture_transcript_delay_ms=0 stimulus_to_transcript_ms={:.3} stimulus_to_cut_ms={:.3} stimulus_to_last_reply_ms={:.3}",
+        elapsed(transcript)?,
+        elapsed(cut)?,
+        elapsed(last)?
+
+    ))
+}
+
 pub fn muted(records: &[Value], before: u64, after: u64) -> Result<String, String> {
     let windows: Vec<_> = records
         .iter()
@@ -141,8 +164,40 @@ mod tests {
             bytes: [28800, 9600],
             old_sink_pcm: Some(19200),
             cancel: Some(cancel),
+            stimulus: Some(cancel - Duration::from_millis(100)),
+            cut_stop: Some(cancel + Duration::from_millis(50)),
+            last_old_reply: Some(cancel + Duration::from_millis(20)),
             played: vec![cancel + Duration::from_millis(200), cancel + Duration::from_millis(500)],
             ..Ledger::default()
+        }
+    }
+
+    #[test]
+    fn stimulus_timing_reports_measured_boundaries_and_rejects_missing_or_reordered_edges() {
+        let state = observed();
+        assert_eq!(
+            stimulus_timing(&state).unwrap(),
+            "fixture_transcript_delay_ms=0 stimulus_to_transcript_ms=100.000 stimulus_to_cut_ms=150.000 stimulus_to_last_reply_ms=120.000"
+        );
+        for invalid in [
+            Ledger {
+                stimulus: None,
+                ..state.clone()
+            },
+            Ledger {
+                cut_stop: None,
+                ..state.clone()
+            },
+            Ledger {
+                last_old_reply: state.played.last().copied(),
+                ..state.clone()
+            },
+            Ledger {
+                stimulus: state.cut_stop,
+                ..state.clone()
+            },
+        ] {
+            assert!(stimulus_timing(&invalid).is_err());
         }
     }
 

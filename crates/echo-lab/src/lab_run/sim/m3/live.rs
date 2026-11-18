@@ -234,15 +234,15 @@ async fn respond(
         // The old converter still holds its filter tail. Done precedes
         // the user transcript, followed by audible PCM on the independent RTP
         // path. The pinned V3 parser does not forward speech-start events.
+        wire.send_modify(|state| {
+            state.cancel = Some(Instant::now());
+            state.cut_frames = Some(frames);
+        });
         transcript(process, "assistant", "The time", true).await?;
         process
             .send(&json!({"tag":"barge", "events":[{"type":"input_transcript.added", "item":{"text":"What day is it?"}}]}))
             .await?;
         process.expect("provider.sent").await?;
-        wire.send_modify(|state| {
-            state.cancel = Some(Instant::now());
-            state.cut_frames = Some(frames);
-        });
         answer(peer, 51..53).await?;
         *phase = 3;
     }

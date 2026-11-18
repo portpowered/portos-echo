@@ -27,6 +27,9 @@ pub struct Ledger {
     pub stops: usize,
     pub played: Vec<Instant>,
     pub cancel: Option<Instant>,
+    pub stimulus: Option<Instant>,
+    pub cut_stop: Option<Instant>,
+    pub last_old_reply: Option<Instant>,
     pub after_window: usize,
     pub after_stop: usize,
     pub muted: bool,
@@ -71,16 +74,22 @@ impl Ledger {
                     return Err("M3 wire: flush must cut the first reply exactly once".into());
                 }
                 self.flushes += 1;
+                self.cut_stop = Some(Instant::now());
             }
             "audio-stop" => self.stops += 1,
             "hassmic-end" => self.ends += 1,
+
             "audio-chunk" => {
                 let phase = self.started.checked_sub(1).ok_or("M3 wire: PCM before start")?;
                 if phase >= 2 || event.payload.len() != 960 {
                     return Err("M3 wire: expected complete 20 ms reply PCM".into());
                 }
                 self.bytes[phase] += event.payload.len();
+                if phase == 0 {
+                    self.last_old_reply = Some(Instant::now());
+                }
                 if self.stops + self.flushes == self.started {
+
                     self.after_stop += event.payload.len();
                 }
                 if phase == 0 && self.cancel.is_some_and(|at| at.elapsed() >= Duration::from_millis(200)) {

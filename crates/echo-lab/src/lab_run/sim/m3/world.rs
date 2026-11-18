@@ -159,7 +159,10 @@ impl World {
             .as_ref()
             .ok_or("M3: missing wire")?
             .observed
-            .send_modify(|state| state.overlap_base = Some(baseline));
+            .send_modify(|state| {
+                state.overlap_base = Some(baseline);
+                state.stimulus = Some(tokio::time::Instant::now());
+            });
         self.control(json!({"action":"inject","pcm":fixture()})).await?;
         let old = self.wait("old reply Played", |s| s.played.len() == 1).await?;
         // Socket Played and the complete native stderr record have separate readers.
