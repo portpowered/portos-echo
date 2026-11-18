@@ -145,18 +145,47 @@ async fn executable(
 async fn settle(
     root: &Path,
     satellite: &mut TcpStream,
+    input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    clock: &mut mpsc::Receiver<()>,
     run: usize,
 ) {
     assert_eq!(count(root, "reply.played"), run - 1);
     assert_eq!(count(root, "bridge.run_completed"), run - 1);
     send(satellite, "played", json!({}), vec![]).await;
-    let completed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    assert_eq!(
-        completed,
-        json!({"event":"bridge.run_completed", "run_id":format!("run-{run}")})
-    );
+    let mut pending = false;
+    let mut completed = false;
+    // Played can precede the delayed mouth boundary. Keep the same clock moving,
+    // and drain its receipt even when completion is published before the receipt.
+    while !completed || pending {
+        tokio::select! {
+            line = output.next_line() => {
+                let observed: Value = serde_json::from_str(&line.unwrap().unwrap()).unwrap();
+                settle_receipt(&observed, &mut pending, &mut completed, run);
+            },
+            tick = clock.recv(), if !pending && !completed => {
+                assert_eq!(tick, Some(()));
+                input.write_all(b"{\"action\":\"advance_clock\",\"milliseconds\":20}\n").await.unwrap();
+                pending = true;
+            },
+        }
+    }
     assert_eq!(count(root, "reply.played"), run);
+}
+
+fn settle_receipt(observed: &Value, pending: &mut bool, completed: &mut bool, run: usize) {
+    if observed["event"] == "bridge.clock_advanced" {
+        assert!(*pending);
+        assert_eq!(observed, &json!({"event":"bridge.clock_advanced","milliseconds":20}));
+        *pending = false;
+    } else {
+        assert!(!*completed);
+        assert_eq!(
+            observed,
+            &json!({"event":"bridge.run_completed", "run_id":format!("run-{run}")})
+        );
+        *completed = true;
+    }
 }
 
 pub(super) fn launch(root: &Path, origin: &str) -> tokio::process::Child {
