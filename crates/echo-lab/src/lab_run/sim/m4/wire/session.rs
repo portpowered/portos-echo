@@ -124,6 +124,13 @@ impl Session {
     }
 }
 
+impl super::Timing {
+    /// Forwarded run, reply and capture boundaries for persistent journeys.
+    pub fn session_observation(&self) -> Value {
+        self.session.observation()
+    }
+}
+
 impl super::Relay {
     /// Wait for forwarded device receipts, independently of bridge projections.
     /// An early end or an extra reply fails rather than satisfying a stale gate.

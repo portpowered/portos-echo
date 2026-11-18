@@ -1,0 +1,22 @@
+id: session-barge-continues
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - expect_trace:
+      - run.started
+  - expect_speech_contains: ["time"]
+  - say: "Computer, what day is it?"
+  - expect_speech_contains: ["day"]
+  - expect_trace:
+      - run.started
+      - "reply.played {outcome: played}"
+      - wyoming.run_ended
+# One persistent run: the barge-in flushes the queued reply on the native
+# host, the replacement is audible and Played, and capture continues. The M3
+# driver checks flush silence and both host PCM counts from wire receipts.
+budgets:
+  reply_send_window_ms: 200
+  barge_in_cut_ms: 600
+negative: []

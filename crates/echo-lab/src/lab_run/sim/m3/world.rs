@@ -435,7 +435,12 @@ impl World {
 #[cfg(test)]
 #[path = "lifecycle.rs"]
 mod tests;
-fn configure(command: &mut tokio::process::Command, root: &Path, port: u16, origin: &str) -> Result<(), String> {
+pub(in crate::lab_run::sim) fn configure(
+    command: &mut tokio::process::Command,
+    root: &Path,
+    port: u16,
+    origin: &str,
+) -> Result<(), String> {
     production::configure(
         command,
         root,

@@ -6,6 +6,7 @@ mod world;
 use super::{controlled, selectors};
 use crate::lab_run::{Driver, Step, run_options::Options, run_report::Artifacts};
 use serde_json::Value;
+pub(in crate::lab_run::sim) use world::{configure, fixture};
 
 pub const FIRST: &str = "Computer, what time is it?";
 pub const SECOND: &str = "Computer, what day is it?";
@@ -128,6 +129,8 @@ pub struct M3<'a> {
     launched: bool,
     deadline: tokio::time::Instant,
     traces: Vec<(Vec<Value>, bool)>,
+    /// The persistent barge journey has no mute presses; M3 requires both.
+    mute: bool,
 }
 
 impl<'a> M3<'a> {
@@ -147,10 +150,11 @@ impl<'a> M3<'a> {
             launched: false,
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(120),
             traces: vec![],
+            mute: scenario["id"] == "m3-full-duplex",
         })
     }
 
-    async fn step(world: &mut world::World, step: &Step) -> Result<(), String> {
+    async fn step(world: &mut world::World, step: &Step, mute: bool) -> Result<(), String> {
         match step {
             Step::SayText(text) if text == FIRST && world.first_pcm.is_none() => world.first().await,
             Step::SayText(text) if text == SECOND && world.first_pcm.is_some() && world.second_pcm.is_none() => {
@@ -190,6 +194,12 @@ impl<'a> M3<'a> {
             Step::Budget(name, value) if name == "barge_in_cut_ms" && value.to_bits() == 600.0_f64.to_bits() => {
                 let state = world.relay.as_ref().ok_or("M3: missing wire")?.observed.borrow();
                 oracle::duplex(&state, world.first_pcm, world.second_pcm)?;
+                if !mute {
+                    return match world.muted_live_before {
+                        None => Ok(()),
+                        Some(_) => Err("M3: unexpected mute press in a persistent barge journey".into()),
+                    };
+                }
                 oracle::muted(
                     &world.trace.records,
                     world.muted_live_before.ok_or("M3 mute: missing native open window")?,
@@ -216,7 +226,7 @@ impl Driver for M3<'_> {
                         )
                         .await?;
                 }
-                Self::step(&mut self.world, step).await
+                Self::step(&mut self.world, step, self.mute).await
             },
             self.options.cancel.as_deref(),
             self.deadline,

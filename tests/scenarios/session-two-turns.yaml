@@ -1,0 +1,17 @@
+id: session-two-turns
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - say: "Computer, what day is it?"
+  - expect_trace:
+      - run.started
+      - "reply.played {outcome: played, count: 2}"
+      - wyoming.run_ended
+# One wake, two delegated replies in the same run: the second utterance is
+# captured after the first reply is Played, then the run ends at idle expiry.
+# The driver checks forwarded wire receipts and exact sim-clock deadlines.
+budgets:
+  session_listen_seconds: 3
+negative: []

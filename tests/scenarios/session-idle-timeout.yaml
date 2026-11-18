@@ -1,0 +1,15 @@
+id: session-idle-timeout
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - expect_trace:
+      - run.started
+      - "reply.played {outcome: played}"
+      - wyoming.run_ended
+# After the only reply is Played the run stays open for exactly the listen
+# window, then the bridge ends it once without an error.
+budgets:
+  session_listen_seconds: 3
+negative: []

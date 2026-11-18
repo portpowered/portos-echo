@@ -1,0 +1,16 @@
+id: session-end-after-reply
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - expect_trace:
+      - run.started
+      - "session.tool_receipt {tool: end_session, outcome: applied}"
+      - "reply.played {outcome: played}"
+      - wyoming.run_ended
+# The delegated agent ends the session; the bridge still plays the reply and
+# ends the run as soon as it settles, without waiting for idle expiry.
+budgets:
+  session_listen_seconds: 3
+negative: []
