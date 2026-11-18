@@ -171,8 +171,11 @@ pub(super) async fn close_world(world: &mut super::super::world::World) -> Resul
     completion.stop();
     let (owned, result) = completion.assert_closed().await;
     *world = owned;
-    for receipt in [host, bridge].into_iter().flatten() {
-        assert!(receipt.try_recv().unwrap().success());
+    for (owner, receipt) in [("host", host), ("bridge", bridge)] {
+        if let Some(receipt) = receipt {
+            let status = receipt.try_recv().unwrap();
+            assert!(status.success(), "M2 {owner} collection: {status}; close={result:?}");
+        }
     }
     result
 }

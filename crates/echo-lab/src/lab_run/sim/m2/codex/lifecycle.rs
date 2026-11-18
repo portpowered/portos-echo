@@ -63,7 +63,17 @@ impl Owner {
         if index > 1 {
             self.provider.next_capture().await;
         }
-        let row = self.bridge.expect("bridge.run_completed").await.unwrap();
+        let completed = self.bridge.expect("bridge.run_completed").await;
+        if let Err(error) = &completed {
+            let exited = self.bridge.exited();
+            assert!(
+                completed.is_ok(),
+                "M2 run {index}: {error}; exited={exited:?}; status={}; trace={:?}",
+                self.bridge.exit_summary(),
+                self.trace().records
+            );
+        }
+        let row = completed.unwrap();
         assert_eq!(row["run_id"], format!("run-{index}"));
         let states: &[&str] = if index == 1 {
             &["listening", "connected", "ready"]
