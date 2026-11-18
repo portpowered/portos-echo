@@ -65,9 +65,10 @@ If Python is missing, install it manually and ensure `python` is on PATH before 
 native `sh -ec` and POSIX utilities on PATH, with Python 3 for the lint self-tests.
 For Windows WSL selection and locked validation, see [Windows WSL helpers](docs/README.md#windows-wsl-helpers).
 
-The existing gates also require their provisioned tools: cargo-nextest, cargo-deny, cargo-llvm-cov, the pinned
-nightly coverage toolchain, shfmt, shellcheck, gitleaks, Node/npm and the documentation checkers. The pinned
+The existing gates also require their provisioned tools: cargo-nextest, cargo-deny, shfmt, shellcheck, gitleaks,
+Node/npm and the documentation checkers. The pinned
 versions and setup commands are in `.github/actions/setup/action.yml`; the bootstrap does not install them.
+`make coverage` is no longer a gate; run by hand, it also needs cargo-llvm-cov and the pinned nightly toolchain.
 
 From the repository root, run:
 

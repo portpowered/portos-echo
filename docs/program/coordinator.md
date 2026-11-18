@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 18
 status: active; how work runs in this repository
 ---
 
@@ -37,8 +37,9 @@ names the final head and the lane goes to review. The coordinator itself writes 
 
 - **One owner for everything shared.** Contracts, `Cargo.lock`, the crate list and CI change in one place, by one
   agent. Factory items never change them as a side effect.
-- **The gates do the policing.** Shape, layering, rules and coverage checks run in CI (plan section 11). A rule
-  that lives only in a prompt is not enforced, so nobody relies on reviewers remembering rules.
+- **The gates do the policing.** Shape, layering and rules checks run in CI (plan section 11); coverage is
+  suspended (`decisions.md`, 2026-11-18). A rule that lives only in a prompt is not enforced, so nobody relies on
+  reviewers remembering rules.
 - **The factory gives parallel lanes without lane owners.** Independent items run at once in their own worktrees;
   dependent items wait on `DEPENDS_ON` edges until the upstream pull request has merged.
 

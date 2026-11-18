@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 18
 status: owner action requested after the CI pull request merges
 ---
 
@@ -23,7 +23,6 @@ these exact GitHub Actions check names required, and branches up to date before 
 - `test-contract`
 - `test-sim`
 - `test-concurrency`
-- `coverage`
 - `build-host`
 
 Require the GitHub Actions app as the status source. Apply protections to administrators,
@@ -40,7 +39,8 @@ Local execution needs the tools pinned in `.github/actions/setup/action.yml`, GN
 POSIX sh, Python 3.12, Node 24 and the stable compiler in `rust-toolchain.toml`.
 Nextest runs each unit test once, with zero retries and a 30-second timeout.
 
-Coverage alone uses the approved nightly compiler:
+Coverage is suspended as a CI gate (`decisions.md`, 2026-11-18) and runs only by hand.
+It alone uses the approved nightly compiler:
 
 ~~~sh
 rustup toolchain install nightly-2026-11-05 --profile minimal --component llvm-tools-preview

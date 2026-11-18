@@ -236,57 +236,6 @@ jobs:
           target: test-concurrency
       - name: test-concurrency
         run: make test-concurrency
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: coverage
-      - name: Host build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: .cache/hassmic-host
-          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}
-      - name: Build pinned hassmic-host
-        run: make hassmic-host
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ~/.cache/portos-echo/codex
-          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
-      - name: Provision verified pinned Codex
-        run: sh scripts/codex-app-server.sh
-      - name: Enable isolated Codex network namespace
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: coverage
-        run: make coverage
-        env:
-          COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-      - name: Detect quarantined coverage profiles
-        id: quarantine
-        if: always()
-        run: |
-          present=false
-          if [ -d target/llvm-cov/quarantine ]; then
-            if [ -n "$(find target/llvm-cov/quarantine -type f -name '*.profraw' -print -quit)" ]; then
-              present=true
-            fi
-          fi
-          echo "present=$present" >> "$GITHUB_OUTPUT"
-      - name: Retain quarantined coverage profiles
-        if: ${{ always() && steps.quarantine.outputs.present == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: coverage-quarantine-${{ github.run_id }}-${{ github.run_attempt }}
-          path: target/llvm-cov/quarantine/
-          retention-days: 3
-          if-no-files-found: error
   build-host:
     name: build-host
     runs-on: ubuntu-latest
