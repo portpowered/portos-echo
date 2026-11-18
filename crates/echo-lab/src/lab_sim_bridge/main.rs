@@ -48,6 +48,8 @@ async fn capture(client: &WyomingClient, run: &mut Run) -> Result<u64, String> {
         count += 1;
     }
     reply(client).await?;
+    // Played settles the reply; this one-turn consumer owns the run end.
+    client.end_run().await.map_err(|_| "bridge: cannot end run")?;
     while run.recv().await.map_err(|_| "bridge: microphone failed")?.is_some() {
         count += 1;
     }
