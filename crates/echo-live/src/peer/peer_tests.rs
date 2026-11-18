@@ -243,3 +243,72 @@ fn payload_admission_uses_exact_byte_bounds() {
     assert_eq!(datagram(&[0; 20]), Err(Error::Protocol));
     assert_eq!(datagram(&[128, 0]), Err(Error::Protocol));
 }
+
+#[test]
+fn consent_requires_nine_unanswered_probes_and_the_final_response_window() {
+    let tick = Instant::now();
+    let mut consent = Consent::default();
+    consent.observe(tick, 4, 2);
+    // An arbitrarily late tick with no new checks is not a failed check.
+    consent.observe(tick + Duration::from_secs(60), 4, 2);
+    assert!(!consent.failed);
+    for count in 1..=9 {
+        let now = tick + Duration::from_secs(60 + count * 2);
+        consent.observe(now, 4 + count, 2);
+        assert!(!consent.failed);
+    }
+    consent.observe(tick + Duration::from_secs(80), 14, 2);
+    assert!(!consent.failed);
+    consent.observe(tick + Duration::from_secs(81), 14, 2);
+    assert!(consent.failed);
+    consent.observe(tick + Duration::from_secs(82), 14, 3);
+    assert!(!consent.failed);
+    consent.observe(tick + Duration::from_secs(142), 15, 3);
+    assert!(!consent.failed);
+}
+
+// T3: an elapsed caller tick may start a consent check, but must not revoke
+// an established channel before that check has had a chance to get a response.
+#[tokio::test(start_paused = true)]
+async fn t3_elapsed_ticks_keep_exact_delivery_and_dead_remote_loses_readiness() {
+    let (mut a, mut b) = Box::pin(pair()).await;
+    for seconds in [12, 59] {
+        tokio::time::advance(Duration::from_secs(seconds)).await;
+        a.timeout(now()).await.unwrap();
+        b.timeout(now()).await.unwrap();
+        assert!(a.ready() && b.ready());
+        let left = format!("{{\"delegation_id\":\"left-{seconds}\"}}");
+        let right = format!("{{\"delegation_id\":\"right-{seconds}\"}}");
+        a.send_text(&left).await.unwrap();
+        b.send_text(&right).await.unwrap();
+        let ceiling = Instant::now() + Duration::from_secs(5);
+        while a.text.items_empty() || b.text.items_empty() {
+            assert!(Instant::now() < ceiling, "elapsed-tick delivery stalled");
+            a.receive(now()).await.unwrap();
+            b.receive(now()).await.unwrap();
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(a.pop_text(), Some(right));
+        assert_eq!(b.pop_text(), Some(left));
+    }
+    // Finish pending consent exchanges before removing the remote endpoint.
+    let ceiling = Instant::now() + Duration::from_secs(5);
+    while a.consent.baseline != a.consent.sent || b.consent.baseline != b.consent.sent {
+        assert!(Instant::now() < ceiling, "consent response stalled");
+        a.receive(now()).await.unwrap();
+        b.receive(now()).await.unwrap();
+        tokio::task::yield_now().await;
+    }
+    b.close();
+    for _ in 0..12 {
+        tokio::time::advance(Duration::from_secs(2)).await;
+        a.timeout(now()).await.unwrap();
+    }
+    assert!(!a.ready());
+    assert_eq!(a.send_text("undeliverable").await, Err(Error::NotReady));
+    assert_eq!((a.pop_text(), b.pop_text()), (None, None));
+    let address = a.local_addr();
+    a.close();
+    let rebound = tokio::net::UdpSocket::bind(address).await.unwrap();
+    assert_eq!(rebound.local_addr().unwrap(), address);
+}

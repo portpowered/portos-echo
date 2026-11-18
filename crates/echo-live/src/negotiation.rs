@@ -1,7 +1,11 @@
-use std::{net::SocketAddr, time::Instant};
+use std::{
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
+use rtc::peer_connection::configuration::setting_engine::SettingEngineBuilder;
 use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::peer_connection::transport::{CandidateConfig, CandidateHostConfig, RTCIceCandidate, RTCIceCandidateInit};
 use rtc::peer_connection::{RTCPeerConnection, RTCPeerConnectionBuilder};
@@ -26,6 +30,14 @@ pub(crate) fn connection(address: SocketAddr, now: Instant) -> Result<RTCPeerCon
         .map_err(|_| Error::Protocol)?;
     let mut rtc = RTCPeerConnectionBuilder::new()
         .with_media_engine(media)
+        // The previous peer expires a path after unanswered checks, not a
+        // single delayed caller tick. The adapter retains that bounded probe
+        // policy; rtc continues sending its normal consent checks.
+        .with_setting_engine(
+            SettingEngineBuilder::new()
+                .with_ice_timeouts(None, Some(Duration::ZERO), None)
+                .build(),
+        )
         .build(now)
         .map_err(|_| Error::Protocol)?;
     let candidate = CandidateHostConfig {

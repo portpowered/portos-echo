@@ -32,6 +32,14 @@ caller's; a frozen bridge clock can negotiate with an advancing remote peer.
 The adapter also drains event-triggered DTLS/SCTP work to quiescence, servicing
 the initial DTLS flight at the last supplied instant. Sequential calls can
 negotiate and deliver events with both clocks frozen, without a timer advance.
+Readiness also preserves the previous peer's probe-based path viability: rtc's
+recoverable `Disconnected` notification does not revoke an open channel while
+a consent check is in flight. Its elapsed-time terminal ICE failure is disabled
+in favor of nine actually unanswered consent checks and the previous final
+three-second response window. Validated inbound STUN requests/responses reset
+that budget. The normal rtc keepalive schedule remains active; a single delayed
+caller tick cannot count as multiple failed checks. Dead remotes still lose
+readiness, and caller operation deadlines and channel closure remain unchanged.
 
 The canonical bridge path uses Codex and echo-media. Legacy/Muse bridge calls,
 M3, and simulator fake peers still consume echo-live. Sign-in and Responses

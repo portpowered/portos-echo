@@ -8,6 +8,7 @@ use rtc::peer_connection::message::RTCMessage;
 use rtc::peer_connection::state::RTCIceConnectionState;
 use rtc::sansio::Protocol;
 use rtc::shared::{TaggedBytesMut, TransportContext, TransportProtocol};
+use rtc::statistics::{StatsSelector, report::RTCStatsReportEntry};
 use tokio::net::UdpSocket;
 
 use crate::{Error, negotiation::Negotiation, queue::Queue};
@@ -32,6 +33,7 @@ pub struct LivePeer {
     negotiation: Negotiation,
     channel: Option<RTCDataChannelId>,
     connected: bool,
+    consent: Consent,
     audio: Queue<AudioFrame>,
     text: Queue<String>,
 }
@@ -54,6 +56,7 @@ impl LivePeer {
             negotiation: Negotiation::default(),
             channel: None,
             connected: false,
+            consent: Consent::default(),
             audio: Queue::new(128),
             text: Queue::new(16),
         };
@@ -68,7 +71,7 @@ impl LivePeer {
 
     #[must_use]
     pub fn ready(&self) -> bool {
-        self.socket.is_some() && self.connected && self.channel.is_some()
+        self.socket.is_some() && self.connected && self.channel.is_some() && !self.consent.failed
     }
 
     /// Create one sendrecv Opus track and one reliable ordered `oai-events` channel.
@@ -163,6 +166,7 @@ impl LivePeer {
                 break;
             }
         }
+        self.observe_consent();
         Ok(self.rtc.poll_timeout().unwrap_or(self.now + Duration::from_hours(24)))
     }
 
@@ -253,13 +257,37 @@ impl LivePeer {
         if self.ready() { Ok(()) } else { Err(Error::NotReady) }
     }
 
+    fn observe_consent(&mut self) {
+        if self.channel.is_none() {
+            return;
+        }
+        for entry in self.rtc.get_stats(self.now, StatsSelector::None).iter() {
+            if let RTCStatsReportEntry::IceCandidatePair(pair) = entry
+                && pair.nominated
+            {
+                self.consent.observe(
+                    self.now,
+                    pair.consent_requests_sent,
+                    pair.requests_received + pair.responses_received,
+                );
+            }
+        }
+    }
+
     fn event(&mut self, event: &RTCPeerConnectionEvent) {
         match event {
             RTCPeerConnectionEvent::OnIceConnectionStateChangeEvent(state) => {
-                self.connected = matches!(
-                    state,
-                    RTCIceConnectionState::Connected | RTCIceConnectionState::Completed
-                );
+                // rtc's Disconnected state is a recoverable consent-check gap:
+                // the selected pair and open SCTP channel remain usable. Keep
+                // admission until checks are exhausted or the channel closes.
+                // A delayed caller tick must not reject an otherwise valid send
+                // while the freshly emitted consent request is still in flight.
+                if *state != RTCIceConnectionState::Disconnected {
+                    self.connected = matches!(
+                        state,
+                        RTCIceConnectionState::Connected | RTCIceConnectionState::Completed
+                    );
+                }
             }
             RTCPeerConnectionEvent::OnDataChannel(RTCDataChannelEvent::OnOpen(id)) => {
                 if self.rtc.data_channel(*id).is_some_and(|c| c.label() == "oai-events") {
@@ -295,6 +323,42 @@ impl LivePeer {
             _ => {}
         }
         Ok(())
+    }
+}
+
+// str0m's default path viability is nine unanswered STUN attempts followed by
+// the final (capped) three-second response window. Preserve a bounded failure
+// decision based on checks actually sent, rather than treating one late timer
+// as many failed attempts. Only rtc's validated STUN counters restore consent.
+#[derive(Default)]
+struct Consent {
+    sent: u64,
+    received: u64,
+    baseline: u64,
+    last_probe: Option<Instant>,
+    failed: bool,
+}
+
+impl Consent {
+    fn observe(&mut self, now: Instant, sent: u64, received: u64) {
+        if received != self.received {
+            self.received = received;
+            self.baseline = sent;
+            self.failed = false;
+        }
+        if sent != self.sent {
+            self.sent = sent;
+            if sent.saturating_sub(self.baseline) <= 9 {
+                self.last_probe = Some(now);
+            }
+        }
+        if sent.saturating_sub(self.baseline) >= 9
+            && self
+                .last_probe
+                .is_some_and(|probe| now.saturating_duration_since(probe) >= Duration::from_secs(3))
+        {
+            self.failed = true;
+        }
     }
 }
 
