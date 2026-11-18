@@ -29,13 +29,24 @@ review.
   runner. Locally run only the focused commands your PRD names (the crate's
   tests, the scenario, a seeded failure), and paste them with their output in
   a PR comment. A red hosted check on your head is your failure to fix; cite
-  the run URL. Use pe-ci (under `/var/tmp/pe-ci.lock`) only when the PRD asks
-  for what hosted CI cannot do: repeated or discriminating runs of named tests,
-  a Windows-native run through WSL interop, or a measurement on that machine.
-- Linux host: the `pe-ci` WSL distro is the only supported Linux host. Never use,
+  the run URL. Lanes dispatch focused/repeated Linux runs themselves through `targeted.yml`, never park
+  for coordinator Linux proof. For example:
+  `gh workflow run targeted.yml --ref <lane-branch> -f 'nextest_filter=test(t3_m3_)' -f repeat=2`
+  or `gh workflow run targeted.yml --ref <lane-branch> -f scenarios=m4-spoof-tool` (selectors combine).
+  Follow `docs/program/coordinator.md`, Hosted targeted witnesses, to match run branch/time/head SHA,
+  link the run, inspect TARGETED_RESULT summaries and download scenario report.json artifacts.
+  No soak/native-load/flake cohort is required for any story. No per-PR Windows-native WSL cohorts or
+  lane payload demands for them: Windows is a temporary host. Retain existing Windows jobs; only the
+  owner changes required checks. Require changed-path signs of life and clean architecture following
+  `docs/program/rules.md`. Allow one `gh run rerun <id> --failed` for intermittent hosted failure;
+  file a persistent flake as its own lane. Required red blocks merge; nextest retries remain zero.
+  pe-ci stays coordinator-scheduled for T5 and rare hosted-unsupported work. T5/T6 milestone/release
+  definitions remain. Stop after final push, PR open, CI started and feedback addressed; review owns
+  terminal checks, independent validation and merge.
+- Local Linux host: `pe-ci` is the only supported local WSL distro; hosted Ubuntu is preferred. Never use,
   start, repair or wait for any other distro (the default `Ubuntu` distro is
   unavailable). Run Linux-side witnesses (pinned `hassmic-host`, T3 tests, sim
-  scenarios) natively inside pe-ci: `wsl -d pe-ci -u root -- sh <script>.sh`
+  scenarios) on hosted targeted runs; authorized hosted-unsupported work inside pe-ci: `wsl -d pe-ci -u root -- sh <script>.sh`
   from a script file with LF line endings that sources `/opt/pe-ci-env.sh`,
   holds `/var/tmp/pe-ci.lock` for every build or test, and builds into its own
   `/var/tmp` target deleted by an EXIT trap. Inside pe-ci, git cannot follow a

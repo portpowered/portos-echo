@@ -1,0 +1,25 @@
+name: Pinned simulation setup
+description: Shared host and verified Codex provisioning
+runs:
+  using: composite
+  steps:
+    - name: Host build dependencies
+      shell: sh
+      run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: .cache/hassmic-host
+        key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}
+    - name: Build pinned hassmic-host
+      shell: sh
+      run: make hassmic-host
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ~/.cache/portos-echo/codex
+        key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
+    - name: Provision verified pinned Codex
+      shell: sh
+      run: sh scripts/codex-app-server.sh
+    - name: Enable isolated Codex network namespace
+      shell: sh
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
