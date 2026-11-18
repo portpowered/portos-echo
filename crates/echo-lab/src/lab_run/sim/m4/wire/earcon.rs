@@ -41,7 +41,7 @@ impl Earcon {
     }
 }
 
-fn matches(bytes: &[u8], offset: usize) -> bool {
+pub(super) fn matches(bytes: &[u8], offset: usize) -> bool {
     if bytes.len() != 960 || offset + 480 > 3840 {
         return false;
     }

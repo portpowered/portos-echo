@@ -15,6 +15,10 @@ use tokio::{
 #[derive(Clone, Debug, Default)]
 pub struct Timing {
     pub captured: usize,
+    captured_chunks: usize,
+    endpoint_sample: Option<usize>,
+    capture_tail: Vec<u8>,
+    earcon_in_capture: bool,
     pub played: usize,
     pub nonzero_samples: usize,
     pub audible_samples: usize,
@@ -27,6 +31,11 @@ pub struct Timing {
 }
 
 impl Timing {
+    pub fn capture_observation(&self) -> serde_json::Value {
+        serde_json::json!({"bytes":self.captured,"chunks":self.captured_chunks,
+            "endpoint_sample":self.endpoint_sample,"earcon_first_frame_present":self.earcon_in_capture})
+    }
+
     pub fn endpoint_seen(&self) -> bool {
         self.endpoint.is_some()
     }
@@ -48,6 +57,15 @@ impl Timing {
                 if !pcm(event, 16000) {
                     return Err("wire: invalid capture PCM".into());
                 }
+                self.captured_chunks += 1;
+                self.capture_tail.extend_from_slice(&event.payload);
+                self.earcon_in_capture |= self
+                    .capture_tail
+                    .windows(960)
+                    .step_by(2)
+                    .any(|bytes| earcon::matches(bytes, 0));
+                let discard = self.capture_tail.len().saturating_sub(958);
+                self.capture_tail.drain(..discard);
                 self.captured = self
                     .captured
                     .checked_add(event.payload.len())
@@ -57,6 +75,7 @@ impl Timing {
                 }
                 if self.endpoint.is_none() && self.captured >= target {
                     self.endpoint = Some(now);
+                    self.endpoint_sample = Some(target / 2);
                 }
             }
             _ => {}
@@ -91,6 +110,7 @@ impl Timing {
         let measured = serde_json::json!({"pcm_bytes":self.played,
             "nonzero_samples":self.nonzero_samples,"audible_samples":self.audible_samples,
             "wake":self.wake_observation(),
+            "capture":self.capture_observation(),
             "host":host});
         if let Some(error) = &self.failure {
             return Err(error.clone());
@@ -312,8 +332,9 @@ impl Endpoint {
                     // Upstream microphone gain changes magnitudes but preserves
                     // signs. Match the complete finite fixture across frames.
                     tail.extend(signs(&event.payload));
-                    if tail.windows(bytes.len()).any(|window| window == bytes) {
+                    if let Some(position) = tail.windows(bytes.len()).position(|window| window == bytes) {
                         state.endpoint = Some(now);
+                        state.endpoint_sample = Some(state.captured / 2 - tail.len() + position + bytes.len());
                         tail.clear();
                     } else {
                         let discard = tail.len().saturating_sub(bytes.len() - 1);

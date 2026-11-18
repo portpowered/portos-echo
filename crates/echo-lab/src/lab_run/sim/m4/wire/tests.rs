@@ -128,7 +128,34 @@ fn finite_waveform_endpoint_ignores_silence_and_matches_gain_across_frames() {
     state.playback(&reply(960), Duration::from_millis(1520)).unwrap();
     assert_eq!(state.sample(), Ok(Duration::from_millis(1500)));
     assert_eq!(state.captured, 28800);
+    assert_eq!(
+        state.capture_observation(),
+        serde_json::json!({"bytes":28800,"chunks":3,
+        "endpoint_sample":14400,"earcon_first_frame_present":false})
+    );
     assert!(matches!(endpoint, Endpoint::Fixture { tail, .. } if tail.is_empty()));
+}
+
+#[test]
+fn capture_finds_earcon_samples_across_chunks_without_counting_speaker_data() {
+    let mut state = Timing::default();
+    state
+        .capture(&event("run-pipeline", 0), usize::MAX, Duration::ZERO)
+        .unwrap();
+    state.playback(&chime_frame(0), Duration::ZERO).unwrap();
+    assert_eq!(state.capture_observation()["earcon_first_frame_present"], false);
+    let pcm = chime_frame(0).payload;
+    for part in pcm.chunks(480) {
+        let mut frame = event("audio-chunk", part.len());
+        frame.payload = part.to_vec();
+        state.capture(&frame, usize::MAX, Duration::ZERO).unwrap();
+    }
+    assert_eq!(
+        state.capture_observation(),
+        serde_json::json!({"bytes":960,"chunks":2,
+        "endpoint_sample":null,"earcon_first_frame_present":true})
+    );
+    assert!(state.capture_tail.len() <= 958);
 }
 
 #[test]

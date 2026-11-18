@@ -31,6 +31,7 @@ use std::{
 #[derive(Default)]
 struct Case {
     earcon: bool,
+    fixture: Option<Vec<u8>>,
     host: Option<Process>,
     relay: Option<crate::lab_run::sim::m4::wire::Relay>,
     playback: Value,
@@ -75,7 +76,12 @@ impl Case {
         }
         let origin = &self.provider.as_ref().ok_or("m2: missing provider")?.origin;
         let mut command = tokio::process::Command::new(options.bridge.as_deref().ok_or("m2: missing bridge")?);
-        let relay = crate::lab_run::sim::m4::wire::Relay::bind_reply(([127, 0, 0, 1], port).into()).await?;
+        let address = ([127, 0, 0, 1], port).into();
+        let relay = if let Some(fixture) = self.fixture.clone() {
+            crate::lab_run::sim::m4::wire::Relay::bind_fixture(address, fixture).await?
+        } else {
+            crate::lab_run::sim::m4::wire::Relay::bind_reply(address).await?
+        };
         let port = relay.address.port();
         self.relay = Some(relay);
         config::configure(&mut command, &root.0, port, origin, &self.trace_path)?;
@@ -238,6 +244,7 @@ impl Case {
 pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Value, Result<(), String>) {
     let mut state = Case {
         earcon: true,
+        fixture: finite_pcm(utterance).ok(),
         ..Case::default()
     };
     let output = root.join("private-success");

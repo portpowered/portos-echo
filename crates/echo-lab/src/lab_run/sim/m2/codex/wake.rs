@@ -8,6 +8,49 @@ use tokio::{
 };
 
 #[tokio::test]
+#[ignore = "T3 requires prebuilt production bridge and pinned hassmic-host"]
+async fn t3_native_wake_earcon_preserves_finite_mic_endpoint_and_reply() {
+    let mut reports = Vec::new();
+    for enabled in [false, true] {
+        reports.push(tokio::time::timeout(DEADLINE, Box::pin(native(enabled))).await.unwrap());
+    }
+    assert_eq!(reports[0]["capture"], reports[1]["capture"]);
+    assert_eq!(reports[0]["microphone"], reports[1]["microphone"]);
+    writeln!(std::io::stdout(), "T3-WAKE native {}", json!(reports)).unwrap();
+}
+
+async fn native(enabled: bool) -> Value {
+    let options = super::super::tests::options();
+    let utterance = super::super::tests::utterance();
+    let mut state = Case {
+        earcon: enabled,
+        fixture: Some(finite_pcm(&utterance).unwrap()),
+        ..Case::default()
+    };
+    let work = async {
+        state.start(&options).await?;
+        state.exercise(&utterance).await
+    }
+    .await;
+    let timing = state.relay.as_ref().map(crate::lab_run::sim::m4::wire::Relay::timing);
+    let closed = state.close().await;
+    assert_eq!(work, Ok(()), "trace={:?}; close={closed:?}", state.trace.records);
+    assert!(provider::valid(&closed.unwrap()));
+    let timing = timing.unwrap();
+    assert_eq!(timing.played, 9600);
+    let capture = timing.capture_observation();
+    assert!(capture["endpoint_sample"].as_u64().is_some());
+    assert_eq!(capture["earcon_first_frame_present"], false);
+    let mut result = report(&state, timing.played, enabled);
+    assert_eq!(result["microphone"]["dropped_chunks"], 0);
+    assert_eq!(result["microphone"]["tail_samples"], 0);
+    result["capture"] = capture;
+    result["wire"] = observe_wire(&timing, enabled);
+    result["host_reply"] = state.playback.clone();
+    result
+}
+
+#[tokio::test]
 #[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
 async fn t3_configured_wake_earcon_keeps_reply_and_mic_accounting_identical_when_disabled() {
     let mut reports = Vec::new();
