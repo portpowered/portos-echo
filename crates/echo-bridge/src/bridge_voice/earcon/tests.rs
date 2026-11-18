@@ -280,3 +280,179 @@ async fn wake_earcon_preempt_discards_unsent_frames_and_settles_before_idle() {
         1
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn wake_earcon_shutdown_cuts_active_playback_without_success_or_replay() {
+    let observer = Observer::default();
+    let client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let origin = Instant::now();
+    let work = async {
+        start()?;
+        first_frame_without_clock_tick(&observer, origin).await;
+        Err(Error::Control)
+    };
+    let (result, ()) = tokio::join!(scope(&client, true, work), acknowledge_cut(&observer));
+    assert_eq!(result, Err(Error::Control));
+    assert_eq!(origin.elapsed(), Duration::ZERO);
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Frame(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Cut(_)))
+            .count(),
+        1
+    );
+    // A new scope has no prior pending success, even if its device has a late Played.
+    scope(&client, true, async {
+        assert!(current().unwrap().state().completed.is_none());
+        assert!(!receipt(&LinkEvent::<()>::Played));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn wake_earcon_playback_failure_settles_without_fabricating_success() {
+    for failure in [echo_link::Error::Closed, echo_link::Error::Timeout] {
+        let observer = Observer::default();
+        let client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        let origin = Instant::now();
+        let work = async {
+            start()?;
+            first_frame_without_clock_tick(&observer, origin).await;
+            observer.finish(Err(failure));
+            failed().await;
+            assert!(current().unwrap().state().completed.is_none());
+            assert_eq!(idle().await, Err(Error::Wyoming));
+            assert_eq!(start(), Err(Error::Wyoming));
+            Ok(())
+        };
+        assert!(scope(&client, true, work).await.is_err());
+        assert!(origin.elapsed() <= SETTLE);
+        client.close().await.unwrap();
+        assert_eq!(observer.commands().last(), Some(&Command::Close));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wake_earcon_reused_scope_requires_distinct_receipts_and_one_chime_per_start() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    scope(&client, true, async {
+        for index in 1..=2 {
+            start()?;
+            assert_eq!(start(), Err(Error::Wyoming));
+            let work = async {
+                loop {
+                    tokio::select! {
+                        biased;
+                        duration = completed() => {
+                            assert_eq!(duration, Duration::from_millis(160));
+                            break;
+                        }
+                        event = events.recv() => assert!(receipt(&event.unwrap().unwrap())),
+                    }
+                }
+                idle().await?;
+                assert!(!receipt(&LinkEvent::<()>::Played));
+                Ok::<_, Error>(())
+            };
+            let remote = async {
+                while observer
+                    .commands()
+                    .iter()
+                    .filter(|c| matches!(c, Command::Cut(_)))
+                    .count()
+                    < index
+                {
+                    tokio::time::advance(FRAME).await;
+                    tokio::task::yield_now().await;
+                }
+                observer.finish(Ok(()));
+            };
+            let (result, ()) = tokio::join!(work, remote);
+            result?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let frames: Vec<_> = observer
+        .commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::Frame(bytes) => Some(bytes),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(frames.len(), 16);
+    assert_eq!(frames[..8], frames[8..]);
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Start(..)))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn wake_earcon_mute_during_negotiation_cuts_and_preserves_control_authority() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    let origin = Instant::now();
+    let mut muted = 0;
+    let work = async {
+        start()?;
+        negotiating(
+            &mut events,
+            std::future::pending::<Result<(), Error>>(),
+            &mut |notice| {
+                assert!(matches!(
+                    notice,
+                    super::super::SessionNotice::Run(super::super::Notice::Device(LinkEvent::Mute(true)))
+                ));
+                muted += 1;
+                Ok(())
+            },
+        )
+        .await
+    };
+    let remote = async {
+        first_frame_without_clock_tick(&observer, origin).await;
+        observer.mute(true);
+        acknowledge_cut(&observer).await;
+    };
+    let (result, ()) = tokio::join!(scope(&client, true, work), remote);
+    assert_eq!(result, Err(Error::Control));
+    assert_eq!(muted, 1);
+    assert_eq!(origin.elapsed(), Duration::ZERO);
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Frame(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Cut(_)))
+            .count(),
+        1
+    );
+}
