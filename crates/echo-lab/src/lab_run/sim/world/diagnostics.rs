@@ -2,8 +2,8 @@
 use super::Trace;
 use serde_json::{Value, json};
 
-fn safe(record: &Value) -> Value {
-    let event = record["event"]
+fn event_name(record: &Value) -> &str {
+    record["event"]
         .as_str()
         .filter(|name| {
             matches!(
@@ -18,12 +18,41 @@ fn safe(record: &Value) -> Value {
                     | "live.closed"
                     | "live.connected"
                     | "screen.listening"
+                    | "bridge.ready"
+                    | "bridge.run_completed"
+                    | "run.started"
+                    | "mic.completed"
+                    | "reply.played"
+                    | "call.start_failed"
+                    | "call.control_failed"
+                    | "call.media_failed"
             )
         })
-        .unwrap_or("redacted");
+        .unwrap_or("redacted")
+}
+
+fn safe(record: &Value) -> Value {
+    let event = event_name(record);
     let mut row = json!({"event":event});
     if let Some(elapsed) = record["elapsed_ms"].as_u64() {
         row["elapsed_ms"] = json!(elapsed);
+    }
+    if event.starts_with("call.") {
+        row["stage"] = json!(
+            record["stage"]
+                .as_str()
+                .filter(|stage| matches!(
+                    *stage,
+                    "new" | "signaling_started" | "answer_received" | "answer_applied" | "media_ready"
+                ))
+                .unwrap_or("unavailable or redacted")
+        );
+        row["media_state"] = json!(
+            record["media_state"]
+                .as_str()
+                .filter(|state| matches!(*state, "New" | "Connecting" | "Connected" | "Failed" | "Closed"))
+                .unwrap_or("unavailable or redacted")
+        );
     }
     if event == "bridge.error" {
         row["reason"] = json!(
@@ -101,6 +130,18 @@ mod tests {
         assert_eq!(
             safe(&json!({"event":"bridge.error","reason":"synthetic-secret-sentinel"})),
             json!({"event":"bridge.error","reason":"unavailable or redacted"})
+        );
+        assert_eq!(
+            safe(&json!({"event":"call.media_failed", "stage":"media_ready",
+            "media_state":"Failed", "payload":"synthetic-secret-sentinel"})),
+            json!({"event":"call.media_failed", "stage":"media_ready", "media_state":"Failed"})
+        );
+        assert_eq!(
+            safe(
+                &json!({"event":"call.control_failed", "stage":"synthetic-secret-sentinel",
+            "media_state":"synthetic-secret-sentinel"})
+            ),
+            json!({"event":"call.control_failed", "stage":"unavailable or redacted", "media_state":"unavailable or redacted"})
         );
         for _ in 0..20 {
             trace.records.push(json!({"event":"wyoming.probe_ok","elapsed_ms":2}));

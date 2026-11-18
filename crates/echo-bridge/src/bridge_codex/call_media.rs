@@ -28,6 +28,8 @@ pub struct MediaCall<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPe
     started: bool,
     active: bool,
     closed: bool,
+    trace: Option<crate::bridge_trace::Trace>,
+    stage: &'static str,
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a, R, W, P> {
@@ -36,6 +38,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         trace: crate::bridge_trace::Trace,
         catalog: &echo_delegation::codex_dispatch::Catalog,
     ) {
+        self.trace = Some(trace.clone());
         self.call.tool_trace = Some(crate::bridge_trace::ToolTrace::new(trace, catalog));
     }
 
@@ -47,6 +50,8 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             started: false,
             active: false,
             closed: false,
+            trace: None,
+            stage: "new",
         }
     }
 
@@ -66,6 +71,11 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         let result = timeout_at(deadline, self.negotiate(options, tools, deadline))
             .await
             .unwrap_or(Err(Error::Deadline));
+        let diagnostic = if result.is_err() {
+            self.diagnostic("call.start_failed")
+        } else {
+            Ok(())
+        };
         if result.is_err() {
             self.call.fail();
             let _ = self.peer.close().await;
@@ -73,7 +83,10 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         } else {
             self.active = true;
         }
-        result
+        if result.is_ok() {
+            self.stage = "media_ready";
+        }
+        result.and(diagnostic)
     }
 
     async fn negotiate(
@@ -83,8 +96,11 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         deadline: Instant,
     ) -> Result<(), Error> {
         let offer = self.peer.offer().await.map_err(media_error)?;
+        self.stage = "signaling_started";
         let answer = self.call.start(options, tools, &offer, deadline).await?;
+        self.stage = "answer_received";
         self.peer.apply_answer(&answer).await.map_err(media_error)?;
+        self.stage = "answer_applied";
         let mut states = self.peer.states();
         loop {
             match *states.borrow_and_update() {
@@ -108,6 +124,17 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         }
     }
 
+    fn diagnostic(&mut self, event: &'static str) -> Result<(), Error> {
+        if let Some(trace) = &mut self.trace {
+            trace.record(
+                event,
+                None,
+                serde_json::json!({"stage":self.stage, "media_state":format!("{:?}", *self.peer.states().borrow())}),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Forward a complete 20 ms mono/16 kHz frame. No bridge Opus encoding.
     /// # Errors
     /// Rejects nonactive sessions or the peer's fixed failure category.
@@ -128,19 +155,21 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         if let Some(event) = self.early.pop_front() {
             return Ok(MediaEvent::Control(event));
         }
-        let result = tokio::select! {
-            event = self.call.next() => event.map(MediaEvent::Control),
-            frame = self.peer.recv() => match frame.map_err(media_error) {
+        let (result, source) = tokio::select! {
+            event = self.call.next() => (event.map(MediaEvent::Control), "call.control_failed"),
+            frame = self.peer.recv() => (match frame.map_err(media_error) {
                 Ok(Some(frame)) => Ok(MediaEvent::Audio(Box::new(frame))),
                 Ok(None) => Err(Error::Unavailable),
                 Err(error) => Err(error),
-            },
+            }, "call.media_failed"),
         };
         if result.is_err() || matches!(&result, Ok(MediaEvent::Control(Event::Closed))) {
+            let diagnostic = self.diagnostic(source);
             self.active = false;
             self.call.fail();
             let _ = self.peer.close().await;
             self.closed = true;
+            return result.and_then(|event| diagnostic.map(|()| event));
         }
         result
     }
