@@ -38,7 +38,9 @@ fn session_stream_quiet_edges_repeat_per_reply_without_restarting_transport() {
 
 #[tokio::test]
 async fn t3_session_stream_delivers_two_complete_replies_on_one_negotiated_peer() {
-    tokio::time::timeout(Duration::from_secs(10), exchange()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), Box::pin(exchange()))
+        .await
+        .unwrap();
 }
 
 async fn exchange() {
