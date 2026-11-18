@@ -65,13 +65,7 @@ async fn bridge_cut_latency_ten_trials_at_200ms_lead() {
 }
 
 pub(super) async fn assert_microphone(path: &Path, live: &bridge_peer::Live, run: usize, before: usize) {
-    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
-        while live.microphone_frames.load(std::sync::atomic::Ordering::SeqCst) < before + 32 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_microphone(path, &live.microphone_frames, run, before).await;
     let received = live.microphone_frames.load(std::sync::atomic::Ordering::SeqCst) - before;
     assert_eq!(received, 32);
     let entries = trace(path);
@@ -97,4 +91,82 @@ pub(super) async fn assert_microphone(path: &Path, live: &bridge_peer::Live, run
         mic[0]["dropped_chunks"]
     )
     .unwrap();
+}
+
+async fn wait_microphone(path: &Path, frames: &std::sync::atomic::AtomicUsize, run: usize, before: usize) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let target = before + 32;
+    if tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        while frames.load(SeqCst) < target {
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .is_err()
+    {
+        let observed = frames.load(SeqCst);
+        let entries: Vec<Value> = std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let completion = entries
+            .iter()
+            .find(|e| e["event"] == "mic.completed" && e["run_id"] == format!("run-{run}"));
+        let counters = completion.map_or_else(
+            || "no matching mic.completed".to_owned(),
+            |mic| {
+                format!(
+                    "count={} dropped_chunks={} input_samples={} received_chunks={}",
+                    mic["count"], mic["dropped_chunks"], mic["input_samples"], mic["received_chunks"]
+                )
+            },
+        );
+        assert!(
+            observed >= target,
+            "run-{run} microphone timeout: observed={observed} before={before} target={target} received={} {counters}",
+            observed.saturating_sub(before)
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn microphone_timeout_reports_run_counters() {
+    for completion in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace");
+        let mut entries = vec![json!({"event":"mic.completed","run_id":"run-2","count":99})];
+        if completion {
+            entries.push(json!({"event":"mic.completed","run_id":"run-1","count":30,
+                "dropped_chunks":5,"input_samples":9728,"received_chunks":66}));
+        }
+        std::fs::write(
+            &path,
+            entries.iter().map(Value::to_string).collect::<Vec<_>>().join("\n"),
+        )
+        .unwrap();
+        let error = tokio::spawn(async move {
+            wait_microphone(&path, &std::sync::atomic::AtomicUsize::new(37), 1, 7).await;
+        })
+        .await
+        .unwrap_err()
+        .into_panic();
+        let message = error.downcast_ref::<String>().unwrap();
+        for expected in ["run-1", "observed=37", "before=7", "target=39", "received=30"] {
+            assert!(message.contains(expected), "{message}");
+        }
+        if completion {
+            for expected in [
+                "count=30",
+                "dropped_chunks=5",
+                "input_samples=9728",
+                "received_chunks=66",
+            ] {
+                assert!(message.contains(expected), "{message}");
+            }
+        } else {
+            assert!(message.contains("no matching mic.completed"), "{message}");
+        }
+        assert!(!message.contains("99"), "{message}");
+    }
 }

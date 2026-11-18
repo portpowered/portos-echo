@@ -25,11 +25,23 @@ impl Default for CodexConfig {
     }
 }
 
+/// The app server's `RealtimeVoice` values at the pinned rust-v0.160.0 schema.
+/// `default` is ours: it omits the field so the app server picks its voice.
+const REALTIME_VOICES: [&str; 19] = [
+    "alloy", "arbor", "ash", "ballad", "breeze", "cedar", "coral", "cove", "echo", "ember", "juniper", "maple",
+    "marin", "sage", "shimmer", "sol", "spruce", "vale", "verse",
+];
+
 impl BridgeConfig {
-    /// Omit the voice when neither setting is supplied, using the pinned server default.
+    /// Omit the voice when neither setting is supplied, or the chosen one is
+    /// `default`, using the pinned server default.
     #[must_use]
     pub fn codex_voice(&self) -> Option<&str> {
-        self.codex.voice.as_deref().or(self.live.voice.as_deref())
+        self.codex
+            .voice
+            .as_deref()
+            .or(self.live.voice.as_deref())
+            .filter(|voice| *voice != "default")
     }
 
     /// The delegated thread's model; the realtime model stays owned by the app server.
@@ -52,6 +64,21 @@ pub(super) fn decode(value: DeValue<'_>) -> Result<CodexConfig, ConfigError> {
     };
     fields.finish()?;
     Ok(config)
+}
+
+/// An unknown voice is refused offline: the app server rejects the whole
+/// realtime start as an invalid request, after the wake.
+pub(super) fn validate_voice(config: &BridgeConfig) -> Result<(), ConfigError> {
+    for (field, voice) in [("codex.voice", &config.codex.voice), ("live.voice", &config.live.voice)] {
+        if let Some(voice) = voice
+            && !voice.trim().is_empty()
+            && voice != "default"
+            && !REALTIME_VOICES.contains(&voice.as_str())
+        {
+            return Err(ConfigError::new(field, "expected default or a pinned realtime voice"));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn validate(config: &CodexConfig) -> Result<(), ConfigError> {

@@ -145,6 +145,38 @@ mod wyoming_loom {
     use loom::{sync::Arc, sync::Mutex, thread};
 
     #[tokio::test(start_paused = true)]
+    async fn default_mic_capacity_retains_lead_in_and_two_seconds() {
+        let queue = MicQueue::new(crate::ClientOptions::default().mic_capacity);
+        for index in 0..53_u8 {
+            queue.push(MicFrame {
+                data: echo_contracts::wyoming::AudioChunkData {
+                    rate: 16000,
+                    width: 2,
+                    channels: 1,
+                    timestamp: None,
+                    extra: std::collections::BTreeMap::default(),
+                },
+                payload: vec![index; if index == 12 { 1024 } else { 2048 }],
+            });
+        }
+        assert_eq!(
+            queue.stats(),
+            RunStats {
+                received: 53,
+                dropped: 0
+            }
+        );
+        queue.close(Ok(()));
+        for index in 0..53_u8 {
+            assert_eq!(
+                queue.recv().await.unwrap().unwrap().payload,
+                vec![index; if index == 12 { 1024 } else { 2048 }]
+            );
+        }
+        assert_eq!(queue.recv().await.unwrap(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn event_audio_retains_counts_without_duplicate_queue_evictions() {
         let queue = FrameQueue::new(1);
         queue.push(1_u8);

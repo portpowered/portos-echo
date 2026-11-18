@@ -175,7 +175,16 @@ async fn drive<E: LinkEvents>(
         tokio::select! {
             // Timeouts cannot be starved by a continuously ready peer.
             biased;
-            () = tokio::time::sleep_until(deadline) => return Err(Error::Deadline),
+            () = tokio::time::sleep_until(deadline) => {
+                if sink.is_none() || !source.delegation.held() {
+                    return Err(Error::Deadline);
+                }
+                // The filler played; a delegated answer missing the response
+                // deadline is dropped instead of failing the whole run.
+                source.delegation.abandon();
+                source.reply.finish()?;
+                deadline = Instant::now() + options.played_timeout;
+            },
             result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,
         }
         if source.played && source.microphone_finished && sink.is_none() {
@@ -267,7 +276,10 @@ async fn media(
                 text,
                 done: true,
             })?;
-            if !source.reply.drained() {
+            if !source.delegation.answered() {
+                return Ok(());
+            }
+            if !source.reply.finished() {
                 while let Some(frame) = port.ready_audio().await? {
                     source.audio(&frame)?;
                     tokio::task::yield_now().await;
@@ -276,8 +288,21 @@ async fn media(
             }
             Ok(())
         }
-        MediaEvent::Control(Event::Transcript { role, text, done }) => observe(Notice::Transcript { role, text, done }),
-        MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => Ok(()),
+        MediaEvent::Control(Event::Transcript { role, text, done }) => {
+            if role == "assistant" && !done {
+                source.delegation.spoke();
+            }
+            observe(Notice::Transcript { role, text, done })
+        }
+        MediaEvent::Control(Event::TurnStarted { .. }) => {
+            source.delegation.started();
+            Ok(())
+        }
+        MediaEvent::Control(Event::TurnCompleted { .. }) => {
+            source.delegation.completed();
+            Ok(())
+        }
+        MediaEvent::Control(Event::Other) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }
 }

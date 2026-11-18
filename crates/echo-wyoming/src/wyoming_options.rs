@@ -18,7 +18,9 @@ pub struct ClientOptions {
 impl Default for ClientOptions {
     fn default() -> Self {
         Self {
-            mic_capacity: 32,
+            // 13 lead-in frames + 40 frames at 50 ms = 2 s of setup headroom,
+            // with 11 spare frames. Overflow still evicts the oldest frame.
+            mic_capacity: 64,
             reply_capacity: 32,
             event_capacity: 32,
             command_capacity: 16,
