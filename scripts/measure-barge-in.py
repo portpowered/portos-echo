@@ -113,7 +113,7 @@ class Session(C.Session):
             retain(failure, session=self, phase="cleanup")
             raise
     def send(self, kind, data=None, payload=b"", keep=True):
-        if kind == "audio-stop":
+        if kind in ("audio-stop", "pause-satellite"):
             self.stop_pending = True
         # A resume on this socket cannot discard lead-in already queued by the host.
         if kind == "run-satellite" and self.mic != "lead":
@@ -142,7 +142,7 @@ class Session(C.Session):
                     if kind == "run-pipeline" else data if kind == "info" else {})
             assert data == want and not payload, f"{label}: expected data={want} payload=0, actual data={data} payload={len(payload)}"
             if kind == "played":
-                assert self.stop_pending, f"{label}: expected audio-stop before played"
+                assert self.stop_pending, f"{label}: expected audio-stop, pause-satellite or active hassmic-end before played"
                 self.stop_pending = False
             if kind == "run-pipeline":
                 self.mic, self.lead_remaining = "lead", 25600
@@ -158,8 +158,17 @@ class Session(C.Session):
                 return row
     def acknowledge_pause(self):
         self.context = "pause-drain"
+        self.until("played", forbid=("run-pipeline",))
         self.barrier(forbid=("played", "run-pipeline"))
         self.mic = "paused"
+    def end_run(self, reply_active=False):
+        self.context = "cleanup/end"
+        self.stop_pending = reply_active
+        self.send("hassmic-end")
+        if reply_active:
+            self.until("played", forbid=("run-pipeline",))
+        self.barrier(forbid=("played", "run-pipeline"))
+        self.mic = "idle"
     def wake(self):
         self.context = "recovery/wake"
         self.send("run-satellite")
@@ -226,6 +235,7 @@ def run_trial(strategy, folder):
             session.context = "pre-cut"
             trial.pump(playback.start + 1)
             assert trial.chunk, "pre-cut: expected microphone witness"
+            cut_bytes = len(playback.data)
             cut = time.monotonic()
             if strategy == "close-stream":
                 trial.disconnect()
@@ -239,8 +249,9 @@ def run_trial(strategy, folder):
                 session.capture_barrier()
             if strategy == "pause-satellite":
                 # Drain pre-pause microphone bytes without opening a new sample phase.
-                # Pong acknowledges pause on the same ordered protocol connection.
+                # Played closes the aborted reply; pong acknowledges the pause.
                 session.acknowledge_pause()
+                trial.played += 1
             session.context = "post-cut"
             trial.phase()
             if strategy == "close-stream":
@@ -254,6 +265,7 @@ def run_trial(strategy, folder):
             result = {"strategy": strategy, "cut_ms": elapsed(playback.start, cut),
                       "end_ms": None if playback.end is None else elapsed(cut, playback.end),
                       "bytes": len(playback.data), "played": trial.played,
+                      "cut_bytes": cut_bytes,
                       "pipelines": trial.pipelines}
             assert_result(strategy, playback, trial, result)
             session.context = "cleanup"
@@ -263,9 +275,7 @@ def run_trial(strategy, folder):
                 session.stream = session.sock.makefile("rb", buffering=0)
                 session.send("describe", keep=False)
                 session.until("info", keep=False)
-            if strategy in ("pause-satellite", "close-stream"):
-                session.send("audio-stop")
-                session.until("played", forbid=("run-pipeline",))
+            session.end_run()
             session.wake()
             return session.rows, result
     except BaseException as error:
@@ -282,8 +292,14 @@ def assert_result(strategy, playback, trial, result):
     assert trial.pipelines == 0, f"{strategy}: expected pipelines=0, actual={result}"
     assert bytes(playback.data) == (PAYLOAD * 30)[:len(playback.data)], f"{strategy}: expected reply PCM, actual={result}"
     drained = strategy in ("audio-stop", "none")
-    want = (144000, 1, True) if drained else (143360, 0, False)
-    actual = (result["bytes"], trial.played, playback.end is not None)
+    if drained:
+        assert result["bytes"] == 144000, f"{strategy}: expected bytes/played/EOF: drained 144000 bytes, actual={result}"
+    else:
+        # One in-flight 20 ms slot plus the host's 4096-byte stdio buffer can
+        # become visible after the cut snapshot. Queued seconds must be dropped.
+        assert result["cut_bytes"] <= result["bytes"] <= result["cut_bytes"] + 4096 + 960 < 144000, f"{strategy}: expected bounded abort PCM, actual={result}"
+    want = (1 if strategy != "close-stream" else 0, True)
+    actual = (trial.played, playback.end is not None)
     assert actual == want, f"{strategy}: expected bytes/played/EOF={want}, actual={actual}"
 def assert_same(raw, want, message):
     """Fail with the differing wire lines, so a CI-only mismatch names its cause."""
@@ -330,7 +346,8 @@ def measure(stage=None, repetitions=10):
                     expected = raw
         if all(sample is not None for sample in samples):
             median, maximum = summary(samples)
-            print(f"{strategy}: repetitions={repetitions} mode=drain bytes=144000 played=1 median_ms={median:.3f} max_ms={maximum:.3f}", flush=True)
+            mode = "drain" if strategy in ("audio-stop", "none") else "abort"
+            print(f"{strategy}: repetitions={repetitions} mode={mode} median_ms={median:.3f} max_ms={maximum:.3f}", flush=True)
         else:
             print(f"{strategy}: repetitions={repetitions} playback sink still open at cut+4000ms; censored, no end latency", flush=True)
 def measure_trial(stage, strategy, index, expected, samples):
