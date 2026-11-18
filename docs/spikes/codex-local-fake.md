@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 16
+last modified: 2026, november, 18
 status: S5 established with the unmodified release; full client implementation pending
 ---
 
@@ -21,13 +21,6 @@ sh scripts/codex-app-server.sh
 cargo test --locked -p echo-codex --test codex_s5 -- --nocapture
 ```
 
-On Windows, provision using the PowerShell twin:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-app-server.ps1
-cargo test --locked -p echo-codex --test codex_s5 -- --nocapture
-```
-
 For offline schema generation, use the helper's returned executable:
 
 ```sh
@@ -39,10 +32,10 @@ The Linux test re-executes its already available Python fixture under
 `unshare --user --map-root-user --net`. It brings only `lo` up, asserts the
 interface inventory and empty routes, then verifies a connection to the
 documentation-only address `192.0.2.1` is refused. Missing namespace support
-fails the witness. Windows proves portable routing and the refusing proxy;
+fails the witness. Historical Windows evidence covered portable routing and the refusing proxy;
 it does not claim Linux confinement. The fixture uses allocated IPv4 loopback
 ports and a fresh external CODEX_HOME/cwd, with an allowlisted child environment.
-No inherited provider credential is passed. Both platforms set a refusing
+No inherited provider credential is passed. The Linux fixture sets a refusing
 HTTP/HTTPS/ALL proxy and `NO_PROXY=127.0.0.1`.
 
 ## Supported redirects and settings

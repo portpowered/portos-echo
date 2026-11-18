@@ -6,10 +6,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 fn terminated(status: ExitStatus) -> bool {
-    #[cfg(windows)]
-    {
-        status.code() == Some(1) // std::process::Child::kill uses TerminateProcess(..., 1).
-    }
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;

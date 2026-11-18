@@ -47,8 +47,8 @@ check exists, the coordinator checks it by hand.
   gate. Run focused changed-path signs of life and keep clean architecture under these standing rules;
   do not run or queue a full local `make ci`. Lanes dispatch focused or repeated Linux witnesses themselves
   with `targeted.yml`, never park for the coordinator to run a Linux test. No soak, native-load or flake
-  cohort is required for any story. No per-PR Windows-native WSL cohort or lane payload may demand one:
-  Windows is a temporary host. Existing Windows jobs stay; only the owner changes required checks.
+  cohort is required for any story. Linux is the only supported platform for building, testing and running Echo.
+  Windows support is retired by the owner decision of 2026-11-18; only the owner changes required checks.
   One intermittent hosted failure permits `gh run rerun <id> --failed` once; file a persistent flake as its
   own lane. Required red checks still block merge; nextest retries remain zero. pe-ci stays coordinator-scheduled
   for T5 and rare work hosted runners cannot support. Release T6 and milestone T5 definitions stay in force.

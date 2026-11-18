@@ -21,11 +21,7 @@ pub fn prepare(root: &Path) {
         }
     }
     for name in ["echo-bridge", "echo-lab-sim-script", "echo-lab-sim-bridge"] {
-        let original = cli.with_file_name(if cfg!(windows) {
-            format!("{name}.exe")
-        } else {
-            name.into()
-        });
+        let original = cli.with_file_name(name);
         if original.is_file() {
             selected(root, original.to_str().unwrap());
         }

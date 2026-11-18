@@ -3,7 +3,7 @@ use super::*;
 
 #[tokio::test]
 async fn t3_m5_codex_provider_quiesces_and_closes_without_admitting_a_call() {
-    let python = if cfg!(windows) { "python" } else { "python3" };
+    let python = "python3";
     let provider = super::super::mcp_peers::Peers::bind(python).await.unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         provider.quiesce().await.unwrap();
@@ -33,11 +33,7 @@ async fn journey(phase: &std::cell::Cell<&str>) {
         .find(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("deps" | "build")))
         .and_then(Path::parent)
         .unwrap()
-        .join(if cfg!(windows) {
-            "echo-bridge.exe"
-        } else {
-            "echo-bridge"
-        });
+        .join("echo-bridge");
     let options = crate::lab_run::run_options::parse(&[
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/scenarios/m5-port-os-link.yaml")
@@ -138,7 +134,7 @@ async fn t3_m5_cleanup_observations_belong_to_each_joined_owner() {
 
 #[tokio::test]
 async fn t3_m5_failed_child_collection_does_not_report_successful_release() {
-    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = tokio::process::Command::new("python3");
     command.args([
         "-u",
         "-c",

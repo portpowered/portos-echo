@@ -133,7 +133,7 @@ class InstrumentedTests(unittest.TestCase):
         new = self.root / "new.profdata"
         self.assertEqual(self.merge(new).returncode, 0)
         self.assertEqual(old.read_bytes(), new.read_bytes())
-        cov = str(Path(TOOL).with_name("llvm-cov.exe" if os.name == "nt" else "llvm-cov"))
+        cov = str(Path(TOOL).with_name("llvm-cov"))
         exports = [subprocess.check_output(
             [cov, "export", "--format=lcov", str(ARTIFACT), f"--instr-profile={path}"]
         ) for path in (old, new)]
@@ -142,7 +142,6 @@ class InstrumentedTests(unittest.TestCase):
         self.assertFalse(self.quarantine.exists())
         print("all good: exit=0; warnings=0; raw inputs, merged output and LCOV byte-identical")
 
-    @unittest.skipIf(os.name == "nt", "T3 Linux Make recipe boundary")
     def test_recipe_runs_unchanged_gates_only_after_admission(self):
         # Substitute workspace Cargo commands, retaining the real Make recipe,
         # validator, profiles, and LLVM merge. No workspace build or gate claim.
@@ -237,7 +236,7 @@ if __name__ == "__main__":
             TOOL = profiles.profdata_tool()
             source = Path(directory) / "writer.rs"
             source.write_text("fn main() { std::hint::black_box(42); }\n")
-            ARTIFACT = Path(directory) / ("writer.exe" if os.name == "nt" else "writer")
+            ARTIFACT = Path(directory) / "writer"
             subprocess.run(["rustc", f"+{profiles.TOOLCHAIN}", "-C", "instrument-coverage",
                             str(source), "-o", str(ARTIFACT)], check=True)
             suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(InstrumentedTests))

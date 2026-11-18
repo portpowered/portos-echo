@@ -4,7 +4,7 @@ use std::{error::Error, io::Write, path::PathBuf, process::Command};
 #[test]
 fn t3_verified_cache_corruption_and_concurrent_writers() -> Result<(), Box<dyn Error>> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = Command::new("python3")
         .arg(root.join("crates/echo-codex/tests/support/codex_fetch.py"))
         .arg(&root)
         .output()?;

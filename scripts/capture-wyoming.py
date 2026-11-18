@@ -30,9 +30,6 @@ def parent_death_guard():
 
 @contextlib.contextmanager
 def controller_signals(message="controller cancelled by signal"):
-    if os.name == "nt":
-        yield
-        return
     signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
     def cancelled(signum, _frame):
         # A second handled signal must not interrupt collection/unstaging.

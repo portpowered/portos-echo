@@ -144,6 +144,10 @@ fn private_replacement_files_are_owner_only() {
     let (store, record) = Store::open(&options, "https://example.invalid").unwrap(); // lint-rules: allow-literal store identity fixture serialized locally without network access
     store.save(&record).unwrap();
     assert_eq!(
+        std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
         std::fs::metadata(dir.path().join("grant.json"))
             .unwrap()
             .permissions()

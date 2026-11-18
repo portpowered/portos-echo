@@ -118,13 +118,6 @@ fn plain_metadata(path: &Path) -> Result<fs::Metadata, ProcessError> {
     if metadata.file_type().is_symlink() {
         return Err(ProcessError::PrivateHome);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0 {
-            return Err(ProcessError::PrivateHome);
-        }
-    }
     Ok(metadata)
 }
 
@@ -151,46 +144,6 @@ fn private_directory(path: &Path) -> Result<(), ProcessError> {
         if metadata.permissions().mode() & 0o777 != 0o700 {
             return Err(ProcessError::PrivateHome);
         }
-    }
-    #[cfg(windows)]
-    verify_windows_acl(path)?;
-    Ok(())
-}
-
-#[cfg(windows)]
-fn verify_windows_acl(path: &Path) -> Result<(), ProcessError> {
-    use std::process::{Command, Stdio};
-    // Fixed code and argv: the target is data, never interpolated shell source.
-    let script = r"
-$ErrorActionPreference = 'Stop'
-try {
-    $sidType = [System.Security.Principal.SecurityIdentifier]
-    $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $allowed = @($current, 'S-1-5-18', 'S-1-5-32-544')
-    $acl = Get-Acl -LiteralPath $env:ECHO_CODEX_ACL_TARGET
-    if ($acl.GetOwner($sidType).Value -notin $allowed) { exit 1 }
-    $rules = $acl.GetAccessRules($true, $true, $sidType)
-    if ($rules.Count -eq 0) { exit 1 }
-    foreach ($rule in $rules) {
-        if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $allowed) {
-            exit 1
-        }
-    }
-    exit 0
-} catch { exit 1 }
-";
-    let system = std::env::var_os("SYSTEMROOT").ok_or(ProcessError::PrivateHome)?;
-    let status = Command::new(PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe"))
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
-        .env_remove("PSModulePath")
-        .env("ECHO_CODEX_ACL_TARGET", path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| ProcessError::PrivateHome)?;
-    if !status.success() {
-        return Err(ProcessError::PrivateHome);
     }
     Ok(())
 }

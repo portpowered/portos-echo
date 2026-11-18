@@ -265,25 +265,20 @@ fn t3_stream_drop_reaps_and_joins_after_a_readiness_signal() {
         stream.next(Duration::from_secs(10), 0).unwrap(),
         Some(b"ready\n".to_vec())
     );
-    let id: u32 = std::fs::read_to_string(session.0.join("child.pid")).unwrap().parse().unwrap();
+    let id: u32 = std::fs::read_to_string(session.0.join("child.pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
     drop(stream);
     // A reaped child cannot be waited on again by another process. The platform
     // check also proves this particular child is gone, without a timing sleep.
-    if cfg!(windows) {
-        let output = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {id}"), "/NH"])
-            .output()
-            .unwrap();
-        assert!(!String::from_utf8_lossy(&output.stdout).contains(&format!(" {id} ")));
-    } else {
-        assert!(
-            !Command::new("kill")
-                .args(["-0", &id.to_string()])
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
+    assert!(
+        !Command::new("kill")
+            .args(["-0", &id.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
 }
 
 #[test]

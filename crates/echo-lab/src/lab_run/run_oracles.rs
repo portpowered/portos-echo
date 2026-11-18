@@ -245,17 +245,6 @@ mod tests {
         let link = run.join("link");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, &link).unwrap();
-        #[cfg(windows)]
-        assert!(
-            std::process::Command::new("cmd")
-                .args(["/c", "mklink", "/J"])
-                .arg(&link)
-                .arg(&outside)
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
         assert_eq!(
             frame_destination(&run, "link/frame.jpg"),
             Err("frame capture: symlink destination refused".into())
@@ -271,8 +260,6 @@ mod tests {
         );
         assert_eq!(std::fs::read(run.join("frame.jpg")).unwrap(), b"existing");
         assert!(!outside.join("frame.jpg").exists());
-        #[cfg(windows)]
-        std::fs::remove_dir(&link).unwrap();
         #[cfg(unix)]
         std::fs::remove_file(&link).unwrap();
         std::fs::remove_dir_all(root).unwrap();

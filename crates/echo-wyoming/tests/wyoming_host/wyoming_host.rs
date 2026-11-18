@@ -202,22 +202,9 @@ async fn capture_after_played(events: &mut EventStream) -> usize {
 
 fn controller() -> Command {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let shell = if cfg!(windows) {
-        let output = Command::new("python")
-            .arg(root.join("scripts/make-posix.py"))
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim()).join("sh.exe")
-    } else {
-        std::path::PathBuf::from("sh")
-    };
+    let shell = std::path::PathBuf::from("sh");
     let mut command = Command::new(&shell);
-    if cfg!(windows) {
-        let inherited = std::env::var_os("PATH").unwrap();
-        let paths = std::iter::once(shell.parent().unwrap().to_path_buf()).chain(std::env::split_paths(&inherited));
-        command.env("PATH", std::env::join_paths(paths).unwrap());
-    }
+
     command.arg("tests/wyoming_host.sh").current_dir(root);
     command
 }

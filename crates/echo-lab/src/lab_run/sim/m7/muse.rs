@@ -14,9 +14,6 @@ pub struct Muse {
 }
 
 pub fn prebuilt() -> Result<PathBuf, String> {
-    if !cfg!(unix) {
-        return Err("m7: requires Unix Muse service binaries".into());
-    }
     let directory = std::env::current_exe()
         .map_err(|_| "m7: cannot locate artifacts")?
         .parent()

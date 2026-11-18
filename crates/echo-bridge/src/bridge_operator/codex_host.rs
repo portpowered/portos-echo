@@ -108,15 +108,6 @@ async fn resolve_binary() -> Result<PathBuf, Error> {
     Ok(path.into())
 }
 
-#[cfg(windows)]
-fn helper(root: &Path) -> Command {
-    let mut command = Command::new("powershell.exe");
-    command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"]);
-    command.arg(root.join("scripts/codex-app-server.ps1"));
-    command
-}
-
-#[cfg(not(windows))]
 fn helper(root: &Path) -> Command {
     let mut command = Command::new("sh");
     command.arg(root.join("scripts/codex-app-server.sh"));

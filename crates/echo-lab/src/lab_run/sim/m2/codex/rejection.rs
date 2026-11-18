@@ -206,13 +206,7 @@ fn synthetic() -> Result<Vec<u8>, String> {
 
 async fn binary() -> Result<PathBuf, String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("powershell.exe");
-        command
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-            .arg(root.join("scripts/codex-app-server.ps1"));
-        command
-    } else {
+    let mut command = {
         let mut command = Command::new("sh");
         command.arg(root.join("scripts/codex-app-server.sh"));
         command

@@ -29,10 +29,10 @@ async fn t3_pinned_voice_executable_waits_for_played_and_releases_home() {
 
 async fn exercise(ending: Ending) {
     let directory = tempfile::tempdir().unwrap();
-    private_parent(directory.path());
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let config = configure(directory.path(), listener.local_addr().unwrap().port());
-    let mut provider = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let mut provider = Command::new("python3")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

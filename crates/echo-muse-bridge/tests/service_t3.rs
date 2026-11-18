@@ -13,20 +13,6 @@ mod lifecycle;
 #[path = "service_support/mod.rs"]
 mod service_support;
 
-#[cfg(not(unix))]
-#[test]
-fn f21_unsupported_service_targets_fail_without_side_effects() {
-    for program in [
-        env!("CARGO_BIN_EXE_echo-muse-daemon"),
-        env!("CARGO_BIN_EXE_echo-muse-report"),
-    ] {
-        let output = std::process::Command::new(program).output().unwrap();
-        assert_eq!(output.status.code(), Some(1));
-        assert_eq!(output.stdout, b"");
-        assert_eq!(output.stderr, b"Muse service requires Unix\n");
-    }
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn f20_two_real_handlers_serialize_duplicate_reports() {

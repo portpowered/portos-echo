@@ -1,23 +1,7 @@
 .DEFAULT_GOAL := ci
-ifeq ($(OS),Windows_NT)
-SHELL := cmd.exe
-.SHELLFLAGS := /d /s /c
-POSIX_BIN := $(shell python scripts/make-posix.py)
-ifneq ($(.SHELLSTATUS),0)
-$(error POSIX bootstrap failed; see tool and path diagnostics above)
-endif
-export PATH := $(POSIX_BIN);$(PATH)
-SHELL := $(POSIX_BIN)/sh.exe
-else
 SHELL := sh
-endif
 .SHELLFLAGS := -ec
 COVERAGE_BASE ?= origin/main
-# Cargo uses response files for long Windows compiler commands. The coverage
-# wrapper cannot read their crate names; direct instrumentation preserves mappings.
-ifeq ($(OS),Windows_NT)
-COVERAGE_INSTRUMENTATION := --no-rustc-wrapper
-endif
 
 .PHONY: fmt-check lint-shape lint lint-rust lint-deps lint-rules lint-scripts-web lint-docs lint-docs-online lint-ci-parity lint-self-tests test-unit test-contract test-sim test-sim-suites test-sim-host test-concurrency coverage deps-fresh build-host ci
 .NOTPARALLEL: lint ci
@@ -56,7 +40,6 @@ lint-ci-parity:
 lint-self-tests:
 	sh scripts/test-lint-scripts-web.sh
 	python scripts/test_lint_docs.py
-	python scripts/test_make_posix.py
 	python scripts/test_coverage_profiles.py
 	python scripts/test_build_echo.py
 
@@ -68,11 +51,7 @@ test-unit:
 
 .PHONY: codex-app-server
 codex-app-server:
-ifeq ($(OS),Windows_NT)
-	powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-app-server.ps1
-else
 	sh scripts/codex-app-server.sh
-endif
 
 test-unit coverage: codex-app-server
 
@@ -121,21 +100,17 @@ test-concurrency:
 COVERAGE_DEPENDENCY_SOURCES := \.cargo.(registry|git).|\.rustup.toolchains.|.rustc.[0-9a-f]{40}.
 COVERAGE_HOST_T3 := -p echo-wyoming --test wyoming_t3
 
-ifeq ($(OS),Windows_NT)
-coverage: export ECHO_COVERAGE_CHILD_PROFILES := $(shell python -c "from pathlib import Path; import uuid; print((Path('target/llvm-cov/child-profiles') / uuid.uuid4().hex).resolve())")
-endif
-
 coverage: hassmic-host
 	cargo build --locked -p echo-bridge --bins
 	if [ "$$(uname -s)" = Linux ]; then python scripts/test_coverage_profiles.py --instrumented; fi
 	cargo +nightly-2026-11-05 llvm-cov clean --workspace
 	mkdir -p target/llvm-cov
-	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) --workspace --all-targets --locked --branch --no-report
-	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-bridge --test bridge_t3 --locked --branch --no-report -- --ignored --nocapture
-	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) $(COVERAGE_HOST_T3) --locked --branch --no-report -- --ignored --nocapture
-	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --test sim_bridge_cli --locked --branch --no-report -- --ignored --nocapture
-	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --test sim_host --locked --branch --no-report -- --ignored --nocapture --test-threads=2
-	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_INSTRUMENTATION) -p echo-lab --bin echo-lab --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov --workspace --all-targets --locked --branch --no-report
+	cargo +nightly-2026-11-05 llvm-cov -p echo-bridge --test bridge_t3 --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov $(COVERAGE_HOST_T3) --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --test sim_bridge_cli --locked --branch --no-report -- --ignored --nocapture
+	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --test sim_host --locked --branch --no-report -- --ignored --nocapture --test-threads=2
+	cargo +nightly-2026-11-05 llvm-cov -p echo-lab --bin echo-lab --locked --branch --no-report -- --ignored --nocapture
 	python tests/test_windows_profraw.py --writer target/llvm-cov-target/debug/echo-lab-fake-adb
 	python tests/coverage_children.py
 	python scripts/coverage_profiles.py

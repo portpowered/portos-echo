@@ -73,22 +73,14 @@ def run(command, root, environment, deadline):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise GateFailure("verification budget exhausted")
-    options = {"start_new_session": True} if os.name != "nt" else {
-        "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP,
-    }
     with subprocess.Popen(command, cwd=root, env=environment,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          **options) as process:
+                          start_new_session=True) as process:
         try:
             stdout, stderr = process.communicate(timeout=remaining)
         except BaseException:
             # Make owns shell/Cargo/scanner descendants: reap the entire tree.
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               check=False, timeout=10)
-            else:
-                os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(process.pid, signal.SIGKILL)
             process.kill()
             process.communicate()
             raise

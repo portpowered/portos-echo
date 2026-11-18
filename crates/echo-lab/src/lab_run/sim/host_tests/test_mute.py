@@ -91,7 +91,7 @@ class MuteControls(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix" and os.environ.get("ECHO_LAB_HOST_MUTE_T3") == "1",
-                     "T3 opt-in requires prebuilt pinned hassmic-host on Linux/WSL")
+                     "T3 opt-in requires prebuilt pinned hassmic-host on Linux")
 class RealHostMute(unittest.TestCase):
     def test_t3_native_mute_transitions_snapshot_and_unmuted_wake(self):
         with tempfile.TemporaryDirectory(prefix="lab-mute-t3-") as directory:

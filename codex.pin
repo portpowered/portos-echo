@@ -8,10 +8,6 @@ notice = "OpenAI Codex, Copyright 2025 OpenAI"
 name = "codex-x86_64-unknown-linux-musl.tar.gz"
 sha256 = "306865417d4ee7a927785852910a527f41e1e159add390ac5ae3accb67d44a13"
 
-[assets.x86_64-pc-windows-msvc]
-name = "codex-x86_64-pc-windows-msvc.exe.zip"
-sha256 = "aad5cf364c873b148e462b58fd06ad7b37fcab9b996be67133386b9322df26bb"
-
 [assets.code-mode-host-x86_64-unknown-linux-musl]
 name = "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz"
 sha256 = "ac6cd6288f0e39f46a33eba1cfd37711651f14f33dbc73d6a1b82eb45e038cac"

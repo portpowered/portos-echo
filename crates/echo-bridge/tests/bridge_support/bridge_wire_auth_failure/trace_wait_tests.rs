@@ -150,11 +150,7 @@ async fn trace_wait_missing_file_reports_timeout_without_payloads() {
 #[tokio::test]
 #[ignore = "T3 requires local child process"]
 async fn trace_wait_process_preserves_stdout_and_reports_live_then_exited() {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("cmd");
-        command.args(["/D", "/Q", "/C", "echo synthetic-ready & set /p line= & exit /b 0"]);
-        command
-    } else {
+    let mut command = {
         let mut command = Command::new("sh");
         command.args(["-c", "echo synthetic-ready; read line; exit 0"]);
         command

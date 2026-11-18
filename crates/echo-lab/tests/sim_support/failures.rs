@@ -68,7 +68,7 @@ fn m1_restart_diagnostics_incomplete_trace_and_cancellation_keep_original_failur
 fn unlaunchable_bridge_closes_the_world_and_a_fresh_run_ignores_old_artifacts() {
     let failed = Session::new();
     failed.scenario(json!([{"press":"action"}]), json!({}));
-    let invalid = failed.0.join("invalid.exe");
+    let invalid = failed.0.join("invalid-binary");
     std::fs::write(&invalid, b"not an executable").unwrap();
     let output = failed.command(invalid.to_str().unwrap()).output().unwrap();
     assert_eq!(output.status.code(), Some(1));

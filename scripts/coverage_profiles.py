@@ -20,8 +20,7 @@ def profdata_tool():
     directory = subprocess.check_output(
         ["rustc", f"+{TOOLCHAIN}", "--print", "target-libdir"], text=True
     ).strip()
-    suffix = ".exe" if os.name == "nt" else ""
-    return str(Path(directory).parent / "bin" / f"llvm-profdata{suffix}")
+    return str(Path(directory).parent / "bin" / "llvm-profdata")
 
 
 def annotation(value):

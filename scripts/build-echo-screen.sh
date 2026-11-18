@@ -13,8 +13,7 @@ android_jar="$ANDROID_HOME/platforms/android-34/android.jar"
 for tool in aapt2 zipalign; do
   [ -x "$tools/$tool" ] || fail "build-tools 35.0.0 $tool is required"
 done
-# The Windows SDK ships batch launchers for these same SDK Java tools.
-# Invoke their jars directly from POSIX sh rather than crossing into cmd.exe.
+# Use the installed SDK launchers, with the same SDK jars as a fallback.
 d8() {
   if [ -f "$tools/d8" ]; then
     "$tools/d8" "$@"

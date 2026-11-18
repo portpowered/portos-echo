@@ -17,7 +17,7 @@ async fn m2_codex_owner_runs_real_pinned_media_and_settles_played_before_idle() 
 
 #[tokio::test]
 async fn t3_m2_codex_provider_closes_before_a_call_without_waiting_for_an_offer() {
-    let python = if cfg!(windows) { "python" } else { "python3" };
+    let python = "python3";
     let owner = provider::Provider::start(python).await.unwrap();
     let observed = tokio::time::timeout(DEADLINE, owner.close()).await.unwrap().unwrap();
     assert_eq!(
@@ -28,7 +28,7 @@ async fn t3_m2_codex_provider_closes_before_a_call_without_waiting_for_an_offer(
 
 #[tokio::test]
 async fn t3_m1_repeated_provider_quiesces_and_closes_without_an_admitted_call() {
-    let python = if cfg!(windows) { "python" } else { "python3" };
+    let python = "python3";
     let owner = provider::Provider::start_m1(python).await.unwrap();
     tokio::time::timeout(DEADLINE, owner.quiesce()).await.unwrap().unwrap();
     let observed = tokio::time::timeout(DEADLINE, owner.close()).await.unwrap().unwrap();
@@ -233,7 +233,7 @@ async fn continuous_control(
 
 #[tokio::test]
 async fn t3_m2_codex_host_failure_names_the_dependency_without_echoing_payloads() {
-    let python = if cfg!(windows) { "python" } else { "python3" };
+    let python = "python3";
     for (event, expected) in [
         ("host.failed", "m2: pinned hassmic-host startup failed before readiness"),
         ("untrusted-payload", "m2: unexpected hassmic-host startup observation"),

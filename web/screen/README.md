@@ -83,10 +83,8 @@ stay in ignored `test-results`; CI uploads them as `screen-evidence-<head>`.
 Review inspects Ready, Approval and Emotion in that archive and posts its link.
 To intentionally regenerate goldens, run `npm run build`, then
 `UPDATE_SCREEN_SNAPSHOTS=1 node --test --test-concurrency=1 tests/*.test.mjs`
-in a POSIX shell (PowerShell: set `$env:UPDATE_SCREEN_SNAPSHOTS='1'` before the
-Node command, then `Remove-Item Env:UPDATE_SCREEN_SNAPSHOTS`). Inspect every
+in a Linux POSIX shell. Inspect every
 changed PNG and semantic snapshot before committing its golden hash; run normal
-`npm test` afterward. Windows and Linux retain separate pixel baselines because
-system font rendering differs. This is isolated page proof; real
+`npm test` afterward. Linux pixel baselines protect rendering. This is isolated page proof; real
 authenticated bridge transport (W2-SCREEN), assembled W1 (W1-INTEGRATION),
 Android compatibility/density (S3-WEBVIEW), and device milestones remain unproved.

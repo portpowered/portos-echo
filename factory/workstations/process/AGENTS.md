@@ -35,8 +35,8 @@ review.
   or `gh workflow run targeted.yml --ref <lane-branch> -f scenarios=m4-spoof-tool` (selectors combine).
   Follow `docs/program/coordinator.md`, Hosted targeted witnesses, to match run branch/time/head SHA,
   link the run, inspect TARGETED_RESULT summaries and download scenario report.json artifacts.
-  No soak/native-load/flake cohort is required for any story. No per-PR Windows-native WSL cohorts or
-  lane payload demands for them: Windows is a temporary host. Retain existing Windows jobs; only the
+  No soak/native-load/flake cohort is required for any story. Linux is the only supported platform
+  for building, testing and running Echo (owner, 2026-11-18); Windows support is retired. Only the
   owner changes required checks. Require changed-path signs of life and clean architecture following
   `docs/program/rules.md`. Allow one `gh run rerun <id> --failed` for intermittent hosted failure;
   file a persistent flake as its own lane. Required red blocks merge; nextest retries remain zero.

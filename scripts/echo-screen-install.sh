@@ -1,7 +1,6 @@
 #!/bin/sh
 # Coordinator-only on hardware; tests put the prebuilt fake adb on PATH.
 set -eu
-export MSYS_NO_PATHCONV=1
 
 usage() {
   printf '%s\n' 'Usage: sh scripts/echo-screen-install.sh [--url <page-url>]' \
@@ -46,10 +45,6 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 apk="$root/target/echo-screen/echo-screen.apk"
 if [ "$uninstall" = false ]; then
   [ -f "$apk" ] && [ -r "$apk" ] || fail 'APK is not readable'
-  # adb is a native Windows executable; only its local APK path needs conversion.
-  if command -v cygpath >/dev/null 2>&1; then
-    apk=$(cygpath -m "$apk")
-  fi
 fi
 command -v adb >/dev/null 2>&1 || fail 'adb is required'
 umask 077

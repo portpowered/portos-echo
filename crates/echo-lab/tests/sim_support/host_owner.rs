@@ -19,10 +19,8 @@ impl Host {
         std::fs::create_dir_all(root.parent().unwrap()).unwrap();
         std::fs::create_dir(&root).unwrap();
         let adapter = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/host_tests/owner.py");
-        let python = root.join(if cfg!(windows) { "python.cmd" } else { "python" });
-        let script = if cfg!(windows) {
-            format!("@echo off\r\npython -u \"{}\" {directory} %*\r\n", adapter.display())
-        } else {
+        let python = root.join("python");
+        let script = {
             format!(
                 "#!/bin/sh\nexec python3 -u '{}' {directory} \"$@\"\n",
                 adapter.display()

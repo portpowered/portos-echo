@@ -1,11 +1,15 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 17
+last modified: 2026, november, 18
 status: active; measured facts, each with its date and source
 ---
 
 # Measured baselines
+
+Windows measurements and installation procedures below are historical evidence only.
+Since the owner decision of 2026-11-18, Linux is the only supported build, test and runtime platform.
+Measurement values, dates and their original limitations are retained.
 
 Facts measured on the real device, bench and services. Each row has its date and how it was measured. Plans and
 factory payloads cite these instead of rediscovering them. Add a row whenever a measurement changes a decision.

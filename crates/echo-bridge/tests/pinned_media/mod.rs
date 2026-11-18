@@ -22,13 +22,13 @@ async fn t3_pinned_codex_media_and_role_aware_transcripts() {
 
 async fn journey() {
     let directory = tempfile::tempdir().unwrap();
-    private_parent(directory.path());
+
     let config = CodexConfig {
         binary: Some(binary()),
         home: Some(directory.path().join("home")),
         ..CodexConfig::default()
     };
-    let mut provider = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let mut provider = Command::new("python3")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -190,12 +190,7 @@ async fn echo_ready(peer: &mut LivePeer) -> usize {
 
 fn binary() -> std::path::PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut command = if cfg!(windows) {
-        let mut command = std::process::Command::new("powershell.exe");
-        command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
-        command.arg(root.join("scripts/codex-app-server.ps1"));
-        command
-    } else {
+    let mut command = {
         let mut command = std::process::Command::new("sh");
         command.arg(root.join("scripts/codex-app-server.sh"));
         command
@@ -203,38 +198,4 @@ fn binary() -> std::path::PathBuf {
     let output = command.env("ECHO_CODEX_OFFLINE", "1").output().unwrap();
     assert!(output.status.success(), "offline pinned-binary resolution failed");
     String::from_utf8(output.stdout).unwrap().trim().into()
-}
-
-#[cfg(not(windows))]
-fn private_parent(_: &Path) {}
-
-#[cfg(windows)]
-fn private_parent(path: &Path) {
-    let script = r"
-$ErrorActionPreference = 'Stop'
-$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = New-Object System.Security.AccessControl.DirectorySecurity
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($sid in @($user.Value, 'S-1-5-18', 'S-1-5-32-544')) {
-    $identity = New-Object System.Security.Principal.SecurityIdentifier $sid
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-    $acl.AddAccessRule($rule)
-}
-[System.IO.Directory]::SetAccessControl($env:ECHO_MEDIA_TEST_PARENT, $acl)
-";
-    let mut command = std::process::Command::new("powershell.exe");
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().eq_ignore_ascii_case("PSModulePath") {
-            command.env_remove(key);
-        }
-    }
-    assert!(
-        command
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
-            .env("ECHO_MEDIA_TEST_PARENT", path)
-            .status()
-            .unwrap()
-            .success()
-    );
 }

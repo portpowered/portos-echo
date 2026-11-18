@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 18
 status: active; documentation index
 ---
 
@@ -63,7 +63,7 @@ npx --yes @mermaid-js/mermaid-cli@11.12.0 --version
 ~~~
 
 Install missing lychee with `cargo install --locked --version 0.24.2 lychee`, as permitted by the Phase F packet.
-Use Python 3.12 (`python` on Windows, `python3` on Ubuntu), Node 24, GNU Make and POSIX sh.
+Use Python 3.12 (`python` and `python3` on PATH), Node 24, GNU Make and POSIX sh on Linux.
 The Mermaid CLI requires its supported local headless browser; a missing browser fails the gate.
 
 ~~~sh
@@ -91,59 +91,23 @@ Add each new tracked documentation page to this index in the same change.
 - [Codex local fake: S5](spikes/codex-local-fake.md)
 - [Frame-based Codex media peer](adr/0027-echo-media.md)
 
-## Windows WSL helpers
+## Linux hosts
 
-Windows helpers select one guest with `ECHO_WSL_DISTRO`. Unset or empty selects
-Ubuntu; a nonempty value must contain only ASCII letters, digits, `.`, `_` or `-`.
-Names preserve case. Invalid input fails before WSL runs and names the variable.
-WSL failures name the resolved distro on stderr; there is no fallback or install.
-Linux uses native tools and ignores this setting, including invalid values.
+Linux is the only supported platform for building, testing and running Echo.
+Use the provisioned tools in `.github/actions/setup/action.yml`; helpers never
+install a toolchain implicitly. Build once with `make hassmic-host` and
+`cargo build -p echo-lab -p echo-bridge --bins --locked`, then run the documented
+`echo-lab run <scenario> --driver sim` entry points with local fake providers.
+The host controller launches `hassmic-host` directly as a Linux process.
 
-Select the provisioned replacement from PowerShell:
+Hosted CI is the quality gate. Use `targeted.yml` for focused Linux witnesses;
+never queue a full local `make ci`. The supported local Linux host is pe-ci.
+Authorized local builds/tests source `/opt/pe-ci-env.sh`, hold
+`/var/tmp/pe-ci.lock`, and use a private `/var/tmp` target removed on exit.
+Use relative worktree gitdir links when sharing a checkout with the host OS.
 
-~~~powershell
-$env:ECHO_WSL_DISTRO = 'pe-ci'
-~~~
-
-For POSIX shells use `export ECHO_WSL_DISTRO=pe-ci`. Never probe the damaged
-default guest. Unset/empty refusal tests use only the deny-only WSL substitute
-in `python scripts/test_build_echo.py -v`; they prove selection and error
-propagation, not the damaged guest's behavior.
-
-Every build/test using pe-ci holds `/var/tmp/pe-ci.lock` without a timeout.
-First verify interop (this starts only the selected replacement):
-
-~~~powershell
-wsl -d pe-ci -u root -- flock /var/tmp/pe-ci.lock `
-  /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Write-Output WSL_INTEROP_OK"
-~~~
-
-Require exit 0 and `WSL_INTEROP_OK`; stop and report if unavailable. Save this
-native validation script outside the checkout, replacing the worktree path:
-
-~~~powershell
-Set-Location '<worktree>'
-$env:ECHO_WSL_DISTRO = 'pe-ci'
-$env:PATH = (python scripts/make-posix.py) + ';' + $env:PATH
-sh tests/hassmic_host_smoke.sh
-if ($LASTEXITCODE) { exit $LASTEXITCODE }
-python scripts/test_build_echo.py -v
-exit $LASTEXITCODE
-~~~
-
-Run that script under the same lock, using its absolute Windows path:
-
-~~~powershell
-wsl -d pe-ci -u root -- flock /var/tmp/pe-ci.lock `
-  /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -File '<validation.ps1>'
-~~~
-
-Do not nest lock acquisition inside the Windows script. The bridge refusal
-helper `sh crates/echo-bridge/tests/bridge_refusal/host.sh` uses the same setting:
-retain its stdin, require a numeric port on stdout, close stdin, require
-`cleaned` and exit 0, and collect the launcher. Use prebuilt native echo-lab
-binaries for the W1 sim scenario; the runner never builds them.
-For Linux quality, source `/opt/pe-ci-env.sh` from a guest script, change to the
-worktree, and run `make ci` while holding the same lock. Long runs launch with
-`setsid -f`; print `QUALITY_LOCK_ACQUIRED` after acquiring the lock and capture
-the actual `QUALITY_EXIT` status alongside the tested HEAD. Keep logs outside git.
+Coordinator device runs also execute from Linux pe-ci with explicit Linux
+`adb` and `port` paths and the existing forwarding, firmware, quiet-hours and
+session safeguards. No networking or device configuration is changed by the
+platform removal. Physical reachability and acoustic proof remain coordinator
+T5 work; workers use explicit local fake adb/port binaries only.

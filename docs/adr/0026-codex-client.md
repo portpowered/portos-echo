@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 16
+last modified: 2026, november, 18
 status: implementation in progress
 ---
 
@@ -11,9 +11,9 @@ The [program plan](../program/plan.md#33-the-codex-app-server) selects the
 unmodified Codex app server for call control and delegated turns. `echo-codex`
 is an additive component; the bridge and its current Live path remain unchanged.
 The selected release is `rust-v0.160.0`, commit
-`a956835d020762cb2b570053af06f643a11c0ecc`. `codex.pin` fixes the Linux musl and
-Windows asset digests. Both helpers verify archives before publishing an external
-cache, retain upstream LICENSE and NOTICE, and reject corrupt warm entries.
+`a956835d020762cb2b570053af06f643a11c0ecc`. `codex.pin` fixes the Linux musl and code-mode-host
+asset digests. The Linux helper verifies archives before publishing an external
+cache, retains upstream LICENSE and NOTICE, and rejects corrupt warm entries.
 `ECHO_CODEX_OFFLINE=1` permits only cache reads during a test.
 
 The crate uses the workspace's existing `serde`, `serde_json`, `tokio` and
@@ -57,9 +57,8 @@ whether a caller chooses to deserialize a known projection.
 The supervisor creates a fresh external CODEX_HOME and separate empty working
 directory before starting a child. Existing homes and repository paths are
 rejected; the caller retains responsibility for deleting or retaining the home.
-Unix homes are created with mode 0700; Windows uses the caller's inherited
-directory ACL. The child receives an allowlisted system environment, with HOME
-and USERPROFILE redirected to its dedicated home. Proxy/certificate settings
+Linux homes are created with mode 0700. The child receives an allowlisted system environment, with HOME
+redirected to its dedicated home. Proxy/certificate settings
 may be supplied explicitly before launch; provider credentials use account RPC.
 Config overrides are individual argv entries, never shell input. Stderr is
 discarded so payloads cannot enter diagnostics or block an undrained pipe.
@@ -139,14 +138,9 @@ chains without invoking Git or depending on the source checkout. Existing work
 directories and marker files are retained. Preparation never opens, writes,
 copies or deletes `auth.json`.
 
-Unix homes require mode 0700. On Windows, inherited ACLs must be verifiable
-through the built-in, noninteractive PowerShell `Get-Acl` command. The owner
-and every allowed identity must be the current user, SYSTEM or Administrators.
-The script and argv are fixed; the target path is passed as environment data.
-Output is discarded and unverifiable privacy fails closed. The helper removes
-an inherited `PSModulePath` so PowerShell loads its own built-in security
-module. It does not modify production ACLs. Controlled-process fixtures create
-private parent directories to avoid depending on the host temp directory's ACL.
+Linux homes require mode 0700. The supervisor rejects public or unverifiable
+permissions before starting the child. Controlled-process fixtures create
+private parent directories; Windows ACL support was retired on 2026-11-18.
 
 The public supervisor tests exercise clean reopen with byte-identical synthetic
 authorization and retained marker/work bytes, rejection while the live owner
@@ -616,8 +610,8 @@ Explicit numeric loopback call/model routes now select a media peer restricted
 only to IPv4 loopback, with loopback candidates enabled. Ordinary configured
 calls retain the media peer's LAN defaults. No STUN endpoint or new dependency
 is introduced. The executable heap-allocates the peer factory and each admitted
-conversation future; the Windows main thread otherwise overflows its stack on
-the first real wake even though startup and component media tests pass.
+conversation future. These heap boundaries remain after retiring Windows support;
+the original stack-overflow observation is historical.
 
 The prebuilt executable witness in `bridge_codex_media` owns a private external
 home, the verified offline app-server pin, local Python provider, real echo-media
@@ -972,7 +966,7 @@ retaining its socket and sideband until the real owner closes. All children,
 peers and private external homes remain owned through cleanup.
 
 Canonical dispatch polling and execution futures have heap boundaries so the
-real-media and MCP call chain does not exhaust the Windows main stack. Work,
+real-media and MCP call chain retains bounded stack use. Work,
 cancellation, deadlines and the single process reader retain their owners.
 The lab process owner also retains partial JSONL bytes across cancelled reads;
 a control message cannot discard the beginning of a native receipt.

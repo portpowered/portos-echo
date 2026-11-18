@@ -353,7 +353,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn t3_media_progress_survives_clock_ticks_and_transcript_control() {
-        let python = if cfg!(windows) { "python" } else { "python3" };
+        let python = "python3";
         let mut command = tokio::process::Command::new(python);
         command.args([
             "-u",

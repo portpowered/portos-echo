@@ -11,7 +11,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SH = shutil.which("sh")
-FAKE = ROOT / "target" / "debug" / ("echo-lab-fake-adb.exe" if os.name == "nt" else "echo-lab-fake-adb")
+FAKE = ROOT / "target" / "debug" / "echo-lab-fake-adb"
 HOME = ["shell", "printf '%s\\n' org.portos.echoscreen > /data/local/hassmic/state/screen_home && chown system:system /data/local/hassmic/state/screen_home && chmod 644 /data/local/hassmic/state/screen_home"]
 START = ["shell", "am", "start", "-n", "org.portos.echoscreen/.MainActivity"]
 REMOVE = ["shell", "rm", "-f", "/data/local/hassmic/state/screen_home"]
@@ -45,15 +45,15 @@ def case(args=(), fail_step=None, missing=None):
         tools = root / "bin"
         tools.mkdir()
         # A closed PATH: no possibility of falling back to an installed real adb.
-        for name in ("dirname", "sed", "mktemp", "rm", "cygpath"):
+        for name in ("dirname", "sed", "mktemp", "rm"):
             tool = shutil.which(name)
             if tool:
                 wrapper = tools / name
                 wrapper.write_text("#!/bin/sh\nexec " + quote(Path(tool).as_posix()) + ' "$@"\n', encoding="utf-8")
                 wrapper.chmod(0o755)
         if missing != "adb":
-            shutil.copyfile(FAKE, tools / ("adb.exe" if os.name == "nt" else "adb"))
-            (tools / ("adb.exe" if os.name == "nt" else "adb")).chmod(0o755)
+            shutil.copyfile(FAKE, tools / "adb")
+            (tools / "adb").chmod(0o755)
         ledger = root / "ledger.jsonl"
         fixture = root / "fixture.json"
         install = ["install", "-r", apk.as_posix()]
@@ -67,9 +67,8 @@ def case(args=(), fail_step=None, missing=None):
             }
         fixture.write_text(json.dumps(responses), encoding="utf-8")
         env = dict(os.environ, PATH=str(tools), ECHO_LAB_FAKE_LEDGER=str(ledger),
-                   ECHO_LAB_FAKE_FIXTURE=str(fixture), MSYS_NO_PATHCONV="1")
-        # Native Windows -> MSYS sh parses unquoted apostrophes in CreateProcess
-        # argv. Enter through shell variables to reproduce a caller's quoted argv.
+                   ECHO_LAB_FAKE_FIXTURE=str(fixture))
+        # Keep hostile argument bytes literal through the caller's quoted argv.
         env["ECHO_SCREEN_TEST_SCRIPT"] = (scripts / "echo-screen-install.sh").as_posix()
         command = 'exec "$ECHO_SCREEN_TEST_SCRIPT"'
         for index, argument in enumerate(args):

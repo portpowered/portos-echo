@@ -415,14 +415,12 @@ fn nonterminal(error: std::io::Error) -> std::io::Error {
     std::io::Error::new(error.kind(), error)
 }
 pub(super) fn terminal(error: &std::io::Error, completed: bool) -> bool {
-    // Windows reports a peer reset on an established socket as WSAECONNABORTED (10053) as well as WSAECONNRESET.
-    let aborted = cfg!(windows) && error.kind() == std::io::ErrorKind::ConnectionAborted;
-    completed && (error.kind() == std::io::ErrorKind::ConnectionReset || aborted) && error.get_ref().is_none()
+    completed && (error.kind() == std::io::ErrorKind::ConnectionReset) && error.get_ref().is_none()
 }
 #[test]
-fn bridge_satellite_aborted_terminal_authority_is_windows_only() {
+fn bridge_satellite_aborted_is_not_terminal_authority() {
     let error = std::io::ErrorKind::ConnectionAborted.into();
-    assert_eq!(terminal(&error, true), cfg!(windows));
+    assert!(!terminal(&error, true));
     assert!(!terminal(&nonterminal(error), true));
 }
 #[tokio::test]

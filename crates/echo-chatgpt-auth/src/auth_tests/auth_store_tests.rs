@@ -4,6 +4,15 @@ use crate::{AuthError, AuthSource, auth_store};
 #[test]
 fn store_roundtrip_and_atomic_replacement_preserve_five_fields() {
     let directory = directory();
+    let staging = crate::auth_private::Directory::new(&directory.0).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&staging.0).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    drop(staging);
     let path = directory.0.join("credential.json");
     let mut first = record();
     auth_store::save(&path, &first).unwrap();
@@ -23,19 +32,6 @@ fn store_roundtrip_and_atomic_replacement_preserve_five_fields() {
 fn check_permissions(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
-}
-#[cfg(windows)]
-fn check_permissions(path: &std::path::Path) {
-    let script = r"$ErrorActionPreference='Stop'; $a=[System.IO.File]::GetAccessControl($env:ECHO_AUTH_TEST_FILE);
-$s=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;
-$r=@($a.Access);
-if($r.Count -ne 1 -or $r[0].IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $s.Value -or $r[0].AccessControlType -ne 'Allow' -or $r[0].FileSystemRights -ne 'FullControl'){exit 1};";
-    let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .env("ECHO_AUTH_TEST_FILE", path)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "private DACL assertion failed");
 }
 #[test]
 fn store_invalid_missing_oversized_and_write_failure_are_safe() {

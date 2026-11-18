@@ -183,11 +183,7 @@ fn single_explicit_bridge_overrides_available_sibling() {
         json!([{"expect_trace":["wyoming.run_started","wyoming.mic_frames {count_gte: 10}","wyoming.run_ended"]}]),
         json!({}),
     );
-    let bridge = session.0.join(if cfg!(windows) {
-        "override bridge.exe"
-    } else {
-        "override bridge"
-    });
+    let bridge = session.0.join("override bridge");
     std::fs::copy(env!("CARGO_BIN_EXE_echo-lab-sim-script"), &bridge).unwrap();
     let mut records = super::records();
     for record in records.as_array_mut().unwrap() {
@@ -210,13 +206,9 @@ fn single_explicit_bridge_overrides_available_sibling() {
 fn single_missing_selected_bridge_fails_before_artifacts_or_world_start() {
     let session = Session::new();
     w1_copy(&session, 10);
-    let cli = session.0.join(if cfg!(windows) { "echo-lab.exe" } else { "echo-lab" });
+    let cli = session.0.join("echo-lab");
     std::fs::copy(env!("CARGO_BIN_EXE_echo-lab"), &cli).unwrap();
-    let missing = cli.with_file_name(if cfg!(windows) {
-        "echo-lab-sim-bridge.exe"
-    } else {
-        "echo-lab-sim-bridge"
-    });
+    let missing = cli.with_file_name("echo-lab-sim-bridge");
     let output = std::process::Command::new(&cli)
         .current_dir(&session.0)
         .args([

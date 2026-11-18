@@ -12,7 +12,6 @@ import os
 import pathlib
 import platform
 import shutil
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -31,9 +30,6 @@ def fetch(url, path):
 
 
 def metadata_path(base, value):
-    # Windows-created worktrees can also be invoked through WSL.
-    if pathlib.PureWindowsPath(value).is_absolute():
-        value = subprocess.check_output(['wslpath', '-u', value], text=True).strip()
     return (base / value).resolve(strict=True)
 
 
@@ -90,7 +86,7 @@ def main():
     if (pin['repo'], pin['tag'], pin['commit']) != ('https://github.com/openai/codex', 'rust-v0.160.0', commit):
         raise ValueError('invalid pin')
     if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'AMD64'):
-        raise ValueError('unsupported host; Windows uses codex-app-server.ps1')
+        raise ValueError('unsupported host; requires Linux x86_64')
     target = 'x86_64-unknown-linux-musl'
     asset = pin['assets'][target]
     expected = '306865417d4ee7a927785852910a527f41e1e159add390ac5ae3accb67d44a13'

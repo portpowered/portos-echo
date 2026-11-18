@@ -122,7 +122,7 @@ mod tests {
     fn options(path: &Path) -> Options {
         Options {
             bridge_config: Some(path.to_owned()),
-            python: if cfg!(windows) { "python" } else { "python3" }.into(),
+            python: "python3".into(),
             wake_clip: None,
             sim: false,
             bridge: None,

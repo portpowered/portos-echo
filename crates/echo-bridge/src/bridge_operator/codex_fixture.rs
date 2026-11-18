@@ -14,9 +14,7 @@ pub(super) struct Fixture {
 impl Fixture {
     pub fn new(mode: &str) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        #[cfg(windows)]
-        private_parent(directory.path());
-        let binary = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+        let binary = std::process::Command::new("python3")
             .args(["-c", "import sys; print(sys.executable)"])
             .output()
             .unwrap();
@@ -99,7 +97,7 @@ impl Fixture {
     }
 
     pub async fn child_closed(mut stream: tokio::net::TcpStream) {
-        // TerminateProcess resets held TCP connections on Windows; both EOF
+        // Process termination can reset held TCP connections; both EOF
         // and reset prove destruction of this child's connected socket.
         match stream.read(&mut [0]).await {
             Ok(count) => assert_eq!(count, 0),
@@ -144,7 +142,7 @@ fn watch_children(
             let (mut stream, _) = listener.accept().await.unwrap();
             assert_eq!(stream.read_u8().await.unwrap(), b'O');
             // Admit the child only once its instance-owned connection is held
-            // by this test. Windows may discard unread bytes on process kill.
+            // by this test. Process kill may discard unread bytes.
             stream.write_all(b"A").await.unwrap();
             if send.send(stream).is_err() {
                 break;
@@ -152,31 +150,4 @@ fn watch_children(
         }
     });
     (receive, task)
-}
-
-#[cfg(windows)]
-fn private_parent(path: &Path) {
-    let script = r"
-$ErrorActionPreference = 'Stop'
-$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = New-Object System.Security.AccessControl.DirectorySecurity
-$acl.SetOwner($user)
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($sid in @($user.Value, 'S-1-5-18', 'S-1-5-32-544')) {
-    $identity = New-Object System.Security.Principal.SecurityIdentifier $sid
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-    $acl.AddAccessRule($rule)
-}
-Set-Acl -LiteralPath $env:ECHO_OPERATOR_TEST_PARENT -AclObject $acl
-";
-    assert!(
-        std::process::Command::new("powershell.exe")
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
-            .env_remove("PSModulePath")
-            .env("ECHO_OPERATOR_TEST_PARENT", path)
-            .status()
-            .unwrap()
-            .success()
-    );
 }

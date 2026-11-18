@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from wsl_distro import DEFAULT_WSL_DISTRO
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,31 +47,6 @@ elif name == 'rustc':
     print('controlled rustc version')
 elif name == 'file':
     print('controlled file: ELF 32-bit ARM EABI5')
-elif name == 'uname':
-    print(os.environ.get('TEST_PLATFORM', 'Linux'))
-elif name == 'cygpath':
-    print('C:/controlled checkout')
-elif name == 'wsl':
-    if os.environ.get('TEST_PLATFORM') == 'Linux':
-        sys.exit('unexpected recursive WSL dispatch in controlled guest')
-    if os.environ.get('WSL_FAILURE'):
-        sys.exit('controlled WSL unavailable')
-    assert args[:3] == ['-d', os.environ['EXPECTED_DISTRO'], '--exec'], args
-    if args[3] == 'wslpath':
-        if os.environ.get('PATH_FAILURE'):
-            sys.exit(26)
-        print(os.getcwd().replace('\\', '/') if args[5] == 'C:/controlled checkout' else
-              json.loads(os.environ.get('PATH_TRANSLATIONS', '{}')).get(args[5], args[5]))
-    else:
-        import subprocess
-        assert args[3] == 'sh' and args[4] in ('-lc', '-c'), args
-        child = dict(os.environ, TEST_PLATFORM='Linux', HOME=os.environ['GUEST_HOME'])
-        guest_args = args[5:]
-        guest_args[3] = json.loads(os.environ.get('PATH_TRANSLATIONS', '{}')).get(guest_args[3], guest_args[3])
-        target_index = 3 if args[4] == '-c' else 4
-        guest_args[target_index] = json.loads(os.environ.get('GUEST_PATHS', '{}')).get(guest_args[target_index], guest_args[target_index])
-        # The controlled guest uses the same shell, without host login startup files.
-        sys.exit(subprocess.run(['sh', '-c', *guest_args], env=child).returncode)
 else:
     sys.exit('unexpected tool: ' + name)
 '''
@@ -84,8 +58,7 @@ class BuildEchoTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / 'scripts').mkdir()
-        for path in ('Makefile', 'scripts/build-echo.sh', 'scripts/build-echo-wsl.sh',
-                     'scripts/make-posix.py', 'scripts/wsl-distro.sh'):
+        for path in ('Makefile', 'scripts/build-echo.sh'):
             shutil.copyfile(ROOT / path, self.root / path)
         self.bin = self.root / 'bin'
         self.bin.mkdir()
@@ -95,40 +68,37 @@ class BuildEchoTests(unittest.TestCase):
         self.env = dict(os.environ)
         for name in ('ANDROID_NDK_HOME', 'ANDROID_NDK_LATEST_HOME', 'MAKEFLAGS',
                      'MFLAGS', 'MAKELEVEL', 'CARGO_FAILURE', 'NO_BINARY',
-                     'HEADERS', 'INSPECT_FAILURE', 'COMPILER_FAILURE', 'TEST_PLATFORM',
-                     'WSL_FAILURE', 'PATH_FAILURE', 'PATH_TRANSLATIONS', 'PARTIAL_BINARY',
-                     'GUEST_PATHS', 'ECHO_WSL_DISTRO'):
+                     'HEADERS', 'INSPECT_FAILURE', 'COMPILER_FAILURE', 'PARTIAL_BINARY'):
             self.env.pop(name, None)
-        self.env.update(EXPECTED_DISTRO=DEFAULT_WSL_DISTRO, COMMAND_LOG=str(self.log), WITNESS=self.witness.as_posix(),
-                        GUEST_HOME=self.root.as_posix(),
+        self.env.update(COMMAND_LOG=str(self.log), WITNESS=self.witness.as_posix(),
                         CARGO_TARGET_DIR=(self.root / 'output with spaces').as_posix())
         self.env['PATH'] = str(self.bin) + os.pathsep + self.env['PATH']
-        if os.name == 'nt':
-            git = Path(shutil.which('git.exe')).resolve()
-            self.env['PATH'] += os.pathsep + str(git.parent.parent / 'usr/bin')
         self.shell = shutil.which('sh', path=self.env['PATH'])
-        for name in ('cargo', 'rustc', 'file', 'curl', 'wget', 'rustup',
-                     'uname', 'wsl', 'cygpath'):
+        for name in ('cargo', 'rustc', 'file', 'curl', 'wget', 'rustup'):
             self.tool(self.bin / name)
         self.ndk = self.make_ndk('ndk with spaces')
+        self.optional('echo-bridge')
 
-    def test_windows_override_selects_every_guest_operation(self):
-        self.env.update(ECHO_WSL_DISTRO='pe-ci', EXPECTED_DISTRO='pe-ci')
-        self.make_ndk('android/android-ndk-r27d')
-        result = self.run_helper(['echo-contracts'], TEST_PLATFORM='MINGW64_NT')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        calls = [c for c in self.commands() if c['name'] == 'wsl']
-        self.assertTrue(calls)
-        self.assertTrue(all(c['args'][:3] == ['-d', 'pe-ci', '--exec'] for c in calls))
 
-    def test_linux_build_ignores_invalid_windows_selector(self):
-        result, _ = self.run_make(ECHO_WSL_DISTRO='bad;name', ANDROID_NDK_HOME=str(self.ndk))
+    def test_paths_and_literal_packages_are_data(self):
+        packages = ['echo-bridge', 'space package', 'glob*', 'semi;colon', '$(touch sentinel)']
+        result = self.run_helper(packages, ANDROID_NDK_HOME=self.ndk.as_posix())
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(any(c['name'] == 'wsl' for c in self.commands()))
+        cargo, = [c for c in self.commands() if c['name'] == 'cargo']
+        self.assertEqual(cargo['args'][7::2], packages)
+        self.assertEqual(cargo['env']['RUSTUP_AUTO_INSTALL'], '0')
+        self.assertFalse((self.root / 'sentinel').exists())
+
+    def test_library_only_helper_keeps_binary_unproved(self):
+        result = self.run_helper(['echo-config'], ANDROID_NDK_HOME=self.ndk.as_posix())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('library-only build', result.stdout)
+        self.assertNotIn('binary size', result.stdout)
+        self.assertEqual([c['name'] for c in self.commands()],
+                         ['armv7a-linux-androideabi24-clang', 'rustc', 'cargo'])
 
     def commands(self):
-        records = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
-        return [record for record in records if record['name'] != 'uname']
+        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
     def tool(self, path):
         path.write_text('#!/bin/sh\nexec python "$WITNESS" "$(basename "$0")" "$@"\n',
@@ -149,11 +119,7 @@ class BuildEchoTests(unittest.TestCase):
         return ndk
 
     def run_make(self, **env):
-        selected = self.env | env
-        # Preserve the controlled tools ahead of the Windows POSIX bootstrap.
         args = ['make', '--no-print-directory', 'build-echo']
-        if os.name == 'nt':
-            args.append('PATH=' + selected['PATH'])
         result = subprocess.run(args,
                                 cwd=self.root, env=self.env | env,
                                 capture_output=True, text=True, timeout=30)
@@ -173,96 +139,6 @@ class BuildEchoTests(unittest.TestCase):
                               cwd=self.root, env=self.env | env,
                               capture_output=True, text=True, timeout=30)
 
-    def test_windows_default_uses_guest_ndk_and_public_make(self):
-        self.make_ndk('android/android-ndk-r27d')
-        self.optional('echo-bridge')
-        result, commands = self.run_make(TEST_PLATFORM='MINGW64_NT')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        cargo, = [c for c in commands if c['name'] == 'cargo']
-        self.assertTrue(cargo['env']['ANDROID_NDK_HOME'].endswith('/android/android-ndk-r27d'))
-        self.assertEqual(cargo['env']['RUSTUP_AUTO_INSTALL'], '0')
-        self.assertIn('echo-bridge', cargo['args'])
-        self.assertIn('binary size 19 bytes', result.stdout)
-
-    def test_windows_paths_and_literal_packages_are_data(self):
-        packages = ['echo-bridge', 'space package', 'glob*', 'semi;colon', '$(touch sentinel)']
-        result = self.run_helper(packages, TEST_PLATFORM='MSYS_NT',
-                                 ANDROID_NDK_HOME=self.ndk.as_posix())
-        self.assertEqual(result.returncode, 0, result.stderr)
-        cargo, = [c for c in self.commands() if c['name'] == 'cargo']
-        self.assertEqual(cargo['args'][7::2], packages)
-        self.assertFalse((self.root / 'sentinel').exists())
-        dispatch, = [c for c in self.commands() if c['name'] == 'wsl' and '-lc' in c['args']]
-        self.assertEqual(dispatch['args'][-len(packages):], packages)
-
-    def test_windows_explicit_invalid_and_tool_failures_remove_stale(self):
-        self.env['CARGO_TARGET_DIR'] = 'output with spaces'
-        self.make_ndk('android/android-ndk-r27d')
-        for fault, diagnostic in [
-                ({'ANDROID_NDK_HOME': (self.root / 'missing').as_posix()}, 'does not exist'),
-                ({'WSL_FAILURE': '1'}, "WSL distro '" + self.env['EXPECTED_DISTRO'] + "'"),
-                ({'PATH_FAILURE': '1'}, 'could not translate'),
-                ({'COMPILER_FAILURE': '1'}, 'compiler failed'),
-                ({'INSPECT_FAILURE': '1'}, 'inspection failed')]:
-            with self.subTest(fault=fault):
-                binary = self.stale_binary()
-                result, _ = self.run_make(TEST_PLATFORM='CYGWIN_NT', **fault)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(diagnostic, result.stderr)
-                self.assertFalse(binary.exists())
-                self.assertNotIn('binary size', result.stdout)
-
-    def test_windows_ndk_translation_failure_cleans_distinct_guest_output(self):
-        guest_target = '/guest-only/output with spaces'
-        binary = self.root / 'guest filesystem/armv7-linux-androideabi/release/echo-bridge'
-        binary.parent.mkdir(parents=True)
-        binary.write_bytes(b'stale guest artifact')
-        result = self.run_helper(['echo-bridge'], TEST_PLATFORM='MINGW64_NT',
-            CARGO_TARGET_DIR=guest_target, ANDROID_NDK_HOME='Z:/missing NDK',
-            PATH_FAILURE='1', GUEST_PATHS=json.dumps({guest_target: binary.parents[2].as_posix()}))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('could not translate', result.stderr)
-        self.assertFalse(binary.exists())
-        self.assertNotIn('binary size', result.stdout)
-        self.assertNotIn('cargo', [c['name'] for c in self.commands()])
-
-    def test_windows_drive_unc_and_guest_paths_translate_without_evaluation(self):
-        for selected in ('Z:/NDK with spaces', '//host/share/NDK with spaces',
-                         '/guest/NDK with spaces'):
-            with self.subTest(selected=selected):
-                self.log.unlink(missing_ok=True)
-                result = self.run_helper(['echo-config'], TEST_PLATFORM='MINGW64_NT',
-                    ANDROID_NDK_HOME=selected,
-                    PATH_TRANSLATIONS=json.dumps({selected: self.ndk.as_posix()}))
-                self.assertEqual(result.returncode, 0, result.stderr)
-                cargo, = [c for c in self.commands() if c['name'] == 'cargo']
-                self.assertTrue(cargo['env']['ANDROID_NDK_HOME'].endswith('/ndk with spaces'))
-
-    def test_windows_fallback_precedence_and_absent_default(self):
-        result, _ = self.run_make(TEST_PLATFORM='MINGW64_NT')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('selected Android NDK directory does not exist', result.stderr)
-        for primary, fallback, accepted in (
-                ('', self.ndk.as_posix(), True),
-                ((self.root / 'missing').as_posix(), self.ndk.as_posix(), False),
-                ('', (self.root / 'missing').as_posix(), False)):
-            with self.subTest(primary=primary, fallback=fallback):
-                self.log.unlink(missing_ok=True)
-                result, commands = self.run_make(TEST_PLATFORM='MINGW64_NT',
-                    ANDROID_NDK_HOME=primary, ANDROID_NDK_LATEST_HOME=fallback)
-                self.assertEqual(result.returncode == 0, accepted, result.stderr)
-                self.assertEqual(sum(c['name'] == 'cargo' for c in commands), int(accepted))
-
-    def test_missing_wsl_reports_prerequisite_and_cleans_reachable_output(self):
-        self.env['CARGO_TARGET_DIR'] = 'output with spaces'
-        (self.bin / 'wsl').unlink()
-        path = os.pathsep.join(entry for entry in self.env['PATH'].split(os.pathsep)
-                               if not any((Path(entry) / name).is_file() for name in ('wsl', 'wsl.exe')))
-        binary = self.stale_binary()
-        result = self.run_helper(['echo-bridge'], TEST_PLATFORM='MINGW64_NT', PATH=path)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("installed WSL distro '" + self.env['EXPECTED_DISTRO'] + "' required", result.stderr)
-        self.assertFalse(binary.exists())
 
     def test_cargo_partial_failure_removes_unpublishable_binary(self):
         binary = self.stale_binary()
@@ -320,9 +196,9 @@ class BuildEchoTests(unittest.TestCase):
                                    'echo-audio', 'echo-live', 'echo-chatgpt-auth',
                                    'echo-agent-api', 'echo-agent-loop', 'echo-mcp-auth',
                                    'echo-mcp-client', 'echo-screen-contract',
-                                   'echo-screen-server', 'echo-delegation', 'echo-signin'])
-        # Windows environment mappings normalize variable names to uppercase.
-        child = {key.upper(): value for key, value in cargo['env'].items()}
+                                   'echo-screen-server', 'echo-delegation', 'echo-signin',
+                                   'echo-bridge'])
+        child = cargo['env']
         self.assertTrue(child['ANDROID_NDK_HOME'].endswith('/ndk with spaces'))
         for key, tool in (
             ('CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER', 'armv7a-linux-androideabi24-clang'),
@@ -330,15 +206,14 @@ class BuildEchoTests(unittest.TestCase):
             ('CXX_armv7_linux_androideabi', 'armv7a-linux-androideabi24-clang++'),
             ('AR_armv7_linux_androideabi', 'llvm-ar'),
         ):
-            self.assertEqual(child[key.upper()], child['ANDROID_NDK_HOME'] +
+            self.assertEqual(child[key], child['ANDROID_NDK_HOME'] +
                              '/toolchains/llvm/prebuilt/linux-x86_64/bin/' + tool)
         self.assertEqual(child['ANDROID_PLATFORM'], 'android-24')
         for package in packages:
             self.assertIn(f'build-echo: built {package} for armv7-linux-androideabi (release)', result.stdout)
-        self.assertIn('library-only build', result.stdout)
-        self.assertNotIn('binary size', result.stdout)
+        self.assertIn('binary size 19 bytes', result.stdout)
         self.assertEqual([c['name'] for c in commands],
-                         ['armv7a-linux-androideabi24-clang', 'rustc', 'cargo'])
+                         ['armv7a-linux-androideabi24-clang', 'rustc', 'cargo', 'file', 'llvm-readelf'])
 
     def test_fallback_and_empty_primary(self):
         for primary in (None, ''):
@@ -376,7 +251,7 @@ class BuildEchoTests(unittest.TestCase):
     def test_missing_binary_does_not_inspect_stale_artifact(self):
         self.optional('echo-bridge')
         binary = Path(self.env['CARGO_TARGET_DIR']) / 'armv7-linux-androideabi/release/echo-bridge'
-        binary.parent.mkdir(parents=True)
+        binary.parent.mkdir(parents=True, exist_ok=True)
         binary.write_bytes(b'stale')
         result, commands = self.run_make(ANDROID_NDK_HOME=str(self.ndk), NO_BINARY='1')
         self.assertNotEqual(result.returncode, 0)
@@ -426,10 +301,6 @@ class BuildEchoTests(unittest.TestCase):
                 self.assertFalse((Path(self.env['CARGO_TARGET_DIR']) / 'armv7-linux-androideabi/release/echo-bridge').exists())
                 self.assertIn(diagnostic, result.stderr)
                 self.assertNotIn('binary size', result.stdout)
-
-
-from test_wsl_distro import (SelectorTests, DispatchTests, PythonDispatchTests,
-                            NumericRelayTests, ControllerFailureTests)
 
 
 if __name__ == '__main__':

@@ -1,20 +1,7 @@
 #!/bin/sh
-# Build on Linux; Windows callers use the same implementation in the selected WSL distro.
+# Build and run the pinned native Linux host.
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-case $(uname -s) in
-  MINGW* | MSYS* | CYGWIN*)
-    # shellcheck source=scripts/wsl-distro.sh
-    . "$root/scripts/wsl-distro.sh"
-    distro=$(echo_wsl_distro)
-    script=$(echo_wsl_run "$distro" wslpath -u "$(cygpath -am "$root/scripts/hassmic-host.sh")")
-    source_path=''
-    if [ -n "${HASSMIC_SRC:-}" ]; then
-      source_path=$(echo_wsl_run "$distro" wslpath -u "$(cygpath -am "$HASSMIC_SRC")")
-    fi
-    echo_wsl_exec "$distro" sh -lc "export HASSMIC_SRC=\"\$1\"; shift; exec sh \"\$@\"" sh "$source_path" "$script" "$@"
-    ;;
-esac
 cd "$root"
 fail() {
   printf 'hassmic-host: %s\n' "$*" >&2

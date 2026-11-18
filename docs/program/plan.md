@@ -170,8 +170,8 @@ encode the undocumented parts (endpoints, headers, the V3 events, the sideband's
 need, since the Echo's disk is small.
 
 - **Pin.** Release `rust-v0.160.0` (commit `a956835d020762cb2b570053af06f643a11c0ecc`), Apache-2.0 with a NOTICE that
-  any redistributed build or adapted file keeps. The PC uses the published `x86_64-unknown-linux-musl` (CI) or
-  Windows (operator) binary, checked against a pinned SHA-256 by `scripts/codex-app-server.sh`; the Echo uses our
+  any redistributed build or adapted file keeps. The Linux host uses the published `x86_64-unknown-linux-musl`
+  binary, checked against a pinned SHA-256 by `scripts/codex-app-server.sh`; the Echo uses our
   own armv7 build of the same commit. Moving the pin is a coordinator PR, like `hassmic.pin`.
 - **Process.** `codex app-server --listen stdio://`, a child of the bridge with its own `CODEX_HOME` outside the
   repository. Messages are newline-delimited JSON-RPC without a `"jsonrpc"` field. The bridge sends `initialize`
@@ -350,6 +350,9 @@ What follows from it:
 
 ## 6. The bridge: what it runs and where
 
+Linux is the only supported platform for building, testing and running Echo (owner, 2026-11-18).
+Coordinator device runs use Linux pe-ci with the existing T5 safeguards.
+
 - **What it is.** A single Rust binary, `echo-bridge`, in this workspace, sharing `echo-contracts`, so the Wyoming,
   screen and GPT-Live protocols are contracts checked by the same CI gates as every other crate.
 - **What it does.** It connects out to hassmic's Wyoming port on the Echo (`run-satellite`), owns the GPT-Live
@@ -360,7 +363,7 @@ What follows from it:
 - **Audio.** hassmic announces its formats in `audio-start` (rate, width, channels); the bridge resamples between
   them and the WebRTC track's Opus at 48 kHz. Every queue is bounded and drops the oldest frame under backpressure.
   The bridge counts received microphone frames per run, which is half of the mute proof (section 8.4).
-- **Where it runs first: the operator's Windows PC on the LAN,** in WSL beside the CI-identical toolchain. The
+- **Where it runs first: Linux on the operator's PC on the LAN,** beside the CI-identical toolchain. The
   credentials are the operator's own, so they stay on the operator's machine; the Echo is on the same LAN, so
   Wyoming never crosses the internet; nothing is exposed to the internet. The cost is that the device only works
   while the PC is on, which is fine for development and the bench.

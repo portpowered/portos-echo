@@ -1,6 +1,6 @@
 """Private pinned-host owner. JSON stdin, bounded fixed replies, EOF teardown.
 
-Linux/WSL only below the launcher. The upstream audio-file backend has a real
+Native Linux process owner. The upstream audio-file backend has a real
 clock; FIFO consumption and log markers provide readiness without sleep oracles.
 """
 import contextlib, ctypes, hashlib, json, os, queue, runpy, select, shutil
@@ -34,9 +34,6 @@ def parent_death_guard():
 
 @contextlib.contextmanager
 def controller_signals(message="controller cancelled by signal"):
-    if os.name == "nt":
-        yield
-        return
     signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
     def cancelled(signum, _frame):
         # A second handled signal must not interrupt collection/unstaging.
@@ -55,11 +52,8 @@ def controller_signals(message="controller cancelled by signal"):
 def emit(value):
     print(json.dumps(value), flush=True)
 
-sys.path.insert(0, str(ROOT / "scripts"))
-from wsl_distro import resolve_wsl_distro
-from wsl_host import LauncherError, LauncherChild, HostCancelled
-
-from wsl_relay import observations, guest, diagnostic_tail
+class HostCancelled(RuntimeError):
+    """Caller EOF cancelled a pending host command."""
 
 def launcher_input(events):
     try:
@@ -83,166 +77,10 @@ def launcher_input(events):
         events.put(("error", None))
         return False
 
-def launcher_translation(proc, events):
-    try:
-        data = proc.stdout.read(LIMIT + 1)
-        if len(data) > LIMIT or proc.wait() != 0:
-            raise ValueError("translation failed")
-        path = data.decode("utf-8").strip()
-        if not path or "\n" in path:
-            raise ValueError("invalid translated path")
-        events.put(("translated", path))
-    except (OSError, ValueError, UnicodeError):
-        events.put(("error", None))
 
-def launcher_write(proc, commands, events, relays=()):
-    # Raw pipes avoid a buffered-writer lock in the cleanup owner. A blocked
-    # write must not prevent the supervisor from observing caller EOF.
-    try:
-        while True:
-            data = commands.get()
-            if data is None:
-                proc.stdin.close()
-                return
-            if json.loads(data).get("action") in ("kill", "restart"):
-                for relay in relays:
-                    relay.replace(None, awaiting_ready=True)
-            while data:
-                count = proc.stdin.write(data)
-                if not count:
-                    raise OSError("launcher write failed")
-                data = data[count:]
-    except (OSError, ValueError, RuntimeError):
-        events.put(("error", None))
-def launch_windows():
-    events = queue.Queue()
-    owner = None
-    owners = []
-    reader = None
-    distro = None
-    try:
-        distro = resolve_wsl_distro()
-        owner = LauncherChild(subprocess.Popen(
-            ["wsl", "-d", distro, "--exec", "wslpath", "-u", str(Path(__file__).resolve())],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
-        owners.append(owner)
-        reader = threading.Thread(target=launcher_translation, args=(owner.proc, events), daemon=True)
-        reader.start()
-        threading.Thread(target=launcher_input, args=(events,), daemon=True).start()
-        status = launcher_forward(events, owner, owners, distro)
-        if status:
-            sys.stderr.write(f"WSL distro '{distro}': operation failed\n")
-        return status
-    except LauncherError as error:
-        sys.stderr.write(f"WSL distro '{distro}': {error}\n")
-        emit({"event": "host.failed"})
-        return 1
-    except (OSError, ValueError, RuntimeError, queue.Full) as error:
-        sys.stderr.write((f"WSL distro '{distro}': operation failed" if distro else str(error)) + "\n")
-        emit({"event": "host.failed"})
-        return 1
-    finally:
-        cleanup_failed = False
-        for acquired in reversed(owners):
-            try:
-                acquired.close()
-            except (OSError, ValueError, LauncherError):
-                sys.stderr.write("cleanup: cannot collect launcher child\n")
-                cleanup_failed = True
-        if reader and reader.ident is not None:
-            reader.join(timeout=1)
-            if reader.is_alive():
-                sys.stderr.write("cleanup: launcher reader did not stop\n")
-                cleanup_failed = True
-        if owner and owner.proc.stdout and (reader is None or not reader.is_alive()):
-            try:
-                owner.proc.stdout.close()
-            except (OSError, ValueError):
-                sys.stderr.write("cleanup: cannot close launcher output\n")
-                cleanup_failed = True
-        if cleanup_failed:
-            sys.stderr.write(f"WSL distro '{distro}': cleanup failed\n")
-            emit({"event": "host.failed"})
-            return 1
 def launcher_emit(value):
     sys.stdout.buffer.write((json.dumps(value) + "\n").encode("utf-8"))
     sys.stdout.buffer.flush()
-def launcher_forward(events, translation, owners, distro=None):
-    owner = translation
-    pending = []
-    commands = queue.Queue(maxsize=16)
-    writer = None
-    translated = False
-    output = None
-    relays = []
-    startup = time.monotonic() + 20
-    try:
-        while True:
-            if translated and owner.exited():
-                return owner.close()
-            if not translated and time.monotonic() >= startup:
-                raise RuntimeError("launch: translation timed out")
-            try:
-                action, value = events.get(timeout=0.01)
-            except queue.Empty:
-                continue
-            if action == "eof":
-                if writer:
-                    # Retain one deadline while the writer drains commands and
-                    # closes the pipe. A stalled writer is forced at that same
-                    # deadline, rather than blocking EOF detection or cleanup.
-                    commands.put_nowait(None)
-                    owner.deadline = time.monotonic() + 4
-                status = owner.close()
-                return status if translated else 1
-            if action == "error":
-                raise RuntimeError("launch: launcher input or translation failed")
-            if action == "translated":
-                if translation.close() != 0:
-                    return 1
-                owner = LauncherChild(subprocess.Popen(
-                    ["wsl", "-d", distro or resolve_wsl_distro(), "--exec", "python3", "-u", value,
-                     *(["--finite"] if "--finite" in sys.argv[1:] else [])],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0))
-                owners.append(owner)
-                translated = True
-                output = threading.Thread(target=observations, args=(
-                    owner.proc, ["wsl", "-d", distro or resolve_wsl_distro(), "--exec",
-                                 "python3", "-u", value, "--relay"], relays, launcher_emit, events))
-                output.start()
-                writer = threading.Thread(target=launcher_write, args=(owner.proc, commands, events, relays), daemon=True)
-                writer.start()
-                for line in pending:
-                    commands.put_nowait(line)
-                pending.clear()
-            elif translated:
-                commands.put_nowait(value)
-            elif sum(map(len, pending)) + len(value) <= LIMIT:
-                pending.append(value)
-            else:
-                raise ValueError("launch: startup input exceeded limit")
-    finally:
-        try:
-            owner.close()
-        finally:
-            if writer and writer.ident is not None:
-                with contextlib.suppress(queue.Full):
-                    commands.put_nowait(None)
-                writer.join(timeout=0.5)
-            failed = False
-            if output and output.ident is not None:
-                output.join(timeout=0.5)
-                failed = output.is_alive()
-            if translated and not failed:
-                owner.proc.stdout.close()
-            for relay in relays:
-                try:
-                    relay.close()
-                except (OSError, ValueError, RuntimeError):
-                    failed = True
-            diagnostic_tail(relays)
-            if failed:
-                raise RuntimeError("launch: output cleanup failed")
 class Host:
     def __init__(self, folder, finite_mode=False):
         self.folder = Path(folder)
@@ -454,8 +292,9 @@ class Host:
                 raise RuntimeError("host thread cleanup failed")
         self.closed = True
 def host_input(host, events):
-    # Read EOF independently; the main owner interrupts waits and collects the
-    # host group before the Windows client's retained four-second deadline.
+    # Read EOF independently of log/FIFO waits. Only the main owner closes the
+    # host: interrupt its wait, then let its finally stop and collect the group
+    # before the caller's retained four-second deadline expires.
     clean = False
     try:
         clean = launcher_input(events)
@@ -490,7 +329,4 @@ def main():
     emit({"event": "host.closed"})
     return int(failed)
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--relay":
-        guest(int(sys.argv[2]))
-    else:
-        sys.exit(launch_windows() if os.name == "nt" else main())
+    sys.exit(main())

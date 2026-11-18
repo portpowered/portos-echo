@@ -22,7 +22,7 @@ struct Bench {
 impl Bench {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let mut host = Command::new(if cfg!(windows) { "python" } else { "python3" })
+        let mut host = Command::new("python3")
             .arg("-u")
             .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/device_support/supervisor.py"))
             .stdin(Stdio::piped())
@@ -128,11 +128,7 @@ impl Drop for Bench {
 }
 
 fn bridge() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_echo-lab")).with_file_name(if cfg!(windows) {
-        "echo-bridge.exe"
-    } else {
-        "echo-bridge"
-    })
+    PathBuf::from(env!("CARGO_BIN_EXE_echo-lab")).with_file_name("echo-bridge")
 }
 
 #[test]

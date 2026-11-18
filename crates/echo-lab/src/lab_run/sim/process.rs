@@ -186,12 +186,10 @@ pub fn host(python: &str) -> Command {
     command
 }
 
-// An announcement proves child-side readiness, not caller-side reachability
-// (notably across WSL forwarding). Share one budget with host observation.
+// An announcement proves child-side readiness, not caller-side reachability.
+// Share one budget with host observation.
 const READINESS: std::time::Duration = std::time::Duration::from_secs(20);
-// A stale Windows/WSL forwarding route can leave one TCP SYN pending for the
-// whole admission budget. Bound each attempt so a fresh connection can observe
-// forwarding becoming ready, while retaining the same overall deadline.
+// Bound each connection attempt while retaining the same overall admission deadline.
 const PROBE: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub(super) fn readiness_deadline() -> tokio::time::Instant {
