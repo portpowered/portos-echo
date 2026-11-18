@@ -137,10 +137,21 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         tools: Vec<DynamicTool>,
         deadline: Instant,
     ) -> Result<(), Error> {
-        let offer = self.peer.offer().await.map_err(media_error)?;
-        self.record_stage("call.offer_ready")?;
+        // Only thread preparation is independent of the offer. Keep the final
+        // realtime request behind both results, with no spawned sibling task.
+        let mut trace = self.call.setup_trace.clone();
+        let (offer, ()) = tokio::try_join!(
+            async {
+                let offer = self.peer.offer().await.map_err(media_error)?;
+                if let Some(trace) = &mut trace {
+                    trace.record("call.offer_ready", None, serde_json::json!({}))?;
+                }
+                Ok(offer)
+            },
+            self.call.prepare(options, tools, deadline),
+        )?;
         self.stage = "signaling_started";
-        let answer = self.call.start(options, tools, &offer, deadline).await?;
+        let answer = self.call.start_prepared(options, &offer, deadline).await?;
         self.stage = "answer_received";
         self.peer.apply_answer(&answer).await.map_err(media_error)?;
         self.record_stage("call.answer_applied")?;
