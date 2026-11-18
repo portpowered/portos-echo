@@ -7,6 +7,14 @@ status: provisional; local Responses component, real provider acceptance pending
 
 # 0013: Bridge-side Responses agent loop
 
+## Canonical cutover status (2026-11-17)
+
+Codex app-server supersedes the canonical bridge implementation of this path.
+The APIs described here remain active for retained sign-in/provider adapters,
+legacy/Muse bridge execution and local fake consumers. The retirement lane
+retains consumed behavior and all existing quality gates; it does not authorize
+removing these APIs or migrating their callers.
+
 ## Decision
 
 Implement the existing generic `AgentBackend` and `ToolHost` traits in

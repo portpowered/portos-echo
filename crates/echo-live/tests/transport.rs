@@ -81,6 +81,53 @@ async fn pair() -> Result<(LivePeer, LivePeer), Error> {
     Ok((a, b))
 }
 
+// The bridge's --sim-clock can stay frozen while the remote peer's protocol
+// clock advances. Incoming network work must not require a local timer tick.
+#[tokio::test(start_paused = true)]
+async fn t3_frozen_caller_negotiates_and_exchanges() -> Result<(), Error> {
+    let tick = now();
+    let mut a = peer().await?;
+    let mut b = peer().await?;
+    let offer = a.offer().await?;
+    let answer = b.answer(&offer).await?;
+    a.apply_answer(&answer).await?;
+    let ceiling = tick + Duration::from_secs(5);
+    while !(a.ready() && b.ready()) {
+        frozen_step(&mut a, &mut b, tick, ceiling).await?;
+    }
+    a.send_audio(frame(7, 4000), tick).await?;
+    b.send_text("{\"id\":\"frozen\"}").await?;
+    let (mut audio, mut text) = (None, None);
+    while audio.is_none() || text.is_none() {
+        frozen_step(&mut a, &mut b, tick, ceiling).await?;
+        audio = audio.or_else(|| b.pop_audio());
+        text = text.or_else(|| a.pop_text());
+    }
+    assert_eq!(audio, Some(frame(7, 4000)));
+    assert_eq!(text.as_deref(), Some("{\"id\":\"frozen\"}"));
+    assert_eq!((a.dropped_audio(), b.dropped_audio()), (0, 0));
+    Ok(())
+}
+
+async fn frozen_step(a: &mut LivePeer, b: &mut LivePeer, tick: Instant, ceiling: Instant) -> Result<(), Error> {
+    assert!(now() < ceiling, "negotiation/data stalled at frozen caller tick");
+    if a.flush().await? <= tick {
+        a.timeout(tick).await?;
+    }
+    let next = b.flush().await?.min(ceiling);
+    let event = tokio_readiness(a.readable(), b.readable(), tokio::time::sleep_until(next.into())).await?;
+    match event {
+        0 => {
+            a.receive(tick).await?;
+        }
+        1 => {
+            b.receive(now()).await?;
+        }
+        _ => b.timeout(now()).await?,
+    }
+    Ok(())
+}
+
 // RFC 6716 Opus comfort-noise packet: one 20-ms full-band frame.
 fn frame(sequence: u16, marker: u32) -> AudioFrame {
     AudioFrame {

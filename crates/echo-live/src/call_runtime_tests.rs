@@ -1,6 +1,6 @@
 //! T3: real HTTP and ICE/DTLS/SRTP/SCTP, only literal loopback, paused per-test time.
 use std::net::{Ipv4Addr, SocketAddr};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use echo_contracts::ids::{DelegationId, SessionId};
 use echo_contracts::live::LiveEvent;
@@ -51,7 +51,6 @@ async fn peer() -> LivePeer {
         .await
         .unwrap()
 }
-
 async fn open(fake: &FakeLive, mode: LiveAuthMode) -> (LiveCall, SocketAddr) {
     let peer = peer().await;
     let address = peer.local_addr();
@@ -61,6 +60,31 @@ async fn open(fake: &FakeLive, mode: LiveAuthMode) -> (LiveCall, SocketAddr) {
         .await
         .unwrap();
     (call, address)
+}
+
+// T3: sequential calls deliver with paused time held by a runnable observer.
+#[tokio::test(start_paused = true)]
+async fn t3_sequential_calls_deliver_with_both_clocks_frozen() {
+    let fake = FakeLive::bind(script()).await.unwrap();
+    let tick = now();
+    let ceiling = Instant::now() + Duration::from_secs(5);
+    for _ in 0..2 {
+        let mut operation = Box::pin(async {
+            let (mut call, address) = open(&fake, LiveAuthMode::ApiKey).await;
+            replay_script(&mut call).await;
+            call.close();
+            drop(tokio::net::UdpSocket::bind(address).await.unwrap());
+        });
+        std::future::poll_fn(|cx| {
+            assert!(Instant::now() < ceiling, "sequential frozen call stalled");
+            cx.waker().wake_by_ref();
+            operation.as_mut().poll(cx)
+        })
+        .await;
+        assert_eq!(now(), tick);
+    }
+    assert_eq!(fake.observer().calls().unwrap().len(), 2);
+    fake.shutdown().await;
 }
 
 async fn receive(call: &mut LiveCall) -> LiveEvent {

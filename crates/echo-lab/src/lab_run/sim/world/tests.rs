@@ -107,7 +107,7 @@ fn check_startup(
                 "launch: endpoint {endpoint} readiness timed out after 20000 ms"
             ))
         );
-        assert_eq!(endpoints, &[]);
+        assert_eq!(endpoints, &[] as &[std::net::SocketAddr]);
         assert_eq!(next, 0);
     }
 }
@@ -154,9 +154,12 @@ async fn t3_readiness_cancel_keeps_owned_child_until_explicit_close() {
         before_startup(startup.as_mut(), probed.notified()).await;
     }
     assert_eq!(next.get(), 0);
-    assert_eq!(world.endpoints, vec![]);
+    assert_eq!(world.endpoints, Vec::<std::net::SocketAddr>::new());
     assert!(!world.host.as_mut().unwrap().exited().unwrap());
-    assert_eq!(close_world(&mut world, &root.0).await, vec![]);
+    assert_eq!(
+        close_world(&mut world, &root.0).await,
+        Vec::<std::net::SocketAddr>::new()
+    );
 }
 
 async fn child_startup(listen: bool) {

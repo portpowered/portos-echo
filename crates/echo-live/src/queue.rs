@@ -34,6 +34,16 @@ impl<T> Queue<T> {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub fn items_len(&self) -> usize {
+        self.items.len()
+    }
+
+    #[cfg(test)]
+    pub fn items_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     pub fn pop(&mut self) -> Option<T> {
         self.items.pop_front()
     }
@@ -49,31 +59,34 @@ mod tests {
 
     #[test]
     fn audio_pressure_drops_exactly_oldest() -> Result<(), Error> {
-        let mut queue = Queue::new(3);
-        for n in 0..4 {
+        let mut queue = Queue::new(128);
+        for n in 0..129 {
             queue.push(n, true)?;
         }
         assert_eq!(queue.drops, 1);
-        assert_eq!(
-            (queue.pop(), queue.pop(), queue.pop(), queue.pop()),
-            (Some(1), Some(2), Some(3), None)
-        );
+        for n in 1..129 {
+            assert_eq!(queue.pop(), Some(n));
+        }
+        assert_eq!(queue.pop(), None);
+        queue.close();
+        assert_eq!(queue.push(129, true), Err(Error::Closed));
         Ok(())
     }
 
     #[test]
     fn text_pressure_and_close_preserve_fifo() -> Result<(), Error> {
-        let mut queue = Queue::new(2);
-        queue.push("first", false)?;
-        queue.push("second", false)?;
-        assert_eq!(queue.push("third", false), Err(Error::Full));
-        assert_eq!(
-            (queue.pop(), queue.pop(), queue.pop()),
-            (Some("first"), Some("second"), None)
-        );
+        let mut queue = Queue::new(16);
+        for n in 0..16 {
+            queue.push(n, false)?;
+        }
+        assert_eq!(queue.push(16, false), Err(Error::Full));
         queue.close();
         queue.close();
-        assert_eq!(queue.push("closed", false), Err(Error::Closed));
+        assert_eq!(queue.push(17, false), Err(Error::Closed));
+        for n in 0..16 {
+            assert_eq!(queue.pop(), Some(n));
+        }
+        assert_eq!(queue.pop(), None);
         Ok(())
     }
 }

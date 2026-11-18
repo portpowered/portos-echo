@@ -1,13 +1,55 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
-status: accepted for local S1 transport; provider compatibility pending M2
+last modified: 2026, november, 17
+status: amended; str0m choice superseded, explicit encoded transport retained
 ---
 
 # 0009: Explicitly driven WebRTC transport
 
-## Decision
+## Retirement amendment (2026-11-17)
+
+The binding el-w2d-retire decision replaces the private str0m backend with
+`rtc =0.21.1`, the Sans-I/O core already locked for `echo-media`'s
+`webrtc =0.21.1`. Only the direct rtc edge is needed: the async webrtc driver
+would introduce workers into this caller-driven API. No package version moves
+or new package identities are authorized. The original decision below remains
+historical; its str0m-specific buffer and implementation details are superseded.
+
+The public encoded Opus, event, call and fake APIs remain active. One owner
+still drives UDP, protocol deadlines and cancellation; no workers are spawned.
+Readiness still requires connected ICE and the opened `oai-events` channel.
+Audio sequence numbers, timestamps and encoded payloads pass through unchanged.
+The generated SCTP m-line's redundant sendrecv attribute is omitted from the
+signaled SDP, preserving one sendrecv audio track and no video. Receive queues
+retain 128 audio packets (drop oldest) and 16 texts (reject overflow). Text
+admission remains 16 KiB with a 128 KiB outstanding-send bound. Errors retain
+their sanitized public categories. Close/drop release the socket immediately.
+Signaling starts one microsecond before the initial injected tick to accommodate
+rtc's strict positive elapsed-time check for host nomination, including Windows
+clock resolution. Subsequent input, media and timeout times remain exactly the
+caller's; a frozen bridge clock can negotiate with an advancing remote peer.
+The adapter also drains event-triggered DTLS/SCTP work to quiescence, servicing
+the initial DTLS flight at the last supplied instant. Sequential calls can
+negotiate and deliver events with both clocks frozen, without a timer advance.
+Readiness also preserves the previous peer's probe-based path viability: rtc's
+recoverable `Disconnected` notification does not revoke an open channel while
+a consent check is in flight. Its elapsed-time terminal ICE failure is disabled
+in favor of nine actually unanswered consent checks and the previous final
+three-second response window. Validated inbound STUN requests/responses reset
+that budget. The normal rtc keepalive schedule remains active; a single delayed
+caller tick cannot count as multiple failed checks. Dead remotes still lose
+readiness, and caller operation deadlines and channel closure remain unchanged.
+
+The canonical bridge path uses Codex and echo-media. Legacy/Muse bridge calls,
+M3, and simulator fake peers still consume echo-live. Sign-in and Responses
+consumers still require echo-chatgpt-auth and echo-agent-loop. Their registrations,
+coverage floors, mutation gates and layering restrictions therefore stay active.
+Retirement does not authorize caller migrations, runtime selection changes or
+shared contract changes. Rollback reverts this replacement and its lockfile;
+no persisted state changes. Codex LICENSE/NOTICE and design pin remain intact.
+
+## Original decision (superseded transport selection)
 
 Use pinned str0m 0.25.0 with default features disabled and `rust-crypto`,
 and a Tokio UDP adapter in `echo-live`. One owner drives each peer with

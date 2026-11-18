@@ -7,6 +7,14 @@ status: accepted
 
 # Independent ChatGPT credential source
 
+## Canonical cutover status (2026-11-17)
+
+Codex app-server supersedes the canonical bridge implementation of this path.
+The APIs described here remain active for retained sign-in/provider adapters,
+legacy/Muse bridge execution and local fake consumers. The retirement lane
+retains consumed behavior and all existing quality gates; it does not authorize
+removing these APIs or migrating their callers.
+
 ## Status
 
 Accepted for el-w2-chatgpt-auth, plan section 4.2.
