@@ -338,7 +338,7 @@ async fn voice_backpressure_keeps_pending_pcm_and_continues_control() {
     let mut mic = microphone(&mut events).await;
     let (mut port, tx) = port();
     let mut source = Source::new(200, false).unwrap();
-    source.microphone_finished = true;
+    source.controller.microphone_ended();
     let mut pending = Some(vec![12; 960]);
     let mut notices = Vec::new();
     for text in ["first", "second"] {

@@ -1,6 +1,8 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
 #[path = "earcon/earcon.rs"]
 mod earcon;
+#[path = "controls/session_controller.rs"]
+mod session_controller;
 #[path = "controls/tool_ledger.rs"]
 mod tool_ledger;
 #[path = "controls/tool_policy.rs"]
@@ -40,7 +42,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::{Instant, timeout, timeout_at},
 };
-use voice_source::{ReplyState, Source};
+use voice_source::Source;
 
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
@@ -151,10 +153,8 @@ pub async fn run<L: EchoLink>(
             &mut observe,
         )
         .await;
-        if result == Err(Error::Control) && source.state == ReplyState::Cutting {
-            source.state = ReplyState::Retired;
-            source.cut_receipts += usize::from(!source.played);
-            source.played = false;
+        if result == Err(Error::Control) && source.controller.cutting() {
+            source.controller.cut_settled();
             observe(Notice::ReplyPaused)?;
         } else {
             result?;
@@ -260,7 +260,7 @@ async fn drive<E: LinkEvents>(
     let mut pending = None;
     let mut deadline = options.response_deadline;
     loop {
-        if source.state == ReplyState::Cutting {
+        if source.controller.cutting() {
             return Err(Error::Control);
         }
         if source.reply.drained() && pending.is_none() && sink.is_some() {
@@ -294,12 +294,7 @@ async fn drive<E: LinkEvents>(
                 }
             }, if pending.is_none() => {},
         }
-        if source.state != ReplyState::Cutting
-            && source.played
-            && source.microphone_finished
-            && sink.is_none()
-            && source.mouth.due().is_none()
-        {
+        if source.controller.complete(sink.is_none(), source.mouth.due().is_none()) {
             return Ok(());
         }
     }
@@ -320,7 +315,7 @@ async fn step<E: LinkEvents>(
             Ok(None) => { source.failure = "events_eof"; Err(Error::Wyoming) },
             Err(error) => { source.failure = "events_recv"; Err(error.into()) },
         },
-        frame = earcon::microphone(microphone), if !source.microphone_finished => {
+        frame = earcon::microphone(microphone), if !source.controller.microphone_finished() => {
             let frame = frame.map_err(|error| { source.failure = "microphone_recv"; Error::from(error) })?;
             if source.capture(frame, port)? {
                 observe(Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
@@ -366,15 +361,14 @@ fn device<R>(
     }
     let event = match event {
         LinkEvent::Played => {
-            if source.cut_receipts > 0 {
-                source.cut_receipts -= 1;
-                return Ok(());
+            match source.controller.played(stopped) {
+                Ok(false) => return Ok(()),
+                Ok(true) => {}
+                Err(error) => {
+                    source.failure = "premature_played";
+                    return Err(error);
+                }
             }
-            if !stopped {
-                source.failure = "premature_played";
-                return Err(Error::Wyoming);
-            }
-            source.played = true;
             LinkEvent::Played
         }
         LinkEvent::Mute(muted) => {
@@ -405,7 +399,7 @@ async fn media(
     match event {
         MediaEvent::Audio(frame) => source.audio(&frame),
         MediaEvent::Control(Event::ReplyDone { text }) => {
-            if source.state == ReplyState::Retired {
+            if source.controller.retired() {
                 return Ok(());
             }
             observe(Notice::Transcript {
@@ -429,7 +423,7 @@ async fn media(
             if role == "user" {
                 source.interrupt(port)?;
             } else if role == "assistant" && !done {
-                source.state = ReplyState::Speaking;
+                source.controller.reply_started();
                 source.delegation.spoke();
             }
             observe(Notice::Transcript { role, text, done })
