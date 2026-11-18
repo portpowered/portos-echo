@@ -15,6 +15,8 @@ pub struct Ledger {
     pub flushes: usize,
     pub tail_bytes: usize,
     pub live_tail_frames: u64,
+    pub overlap_base: Option<u64>,
+    pub cut_frames: Option<u64>,
     pub runs: usize,
     pub capture_frames: u64,
     pub old_sink_pcm: Option<u64>,

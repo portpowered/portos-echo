@@ -154,6 +154,12 @@ impl World {
     }
 
     pub async fn second(&mut self) -> Result<(), String> {
+        let baseline = self.live.as_ref().ok_or("M3: missing Live")?.snapshot().await?;
+        self.relay
+            .as_ref()
+            .ok_or("M3: missing wire")?
+            .observed
+            .send_modify(|state| state.overlap_base = Some(baseline));
         self.control(json!({"action":"inject","pcm":fixture()})).await?;
         let old = self.wait("old reply Played", |s| s.played.len() == 1).await?;
         // Socket Played and the complete native stderr record have separate readers.

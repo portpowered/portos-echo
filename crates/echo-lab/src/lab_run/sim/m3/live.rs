@@ -212,7 +212,7 @@ async fn respond(
     phase: &mut u8,
 ) -> Result<(), String> {
     let state = wire.borrow().clone();
-    if *phase == 0 && frames >= 44 && state.inputs == 1 {
+    if *phase == 0 && frames > 0 && state.inputs == 1 {
         transcript(process, "assistant", "The time is twelve.", false).await?;
         answer(peer, 0..5).await?;
         observed.send_modify(|state| {
@@ -222,22 +222,28 @@ async fn respond(
         *phase = 1;
     }
     if *phase == 1 && state.bytes[0] >= 2880 {
-        answer(peer, 5..11).await?;
+        // Leave a genuinely long reply queued while the 100 ms interruption
+        // crosses capture, media and sideband. A 200 ms reply can drain first.
+        answer(peer, 5..51).await?;
         *phase = 2;
     }
-    if *phase == 2 && frames >= 49 && state.inputs == 2 {
+    if *phase == 2 && state.overlap_base.is_some_and(|base| frames >= base + 5) && state.inputs == 2 {
         if state.stops != 0 || !state.played.is_empty() {
             return Err("M3 overlap: interrupting input arrived after first reply closed".into());
         }
         // The old converter still holds its filter tail. Done precedes
-        // the speech signal, followed by audible PCM on the independent RTP path.
+        // the user transcript, followed by audible PCM on the independent RTP
+        // path. The pinned V3 parser does not forward speech-start events.
         transcript(process, "assistant", "The time", true).await?;
         process
-            .send(&json!({"tag":"barge", "events":[{"type":"input_audio_buffer.speech_started"}]}))
+            .send(&json!({"tag":"barge", "events":[{"type":"input_transcript.added", "item":{"text":"What day is it?"}}]}))
             .await?;
         process.expect("provider.sent").await?;
-        wire.send_modify(|state| state.cancel = Some(Instant::now()));
-        answer(peer, 11..13).await?;
+        wire.send_modify(|state| {
+            state.cancel = Some(Instant::now());
+            state.cut_frames = Some(frames);
+        });
+        answer(peer, 51..53).await?;
         *phase = 3;
     }
     replacement(peer, process, wire, observed, frames, phase).await
@@ -252,11 +258,15 @@ async fn replacement(
     phase: &mut u8,
 ) -> Result<(), String> {
     let state = wire.borrow().clone();
-    if *phase == 3 && frames >= 54 && state.played.len() == 1 && state.old_sink_pcm.is_some() {
-        verify_tail(&state, frames)?;
-        wire.send_modify(|state| state.live_tail_frames = frames - 49);
+    if *phase == 3
+        && state.cut_frames.is_some_and(|base| frames >= base + 5)
+        && state.played.len() == 1
+        && state.old_sink_pcm.is_some()
+    {
+        let tail = verify_tail(&state, frames)?;
+        wire.send_modify(|state| state.live_tail_frames = tail);
         transcript(process, "assistant", "The day is Monday.", false).await?;
-        answer(peer, 13..18).await?;
+        answer(peer, 53..58).await?;
         observed.send_modify(|state| {
             state.second = true;
             state.transcript = Some("The day is Monday.".into());
@@ -264,7 +274,7 @@ async fn replacement(
         *phase = 4;
     }
     if *phase == 4 && state.bytes[1] >= 2880 {
-        answer(peer, 18..23).await?;
+        answer(peer, 58..63).await?;
         *phase = 5;
     }
     if *phase == 5 && state.bytes[1] >= 8640 {
@@ -286,13 +296,26 @@ async fn transcript(process: &mut Process, role: &str, text: &str, done: bool) -
     Ok(())
 }
 
-fn verify_tail(state: &Ledger, frames: u64) -> Result<(), String> {
-    // The continuous resampler retains its partial frame across the cut:
-    // 44 initial frames + 5 interrupting prefix + 5 post-Played tail.
-    if frames != 54 || state.tail_bytes != 3200 || state.runs != 1 || state.flushes != 1 {
-        return Err("M3 continuation: expected 54 Live frames, 3200 post-Played bytes and one run/flush".into());
+fn verify_tail(state: &Ledger, frames: u64) -> Result<u64, String> {
+    // Cold call negotiation can evict startup capture. Measure the two exact
+    // five-frame inputs from the acknowledged pre-overlap media snapshot.
+    let tail = state.cut_frames.and_then(|base| frames.checked_sub(base));
+    if state
+        .overlap_base
+        .zip(state.cut_frames)
+        .is_none_or(|(before, cut)| cut != before + 5)
+        || tail != Some(5)
+        || state.tail_bytes != 3200
+        || state.runs != 1
+        || state.flushes != 1
+    {
+        return Err(
+            "M3 continuation: expected 5 prefix and 5 tail Live frames, 3200 post-Played bytes and one run/flush"
+                .into(),
+        );
+
     }
-    Ok(())
+    tail.ok_or("M3: missing measured Live tail".into())
 }
 
 async fn answer(peer: &mut LivePeer, sequences: std::ops::Range<u16>) -> Result<(), String> {
@@ -334,6 +357,8 @@ mod tests {
     #[test]
     fn continuous_tail_requires_exact_unflushed_frame_total() {
         let state = Ledger {
+            overlap_base: Some(44),
+            cut_frames: Some(49),
             tail_bytes: 3200,
             runs: 1,
             flushes: 1,
@@ -343,6 +368,34 @@ mod tests {
         for frames in [49, 53, 55] {
             assert!(verify_tail(&state, frames).is_err());
         }
+        let cold = Ledger {
+            overlap_base: Some(9),
+            cut_frames: Some(14),
+            ..state
+        };
+        assert!(verify_tail(&cold, 19).is_ok());
+        assert!(verify_tail(&cold, 18).is_err());
+        assert!(verify_tail(&cold, 20).is_err());
+        assert!(
+            verify_tail(
+                &Ledger {
+                    cut_frames: Some(15),
+                    ..cold.clone()
+                },
+                19
+            )
+            .is_err()
+        );
+        assert!(
+            verify_tail(
+                &Ledger {
+                    overlap_base: None,
+                    ..cold
+                },
+                19
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]

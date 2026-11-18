@@ -5,12 +5,9 @@ setup: {}
 steps:
   - say: "Computer, what time is it?"
   - expect_trace:
-      - reply.started
+      - run.started
   - expect_speech_contains: ["time"]
   - say: "Computer, what day is it?"
-  - expect_trace:
-      - reply.cut
-      - "reply.played {outcome: cut}"
   - expect_speech_contains: ["day"]
   - expect_trace:
       - "reply.played {outcome: played}"
@@ -20,8 +17,8 @@ steps:
   - press: mute
   - expect_trace:
       - "mic.mute_window {window_id: mute-1, received_frames: 0, forwarded_frames: 0}"
-# S2: hassmic drains received audio; the bridge's send lead bounds residue.
-# Preserve the 200 ms lead and bridge_latency.rs's strict 600 ms ceiling.
+# Cut, continuation, two playback receipts and strict silence timing are
+# checked against independent Wyoming/host PCM receipts by the M3 driver.
 budgets:
   reply_send_window_ms: 200
   barge_in_cut_ms: 600
