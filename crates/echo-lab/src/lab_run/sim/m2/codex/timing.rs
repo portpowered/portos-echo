@@ -58,9 +58,13 @@ fn corroborate(state: &Case, pcm: &[Value], states: &[Value], reply: &crate::lab
 
 async fn settle(state: &mut Case) -> (Vec<Value>, Vec<Value>) {
     let (mut pcm, mut states) = (vec![], vec![]);
-    let (mut done, mut transcript) = (false, false);
+    let (mut done, mut transcript, mut tail) = (false, false, false);
     while !done {
         state.provider.as_mut().unwrap().tick().await.unwrap();
+        if state.relay.as_ref().unwrap().timing().played >= 2880 && !tail {
+            state.provider.as_ref().unwrap().tail().await.unwrap();
+            tail = true;
+        }
         if state.relay.as_ref().unwrap().timing().played >= 8640 && !transcript {
             state.provider.as_ref().unwrap().transcripts().await.unwrap();
             transcript = true;

@@ -132,9 +132,14 @@ impl Case {
     async fn settle(&mut self) -> Result<(), String> {
         let mut done = false;
         let mut transcript = false;
+        let mut tail = false;
         while !done {
             self.provider.as_mut().ok_or("m2: missing provider")?.tick().await?;
             let played = self.relay.as_ref().ok_or("m2: missing relay")?.timing().played;
+            if played >= 2880 && !tail {
+                self.provider.as_ref().ok_or("m2: missing provider")?.tail().await?;
+                tail = true;
+            }
             // Nine frames prove all eleven packets reached the real converter.
             // Transcript completion flushes its held final frame.
             if played >= 8640 && !transcript {

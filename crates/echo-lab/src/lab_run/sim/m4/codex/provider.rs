@@ -11,6 +11,7 @@ use tokio::{
 pub(super) enum Control {
     Delegate,
     Complete,
+    Tail,
     Reply,
     Quiesce(oneshot::Sender<()>),
     Close,
@@ -175,13 +176,7 @@ async fn conversation(
         if let Some(value) = value {
             observation(observed, &value)?;
             if value["event"] == "provider.append" {
-                if reply {
-                    return Err("m4: duplicate native append".into());
-                }
-                reply = true;
-                if allow_reply {
-                    send_reply(peer).await?;
-                }
+                append(peer, &mut reply, allow_reply).await?;
             }
         } else {
             match action {
@@ -189,10 +184,11 @@ async fn conversation(
                 Some(Control::Reply) if emotion && !allow_reply => {
                     allow_reply = true;
                     if reply {
-                        send_reply(peer).await?;
+                        send_reply(peer, 0..5).await?;
                     }
                 }
                 Some(Control::Reply) => return Err("m6: premature reply release".into()),
+                Some(Control::Tail) => send_reply(peer, 5..11).await?,
                 Some(Control::Complete) => process.send(&json!({"complete":true})).await?,
                 Some(Control::Quiesce(done)) => {
                     quiesced = true;
@@ -202,6 +198,16 @@ async fn conversation(
             }
         }
     }
+}
+
+async fn append(peer: &mut LivePeer, reply: &mut bool, allow_reply: bool) -> Result<(), String> {
+    if std::mem::replace(reply, true) {
+        return Err("m4: duplicate native append".into());
+    }
+    if allow_reply {
+        send_reply(peer, 0..5).await?;
+    }
+    Ok(())
 }
 
 fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), String> {
@@ -224,13 +230,13 @@ fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), Str
     Ok(())
 }
 
-/// Admit the finite utterance before advancing the bridge clock. RTP spacing
-/// stays 20 ms; playback pacing belongs to the delivered bridge, not this host.
-async fn send_reply(peer: &mut LivePeer) -> Result<(), String> {
+/// Each bounded burst fits the production ingress. Release the second only
+/// after actual PCM writes prove the first has been consumed.
+async fn send_reply(peer: &mut LivePeer, sequences: std::ops::Range<u16>) -> Result<(), String> {
     if !peer.ready() {
         return Err("m4: reply before media readiness".into());
     }
-    for sequence in 0..11 {
+    for sequence in sequences {
         peer.send_audio(
             crate::lab_run::sim::m2::codex::tone::packet(sequence).ok_or("m4: invalid tone sequence")?,
             Instant::now().into_std(),

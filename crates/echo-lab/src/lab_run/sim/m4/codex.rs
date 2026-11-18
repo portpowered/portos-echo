@@ -317,6 +317,7 @@ async fn settle(
     let mut admitted = false;
     let mut delegated = false;
     let mut completed = false;
+    let mut tail = false;
     loop {
         provider.tick().await?;
         if !admitted {
@@ -332,6 +333,10 @@ async fn settle(
         if admitted && timing.endpoint_seen() && !delegated {
             provider.control(Control::Delegate).await?;
             delegated = true;
+        }
+        if timing.played >= 2880 && !tail {
+            provider.control(Control::Tail).await?;
+            tail = true;
         }
         // Eleven synthetic tone packets yield nine frames before converter tail flush.
         if timing.played >= 8640 && !completed {

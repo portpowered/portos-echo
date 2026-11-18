@@ -10,6 +10,7 @@ use tokio::{
 
 enum Control {
     Transcripts,
+    Tail,
     Quiesce(oneshot::Sender<()>),
     Close,
     #[cfg(test)]
@@ -64,6 +65,12 @@ impl Provider {
     }
     pub async fn tick(&mut self) -> Result<(), String> {
         self.ticks.recv().await.ok_or("m2: provider media driver ended".into())
+    }
+    pub async fn tail(&self) -> Result<(), String> {
+        self.commands
+            .send(Control::Tail)
+            .await
+            .map_err(|_| "m2: provider control closed".into())
     }
     pub async fn transcripts(&self) -> Result<(), String> {
         self.commands
@@ -132,22 +139,25 @@ async fn drive(
     let mut quiesced = peer.is_none();
     let mut reply = false;
     let mut started = false;
+    let mut tail = false;
     let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
     loop {
         let work = async {
             if quiesced {
                 std::future::pending().await
             } else {
-                step(peer, &mut reply, quiet_edges).await
+                step(peer, &mut reply, &mut tail, quiet_edges).await
             }
         };
         let progress = progress(work, process, commands, ticks, &mut clock, quiesced).await?;
         match progress {
-            Progress::Media(received) if received > 0 && !started => {
-                started = true;
-                reply = true;
+            Progress::Media(received, released) => {
+                tail |= released;
+                if received > 0 && !started {
+                    started = true;
+                    reply = true;
+                }
             }
-            Progress::Media(_) => {}
             Progress::Quiesced => quiesced = true,
             Progress::Closed => break,
         }
@@ -157,7 +167,7 @@ async fn drive(
 }
 
 enum Progress {
-    Media(usize),
+    Media(usize, bool),
     Quiesced,
     Closed,
 }
@@ -173,11 +183,13 @@ async fn progress(
     quiesced: bool,
 ) -> Result<Progress, String> {
     tokio::pin!(work);
+    let mut tail = false;
     loop {
         tokio::select! {
-            result = &mut work => return result.map(Progress::Media),
+            result = &mut work => return result.map(|received| Progress::Media(received, tail)),
             _ = clock.tick(), if !quiesced => { let _ = ticks.try_send(()); },
             control = commands.recv() => match control {
+                Some(Control::Tail) => tail = true,
                 Some(Control::Transcripts) => process.send(&json!({"transcripts":true})).await?,
                 Some(Control::Quiesce(done)) => {
                     let _ = done.send(());
@@ -201,6 +213,7 @@ async fn repeat(
 ) -> Result<Value, String> {
     let mut received = 0;
     let mut reply = false;
+    let mut tail = false;
     let mut quiesced = true;
     loop {
         tokio::select! {
@@ -210,7 +223,7 @@ async fn repeat(
                 received = 0;
                 quiesced = false;
             },
-            result = step(peer, &mut reply, false), if !quiesced => {
+            result = step(peer, &mut reply, &mut tail, false), if !quiesced => {
                 received += result?;
                 if received >= 12 {
                     process.send(&json!({"transcripts":true})).await?;
@@ -222,7 +235,7 @@ async fn repeat(
                 Some(Control::Close) | None => break,
                 #[cfg(test)]
                 Some(Control::NextCapture) => { received = 0; quiesced = false; },
-                Some(Control::Transcripts) => return Err("m1: automatic transcript ownership".into()),
+                Some(Control::Transcripts | Control::Tail) => return Err("m1: automatic transcript ownership".into()),
             },
         }
     }
@@ -255,27 +268,36 @@ async fn negotiate(process: &mut Process, peer: &mut Option<LivePeer>, offer: &V
     Ok(())
 }
 
-async fn step(peer: &mut Option<LivePeer>, reply: &mut bool, quiet_edges: bool) -> Result<usize, String> {
+async fn step(
+    peer: &mut Option<LivePeer>,
+    reply: &mut bool,
+    tail: &mut bool,
+    quiet_edges: bool,
+) -> Result<usize, String> {
     let mut received = 0;
     let peer = peer.as_mut().ok_or("m2: missing remote media")?;
     if peer.ready() {
         while peer.pop_audio().is_some() {
             received += 1;
         }
-        if std::mem::take(reply) {
-            // Admit the entire finite utterance before advancing its consumer's
-            // clock. RTP timestamps retain 20 ms spacing; the production bridge
-            // owns playback pacing. Host scheduling cannot manufacture a gap.
-            for sequence in 0..11 {
-                let mut frame = super::tone::packet(sequence).ok_or("m2: invalid tone sequence")?;
-                if quiet_edges && !(2..8).contains(&sequence) {
-                    // Standard 20 ms mono Opus digital silence, never microphone PCM.
-                    frame.payload = vec![0xf8, 0xff, 0xfe];
-                }
-                peer.send_audio(frame, Instant::now().into_std())
-                    .await
-                    .map_err(|_| "m2: synthetic reply media")?;
+        let sequences = if std::mem::take(reply) {
+            0..5
+        } else if std::mem::take(tail) {
+            5..11
+        } else {
+            0..0
+        };
+        // Keep each burst below the production ingress capacity. The tail is
+        // released only after three actual PCM writes prove initial consumption.
+        for sequence in sequences {
+            let mut frame = super::tone::packet(sequence).ok_or("m2: invalid tone sequence")?;
+            if quiet_edges && !(2..8).contains(&sequence) {
+                // Standard 20 ms mono Opus digital silence, never microphone PCM.
+                frame.payload = vec![0xf8, 0xff, 0xfe];
             }
+            peer.send_audio(frame, Instant::now().into_std())
+                .await
+                .map_err(|_| "m2: synthetic reply media")?;
         }
     }
     let next = Instant::from_std(peer.flush().await.map_err(|_| "m2: remote media flush")?);
@@ -325,6 +347,7 @@ mod tests {
             for _ in 0..3 {
                 clock_ticks.recv().await.unwrap();
             }
+            commands.send(Control::Tail).await.unwrap();
             commands.send(Control::Transcripts).await.unwrap();
             clock_ticks.recv().await.unwrap();
             finish.send(()).unwrap();
@@ -333,7 +356,7 @@ mod tests {
             progress(work, &mut process, &mut receive, &ticks, &mut clock, false),
             controls
         );
-        assert!(matches!(result.unwrap(), Progress::Media(11)));
+        assert!(matches!(result.unwrap(), Progress::Media(11, true)));
         assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(process.line().await.unwrap(), json!({"transcripts":true}));
         // The external process exits on wall time; only media progress used fake time.
