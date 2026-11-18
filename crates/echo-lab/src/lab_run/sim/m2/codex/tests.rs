@@ -15,6 +15,25 @@ async fn m2_codex_owner_runs_real_pinned_media_and_settles_played_before_idle() 
     tokio::time::timeout(DEADLINE, Box::pin(exercise())).await.unwrap();
 }
 
+#[test]
+fn running_trace_keeps_an_unterminated_record_pending_until_collected() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("bridge.private.jsonl");
+    let complete = "{\"event\":\"wyoming.probe_ok\",\"elapsed_ms\":1,\"run_id\":\"run-1\"}\n";
+    // The bridge has written a record body but not yet its separate newline.
+    let partial = format!("{complete}{{\"event\":\"bridge.ready\",\"elapsed_ms\":2}}");
+    std::fs::write(&path, &partial).unwrap();
+    let running = running_trace(&path).unwrap();
+    assert_eq!(running.records.len(), 1);
+    assert_eq!(running.records[0]["event"], "wyoming.probe_ok");
+    assert_eq!(
+        read_trace(&path).err(),
+        Some("trace: incomplete final JSON line".into())
+    );
+    std::fs::write(&path, partial + "\n").unwrap();
+    assert_eq!(read_trace(&path).unwrap().records.len(), 2);
+}
+
 #[tokio::test]
 async fn t3_m2_codex_provider_closes_before_a_call_without_waiting_for_an_offer() {
     let python = "python3";

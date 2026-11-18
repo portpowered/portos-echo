@@ -283,9 +283,16 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
 }
 
 fn read_trace(path: &Path) -> Result<Trace, String> {
+    let trace = running_trace(path)?;
+    trace.finish()?;
+    Ok(trace)
+}
+
+/// The bridge writes a record and its newline separately. While it runs, an
+/// unterminated tail is not yet a record; `read_trace` rejects it once collected.
+fn running_trace(path: &Path) -> Result<Trace, String> {
     let mut trace = Trace::default();
     trace.append(&std::fs::read(path).map_err(|_| "m2: missing bridge trace")?)?;
-    trace.finish()?;
     Ok(trace)
 }
 

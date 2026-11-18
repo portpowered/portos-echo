@@ -298,16 +298,14 @@ impl World {
     }
 
     /// The bridge writes a record and its newline separately. While it runs,
-    /// parse complete lines only; once it is collected, a partial line fails.
+    /// keep an unterminated tail pending; once it is collected, a partial line fails.
     fn load_trace(&mut self, collected: bool) -> Result<(), String> {
         let path = self.root.join("bridge.private.jsonl");
-        let mut bytes = std::fs::read(path).map_err(|_| "M3: missing bridge trace")?;
-        if !collected {
-            bytes.truncate(bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |end| end + 1));
-        }
         let mut trace = Trace::default();
-        trace.append(&bytes)?;
-        trace.finish()?;
+        trace.append(&std::fs::read(path).map_err(|_| "M3: missing bridge trace")?)?;
+        if collected {
+            trace.finish()?;
+        }
         if let Some(relay) = &self.relay {
             let interrupts = trace
                 .records
