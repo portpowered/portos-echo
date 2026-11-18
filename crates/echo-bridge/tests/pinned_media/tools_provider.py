@@ -53,7 +53,7 @@ class Delegation:
         self.delegations.append(self.identity)
         return {'type': 'delegation.created', 'item': {
             'type': 'delegation', 'target': 'client', 'id': self.identity,
-            'content': [{'type': 'input_text', 'text': 'Call tool_0 with text delegated echo and report the result.'}]}}
+            'content': [{'type': 'input_text', 'text': 'Call test_echo with text delegated echo and report the result.'}]}}
 
     def respond(self, body):
         expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
@@ -73,11 +73,11 @@ class Delegation:
         if index == 0:
             assert not outputs, 'premature tool output'
             item = {'type': 'function_call', 'id': 'fc-local', 'call_id': self.call_id,
-                    'name': 'tool_0', 'arguments': '{"text":"delegated echo"}', 'status': 'completed'}
+                    'name': 'test_echo', 'arguments': '{"text":"delegated echo"}', 'status': 'completed'}
             if self.native:
                 item = {'type': 'custom_tool_call', 'id': 'fc-local', 'call_id': self.call_id,
                         'name': 'exec', 'namespace': 'functions',
-                        'input': 'text(await tools.tool_0({text: "delegated echo"}));', 'status': 'completed'}
+                        'input': 'text(await tools.test_echo({text: "delegated echo"}));', 'status': 'completed'}
         else:
             assert len(outputs) == 1 and outputs[0]['call_id'] == self.call_id, 'tool identity mismatch'
             # The pinned engine encodes dynamic-tool content as a JSON text value.
@@ -105,7 +105,7 @@ class Delegation:
         nested = re.findall(r'^### `([^`]+)`$', description, re.M)
         print(json.dumps({'model': self.model, 'tools': names, 'nested': nested}), file=sys.stderr, flush=True)
         assert names == ['functions.exec', 'functions.wait', 'functions.request_user_input_async', 'clock.sleep'], names
-        assert nested == [tool['name'] for tool in self.tools] + ['clock__curr_time'], nested
+        assert nested == sorted(tool['name'] for tool in self.tools) + ['clock__curr_time'], nested
         for tool, fields in zip(self.tools, ['text: string;', 'ms: number;', '', 'name: string;']):
             declaration = 'declare const tools: { ' + tool['name'] + '(args: { ' + fields + ' }): Promise<unknown>; };'
             if not fields:

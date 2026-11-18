@@ -61,7 +61,7 @@ fn call(index: usize) -> ToolCall {
         thread_id: "thread-1".into(),
         turn_id: "turn-1".into(),
         call_id: format!("call-{index}"),
-        tool: "tool_0".into(),
+        tool: "test_echo".into(),
         arguments: json!({"text":"雪"}),
         namespace: None,
     }
@@ -80,12 +80,12 @@ fn catalog_preserves_definitions_and_filters_authority_without_alias_ambiguity()
     assert_eq!(
         serde_json::to_value(catalog.tools()).unwrap(),
         json!([
-            {"name":"tool_0","description":"0","inputSchema":specs[0].input_schema},
-            {"name":"tool_1","description":"2","inputSchema":specs[2].input_schema}
+            {"name":"test_0","description":"0","inputSchema":specs[0].input_schema},
+            {"name":"test_2","description":"2","inputSchema":specs[2].input_schema}
         ])
     );
-    assert_eq!(catalog.resolve("tool_0"), Some("test.0"));
-    assert_eq!(catalog.resolve("tool_1"), Some("test.2"));
+    assert_eq!(catalog.resolve("test_0"), Some("test.0"));
+    assert_eq!(catalog.resolve("test_2"), Some("test.2"));
     for alias in [
         "test.0",
         "tool_00",
@@ -383,5 +383,89 @@ fn malformed_or_oversized_catalog_is_not_advertised() {
             Catalog::new(vec![malformed], &[]),
             Err(DispatchError::Catalog)
         ));
+    }
+}
+
+fn collision_names() -> Vec<String> {
+    [
+        "test.echo",
+        "test-echo",
+        "test_echo",
+        "test_echo__c1",
+        "test_echo__c2",
+        "test.wait",
+        "test.requires_approval",
+        "ui.show_emotion",
+        "9tool",
+        "mcp",
+        "mcp__x",
+        "__proto__",
+        "constructor",
+        "exec",
+        "clock__curr_time",
+        "雪",
+        "雨",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain([format!("{}x", "a".repeat(128)), format!("{}y", "a".repeat(128))])
+    .collect()
+}
+
+#[test]
+fn meaningful_aliases_survive_collisions_and_reordered_discovery() {
+    let names = collision_names();
+    let specs: Vec<_> = names
+        .iter()
+        .map(|name| ToolSpec {
+            name: name.clone(),
+            description: format!("description {name}"),
+            input_schema: json!({"type":"object","properties":{"text":{"type":"string"}}}),
+        })
+        .collect();
+    let first = Catalog::new(specs.clone(), &names).unwrap();
+    let reversed = Catalog::new(specs.into_iter().rev().collect(), &names).unwrap();
+    let mut actual = std::collections::BTreeMap::new();
+    for tool in first.tools() {
+        let original = first.resolve(&tool.name).unwrap();
+        assert_eq!(reversed.resolve(&tool.name), Some(original));
+        assert_eq!(tool.description, format!("description {original}"));
+        assert_eq!(
+            tool.input_schema,
+            json!({"type":"object","properties":{"text":{"type":"string"}}})
+        );
+        assert!(tool.name.len() <= 128);
+        assert!(tool.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        assert!(!tool.name.starts_with(|c: char| c.is_ascii_digit()));
+        assert!(actual.insert(tool.name.clone(), original.to_owned()).is_none());
+    }
+    for (alias, original) in [
+        ("test_echo__c3", "test-echo"),
+        ("test_echo__c4", "test.echo"),
+        ("test_echo__c5", "test_echo"),
+        ("test_echo__c1", "test_echo__c1"),
+        ("test_wait", "test.wait"),
+        ("test_requires_approval", "test.requires_approval"),
+        ("ui_show_emotion", "ui.show_emotion"),
+        ("bridge_9tool", "9tool"),
+        ("bridge_mcp", "mcp"),
+        ("bridge_mcp__x", "mcp__x"),
+        ("bridge___proto__", "__proto__"),
+        ("bridge_constructor", "constructor"),
+        ("bridge_exec", "exec"),
+        ("bridge_clock__curr_time", "clock__curr_time"),
+        ("___c1", "雨"),
+        ("___c2", "雪"),
+    ] {
+        assert_eq!(actual.get(alias).map(String::as_str), Some(original));
+    }
+    for (suffix, original) in [(1, &names[17]), (2, &names[18])] {
+        assert_eq!(
+            first.resolve(&format!("{}__c{suffix}", "a".repeat(124))),
+            Some(original.as_str())
+        );
+    }
+    for unknown in ["test_echo", "test.echo", "tool_0", "test_echo__c0", "test_echo__c03"] {
+        assert_eq!(first.resolve(unknown), None);
     }
 }

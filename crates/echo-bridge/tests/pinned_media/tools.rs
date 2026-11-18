@@ -152,7 +152,10 @@ async fn catalog(spoof: &Spoof) -> (McpClient<NoToken>, Catalog) {
     .unwrap();
     let catalog = Catalog::new(host.list_tools().await.unwrap(), &allowed).unwrap();
     for (index, name) in allowed.iter().enumerate() {
-        assert_eq!(catalog.resolve(&format!("tool_{index}")), Some(name.as_str()));
+        assert_eq!(
+            catalog.resolve(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"][index]),
+            Some(name.as_str())
+        );
     }
     (host, catalog)
 }
@@ -314,7 +317,7 @@ async fn snapshot(
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let value: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let names = if model == "gpt-5.4" {
-        json!(["tool_0", "tool_1", "tool_2", "tool_3"])
+        json!(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"])
     } else {
         json!([
             "functions.exec",

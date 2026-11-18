@@ -47,7 +47,7 @@ impl Provider {
     }
     async fn cycle(&mut self, identity: &str, exhausted: bool) {
         let tools: Vec<_> = echo_spoof_mcp::catalog().as_array().unwrap().iter().enumerate()
-            .map(|(i, t)| json!({"name":format!("tool_{i}"),"description":t["description"],"inputSchema":t["inputSchema"]})).collect();
+            .map(|(i, t)| json!({"name":(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"][i]),"description":t["description"],"inputSchema":t["inputSchema"]})).collect();
         self.model_ingress = 0;
         self.send(json!({"tools":tools,"negative":false,"exhausted":exhausted,"manual":true,"identity":identity}))
             .await;
@@ -244,8 +244,8 @@ async fn success(provider: &mut Provider, identity: &str) -> Value {
     assert_eq!(
         snapshot["models"],
         json!([
-            {"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":0},
-            {"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":1}
+            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
+            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}
         ])
     );
     assert_eq!(snapshot["appends"], json!([identity]));
@@ -260,7 +260,10 @@ async fn interrupted(root: &Path, provider: &mut Provider) {
     // The separate gated rust-v0.160.0 component asserts exactly one request
     // before polling. Here every native ingress receipt must match the exact
     // final request list, with no returned tool output or post-interrupt work.
-    let expected = vec![json!({"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":0}); provider.model_ingress];
+    let expected = vec![
+        json!({"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0});
+        provider.model_ingress
+    ];
     assert_eq!(snapshot["models"], json!(expected));
     assert_eq!(provider.snapshot().await, snapshot);
     assert_eq!(snapshot["appends"], json!([]));

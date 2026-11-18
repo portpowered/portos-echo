@@ -15,7 +15,7 @@ fn request(index: usize) -> ToolCall {
         thread_id: "thread-1".into(),
         turn_id: "turn-1".into(),
         call_id: format!("call-{index}"),
-        tool: "tool_0".into(),
+        tool: "test_echo".into(),
         arguments: json!({"text":"delegated echo"}),
         namespace: None,
     }
@@ -124,10 +124,13 @@ async fn discovered(spoof: &Spoof) -> (McpClient<Token>, Catalog) {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
-        ["tool_0", "tool_1", "tool_2", "tool_3"]
+        ["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"]
     );
     for (index, name) in allowed.iter().enumerate() {
-        assert_eq!(catalog.resolve(&format!("tool_{index}")), Some(name.as_str()));
+        assert_eq!(
+            catalog.resolve(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"][index]),
+            Some(name.as_str())
+        );
     }
     (host, catalog)
 }

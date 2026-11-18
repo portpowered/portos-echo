@@ -26,7 +26,7 @@ impl Peers {
         let ready = process.expect("provider.ready").await?;
         let tool = echo_spoof_mcp::catalog()[0].clone();
         process
-            .send(&json!({"mcp":true,"tools":[{"name":"tool_0",
+            .send(&json!({"mcp":true,"tools":[{"name":"test_echo",
             "description":tool["description"],"inputSchema":tool["inputSchema"]}]}))
             .await?;
         let origin = ready["origin"]
@@ -87,7 +87,7 @@ fn validate(value: &Value) -> Result<(), String> {
         "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}])
     };
     let models = (0..ids.len() * 2)
-        .map(|index| json!({"tools":["tool_0"],"outputs":index.div_ceil(2)}))
+        .map(|index| json!({"tools":["test_echo"],"outputs":index.div_ceil(2)}))
         .collect::<Vec<_>>();
     let expected = json!({"event":"provider.snapshot", "calls":calls,"sidebands":u8::from(!ids.is_empty()),
         "external":0, "delegations":ids, "appends":ids,"transcripts":[],"models":models});

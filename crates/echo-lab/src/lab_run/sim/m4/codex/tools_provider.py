@@ -48,7 +48,7 @@ class Delegation:
         self.delegations.append('delegation-local')
         return {'type': 'delegation.created', 'item': {
             'type': 'delegation', 'target': 'client', 'id': 'delegation-local',
-            'content': [{'type': 'input_text', 'text': 'Call tool_3 with name happy and report the result.' if self.emotion else 'Call tool_0 with text delegated echo and report the result.'}]}}
+            'content': [{'type': 'input_text', 'text': 'Call ui_show_emotion with name happy and report the result.' if self.emotion else 'Call test_echo with text delegated echo and report the result.'}]}}
 
     def respond(self, body):
         expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
@@ -66,7 +66,7 @@ class Delegation:
         if index == 0:
             assert not outputs, 'premature tool output'
             item = {'type': 'function_call', 'id': 'fc-local', 'call_id': 'tool-local',
-                    'name': 'tool_3' if self.emotion else 'tool_0',
+                    'name': 'ui_show_emotion' if self.emotion else 'test_echo',
                     'arguments': '{"name":"happy"}' if self.emotion else '{"text":"delegated echo"}', 'status': 'completed'}
         else:
             assert len(outputs) == 1 and outputs[0]['call_id'] == 'tool-local', 'tool identity mismatch'
@@ -125,7 +125,7 @@ class McpDelegation:
         self.delegations.append(name)
         return {'type': 'delegation.created', 'item': {
             'type': 'delegation', 'target': 'client', 'id': name,
-            'content': [{'type': 'input_text', 'text': 'Call tool_0 with text m5-linked and report the result.'}]}}
+            'content': [{'type': 'input_text', 'text': 'Call test_echo with text m5-linked and report the result.'}]}}
 
     def respond(self, body):
         expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
@@ -145,7 +145,7 @@ class McpDelegation:
             assert actual == expected_outputs[position], 'M5 exact native output mismatch'
         if index % 2 == 0:
             item = {'type': 'function_call', 'id': f'm5-fc-{index}', 'call_id': f'm5-call-{index // 2}',
-                    'name': 'tool_0', 'arguments': '{"text":"m5-linked"}', 'status': 'completed'}
+                    'name': 'test_echo', 'arguments': '{"text":"m5-linked"}', 'status': 'completed'}
         else:
             item = {'type': 'message', 'id': f'm5-msg-{index}', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
