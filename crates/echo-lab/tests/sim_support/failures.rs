@@ -36,7 +36,7 @@ fn m1_restart_diagnostics_incomplete_trace_and_cancellation_keep_original_failur
     for cancelled in [false, true] {
         let session = Session::new();
         session.scenario(json!([{"expect_screen":{"state":"speaking"}}]), json!({}));
-        let script = json!({"records":[{"event":"bridge.error","reason":"wyoming"}],
+        let script = json!({"records":[{"event":"bridge.error","reason":"wyoming","elapsed_ms":1}],
             "no_ready":cancelled,"cancel":cancelled,
             "raw_tail":"{\"payload\":\"synthetic-secret-sentinel"});
         std::fs::write(session.0.join("script.json"), script.to_string()).unwrap();
