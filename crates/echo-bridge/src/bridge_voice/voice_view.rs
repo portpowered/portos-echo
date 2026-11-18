@@ -14,6 +14,10 @@ pub(super) struct View<'a> {
 }
 
 impl<'a> View<'a> {
+    pub(super) fn setup_trace(&self) -> Trace {
+        self.trace.clone()
+    }
+
     pub(super) async fn open_tools(
         &mut self,
         tools: &mut super::voice_tools::Tools,

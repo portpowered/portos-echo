@@ -22,6 +22,7 @@ fn config() -> PeerConfig {
 async fn pair() -> (Peer, Peer) {
     let a = Peer::create(config()).await.unwrap();
     let b = Peer::build(config(), true).await.unwrap();
+    let observations = [setup_observations(&a), setup_observations(&b)];
     let offer = a.offer().await.unwrap();
     assert_eq!(offer.lines().filter(|l| l.starts_with("m=audio ")).count(), 1);
     assert!(offer.contains("opus/48000/2"));
@@ -40,9 +41,26 @@ async fn pair() -> (Peer, Peer) {
     })
     .await
     .unwrap();
+    for stages in observations {
+        assert_eq!(
+            *stages.lock().unwrap(),
+            [crate::SetupStage::IceConnected, crate::SetupStage::DataChannelOpen]
+        );
+    }
     writeln!(std::io::stdout(), "connect_ms={}", start.elapsed().as_millis()).unwrap();
     assert!(start.elapsed() <= Duration::from_secs(2));
     (a, b)
+}
+
+fn setup_observations(peer: &Peer) -> std::sync::Arc<std::sync::Mutex<Vec<crate::SetupStage>>> {
+    let stages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = stages.clone();
+    peer.observe_setup(std::sync::Arc::new(move |stage| {
+        observed.lock().unwrap().push(stage);
+        Ok(())
+    }))
+    .unwrap();
+    stages
 }
 
 #[tokio::test]

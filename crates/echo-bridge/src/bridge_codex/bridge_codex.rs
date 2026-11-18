@@ -69,6 +69,7 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     interrupt: Option<(RequestId, Instant)>,
     interrupted: Option<TurnInterrupt>,
     tool_trace: Option<crate::bridge_trace::ToolTrace>,
+    setup_trace: Option<crate::bridge_trace::Trace>,
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
@@ -81,6 +82,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             interrupt: None,
             interrupted: None,
             tool_trace: None,
+            setup_trace: None,
         }
     }
 
@@ -99,8 +101,35 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if self.phase != Phase::Fresh || offer.trim().is_empty() {
             return Err(Error::Input);
         }
+        self.prepare(options, tools, deadline).await?;
+        self.start_prepared(options, offer, deadline).await
+    }
+
+    async fn prepare(
+        &mut self,
+        options: &Options<'_>,
+        tools: Vec<DynamicTool>,
+        deadline: Instant,
+    ) -> Result<(), Error> {
+        if self.phase != Phase::Fresh {
+            return Err(Error::Input);
+        }
         self.phase = Phase::Starting;
-        let result = timeout_at(deadline, self.negotiate(options, tools, offer))
+        let result = timeout_at(deadline, self.prepare_thread(options, tools))
+            .await
+            .unwrap_or(Err(Error::Deadline));
+        if result.is_err() {
+            self.fail();
+        }
+        result
+    }
+
+    async fn start_prepared(&mut self, options: &Options<'_>, offer: &str, deadline: Instant) -> Result<String, Error> {
+        if self.phase != Phase::Starting || self.thread.is_none() || offer.trim().is_empty() {
+            self.fail();
+            return Err(Error::Input);
+        }
+        let result = timeout_at(deadline, self.negotiate(options, offer))
             .await
             .unwrap_or(Err(Error::Deadline));
         match result {
@@ -115,12 +144,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         }
     }
 
-    async fn negotiate(
-        &mut self,
-        options: &Options<'_>,
-        tools: Vec<DynamicTool>,
-        offer: &str,
-    ) -> Result<String, Error> {
+    async fn prepare_thread(&mut self, options: &Options<'_>, tools: Vec<DynamicTool>) -> Result<(), Error> {
         let mut params = serde_json::to_value(ThreadSettings::new(tools)).map_err(|_| Error::Decode)?;
         params["baseInstructions"] = options.instructions.into();
         if let Some(model) = options.model {
@@ -137,8 +161,13 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if thread.is_empty() || thread.chars().any(char::is_control) {
             return Err(Error::Decode);
         }
-        self.thread = Some(thread.clone());
-        let mut params = serde_json::to_value(RealtimeStart::new(&thread, offer)).map_err(|_| Error::Decode)?;
+        self.thread = Some(thread);
+        Ok(())
+    }
+
+    async fn negotiate(&mut self, options: &Options<'_>, offer: &str) -> Result<String, Error> {
+        let thread = self.thread.as_deref().ok_or(Error::Input)?;
+        let mut params = serde_json::to_value(RealtimeStart::new(thread, offer)).map_err(|_| Error::Decode)?;
         if let Some(voice) = options.voice {
             params["voice"] = voice.into();
         }
@@ -147,8 +176,16 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             .io
             .begin_request("thread/realtime/start", &params)
             .map_err(rpc_error)?;
+        self.io.flush().await.map_err(rpc_error)?;
+        if let Some(trace) = &mut self.setup_trace {
+            trace.record("call.realtime_start_sent", None, json!({}))?;
+        }
         self.io.wait_reply(&request).await.map_err(rpc_error)?;
-        self.answer().await
+        let answer = self.answer().await?;
+        if let Some(trace) = &mut self.setup_trace {
+            trace.record("call.answer_received", None, json!({}))?;
+        }
+        Ok(answer)
     }
 
     async fn answer(&mut self) -> Result<String, Error> {

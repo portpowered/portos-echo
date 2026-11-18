@@ -53,6 +53,16 @@ pub enum PeerState {
     Closed,
 }
 
+/// Payload-free observations of actual transport setup transitions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetupStage {
+    IceConnected,
+    DataChannelOpen,
+}
+
+/// Called synchronously once per stage. Must not block or reenter the peer.
+pub type SetupObserver = std::sync::Arc<dyn Fn(SetupStage) -> Result<(), Error> + Send + Sync>;
+
 /// Fixed error categories never contain native diagnostics, SDP, or PCM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -79,6 +89,13 @@ pub trait MediaPeer: Sized {
     fn offer(&self) -> impl Future<Output = Result<String, Error>> + Send;
     fn apply_answer(&self, sdp: &str) -> impl Future<Output = Result<(), Error>> + Send;
     fn states(&self) -> watch::Receiver<PeerState>;
+    /// Install once, before offer. Unsupported peers reject observation.
+    /// # Errors
+    /// Returns State for unsupported, repeated or late installation.
+    fn observe_setup(&self, observer: SetupObserver) -> Result<(), Error> {
+        drop(observer);
+        Err(Error::State)
+    }
     /// # Errors
     /// Returns `NotConnected` before readiness, the fixed failure category, or Closed.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;

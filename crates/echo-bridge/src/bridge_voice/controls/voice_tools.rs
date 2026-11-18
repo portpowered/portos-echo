@@ -156,7 +156,9 @@ where
             () = cancelled.as_mut() => return Err(Error::Control),
             result = tokio::time::timeout_at(options.deadline, tools.catalog()) => result.map_err(|_| Error::Deadline)??,
         };
-        call.trace_tools(tools.trace.as_ref().ok_or(Error::Unavailable)?.clone(), &catalog);
+        let trace = tools.trace.as_ref().ok_or(Error::Unavailable)?.clone();
+        call.trace_setup(trace.clone())?;
+        call.trace_tools(trace, &catalog);
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),

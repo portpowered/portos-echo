@@ -14,7 +14,11 @@ struct State {
     sent: Mutex<Vec<PcmFrame>>,
     answers: Mutex<Vec<String>>,
     offers: AtomicUsize,
+    offer_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    offer_error: Mutex<Option<echo_media::Error>>,
     closes: AtomicUsize,
+    observer: Mutex<Option<echo_media::SetupObserver>>,
+    applied: tokio::sync::Notify,
     ready: bool,
     answer_error: Option<echo_media::Error>,
 }
@@ -29,7 +33,11 @@ fn peer(ready: bool, answer_error: Option<echo_media::Error>) -> (Controlled, Ar
         sent: Mutex::default(),
         answers: Mutex::default(),
         offers: AtomicUsize::new(0),
+        offer_gate: Mutex::default(),
+        offer_error: Mutex::default(),
         closes: AtomicUsize::new(0),
+        observer: Mutex::default(),
+        applied: tokio::sync::Notify::new(),
         ready,
         answer_error,
     });
@@ -47,20 +55,36 @@ impl MediaPeer for Controlled {
     fn create(_: PeerConfig) -> impl std::future::Future<Output = Result<Self, echo_media::Error>> {
         std::future::ready(Err(echo_media::Error::InvalidConfig))
     }
-    fn offer(&self) -> impl std::future::Future<Output = Result<String, echo_media::Error>> {
+    async fn offer(&self) -> Result<String, echo_media::Error> {
         self.state.offers.fetch_add(1, Ordering::SeqCst);
         self.state.states.send_replace(PeerState::Connecting);
-        std::future::ready(Ok("fixture-offer".into()))
+        let gate = self.state.offer_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+        if let Some(error) = *self.state.offer_error.lock().unwrap() {
+            return Err(error);
+        }
+        Ok("fixture-offer".into())
     }
     fn apply_answer(&self, sdp: &str) -> impl std::future::Future<Output = Result<(), echo_media::Error>> {
         self.state.answers.lock().unwrap().push(sdp.into());
         if let Some(error) = self.state.answer_error {
             return std::future::ready(Err(error));
         }
+        self.state.applied.notify_one();
         if self.state.ready {
             self.state.states.send_replace(PeerState::Connected);
         }
         std::future::ready(Ok(()))
+    }
+    fn observe_setup(&self, observer: echo_media::SetupObserver) -> Result<(), echo_media::Error> {
+        let mut stored = self.state.observer.lock().unwrap();
+        if stored.is_some() {
+            return Err(echo_media::Error::State);
+        }
+        *stored = Some(observer);
+        Ok(())
     }
     fn states(&self) -> watch::Receiver<PeerState> {
         self.state.states.subscribe()

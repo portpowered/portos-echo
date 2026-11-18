@@ -1,6 +1,6 @@
 // Copyright 2025 OpenAI. SPDX-License-Identifier: Apache-2.0
 // Adapted from Codex voice-host transport.rs; Modified by Port OS.
-use crate::{Error, PcmFrame, PeerState, media_queue::Queue};
+use crate::{Error, PcmFrame, PeerState, SetupObserver, SetupStage, media_queue::Queue};
 use std::sync::{Arc, Mutex};
 use tokio::{sync::watch, task::JoinHandle};
 
@@ -12,6 +12,7 @@ pub(crate) struct Shared {
     pub(crate) ingress: Arc<Queue<rtc::rtp::Packet>>,
     pub(crate) tasks: Mutex<Vec<JoinHandle<()>>>,
     readiness: Mutex<(bool, bool)>,
+    setup: Mutex<(Option<SetupObserver>, u8)>,
     #[cfg(test)]
     pub(crate) sent: watch::Sender<(u32, u32)>,
     #[cfg(test)]
@@ -27,11 +28,59 @@ impl Shared {
             ingress: Arc::new(Queue::new(capacity)),
             tasks: Mutex::new(Vec::new()),
             readiness: Mutex::new((false, false)),
+            setup: Mutex::new((None, 0)),
             #[cfg(test)]
             sent: watch::channel((0, 0)).0,
             #[cfg(test)]
             received: watch::channel((0, 0)).0,
         }
+    }
+    pub(crate) fn observe_setup(&self, observer: SetupObserver) -> Result<(), Error> {
+        let mut setup = self.setup.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *self.state.borrow() != PeerState::New || setup.0.is_some() {
+            return Err(Error::State);
+        }
+        setup.0 = Some(observer);
+        Ok(())
+    }
+    pub(crate) fn begin(&self) -> Result<(), Error> {
+        let _setup = self.setup.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.check()?;
+        let changed = self.state.send_if_modified(|state| {
+            if *state == PeerState::New {
+                *state = PeerState::Connecting;
+                true
+            } else {
+                false
+            }
+        });
+        if changed { Ok(()) } else { Err(Error::State) }
+    }
+    pub(crate) fn setup_stage(&self, stage: SetupStage) {
+        let mut setup = self.setup.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(*self.state.borrow(), PeerState::Closed | PeerState::Failed) {
+            return;
+        }
+        let bit = match stage {
+            SetupStage::IceConnected => 1,
+            SetupStage::DataChannelOpen => 2,
+        };
+        if setup.1 & bit != 0 {
+            return;
+        }
+        setup.1 |= bit;
+        if let Some(observer) = &setup.0
+            && observer(stage).is_err()
+        {
+            self.fail(Error::Transport);
+        }
+    }
+    pub(crate) fn close(&self) {
+        // Wait for any in-flight callback before making close terminal.
+        let mut setup = self.setup.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        setup.0 = None;
+        self.state.send_replace(PeerState::Closed);
+        self.clear();
     }
     pub(crate) fn task(&self, task: JoinHandle<()>) {
         let mut tasks = self.tasks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

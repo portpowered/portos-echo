@@ -1,5 +1,5 @@
 //! Idle supervision and first-wake admission on the authenticated IO borrower.
-use super::{ConversationOptions, Notice, SessionNotice, SessionOptions, open_conversation, voice_kill::Gate};
+use super::{Notice, SessionNotice, SessionOptions, voice_kill::Gate};
 use crate::{Error, bridge_codex};
 use echo_codex::{DynamicTool, codex_io::RpcIo, codex_protocol::Message};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
@@ -16,26 +16,6 @@ pub struct ServeOptions<'a> {
     pub tools: Vec<DynamicTool>,
     pub session: SessionOptions,
     pub connect_timeout: Duration,
-}
-
-impl<'o> ServeOptions<'o> {
-    pub(super) fn conversation<'a>(&self, instructions: &'a str, deadline: Instant) -> ConversationOptions<'a>
-    where
-        'o: 'a,
-    {
-        ConversationOptions {
-            call: bridge_codex::Options {
-                voice: self.call.voice,
-                instructions,
-                model: self.call.model,
-                effort: self.call.effort,
-                time_zone: self.call.time_zone,
-            },
-            tools: self.tools.clone(),
-            deadline,
-            session: self.session,
-        }
-    }
 }
 
 /// Ready means authenticated device readiness, never media connectivity.
@@ -74,7 +54,7 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
-    service(client, io, options, peer, cancelled, observe, None).await
+    service(client, io, options, peer, cancelled, observe, (None, None)).await
 }
 
 pub(super) async fn service<L, R, W, P>(
@@ -84,7 +64,10 @@ pub(super) async fn service<L, R, W, P>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(ServeNotice) -> Result<(), Error>,
-    mut tools: Option<&mut super::voice_tools::Tools>,
+    context: (
+        Option<&mut super::voice_tools::Tools>,
+        Option<crate::bridge_trace::Trace>,
+    ),
 ) -> Result<(), Error>
 where
     L: EchoLink,
@@ -92,6 +75,7 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
+    let (mut tools, trace) = context;
     super::voice_session::validate(&options.session)?;
     if options.connect_timeout.is_zero() || Instant::now().checked_add(options.connect_timeout).is_none() {
         return Err(Error::Input);
@@ -125,7 +109,7 @@ where
                 }
             },
             &mut observe,
-            (tools.as_deref_mut(), std::time::SystemTime::now),
+            (tools.as_deref_mut(), std::time::SystemTime::now, trace.clone()),
         ))
         .await;
         if killed.get() && result == Err(Error::Control) {
@@ -153,6 +137,7 @@ async fn admitted<L, R, W, P>(
     context: (
         Option<&mut super::voice_tools::Tools>,
         impl FnOnce() -> std::time::SystemTime,
+        Option<crate::bridge_trace::Trace>,
     ),
 ) -> Result<(), Error>
 where
@@ -161,7 +146,7 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
-    let (tools, clock) = context;
+    let (tools, clock, mut trace) = context;
     tokio::pin!(cancelled);
     if let Some(tools) = &tools {
         tools.budget.check_call()?;
@@ -170,7 +155,7 @@ where
     let deadline = Instant::now()
         .checked_add(options.connect_timeout)
         .ok_or(Error::Input)?;
-    let (media, instructions) = tokio::select! {
+    let (mut media, instructions) = tokio::select! {
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
         result = async {
@@ -179,6 +164,7 @@ where
             Ok::<_, Error>((media, instructions))
         } => result?,
     };
+    super::voice_session::peer_created(&mut media, &mut trace).await?;
     let options_call = options.conversation(&instructions, deadline);
     let mut observer = |notice| {
         if let SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))) = &notice {
@@ -198,9 +184,16 @@ where
         .await
         .map(|_| ());
     }
-    open_conversation(device, io, media, options_call, cancelled.as_mut(), &mut observer)
-        .await
-        .map(|_| ())
+    super::voice_session::open_traced(
+        device,
+        io,
+        media,
+        (options_call, trace),
+        cancelled.as_mut(),
+        &mut observer,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
@@ -315,10 +308,14 @@ mod tests {
                 &mut peer,
                 std::future::pending(),
                 &mut observe,
-                (None, || {
-                    samples.set(samples.get() + 1);
-                    now
-                }),
+                (
+                    None,
+                    || {
+                        samples.set(samples.get() + 1);
+                        now
+                    },
+                    None,
+                ),
             );
             let remote = check_context(
                 (server, &observer, &started),
@@ -356,10 +353,14 @@ mod tests {
                     }
                 },
                 &mut |_| Ok(()),
-                (None, || {
-                    samples.set(samples.get() + 1);
-                    std::time::UNIX_EPOCH + Duration::from_hours(70_389_528)
-                }),
+                (
+                    None,
+                    || {
+                        samples.set(samples.get() + 1);
+                        std::time::UNIX_EPOCH + Duration::from_hours(70_389_528)
+                    },
+                    None,
+                ),
             )
             .await;
             assert_eq!(result, Err(if cancelled { Error::Control } else { Error::Input }));
@@ -372,7 +373,6 @@ mod tests {
             assert_eq!(bytes, Vec::<u8>::new());
         }
     }
-
     #[tokio::test(start_paused = true)]
     async fn idle_polls_control_refuses_unsolicited_tools_and_probes_before_wake() {
         let (stream, server) = tokio::io::duplex(4096);
@@ -425,7 +425,6 @@ mod tests {
             echo_codex::codex_protocol::RequestId::Number(1)
         );
     }
-
     #[tokio::test(start_paused = true)]
     async fn idle_mute_blocks_wake_and_observes_drops_until_unmuted() {
         let (stream, _server) = tokio::io::duplex(4096);
@@ -464,7 +463,6 @@ mod tests {
         assert_eq!(notices, ["muted", "dropped", "unmuted"]);
         assert_eq!(observer.commands(), [Command::Connect]);
     }
-
     #[tokio::test(start_paused = true)]
     async fn idle_eof_and_ready_cancellation_fail_without_admitting_queued_wake() {
         for cancelled in [false, true] {

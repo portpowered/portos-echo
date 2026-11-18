@@ -6,7 +6,7 @@ use echo_codex::{
     codex_io::RpcIo,
     codex_protocol::{RequestId, ToolResult, TurnInterrupt},
 };
-use echo_media::{DropCounts, MediaPeer, PcmFrame, Peer, PeerState};
+use echo_media::{DropCounts, MediaPeer, PcmFrame, Peer, PeerState, SetupStage};
 use std::collections::VecDeque;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -30,6 +30,7 @@ pub struct MediaCall<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPe
     closed: bool,
     trace: Option<crate::bridge_trace::Trace>,
     stage: &'static str,
+    trace_failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a, R, W, P> {
@@ -42,6 +43,39 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         self.call.tool_trace = Some(crate::bridge_trace::ToolTrace::new(trace, catalog));
     }
 
+    pub(crate) fn trace_setup(&mut self, trace: crate::bridge_trace::Trace) -> Result<(), Error> {
+        let observer_trace = trace.clone();
+        let failed = self.trace_failed.clone();
+        self.peer
+            .observe_setup(std::sync::Arc::new(move |stage| {
+                let event = match stage {
+                    SetupStage::IceConnected => "call.ice_connected",
+                    SetupStage::DataChannelOpen => "call.data_channel_open",
+                };
+                observer_trace
+                    .clone()
+                    .record(event, None, serde_json::json!({}))
+                    .map_err(|_| {
+                        failed.store(true, std::sync::atomic::Ordering::Release);
+                        echo_media::Error::Transport
+                    })
+            }))
+            .map_err(media_error)?;
+        self.call.setup_trace = Some(trace.clone());
+        self.trace = Some(trace);
+        Ok(())
+    }
+
+    fn record_stage(&mut self, event: &'static str) -> Result<(), Error> {
+        if self.trace_failed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Error::Trace);
+        }
+        if let Some(trace) = &mut self.call.setup_trace {
+            trace.record(event, None, serde_json::json!({}))?;
+        }
+        Ok(())
+    }
+
     pub fn new(io: &'a mut RpcIo<R, W>, peer: P) -> Self {
         Self {
             call: Call::new(io),
@@ -52,6 +86,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             closed: false,
             trace: None,
             stage: "new",
+            trace_failed: std::sync::Arc::default(),
         }
     }
 
@@ -68,9 +103,13 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             return Err(Error::Input);
         }
         self.started = true;
-        let result = timeout_at(deadline, self.negotiate(options, tools, deadline))
-            .await
-            .unwrap_or(Err(Error::Deadline));
+        let result = if Instant::now() >= deadline {
+            Err(Error::Deadline)
+        } else {
+            timeout_at(deadline, self.negotiate(options, tools, deadline))
+                .await
+                .unwrap_or(Err(Error::Deadline))
+        };
         let diagnostic = if result.is_err() {
             self.diagnostic("call.start_failed")
         } else {
@@ -86,6 +125,9 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         if result.is_ok() {
             self.stage = "media_ready";
         }
+        if self.trace_failed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Error::Trace);
+        }
         result.and(diagnostic)
     }
 
@@ -95,16 +137,29 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         tools: Vec<DynamicTool>,
         deadline: Instant,
     ) -> Result<(), Error> {
-        let offer = self.peer.offer().await.map_err(media_error)?;
+        // Only thread preparation is independent of the offer. Keep the final
+        // realtime request behind both results, with no spawned sibling task.
+        let mut trace = self.call.setup_trace.clone();
+        let (offer, ()) = tokio::try_join!(
+            async {
+                let offer = self.peer.offer().await.map_err(media_error)?;
+                if let Some(trace) = &mut trace {
+                    trace.record("call.offer_ready", None, serde_json::json!({}))?;
+                }
+                Ok(offer)
+            },
+            self.call.prepare(options, tools, deadline),
+        )?;
         self.stage = "signaling_started";
-        let answer = self.call.start(options, tools, &offer, deadline).await?;
+        let answer = self.call.start_prepared(options, &offer, deadline).await?;
         self.stage = "answer_received";
         self.peer.apply_answer(&answer).await.map_err(media_error)?;
+        self.record_stage("call.answer_applied")?;
         self.stage = "answer_applied";
         let mut states = self.peer.states();
         loop {
             match *states.borrow_and_update() {
-                PeerState::Connected => return Ok(()),
+                PeerState::Connected => return self.record_stage("call.live_connected"),
                 PeerState::Failed | PeerState::Closed => return Err(Error::Unavailable),
                 _ => (),
             }
