@@ -12,16 +12,7 @@ pub(crate) struct Router {
 }
 
 impl Router {
-    #[cfg(test)]
-    pub(crate) fn route(&mut self, frame: Event) -> Result<WyomingEvent, Error> {
-        self.route_with_capture(frame, false)
-    }
-
-    pub(crate) fn route_with_capture(
-        &mut self,
-        mut frame: Event,
-        capture_continues: bool,
-    ) -> Result<WyomingEvent, Error> {
+    pub(crate) fn route(&mut self, mut frame: Event) -> Result<WyomingEvent, Error> {
         let event = frame.typed().map_err(|_| Error::Protocol)?;
         let mut run = None;
         let audio_count = u64::from(matches!(event, WyomingEvent::AudioChunk(_)));
@@ -60,7 +51,7 @@ impl Router {
             .try_send(ReceivedEvent {
                 generation: self.generation.clone(),
                 audio_count,
-                capture_continues,
+                capture_active: self.current.is_some(),
                 event: event.clone(),
                 payload: if audio_count == 0 { frame.payload } else { vec![] },
                 run,

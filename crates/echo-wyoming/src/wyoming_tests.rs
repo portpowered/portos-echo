@@ -88,6 +88,7 @@ async fn reconnected_microphone_peer(fresh: &mut tokio::io::DuplexStream, pipeli
     }
     wyoming_peer::send(fresh, "audio-stop", json!({}), vec![]).await;
     wyoming_peer::send(fresh, "info", json!({"fresh":true}), vec![]).await;
+    assert_eq!(wyoming_peer::receive(fresh).await.header.r#type, "hassmic-end");
     assert_eq!(tokio::io::AsyncReadExt::read(fresh, &mut [0]).await.unwrap(), 0);
 }
 
@@ -178,9 +179,14 @@ async fn blocked_reply_writer_retains_only_newest_two_frames() {
         }
         assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "audio-stop");
         wyoming_peer::send(&mut peer, "played", json!(null), vec![]).await;
-        assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "hassmic-end");
+        assert_eq!(tokio::io::AsyncReadExt::read(&mut peer, &mut [0]).await.unwrap(), 0);
     };
-    let (result, (), ()) = tokio::join!(client.play(format, rx), producer, server);
+    let caller = async {
+        let result = client.play(format, rx).await;
+        client.close().await.unwrap();
+        result
+    };
+    let (result, (), ()) = tokio::join!(caller, producer, server);
     assert_eq!(result, Ok(crate::PlayOutcome::Played));
 }
 
@@ -222,7 +228,6 @@ async fn playback_is_exclusive_and_stray_played_does_not_complete_it() {
         wyoming_peer::send(&mut peer, "ping", json!(null), vec![]).await;
         assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "audio-stop");
         wyoming_peer::send(&mut peer, "played", json!(null), vec![]).await;
-        assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "hassmic-end");
         assert_eq!(tokio::io::AsyncReadExt::read(&mut peer, &mut [0]).await.unwrap(), 0);
     };
     tokio::join!(caller, server);

@@ -55,13 +55,11 @@ impl State {
         if event.audio_count == 0 {
             self.seal(Some(event), capacity)?;
         } else {
-            if self
-                .trailing
-                .as_ref()
-                .is_some_and(|audio| !Arc::ptr_eq(&audio.generation, &event.generation))
-            {
-                // A fresh generation cannot inherit old counts even if its
-                // first frame is audio. This marker uses lifecycle capacity.
+            if self.trailing.as_ref().is_some_and(|audio| {
+                !Arc::ptr_eq(&audio.generation, &event.generation) || audio.capture_active != event.capture_active
+            }) {
+                // Preserve transport generation and explicit capture-end boundaries
+                // when audio notifications coalesce without an intervening event.
                 self.seal(None, capacity)?;
             }
             if let Some(audio) = &mut self.trailing {
@@ -165,7 +163,7 @@ mod tests {
         ReceivedEvent {
             generation: generation.clone(),
             audio_count: count,
-            capture_continues: false,
+            capture_active: false,
             event: if count == 0 {
                 WyomingEvent::Ping(json!({}))
             } else {
@@ -196,6 +194,24 @@ mod tests {
             assert!(Arc::ptr_eq(&notification.generation, generation));
             assert_eq!(notification.audio_count, count);
         }
+        assert!(receiver.recv().await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn audio_counts_stay_on_their_side_of_explicit_capture_end() {
+        let (sender, mut receiver) = channel(1);
+        let generation = Arc::new(());
+        let mut admitted = event(&generation, 3);
+        admitted.capture_active = true;
+        sender.try_send(admitted).unwrap();
+        sender.try_send(event(&generation, 7)).unwrap();
+        drop(sender);
+        let before_end = receiver.recv().await.unwrap();
+        assert_eq!(before_end.audio_count, 3);
+        assert!(before_end.capture_active);
+        let after_end = receiver.recv().await.unwrap();
+        assert_eq!(after_end.audio_count, 7);
+        assert!(!after_end.capture_active);
         assert!(receiver.recv().await.is_none());
     }
 

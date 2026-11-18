@@ -196,14 +196,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             frame.typed().map_err(|_| Error::Protocol)?;
             return Ok(());
         }
-        let capture_continues = self.play.as_ref().is_some_and(|play| play.cut);
-        if frame.header.r#type == "played" && self.play.as_ref().is_some_and(|play| play.stopped && !play.cut) {
-            // Complete the device write before publishing terminal Played or
-            // resolving playback to the caller. A failed write is not success.
-            frame.typed().map_err(|_| Error::Protocol)?;
-            self.end_device().await?;
-        }
-        match self.router.route_with_capture(frame, capture_continues)? {
+        match self.router.route(frame)? {
             WyomingEvent::RunPipeline(_) => self.run_open = Some(()),
             event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
@@ -218,9 +211,6 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                         PlayOutcome::Played
                     };
                     play.finish(Ok(outcome));
-                }
-                if !capture_continues {
-                    self.router.end(Ok(()));
                 }
             }
             _ => {}
@@ -354,7 +344,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     }
 
     async fn end_device_if_active(&mut self) -> Result<(), Error> {
-        if self.router.current.is_some() || self.play.is_some() {
+        if self.run_open.is_some() || self.play.is_some() {
             self.end_device().await?;
         }
         Ok(())

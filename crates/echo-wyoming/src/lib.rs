@@ -72,7 +72,7 @@ pub struct RunStats {
 pub struct ReceivedEvent {
     pub(crate) generation: Arc<()>,
     pub(crate) audio_count: u64,
-    pub(crate) capture_continues: bool,
+    pub(crate) capture_active: bool,
     pub event: WyomingEvent,
     pub payload: Vec<u8>,
     pub run: Option<Run>,

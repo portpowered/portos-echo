@@ -103,6 +103,7 @@ async fn continued_tail<T: AsyncRead + AsyncWrite + Unpin>(mut peer: T) {
     )
     .await;
     send(&mut peer, "audio-stop", Value::Null, vec![]).await;
+    assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-end");
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
 }
 

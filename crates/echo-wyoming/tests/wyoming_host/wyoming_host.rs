@@ -120,6 +120,7 @@ pub(super) async fn lifecycle() {
     client.run_satellite().await.unwrap();
     let mut first = wake(&mut host, &mut events).await;
     reply(&client, &mut events).await;
+    client.end_run().await.unwrap();
     while first.recv().await.unwrap().is_some() {}
     host.command("stop");
     host.command("restart");

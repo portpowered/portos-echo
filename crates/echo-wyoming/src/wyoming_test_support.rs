@@ -180,7 +180,6 @@ async fn playback_server<T: AsyncRead + AsyncWrite + Unpin>(peer: &mut T) {
         send(peer, "ping", Value::Null, vec![]).await;
         assert_kind(peer, "describe").await;
         send(peer, "played", Value::Null, vec![]).await;
-        assert_kind(peer, "hassmic-end").await;
         send(peer, "info", json!({"ack":count}), vec![]).await;
     }
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);

@@ -228,9 +228,19 @@ async fn report_failure(client: &WyomingClient) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn played_end_write_timeout_never_reports_playback_success() {
+async fn played_then_end_write_timeout_never_reports_run_success() {
     let (io, mut stream) = duplex(1);
-    let client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = client.events().unwrap();
+    peer::send(
+        &mut stream,
+        "run-pipeline",
+        json!({"start_stage":"asr","end_stage":"tts",
+        "restart_on_end":false,"wake_word_name":"Computer"}),
+        vec![],
+    )
+    .await;
+    let mut run = events.recv().await.unwrap().unwrap().run.unwrap();
     let (tx, rx) = mpsc::channel(1);
     drop(tx);
     let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
@@ -239,13 +249,13 @@ async fn played_end_write_timeout_never_reports_playback_success() {
         assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
         assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
         peer::send(&mut stream, "played", json!({}), vec![]).await;
-        std::future::pending::<()>().await;
     };
-    tokio::pin!(play);
-    tokio::select! {
-        result = &mut play => assert_eq!(result, Err(crate::Error::Timeout)),
-        () = server => unreachable!(),
-    }
+    let (result, ()) = tokio::join!(play, server);
+    assert_eq!(result, Ok(PlayOutcome::Played));
+    // Played succeeds independently; the stalled end command cannot close the
+    // run successfully or fabricate successful capture EOF.
+    assert_eq!(client.end_run().await, Err(Error::Timeout));
+    assert!(matches!(run.recv().await, Err(Error::Timeout | Error::Closed)));
 }
 
 #[tokio::test(start_paused = true)]

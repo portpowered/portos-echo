@@ -329,7 +329,6 @@ async fn playback_override_survives_twelve_seconds_without_extending_describe_ti
         assert_eq!(peer::receive(&mut server).await.header.r#type, "audio-stop");
         tokio::time::sleep(Duration::from_secs(12)).await;
         peer::send(&mut server, "played", json!({}), vec![]).await;
-        assert_eq!(peer::receive(&mut server).await.header.r#type, "hassmic-end");
         assert_eq!(peer::receive(&mut server).await.header.r#type, "describe");
         assert_eq!(tokio::io::AsyncReadExt::read(&mut server, &mut [0]).await.unwrap(), 0);
     };

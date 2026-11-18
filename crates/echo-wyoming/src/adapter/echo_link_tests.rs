@@ -144,6 +144,8 @@ async fn echo_link_cut_is_idempotent_and_preserves_tail_through_played() {
         EchoLink::cut_with_stats(&client).await.unwrap(),
         CutStats { dropped_frames: 0 }
     );
+    EchoLink::end_run(&client).await.unwrap();
+    assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-end");
     assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
     EchoLink::close(&client).await.unwrap();
 }
@@ -178,7 +180,7 @@ async fn reply_server(peer: &mut tokio::io::DuplexStream) {
     assert_eq!(chunk.payload, [5, 6]);
     assert_eq!(receive(peer).await.header.r#type, "audio-stop");
     send(peer, "played", json!(null), vec![]).await;
-    for expected in ["hassmic-end", "hassmic-end", "pause-satellite"] {
+    for expected in ["hassmic-end", "pause-satellite"] {
         assert_eq!(receive(peer).await.header.r#type, expected);
     }
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
@@ -399,5 +401,59 @@ async fn end_run_after_capture_eof_still_ends_device_once() {
     EchoLink::end_run(&client).await.unwrap();
     assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-end");
     client.close().await.unwrap();
+    assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn played_keeps_capture_through_two_replies_until_explicit_end() {
+    let (io, mut peer) = duplex(4096);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = EchoLink::events(&mut client).unwrap();
+    send_wake(&mut peer).await;
+    let Some(LinkEvent::Wake(mut run)) = events.recv().await.unwrap() else {
+        unreachable!()
+    };
+    for value in [1, 2] {
+        let (tx, rx) = client.reply_channel(NonZeroUsize::MIN);
+        drop(tx);
+        let play = EchoLink::play_with_timeout(&client, pcm(), rx, Duration::from_secs(2));
+        let server = async {
+            assert_eq!(receive(&mut peer).await.header.r#type, "audio-start");
+            assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
+            send(&mut peer, "played", json!(null), vec![]).await;
+        };
+        let (result, ()) = tokio::join!(play, server);
+        assert_eq!(result, Ok(PlayOutcome::Played));
+        assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Played)));
+        send(
+            &mut peer,
+            "audio-chunk",
+            json!({"rate":16000,"width":2,"channels":1}),
+            vec![value, 1],
+        )
+        .await;
+        assert_eq!(
+            MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload,
+            [value, 1]
+        );
+        assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));
+    }
+    EchoLink::end_run(&client).await.unwrap();
+    EchoLink::end_run(&client).await.unwrap();
+    assert_eq!(receive(&mut peer).await.header.r#type, "hassmic-end");
+    assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
+    send(
+        &mut peer,
+        "audio-chunk",
+        json!({"rate":16000,"width":2,"channels":1}),
+        vec![9, 9],
+    )
+    .await;
+    assert!(matches!(
+        events.recv().await.unwrap(),
+        Some(LinkEvent::MicrophoneDropped(1))
+    ));
+    assert_eq!(MicrophoneRun::stats(&run).received, 2);
+    EchoLink::close(&client).await.unwrap();
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
 }
