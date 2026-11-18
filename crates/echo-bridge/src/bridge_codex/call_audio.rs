@@ -1,5 +1,5 @@
 //! PCM boundaries for the run owner; media owns Opus and the 48 kHz track.
-use crate::{Error, bridge_runtime::bridge_pacing::LeadPacer};
+use crate::{Error, bridge_runtime::bridge_pacing::ClockPacer};
 use echo_audio::{FrameQueue, PcmResampler};
 use echo_link::PcmFormat;
 use echo_media::PcmFrame;
@@ -118,14 +118,14 @@ fn frame_capture(pending: &mut Vec<i16>, samples: &[i16], frames: &mut Vec<PcmFr
     }
 }
 
-/// Bounded Wyoming PCM24 reply queue using the same lead policy as the run owner.
+/// Bounded Wyoming PCM24 reply queue, paced on the audio clock up to the lead.
 /// `finish` is legal only after the caller has drained accepted media; transcript
 /// completion alone cannot establish that. Empty/drained never proves `played`.
 pub struct ReplyAudio {
     converter: Converter,
     queue: FrameQueue<Vec<u8>>,
     partial: Vec<u8>,
-    pacer: LeadPacer,
+    pacer: ClockPacer,
     finished: bool,
 }
 
@@ -137,7 +137,7 @@ impl ReplyAudio {
             converter: Converter::new(crate::bridge_audio::format(16_000), 24_000)?,
             queue: FrameQueue::new(NonZeroUsize::new(128).ok_or(Error::Audio)?),
             partial: Vec::with_capacity(960),
-            pacer: LeadPacer::new(lead_ms),
+            pacer: ClockPacer::new(lead_ms),
             finished: false,
         })
     }
@@ -166,7 +166,8 @@ impl ReplyAudio {
         Ok(())
     }
 
-    /// Cancellation while waiting consumes no PCM. Underflow does not renew lead.
+    /// Cancellation while waiting consumes no PCM. Frames are never sent more
+    /// than the lead ahead of the audio clock; late wakeups catch up.
     pub async fn next_frame(&mut self) -> Option<Vec<u8>> {
         self.pacer.next_frame(&mut self.queue).await
     }
@@ -175,6 +176,12 @@ impl ReplyAudio {
     #[must_use]
     pub fn has_frames(&self) -> bool {
         !self.queue.is_empty()
+    }
+
+    /// The reply was flushed; later peer media is not part of it.
+    #[must_use]
+    pub fn finished(&self) -> bool {
+        self.finished
     }
 
     /// Accepted media was flushed and all retained frames were handed to playback.

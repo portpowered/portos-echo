@@ -39,6 +39,51 @@ impl LeadPacer {
     }
 }
 
+const PERIOD: Duration = Duration::from_millis(20);
+
+/// Audio-clock pacing for a reply that arrives in real time (the WebRTC peer).
+/// Frames go out as soon as they arrive, never more than `lead` ahead of the
+/// clock: frame k is due at `start + 20 ms * (k + 1) - lead`. Late wakeups (a
+/// coarse OS timer) catch up instead of stretching every frame. Once the device
+/// has played out everything sent, the clock restarts at the next frame.
+pub(crate) struct ClockPacer {
+    lead_frames: u32,
+    started: Option<Instant>,
+    sent: u32,
+}
+
+impl ClockPacer {
+    pub(crate) fn new(lead_ms: u16) -> Self {
+        Self {
+            lead_frames: u32::from(lead_ms / 20),
+            started: None,
+            sent: 0,
+        }
+    }
+
+    /// Cancellation while waiting consumes no frame and no clock credit.
+    pub(crate) async fn next_frame<T>(&mut self, queue: &mut FrameQueue<T>) -> Option<T> {
+        if queue.is_empty() {
+            return None;
+        }
+        let now = Instant::now();
+        let started = match self.started {
+            Some(started) if started + PERIOD * self.sent >= now => started,
+            _ => {
+                self.sent = 0;
+                *self.started.insert(now)
+            }
+        };
+        let due = started + (PERIOD * (self.sent + 1)).saturating_sub(PERIOD * self.lead_frames);
+        // Timers round up to the next millisecond: never sleep for a frame already due.
+        if due > now {
+            tokio::time::sleep_until(due).await;
+        }
+        self.sent += 1;
+        queue.pop()
+    }
+}
+
 #[cfg(test)]
 mod bridge_pacing_tests {
     use super::*;

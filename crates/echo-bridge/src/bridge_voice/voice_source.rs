@@ -9,6 +9,7 @@ pub(super) struct Source {
     pub muted: bool,
     pub reply: ReplyAudio,
     pub played: bool,
+    pub delegation: Delegation,
     pub stats: Stats,
 }
 
@@ -20,6 +21,7 @@ impl Source {
             muted,
             reply: ReplyAudio::new(lead_ms)?,
             played: false,
+            delegation: Delegation::default(),
             stats: Stats::default(),
         })
     }
@@ -53,11 +55,24 @@ impl Source {
         Ok(false)
     }
 
+    /// WebRTC media is continuous: quiet frames keep arriving after the
+    /// assistant transcript is done and the reply was flushed. They are counted
+    /// as received but not queued; audible late media still fails closed
+    /// rather than truncating the reply silently, except an abandoned
+    /// delegated answer.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
-        self.reply.push(frame)?;
+        let dropped = self.delegation.abandoned || quiet(frame);
+        if !(self.reply.finished() && dropped) {
+            self.reply.push(frame)?;
+        }
         self.stats.reply_received += 1;
         Ok(())
     }
+}
+
+/// Peak at most 64 (about -54 dBFS): decoded silence, not speech.
+fn quiet(frame: &PcmFrame) -> bool {
+    frame.iter().all(|sample| sample.unsigned_abs() <= 64)
 }
 
 /// Preserve playback ownership until the device acknowledges an interrupted
@@ -78,5 +93,83 @@ pub(super) async fn settle_cut(
         Some(Ok(_)) => Ok(()),
         Some(Err(error)) => Err(error.into()),
         None => Err(Error::Wyoming),
+    }
+}
+
+/// Delegated Codex turns and the assistant utterance they bracket. Each
+/// delegated turn has at most one filler ("one sec"): the utterance in progress
+/// when the turn starts, or else the first one begun while it runs. A filler's
+/// done holds the reply open; any later utterance is the answer, even when it
+/// begins before turn/completed arrives. A filler still speaking after its turn
+/// completed has run on into the answer, so its done ends the reply. The order
+/// of the filler's done, the answer's deltas and turn/completed varies by call.
+/// The assistant utterance in progress, by its role in a delegated turn.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Utterance {
+    #[default]
+    None,
+    Filler,
+    /// A filler whose delegated turn completed before its done.
+    Settled,
+    Answer,
+}
+
+#[derive(Default)]
+pub struct Delegation {
+    turns: usize,
+    armed: bool,
+    utterance: Utterance,
+    held: bool,
+    abandoned: bool,
+}
+
+impl Delegation {
+    pub fn started(&mut self) {
+        self.turns += 1;
+        if self.utterance == Utterance::Answer {
+            self.utterance = Utterance::Filler;
+        } else {
+            self.armed = true;
+        }
+    }
+
+    pub fn completed(&mut self) {
+        self.turns = self.turns.saturating_sub(1);
+        if self.turns == 0 {
+            self.armed = false;
+            if self.utterance == Utterance::Filler {
+                self.utterance = Utterance::Settled;
+            }
+        }
+    }
+
+    pub fn spoke(&mut self) {
+        self.utterance = match self.utterance {
+            Utterance::None if self.armed && self.turns > 0 => {
+                self.armed = false;
+                Utterance::Filler
+            }
+            Utterance::None | Utterance::Settled => Utterance::Answer,
+            utterance => utterance,
+        };
+    }
+
+    /// True when this assistant done ends the reply rather than a filler.
+    pub fn answered(&mut self) -> bool {
+        let utterance = std::mem::take(&mut self.utterance);
+        self.held = matches!(utterance, Utterance::Filler | Utterance::Settled);
+        !self.held
+    }
+
+    /// A filler done is holding the reply open for a delegated answer.
+    #[must_use]
+    pub fn held(&self) -> bool {
+        self.held && !self.abandoned
+    }
+
+    /// The response deadline passed first: the reply ends after the filler and
+    /// the answer, if it still comes, is dropped instead of failing the run.
+    pub fn abandon(&mut self) {
+        self.abandoned = true;
     }
 }
