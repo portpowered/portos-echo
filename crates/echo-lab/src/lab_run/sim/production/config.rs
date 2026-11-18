@@ -45,6 +45,8 @@ fn configure_at(
         .replace("0.0.0.0:16900", "127.0.0.1:0") // lint-rules: allow-literal inert example replaced with loopback
         // Each wake gets a fresh pinned call, including after a host restart.
         .replace("session_idle_seconds = 120", "session_idle_seconds = 0")
+        // Keep each persistent duplex run's post-reply listen short.
+        .replace("session_listen_seconds = 15", "session_listen_seconds = 3")
         .replace("credentials/live.json", "credential")
         .replace("credentials/screen-pairing.txt", "pairing")
         .replace("http://127.0.0.1:18080/mcp", mcp);

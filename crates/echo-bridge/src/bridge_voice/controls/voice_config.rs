@@ -125,7 +125,9 @@ impl Configured {
                 },
                 tools,
                 session: SessionOptions {
-                    listen_timeout: None,
+                    // Duplex runs stay open after a reply until this listen
+                    // deadline; live.session_idle_seconds is between-wakes reuse.
+                    listen_timeout: Some(Duration::from_secs(u64::from(self.config.voice.session_listen_seconds))),
                     idle: Duration::from_secs(self.config.live.session_idle_seconds),
                     response_timeout: Duration::from_secs(self.config.agent.task_deadline_seconds),
                     played_timeout: Duration::from_secs(5),
@@ -262,6 +264,7 @@ pub(super) mod tests {
         assert_eq!(call.call.model, options.voice.call.model);
         assert_eq!(call.tools, [tool]);
         assert_eq!(call.session.idle, options.voice.session.idle);
+        assert_eq!(call.session.listen_timeout, Some(Duration::from_secs(15)));
         assert_eq!(call.session.response_timeout, options.voice.session.response_timeout);
         assert_eq!(call.session.played_timeout, options.voice.session.played_timeout);
         assert_eq!(call.session.reply_lead_ms, options.voice.session.reply_lead_ms);

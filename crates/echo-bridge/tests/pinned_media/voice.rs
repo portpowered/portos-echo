@@ -97,7 +97,9 @@ pub(super) fn configure(root: &Path, port: u16) -> CodexConfig {
         .replace("credentials/live.json", "key")
         .replace("voice = \"default\"\n", "")
         .replace("0.0.0.0:16900", "127.0.0.1:0") // lint-rules: allow-literal replace inert example listener with loopback
-        .replace("credentials/screen-pairing.txt", "screen-token");
+        .replace("credentials/screen-pairing.txt", "screen-token")
+        // Keep each persistent duplex run's post-reply listen short.
+        .replace("session_listen_seconds = 15", "session_listen_seconds = 3");
     std::fs::write(
         root.join("bridge.toml"),
         format!(
