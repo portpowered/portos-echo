@@ -299,7 +299,9 @@ span multiple Echo wakes.
 
 The app server creates the call with HTTPS SDP exchange and attaches its WSS sideband. The bridge's
 [media peer](../crates/echo-media/src/media_peer.rs) sends/receives Opus over WebRTC SRTP after ICE/DTLS,
-with an ordered `oai-events` SCTP channel. The selected V3 subscription model is `gpt-live-1.1-codex`.
+with an ordered `oai-events` SCTP channel. The pin defaults V3 to `gpt-live-1-codex` in
+`codex-rs/core/src/realtime_conversation.rs`; plan section 3.3 instead names `gpt-live-1.1-codex`.
+That is a source/plan discrepancy, not proof of the model a real provider resolves.
 The app server forwards transcript notifications and handles native delegation. Local PCM conversion,
 playout pacing and `played` receipt are outside the cloud call.
 
