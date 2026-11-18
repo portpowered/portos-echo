@@ -21,6 +21,9 @@ fn playout_receipts_keep_earcon_separate_and_reject_unknown_or_missing_sources()
 }
 use tokio::{net::TcpListener, sync::mpsc};
 mod overlap;
+mod peer;
+mod termination;
+use peer::satellite;
 
 pub(super) struct Owner {
     root: config::Root,
@@ -37,6 +40,10 @@ pub(super) struct Owner {
 
 impl Owner {
     pub(super) async fn start(idle: u16, earcon: bool) -> Self {
+        Self::start_observed(idle, earcon, None).await
+    }
+
+    async fn start_observed(idle: u16, earcon: bool, observer: Option<peer::Observer>) -> Self {
         let options = super::super::tests::options();
         let root = config::Root::new().unwrap();
         let output = tempfile::tempdir().unwrap();
@@ -60,7 +67,7 @@ impl Owner {
         )
         .unwrap();
         let (wake, requested) = mpsc::channel(1);
-        let satellite = tokio::spawn(satellite(listener, requested, earcon));
+        let satellite = tokio::spawn(peer::observed_satellite(listener, requested, earcon, observer));
         let mut bridge = Process::start(&mut command).unwrap();
         let collected = bridge.observe_collection();
         bridge.expect("bridge.ready").await.unwrap();
@@ -129,46 +136,6 @@ impl Owner {
         remove_root(self.root);
         overlap::report(&trace, &origin, &observed);
     }
-}
-
-async fn satellite(listener: Arc<TcpListener>, mut requested: mpsc::Receiver<()>, earcon: bool) -> usize {
-    use super::tests::{read, send};
-    let mut stream = listener.accept().await.unwrap().0;
-    assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
-    assert_eq!(read(&mut stream).await.0["type"], "describe");
-    send(&mut stream, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await;
-    let wake: Value = serde_json::from_str(
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/wyoming/wake-word.jsonl"
-        ))
-        .lines()
-        .nth(1)
-        .unwrap(),
-    )
-    .unwrap();
-    let mut completed = 0;
-    while wait_for_wake(&mut stream, requested.recv()).await {
-        send(&mut stream, "run-pipeline", wake["header"]["data"].clone(), vec![]).await;
-        stream = run_playback(stream, earcon).await;
-        completed += 1;
-    }
-    // Socket EOF does not release this test-owned listener. The controller
-    // explicitly drops its wake sender after collecting the bridge.
-    assert!(requested.recv().await.is_none());
-    drop(listener);
-    completed
-}
-
-async fn run_playback(mut stream: tokio::net::TcpStream, earcon: bool) -> tokio::net::TcpStream {
-    let format = json!({"rate":16000,"width":2,"channels":1});
-    super::tests::send(&mut stream, "audio-start", format.clone(), vec![]).await;
-    if earcon {
-        super::wake::acknowledge(&mut stream).await;
-    }
-    let (stream, frames) = super::tests::continuous_playback(stream, format).await;
-    assert_eq!(frames, 0);
-    stream
 }
 
 #[tokio::test]
@@ -443,29 +410,11 @@ pub(super) async fn observed_listener() -> (Arc<TcpListener>, std::sync::Weak<Tc
     (listener, lifetime)
 }
 
-// A synthetic satellite must keep answering the real bridge's idle probes
-// while the test controls wake admission. Peek is cancellation safe: a wake
-// cannot discard a partially read frame that playback still needs to consume.
 pub(super) async fn wait_for_wake(
     stream: &mut tokio::net::TcpStream,
     requested: impl std::future::Future<Output = Option<()>>,
 ) -> bool {
-    use super::tests::{read, send};
-    tokio::pin!(requested);
-    loop {
-        let mut byte = [0];
-        tokio::select! {
-            requested = &mut requested => return requested.is_some(),
-            ready = stream.peek(&mut byte) => if ready.unwrap() == 0 { return false; },
-        }
-        let (row, payload) = read(stream).await;
-        assert_eq!(payload, [] as [u8; 0]);
-        match row["type"].as_str().unwrap() {
-            "describe" => send(stream, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
-            "error" => assert_eq!(row["data"]["code"], "echo-kill-switch"),
-            other => assert_eq!(other, "expected idle probe or kill refusal"),
-        }
-    }
+    peer::wait_for_wake(stream, requested, &mut None).await
 }
 
 #[tokio::test]
