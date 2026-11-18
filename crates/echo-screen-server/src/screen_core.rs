@@ -47,6 +47,13 @@ impl Core {
         self.close_clients();
     }
 
+    pub fn finish(&mut self) {
+        self.revoked = true;
+        // Closing senders lets existing streams consume their finite FIFO
+        // prefix and reach EOF. Revocation/Drop still cancel immediately.
+        self.clients.clear();
+    }
+
     fn close_clients(&mut self) {
         for client in self.clients.drain(..) {
             client.cancel.send_replace(true);
@@ -131,6 +138,43 @@ pub(crate) async fn pump(
 mod tests {
     use super::*;
     use std::future::Future;
+
+    #[tokio::test]
+    async fn finish_preserves_queued_failure_while_revocation_cancels() {
+        for graceful in [true, false] {
+            let mut core = Core::new(&Secret::new("synthetic-screen-pair".into()));
+            let (cancel, _) = watch::channel(false);
+            let mut client = core.attach(cancel.clone()).unwrap();
+            let states = [
+                UiState::Listening,
+                UiState::Error {
+                    message: "unavailable".into(),
+                    relink: false,
+                },
+            ];
+            for state in &states {
+                assert!(core.publish(state.clone()));
+            }
+            if graceful {
+                core.finish();
+            } else {
+                core.revoke();
+            }
+            assert!(!core.authorized("synthetic-screen-pair"));
+            assert_eq!(*client.cancelled.borrow(), !graceful);
+            for (index, state) in states.into_iter().enumerate() {
+                let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap()).unwrap();
+                assert_eq!(
+                    frame,
+                    ScreenFrame {
+                        seq: index as u64 + 1,
+                        state
+                    }
+                );
+            }
+            assert!(client.frames.recv().await.is_none());
+        }
+    }
 
     #[tokio::test]
     async fn held_pump_commits_fifo_before_ack_and_first_snapshot() {

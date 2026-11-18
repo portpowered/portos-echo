@@ -287,8 +287,19 @@ pub(super) async fn failed_call(fault: &str, earcon: bool) {
     let mut screen = paired_screen(&path).await;
     assert!(listener_lifetime.upgrade().is_some());
     wake.send(()).unwrap();
-    assert_eq!(screen.next().await.unwrap()["state"]["state"], "listening");
-    assert_eq!(screen.next().await.unwrap()["state"]["state"], "error");
+    for expected in ["listening", "error"] {
+        let frame = screen
+            .next()
+            .await
+            .map_err(|error| {
+                format!(
+                    "fault={fault} earcon={earcon} expected={expected}: {error}; trace={:?}",
+                    read_trace(&path).map(|trace| trace.records)
+                )
+            })
+            .unwrap();
+        assert_eq!(frame["state"]["state"], expected, "fault={fault} earcon={earcon}");
+    }
     failed_process(bridge, collected).await;
     satellite.await.unwrap();
     let observed = provider.close().await.unwrap();

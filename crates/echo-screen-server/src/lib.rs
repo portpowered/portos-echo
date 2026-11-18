@@ -39,6 +39,7 @@ pub struct ScreenServer {
     publication_requests: mpsc::Sender<tokio::sync::oneshot::Sender<()>>,
     core: Arc<Mutex<Core>>,
     stop: watch::Sender<bool>,
+    drain: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -74,11 +75,18 @@ impl ScreenServer {
         Ok(())
     }
 
-    /// Cancel and join owned tasks, closing streams and the action channel.
+    /// Drain committed frames for at most one second, then cancel and join
+    /// owned tasks, closing streams and the action channel.
     ///
     /// # Errors
     /// Returns `Task` when an owned task failed.
     pub async fn shutdown(&mut self) -> Result<(), ScreenServerError> {
+        // Finish committed SSE frames before cancellation tears down sockets.
+        self.core.lock().await.finish();
+        self.drain.send_replace(true);
+        if let Some(listener) = self.tasks.pop() {
+            listener.await.map_err(|_| ScreenServerError::Task)?;
+        }
         self.stop.send_replace(true);
         for task in self.tasks.drain(..) {
             task.await.map_err(|_| ScreenServerError::Task)?;
@@ -115,8 +123,9 @@ pub async fn serve(
     let bound_addr = listener.local_addr().map_err(|_| ScreenServerError::Bind)?;
     let (actions_tx, actions) = mpsc::channel(32);
     let (stop, stop_rx) = watch::channel(false);
+    let (drain, drain_rx) = watch::channel(false);
     let app = screen_http::router(core.clone(), actions_tx, stop_rx.clone(), bound_addr);
-    let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx));
+    let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx, drain_rx));
     let (publication_requests, requests) = mpsc::channel(32);
     let state_task = tokio::spawn(screen_core::pump(core.clone(), states, requests, stop.clone()));
     Ok(ScreenServer {
@@ -125,6 +134,7 @@ pub async fn serve(
         publication_requests,
         core,
         stop,
+        drain,
         tasks: vec![state_task, listener_task],
     })
 }
@@ -150,6 +160,7 @@ mod tests {
                 publication_requests,
                 core: Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into())))),
                 stop: watch::channel(false).0,
+                drain: watch::channel(false).0,
                 tasks: vec![],
             },
             requests,

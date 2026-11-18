@@ -5,6 +5,43 @@ use support::{Result, TOKEN, events, frame, post, report, request, server};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 
 #[tokio::test]
+async fn t3_shutdown_delivers_committed_failure_before_stream_eof() -> Result {
+    let (mut server, tx) = server().await?;
+    let address = server.bound_addr;
+    let mut stream = events(address).await?;
+    let states = [
+        UiState::Listening,
+        UiState::Error {
+            message: "Conversation unavailable. Try another wake.".into(),
+            relink: false,
+        },
+    ];
+    for state in &states {
+        tx.send(state.clone()).await?;
+    }
+    server
+        .flush(tokio::time::Instant::now() + std::time::Duration::from_secs(5))
+        .await?;
+    // Hold the observer until teardown completes: it must receive the actual
+    // committed Error frame, even when no client read races server shutdown.
+    server.shutdown().await?;
+    for (index, state) in states.into_iter().enumerate() {
+        assert_eq!(
+            frame(&mut stream).await?,
+            ScreenFrame {
+                seq: index as u64 + 1,
+                state
+            }
+        );
+    }
+    let mut tail = String::new();
+    stream.read_to_string(&mut tail).await?;
+    assert!(!tail.contains("data:"));
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn t3_exact_sequence_actions_and_reconnect() -> Result {
     let (mut server, tx) = server().await?;
     let mut a = events(server.bound_addr).await?;
