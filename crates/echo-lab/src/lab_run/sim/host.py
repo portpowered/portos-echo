@@ -331,10 +331,7 @@ class Host:
         (self.folder / "keys").unlink(missing_ok=True)
         os.mkfifo(self.folder / "keys")
         self.keys = os.open(self.folder / "keys", os.O_RDWR | os.O_NONBLOCK)
-        # One page of capture pipe (128 ms at 32 kB/s). A say waits until the
-        # pipe's queued audio plus 8 KiB has been consumed after the fixture is
-        # set, so the default 64 KiB pipe cost 2.3 s per say; one page costs 0.4 s.
-        import fcntl
+        import fcntl  # One-page pipe: a say waits 0.4 s, not 2.3 s, behind queued audio.
         fcntl.fcntl(self.fd, fcntl.F_SETPIPE_SZ, 4096)
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))

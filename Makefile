@@ -85,17 +85,18 @@ test-sim: test-sim-suites test-sim-host
 
 .PHONY: sim-prereqs
 sim-prereqs: hassmic-host
-	cargo build --locked -p echo-bridge -p echo-muse-bridge -p echo-lab --bins
+	cargo build --locked -p echo-bridge -p echo-muse-bridge --bins
+	cargo build --locked -p echo-lab --bins
 
 test-sim-suites: sim-prereqs
 	cargo run --locked -p echo-lab -- validate
-	sh tests/hassmic_host_smoke.sh
 	cargo nextest run -p echo-bridge --test bridge_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
 	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
 	cargo nextest run -p echo-lab --test sim_bridge_cli --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
 	cargo run --locked -p echo-lab -- run --all --driver sim
 
 test-sim-host: sim-prereqs
+	sh tests/hassmic_host_smoke.sh
 	cargo nextest run -p echo-lab --test sim_host --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
 	cargo nextest run -p echo-lab --bin echo-lab --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
 

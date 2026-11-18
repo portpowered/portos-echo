@@ -24,8 +24,7 @@ runs:
     - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a
       with:
         # The virtual workspace root is absent from rust-cache's package manifests.
-        # Both sim halves build the same dependency set and share one cache.
-        key: ${{ startsWith(inputs.target, 'test-sim') && 'test-sim' || inputs.target }}-${{ hashFiles('Cargo.toml') }}
+        key: ${{ inputs.target }}-${{ hashFiles('Cargo.toml') }}
         # Preserve compiled dependencies when a cold gate reaches its time limit.
         cache-on-failure: true
     - name: Locked dependency cache
