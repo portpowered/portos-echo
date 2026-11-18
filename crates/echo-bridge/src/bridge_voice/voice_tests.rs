@@ -386,7 +386,7 @@ async fn tick<F: Future>(mut work: Pin<&mut F>, frames: usize) {
 
 /// Live calls showed both orders: the filler's done before turn/completed, and
 /// turn/completed while the filler was still being spoken.
-async fn delegated_answer(filler: Vec<MediaEvent>) -> (u64, u64) {
+async fn delegated_answer(filler: Vec<MediaEvent>, answer: MediaEvent) -> (u64, u64) {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -408,7 +408,7 @@ async fn delegated_answer(filler: Vec<MediaEvent>) -> (u64, u64) {
     send(&tx, audible(12)).await;
     pending(work.as_mut()).await;
     assert_eq!(frames(&observer).len(), 10);
-    send(&tx, [said("It's three."), done()]).await;
+    send(&tx, [answer, done()]).await;
     tick(work.as_mut(), 2).await;
     // Only the answer's done ends the reply: every frame plays, then audio-stop.
     assert_eq!(frames(&observer).len(), 12);
@@ -421,13 +421,25 @@ async fn delegated_answer(filler: Vec<MediaEvent>) -> (u64, u64) {
 #[tokio::test(start_paused = true)]
 async fn voice_filler_done_before_the_delegated_turn_completes_keeps_the_reply_open() {
     let filler = vec![turn(true), said("One sec."), done(), turn(false)];
-    assert_eq!(delegated_answer(filler).await, (12, 12));
+    assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
 }
 
 #[tokio::test(start_paused = true)]
 async fn voice_filler_done_after_the_delegated_turn_completes_keeps_the_reply_open() {
     let filler = vec![turn(true), said("One sec."), turn(false), done()];
-    assert_eq!(delegated_answer(filler).await, (12, 12));
+    assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_answer_begun_before_turn_completed_still_ends_the_reply() {
+    let filler = vec![turn(true), said("One sec."), done(), said("It's")];
+    assert_eq!(delegated_answer(filler, turn(false)).await, (12, 12));
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_utterance_in_progress_when_the_turn_starts_is_the_filler() {
+    let filler = vec![said("One sec."), turn(true), done(), turn(false)];
+    assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
 }
 
 #[tokio::test(start_paused = true)]

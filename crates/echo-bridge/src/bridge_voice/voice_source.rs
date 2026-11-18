@@ -96,14 +96,16 @@ pub(super) async fn settle_cut(
     }
 }
 
-/// Delegated Codex turns and the assistant utterance they bracket. An utterance
-/// begun while a turn runs is the filler ("one sec"); its done holds the reply
-/// open for the answer spoken once the turn completes. Notification order
-/// between the filler's done and turn/completed varies between calls, so the
-/// utterance is classified by its first delta, not by its done.
+/// Delegated Codex turns and the assistant utterance they bracket. Each
+/// delegated turn has at most one filler ("one sec"): the utterance in progress
+/// when the turn starts, or else the first one begun while it runs. A filler's
+/// done holds the reply open; any later utterance is the answer, even when it
+/// begins before turn/completed arrives. Notification order between the
+/// filler's done, the answer's first delta and turn/completed varies by call.
 #[derive(Default)]
 pub struct Delegation {
     turns: usize,
+    armed: bool,
     filler: Option<bool>,
     held: bool,
     abandoned: bool,
@@ -112,15 +114,26 @@ pub struct Delegation {
 impl Delegation {
     pub fn started(&mut self) {
         self.turns += 1;
+        if self.filler == Some(false) {
+            self.filler = Some(true);
+        } else {
+            self.armed = true;
+        }
     }
 
     pub fn completed(&mut self) {
         self.turns = self.turns.saturating_sub(1);
+        if self.turns == 0 {
+            self.armed = false;
+        }
     }
 
     pub fn spoke(&mut self) {
-        let busy = self.turns > 0;
-        self.filler.get_or_insert(busy);
+        if self.filler.is_none() {
+            let filler = self.armed && self.turns > 0;
+            self.armed &= !filler;
+            self.filler = Some(filler);
+        }
     }
 
     /// True when this assistant done ends the reply rather than a filler.
