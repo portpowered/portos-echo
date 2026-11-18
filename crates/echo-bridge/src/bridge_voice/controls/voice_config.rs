@@ -189,8 +189,9 @@ fn calendar(days: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use super::super::ServeOptions;
+    use super::super::{ServeNotice, ServeOptions, SessionNotice};
     use super::*;
+    use echo_link::fake::Command;
     use echo_media::MediaPeer;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -287,7 +288,6 @@ pub(super) mod tests {
             std::future::ready(Ok(()))
         }
     }
-
     pub(in crate::bridge_voice) fn admission_options() -> ServeOptions<'static> {
         ServeOptions {
             kill_path: None,
@@ -307,8 +307,15 @@ pub(super) mod tests {
             connect_timeout: Duration::from_secs(2),
         }
     }
-
-    pub(in crate::bridge_voice) async fn check_context(server: tokio::io::DuplexStream, expected: String) {
+    pub(in crate::bridge_voice) async fn check_context(
+        remote: (
+            tokio::io::DuplexStream,
+            &echo_link::fake::Observer,
+            &tokio::sync::Notify,
+        ),
+        expected: String,
+    ) {
+        let (server, observer, started) = remote;
         let mut server = BufReader::new(server);
         for method in ["thread/start", "thread/realtime/start", "thread/realtime/stop"] {
             let mut line = String::new();
@@ -316,20 +323,20 @@ pub(super) mod tests {
             let request: serde_json::Value = serde_json::from_str(&line).unwrap();
             assert_eq!(request["method"], method);
             let params = &request["params"];
-            if method == "thread/start" {
-                assert_eq!(params["baseInstructions"], expected);
-            }
-            if method == "thread/realtime/start" {
-                assert_eq!(params["prompt"], expected);
-                assert_eq!(params["voice"], "cedar");
-                server.get_mut().write_all(b"{\"method\":\"thread/realtime/sdp\",\"params\":{\"threadId\":\"thread-1\",\"sdp\":\"fixture-answer\"}}\n").await.unwrap();
-            }
-            if method == "thread/realtime/stop" {
-                server
-                    .get_mut()
-                    .write_all(b"{\"method\":\"thread/realtime/closed\",\"params\":{\"threadId\":\"thread-1\"}}\n")
-                    .await
-                    .unwrap();
+            match method {
+                "thread/start" => assert_eq!(params["baseInstructions"], expected),
+                "thread/realtime/start" => {
+                    assert_eq!(params["prompt"], expected);
+                    assert_eq!(params["voice"], "cedar");
+                    server.get_mut().write_all(b"{\"method\":\"thread/realtime/sdp\",\"params\":{\"threadId\":\"thread-1\",\"sdp\":\"fixture-answer\"}}\n").await.unwrap();
+                }
+                _ => {
+                    server
+                        .get_mut()
+                        .write_all(b"{\"method\":\"thread/realtime/closed\",\"params\":{\"threadId\":\"thread-1\"}}\n")
+                        .await
+                        .unwrap();
+                }
             }
             let response = serde_json::json!({"id": request["id"], "result": if method == "thread/start" { serde_json::json!({"thread":{"id":"thread-1"}}) } else { serde_json::json!({}) }});
             server
@@ -337,12 +344,65 @@ pub(super) mod tests {
                 .write_all(format!("{response}\n").as_bytes())
                 .await
                 .unwrap();
+            if method == "thread/realtime/start" {
+                retained_replies(&mut server, observer, started).await;
+            }
         }
     }
-
+    pub(in crate::bridge_voice) fn retained_observer<'a>(
+        observer: &'a echo_link::fake::Observer,
+        started: &'a tokio::sync::Notify,
+        completed: &'a mut usize,
+    ) -> impl FnMut(ServeNotice) -> Result<(), Error> + 'a {
+        move |notice| {
+            match notice {
+                ServeNotice::Session(SessionNotice::Started) => started.notify_one(),
+                ServeNotice::Session(SessionNotice::Completed(_)) => {
+                    *completed += 1;
+                    if *completed == 1 {
+                        observer.wake("retained", vec![]);
+                    }
+                }
+                _ => (),
+            }
+            Ok(())
+        }
+    }
+    async fn retained_replies(
+        server: &mut BufReader<tokio::io::DuplexStream>,
+        observer: &echo_link::fake::Observer,
+        started: &tokio::sync::Notify,
+    ) {
+        for count in 1..=2 {
+            started.notified().await;
+            let done = serde_json::json!({"method":"thread/realtime/transcript/done",
+                "params":{"threadId":"thread-1","role":"assistant","text":"fixture reply"}});
+            server
+                .get_mut()
+                .write_all(format!("{done}\n").as_bytes())
+                .await
+                .unwrap();
+            let stops = || observer.commands().iter().filter(|cmd| **cmd == Command::Stop).count();
+            for _ in 0..1024 {
+                if stops() == count {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(stops(), count);
+            observer.finish(Ok(()));
+        }
+    }
     fn configured() -> Configured {
-        let mut config =
-            BridgeConfig::from_toml_str(include_str!("../../../../../examples/bridge.example.toml")).unwrap();
+        let mut config = BridgeConfig::from_toml_str(
+            &include_str!("../../../../../examples/bridge.example.toml")
+                .replace(
+                    "# Optional Codex instructions (add a [codex] section to customize):",
+                    "[codex]",
+                )
+                .replace("# instructions =", "instructions ="),
+        )
+        .unwrap();
         config.codex.home = Some(std::env::temp_dir().join("unused-codex-config-home"));
         Configured::new(config, "unused-trace".into(), ([127, 0, 0, 1], 0).into()).unwrap()
     }

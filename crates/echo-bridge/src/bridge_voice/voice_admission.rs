@@ -297,17 +297,10 @@ mod tests {
                 unreachable!()
             };
             let now = std::time::UNIX_EPOCH + Duration::from_secs(seconds);
-            let clock = || {
-                samples.set(samples.get() + 1);
-                now
-            };
+            let started = tokio::sync::Notify::new();
+            let mut completed = 0;
             let mut peer = async || Ok(MemoryPeer);
-            let mut observe = |notice| {
-                if matches!(notice, ServeNotice::Session(SessionNotice::Connected)) {
-                    return Err(Error::Control);
-                }
-                Ok(())
-            };
+            let mut observe = super::super::voice_config::tests::retained_observer(&observer, &started, &mut completed);
             let work = admitted(
                 (&client, &mut events, run),
                 &mut io,
@@ -315,14 +308,18 @@ mod tests {
                 &mut peer,
                 std::future::pending(),
                 &mut observe,
-                (None, clock),
+                (None, || {
+                    samples.set(samples.get() + 1);
+                    now
+                }),
             );
             let remote = check_context(
-                server,
+                (server, &observer, &started),
                 super::super::voice_config::call_instructions("configured\n\u{8a9e} \n", now).unwrap(),
             );
             let (result, ()) = tokio::join!(work, remote);
-            assert_eq!(result, Err(Error::Control));
+            drop(observe);
+            assert_eq!((result, completed), (Ok(()), 2));
             assert_eq!(options.call.instructions, "configured\n\u{8a9e} \n");
         }
         assert_eq!(samples.get(), 2);
