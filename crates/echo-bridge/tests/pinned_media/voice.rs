@@ -170,12 +170,7 @@ async fn settle(
                 let observed: Value = serde_json::from_str(&line.unwrap().unwrap()).unwrap();
                 settle_receipt(&observed, &mut pending, &mut completed, run);
             },
-            tick = clock.recv(), if !pending && !completed => {
-                assert_eq!(tick, Some(()));
-                input.write_all(b"{\"action\":\"advance_playout\",\"milliseconds\":20}\n").await.unwrap();
-                pending = true;
-            },
-            () = tokio::time::sleep(Duration::from_millis(5)), if !pending && !completed => {
+            () = paced(clock), if !pending && !completed => {
                 input.write_all(b"{\"action\":\"advance_playout\",\"milliseconds\":20}\n").await.unwrap();
                 pending = true;
             },
@@ -190,6 +185,14 @@ async fn settle(
     );
     assert_eq!(payload, [] as [u8; 0]);
     assert_eq!(count(root, "reply.played"), run);
+}
+
+/// A remote media step, or a short wall interval once no media paces it.
+async fn paced(clock: &mut mpsc::Receiver<()>) {
+    tokio::select! {
+        tick = clock.recv() => assert_eq!(tick, Some(())),
+        () = tokio::time::sleep(Duration::from_millis(5)) => (),
+    }
 }
 
 fn settle_receipt(observed: &Value, pending: &mut bool, completed: &mut bool, run: usize) {
