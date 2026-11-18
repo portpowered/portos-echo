@@ -6,6 +6,39 @@ use crate::Error;
 use serde_json::json;
 use std::{future::Future, task::Poll, time::Duration};
 
+#[tokio::test(start_paused = true)]
+async fn terminal_control_allows_cleanup_deadlines_without_another_clock_command() {
+    for clean in [true, false] {
+        if !clean {
+            tokio::time::pause();
+        }
+        let (stop, cancelled) = tokio::sync::oneshot::channel();
+        let collected = std::cell::Cell::new(false);
+        let owner = async {
+            assert_eq!(cancelled.await, Ok(clean));
+            // Model a drain blocked on a client that no longer reads. The
+            // cleanup timeout must expire even inside the always-ready driver.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(1), std::future::pending::<()>())
+                    .await
+                    .is_err()
+            );
+            collected.set(true);
+            Ok(())
+        };
+        let control = if clean { Ok(()) } else { Err(Error::Control) };
+        assert_eq!(
+            receipt::bounded(
+                super::drive(super::finish(owner, stop, control)),
+                Duration::from_secs(1)
+            )
+            .await,
+            if clean { Ok(()) } else { Err(Error::Control) }
+        );
+        assert!(collected.get(), "terminal input must await actual owner cleanup");
+    }
+}
+
 #[test]
 fn playout_control_rejects_malformed_and_keeps_legacy_compatible() {
     assert_eq!(
@@ -96,7 +129,7 @@ async fn missing_task_or_pcm_acknowledgement_expires_without_advancing_time() {
     );
     drop(publisher_owner);
     let context = Context::new();
-    context.submitted().unwrap();
+    context.submitted("reply").unwrap();
     assert_eq!(
         receipt::bounded(context.advance(20), Duration::from_millis(1)).await,
         Err(Error::Control)
@@ -124,8 +157,10 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
     context.screen(&server).unwrap();
     let mut voice = context.voice().unwrap();
     let mut publisher = context.publisher().unwrap();
-    context.submitted().unwrap();
+    context.submitted("earcon").unwrap();
     context.wrote(&65_i16.to_le_bytes().repeat(480)).unwrap();
+    context.submitted("earcon").unwrap();
+    context.discarded_earcon(1).unwrap();
     states.send(UiState::Speaking).await.unwrap();
     context.projected(&UiState::Speaking).unwrap();
     let step = async {
@@ -134,8 +169,8 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
             receipt,
             json!({
                 "event":"bridge.clock_advanced", "milliseconds":20, "epoch_ms":20,
-                "pcm":[{"epoch_ms":0,"pcm_bytes":960,"nonzero_samples":480,"audible_samples":480},
-                    {"epoch_ms":0,"pcm_bytes":960,"nonzero_samples":480,"audible_samples":480}],
+                "pcm":[{"epoch_ms":0,"pcm_bytes":960,"nonzero_samples":480,"audible_samples":480,"source":"earcon"},
+                    {"epoch_ms":0,"pcm_bytes":960,"nonzero_samples":480,"audible_samples":480,"source":"reply"}],
                 "states":[{"epoch_ms":0,"state":{"state":"speaking"}}],
             })
         );
@@ -146,7 +181,7 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
         voice.acknowledge().await;
         // Work can become ready while the first publication flush is awaited.
         // The final voice fence must detect it and flush another complete pass.
-        context.submitted().unwrap();
+        context.submitted("reply").unwrap();
         context.wrote(&65_i16.to_le_bytes().repeat(480)).unwrap();
         voice.acknowledge().await;
         publisher.acknowledge().await;
@@ -163,6 +198,19 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
     drop(publisher);
     assert_eq!(context.advance(0).await, Err(Error::Control));
     Arc::try_unwrap(server).ok().unwrap().shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn receipt_rejects_unknown_sources_and_cut_cannot_hide_reply_or_written_pcm() {
+    let context = Context::new();
+    assert_eq!(context.submitted("unknown"), Err(Error::Control));
+    context.submitted("reply").unwrap();
+    assert_eq!(context.discarded_earcon(1), Err(Error::Control));
+    let context = Context::new();
+    context.submitted("earcon").unwrap();
+    context.wrote(&65_i16.to_le_bytes()).unwrap();
+    assert_eq!(context.discarded_earcon(1), Err(Error::Control));
+    assert_eq!(context.advance(0).await, Err(Error::Control));
 }
 
 /// T3: real loopback sockets at the guarded bridge write boundary.

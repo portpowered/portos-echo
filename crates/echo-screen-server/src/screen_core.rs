@@ -145,6 +145,47 @@ mod tests {
     use std::future::Future;
 
     #[tokio::test]
+    async fn drain_preserves_queued_failure_while_revocation_cancels() {
+        for graceful in [true, false] {
+            let mut core = Core::new(&Secret::new("synthetic-screen-pair".into()));
+            let (cancel, _) = watch::channel(false);
+            let mut client = core.attach(cancel.clone()).unwrap();
+            let states = [
+                UiState::Listening,
+                UiState::Error {
+                    message: "unavailable".into(),
+                    relink: false,
+                },
+            ];
+            for state in &states {
+                assert!(core.publish(state.clone()));
+            }
+            if graceful {
+                core.drain();
+                client.frames.close();
+            } else {
+                core.revoke();
+            }
+            assert_eq!(core.authorized("synthetic-screen-pair"), graceful);
+            if graceful {
+                assert!(core.attach(watch::channel(false).0).is_none());
+            }
+            assert_eq!(*client.cancelled.borrow(), !graceful);
+            for (index, state) in states.into_iter().enumerate() {
+                let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap()).unwrap();
+                assert_eq!(
+                    frame,
+                    ScreenFrame {
+                        seq: index as u64 + 1,
+                        state
+                    }
+                );
+            }
+            assert!(client.frames.recv().await.is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn held_pump_commits_fifo_before_ack_and_first_snapshot() {
         let core = Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into()))));
         let (states, input) = mpsc::channel(32);

@@ -67,6 +67,7 @@ impl BridgeConfig {
 /// A fully validated result from a loader. Public fields may subsequently be mutated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeConfig {
+    pub wake_earcon: bool,
     pub chatgpt_auth: ChatGptAuthConfig,
     pub codex: CodexConfig,
     pub echo: EchoConfig,

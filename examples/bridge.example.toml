@@ -1,4 +1,7 @@
 # All credential values are paths; this example contacts no services when loaded.
+# Optional wake acknowledgement; omitted means true. Set false to disable.
+wake_earcon = true
+
 [echo]
 host = "echo.example.invalid"
 wyoming_port = 16700

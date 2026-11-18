@@ -1,6 +1,7 @@
 //! Bounded, transparent Wyoming observer. Times are taken after successful
 //! socket writes, never from capture FIFO writes or playback-file growth.
 use std::{net::SocketAddr, time::Duration};
+mod earcon;
 
 use echo_contracts::wyoming::{Decoder, Event, Header, WyomingEvent};
 use tokio::{
@@ -14,28 +15,57 @@ use tokio::{
 #[derive(Clone, Debug, Default)]
 pub struct Timing {
     pub captured: usize,
+    captured_chunks: usize,
+    endpoint_sample: Option<usize>,
+    capture_tail: Vec<u8>,
+    earcon_in_capture: bool,
     pub played: usize,
     pub nonzero_samples: usize,
     pub audible_samples: usize,
+    earcon: earcon::Earcon,
     endpoint: Option<Duration>,
     first_pcm: Option<Duration>,
+    wake: Option<Duration>,
     run: bool,
     failure: Option<String>,
 }
 
 impl Timing {
+    pub fn capture_observation(&self) -> serde_json::Value {
+        serde_json::json!({"bytes":self.captured,"chunks":self.captured_chunks,
+            "endpoint_sample":self.endpoint_sample,"earcon_first_frame_present":self.earcon_in_capture})
+    }
+
     pub fn endpoint_seen(&self) -> bool {
         self.endpoint.is_some()
+    }
+
+    pub fn wake_observation(&self) -> serde_json::Value {
+        serde_json::json!({"earcon_bytes":self.earcon.bytes,
+            "wake_to_earcon_ms":self.earcon.first.zip(self.wake)
+                .and_then(|(first, wake)| first.checked_sub(wake)).map(|time| time.as_millis())})
     }
 
     fn capture(&mut self, event: &Event, target: usize, now: Duration) -> Result<(), String> {
         match event.header.r#type.as_str() {
             "run-pipeline" if self.run => return Err("wire: multiple runs in one world".into()),
-            "run-pipeline" => self.run = true,
+            "run-pipeline" => {
+                self.run = true;
+                self.wake = Some(now);
+            }
             "audio-chunk" if self.run => {
                 if !pcm(event, 16000) {
                     return Err("wire: invalid capture PCM".into());
                 }
+                self.captured_chunks += 1;
+                self.capture_tail.extend_from_slice(&event.payload);
+                self.earcon_in_capture |= self
+                    .capture_tail
+                    .windows(960)
+                    .step_by(2)
+                    .any(|bytes| earcon::matches(bytes, 0));
+                let discard = self.capture_tail.len().saturating_sub(958);
+                self.capture_tail.drain(..discard);
                 self.captured = self
                     .captured
                     .checked_add(event.payload.len())
@@ -45,6 +75,7 @@ impl Timing {
                 }
                 if self.endpoint.is_none() && self.captured >= target {
                     self.endpoint = Some(now);
+                    self.endpoint_sample = Some(target / 2);
                 }
             }
             _ => {}
@@ -53,9 +84,13 @@ impl Timing {
     }
 
     fn playback(&mut self, event: &Event, now: Duration) -> Result<(), String> {
+        let earcon = self.earcon.observe(event, now)?;
         if event.header.r#type == "audio-chunk" {
             if !self.run || !pcm(event, 24000) {
                 return Err("wire: invalid reply PCM".into());
+            }
+            if earcon {
+                return Ok(());
             }
             self.played = self
                 .played
@@ -74,6 +109,8 @@ impl Timing {
     pub fn audible_reply(&self, host: &serde_json::Value) -> Result<serde_json::Value, String> {
         let measured = serde_json::json!({"pcm_bytes":self.played,
             "nonzero_samples":self.nonzero_samples,"audible_samples":self.audible_samples,
+            "wake":self.wake_observation(),
+            "capture":self.capture_observation(),
             "host":host});
         if let Some(error) = &self.failure {
             return Err(error.clone());
@@ -295,8 +332,9 @@ impl Endpoint {
                     // Upstream microphone gain changes magnitudes but preserves
                     // signs. Match the complete finite fixture across frames.
                     tail.extend(signs(&event.payload));
-                    if tail.windows(bytes.len()).any(|window| window == bytes) {
+                    if let Some(position) = tail.windows(bytes.len()).position(|window| window == bytes) {
                         state.endpoint = Some(now);
+                        state.endpoint_sample = Some(state.captured / 2 - tail.len() + position + bytes.len());
                         tail.clear();
                     } else {
                         let discard = tail.len().saturating_sub(bytes.len() - 1);

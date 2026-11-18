@@ -72,6 +72,7 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
     let mut root = Fields::new(value, "config")?;
     let agent_backend;
     let result = BridgeConfig {
+        wake_earcon: root.optional("wake_earcon")?.unwrap_or(true),
         codex: root
             .table
             .remove("codex")

@@ -53,7 +53,7 @@ impl Session {
 
     pub async fn start(&mut self, options: &Options, _root: &Path) -> Result<(), String> {
         self.prepare(options)?;
-        self.host = Some(Process::start(&mut process::host(&options.python))?);
+        self.host = Some(Process::start_observed(&mut process::host(&options.python))?);
         let host = self.host.as_mut().ok_or("M5: missing host")?;
         let address = process::admit_host(
             &mut self.endpoints,
@@ -91,7 +91,7 @@ impl Session {
             "--sim-epoch",
             &EPOCH.to_string(),
         ]);
-        self.bridge = Some(Process::start(&mut command)?);
+        self.bridge = Some(Process::start_observed(&mut command)?);
         self.bridge
             .as_mut()
             .ok_or("M5: missing bridge")?
@@ -399,7 +399,11 @@ impl Session {
             let closed = bridge.close().await;
             #[cfg(test)]
             self.record_release("bridge", &closed);
-            failures.extend(closed.err());
+            failures.extend(
+                closed
+                    .err()
+                    .map(|error| format!("M5 bridge: {error}; {}", bridge.exit_summary())),
+            );
             if let Err(error) = self.observe().and_then(|()| self.trace.finish()) {
                 failures.push(error);
             }
@@ -437,7 +441,7 @@ impl Session {
             let closed = live.shutdown().await;
             #[cfg(test)]
             self.record_release("provider", &closed);
-            failures.extend(closed.err());
+            failures.extend(closed.err().map(|error| format!("M5 provider: {error}")));
         }
         if let Some(spoof) = self.spoof.take() {
             let closed = spoof.shutdown().await;
@@ -455,7 +459,11 @@ impl Session {
             let closed = host.close().await;
             #[cfg(test)]
             self.record_release("host", &closed);
-            failures.extend(closed.err());
+            failures.extend(
+                closed
+                    .err()
+                    .map(|error| format!("M5 host: {error}; {}", host.exit_summary())),
+            );
         }
         if self.started() && std::fs::remove_dir_all(&self.directory).is_err() {
             failures.push("M5: private state cleanup failed".into());

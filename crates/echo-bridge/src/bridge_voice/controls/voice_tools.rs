@@ -134,7 +134,7 @@ impl Tools {
 }
 
 pub(super) async fn conversation<L, R, W, P>(
-    device: (&L, &mut L::Events, <L::Events as echo_link::LinkEvents>::Run),
+    mut device: (&L, &mut L::Events, <L::Events as echo_link::LinkEvents>::Run),
     io: &mut echo_codex::codex_io::RpcIo<R, W>,
     peer: P,
     options: (super::ConversationOptions<'_>, &mut Tools),
@@ -151,19 +151,29 @@ where
     let mut call = crate::bridge_codex::MediaCall::new(io, peer);
     tokio::pin!(cancelled);
     let work = async {
-        let catalog = tokio::select! {
-            biased;
-            () = cancelled.as_mut() => return Err(Error::Control),
-            result = tokio::time::timeout_at(options.deadline, tools.catalog()) => result.map_err(|_| Error::Deadline)??,
-        };
-        let trace = tools.trace.as_ref().ok_or(Error::Unavailable)?.clone();
-        call.trace_setup(trace.clone())?;
-        call.trace_tools(trace, &catalog);
-        tokio::select! {
-            biased;
-            () = cancelled.as_mut() => return Err(Error::Control),
-            result = call.start(&options.call, catalog.tools().to_vec(), options.deadline) => result?,
-        }
+        // Discovery can outlast the chime. Keep its receipt, ordered mute and
+        // microphone capture supervised through both discovery and call start.
+        let catalog = super::earcon::negotiating(
+            device.1,
+            super::earcon::capture_during(&mut device.2, async {
+                let catalog = tokio::select! {
+                    biased;
+                    () = cancelled.as_mut() => return Err(Error::Control),
+                    result = tokio::time::timeout_at(options.deadline, tools.catalog()) => result.map_err(|_| Error::Deadline)??,
+                };
+                let trace = tools.trace.as_ref().ok_or(Error::Unavailable)?.clone();
+                call.trace_setup(trace.clone())?;
+                call.trace_tools(trace, &catalog);
+                tokio::select! {
+                    biased;
+                    () = cancelled.as_mut() => return Err(Error::Control),
+                    result = call.start(&options.call, catalog.tools().to_vec(), options.deadline) => result?,
+                }
+                Ok(catalog)
+            }),
+            &mut observe,
+        )
+        .await?;
         observe(super::SessionNotice::Connected)?;
         // Keep the retained scheduler/run future off the Windows main stack.
         Box::pin(super::tool_conversation(

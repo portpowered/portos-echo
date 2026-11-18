@@ -1,4 +1,6 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
+#[path = "earcon/earcon.rs"]
+mod earcon;
 #[path = "controls/tool_ledger.rs"]
 mod tool_ledger;
 #[path = "controls/tool_policy.rs"]
@@ -64,6 +66,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> VoicePort for Me
 
 /// No payload-bearing observation implements Debug or Display.
 pub enum Notice {
+    EarconPlayed(Duration),
     Device(LinkEvent<()>),
     Transcript {
         role: String,
@@ -124,7 +127,10 @@ pub async fn run<L: EchoLink>(
     let (sink, reply) = client.reply_channel(NonZeroUsize::MIN);
     let ceiling = options.response_deadline.saturating_duration_since(Instant::now()) + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
+    let playback_started = std::cell::Cell::new(false);
     let playback = async {
+        earcon::idle().await?;
+        playback_started.set(true);
         let result = client
             .play_with_timeout(crate::bridge_audio::format(24_000), reply, ceiling)
             .await;
@@ -148,6 +154,11 @@ pub async fn run<L: EchoLink>(
     .await
     .unwrap_or(Err(Error::Deadline));
     if let Err(error) = result {
+        // The earcon scope still owns the speaker until reply playback starts.
+        // Its joined supervisor cuts/collects that operation on borrower exit.
+        if !playback_started.get() {
+            return Err(error);
+        }
         let cut = timeout(Duration::from_secs(1), client.cut_with_stats()).await;
         if error == Error::Control {
             cut.map_err(|_| Error::Deadline)??;
@@ -185,6 +196,7 @@ async fn drive<E: LinkEvents>(
         tokio::select! {
             // Timeouts cannot be starved by a continuously ready peer.
             biased;
+            duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
             () = tokio::time::sleep_until(deadline) => {
                 if sink.is_none() || !source.delegation.held() {
                     return Err(Error::Deadline);
@@ -228,7 +240,7 @@ async fn step<E: LinkEvents>(
 ) -> Result<(), Error> {
     tokio::select! {
         event = events.recv() => device(&event?.ok_or(Error::Wyoming)?, sink.is_none(), source, observe),
-        frame = microphone.recv(), if !source.microphone_finished => {
+        frame = earcon::microphone(microphone), if !source.microphone_finished => {
             if source.capture(frame?, port)? {
                 observe(Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
             }
@@ -244,7 +256,7 @@ async fn step<E: LinkEvents>(
             if let Some(frame) = pending.take() {
                 source.mouth.wrote(&frame, Instant::now());
                 if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
-                    clock.submitted()?;
+                    clock.submitted("reply")?;
                 }
             }
             source.stats.reply_sent += 1;
@@ -256,6 +268,8 @@ async fn step<E: LinkEvents>(
 async fn forward(sink: Option<&impl ReplySink>, pending: Option<&[u8]>) -> Result<(), Error> {
     let sink = sink.ok_or(Error::Wyoming)?;
     let frame = pending.ok_or(Error::Audio)?;
+    earcon::preempt();
+    earcon::idle().await?;
     // Retain the single frame across cancelled bounded sends.
     sink.send(frame.to_vec()).await.map_err(Error::from)
 }
@@ -266,6 +280,9 @@ fn device<R>(
     source: &mut Source,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    if earcon::receipt(event) {
+        return Ok(());
+    }
     let event = match event {
         LinkEvent::Played => {
             if !stopped {

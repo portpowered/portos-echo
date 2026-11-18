@@ -35,6 +35,9 @@ fn configure_at(
     let directory = private.join("configured.private");
     std::fs::create_dir(&directory).map_err(|_| "launch: cannot create private configuration")?;
     let template = include_str!("../../../../../../examples/bridge.example.toml")
+        // Shared legacy fixtures assert reply-only playback. The M2 configured
+        // journey separately exercises the production default-on wake sound.
+        .replace("wake_earcon = true", "wake_earcon = false")
         .replace("echo.example.invalid", "127.0.0.1")
         .replace("wyoming_port = 16700", &format!("wyoming_port = {}", address.port()))
         .replace("mode = \"chatgpt\"", "mode = \"api_key\"")

@@ -12,6 +12,7 @@ import threading
 import time
 
 finite_input = runpy.run_path(str(Path(__file__).with_name("m3") / "host_input.py"))["finite_input"]
+playback_counts = runpy.run_path(str(Path(__file__).with_name("m2") / "host_playback.py"))["playback_counts"]
 
 ROOT = Path(__file__).resolve().parents[5]
 LIMIT = 65536
@@ -396,8 +397,7 @@ class Host:
                 data = recording.read(LIMIT + 1)
             if len(data) > LIMIT or len(data) % 2:
                 raise ValueError("invalid playback observation")
-            emit({"event": "host.ack", "pcm_bytes": len(data),
-                  "nonzero_bytes": sum(byte != 0 for byte in data)})
+            emit(playback_counts(data, value.get("wake_earcon", False)))
             return
         elif action in ("finite", "inject", "muted"):
             finite_input(self, value, signal.SIGUSR1)

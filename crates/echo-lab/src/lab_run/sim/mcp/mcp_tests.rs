@@ -57,7 +57,7 @@ async fn journey(phase: &std::cell::Cell<&str>) {
         .arg("-u")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/mcp/mcp_host.py"))
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/wyoming/wake-word.jsonl"));
-    session.host = Some(Process::start(&mut command).unwrap());
+    session.host = Some(Process::start_observed(&mut command).unwrap());
     let ready = session.host.as_mut().unwrap().expect("host.ready").await.unwrap();
     let address = ready["address"].as_str().unwrap().parse().unwrap();
     let origin = session.start_peers(address, &options.python).await.unwrap();
@@ -70,7 +70,7 @@ async fn journey(phase: &std::cell::Cell<&str>) {
     assert_eq!(session.released, ["bridge"]); // only the pre-restart generation collected
     let cleanup = session.close().await;
     assert_eq!(result, Ok(()));
-    assert_eq!(cleanup, Ok(()));
+    assert_eq!(cleanup, Ok(()), "M5: collected owners: {:?}", session.released);
     assert_closed(&session);
     assert!(!path.exists());
 }
@@ -142,16 +142,23 @@ async fn t3_m5_failed_child_collection_does_not_report_successful_release() {
     command.args([
         "-u",
         "-c",
-        "import sys; print('{\"event\":\"host.ready\"}'); sys.stdin.read(); sys.exit(7)",
+        "import sys; print('{\"event\":\"host.ready\"}'); sys.stderr.write('private-fixture-data\\n' * 4096); sys.stderr.flush(); sys.stdin.read(); sys.exit(7)",
     ]);
-    let mut host = Process::start(&mut command).unwrap();
+    let mut host = Process::start_observed(&mut command).unwrap();
     host.expect("host.ready").await.unwrap();
     let collected = host.observe_collection();
     let mut session = Session::default();
     session.host = Some(host);
     session.spoof = Some(Spoof::start(SpoofOptions::default()).await.unwrap());
-    assert_eq!(session.close().await, Err("cleanup: owned child exited nonzero".into()));
-    assert_eq!(collected.try_recv().unwrap().code(), Some(7));
+    let closed = session.close().await;
+    let status = collected.try_recv().unwrap();
+    assert_eq!(status.code(), Some(7));
+    assert_eq!(
+        closed,
+        Err(format!(
+            "M5 host: cleanup: owned child exited nonzero; {status}; forced=false; diagnostic=unrecognized stderr"
+        ))
+    );
     assert_eq!(session.released, ["spoof"]);
     assert!(session.host.is_none() && session.spoof.is_none());
 }

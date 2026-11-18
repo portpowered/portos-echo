@@ -230,3 +230,36 @@ fn mouth_oracle_accepts_only_exact_audible_pcm_and_bounded_state_offsets() {
     assert!(check(&extra, &states).unwrap_err().contains("expected 9600"));
     assert!(check(&extra[..10], &states[..4]).unwrap_err().contains("expected"));
 }
+
+#[tokio::test]
+async fn t3_controlled_wake_services_idle_probes_without_admitting_a_run() {
+    use super::tests::{read, send};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let mut peer = listener.accept().await.unwrap().0;
+    let (wake, requested) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let admitted = super::lifecycle::wait_for_wake(&mut peer, async { requested.await.ok() }).await;
+        (peer, admitted)
+    });
+    for _ in 0..2 {
+        send(&mut client, "describe", json!({}), vec![]).await;
+        assert_eq!(read(&mut client).await.0["type"], "info");
+        assert!(!task.is_finished(), "probe admitted a wake");
+    }
+    // A queued probe remains intact if wake wins the select. Playback can
+    // consume it; otherwise the idle reader already answered it.
+    send(&mut client, "describe", json!({}), vec![]).await;
+    wake.send(()).unwrap();
+    let (mut peer, admitted) = task.await.unwrap();
+    assert!(admitted);
+    send(&mut client, "audio-start", json!({}), vec![]).await;
+    let row = read(&mut peer).await.0;
+    if row["type"] == "describe" {
+        assert_eq!(read(&mut peer).await.0["type"], "audio-start");
+    } else {
+        assert_eq!(row["type"], "audio-start");
+    }
+}
