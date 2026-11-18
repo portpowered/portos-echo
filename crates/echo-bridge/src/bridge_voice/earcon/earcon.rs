@@ -1,7 +1,9 @@
 //! A scoped, bounded speaker owner, independent of reply audio and mouth state.
+mod capture;
 #[cfg(test)]
 mod tests;
 mod waveform;
+pub(super) use capture::{during as capture_during, recv as microphone};
 
 use crate::Error;
 use echo_link::{EchoLink, LinkEvent, LinkEvents, PlayOutcome, ReplySink};
@@ -29,6 +31,7 @@ struct State {
     receipt: bool,
     closing: bool,
     completed: Option<Duration>,
+    capture: capture::Capture,
 }
 
 #[derive(Default, PartialEq, Eq)]
@@ -79,6 +82,7 @@ pub(super) fn start() -> Result<(), Error> {
         if state.phase != Phase::Idle || state.completed.is_some() || state.closing {
             return Err(Error::Wyoming);
         }
+        state.capture = capture::Capture::default();
         state.phase = Phase::Active;
         state.stop = false;
         state.receipt = false;
@@ -143,7 +147,7 @@ pub(super) async fn completed() -> Duration {
 }
 
 /// Poll the one event reader while setup owns the media port. No microphone
-/// payload is taken here; its bounded run queue remains owned by the run.
+/// payload is taken by this event reader; `capture_during` retains setup PCM.
 pub(super) async fn negotiating<E: LinkEvents, T>(
     events: &mut E,
     work: impl Future<Output = Result<T, Error>>,
@@ -154,8 +158,7 @@ pub(super) async fn negotiating<E: LinkEvents, T>(
         tokio::select! {
             biased;
             duration = completed() => observe(super::SessionNotice::Run(super::Notice::EarconPlayed(duration)))?,
-            result = &mut work => return result,
-            event = events.recv(), if active() => {
+            event = events.recv(), if current().is_some() => {
                 let event = event?.ok_or(Error::Wyoming)?;
                 if receipt(&event) { continue; }
                 let event = match event {
@@ -168,6 +171,7 @@ pub(super) async fn negotiating<E: LinkEvents, T>(
                 observe(super::SessionNotice::Run(super::Notice::Device(event)))?;
                 if muted { return Err(Error::Control); }
             }
+            result = &mut work => return result,
         }
     }
 }

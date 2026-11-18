@@ -233,7 +233,7 @@ async fn step<E: LinkEvents>(
 ) -> Result<(), Error> {
     tokio::select! {
         event = events.recv() => device(&event?.ok_or(Error::Wyoming)?, sink.is_none(), source, observe),
-        frame = microphone.recv(), if !source.microphone_finished => {
+        frame = earcon::microphone(microphone), if !source.microphone_finished => {
             if source.capture(frame?, port)? {
                 observe(Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
             }

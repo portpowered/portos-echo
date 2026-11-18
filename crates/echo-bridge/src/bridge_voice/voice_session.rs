@@ -83,7 +83,7 @@ where
 }
 
 pub(super) async fn open_traced<L, R, W, P>(
-    device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
+    mut device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
     io: &mut RpcIo<R, W>,
     peer: P,
     options: (ConversationOptions<'_>, Option<crate::bridge_trace::Trace>),
@@ -103,7 +103,7 @@ where
         // Refuse an already expired deadline before generating an offer or RPC.
         super::earcon::negotiating(
             device.1,
-            async {
+            super::earcon::capture_during(&mut device.2, async {
                 tokio::select! {
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
@@ -115,7 +115,7 @@ where
                     } => result?,
                 }
                 Ok(())
-            },
+            }),
             &mut observe,
         )
         .await?;

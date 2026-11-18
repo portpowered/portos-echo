@@ -134,7 +134,7 @@ impl Tools {
 }
 
 pub(super) async fn conversation<L, R, W, P>(
-    device: (&L, &mut L::Events, <L::Events as echo_link::LinkEvents>::Run),
+    mut device: (&L, &mut L::Events, <L::Events as echo_link::LinkEvents>::Run),
     io: &mut echo_codex::codex_io::RpcIo<R, W>,
     peer: P,
     options: (super::ConversationOptions<'_>, &mut Tools),
@@ -161,14 +161,14 @@ where
         call.trace_tools(trace, &catalog);
         super::earcon::negotiating(
             device.1,
-            async {
+            super::earcon::capture_during(&mut device.2, async {
                 tokio::select! {
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
                     result = call.start(&options.call, catalog.tools().to_vec(), options.deadline) => result?,
                 }
                 Ok(())
-            },
+            }),
             &mut observe,
         )
         .await?;

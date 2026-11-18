@@ -306,7 +306,7 @@ async fn interrupted(fault: &'static str) {
     interrupt_control(binary, &root.0, &mut screen, fault).await;
     interrupted_cleanup(bridge, collected, fault).await;
     let frames = satellite.await.unwrap();
-    assert!((1..=8).contains(&frames), "{fault}: {frames}");
+    interrupted_frames(fault, frames);
     let observed = provider.close().await.unwrap();
     interrupted_provider(&observed);
     interrupted_receipts(&path, fault);
@@ -384,6 +384,9 @@ async fn drain_unacknowledged(stream: &mut TcpStream) -> usize {
 }
 
 async fn interrupt_control(binary: &Path, root: &Path, screen: &mut Screen, fault: &str) {
+    if fault == "mute" {
+        assert_eq!(screen.next().await.unwrap()["state"]["state"], "muted");
+    }
     if fault == "kill" {
         let result = tokio::process::Command::new(binary)
             .current_dir(root.join("configured.private"))
@@ -441,4 +444,9 @@ async fn interrupted_open(listener: Arc<TcpListener>, wake: oneshot::Receiver<()
 fn interrupted_provider(observed: &Value) {
     assert_eq!(observed["external"], 0);
     assert_eq!(observed["refreshes"], 0);
+}
+
+fn interrupted_frames(fault: &str, frames: usize) {
+    let maximum = if fault == "mute" { 7 } else { 8 };
+    assert!((1..=maximum).contains(&frames), "{fault}: {frames}");
 }

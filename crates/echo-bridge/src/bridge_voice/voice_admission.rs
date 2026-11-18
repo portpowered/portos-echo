@@ -148,7 +148,7 @@ where
 }
 
 async fn admitted<L, R, W, P>(
-    device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
+    mut device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
     io: &mut RpcIo<R, W>,
     options: &mut ServeOptions<'_>,
     peer: &mut impl AsyncFnMut() -> Result<P, Error>,
@@ -180,11 +180,11 @@ where
     let (mut media, instructions) = tokio::select! {
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
-        result = super::earcon::negotiating(device.1, async {
+        result = super::earcon::negotiating(device.1, super::earcon::capture_during(&mut device.2, async {
             let instructions = super::voice_config::call_instructions(options.call.instructions, clock(), options.call.time_zone)?;
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
             Ok::<_, Error>((media, instructions))
-        }, &mut setup_observer) => result?,
+        }), &mut setup_observer) => result?,
     };
     super::voice_session::peer_created(&mut media, &mut trace).await?;
     let options_call = options.conversation(&instructions, deadline);
