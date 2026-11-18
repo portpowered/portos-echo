@@ -187,7 +187,7 @@ fn native_case(order: super::super::CutOrder, name: &str) {
     assert_eq!(artifacts.checks.get("m3_mute"), Some(&true));
     let events = std::fs::read_to_string(options.out.join("events.jsonl")).unwrap();
     let rows: Vec<Value> = events.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-    native_observations(order, name, rows);
+    native_observations(order, name, &rows, &driver.world.trace.records);
 }
 
 fn native_failure_trace(root: &Path, name: &str) {
@@ -209,16 +209,16 @@ fn native_failure_trace(root: &Path, name: &str) {
     }
 }
 
-fn native_observations(order: super::super::CutOrder, name: &str, rows: Vec<Value>) {
+fn native_observations(order: super::super::CutOrder, name: &str, rows: &[Value], trace: &[Value]) {
     if order.delegated() {
-        let interrupts: Vec<_> = rows.iter().filter(|row| row["event"] == "turn/interrupt").collect();
-        let receipts: Vec<_> = rows
+        let interrupts: Vec<_> = trace.iter().filter(|row| row["event"] == "turn/interrupt").collect();
+        let receipts: Vec<_> = trace
             .iter()
             .filter(|row| row["event"] == "turn.interrupt_acknowledged")
             .collect();
         assert_eq!(interrupts.len(), 1);
         assert_eq!(receipts.len(), 1);
-        let completed: Vec<_> = rows.iter().filter(|row| row["event"] == "turn.interrupted").collect();
+        let completed: Vec<_> = trace.iter().filter(|row| row["event"] == "turn.interrupted").collect();
         assert_eq!(completed.len(), 1);
         assert!(interrupts[0]["thread_id"].as_str().is_some_and(|id| !id.is_empty()));
         assert!(interrupts[0]["turn_id"].as_str().is_some_and(|id| !id.is_empty()));
@@ -227,7 +227,9 @@ fn native_observations(order: super::super::CutOrder, name: &str, rows: Vec<Valu
         assert_eq!(completed[0]["thread_id"], interrupts[0]["thread_id"]);
         assert_eq!(completed[0]["turn_id"], interrupts[0]["turn_id"]);
     }
-    for row in rows {
+    // Public scenario events deliberately omit private turn receipts. Assert and
+    // print the actual bridge records retained by the production driver.
+    for row in rows.iter().chain(trace) {
         if matches!(
             row["event"].as_str(),
             Some(
