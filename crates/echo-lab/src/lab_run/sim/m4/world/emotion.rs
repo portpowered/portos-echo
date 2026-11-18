@@ -34,7 +34,7 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
     assert!(playback["nonzero_bytes"].as_u64().unwrap() > 0);
     assert!(playback["nonzero_samples"].as_u64().unwrap() >= 2400);
     assert!(playback["audible_samples"].as_u64().unwrap() >= 2400);
-    owners.closed().await;
+    owners.closed(&case);
 }
 
 #[tokio::test]
@@ -85,6 +85,6 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
     assert_eq!(case.snapshot["transcripts"], json!([]));
     assert_eq!(screen.next().await, Err("screen: EOF before observation".into()));
     assert!(!case.trace.records.iter().any(|r| r["event"] == "bridge.run_completed"));
-    owners.closed().await;
+    owners.closed(&case);
     assert_eq!(case.close().await, Ok(()));
 }

@@ -50,6 +50,8 @@ struct Case {
     bridge_exit: Option<String>,
     playback: Option<Value>,
     clock: Value,
+    #[cfg(test)]
+    released: Vec<&'static str>,
 }
 pub(super) struct Journey {
     pub trace: Trace,
@@ -233,17 +235,27 @@ impl Case {
         let mut snapshot = Value::Null;
         if let Some(provider) = self.provider.take() {
             match provider.close().await {
-                Ok(value) => snapshot = value,
+                Ok(value) => {
+                    #[cfg(test)]
+                    self.released.push("provider");
+                    snapshot = value;
+                }
                 Err(error) => errors.push(error),
             }
         }
         self.transcript = snapshot["transcripts"][1]["text"].as_str().map(str::to_owned);
         self.close_mcp(&snapshot, &mut errors).await;
         if let Some(relay) = self.relay.take() {
-            errors.extend(relay.close().await.err());
+            let closed = relay.close().await;
+            #[cfg(test)]
+            self.record_release("relay", &closed);
+            errors.extend(closed.err());
         }
         if let Some(mut host) = self.host.take() {
-            errors.extend(host.close().await.err());
+            let closed = host.close().await;
+            #[cfg(test)]
+            self.record_release("host", &closed);
+            errors.extend(closed.err());
         }
         self.snapshot = snapshot;
         errors.extend(self.remove_root().err());
@@ -261,7 +273,10 @@ impl Case {
     }
     async fn close_bridge(&mut self, errors: &mut Vec<String>) {
         if let Some(mut bridge) = self.bridge.take() {
-            errors.extend(bridge.close().await.err());
+            let closed = bridge.close().await;
+            #[cfg(test)]
+            self.record_release("bridge", &closed);
+            errors.extend(closed.err());
             self.bridge_exit = Some(bridge.exit_summary());
             if let Some(root) = &self.root {
                 let read = std::fs::read(root.0.join("trace")).map_err(|_| "m4: missing final trace".to_owned());
@@ -279,13 +294,10 @@ impl Case {
                 .map_err(|_| "m4: missing MCP observation".to_owned())
                 .and_then(|mcp| receipts::merge_mode(&mut self.trace, snapshot, &mcp, self.negative, self.emotion));
             errors.extend(checked.err());
-            errors.extend(
-                spoof
-                    .shutdown()
-                    .await
-                    .map_err(|_| "m4: spoof shutdown".to_owned())
-                    .err(),
-            );
+            let closed = spoof.shutdown().await;
+            #[cfg(test)]
+            self.record_release("spoof", &closed);
+            errors.extend(closed.err().map(|_| "m4: spoof shutdown".to_owned()));
         }
     }
 }

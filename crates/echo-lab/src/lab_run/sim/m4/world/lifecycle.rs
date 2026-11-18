@@ -11,20 +11,16 @@ pub(super) struct Owners {
     addresses: Vec<String>,
 }
 impl Owners {
-    pub async fn closed(self) {
+    pub fn closed(self, case: &Case) {
         assert!(self.host_child.try_recv().unwrap().success(), "host not collected");
         assert!(self.bridge_child.try_recv().unwrap().success(), "bridge not collected");
         self.host.assert_closed();
         assert!(!self.root.exists());
-        let mut checks = tokio::task::JoinSet::new();
-        for address in self.addresses {
-            checks.spawn(async move {
-                assert!(tokio::net::TcpStream::connect(address).await.is_err());
-            });
-        }
-        while let Some(result) = checks.join_next().await {
-            result.unwrap();
-        }
+        let mut released = case.released.clone();
+        released.sort_unstable();
+        assert_eq!(released, ["bridge", "host", "provider", "relay", "spoof"]);
+        assert!(case.host.is_none() && case.bridge.is_none());
+        assert!(case.provider.is_none() && case.relay.is_none() && case.spoof.is_none());
     }
 }
 
@@ -64,6 +60,7 @@ pub(super) async fn start(emotion: bool, negative: bool) -> (Case, Owners) {
         root,
         addresses,
     };
+    assert_eq!(case.released, [] as [&str; 0]);
     (case, owners)
 }
 
@@ -96,7 +93,7 @@ async fn t3_m4_cancel_active_reply_reaps_children_listeners_and_private_files() 
     assert_eq!(case.snapshot, receipts::expected(false, false));
     assert!(!case.trace.records.iter().any(|r| r["event"] == "reply.played"));
     assert!(!case.trace.records.iter().any(|r| r["event"] == "bridge.run_completed"));
-    owners.closed().await;
+    owners.closed(&case);
     assert_eq!(case.close().await, Ok(()));
 }
 
@@ -121,6 +118,7 @@ async fn t3_m4_parallel_world_failure_does_not_borrow_success_or_leave_listeners
     assert_ne!(a.root, b.root);
     assert!(a.addresses.iter().all(|address| !b.addresses.contains(address)));
     failed.provider.take().unwrap().close().await.unwrap();
+    failed.released.push("provider");
     let (failure, success) = tokio::join!(failed.speak(), passed.speak());
     assert!(failure.is_err());
     assert!(failed.speaking.is_none());
@@ -132,7 +130,10 @@ async fn t3_m4_parallel_world_failure_does_not_borrow_success_or_leave_listeners
             .contains("missing or duplicate native delegation.created")
     );
     assert_eq!(success, Ok(()));
-    tokio::join!(a.closed(), b.closed());
+    assert_eq!(failed.released, ["provider", "bridge", "spoof", "relay", "host"]);
+    assert_eq!(passed.released, ["bridge", "provider", "spoof", "relay", "host"]);
+    a.closed(&failed);
+    b.closed(&passed);
 }
 
 #[tokio::test]
@@ -155,6 +156,70 @@ async fn t3_m4_teardown_failure_surfaces_after_collecting_all_peers() {
     assert_eq!(std::fs::read_to_string(&owners.root).unwrap(), "replacement");
     std::fs::remove_file(&owners.root).unwrap();
     std::fs::remove_dir_all(retained).unwrap();
-    owners.closed().await;
+    owners.closed(&case);
     assert_eq!(case.close().await, Ok(()));
+}
+
+impl Case {
+    pub(super) fn record_release<T, E>(&mut self, owner: &'static str, result: &Result<T, E>) {
+        // Only successful awaited shutdown joins the serving task or collects
+        // this child's process. A taken Option or a cleanup intention is not proof.
+        if result.is_ok() {
+            self.released.push(owner);
+        }
+    }
+}
+
+#[tokio::test]
+async fn t3_m4_cleanup_observations_cannot_borrow_a_live_world() {
+    let mut first = Case {
+        spoof: Some(Spoof::start(SpoofOptions::default()).await.unwrap()),
+        ..Case::default()
+    };
+    let mut retained = Case {
+        spoof: Some(Spoof::start(SpoofOptions::default()).await.unwrap()),
+        ..Case::default()
+    };
+    let address = retained.spoof.as_ref().unwrap().url().trim_start_matches("http://");
+    let address = address.split('/').next().unwrap().to_owned();
+    assert!(first.released.is_empty() && retained.released.is_empty());
+    let expected = Err("m4: missing or duplicate native delegation.created".into());
+    assert_eq!(first.close().await, expected);
+    assert_eq!(first.released, ["spoof"]);
+    assert_eq!(retained.released, [] as [&str; 0]);
+    let _connection = tokio::net::TcpStream::connect(address).await.unwrap();
+    assert_eq!(retained.close().await, expected);
+    assert_eq!(retained.released, ["spoof"]);
+    assert_eq!(first.close().await, Ok(()));
+    assert_eq!(first.released, ["spoof"]);
+}
+
+#[tokio::test]
+async fn t3_m4_failed_child_collection_keeps_other_cleanup_and_error() {
+    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    command.args([
+        "-u",
+        "-c",
+        "import sys; print('{\"event\":\"ready\"}'); sys.stdin.read(); sys.exit(7)",
+    ]);
+    let mut host = Process::start(&mut command).unwrap();
+    host.expect("ready").await.unwrap();
+    let collected = host.observe_collection();
+    let mut case = Case {
+        host: Some(host),
+        spoof: Some(Spoof::start(SpoofOptions::default()).await.unwrap()),
+        ..Case::default()
+    };
+    assert!(matches!(
+        collected.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(case.released, [] as [&str; 0]);
+    assert_eq!(
+        case.close().await,
+        Err("m4: missing or duplicate native delegation.created; cleanup: owned child exited nonzero".into())
+    );
+    assert_eq!(collected.try_recv().unwrap().code(), Some(7));
+    assert_eq!(case.released, ["spoof"]);
+    assert!(case.host.is_none() && case.spoof.is_none());
 }

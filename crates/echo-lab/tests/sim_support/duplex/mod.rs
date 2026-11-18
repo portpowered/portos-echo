@@ -7,10 +7,10 @@ fn scenario(session: &Session, contents: &str) {
 const SCENARIO: &str = include_str!("../../../../../tests/scenarios/m3-full-duplex.yaml");
 
 fn command(session: &Session) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_echo-lab"));
+    let mut command = session.cli();
     command
         .current_dir(&session.0)
-        .args(["run", "scenario.yaml", "--driver", "sim", "--out", "artifacts"]);
+        .args(["scenario.yaml", "--driver", "sim", "--out", "artifacts"]);
     command
 }
 
@@ -24,6 +24,11 @@ fn checked(session: &Session, output: &Output, result: &str) -> Value {
     let report = session.report();
     assert_eq!(report["result"], result);
     assert_eq!(report["checks"]["world_closed"], true);
+    session.owners_closed();
+    // The collected CLI reports world_closed only after World::close joins
+    // its relay/Live tasks and collects the bridge and native host. Private
+    // lifecycle tests protect that per-owner boundary, including failed
+    // collection. Reconnecting here would query a reusable address instead.
     assert!(!session.0.join("artifacts/m3.private").exists());
     let events = fs::read_to_string(session.0.join("artifacts/events.jsonl")).unwrap();
     assert!(!events.contains("synthetic-local-api"));
@@ -37,10 +42,6 @@ fn checked(session: &Session, output: &Output, result: &str) -> Value {
     assert_eq!(endpoints.len(), 5);
     for address in &endpoints[1..] {
         assert_eq!(address.ip(), std::net::Ipv4Addr::LOCALHOST);
-        assert!(
-            std::net::TcpStream::connect(address).is_err(),
-            "leaked endpoint {address}"
-        );
     }
     report
 }

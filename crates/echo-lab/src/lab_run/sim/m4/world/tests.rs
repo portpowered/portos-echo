@@ -18,7 +18,7 @@ async fn journey(negative: bool) {
         })
     );
     assert_trace(&case.trace);
-    owners.closed().await;
+    owners.closed(&case);
     assert_eq!(case.close().await, Ok(()));
 }
 
