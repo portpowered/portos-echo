@@ -437,6 +437,12 @@ async fn voice_answer_begun_before_turn_completed_still_ends_the_reply() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn voice_filler_running_on_into_the_answer_ends_the_reply_at_its_done() {
+    let filler = vec![turn(true), said("One sec."), turn(false)];
+    assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
+}
+
+#[tokio::test(start_paused = true)]
 async fn voice_utterance_in_progress_when_the_turn_starts_is_the_filler() {
     let filler = vec![said("One sec."), turn(true), done(), turn(false)];
     assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));

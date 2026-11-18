@@ -100,13 +100,25 @@ pub(super) async fn settle_cut(
 /// delegated turn has at most one filler ("one sec"): the utterance in progress
 /// when the turn starts, or else the first one begun while it runs. A filler's
 /// done holds the reply open; any later utterance is the answer, even when it
-/// begins before turn/completed arrives. Notification order between the
-/// filler's done, the answer's first delta and turn/completed varies by call.
+/// begins before turn/completed arrives. A filler still speaking after its turn
+/// completed has run on into the answer, so its done ends the reply. The order
+/// of the filler's done, the answer's deltas and turn/completed varies by call.
+/// The assistant utterance in progress, by its role in a delegated turn.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Utterance {
+    #[default]
+    None,
+    Filler,
+    /// A filler whose delegated turn completed before its done.
+    Settled,
+    Answer,
+}
+
 #[derive(Default)]
 pub struct Delegation {
     turns: usize,
     armed: bool,
-    filler: Option<bool>,
+    utterance: Utterance,
     held: bool,
     abandoned: bool,
 }
@@ -114,8 +126,8 @@ pub struct Delegation {
 impl Delegation {
     pub fn started(&mut self) {
         self.turns += 1;
-        if self.filler == Some(false) {
-            self.filler = Some(true);
+        if self.utterance == Utterance::Answer {
+            self.utterance = Utterance::Filler;
         } else {
             self.armed = true;
         }
@@ -125,20 +137,27 @@ impl Delegation {
         self.turns = self.turns.saturating_sub(1);
         if self.turns == 0 {
             self.armed = false;
+            if self.utterance == Utterance::Filler {
+                self.utterance = Utterance::Settled;
+            }
         }
     }
 
     pub fn spoke(&mut self) {
-        if self.filler.is_none() {
-            let filler = self.armed && self.turns > 0;
-            self.armed &= !filler;
-            self.filler = Some(filler);
-        }
+        self.utterance = match self.utterance {
+            Utterance::None if self.armed && self.turns > 0 => {
+                self.armed = false;
+                Utterance::Filler
+            }
+            Utterance::None | Utterance::Settled => Utterance::Answer,
+            utterance => utterance,
+        };
     }
 
     /// True when this assistant done ends the reply rather than a filler.
     pub fn answered(&mut self) -> bool {
-        self.held = self.filler.take().unwrap_or(false);
+        let utterance = std::mem::take(&mut self.utterance);
+        self.held = matches!(utterance, Utterance::Filler | Utterance::Settled);
         !self.held
     }
 
