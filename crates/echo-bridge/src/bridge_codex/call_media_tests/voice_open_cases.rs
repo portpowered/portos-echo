@@ -23,9 +23,9 @@ fn serving_label(notice: &ServeNotice) -> Option<&'static str> {
     }
 }
 
-async fn two_calls(server: &mut Server) {
+async fn two_calls(server: &mut Server, began: std::time::SystemTime) {
     for _ in 0..2 {
-        start(server).await;
+        admitted_start(server, began).await;
         reply(server).await;
         stop(server).await;
     }
@@ -34,6 +34,7 @@ async fn two_calls(server: &mut Server) {
 
 #[tokio::test(start_paused = true)]
 async fn serving_waits_past_startup_budget_then_reopens_after_idle_on_same_io() {
+    let began = std::time::SystemTime::now();
     let (mut io, mut server) = fixture();
     let observer = Observer::default();
     let mut link = FakeConnector::new(observer.clone()).connect().await.unwrap();
@@ -58,7 +59,7 @@ async fn serving_waits_past_startup_budget_then_reopens_after_idle_on_same_io() 
         },
     );
     let mut work = Box::pin(async {
-        tokio::select! { result = work => result, () = two_calls(&mut server) => unreachable!() }
+        tokio::select! { result = work => result, () = two_calls(&mut server, began) => unreachable!() }
     });
     pump(work.as_mut()).await;
     tokio::time::advance(Duration::from_secs(10)).await;

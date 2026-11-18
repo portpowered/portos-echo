@@ -85,6 +85,99 @@ pub(super) async fn start(server: &mut Server) -> Value {
     params
 }
 
+// Service admission adds a fresh snapshot; direct signaling keeps `start` above.
+pub(super) async fn admitted_start(server: &mut Server, began: std::time::SystemTime) {
+    let params = thread(server).await;
+    let request = read(server).await;
+    let ended = std::time::SystemTime::now();
+    let prompt = params["baseInstructions"].as_str().unwrap();
+    assert_snapshot(prompt, began, ended);
+    let mut expected = serde_json::to_value(ThreadSettings::new(vec![])).unwrap();
+    expected["model"] = "fixture-model".into();
+    expected["baseInstructions"] = prompt.into();
+    assert_eq!(params, expected);
+    assert_eq!(request["method"], "thread/realtime/start");
+    assert_eq!(
+        request["params"],
+        json!({
+            "threadId":"thread-1","outputModality":"audio","transport":{"type":"webrtc","sdp":"fixture-offer"},
+            "version":"v3","includeStartupContext":false,"clientManagedHandoffs":false,
+            "voice":"alloy","prompt":prompt
+        })
+    );
+    notification(
+        server,
+        "thread/realtime/sdp",
+        json!({"threadId":"foreign","sdp":"wrong"}),
+    )
+    .await;
+    notification(
+        server,
+        "thread/realtime/sdp",
+        json!({"threadId":"thread-1","sdp":"fixture-answer"}),
+    )
+    .await;
+    write(server, json!({"id":request["id"],"result":{}})).await;
+}
+
+fn assert_snapshot(prompt: &str, began: std::time::SystemTime, ended: std::time::SystemTime) {
+    let snapshot = prompt
+        .strip_prefix("Client audio bridge\n[Call-start context: ")
+        .unwrap();
+    let snapshot = snapshot.strip_suffix(" UTC+00:00; local offset unavailable]").unwrap();
+    let fields: Vec<_> = snapshot.split(' ').collect();
+    assert_eq!(fields.len(), 3);
+    let date: Vec<u64> = fields[0].split('-').map(|part| part.parse().unwrap()).collect();
+    let time: Vec<u64> = fields[2].split(':').map(|part| part.parse().unwrap()).collect();
+    assert_eq!(date.len(), 3);
+    assert_eq!(time.len(), 3);
+    let (year, month, day) = (date[0], date[1], date[2]);
+    assert!((1970..=9999).contains(&year));
+    assert!((1..=12).contains(&month));
+    let leap = |y| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let months = [
+        31,
+        if leap(year) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    assert!((1..=months[usize::try_from(month - 1).unwrap()]).contains(&day));
+    assert!(time[0] < 24 && time[1] < 60 && time[2] < 60);
+    let days = (1970..year).map(|y| if leap(y) { 366 } else { 365 }).sum::<u64>()
+        + months[..usize::try_from(month - 1).unwrap()].iter().sum::<u64>()
+        + day
+        - 1;
+    let weekdays = [
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+    ];
+    let weekday = weekdays[usize::try_from(days % 7).unwrap()];
+    assert_eq!(
+        snapshot,
+        format!(
+            "{year:04}-{month:02}-{day:02} {weekday} {:02}:{:02}:{:02}",
+            time[0], time[1], time[2]
+        )
+    );
+    let epoch = days * 86_400 + time[0] * 3600 + time[1] * 60 + time[2];
+    // The wire snapshot has second precision; compare equally truncated bounds.
+    assert!(epoch >= began.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    assert!(epoch <= ended.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+}
+
 pub(super) async fn stop(server: &mut Server) {
     let request = read(server).await;
     assert_eq!(request["method"], "thread/realtime/stop");
