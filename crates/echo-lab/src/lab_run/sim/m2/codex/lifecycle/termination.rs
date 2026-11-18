@@ -51,10 +51,7 @@ async fn collect(
 ) {
     let mut wake = Some(owner.wake);
     let mut counts = Counts::default();
-    if !collect_first {
-        resume.send(()).await.unwrap();
-        through(&mut observed, &mut counts, Phase::Control("error".into())).await;
-    }
+    before_shutdown(collect_first, &resume, &mut observed, &mut counts).await;
     close_bridge(owner.bridge, owner.collected, &owner.listener_lifetime).await;
     if collect_first {
         drop(wake.take());
@@ -64,9 +61,7 @@ async fn collect(
     assert_eq!(counts.refusals, 1);
     assert!(counts.ends >= 1, "shutdown end must be consumed in idle phase");
     assert!(owner.listener_lifetime.upgrade().is_some());
-    if !collect_first {
-        drop(wake.take());
-    }
+    drop(wake.take());
     resume.send(()).await.unwrap();
     assert_eq!(owner.satellite.await.unwrap(), 2);
     assert!(owner.listener_lifetime.upgrade().is_none());
@@ -222,4 +217,16 @@ async fn close_bridge(
     drop(bridge);
     assert!(collected.try_recv().unwrap().success());
     assert!(lifetime.upgrade().is_some());
+}
+
+async fn before_shutdown(
+    collect_first: bool,
+    resume: &mpsc::Sender<()>,
+    observed: &mut mpsc::UnboundedReceiver<Phase>,
+    counts: &mut Counts,
+) {
+    if !collect_first {
+        resume.send(()).await.unwrap();
+        through(observed, counts, Phase::Control("error".into())).await;
+    }
 }
