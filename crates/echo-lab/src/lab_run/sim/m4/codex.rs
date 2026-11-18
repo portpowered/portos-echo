@@ -346,7 +346,12 @@ async fn settle(
             provider.control(Control::Complete).await?;
             completed = true;
         }
-        let result = crate::lab_run::sim::m2::codex::advance_playout(bridge, clock).await?;
+        let milliseconds = if timing.played > 0 && timing.played < 9600 {
+            0
+        } else {
+            20
+        };
+        let result = crate::lab_run::sim::m2::codex::collect_playout(bridge, clock, milliseconds).await?;
         if let Some(result) = result {
             return Ok(result);
         }

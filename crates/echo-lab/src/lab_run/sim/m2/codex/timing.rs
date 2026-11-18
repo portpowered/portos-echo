@@ -34,7 +34,9 @@ fn assert_quiet_edges(pcm: &[Value], required: bool) {
 }
 
 fn corroborate(state: &Case, pcm: &[Value], states: &[Value], reply: &crate::lab_run::sim::m4::wire::Timing) {
-    let measured = check(pcm, states).unwrap();
+    let measured = check(pcm, states);
+    assert!(measured.is_ok(), "{measured:?}; pcm={pcm:?}; states={states:?}");
+    let measured = measured.unwrap();
     assert_eq!(measured["pcm_bytes"], reply.played);
     assert_eq!(measured["nonzero_samples"], reply.nonzero_samples);
     assert_eq!(measured["audible_samples"], reply.audible_samples);
@@ -61,6 +63,7 @@ async fn settle(state: &mut Case) -> (Vec<Value>, Vec<Value>) {
     let (mut done, mut transcript, mut tail) = (false, false, false);
     while !done {
         state.provider.as_mut().unwrap().tick().await.unwrap();
+        let played = state.relay.as_ref().unwrap().timing().played;
         if state.relay.as_ref().unwrap().timing().played >= 2880 && !tail {
             state.provider.as_ref().unwrap().tail().await.unwrap();
             tail = true;
@@ -70,8 +73,9 @@ async fn settle(state: &mut Case) -> (Vec<Value>, Vec<Value>) {
             transcript = true;
         }
         let bridge = state.bridge.as_mut().unwrap();
+        let milliseconds = if played > 0 && played < 9600 { 0 } else { 20 };
         bridge
-            .send(&json!({"action":"advance_playout","milliseconds":20}))
+            .send(&json!({"action":"advance_playout","milliseconds":milliseconds}))
             .await
             .unwrap();
         loop {
@@ -82,7 +86,7 @@ async fn settle(state: &mut Case) -> (Vec<Value>, Vec<Value>) {
                     done = true;
                 }
                 "bridge.clock_advanced" => {
-                    assert_eq!(row["milliseconds"], 20);
+                    assert_eq!(row["milliseconds"], milliseconds);
                     assert_eq!(row["epoch_ms"].as_u64().unwrap() % 20, 0);
                     pcm.extend(row["pcm"].as_array().unwrap().iter().cloned());
                     states.extend(row["states"].as_array().unwrap().iter().cloned());

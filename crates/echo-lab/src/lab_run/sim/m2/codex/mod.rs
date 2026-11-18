@@ -150,9 +150,13 @@ impl Case {
                     .await?;
                 transcript = true;
             }
-            done = advance_playout(self.bridge.as_mut().ok_or("m2: missing bridge")?, &mut self.clock)
-                .await?
-                .is_some();
+            done = collect_playout(
+                self.bridge.as_mut().ok_or("m2: missing bridge")?,
+                &mut self.clock,
+                if played > 0 && played < 9600 { 0 } else { 20 },
+            )
+            .await?
+            .is_some();
         }
         // Keep the remote's socket alive but stop its RTP driver before closing
         // the production media owner. The pin's sideband stays until idle stop.
@@ -297,21 +301,24 @@ async fn advance(bridge: &mut Process, milliseconds: u64) -> Result<bool, String
     }
 }
 
-pub(in crate::lab_run::sim) async fn advance_playout(
+/// Hold fake time while collecting a bounded reply from external processes.
+/// Process scheduling latency must not manufacture a gap in simulated audio.
+pub(in crate::lab_run::sim) async fn collect_playout(
     bridge: &mut Process,
     clock: &mut Value,
+    milliseconds: u64,
 ) -> Result<Option<Value>, String> {
     bridge
-        .send(&json!({"action":"advance_playout","milliseconds":20}))
+        .send(&json!({"action":"advance_playout","milliseconds":milliseconds}))
         .await?;
     let mut completed = None;
     loop {
         let row = bridge.line().await?;
         match row["event"].as_str() {
             Some("bridge.run_completed") if row["run_id"] == "run-1" => completed = Some(row),
-            Some("bridge.clock_advanced") if row["milliseconds"] == 20 => {
+            Some("bridge.clock_advanced") if row["milliseconds"] == milliseconds => {
                 let previous = clock["epoch_ms"].as_u64().unwrap_or(0);
-                if row["epoch_ms"].as_u64() != previous.checked_add(20) {
+                if row["epoch_ms"].as_u64() != previous.checked_add(milliseconds) {
                     return Err("playout: clock receipt epoch mismatch".into());
                 }
                 if clock.is_null() {
