@@ -114,6 +114,12 @@ fn barge_fixture_preserves_both_control_orders_and_exact_payloads() {
 
 #[test]
 #[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host and Codex"]
+fn t3_m3_done_before_transcript_plays_replacement_and_closes_on_idle() {
+    native_case(super::super::CutOrder::DoneFirst, "done_before_transcript");
+}
+
+#[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host and Codex"]
 fn t3_m3_transcript_before_done_plays_replacement_and_closes_on_idle() {
     native_case(super::super::CutOrder::TranscriptFirst, "transcript_before_done");
 }
@@ -124,8 +130,12 @@ fn t3_m3_delegated_barge_interrupts_once_and_rejects_late_completion() {
     native_case(super::super::CutOrder::Delegated, "delegated");
 }
 
-fn native_case(order: super::super::CutOrder, name: &str) {
-    use crate::lab_run::{Driver, run_options, run_report::Artifacts};
+// Test-only artifact selection lets the identical witness fail on an unfixed
+// prebuilt bridge. Neither the test nor the driver compiles that artifact.
+fn native_bridge() -> PathBuf {
+    if let Some(path) = std::env::var_os("ECHO_LAB_M3_BRIDGE") {
+        return std::fs::canonicalize(path).unwrap();
+    }
     let executable = std::env::current_exe().unwrap();
     let profile = executable
         .ancestors()
@@ -134,11 +144,16 @@ fn native_case(order: super::super::CutOrder, name: &str) {
                 .is_some_and(|name| name == "debug" || name == "release")
         })
         .unwrap();
-    let bridge = profile.join(if cfg!(windows) {
+    profile.join(if cfg!(windows) {
         "echo-bridge.exe"
     } else {
         "echo-bridge"
-    });
+    })
+}
+
+fn native_case(order: super::super::CutOrder, name: &str) {
+    use crate::lab_run::{Driver, run_options, run_report::Artifacts};
+    let bridge = native_bridge();
     let scenario = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/scenarios/m3-full-duplex.yaml");
     let root = tempfile::tempdir().unwrap();
     let options = run_options::parse(&[
@@ -161,6 +176,7 @@ fn native_case(order: super::super::CutOrder, name: &str) {
         .try_for_each(|(index, step)| driver.execute(step, index, steps.get(index + 1), &mut artifacts));
     let cleanup = driver.close(&mut artifacts);
     if journey.is_err() || cleanup.is_err() {
+        native_failure_trace(&options.out, name);
         let retained = root.keep();
         assert!(
             journey.is_ok() && cleanup.is_ok(),
@@ -172,6 +188,25 @@ fn native_case(order: super::super::CutOrder, name: &str) {
     let events = std::fs::read_to_string(options.out.join("events.jsonl")).unwrap();
     let rows: Vec<Value> = events.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     native_observations(order, name, rows);
+}
+
+fn native_failure_trace(root: &Path, name: &str) {
+    // The driver copies this payload-free trace before removing its private
+    // home, including failed runs. Expose the actual error signature in CI;
+    // a missing trace must never be replaced with a synthetic observation.
+    if let Ok(trace) = std::fs::read_to_string(root.join("m3.trace.jsonl")) {
+        for row in trace
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        {
+            if matches!(
+                row["event"].as_str(),
+                Some("bridge.error" | "live.closed" | "reply.played" | "run.started")
+            ) {
+                writeln!(std::io::stdout(), "case={name} {row}").unwrap();
+            }
+        }
+    }
 }
 
 fn native_observations(order: super::super::CutOrder, name: &str, rows: Vec<Value>) {
