@@ -17,6 +17,7 @@ pub struct Ledger {
     pub live_tail_frames: u64,
     pub overlap_base: Option<u64>,
     pub receive_resets: usize,
+    pub interrupts: usize,
     pub cut_frames: Option<u64>,
     pub runs: usize,
     pub capture_frames: u64,

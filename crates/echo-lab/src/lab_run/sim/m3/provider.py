@@ -18,7 +18,8 @@ answers = queue.Queue()
 events = queue.Queue()
 wake_read, wake_write = socket.socketpair()
 output_lock = threading.Lock()
-observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'appends': [], 'models': 0}
+observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'appends': [], 'models': 0, 'released': 0}
+release_model = threading.Event()
 
 
 def emit(value):
@@ -54,6 +55,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+        if self.path == '/v1/responses':
+            observed['models'] += 1
+            assert observed['models'] == 1, 'unexpected model retry'
+            assert body['model'] == 'gpt-5.4', 'wrong delegated model'
+            emit({'event': 'provider.model_started'})
+            assert release_model.wait(20), 'late model release deadline'
+            item = {'type': 'message', 'id': 'stale-message', 'role': 'assistant', 'status': 'completed',
+                    'content': [{'type': 'output_text', 'text': 'stale delegated answer', 'annotations': []}]}
+            response = {'id': 'stale-response', 'status': 'completed', 'output': [item]}
+            values = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
+                      {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
+                      {'type': 'response.completed', 'response': response}]
+            data = ''.join('event: ' + value['type'] + '\ndata: ' + json.dumps(value) + '\n\n' for value in values).encode()
+            try:
+                self.respond(200, data, 'text/event-stream')
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # A cancelled pinned request may already have closed HTTP.
+            observed['released'] += 1
+            emit({'event': 'provider.model_released'})
+            return
         if not self.path.startswith('/backend-api/codex/realtime/calls?'):
             observed['external'] += 1
             self.respond(403, b'{}')
@@ -89,7 +110,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         value = json.loads(data)
                         if value.get('type') == 'delegation.context.append':
                             observed['appends'].append(value)
-                            emit({'event': 'provider.append'})
                 if wake_read in readable:
                     assert wake_read.recv(1) == b'e'
                     command = events.get_nowait()
@@ -115,9 +135,12 @@ try:
             wake_write.sendall(b'e')
         elif command == {'snapshot': True}:
             emit({'event': 'provider.snapshot', **observed})
+        elif command == {'release_model': True}:
+            release_model.set()
         else:
             raise AssertionError('unknown fixture command')
 finally:
+    release_model.set()
     server.shutdown()
     server.server_close()
     wake_read.close()

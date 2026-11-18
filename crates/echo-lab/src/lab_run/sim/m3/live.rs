@@ -198,6 +198,9 @@ async fn replay(
             state.active = true;
         });
         while let Ok(reply) = requests.try_recv() {
+            if matches!(&reply, Request::Quiesce(_)) {
+                order.verify(process).await?;
+            }
             quiesced |= reply.respond(observed);
         }
         if !quiesced {
@@ -218,6 +221,7 @@ async fn respond(
 ) -> Result<(), String> {
     let state = wire.borrow().clone();
     if *phase == 0 && frames > 0 && state.inputs == 1 {
+        order.begin(process).await?;
         transcript(process, "assistant", "The time is twelve.", false).await?;
         answer(peer, 0..5).await?;
         observed.send_modify(|state| {
@@ -255,6 +259,9 @@ async fn respond(
         answer(peer, 51..53).await?;
         *phase = 3;
     }
+    if !order.release_if_ready(process, state.interrupts, phase).await? {
+        return Ok(());
+    }
     replacement(peer, process, wire, observed, frames, phase).await
 }
 
@@ -267,7 +274,7 @@ async fn replacement(
     phase: &mut u8,
 ) -> Result<(), String> {
     let state = wire.borrow().clone();
-    if *phase == 3
+    if matches!(*phase, 3 | 8)
         && state.cut_frames.is_some_and(|base| frames >= base + 5)
         && state.played.len() == 1
         && state.old_sink_pcm.is_some()

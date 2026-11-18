@@ -298,16 +298,22 @@ impl World {
         trace.append(&bytes)?;
         trace.finish()?;
         if let Some(relay) = &self.relay {
+            let interrupts = trace
+                .records
+                .iter()
+                .filter(|row| row["event"] == "turn.interrupt_acknowledged")
+                .count();
             let resets = trace
                 .records
                 .iter()
                 .filter(|row| row["event"] == "call.receive_reset")
                 .count();
             relay.observed.send_if_modified(|state| {
-                if state.receive_resets == resets {
+                if state.receive_resets == resets && state.interrupts == interrupts {
                     return false;
                 }
                 state.receive_resets = resets;
+                state.interrupts = interrupts;
                 true
             });
             trace.records.extend(relay.observed.borrow().observations());

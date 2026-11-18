@@ -115,6 +115,16 @@ fn barge_fixture_preserves_both_control_orders_and_exact_payloads() {
 #[test]
 #[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host and Codex"]
 fn t3_m3_transcript_before_done_plays_replacement_and_closes_on_idle() {
+    native_case(super::super::CutOrder::TranscriptFirst, "transcript_before_done");
+}
+
+#[test]
+#[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host and Codex"]
+fn t3_m3_delegated_barge_interrupts_once_and_rejects_late_completion() {
+    native_case(super::super::CutOrder::Delegated, "delegated");
+}
+
+fn native_case(order: super::super::CutOrder, name: &str) {
     use crate::lab_run::{Driver, run_options, run_report::Artifacts};
     let executable = std::env::current_exe().unwrap();
     let profile = executable
@@ -144,7 +154,7 @@ fn t3_m3_transcript_before_done_plays_replacement_and_closes_on_idle() {
     let (_, _, steps) = crate::lab_run::load(&options).unwrap();
     let mut artifacts = Artifacts::create(options.out.clone()).unwrap();
     let mut driver = super::super::M3::new(&options).unwrap();
-    driver.world.cut_order = Some(super::super::CutOrder::TranscriptFirst);
+    driver.world.cut_order = Some(order);
     let journey = steps
         .iter()
         .enumerate()
@@ -160,11 +170,89 @@ fn t3_m3_transcript_before_done_plays_replacement_and_closes_on_idle() {
     assert_eq!(artifacts.checks.get("m3_duplex"), Some(&true));
     assert_eq!(artifacts.checks.get("m3_mute"), Some(&true));
     let events = std::fs::read_to_string(options.out.join("events.jsonl")).unwrap();
-    for row in events.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()) {
-        if matches!(row["event"].as_str(), Some("m3.wire" | "m3.duplex" | "m3.mute")) {
-            writeln!(std::io::stdout(), "case=transcript_before_done {row}").unwrap();
+    let rows: Vec<Value> = events.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    native_observations(order, name, rows);
+}
+
+fn native_observations(order: super::super::CutOrder, name: &str, rows: Vec<Value>) {
+    if order.delegated() {
+        let interrupts: Vec<_> = rows.iter().filter(|row| row["event"] == "turn/interrupt").collect();
+        let receipts: Vec<_> = rows
+            .iter()
+            .filter(|row| row["event"] == "turn.interrupt_acknowledged")
+            .collect();
+        assert_eq!(interrupts.len(), 1);
+        assert_eq!(receipts.len(), 1);
+        let completed: Vec<_> = rows.iter().filter(|row| row["event"] == "turn.interrupted").collect();
+        assert_eq!(completed.len(), 1);
+        assert!(interrupts[0]["thread_id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert!(interrupts[0]["turn_id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert_eq!(receipts[0]["thread_id"], interrupts[0]["thread_id"]);
+        assert_eq!(receipts[0]["turn_id"], interrupts[0]["turn_id"]);
+        assert_eq!(completed[0]["thread_id"], interrupts[0]["thread_id"]);
+        assert_eq!(completed[0]["turn_id"], interrupts[0]["turn_id"]);
+    }
+    for row in rows {
+        if matches!(
+            row["event"].as_str(),
+            Some(
+                "m3.wire"
+                    | "m3.duplex"
+                    | "m3.mute"
+                    | "turn/interrupt"
+                    | "turn.interrupt_acknowledged"
+                    | "turn.interrupted"
+            )
+        ) {
+            writeln!(std::io::stdout(), "case={name} {row}").unwrap();
         }
     }
+}
+
+#[tokio::test]
+async fn t3_m3_model_boundary_holds_completion_until_explicit_release() {
+    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    command
+        .arg("-u")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m3/provider.py"));
+    let mut provider = Process::start(&mut command).unwrap();
+    let ready = provider.expect("provider.ready").await.unwrap();
+    let url = format!("{}/v1/responses", ready["origin"].as_str().unwrap());
+    let request = tokio::spawn(async move {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(url)
+            .json(&json!({"model":"gpt-5.4", "input":[], "tools":[]}))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    });
+    provider.expect("provider.model_started").await.unwrap();
+    assert!(!request.is_finished());
+    provider.send(&json!({"snapshot":true})).await.unwrap();
+    let held = provider.expect("provider.snapshot").await.unwrap();
+    assert_eq!(held["models"], 1);
+    assert_eq!(held["released"], 0);
+    super::super::CutOrder::Delegated.release(&mut provider).await.unwrap();
+    let completion = request.await.unwrap();
+    let completed: Vec<Value> = completion
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(completed.len(), 3);
+    assert_eq!(completed[2]["type"], "response.completed");
+    assert_eq!(
+        completed[2]["response"]["output"][0]["content"][0]["text"],
+        "stale delegated answer"
+    );
+    super::super::CutOrder::Delegated.verify(&mut provider).await.unwrap();
+    assert_eq!(provider.close().await, Ok(()));
 }
 
 #[tokio::test]

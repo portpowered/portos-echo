@@ -16,6 +16,8 @@ pub(super) enum CutOrder {
     DoneFirst,
     #[cfg(test)]
     TranscriptFirst,
+    #[cfg(test)]
+    Delegated,
 }
 
 impl CutOrder {
@@ -26,7 +28,85 @@ impl CutOrder {
             Self::DoneFirst => vec![done, user],
             #[cfg(test)]
             Self::TranscriptFirst => vec![user, done],
+            #[cfg(test)]
+            Self::Delegated => vec![done, user.clone(), user],
         }
+    }
+
+    fn delegated(self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::Delegated => true,
+            _ => false,
+        }
+    }
+
+    async fn begin(self, process: &mut super::process::Process) -> Result<(), String> {
+        if !self.delegated() {
+            return Ok(());
+        }
+        process
+            .send(&serde_json::json!({"tag":"delegate", "events":[{
+                "type":"delegation.created", "item":{"type":"delegation", "target":"client",
+                "id":"barge-delegation", "content":[{"type":"input_text", "text":"Give the old answer."}]}
+            }]}))
+            .await?;
+        let mut observations = Vec::new();
+        for _ in 0..2 {
+            observations.push(process.line().await?["event"].as_str().unwrap_or_default().to_owned());
+        }
+        observations.sort();
+        if observations != ["provider.model_started", "provider.sent"] {
+            return Err("M3 delegation: expected exactly one pending model and sideband receipt".into());
+        }
+        Ok(())
+    }
+
+    async fn release(self, process: &mut super::process::Process) -> Result<(), String> {
+        if self.delegated() {
+            process.send(&serde_json::json!({"release_model":true})).await?;
+            process.expect("provider.model_released").await?;
+        }
+        Ok(())
+    }
+
+    async fn release_if_ready(
+        self,
+        process: &mut super::process::Process,
+        acknowledgements: usize,
+        phase: &mut u8,
+    ) -> Result<bool, String> {
+        if !self.delegated() || *phase != 3 {
+            return Ok(true);
+        }
+        match acknowledgements {
+            0 => return Ok(false),
+            1 => self.release(process).await?,
+            _ => return Err("M3 delegation: duplicate turn/interrupt acknowledgement".into()),
+        }
+        *phase = 8;
+        Ok(true)
+    }
+
+    async fn verify(self, process: &mut super::process::Process) -> Result<(), String> {
+        if self.delegated() {
+            process.send(&serde_json::json!({"snapshot":true})).await?;
+            let snapshot = process.expect("provider.snapshot").await?;
+            if snapshot["models"] != 1
+                || snapshot["released"] != 1
+                || snapshot["external"] != 0
+                || snapshot["appends"].as_array().is_none_or(|items| {
+                    items
+                        .iter()
+                        .any(|item| item.to_string().contains("stale delegated answer"))
+                })
+            {
+                return Err(
+                    "M3 delegation: late completion leaked or model boundary was not exercised exactly once".into(),
+                );
+            }
+        }
+        Ok(())
     }
 }
 
