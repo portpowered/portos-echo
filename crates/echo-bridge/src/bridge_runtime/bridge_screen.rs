@@ -14,7 +14,7 @@ mod mute;
 
 pub(crate) struct Screen {
     mute: Arc<Mutex<mute::Mute>>,
-    server: Option<ScreenServer>,
+    server: Option<Arc<ScreenServer>>,
     actions: Option<tokio::task::JoinHandle<()>>,
     pub(crate) presentation: Presentation,
     pub(crate) approvals: approval::Approvals,
@@ -56,7 +56,7 @@ impl Screen {
             .map_err(|_| Error::Screen)?;
         let screen = Self {
             mute: Arc::default(),
-            server: Some(server),
+            server: Some(Arc::new(server)),
             presentation: Presentation::new(Some(states.clone())),
             actions: None,
             approvals: approval::Approvals::default(),
@@ -121,18 +121,44 @@ impl Screen {
         let Some(server) = &mut self.server else {
             return;
         };
-        let mut actions = std::mem::replace(&mut server.actions, mpsc::channel(1).1);
+        let Some(owner) = Arc::get_mut(server) else {
+            return;
+        };
+        let mut actions = std::mem::replace(&mut owner.actions, mpsc::channel(1).1);
+        if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current()
+            && clock.screen(server).is_err()
+        {
+            return;
+        }
+        let mut drain = match crate::bridge_mcp::bridge_clock::receipt::Context::current() {
+            Some(clock) => {
+                if let Ok(drain) = clock.publisher() {
+                    Some(drain)
+                } else {
+                    clock.failed();
+                    return;
+                }
+            }
+            None => None,
+        };
         let mute = self.mute.clone();
         let presentation = self.presentation.clone();
         let approvals = self.approvals.clone();
         self.actions = Some(tokio::spawn(async move {
             loop {
                 let action = tokio::select! {
-                    action = actions.recv() => { let Some(action) = action else { break; }; action },
+                    biased;
                     result = presentation.advance_emotion() => {
                         if result.is_err() { break; }
                         continue;
                     },
+                    action = actions.recv() => { let Some(action) = action else { break; }; action },
+                    () = async {
+                        match &mut drain {
+                            Some(drain) => drain.acknowledge().await,
+                            None => std::future::pending().await,
+                        }
+                    } => continue,
                 };
                 if !mute.lock().map_or(true, |mute| mute.muted) && approvals.answer(&action).is_err() {
                     break;
@@ -160,7 +186,8 @@ impl Screen {
             task.abort();
             let _ = task.await;
         }
-        if let Some(server) = &mut self.server {
+        if let Some(server) = self.server.take() {
+            let mut server = Arc::try_unwrap(server).map_err(|_| Error::Screen)?;
             server.shutdown().await.map_err(|_| Error::Screen)?;
         }
         Ok(())

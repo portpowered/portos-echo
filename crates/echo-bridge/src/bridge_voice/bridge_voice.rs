@@ -172,6 +172,9 @@ async fn drive<E: LinkEvents>(
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let mut sink = Some(sink);
+    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
+        .map(|clock| clock.voice())
+        .transpose()?;
     let mut pending = None;
     let mut deadline = options.response_deadline;
     loop {
@@ -198,6 +201,12 @@ async fn drive<E: LinkEvents>(
                 }
             },
             result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,
+            () = async {
+                match &mut drain {
+                    Some(drain) => drain.acknowledge().await,
+                    None => std::future::pending().await,
+                }
+            }, if pending.is_none() => {},
         }
         if source.played && source.microphone_finished && sink.is_none() && source.mouth.due().is_none() {
             return Ok(());
@@ -231,6 +240,9 @@ async fn step<E: LinkEvents>(
             result?;
             if let Some(frame) = pending.take() {
                 source.mouth.wrote(&frame, Instant::now());
+                if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
+                    clock.submitted()?;
+                }
             }
             source.stats.reply_sent += 1;
             Ok(())

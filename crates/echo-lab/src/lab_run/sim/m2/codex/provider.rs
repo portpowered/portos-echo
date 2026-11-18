@@ -27,16 +27,20 @@ impl Provider {
         self.commands.send(Control::NextCapture).await.unwrap();
     }
     pub async fn start(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, false, None).await
+        Self::start_mode(python, false, None, false).await
     }
     pub async fn start_m1(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, true, None).await
+        Self::start_mode(python, true, None, false).await
     }
     #[cfg(test)]
     pub(super) async fn start_fault(python: &str, fault: &str) -> Result<Self, String> {
-        Self::start_mode(python, false, Some(fault)).await
+        Self::start_mode(python, false, Some(fault), false).await
     }
-    async fn start_mode(python: &str, repeated: bool, fault: Option<&str>) -> Result<Self, String> {
+    #[cfg(test)]
+    pub(super) async fn start_quiet_edges(python: &str) -> Result<Self, String> {
+        Self::start_mode(python, false, None, true).await
+    }
+    async fn start_mode(python: &str, repeated: bool, fault: Option<&str>, quiet_edges: bool) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
@@ -50,7 +54,7 @@ impl Provider {
             .to_owned();
         let (commands, receiver) = mpsc::channel(2);
         let (ticks, clock) = mpsc::channel(1);
-        let task = tokio::spawn(owned(process, receiver, ticks, repeated));
+        let task = tokio::spawn(owned(process, receiver, ticks, repeated, quiet_edges));
         Ok(Self {
             origin,
             commands,
@@ -97,12 +101,13 @@ async fn owned(
     mut commands: mpsc::Receiver<Control>,
     ticks: mpsc::Sender<()>,
     repeated: bool,
+    quiet_edges: bool,
 ) -> Result<Value, String> {
     let mut peer = None;
     let result = if repeated {
         repeat(&mut process, &mut commands, &mut peer).await
     } else {
-        drive(&mut process, &mut commands, &ticks, &mut peer).await
+        drive(&mut process, &mut commands, &ticks, &mut peer, quiet_edges).await
     };
     if let Some(peer) = &mut peer {
         peer.close();
@@ -116,6 +121,7 @@ async fn drive(
     commands: &mut mpsc::Receiver<Control>,
     ticks: &mpsc::Sender<()>,
     peer: &mut Option<LivePeer>,
+    quiet_edges: bool,
 ) -> Result<Value, String> {
     let offer = admit(process, commands).await?;
     let Some(offer) = offer else {
@@ -129,7 +135,7 @@ async fn drive(
     let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
     loop {
         tokio::select! {
-            result = step(peer, &mut reply), if !quiesced => {
+            result = step(peer, &mut reply, quiet_edges), if !quiesced => {
                 if result? > 0 && !started {
                     started = true;
                     reply = true;
@@ -168,7 +174,7 @@ async fn repeat(
                 received = 0;
                 quiesced = false;
             },
-            result = step(peer, &mut reply), if !quiesced => {
+            result = step(peer, &mut reply, false), if !quiesced => {
                 received += result?;
                 if received >= 12 {
                     process.send(&json!({"transcripts":true})).await?;
@@ -213,7 +219,7 @@ async fn negotiate(process: &mut Process, peer: &mut Option<LivePeer>, offer: &V
     Ok(())
 }
 
-async fn step(peer: &mut Option<LivePeer>, reply: &mut bool) -> Result<usize, String> {
+async fn step(peer: &mut Option<LivePeer>, reply: &mut bool, quiet_edges: bool) -> Result<usize, String> {
     let mut received = 0;
     let peer = peer.as_mut().ok_or("m2: missing remote media")?;
     if peer.ready() {
@@ -225,7 +231,11 @@ async fn step(peer: &mut Option<LivePeer>, reply: &mut bool) -> Result<usize, St
             // clock. RTP timestamps retain 20 ms spacing; the production bridge
             // owns playback pacing. Host scheduling cannot manufacture a gap.
             for sequence in 0..11 {
-                let frame = super::tone::packet(sequence).ok_or("m2: invalid tone sequence")?;
+                let mut frame = super::tone::packet(sequence).ok_or("m2: invalid tone sequence")?;
+                if quiet_edges && !(2..8).contains(&sequence) {
+                    // Standard 20 ms mono Opus digital silence, never microphone PCM.
+                    frame.payload = vec![0xf8, 0xff, 0xfe];
+                }
                 peer.send_audio(frame, Instant::now().into_std())
                     .await
                     .map_err(|_| "m2: synthetic reply media")?;

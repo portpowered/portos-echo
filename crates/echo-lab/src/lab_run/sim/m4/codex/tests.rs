@@ -53,7 +53,8 @@ async fn exercise_mode(negative: bool, emotion: bool) {
                 case.bridge.as_mut().unwrap(),
                 case.provider.as_mut().unwrap(),
                 case.relay.as_ref().unwrap(),
-                ready
+                ready,
+                &mut case.clock
             ),
             presentation(&mut screen, spoof, negative, connected, emotion, replies)
         )

@@ -47,6 +47,7 @@ struct Case {
     transcript: Option<String>,
     snapshot: Value,
     playback: Option<Value>,
+    clock: Value,
 }
 pub(super) struct Journey {
     pub trace: Trace,
@@ -189,7 +190,8 @@ impl Case {
             observe(&mut screen, states, "ready").await?;
             Ok::<_, String>(speaking)
         };
-        let (completion, speaking) = tokio::try_join!(settle(bridge, provider, relay, ready), presentation)?;
+        let (completion, speaking) =
+            tokio::try_join!(settle(bridge, provider, relay, ready, &mut self.clock), presentation)?;
         self.speaking = Some(speaking);
         let playback = self.host_control(json!({"action":"playback"})).await?;
         let timing = self.relay.as_ref().ok_or("m4: missing relay")?.timing();
@@ -197,6 +199,7 @@ impl Case {
         let mut playback = playback;
         playback["nonzero_samples"] = samples["nonzero_samples"].clone();
         playback["audible_samples"] = samples["audible_samples"].clone();
+        playback["playout_clock"] = self.clock.clone();
         self.playback = Some(playback);
         timing.sample()?;
         Ok((completion, timing))
@@ -283,6 +286,7 @@ async fn settle(
     provider: &mut Provider,
     relay: &Relay,
     mut connected: tokio::sync::oneshot::Receiver<()>,
+    clock: &mut Value,
 ) -> Result<Value, String> {
     let mut admitted = false;
     let mut delegated = false;
@@ -311,18 +315,7 @@ async fn settle(
             provider.control(Control::Complete).await?;
             completed = true;
         }
-        bridge
-            .send(&json!({"action":"advance_clock","milliseconds":20}))
-            .await?;
-        let mut result = None;
-        loop {
-            let value = bridge.line().await?;
-            match value["event"].as_str() {
-                Some("bridge.run_completed") => result = Some(value),
-                Some("bridge.clock_advanced") if value["milliseconds"] == 20 => break,
-                _ => return Err("m4: unexpected bridge clock observation".into()),
-            }
-        }
+        let result = crate::lab_run::sim::m2::codex::advance_playout(bridge, clock).await?;
         if let Some(result) = result {
             return Ok(result);
         }

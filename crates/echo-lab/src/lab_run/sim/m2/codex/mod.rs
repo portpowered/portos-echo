@@ -6,6 +6,8 @@ pub(in crate::lab_run::sim) mod provider;
 pub(super) mod rejection;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timing;
 pub(in crate::lab_run::sim) mod tone;
 
 use super::{DEADLINE, oracle};
@@ -29,6 +31,7 @@ struct Case {
     host: Option<Process>,
     relay: Option<crate::lab_run::sim::m4::wire::Relay>,
     playback: Value,
+    clock: Value,
     bridge: Option<Process>,
     provider: Option<provider::Provider>,
     collector: Option<tokio::task::JoinHandle<Result<(), String>>>,
@@ -64,7 +67,9 @@ impl Case {
         if self.trace_path.as_os_str().is_empty() {
             self.trace_path = root.0.join("trace");
         }
-        self.provider = Some(provider::Provider::start(&options.python).await?);
+        if self.provider.is_none() {
+            self.provider = Some(provider::Provider::start(&options.python).await?);
+        }
         let origin = &self.provider.as_ref().ok_or("m2: missing provider")?.origin;
         let mut command = tokio::process::Command::new(options.bridge.as_deref().ok_or("m2: missing bridge")?);
         let relay = crate::lab_run::sim::m4::wire::Relay::bind_reply(([127, 0, 0, 1], port).into()).await?;
@@ -120,6 +125,7 @@ impl Case {
             .ok_or("m2: missing relay")?
             .timing()
             .audible_reply(&playback)?;
+        self.playback["playout_clock"] = self.clock.clone();
         Ok(())
     }
 
@@ -139,7 +145,9 @@ impl Case {
                     .await?;
                 transcript = true;
             }
-            done = advance(self.bridge.as_mut().ok_or("m2: missing bridge")?, 20).await?;
+            done = advance_playout(self.bridge.as_mut().ok_or("m2: missing bridge")?, &mut self.clock)
+                .await?
+                .is_some();
         }
         // Keep the remote's socket alive but stop its RTP driver before closing
         // the production media owner. The pin's sideband stays until idle stop.
@@ -280,6 +288,41 @@ async fn advance(bridge: &mut Process, milliseconds: u64) -> Result<bool, String
             Some("bridge.clock_advanced") if row["milliseconds"] == milliseconds => return Ok(completed),
             Some("bridge.run_completed") if row["run_id"] == "run-1" => completed = true,
             _ => return Err("m2: unexpected bridge observation while advancing clock".into()),
+        }
+    }
+}
+
+pub(in crate::lab_run::sim) async fn advance_playout(
+    bridge: &mut Process,
+    clock: &mut Value,
+) -> Result<Option<Value>, String> {
+    bridge
+        .send(&json!({"action":"advance_playout","milliseconds":20}))
+        .await?;
+    let mut completed = None;
+    loop {
+        let row = bridge.line().await?;
+        match row["event"].as_str() {
+            Some("bridge.run_completed") if row["run_id"] == "run-1" => completed = Some(row),
+            Some("bridge.clock_advanced") if row["milliseconds"] == 20 => {
+                let previous = clock["epoch_ms"].as_u64().unwrap_or(0);
+                if row["epoch_ms"].as_u64() != previous.checked_add(20) {
+                    return Err("playout: clock receipt epoch mismatch".into());
+                }
+                if clock.is_null() {
+                    *clock = json!({"pcm":[],"states":[]});
+                }
+                clock["epoch_ms"] = row["epoch_ms"].clone();
+                for key in ["pcm", "states"] {
+                    let values = row[key].as_array().ok_or("playout: missing receipt observations")?;
+                    clock[key]
+                        .as_array_mut()
+                        .ok_or("playout: malformed stored clock")?
+                        .extend(values.iter().cloned());
+                }
+                return Ok(completed);
+            }
+            _ => return Err("playout: unexpected bridge clock observation".into()),
         }
     }
 }

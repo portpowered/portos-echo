@@ -299,7 +299,7 @@ async fn exercise() {
     assert_eq!(replies[0]["dropped_frames"], 0);
 }
 
-async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>) -> (usize, i64) {
+pub(super) async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>) -> (usize, i64) {
     let mut stream = listener.accept().await.unwrap().0;
     drop(listener);
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
@@ -323,6 +323,14 @@ async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>) -> (usize
     let mut byte = [0];
     assert_eq!(stream.read(&mut byte).await.unwrap(), 0);
     result
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_mouth_sync_uses_completed_pcm_writes_and_confirmed_states_on_one_epoch() {
+    tokio::time::timeout(DEADLINE, Box::pin(super::timing::exercise(false)))
+        .await
+        .unwrap();
 }
 
 async fn capture(stream: &mut TcpStream) {
@@ -439,4 +447,12 @@ async fn m2_codex_negative_cases_reject_before_admission_and_release_private_hom
         assert_eq!(measured["auth_unchanged"], true);
         assert_eq!(measured["wyoming_admissions"], 0);
     }
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_mouth_sync_quiet_edges_and_early_played_never_open_early_or_extend_the_mouth() {
+    tokio::time::timeout(DEADLINE, Box::pin(super::timing::exercise(true)))
+        .await
+        .unwrap();
 }
