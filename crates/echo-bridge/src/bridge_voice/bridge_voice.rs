@@ -93,6 +93,8 @@ pub enum Notice {
     /// The speaker went quiet: the mouth closes until audio resumes.
     ReplyPaused,
     ReplyPlayed,
+    /// Per-reply counters while a persistent run retains capture.
+    ReplySettled(Stats),
 }
 
 #[derive(Clone, Copy)]

@@ -125,6 +125,7 @@ impl Configured {
                 },
                 tools,
                 session: SessionOptions {
+                    listen_timeout: None,
                     idle: Duration::from_secs(self.config.live.session_idle_seconds),
                     response_timeout: Duration::from_secs(self.config.agent.task_deadline_seconds),
                     played_timeout: Duration::from_secs(5),
@@ -309,6 +310,7 @@ pub(super) mod tests {
             },
             tools: vec![],
             session: SessionOptions {
+                listen_timeout: None,
                 idle: Duration::from_secs(1),
                 response_timeout: Duration::from_secs(1),
                 played_timeout: Duration::from_secs(1),

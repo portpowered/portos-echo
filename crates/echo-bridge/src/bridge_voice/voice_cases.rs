@@ -119,7 +119,7 @@ fn preemption_notice(notice: &Notice) -> &'static str {
         }
         Notice::ReplyStarted => "speaking",
         Notice::ReplyPaused => "paused",
-        Notice::ReplyPlayed => "played",
+        Notice::ReplyPlayed | Notice::ReplySettled(_) => "played",
         Notice::Transcript { .. } => "transcript",
         Notice::Device(_) => "device",
     }

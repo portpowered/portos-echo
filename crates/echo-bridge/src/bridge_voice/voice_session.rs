@@ -15,6 +15,8 @@ use tokio::{
 
 #[derive(Clone, Copy)]
 pub struct SessionOptions {
+    /// None retains one reply per wake; Some retains capture between replies.
+    pub listen_timeout: Option<Duration>,
     pub idle: Duration,
     pub response_timeout: Duration,
     pub played_timeout: Duration,
@@ -237,7 +239,12 @@ pub(super) async fn peer_created(
 }
 
 pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
-    if options.response_timeout.is_zero() || options.played_timeout.is_zero() {
+    if options.response_timeout.is_zero()
+        || options.played_timeout.is_zero()
+        || options
+            .listen_timeout
+            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+    {
         return Err(Error::Input);
     }
     Instant::now()
@@ -272,24 +279,21 @@ async fn drive<L: EchoLink>(
             microphone,
             call,
             Options {
-                listen_timeout: None,
+                listen_timeout: options.listen_timeout,
                 response_deadline: deadline,
                 played_timeout: options.played_timeout,
                 reply_lead_ms: options.reply_lead_ms,
                 muted: options.muted,
             },
             cancelled.as_mut(),
-            |notice| {
-                if let Notice::Device(LinkEvent::Mute(muted)) = &notice {
-                    options.muted = *muted;
-                }
-                observe(SessionNotice::Run(notice))
-            },
+            |notice| project_reply(notice, &mut options.muted, observe),
         )
         .await?;
         completed = completed.checked_add(1).ok_or(Error::Unavailable)?;
         observe(SessionNotice::MicrophoneCompleted(stats.clone()))?;
-        observe(SessionNotice::ReplyCompleted(stats.clone()))?;
+        if options.listen_timeout.is_none() {
+            observe(SessionNotice::ReplyCompleted(stats.clone()))?;
+        }
         observe(SessionNotice::Completed(stats))?;
         let expires = Instant::now().checked_add(options.idle);
         let next = wait(events, call, expires, &mut options.muted, cancelled.as_mut(), observe).await?;
@@ -306,6 +310,21 @@ async fn drive<L: EchoLink>(
                 result.map_err(|_| Error::Deadline)??;
             }
         }
+    }
+}
+
+fn project_reply(
+    notice: Notice,
+    muted: &mut bool,
+    observe: &mut impl FnMut(SessionNotice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    match notice {
+        Notice::ReplySettled(stats) => observe(SessionNotice::ReplyCompleted(stats)),
+        Notice::Device(LinkEvent::Mute(value)) => {
+            *muted = value;
+            observe(SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))))
+        }
+        notice => observe(SessionNotice::Run(notice)),
     }
 }
 

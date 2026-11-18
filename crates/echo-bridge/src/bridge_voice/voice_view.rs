@@ -143,7 +143,7 @@ impl<'a> View<'a> {
                 self.mouth_paused = true;
                 self.screen.ready()
             }
-            SessionNotice::Run(Notice::ReplyPlayed | Notice::Transcript { .. }) => Ok(()),
+            SessionNotice::Run(Notice::ReplyPlayed | Notice::ReplySettled(_) | Notice::Transcript { .. }) => Ok(()),
             SessionNotice::MicrophoneCompleted(stats) => self.microphone_completed(&stats),
             SessionNotice::ReplyCompleted(stats) => self.reply_completed(&stats),
             SessionNotice::Completed(_) => self.completed(),

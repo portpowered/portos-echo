@@ -18,6 +18,7 @@ pub(super) async fn replies<L: EchoLink>(
     let (events, microphone) = input;
     let (source, drain) = context;
     let mut generation_options = *options;
+    let mut previous = super::Stats::default();
     tokio::pin!(cancelled);
     loop {
         let result = super::generation(
@@ -41,6 +42,14 @@ pub(super) async fn replies<L: EchoLink>(
             return Ok(());
         };
         source.controller.listen_after_reply(timeout)?;
+        let mut stats = source.stats.clone();
+        stats.reply_dropped += source.reply.dropped_frames();
+        let totals = stats.clone();
+        stats.reply_received -= previous.reply_received;
+        stats.reply_sent -= previous.reply_sent;
+        stats.reply_dropped -= previous.reply_dropped;
+        previous = totals;
+        observe(Notice::ReplySettled(stats))?;
         observe(Notice::ReplyPlayed)?;
         if !listen((events, microphone), port, source, cancelled.as_mut(), observe).await? {
             return Ok(());
@@ -119,7 +128,13 @@ mod tests {
         LinkConnector,
         fake::{Command, FakeConnector, Observer},
     };
-    use std::{cell::Cell, future::poll_fn, pin::Pin, task::Poll, time::Duration};
+    use std::{
+        cell::{Cell, RefCell},
+        future::poll_fn,
+        pin::Pin,
+        task::Poll,
+        time::Duration,
+    };
     use tokio::{sync::mpsc, time::Instant};
 
     struct Port(mpsc::Receiver<MediaEvent>);
@@ -176,6 +191,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(64);
         let mut port = Port(rx);
         let receipts = Cell::new(0);
+        let reply_stats = RefCell::new(Vec::new());
         let settled = Cell::new(Instant::now());
         let mut work = Box::pin(super::super::run(
             &client,
@@ -191,6 +207,9 @@ mod tests {
             },
             std::future::pending(),
             |notice| {
+                if let Notice::ReplySettled(stats) = &notice {
+                    reply_stats.borrow_mut().push((stats.reply_received, stats.reply_sent));
+                }
                 if matches!(notice, Notice::ReplyPlayed) {
                     receipts.set(receipts.get() + 1);
                     settled.set(Instant::now());
@@ -225,6 +244,7 @@ mod tests {
         let stats = work.await.unwrap();
         assert_eq!(Instant::now() - settled.get(), Duration::from_secs(3));
         assert_eq!(receipts.get(), 2);
+        assert_eq!(*reply_stats.borrow(), [(12, 12), (12, 12)]);
         assert_eq!(stats.reply_sent, 24);
         assert_eq!(
             observer

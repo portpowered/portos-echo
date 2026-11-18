@@ -128,7 +128,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
                 Notice::EarconPlayed(_) => "earcon",
                 Notice::ReplyStarted => "speaking",
                 Notice::ReplyPaused => "paused",
-                Notice::ReplyPlayed => "played",
+                Notice::ReplyPlayed | Notice::ReplySettled(_) => "played",
                 Notice::Transcript { .. } => "transcript",
                 Notice::Device(_) => "device",
             });

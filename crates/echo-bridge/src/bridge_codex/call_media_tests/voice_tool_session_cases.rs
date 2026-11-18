@@ -9,6 +9,7 @@ use std::{pin::Pin, task::Poll, time::Duration};
 
 fn settings() -> SessionOptions {
     SessionOptions {
+        listen_timeout: None,
         idle: Duration::from_secs(5),
         response_timeout: Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),
