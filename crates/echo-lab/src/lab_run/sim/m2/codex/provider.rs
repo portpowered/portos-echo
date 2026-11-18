@@ -1,4 +1,5 @@
 //! One local provider process and one single-owner Opus remote per M2 case.
+pub(super) mod driver;
 use crate::lab_run::sim::process::Process;
 use echo_live::LivePeer;
 use serde_json::{Value, json};
@@ -8,7 +9,7 @@ use tokio::{
     time::Instant,
 };
 
-enum Control {
+pub(super) enum Control {
     Transcripts,
     Reply,
     Tail,
@@ -16,6 +17,8 @@ enum Control {
     Close,
     #[cfg(test)]
     NextCapture,
+    #[cfg(test)]
+    Maintenance(oneshot::Sender<()>),
 }
 pub(in crate::lab_run::sim) struct Provider {
     pub origin: String,
@@ -25,24 +28,40 @@ pub(in crate::lab_run::sim) struct Provider {
 }
 impl Provider {
     #[cfg(test)]
+    pub(super) async fn start_retained(python: &str) -> Result<Self, String> {
+        Self::start_mode(python, true, None, false, true).await
+    }
+    #[cfg(test)]
+    pub(super) async fn maintained(&self) {
+        let (send, receive) = oneshot::channel();
+        self.commands.send(Control::Maintenance(send)).await.unwrap();
+        receive.await.unwrap();
+    }
+    #[cfg(test)]
     pub(super) async fn next_capture(&self) {
         self.commands.send(Control::NextCapture).await.unwrap();
     }
     pub async fn start(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, false, None, false).await
+        Self::start_mode(python, false, None, false, false).await
     }
     pub async fn start_m1(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, true, None, false).await
+        Self::start_mode(python, true, None, false, false).await
     }
     #[cfg(test)]
     pub(super) async fn start_fault(python: &str, fault: &str) -> Result<Self, String> {
-        Self::start_mode(python, false, Some(fault), false).await
+        Self::start_mode(python, false, Some(fault), false, false).await
     }
     #[cfg(test)]
     pub(super) async fn start_quiet_edges(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, false, None, true).await
+        Self::start_mode(python, false, None, true, false).await
     }
-    async fn start_mode(python: &str, repeated: bool, fault: Option<&str>, quiet_edges: bool) -> Result<Self, String> {
+    async fn start_mode(
+        python: &str,
+        repeated: bool,
+        fault: Option<&str>,
+        quiet_edges: bool,
+        retained: bool,
+    ) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
@@ -56,7 +75,7 @@ impl Provider {
             .to_owned();
         let (commands, receiver) = mpsc::channel(2);
         let (ticks, clock) = mpsc::channel(1);
-        let task = tokio::spawn(owned(process, receiver, ticks, repeated, quiet_edges));
+        let task = tokio::spawn(owned(process, receiver, ticks, repeated, quiet_edges, retained));
         Ok(Self {
             origin,
             commands,
@@ -116,10 +135,11 @@ async fn owned(
     ticks: mpsc::Sender<()>,
     repeated: bool,
     quiet_edges: bool,
+    retained: bool,
 ) -> Result<Value, String> {
     let mut peer = None;
     let result = if repeated {
-        repeat(&mut process, &mut commands, &mut peer).await
+        repeat(&mut process, &mut commands, &mut peer, retained).await
     } else {
         drive(&mut process, &mut commands, &ticks, &mut peer, quiet_edges).await
     };
@@ -209,7 +229,7 @@ async fn progress(
                 }
                 Some(Control::Close) | None => return Ok(Progress::Closed),
                 #[cfg(test)]
-                Some(Control::NextCapture) => return Err("m2: capture-only control".into()),
+                Some(Control::NextCapture | Control::Maintenance(_)) => return Err("m2: capture-only control".into()),
             },
         }
     }
@@ -217,37 +237,33 @@ async fn progress(
 
 /// M1 preserves its capture-only oracle: no reply RTP is generated.
 /// Native completion follows twelve microphone frames received by the remote.
-/// New offers replace the quiescent peer after the prior call's idle stop.
+/// New offers replace the retained peer after the prior call's idle stop.
 async fn repeat(
     process: &mut Process,
     commands: &mut mpsc::Receiver<Control>,
     peer: &mut Option<LivePeer>,
+    retained: bool,
 ) -> Result<Value, String> {
-    let mut received = 0;
+    let mut capture = None;
+    let mut servicing = false;
     let mut reply = false;
     let mut tail = false;
-    let mut quiesced = true;
     loop {
         tokio::select! {
             offer = process.expect("provider.offer") => {
                 if let Some(peer) = peer.as_mut() { peer.close(); }
                 negotiate(process, peer, &offer?).await?;
-                received = 0;
-                quiesced = false;
+                capture = Some(0);
+                servicing = true;
             },
-            result = step(peer, &mut reply, &mut tail, false), if !quiesced => {
-                received += result?;
-                if received >= 12 {
+            result = driver::advance(step(peer, &mut reply, &mut tail, false), commands, &mut capture, &mut servicing, retained) => {
+                match result? {
+                    Some(true) => {
                     process.send(&json!({"transcripts":true})).await?;
-                    quiesced = true;
+                    },
+                    Some(false) => {},
+                    None => break,
                 }
-            },
-            control = commands.recv() => match control {
-                Some(Control::Quiesce(done)) => { quiesced = true; let _ = done.send(()); },
-                Some(Control::Close) | None => break,
-                #[cfg(test)]
-                Some(Control::NextCapture) => { received = 0; quiesced = false; },
-                Some(Control::Transcripts | Control::Tail | Control::Reply) => return Err("m1: automatic transcript ownership".into()),
             },
         }
     }

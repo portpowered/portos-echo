@@ -20,6 +20,7 @@ fn playout_receipts_keep_earcon_separate_and_reject_unknown_or_missing_sources()
     }
 }
 use tokio::{net::TcpListener, sync::mpsc};
+mod overlap;
 
 pub(super) struct Owner {
     root: config::Root,
@@ -41,7 +42,7 @@ impl Owner {
         let output = tempfile::tempdir().unwrap();
         let (listener, listener_lifetime) = observed_listener().await;
         let address = listener.local_addr().unwrap();
-        let provider = provider::Provider::start_m1(&options.python).await.unwrap();
+        let provider = provider::Provider::start_retained(&options.python).await.unwrap();
         let mut command = tokio::process::Command::new(options.bridge.unwrap());
         command = super::tests::continuous_command(
             command.as_std().get_program().as_ref(),
@@ -109,6 +110,8 @@ impl Owner {
     }
 
     pub(super) async fn close(mut self, expected_calls: usize) {
+        let trace = self.trace();
+        let origin = self.provider.origin.clone();
         self.provider.quiesce().await.unwrap();
         assert_eq!(self.bridge.close().await, Ok(()));
         drop(self.bridge);
@@ -123,6 +126,7 @@ impl Owner {
         );
         assert!(self.listener_lifetime.upgrade().is_none());
         remove_root(self.root);
+        overlap::report(&trace, &origin, &observed);
     }
 }
 
