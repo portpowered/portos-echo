@@ -49,7 +49,9 @@ pub(super) fn expand(workflow: &str) -> Result<String, String> {
             .replace(&canonical[start..end], "")
             .replace(&target, &format!("{target}          sim: 'true'\n"));
         if workflow.matches(&factored).count() != 1 {
-            return Err(format!("ci-parity: unsupported job {name}; expected exact shared setup caller"));
+            return Err(format!(
+                "ci-parity: unsupported job {name}; expected exact shared setup caller"
+            ));
         }
         workflow = workflow.replace(&factored, &canonical);
     }
