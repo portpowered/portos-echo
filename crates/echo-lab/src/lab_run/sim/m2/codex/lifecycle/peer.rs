@@ -72,10 +72,7 @@ async fn run_playback(
 ) -> tokio::net::TcpStream {
     use super::super::tests::send;
     let format = json!({"rate":16000,"width":2,"channels":1});
-    send(&mut stream, "audio-start", format.clone(), vec![]).await;
-    if earcon {
-        super::super::wake::acknowledge(&mut stream).await;
-    }
+    start_capture(&mut stream, &format, earcon).await;
     let (mut input, mut output) = stream.into_split();
     let mut cadence = tokio::time::interval(std::time::Duration::from_millis(20));
     let mut replying = false;
@@ -251,4 +248,11 @@ async fn cut_control(
         checkpoint(observer, Phase::CutAcknowledged).await;
     }
     false
+}
+
+async fn start_capture(stream: &mut tokio::net::TcpStream, format: &Value, earcon: bool) {
+    super::super::tests::send(stream, "audio-start", format.clone(), vec![]).await;
+    if earcon {
+        super::super::wake::acknowledge(stream).await;
+    }
 }

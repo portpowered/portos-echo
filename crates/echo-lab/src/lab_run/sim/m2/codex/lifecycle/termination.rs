@@ -44,7 +44,7 @@ async fn kill_schedule(collect_first: bool) {
 }
 
 async fn collect(
-    mut owner: Owner,
+    owner: Owner,
     mut observed: mpsc::UnboundedReceiver<Phase>,
     resume: mpsc::Sender<()>,
     collect_first: bool,
@@ -55,10 +55,7 @@ async fn collect(
         resume.send(()).await.unwrap();
         through(&mut observed, &mut counts, Phase::Control("error".into())).await;
     }
-    assert_eq!(owner.bridge.close().await, Ok(()));
-    drop(owner.bridge);
-    assert!(owner.collected.try_recv().unwrap().success());
-    assert!(owner.listener_lifetime.upgrade().is_some());
+    close_bridge(owner.bridge, owner.collected, &owner.listener_lifetime).await;
     if collect_first {
         drop(wake.take());
         resume.send(()).await.unwrap();
@@ -214,4 +211,15 @@ async fn at_phase(observed: &mut mpsc::UnboundedReceiver<Phase>, until: Phase) {
         }
         assert_eq!(phase, Phase::Control("describe".into()));
     }
+}
+
+async fn close_bridge(
+    mut bridge: Process,
+    collected: std::sync::mpsc::Receiver<std::process::ExitStatus>,
+    lifetime: &std::sync::Weak<TcpListener>,
+) {
+    assert_eq!(bridge.close().await, Ok(()));
+    drop(bridge);
+    assert!(collected.try_recv().unwrap().success());
+    assert!(lifetime.upgrade().is_some());
 }
