@@ -144,7 +144,7 @@ try:
             assert delegation is None or manual
             history = [] if delegation is None else delegation.history + delegation.outputs
             manual = command.get('manual', False)
-            delegation = tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False))
+            delegation = tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False), command.get('model', 'gpt-5.4'))
             if manual:
                 delegation.identity = command['identity']
                 delegation.call_id = command['identity'] + '-tool'

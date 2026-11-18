@@ -80,7 +80,7 @@ impl Drop for Provider {
 
 fn catalog() -> Value {
     Value::Array(echo_spoof_mcp::catalog().as_array().into_iter().flatten().enumerate().map(|(index, tool)| {
-        json!({"name":format!("tool_{index}"),"description":tool["description"],"inputSchema":tool["inputSchema"]})
+        json!({"name":(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"][index]),"description":tool["description"],"inputSchema":tool["inputSchema"]})
     }).collect())
 }
 

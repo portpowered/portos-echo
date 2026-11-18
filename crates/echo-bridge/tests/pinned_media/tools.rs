@@ -30,6 +30,26 @@ async fn t3_pinned_tools_report_mcp_failure_without_retry_or_false_success() {
 }
 
 #[tokio::test]
+async fn t3_pinned_tools_native_code_mode_executes_original_mcp() {
+    tokio::time::timeout(
+        Duration::from_secs(25),
+        Box::pin(exercise_mode(false, false, ToolBudget::new(1, || Ok(7)), "gpt-6.1-sol")),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn t3_pinned_tools_native_code_mode_reports_mcp_failure() {
+    tokio::time::timeout(
+        Duration::from_secs(25),
+        Box::pin(exercise_mode(true, false, ToolBudget::new(1, || Ok(7)), "gpt-6.1-sol")),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn t3_pinned_tools_daily_cap_interrupts_without_mcp() {
     use std::sync::{
         Arc,
@@ -43,11 +63,11 @@ async fn t3_pinned_tools_daily_cap_interrupts_without_mcp() {
             let budget = ToolBudget::new(1, move || Ok(clock.load(Ordering::SeqCst)));
             budget.admit_turn().unwrap();
             assert!(budget.check_call().is_err());
-            Box::pin(exercise_mode(false, true, budget.clone())).await;
+            Box::pin(exercise_mode(false, true, budget.clone(), "gpt-5.4")).await;
             assert!(budget.check_call().is_err());
             day.store(8, Ordering::SeqCst);
             budget.check_call().unwrap();
-            Box::pin(exercise_mode(false, false, budget.clone())).await;
+            Box::pin(exercise_mode(false, false, budget.clone(), "gpt-5.4")).await;
             assert!(budget.check_call().is_err());
         }),
     )
@@ -56,10 +76,10 @@ async fn t3_pinned_tools_daily_cap_interrupts_without_mcp() {
 }
 
 async fn exercise(negative: bool) {
-    Box::pin(exercise_mode(negative, false, ToolBudget::new(1, || Ok(7)))).await;
+    Box::pin(exercise_mode(negative, false, ToolBudget::new(1, || Ok(7)), "gpt-5.4")).await;
 }
 
-async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget) {
+async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, model: &str) {
     let directory = tempfile::tempdir().unwrap();
     private_parent(directory.path());
     let config = CodexConfig {
@@ -84,7 +104,7 @@ async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget) {
     let ready: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let origin = ready["origin"].as_str().unwrap();
     let routes = LocalRoutes::new(origin, origin).unwrap();
-    let initialize = json!({"tools":catalog.tools(), "negative":negative, "exhausted":exhausted});
+    let initialize = json!({"tools":catalog.tools(), "negative":negative, "exhausted":exhausted, "model":model});
     input.write_all(format!("{initialize}\n").as_bytes()).await.unwrap();
     let (commands, receive) = mpsc::channel(2);
     let (started, model_started) = tokio::sync::oneshot::channel();
@@ -94,13 +114,13 @@ async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget) {
             &routes,
             (host, catalog),
             commands,
-            (negative, exhausted, model_started, budget)
+            (negative, exhausted, model_started, budget, model)
         ),
         remote(&mut input, &mut output, receive, started)
     );
     remote.close();
     assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
-    snapshot(&mut input, &mut output, exhausted).await;
+    snapshot(&mut input, &mut output, exhausted, model).await;
     check_mcp(&spoof, exhausted);
     drop(input);
     assert!(provider.wait().await.unwrap().success());
@@ -132,7 +152,10 @@ async fn catalog(spoof: &Spoof) -> (McpClient<NoToken>, Catalog) {
     .unwrap();
     let catalog = Catalog::new(host.list_tools().await.unwrap(), &allowed).unwrap();
     for (index, name) in allowed.iter().enumerate() {
-        assert_eq!(catalog.resolve(&format!("tool_{index}")), Some(name.as_str()));
+        assert_eq!(
+            catalog.resolve(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"][index]),
+            Some(name.as_str())
+        );
     }
     (host, catalog)
 }
@@ -142,7 +165,13 @@ async fn client(
     routes: &LocalRoutes,
     (host, catalog): (McpClient<NoToken>, Catalog),
     commands: mpsc::Sender<bool>,
-    (negative, exhausted, model_started, budget): (bool, bool, tokio::sync::oneshot::Receiver<()>, ToolBudget),
+    (negative, exhausted, model_started, budget, model): (
+        bool,
+        bool,
+        tokio::sync::oneshot::Receiver<()>,
+        ToolBudget,
+        &str,
+    ),
 ) {
     let key = Secret::new("dummy-local-only".to_owned());
     let result = with_host_options(
@@ -168,7 +197,7 @@ async fn client(
                 &Options {
                     voice: None,
                     instructions: "Client audio bridge",
-                    model: Some("gpt-5.4"),
+                    model: Some(model),
                     effort: None,
                     time_zone: None,
                 },
@@ -283,9 +312,20 @@ async fn snapshot(
     input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     exhausted: bool,
+    model: &str,
 ) {
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let value: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+    let names = if model == "gpt-5.4" {
+        json!(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"])
+    } else {
+        json!([
+            "functions.exec",
+            "functions.wait",
+            "functions.request_user_input_async",
+            "clock.sleep"
+        ])
+    };
     if exhausted {
         // rust-v0.160.0: release exactly one request before bridge polling.
         // This is the pre-notification window, not a universal zero-work claim.
@@ -295,7 +335,7 @@ async fn snapshot(
             "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
             "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],
             "sidebands":1,"external":0,"delegations":["delegation-local"],
-            "models":[{"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":0}],"appends":[]})
+            "models":[{"tools":names,"outputs":0}],"appends":[]})
         );
         return;
     }
@@ -305,8 +345,8 @@ async fn snapshot(
             "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
             "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],
             "sidebands":1,"external":0, "delegations":["delegation-local"],
-            "models":[{"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":0},
-                      {"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":1}],
+            "models":[{"tools":names,"outputs":0},
+                      {"tools":names,"outputs":1}],
             "appends":["delegation-local"]})
     );
 }

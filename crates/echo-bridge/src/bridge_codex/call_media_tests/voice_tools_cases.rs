@@ -73,7 +73,7 @@ async fn tool(server: &mut Server, request: Value, turn: &str, call: &str) {
     write(
         server,
         json!({"id":request,"method":"item/tool/call","params":{
-            "threadId":"thread-1","turnId":turn,"callId":call,"tool":"tool_0","arguments":{"text":"echo"}
+            "threadId":"thread-1","turnId":turn,"callId":call,"tool":"test_echo","arguments":{"text":"echo"}
         }}),
     )
     .await;

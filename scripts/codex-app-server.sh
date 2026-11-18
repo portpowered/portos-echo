@@ -54,16 +54,33 @@ def checkout_roots(root):
     return (root,)
 
 
-def verified_binary(published, archive_name, expected, target):
-    archive = published / archive_name
-    binary = published / ('codex-' + target)
-    if digest(archive) != expected or digest(binary) != (published / 'binary.sha256').read_text().strip():
-        raise ValueError('SHA-256 mismatch')
-    if not os.access(binary, os.X_OK):
-        raise ValueError('invalid cached executable')
+def verified_binary(published, assets, target):
+    for asset, name, record in assets:
+        binary = published / name
+        if digest(published / asset['name']) != asset['sha256'] or digest(binary) != (published / record).read_text().strip():
+            raise ValueError('SHA-256 mismatch')
+        if not os.access(binary, os.X_OK):
+            raise ValueError('invalid cached executable')
     if not all((published / name).is_file() for name in ('LICENSE', 'NOTICE')):
         raise ValueError('cached attribution missing')
-    return binary
+    return published / ('codex-' + target)
+
+
+def stage_asset(stage, pin, asset, member_name, binary_name, record):
+    archive = stage / asset['name']
+    fetch(pin['repo'] + '/releases/download/' + pin['tag'] + '/' + asset['name'], archive)
+    if digest(archive) != asset['sha256']:
+        raise ValueError('SHA-256 mismatch')
+    with tarfile.open(archive) as bundle:
+        members = bundle.getmembers()
+        if len(members) != 1 or members[0].name != member_name or not members[0].isfile():
+            raise ValueError('unexpected archive member')
+        bundle.extractall(stage, filter='data')
+    binary = stage / binary_name
+    if member_name != binary_name:
+        (stage / member_name).rename(binary)
+    binary.chmod(0o700)
+    (stage / record).write_text(digest(binary) + '\n')
 
 
 def main():
@@ -79,6 +96,12 @@ def main():
     expected = '306865417d4ee7a927785852910a527f41e1e159add390ac5ae3accb67d44a13'
     if asset != {'name': 'codex-x86_64-unknown-linux-musl.tar.gz', 'sha256': expected}:
         raise ValueError('invalid asset pin')
+    host = pin['assets']['code-mode-host-' + target]
+    host_expected = 'ac6cd6288f0e39f46a33eba1cfd37711651f14f33dbc73d6a1b82eb45e038cac'
+    if host != {'name': 'codex-code-mode-host-' + target + '.tar.gz', 'sha256': host_expected}:
+        raise ValueError('invalid code-mode host pin')
+    assets = ((asset, 'codex-' + target, 'binary.sha256'),
+              (host, 'codex-code-mode-host', 'code-mode-host.sha256'))
     default = pathlib.Path(os.environ.get('XDG_CACHE_HOME', pathlib.Path.home() / '.cache')) / 'portos-echo/codex'
     cache = pathlib.Path(os.environ.get('ECHO_CODEX_CACHE_DIR', default))
     if not cache.is_absolute():
@@ -89,10 +112,12 @@ def main():
         raise ValueError('cache must be outside repository')
     parent = cache / commit / target
     parent.mkdir(parents=True, exist_ok=True)
-    published = parent / expected
-    lock = parent / (expected + '.lock')
+    # The paired identity leaves legacy codex-only caches untouched and forces a
+    # fresh atomic publication with both verified executables on first upgrade.
+    published = parent / (expected + '-' + host_expected)
+    lock = published.with_name(published.name + '.lock')
     if published.exists():
-        print(verified_binary(published, asset['name'], expected, target))
+        print(verified_binary(published, assets, target))
         return
     if os.environ.get('ECHO_CODEX_OFFLINE') == '1':
         raise ValueError('binary missing; provision before testing')
@@ -102,22 +127,13 @@ def main():
         raise ValueError('another fetch owns this pin; lock retained') from error
     try:
         if published.exists():
-            binary = verified_binary(published, asset['name'], expected, target)
+            binary = verified_binary(published, assets, target)
         else:
             with tempfile.TemporaryDirectory(prefix='fetch-', dir=parent) as stage:
                 stage = pathlib.Path(stage)
-                archive = stage / asset['name']
-                fetch(pin['repo'] + '/releases/download/' + pin['tag'] + '/' + asset['name'], archive)
-                if digest(archive) != expected:
-                    raise ValueError('SHA-256 mismatch')
-                with tarfile.open(archive) as bundle:
-                    for member in bundle.getmembers():
-                        if member.name != 'codex-' + target or not member.isfile():
-                            raise ValueError('unexpected archive member')
-                    bundle.extractall(stage, filter='data')
-                binary = stage / ('codex-' + target)
-                binary.chmod(0o700)
-                (stage / 'binary.sha256').write_text(digest(binary) + '\n')
+                stage_asset(stage, pin, asset, 'codex-' + target, 'codex-' + target, 'binary.sha256')
+                stage_asset(stage, pin, host, 'codex-code-mode-host-' + target,
+                            'codex-code-mode-host', 'code-mode-host.sha256')
                 for notice in ('LICENSE', 'NOTICE'):
                     fetch('https://raw.githubusercontent.com/openai/codex/' + commit + '/' + notice, stage / notice)
                 # Rename only after extraction, digest and attribution have succeeded.

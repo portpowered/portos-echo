@@ -98,7 +98,7 @@ for line in sys.stdin:
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     elif method == "thread/start":
         assert home.joinpath("mode").read_text().startswith("tool-")
-        assert [tool["name"] for tool in request["params"]["dynamicTools"]] == ["tool_0", "tool_1", "tool_2", "tool_3"]
+        assert [tool["name"] for tool in request["params"]["dynamicTools"]] == ["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"]
         home.joinpath("thread-config").write_text(json.dumps(request["params"]))
         emit({"id": request["id"], "result": {"thread": {"id": "fixture-thread"}}})
     elif method == "thread/realtime/start":
@@ -110,7 +110,7 @@ for line in sys.stdin:
         approval = home.joinpath("mode").read_text() == "tool-approval"
         emit({"id": "fixture-tool", "method": "item/tool/call", "params": {
             "threadId": "fixture-thread", "turnId": "fixture-turn", "callId": "fixture-call",
-            "tool": "tool_2" if approval else "tool_0", "arguments": {} if approval else {"text": "delegated echo"},
+            "tool": "test_requires_approval" if approval else "test_echo", "arguments": {} if approval else {"text": "delegated echo"},
             "namespace": None}})
     elif method == "thread/realtime/stop":
         emit({"method": "thread/realtime/closed", "params": {"threadId": "fixture-thread"}})

@@ -7,7 +7,7 @@ use serde_json::json;
 
 pub(crate) struct ToolTrace {
     trace: Trace,
-    names: Vec<String>,
+    names: Vec<(String, String)>,
 }
 
 impl ToolTrace {
@@ -17,7 +17,11 @@ impl ToolTrace {
             names: catalog
                 .tools()
                 .iter()
-                .filter_map(|tool| catalog.resolve(&tool.name).map(str::to_owned))
+                .filter_map(|tool| {
+                    catalog
+                        .resolve(&tool.name)
+                        .map(|name| (tool.name.clone(), name.to_owned()))
+                })
                 .collect(),
         }
     }
@@ -35,12 +39,7 @@ impl ToolTrace {
     }
 
     pub fn request(&mut self, id: &RequestId, call: &ToolCall) -> Result<(), Error> {
-        let Some(name) = call.tool.strip_prefix("tool_").and_then(|index| {
-            let index = index.parse::<usize>().ok()?;
-            (call.tool == format!("tool_{index}"))
-                .then(|| self.names.get(index))
-                .flatten()
-        }) else {
+        let Some((_, name)) = self.names.iter().find(|(alias, _)| alias == &call.tool) else {
             // Unknown model-supplied names are never diagnostic vocabulary.
             return Ok(());
         };
@@ -124,7 +123,7 @@ mod tests {
         let mut request = ToolTrace::new(trace.clone(), &catalog());
         let mut effect = trace.clone();
         let call: ToolCall = serde_json::from_value(json!({"threadId":"t:é", "turnId":"turn", "callId":"call",
-            "tool":"tool_0", "arguments":{"text":"private argument"}}))
+            "tool":"test_echo", "arguments":{"text":"private argument"}}))
         .unwrap();
         trace.tool_run(Some("run-1")).unwrap();
         request.request(&RequestId::Number(7), &call).unwrap();
@@ -172,6 +171,19 @@ mod tests {
     }
 
     #[test]
+    fn uncatalogued_alias_produces_no_receipt() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("trace");
+        let mut receipts = ToolTrace::new(Trace::open(&path, "api_key").unwrap(), &catalog());
+        let call: ToolCall = serde_json::from_value(json!({
+            "threadId":"t","turnId":"u","callId":"c","tool":"test_wait","arguments":{}
+        }))
+        .unwrap();
+        receipts.request(&RequestId::Number(1), &call).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"");
+    }
+
+    #[test]
     fn invalid_keys_and_unknown_names_cannot_leak_into_receipts() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("trace");
@@ -193,7 +205,11 @@ mod tests {
         request.request(&RequestId::Number(1), &call).unwrap();
         call.tool = "tool_00".into();
         request.request(&RequestId::Number(1), &call).unwrap();
-        call.tool = "tool_0".into();
+        call.tool = "test_wait".into();
+        request.request(&RequestId::Number(1), &call).unwrap();
+        call.tool = "test_echo__c1".into();
+        request.request(&RequestId::Number(1), &call).unwrap();
+        call.tool = "test_echo".into();
         assert_eq!(
             request.request(&RequestId::Text("x".repeat(257)), &call),
             Err(Error::Decode)

@@ -46,6 +46,7 @@ impl ThreadSettings {
                 "features.unified_exec": false,
                 "features.multi_agent": false,
                 "features.multi_agent_v2": false,
+                "agents.enabled": false,
                 "features.goals": false,
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
@@ -71,6 +72,21 @@ mod tests {
         assert_eq!(empty["config"]["mcp_servers"], json!({}));
         assert_eq!(empty["config"]["features.shell_tool"], false);
         assert_eq!(empty["config"]["features.unified_exec"], false);
+        assert_eq!(
+            empty["config"],
+            json!({
+                "features.shell_tool": false,
+                "features.unified_exec": false,
+                "features.multi_agent": false,
+                "features.multi_agent_v2": false,
+                "agents.enabled": false,
+                "features.goals": false,
+                "tools.experimental_request_user_input.enabled": false,
+                "tools.update_plan.enabled": false,
+                "web_search": "disabled",
+                "mcp_servers": {},
+            })
+        );
         let tool = DynamicTool {
             name: "echo_test".into(),
             description: "Synthetic echo".into(),

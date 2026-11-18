@@ -57,6 +57,44 @@ def corrupt_and_restore(path, cache):
     assert digest(path) == before
 
 
+def host_cache_integrity(published, cache):
+    if WINDOWS:
+        return  # Windows bundles the companion; its helper is unchanged.
+    host = published / 'codex-code-mode-host'
+    record = published / 'code-mode-host.sha256'
+    corrupt_and_restore(host, cache)
+    corrupt_and_restore(record, cache)
+    for path in (host, record):
+        retained = path.with_name(path.name + '.retained')
+        path.rename(retained)
+        try:
+            refused(run(cache), 'codex-app-server:')
+        finally:
+            retained.rename(path)
+    mode = host.stat().st_mode
+    host.chmod(mode & ~0o111)
+    try:
+        refused(run(cache), 'invalid cached executable')
+    finally:
+        host.chmod(mode)
+    print('host_corruption=refused host_record_corruption=refused host_missing=refused')
+    print('host_record_missing=refused host_nonexecutable=refused')
+
+
+def legacy_cache_requires_provisioning(published, cache):
+    if WINDOWS:
+        return
+    legacy = published.with_name(published.name.split('-', 1)[0])
+    published.rename(legacy)
+    try:
+        refused(run(cache), 'binary missing; provision before testing')
+        assert legacy.is_dir(), 'legacy cache was modified'
+    finally:
+        legacy.rename(published)
+    assert successful(run(cache)).parent == published
+    print('legacy_identity=refused paired_identity=verified')
+
+
 def writer_lock(published, cache):
     sys.path.insert(0, str(ROOT / 'crates/echo-codex/tests'))
     from codex_readers import check_warm
@@ -165,9 +203,12 @@ def main():
         assert successful(run(cache)) == binary
         windows_host_architecture(cache, binary)
         archives = list(published.glob('*.zip' if WINDOWS else '*.tar.gz'))
-        assert len(archives) == 1
-        corrupt_and_restore(archives[0], cache)
+        assert len(archives) == (1 if WINDOWS else 2)
+        for archive in archives:
+            corrupt_and_restore(archive, cache)
         corrupt_and_restore(binary, cache)
+        host_cache_integrity(published, cache)
+        legacy_cache_requires_provisioning(published, cache)
         writer_lock(published, cache)
         assert successful(run(cache)) == binary
         external_worktree(pathlib.Path(temporary).resolve(), cache, binary)
