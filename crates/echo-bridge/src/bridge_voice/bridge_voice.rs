@@ -155,9 +155,6 @@ pub async fn run<L: EchoLink>(
         }
         return Err(error);
     }
-    if source.mouth.flush() {
-        observe(Notice::ReplyStarted)?;
-    }
     observe(Notice::ReplyPlayed)?;
     source.stats.received_chunks = microphone.stats().received;
     source.stats.dropped_chunks = microphone.stats().dropped;
@@ -202,7 +199,7 @@ async fn drive<E: LinkEvents>(
             },
             result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,
         }
-        if source.played && source.microphone_finished && sink.is_none() {
+        if source.played && source.microphone_finished && sink.is_none() && source.mouth.due().is_none() {
             return Ok(());
         }
     }

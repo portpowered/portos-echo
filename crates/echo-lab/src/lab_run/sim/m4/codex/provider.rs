@@ -1,6 +1,6 @@
 //! Single owner of provider JSONL, sideband observations, and real Opus media.
 use crate::lab_run::sim::process::Process;
-use echo_live::{AudioFrame, LivePeer};
+use echo_live::LivePeer;
 use serde_json::{Value, json};
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -232,11 +232,7 @@ async fn step(peer: &mut LivePeer, remaining: &mut Option<(u16, Instant)>) -> Re
         && Instant::now() >= due
     {
         peer.send_audio(
-            AudioFrame {
-                sequence,
-                timestamp: u32::from(sequence) * 960,
-                payload: vec![0xf8, 0xff, 0xfe],
-            },
+            crate::lab_run::sim::m2::codex::tone::packet(sequence).ok_or("m4: invalid tone sequence")?,
             Instant::now().into_std(),
         )
         .await

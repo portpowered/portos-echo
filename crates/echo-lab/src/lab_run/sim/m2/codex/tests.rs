@@ -2,6 +2,7 @@
 //! The separate native scenario remains the hassmic-host milestone proof.
 use super::*;
 use echo_contracts::wyoming::{Event, Header, encode};
+use std::io::Write;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -278,11 +279,11 @@ async fn exercise() {
     assert_eq!(settled, Ok(()), "{:?}", state.trace.records);
     assert!(provider::valid(&observed), "{observed}");
     let (frames, energy) = satellite.await.unwrap();
-    assert!((1..=8).contains(&frames), "reply frames: {frames}");
+    assert_eq!(frames, 10, "finite synthetic reply frames");
     assert!(energy > 480 * 1000_i64.pow(2), "decoded reply energy {energy}");
     let measured = json!({"case":"success", "runtime":"codex", "calls":1, "provider_wire":true, "refreshes":0,
         "trace":state.trace.records, "frames":state.frames.lock().unwrap().clone()});
-    assert_eq!(oracle::check(&measured), Ok(()));
+    assert_eq!(oracle::check(&measured), Ok(()), "{measured}");
     let replies: Vec<_> = state
         .trace
         .records
@@ -340,7 +341,7 @@ async fn capture(stream: &mut TcpStream) {
 }
 
 async fn playback(stream: &mut TcpStream) -> (usize, i64) {
-    let (mut frames, mut energy) = (0, 0);
+    let (mut frames, mut energy, mut nonzero, mut audible) = (0, 0, 0, 0);
     loop {
         let (header, bytes) = read(stream).await;
         match header["type"].as_str().unwrap() {
@@ -349,6 +350,10 @@ async fn playback(stream: &mut TcpStream) -> (usize, i64) {
             "audio-chunk" => {
                 assert_eq!(bytes.len(), 960);
                 frames += 1;
+                for sample in bytes.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)) {
+                    nonzero += usize::from(sample != 0);
+                    audible += usize::from(sample.unsigned_abs() > 64);
+                }
                 energy += bytes
                     .as_chunks::<2>()
                     .0
@@ -364,6 +369,15 @@ async fn playback(stream: &mut TcpStream) -> (usize, i64) {
             other => assert_eq!(other, "expected reply audio", "unexpected Wyoming event"),
         }
     }
+    writeln!(
+        std::io::stdout(),
+        "M2 reply: pcm_bytes={} nonzero_samples={nonzero} audible_samples={audible}",
+        frames * 960
+    )
+    .unwrap();
+    assert_eq!(frames, 10);
+    assert!(nonzero >= 2400);
+    assert!(audible >= 2400);
     (frames, energy)
 }
 

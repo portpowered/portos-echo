@@ -15,6 +15,8 @@ use tokio::{
 pub struct Timing {
     pub captured: usize,
     pub played: usize,
+    pub nonzero_samples: usize,
+    pub audible_samples: usize,
     endpoint: Option<Duration>,
     first_pcm: Option<Duration>,
     run: bool,
@@ -59,9 +61,32 @@ impl Timing {
                 .played
                 .checked_add(event.payload.len())
                 .ok_or("wire: playback overflow")?;
+            for bytes in event.payload.as_chunks::<2>().0 {
+                let sample = i16::from_le_bytes(*bytes);
+                self.nonzero_samples += usize::from(sample != 0);
+                self.audible_samples += usize::from(sample.unsigned_abs() > 64);
+            }
             self.first_pcm.get_or_insert(now);
         }
         Ok(())
+    }
+
+    pub fn audible_reply(&self, host: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let measured = serde_json::json!({"pcm_bytes":self.played,
+            "nonzero_samples":self.nonzero_samples,"audible_samples":self.audible_samples,
+            "host":host});
+        if self.failure.is_some()
+            || self.played != 9600
+            || self.nonzero_samples < 2400
+            || self.audible_samples < 2400
+            || host["pcm_bytes"] != 9600
+            || host["nonzero_bytes"].as_u64().is_none_or(|n| n == 0)
+        {
+            return Err(format!(
+                "wire: expected audible 9600-byte reply with >=2400 signed samples; observed {measured}"
+            ));
+        }
+        Ok(measured)
     }
 
     pub fn sample(&self) -> Result<Duration, String> {
@@ -130,6 +155,13 @@ impl Relay {
             },
         )
         .await
+    }
+
+    pub async fn bind_reply(host: SocketAddr) -> Result<Self, String> {
+        if host.ip() != std::net::Ipv4Addr::LOCALHOST || host.port() == 0 {
+            return Err("wire: host must be bound on 127.0.0.1".into());
+        }
+        Self::start(host, Endpoint::Reply).await
     }
 
     async fn start(host: SocketAddr, endpoint: Endpoint) -> Result<Self, String> {
@@ -201,6 +233,7 @@ async fn serve(
 }
 
 enum Endpoint {
+    Reply,
     #[cfg(test)]
     Count(usize),
     Fixture {
@@ -212,6 +245,7 @@ enum Endpoint {
 impl Endpoint {
     fn observe(&mut self, state: &mut Timing, event: &Event, now: Duration) -> Result<(), String> {
         match self {
+            Self::Reply => state.capture(event, usize::MAX, now),
             #[cfg(test)]
             Self::Count(target) => state.capture(event, *target, now),
             Self::Fixture { bytes, tail } => {

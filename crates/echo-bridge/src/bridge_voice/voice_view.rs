@@ -11,6 +11,7 @@ pub(super) struct View<'a> {
     sequence: u64,
     run: Option<String>,
     connected: bool,
+    mouth_paused: bool,
 }
 
 impl<'a> View<'a> {
@@ -48,6 +49,7 @@ impl<'a> View<'a> {
             sequence: 0,
             run: None,
             connected: false,
+            mouth_paused: false,
         }
     }
 
@@ -86,6 +88,7 @@ impl<'a> View<'a> {
     }
 
     fn begin(&mut self) -> Result<(), Error> {
+        self.mouth_paused = false;
         self.sequence = self.sequence.checked_add(1).ok_or(Error::Unavailable)?;
         self.run = Some(format!("run-{}", self.sequence));
         self.trace.tool_run(self.run.as_deref())?;
@@ -114,8 +117,14 @@ impl<'a> View<'a> {
                 Ok(())
             }
             SessionNotice::Run(Notice::Device(event)) => self.screen.observe(&event, self.trace).map(|_| ()),
-            SessionNotice::Run(Notice::ReplyStarted) => self.screen.publish(UiState::Speaking),
-            SessionNotice::Run(Notice::ReplyPaused) => self.screen.publish(UiState::Listening),
+            SessionNotice::Run(Notice::ReplyStarted) => {
+                self.mouth_paused = false;
+                self.screen.publish(UiState::Speaking)
+            }
+            SessionNotice::Run(Notice::ReplyPaused) => {
+                self.mouth_paused = true;
+                self.screen.ready()
+            }
             SessionNotice::Run(Notice::ReplyPlayed | Notice::Transcript { .. }) => Ok(()),
             SessionNotice::Completed(stats) => self.completed(&stats),
         }
@@ -142,7 +151,9 @@ impl<'a> View<'a> {
         )?;
         self.trace.record("wyoming.run_ended", Some(id), json!({}))?;
         self.health.state.send_modify(|state| state.live = "idle");
-        self.screen.ready()?;
+        if !self.mouth_paused {
+            self.screen.ready()?;
+        }
         self.trace.record("bridge.run_completed", Some(id), json!({}))?;
         crate::bridge_runtime::publish("bridge.run_completed", Some(id))?;
         self.run = None;
@@ -343,6 +354,14 @@ mod tests {
             view.observe(ServeNotice::Session(SessionNotice::Run(notice))).unwrap();
             assert!(receive.try_recv().is_err());
         }
+        view.observe(ServeNotice::Session(SessionNotice::Run(Notice::ReplyPaused)))
+            .unwrap();
+        assert_eq!(
+            receive.try_recv().unwrap(),
+            UiState::Ready {
+                message: "Echo Live ready".into()
+            }
+        );
         view.observe(ServeNotice::Session(SessionNotice::Completed(Stats {
             received_chunks: 7,
             microphone_frames: 3,
@@ -352,12 +371,7 @@ mod tests {
             ..Stats::default()
         })))
         .unwrap();
-        assert_eq!(
-            receive.try_recv().unwrap(),
-            UiState::Ready {
-                message: "Echo Live ready".into()
-            }
-        );
+        assert!(receive.try_recv().is_err());
     }
 
     #[tokio::test(start_paused = true)]

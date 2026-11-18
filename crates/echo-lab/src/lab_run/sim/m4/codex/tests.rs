@@ -2,6 +2,7 @@
 //! The complete milestone still requires the native hassmic-host scenario.
 use super::*;
 use echo_contracts::wyoming::{Event, Header, encode};
+use std::io::Write;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -127,7 +128,17 @@ async fn playback(socket: &mut TcpStream) -> usize {
         }
     }
     assert_eq!(pcm.len(), 9600);
-    assert!(pcm.iter().all(|byte| *byte == 0));
+    let samples: Vec<_> = pcm.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
+    let nonzero = samples.iter().filter(|&&s| s != 0).count();
+    let audible = samples.iter().filter(|&&s| s.unsigned_abs() > 64).count();
+    writeln!(
+        std::io::stdout(),
+        "M4 reply: pcm_bytes={} nonzero_samples={nonzero} audible_samples={audible}",
+        pcm.len()
+    )
+    .unwrap();
+    assert!(nonzero >= 2400);
+    assert!(audible >= 2400);
     pcm.len()
 }
 async fn send(socket: &mut TcpStream, kind: &str, data: Value, payload: Vec<u8>) {

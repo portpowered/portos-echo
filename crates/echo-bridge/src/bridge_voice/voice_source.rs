@@ -2,6 +2,7 @@ use super::{Error, Stats, VoicePort};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
+use std::collections::VecDeque;
 use tokio::time::{Duration, Instant};
 
 /// Samples at or below this level are WebRTC silence, not speech.
@@ -192,14 +193,15 @@ const OUTPUT_DELAY: Duration = Duration::from_millis(200);
 #[derive(Default)]
 pub struct Mouth {
     clock: Option<Instant>,
-    open: Option<Instant>,
-    close: Option<Instant>,
-    speaking: bool,
+    transitions: VecDeque<(Instant, bool)>,
 }
 
 impl Mouth {
     /// Record one 24 kHz s16le frame written to the Echo at `now`.
     pub fn wrote(&mut self, frame: &[u8], now: Instant) {
+        if frame.is_empty() {
+            return;
+        }
         let start = self.clock.filter(|end| *end > now).unwrap_or(now);
         self.clock = Some(start + FRAME);
         let audible = frame
@@ -208,35 +210,29 @@ impl Mouth {
             .iter()
             .any(|sample| i16::from_le_bytes(*sample).unsigned_abs() > QUIET);
         if audible {
-            if !self.speaking && self.open.is_none() {
-                self.open = Some(start + OUTPUT_DELAY);
+            let open = start + OUTPUT_DELAY;
+            let close = open + FRAME;
+            if let Some((due, false)) = self.transitions.back_mut()
+                && *due == open
+            {
+                *due = close;
+            } else {
+                self.transitions.push_back((open, true));
+                self.transitions.push_back((close, false));
             }
-            self.close = Some(start + FRAME + OUTPUT_DELAY);
         }
     }
 
     /// When the next open or close is due.
     #[must_use]
     pub fn due(&self) -> Option<Instant> {
-        if self.speaking { self.close } else { self.open }
+        self.transitions.front().map(|(due, _)| *due)
     }
 
     /// The change due by `now`, if any: true opens the mouth, false closes it.
     pub fn poll(&mut self, now: Instant) -> Option<bool> {
         self.due().filter(|due| *due <= now)?;
-        self.speaking = !self.speaking;
-        if self.speaking {
-            self.open = None;
-        } else {
-            self.close = None;
-        }
-        Some(self.speaking)
-    }
-
-    /// The Echo reported played before a pending open came due (a reply
-    /// shorter than the output delay): true when the mouth should still open.
-    pub fn flush(&mut self) -> bool {
-        !self.speaking && self.open.take().is_some()
+        self.transitions.pop_front().map(|(_, open)| open)
     }
 }
 
@@ -279,15 +275,32 @@ mod tests {
         mouth.wrote(&frame(-1000), later);
         assert_eq!(mouth.due(), Some(later + OUTPUT_DELAY));
         assert_eq!(mouth.poll(later + OUTPUT_DELAY), Some(true));
-        assert!(!mouth.flush());
     }
 
     #[tokio::test(start_paused = true)]
-    async fn mouth_still_opens_for_a_reply_played_before_the_output_delay() {
+    async fn mouth_quiet_thresholds_never_schedule_a_transition() {
         let mut mouth = Mouth::default();
-        assert!(!mouth.flush());
-        mouth.wrote(&frame(1000), Instant::now());
-        assert!(mouth.flush());
+        let t0 = Instant::now();
+        for level in [0, 64, -64] {
+            mouth.wrote(&frame(level), t0);
+        }
+        mouth.wrote(&[], t0);
+        assert_eq!(mouth.due(), None);
+        assert_eq!(mouth.poll(t0 + Duration::from_secs(1)), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn mouth_preserves_quiet_gaps_even_when_all_audio_is_written_ahead() {
+        let mut mouth = Mouth::default();
+        let t0 = Instant::now();
+        for level in [65, 0, -65] {
+            mouth.wrote(&frame(level), t0);
+        }
+        for (offset, open) in [(0, true), (1, false), (2, true), (3, false)] {
+            let due = t0 + OUTPUT_DELAY + FRAME * offset;
+            assert_eq!(mouth.poll(due - Duration::from_nanos(1)), None);
+            assert_eq!(mouth.poll(due), Some(open));
+        }
         assert_eq!(mouth.due(), None);
     }
 }

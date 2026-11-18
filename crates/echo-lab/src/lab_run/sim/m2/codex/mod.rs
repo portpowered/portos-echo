@@ -6,6 +6,7 @@ pub(in crate::lab_run::sim) mod provider;
 pub(super) mod rejection;
 #[cfg(test)]
 mod tests;
+pub(in crate::lab_run::sim) mod tone;
 
 use super::{DEADLINE, oracle};
 use crate::lab_run::{
@@ -26,6 +27,8 @@ use std::{
 #[derive(Default)]
 struct Case {
     host: Option<Process>,
+    relay: Option<crate::lab_run::sim::m4::wire::Relay>,
+    playback: Value,
     bridge: Option<Process>,
     provider: Option<provider::Provider>,
     collector: Option<tokio::task::JoinHandle<Result<(), String>>>,
@@ -64,6 +67,9 @@ impl Case {
         self.provider = Some(provider::Provider::start(&options.python).await?);
         let origin = &self.provider.as_ref().ok_or("m2: missing provider")?.origin;
         let mut command = tokio::process::Command::new(options.bridge.as_deref().ok_or("m2: missing bridge")?);
+        let relay = crate::lab_run::sim::m4::wire::Relay::bind_reply(([127, 0, 0, 1], port).into()).await?;
+        let port = relay.address.port();
+        self.relay = Some(relay);
         config::configure(&mut command, &root.0, port, origin, &self.trace_path)?;
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
@@ -104,7 +110,17 @@ impl Case {
         let host = self.host.as_mut().ok_or("m2: missing host")?;
         host.send(&json!({"action":"finite","pcm":pcm})).await?;
         host.expect("host.ack").await?;
-        self.settle().await
+        self.settle().await?;
+        let host = self.host.as_mut().ok_or("m2: missing host")?;
+        host.send(&json!({"action":"playback"})).await?;
+        let playback = host.expect("host.ack").await?;
+        self.playback = self
+            .relay
+            .as_ref()
+            .ok_or("m2: missing relay")?
+            .timing()
+            .audible_reply(&playback)?;
+        Ok(())
     }
 
     async fn settle(&mut self) -> Result<(), String> {
@@ -112,13 +128,10 @@ impl Case {
         let mut transcript = false;
         while !done {
             self.provider.as_mut().ok_or("m2: missing provider")?.tick().await?;
-            let speaking = self
-                .frames
-                .lock()
-                .map_err(|_| "m2: frame lock")?
-                .iter()
-                .any(|f| f["state"]["state"] == "speaking");
-            if speaking && !transcript {
+            let played = self.relay.as_ref().ok_or("m2: missing relay")?.timing().played;
+            // Nine frames prove all eleven packets reached the real converter.
+            // Transcript completion flushes its held final frame.
+            if played >= 8640 && !transcript {
                 self.provider
                     .as_mut()
                     .ok_or("m2: missing provider")?
@@ -138,6 +151,12 @@ impl Case {
             .expect("bridge.ready")
             .await?;
         Ok(())
+    }
+
+    async fn close_relay(&mut self, errors: &mut Vec<String>) {
+        if let Some(relay) = self.relay.take() {
+            errors.extend(relay.close().await.err());
+        }
     }
 
     async fn close(&mut self) -> Result<Value, String> {
@@ -167,6 +186,7 @@ impl Case {
         if let Some(mut host) = self.host.take() {
             errors.extend(host.close().await.err());
         }
+        self.close_relay(&mut errors).await;
         if self.trace_path.is_file() {
             self.trace = read_trace(&self.trace_path)?;
         }
@@ -197,7 +217,8 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
     let measured = json!({"case":"success", "runtime":"codex", "credential_mode":"api_key",
         "calls":observed["calls"].as_array().map(Vec::len),
         "provider_wire":provider::valid(&observed), "refreshes":0, "provider":observed,
-        "frames":state.frames.lock().ok().map(|f| f.clone()), "trace":state.trace.records});
+        "frames":state.frames.lock().ok().map(|f| f.clone()), "trace":state.trace.records,
+        "reply_pcm":state.playback});
     let cleanup = if state.trace_path.is_file() {
         std::fs::remove_file(&state.trace_path)
             .and_then(|()| std::fs::remove_dir(&output))

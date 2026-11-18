@@ -255,3 +255,38 @@ async fn reset_is_eof_only_at_a_complete_frame_boundary() {
     assert_eq!(frame(&mut input).await.unwrap().unwrap().0, bytes);
     assert_eq!(frame(&mut input).await.unwrap(), None);
 }
+
+#[test]
+fn signed_reply_samples_reject_absent_silent_threshold_only_short_and_wrong_sized_audio() {
+    let host = serde_json::json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":9000});
+    for (bytes, level, valid) in [
+        (0, 0_i16, false),
+        (9600, 0, false),
+        (9600, 64, false),
+        (9600, -64, false),
+        (9598, 65, false),
+        (9602, -65, false),
+        (9600, 65, true),
+        (9600, -65, true),
+        (9600, i16::MIN, true),
+    ] {
+        let mut state = Timing {
+            run: true,
+            ..Timing::default()
+        };
+        if bytes != 0 {
+            let mut event = reply(bytes);
+            event.payload = level.to_le_bytes().repeat(bytes / 2);
+            state.playback(&event, Duration::ZERO).unwrap();
+        }
+        assert_eq!(state.audible_reply(&host).is_ok(), valid, "{bytes} bytes at {level}");
+        if valid {
+            assert_eq!(state.nonzero_samples, 4800);
+            assert_eq!(state.audible_samples, 4800);
+            assert!(state.audible_reply(&serde_json::json!({})).is_err());
+            let mut silent_host = host.clone();
+            silent_host["nonzero_bytes"] = 0.into();
+            assert!(state.audible_reply(&silent_host).is_err());
+        }
+    }
+}

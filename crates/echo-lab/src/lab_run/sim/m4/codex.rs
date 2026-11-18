@@ -192,13 +192,12 @@ impl Case {
         let (completion, speaking) = tokio::try_join!(settle(bridge, provider, relay, ready), presentation)?;
         self.speaking = Some(speaking);
         let playback = self.host_control(json!({"action":"playback"})).await?;
-        if playback != json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":0}) {
-            return Err(format!(
-                "m4: expected exact decoded host playback PCM, observed {playback}"
-            ));
-        }
-        self.playback = Some(playback);
         let timing = self.relay.as_ref().ok_or("m4: missing relay")?.timing();
+        let samples = timing.audible_reply(&playback)?;
+        let mut playback = playback;
+        playback["nonzero_samples"] = samples["nonzero_samples"].clone();
+        playback["audible_samples"] = samples["audible_samples"].clone();
+        self.playback = Some(playback);
         timing.sample()?;
         Ok((completion, timing))
     }
@@ -304,7 +303,7 @@ async fn settle(
             provider.control(Control::Delegate).await?;
             delegated = true;
         }
-        // Eleven CNG packets yield nine frames before converter tail flush.
+        // Eleven synthetic tone packets yield nine frames before converter tail flush.
         if timing.played >= 8640 && !completed {
             if provider.observed.borrow()["appends"] != json!(["delegation-local"]) {
                 return Err("m4: reply media before verified native append".into());

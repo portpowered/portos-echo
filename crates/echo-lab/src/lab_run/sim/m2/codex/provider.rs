@@ -124,9 +124,18 @@ async fn drive(
     };
     negotiate(process, peer, &offer).await?;
     let mut quiesced = peer.is_none();
+    let mut reply = None;
+    let mut started = false;
+    let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
     loop {
         tokio::select! {
-            result = step(peer, true), if !quiesced => { result?; let _ = ticks.try_send(()); },
+            result = step(peer, &mut reply), if !quiesced => {
+                if result? > 0 && !started {
+                    started = true;
+                    reply = Some((0, Instant::now()));
+                }
+            },
+            _ = clock.tick(), if !quiesced => { let _ = ticks.try_send(()); },
             control = commands.recv() => match control {
                 Some(Control::Transcripts) => process.send(&json!({"transcripts":true})).await?,
                 Some(Control::Quiesce(done)) => { quiesced = true; let _ = done.send(()); },
@@ -149,6 +158,7 @@ async fn repeat(
     peer: &mut Option<LivePeer>,
 ) -> Result<Value, String> {
     let mut received = 0;
+    let mut reply = None;
     let mut quiesced = true;
     loop {
         tokio::select! {
@@ -158,7 +168,7 @@ async fn repeat(
                 received = 0;
                 quiesced = false;
             },
-            result = step(peer, false), if !quiesced => {
+            result = step(peer, &mut reply), if !quiesced => {
                 received += result?;
                 if received >= 12 {
                     process.send(&json!({"transcripts":true})).await?;
@@ -203,26 +213,33 @@ async fn negotiate(process: &mut Process, peer: &mut Option<LivePeer>, offer: &V
     Ok(())
 }
 
-async fn step(peer: &mut Option<LivePeer>, echo: bool) -> Result<usize, String> {
+async fn step(peer: &mut Option<LivePeer>, reply: &mut Option<(u16, Instant)>) -> Result<usize, String> {
     let mut received = 0;
     let peer = peer.as_mut().ok_or("m2: missing remote media")?;
     if peer.ready() {
-        while let Some(frame) = peer.pop_audio() {
+        while peer.pop_audio().is_some() {
             received += 1;
-            if echo {
-                peer.send_audio(frame, Instant::now().into_std())
-                    .await
-                    .map_err(|_| "m2: remote media echo")?;
-            }
+        }
+        if let Some((sequence, due)) = *reply
+            && Instant::now() >= due
+        {
+            let frame = super::tone::packet(sequence).ok_or("m2: invalid tone sequence")?;
+            peer.send_audio(frame, Instant::now().into_std())
+                .await
+                .map_err(|_| "m2: synthetic reply media")?;
+            *reply = (sequence < 10).then_some((sequence + 1, due + std::time::Duration::from_millis(20)));
         }
     }
-    let next = peer.flush().await.map_err(|_| "m2: remote media flush")?;
+    let mut next = Instant::from_std(peer.flush().await.map_err(|_| "m2: remote media flush")?);
+    if let Some((_, due)) = reply {
+        next = next.min(*due);
+    }
     tokio::select! {
         ready = peer.readable() => {
             ready.map_err(|_| "m2: remote media readiness")?;
             peer.receive(Instant::now().into_std()).await.map_err(|_| "m2: remote media receive")?;
         },
-        () = tokio::time::sleep_until(next.into()) => peer.timeout(Instant::now().into_std()).await.map_err(|_| "m2: remote media timeout")?,
+        () = tokio::time::sleep_until(next) => peer.timeout(Instant::now().into_std()).await.map_err(|_| "m2: remote media timeout")?,
     }
     Ok(received)
 }
