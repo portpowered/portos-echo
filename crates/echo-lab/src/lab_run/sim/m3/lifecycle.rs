@@ -81,13 +81,9 @@ impl World {
 
 async fn listening() -> World {
     let relay = Relay::bind("127.0.0.1:1".parse().unwrap(), &fixture()).await.unwrap();
-    let live = Live::bind(
-        if cfg!(windows) { "python" } else { "python3" },
-        relay.observed.clone(),
-        super::super::CutOrder::DoneFirst,
-    )
-    .await
-    .unwrap();
+    let live = Live::bind("python3", relay.observed.clone(), super::super::CutOrder::DoneFirst)
+        .await
+        .unwrap();
     World {
         relay: Some(relay),
         live: Some(live),
@@ -164,11 +160,7 @@ fn native_bridge() -> PathBuf {
                 .is_some_and(|name| name == "debug" || name == "release")
         })
         .unwrap();
-    profile.join(if cfg!(windows) {
-        "echo-bridge.exe"
-    } else {
-        "echo-bridge"
-    })
+    profile.join("echo-bridge")
 }
 
 fn native_case(order: super::super::CutOrder, name: &str) {
@@ -268,7 +260,7 @@ fn native_observations(order: super::super::CutOrder, name: &str, rows: &[Value]
 
 #[tokio::test]
 async fn t3_m3_model_mismatch_reports_failure_without_starting_pending_work() {
-    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = tokio::process::Command::new("python3");
     command
         .arg("-u")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m3/provider.py"));
@@ -297,7 +289,7 @@ async fn t3_m3_model_mismatch_reports_failure_without_starting_pending_work() {
 
 #[tokio::test]
 async fn t3_m3_model_boundary_holds_completion_until_explicit_release() {
-    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = tokio::process::Command::new("python3");
     command
         .arg("-u")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m3/provider.py"));
