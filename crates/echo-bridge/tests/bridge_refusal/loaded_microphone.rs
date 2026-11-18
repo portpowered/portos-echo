@@ -278,7 +278,6 @@ async fn offer_sequence(peer: &mut tokio::net::TcpStream, schedule: &Schedule) {
         until(|| schedule.turns.load(Ordering::SeqCst) >= turns + 8).await;
     }
 }
-
 #[tokio::test]
 #[ignore = "T3 production runtime, bounded capture and local Live/Wyoming sockets"]
 async fn loaded_microphone_pending_reply_admission_keeps_capture_serviced() {
@@ -312,7 +311,6 @@ async fn loaded_microphone_pending_reply_admission_keeps_capture_serviced() {
     assert_eq!(runtime.await.unwrap(), Ok(()));
     assert_delivery(false, stats, &delivered);
 }
-
 #[tokio::test]
 #[ignore = "T3 production runtime, bounded capture and local Live/Wyoming sockets"]
 async fn loaded_microphone_pending_cut_receipt_keeps_capture_serviced() {
@@ -357,7 +355,6 @@ async fn loaded_microphone_pending_cut_receipt_keeps_capture_serviced() {
     writeln!(std::io::stdout(), "pending cut: offered=0..64 received={} delivered={delivered:?} offered_samples=20480 delivered_samples={} dropped={} fake_received={packets} capacity=32", stats.received, delivered.len()*320, stats.dropped).unwrap();
     assert_delivery(false, stats, &delivered);
 }
-
 #[tokio::test]
 #[ignore = "T3 production owner retirement, real bounded Wyoming and loopback Live"]
 async fn loaded_microphone_playback_retirement_drains_finished_capture() {

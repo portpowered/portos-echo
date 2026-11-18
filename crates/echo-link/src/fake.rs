@@ -42,7 +42,7 @@ struct State {
     outcome: Option<Result<(), Error>>,
     cut: bool,
     stopped: bool,
-    run_open: bool,
+    run_open: Option<()>,
     source: Option<Arc<Mutex<Queue>>>,
     closed: bool,
 }
@@ -221,7 +221,7 @@ impl LinkEvents for Events {
             }
             if let Some(event) = state.events.pop_front() {
                 if matches!(event, LinkEvent::Wake(_)) {
-                    state.run_open = true;
+                    state.run_open = Some(());
                     state.stopped = false;
                 }
                 return Poll::Ready(Ok(Some(event)));
@@ -405,23 +405,22 @@ impl EchoLink for FakeLink {
             })
         })
     }
-    async fn end_run(&self) -> Result<(), Error> {
+    fn end_run(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         let mut state = lock(&self.observer.0);
         if state.closed {
-            return Err(Error::Closed);
+            return std::future::ready(Err(Error::Closed));
         }
         if state.source.is_some() {
-            return Err(Error::Busy);
+            return std::future::ready(Err(Error::Busy));
         }
-        if state.run_open {
+        if state.run_open.take().is_some() {
             state.commands.push(Command::EndRun);
-            state.run_open = false;
             state.stopped = true;
             if let Some(waker) = state.play_waker.take() {
                 waker.wake();
             }
         }
-        Ok(())
+        std::future::ready(Ok(()))
     }
     fn pause(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         std::future::ready({
@@ -435,7 +434,7 @@ impl EchoLink for FakeLink {
             return std::future::ready(Err(Error::Closed));
         }
         state.commands.push(Command::FailRun(code));
-        state.run_open = false;
+        state.run_open = None;
         state.stopped = true;
         if let Some(waker) = state.play_waker.take() {
             waker.wake();
