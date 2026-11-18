@@ -84,12 +84,25 @@ async fn run(
                     result = &mut work => return result,
                     result = advance_control(command, &context) => result?,
                 },
-                Some(Ok(None)) => { let _ = stop.send(true); return work.await; }
-                Some(Err(error)) => { let _ = stop.send(false); let _ = work.await; return Err(error); }
-                None => return Err(Error::Control),
+                Some(Ok(None)) => return finish(work, stop, Ok(())).await,
+                Some(Err(error)) => return finish(work, stop, Err(error)).await,
+                None => return finish(work, stop, Err(Error::Control)).await,
             }
         }
     }
+}
+
+async fn finish(
+    work: impl Future<Output = Result<(), Error>>,
+    stop: oneshot::Sender<bool>,
+    control: Result<(), Error>,
+) -> Result<(), Error> {
+    // No more clock controls can arrive. The always-ready driver prevents
+    // paused time from auto-advancing, so teardown deadlines need real time.
+    tokio::time::resume();
+    let _ = stop.send(control.is_ok());
+    let result = work.await;
+    control.and(result)
 }
 
 async fn drive<F: Future>(future: F) -> F::Output {

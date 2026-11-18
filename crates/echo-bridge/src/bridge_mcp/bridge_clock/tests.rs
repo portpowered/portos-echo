@@ -6,6 +6,39 @@ use crate::Error;
 use serde_json::json;
 use std::{future::Future, task::Poll, time::Duration};
 
+#[tokio::test(start_paused = true)]
+async fn terminal_control_allows_cleanup_deadlines_without_another_clock_command() {
+    for clean in [true, false] {
+        if !clean {
+            tokio::time::pause();
+        }
+        let (stop, cancelled) = tokio::sync::oneshot::channel();
+        let collected = std::cell::Cell::new(false);
+        let owner = async {
+            assert_eq!(cancelled.await, Ok(clean));
+            // Model a drain blocked on a client that no longer reads. The
+            // cleanup timeout must expire even inside the always-ready driver.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(1), std::future::pending::<()>())
+                    .await
+                    .is_err()
+            );
+            collected.set(true);
+            Ok(())
+        };
+        let control = if clean { Ok(()) } else { Err(Error::Control) };
+        assert_eq!(
+            receipt::bounded(
+                super::drive(super::finish(owner, stop, control)),
+                Duration::from_secs(1)
+            )
+            .await,
+            if clean { Ok(()) } else { Err(Error::Control) }
+        );
+        assert!(collected.get(), "terminal input must await actual owner cleanup");
+    }
+}
+
 #[test]
 fn playout_control_rejects_malformed_and_keeps_legacy_compatible() {
     assert_eq!(
