@@ -7,60 +7,66 @@ use std::process::{Command, Output};
 
 #[test]
 fn mcp_controls_fail_without_launching_unavailable_driver_capabilities() {
-    for sim in [false, true] {
-        for action in [
-            "link", "approve", "refresh", "restart", "call", "replay", "probe", "unlink",
-        ] {
-            let session = Session::new(&json!({}));
-            session.scenario("one.yaml", &json!([{"mcp":{"action":action}}]));
-            let output = if sim {
-                session
-                    .command()
-                    .args(["run", "one.yaml", "--driver", "sim"])
-                    .args(["--bridge", FAKE, "--python", FAKE, "--out", "artifacts"])
-                    .output()
-                    .unwrap()
+    mcp_controls_fail(false);
+}
+
+#[test]
+fn mcp_sim_controls_fail_without_launching_unavailable_driver_capabilities() {
+    mcp_controls_fail(true);
+}
+
+fn mcp_controls_fail(sim: bool) {
+    for action in [
+        "link", "approve", "refresh", "restart", "call", "replay", "probe", "unlink",
+    ] {
+        let session = Session::new(&json!({}));
+        session.scenario("one.yaml", &json!([{"mcp":{"action":action}}]));
+        let output = if sim {
+            session
+                .command()
+                .args(["run", "one.yaml", "--driver", "sim"])
+                .args(["--bridge", FAKE, "--python", FAKE, "--out", "artifacts"])
+                .output()
+                .unwrap()
+        } else {
+            session.run(&[])
+        };
+        let message = if sim {
+            format!("one.yaml: step 0: sim: MCP {action} control requires the M5 bridge driver")
+        } else {
+            format!("device: MCP {action} control unavailable")
+        };
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            format!("echo-lab: {message}\n")
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{}: fail\n", session.0.join("artifacts").display())
+        );
+        assert_eq!(session.operations(), ["digest"]);
+        let report = session.report();
+        assert_eq!(report["result"], "fail");
+        assert_eq!(
+            report["checks"],
+            if sim {
+                json!({"step_0":false,"world_closed":true})
             } else {
-                session.run(&[])
-            };
-            let message = if sim {
-                format!("one.yaml: step 0: sim: MCP {action} control requires the M5 bridge driver")
-            } else {
-                format!("device: MCP {action} control unavailable")
-            };
-            assert_eq!(output.status.code(), Some(1));
-            assert_eq!(
-                String::from_utf8(output.stderr).unwrap(),
-                format!("echo-lab: {message}\n")
-            );
-            assert_eq!(
-                String::from_utf8(output.stdout).unwrap(),
-                format!("{}: fail\n", session.0.join("artifacts").display())
-            );
-            assert_eq!(session.operations(), ["digest"]);
-            let report = session.report();
-            assert_eq!(report["result"], "fail");
-            assert_eq!(
-                report["checks"],
-                if sim {
-                    json!({"step_0":false,"world_closed":true})
-                } else {
-                    json!({"step_0":false,"session_released":true})
-                }
-            );
-            assert!(report.get("link_counts").is_none());
-            let events = fs::read_to_string(session.0.join("artifacts/events.jsonl")).unwrap();
-            let events: Vec<serde_json::Value> =
-                events.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
-            assert_eq!(
-                events.iter().map(|e| e["event"].as_str().unwrap()).collect::<Vec<_>>(),
-                ["run_started", "step_started", "step_failed", "run_failed"]
-            );
-            assert_eq!(
-                events[2]["message"],
-                message.strip_prefix("one.yaml: step 0: ").unwrap_or(&message)
-            );
-        }
+                json!({"step_0":false,"session_released":true})
+            }
+        );
+        assert!(report.get("link_counts").is_none());
+        let events = fs::read_to_string(session.0.join("artifacts/events.jsonl")).unwrap();
+        let events: Vec<serde_json::Value> = events.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(
+            events.iter().map(|e| e["event"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["run_started", "step_started", "step_failed", "run_failed"]
+        );
+        assert_eq!(
+            events[2]["message"],
+            message.strip_prefix("one.yaml: step 0: ").unwrap_or(&message)
+        );
     }
 }
 
