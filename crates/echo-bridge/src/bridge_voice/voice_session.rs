@@ -194,9 +194,9 @@ pub async fn tool_conversation<L, R, W, P, H>(
         echo_config::AgentConfig,
         crate::bridge_codex::ToolBudget,
     ),
-    mut options: SessionOptions,
+    options: SessionOptions,
     cancelled: impl Future<Output = ()>,
-    mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
+    observe: impl FnMut(SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error>
 where
     L: EchoLink,

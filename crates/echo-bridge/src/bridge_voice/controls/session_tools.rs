@@ -74,17 +74,16 @@ pub(super) fn answer(
 ) -> Result<(), Error> {
     let SessionRequest { command, key, reply } = request;
     let tool = tool(command);
-    let (result, receipt) = match grants.answered.iter().find(|(answered, _)| *answered == key) {
-        // The same idempotency identity never mutates twice.
-        Some((_, cached)) => (cached.clone(), receipt(tool, "duplicate")),
-        None => {
-            let (result, receipt) = decide(command, tool, grants, controller);
-            if grants.answered.len() == ANSWERED {
-                grants.answered.remove(0);
-            }
-            grants.answered.push((key, result.clone()));
-            (result, receipt)
+    // The same idempotency identity never mutates twice.
+    let (result, receipt) = if let Some((_, cached)) = grants.answered.iter().find(|(answered, _)| *answered == key) {
+        (cached.clone(), receipt(tool, "duplicate"))
+    } else {
+        let (result, receipt) = decide(command, tool, grants, controller);
+        if grants.answered.len() == ANSWERED {
+            grants.answered.remove(0);
         }
+        grants.answered.push((key, result.clone()));
+        (result, receipt)
     };
     observe(Notice::SessionTool(receipt))?;
     let _ = reply.send(result);

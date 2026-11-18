@@ -246,15 +246,20 @@ async fn session_tools_failed_receipt_never_reports_success_and_idle_is_inactive
 struct Inner(Arc<Mutex<Vec<String>>>);
 
 impl ToolHost for Inner {
-    async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
-        Ok(vec![])
+    fn list_tools(&self) -> impl std::future::Future<Output = Result<Vec<ToolSpec>, ToolError>> {
+        std::future::ready(Ok(vec![]))
     }
-    async fn call_tool(&self, name: &str, _: Value, _: &str) -> Result<echo_agent_api::ToolResult, ToolError> {
+    fn call_tool(
+        &self,
+        name: &str,
+        _: Value,
+        _: &str,
+    ) -> impl std::future::Future<Output = Result<echo_agent_api::ToolResult, ToolError>> {
         self.0.lock().unwrap().push(name.into());
-        Ok(echo_agent_api::ToolResult {
+        std::future::ready(Ok(echo_agent_api::ToolResult {
             content: json!("mcp"),
             is_error: false,
-        })
+        }))
     }
 }
 
