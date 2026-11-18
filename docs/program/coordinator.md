@@ -22,9 +22,16 @@ lanes survive only as names for areas of the code.
 | Planner (`plan` workstation) | Codex | `gpt-6.1-sol`; `gpt-6-astra` allowed for planning only |
 | Processor, reviewer, validator and every other agent workstation | Codex | `gpt-6.1-sol` |
 | Workspace setup, CI wait, routing | Scripts in `factory/scripts/` | — |
+| Takeover of a stuck lane: finishes that lane's branch, then hands it to review | A direct subagent of the coordinator | — |
 
 The worker list is `factory/factory.json`. A change to a worker's provider or model is a change to that file, and
 it needs an owner decision unless it stays on Codex `gpt-6.1-sol`.
+
+A lane is stuck after about 8 process visits without progress, when the same red `test-sim` cause repeats, or when
+lanes on the same hot path block each other. The coordinator parks it with a request in its mailbox, waits for its
+running session to end, and sends one direct subagent to finish the branch on the lane's worktree. The response then
+names the final head and the lane goes to review. The coordinator itself writes no product code (decisions.md,
+2026-11-18).
 
 ## Why one coordinator over a factory
 
