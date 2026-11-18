@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 15
+last modified: 2026, november, 18
 status: active; every change follows these rules
 ---
 
@@ -54,7 +54,8 @@ check exists, the coordinator checks it by hand.
   is named or documented as T3, uses only 127.0.0.1 and local processes, waits on readiness rather than fixed sleeps,
   and stays inside nextest's 30 s timeout with no retries. They prove a piece; they never stand in for a milestone
   scenario, which always runs through `echo-lab run` with one file for every driver. Network-free tests stay T1/T2.
-- **Coverage floors hold.** A change that drops a crate below its floor (plan section 11) fails `coverage`.
+- **Coverage floors are suspended.** The owner removed the `coverage` CI job on 2026-11-18 (`decisions.md`). No
+  change is required to meet a floor; `make coverage` still runs by hand.
 
 ## Secrets and privacy
 

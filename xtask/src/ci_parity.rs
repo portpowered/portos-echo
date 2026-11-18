@@ -14,7 +14,6 @@ pub const GATES: &[(&str, &str)] = &[
     ("test-contract", "test-contract"),
     ("test-sim", "test-sim"),
     ("test-concurrency", "test-concurrency"),
-    ("coverage", "coverage"),
     ("build-host", "build-host"),
     ("build-echo", "build-echo"),
 ];
@@ -26,7 +25,7 @@ fn job(name: &str, target: &str) -> String {
     let timeout = match name {
         "test-unit" => 15,
         "test-sim" => 25,
-        "coverage" | "lint-self-tests" => 20,
+        "lint-self-tests" => 20,
         _ => 10,
     };
     let mut block = format!(
@@ -42,26 +41,16 @@ fn job(name: &str, target: &str) -> String {
         }
         block = block.replace(&step, &format!("{provision}{step}"));
     }
-    if matches!(name, "test-sim" | "coverage") {
+    if name == "test-sim" {
         let step = format!("      - name: {name}\n");
         let host = "      - name: Host build dependencies\n        run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/hassmic-host\n          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n      - name: Build pinned hassmic-host\n        run: make hassmic-host\n";
         block = block.replace(&step, &format!("{host}{step}"));
     }
-    if matches!(name, "test-unit" | "test-sim" | "coverage") {
+    if matches!(name, "test-unit" | "test-sim") {
         let step = format!("      - name: {name}\n");
         let codex = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: ~/.cache/portos-echo/codex\n          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}\n      - name: Provision verified pinned Codex\n        run: sh scripts/codex-app-server.sh\n";
         let namespace = "      - name: Enable isolated Codex network namespace\n        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n";
         block = block.replace(&step, &format!("{codex}{namespace}{step}"));
-    }
-    if name == "coverage" {
-        block.push_str(
-            "        env:\n          COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}\n",
-        );
-    }
-    if name == "coverage" {
-        block.push_str(
-            "      - name: Detect quarantined coverage profiles\n        id: quarantine\n        if: always()\n        run: |\n          present=false\n          if [ -d target/llvm-cov/quarantine ]; then\n            if [ -n \"$(find target/llvm-cov/quarantine -type f -name '*.profraw' -print -quit)\" ]; then\n              present=true\n            fi\n          fi\n          echo \"present=$present\" >> \"$GITHUB_OUTPUT\"\n      - name: Retain quarantined coverage profiles\n        if: ${{ always() && steps.quarantine.outputs.present == 'true' }}\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: coverage-quarantine-${{ github.run_id }}-${{ github.run_attempt }}\n          path: target/llvm-cov/quarantine/\n          retention-days: 3\n          if-no-files-found: error\n",
-        );
     }
     if name == "test-unit" {
         block.push_str("      - name: Publish screen screenshot evidence\n        if: always()\n        id: screen-evidence\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02\n        with:\n          name: screen-evidence-${{ github.sha }}\n          path: |\n            web/screen/test-results/screenshots/**\n            web/screen/test-results/summary.txt\n          if-no-files-found: error\n");
@@ -246,7 +235,7 @@ pub fn run() -> Result<(), String> {
     let workflow = fs::read_to_string(".github/workflows/ci.yml").map_err(|error| format!("ci.yml: {error}"))?;
     evaluate(&makefile.replace("\r\n", "\n"), &workflow.replace("\r\n", "\n"))?;
     check_workflows()?;
-    println!("ci-parity: ok (16 checks)");
+    println!("ci-parity: ok ({} checks)", GATES.len());
     for (name, target) in GATES {
         println!("{name}: make {target}");
     }
@@ -303,7 +292,7 @@ mod tests {
     #[test]
     fn codex_provisioning_cannot_be_removed_or_made_optional() {
         let (makefile, workflow) = fixture();
-        for name in ["test-unit", "coverage"] {
+        for name in ["test-unit", "test-sim"] {
             let block = job(name, name);
             for replacement in ["", "        run: sh scripts/codex-app-server.sh || true\n"] {
                 let changed = block.replace("        run: sh scripts/codex-app-server.sh\n", replacement);
@@ -367,6 +356,12 @@ mod tests {
         assert_failure(&makefile, &duplicate, "duplicate gate format");
         let extra = format!("{workflow}{}", job("extra", "extra"));
         assert_failure(&makefile, &extra, "unsupported gate extra");
+        // The owner suspended coverage on 2026-11-18; it is no longer a CI gate.
+        assert_failure(
+            &makefile.replace("build-host", "coverage build-host"),
+            &workflow,
+            "extra or unsupported gate coverage",
+        );
         let reordered = workflow.replace(
             &(job("test-unit", "test-unit") + &job("test-contract", "test-contract")),
             &(job("test-contract", "test-contract") + &job("test-unit", "test-unit")),
@@ -426,33 +421,9 @@ mod tests {
         }
     }
     #[test]
-    fn coverage_quarantine_requires_exact_reviewed_tail() {
-        let (makefile, workflow) = fixture();
-        let coverage = job("coverage", "coverage");
-        for (from, to) in [
-            ("if: always()", "if: success()"),
-            ("steps.quarantine.outputs.present == 'true'", "true"),
-            ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4"),
-            ("retention-days: 3", "retention-days: 90"),
-            ("path: target/llvm-cov/quarantine/", "path: target/"),
-            ("if-no-files-found: error", "if-no-files-found: ignore"),
-            ("present=false", "present=true"),
-            ("run: make coverage\n", "run: make coverage || true\n"),
-        ] {
-            let changed = workflow.replace(&coverage, &coverage.replace(from, to));
-            assert_ne!(changed, workflow);
-            assert_failure(&makefile, &changed, "unsupported job coverage");
-        }
-        let removed = workflow.replace(
-            &coverage,
-            &coverage[..coverage.find("      - name: Detect quarantined").unwrap()],
-        );
-        assert_failure(&makefile, &removed, "unsupported job coverage");
-    }
-    #[test]
     fn host_jobs_require_each_exact_host_step() {
         let (makefile, workflow) = fixture();
-        for name in ["test-sim", "coverage"] {
+        for name in ["test-sim"] {
             let host_job = job(name, name);
             let gate = format!("        run: make {name}\n");
             let fragments = [

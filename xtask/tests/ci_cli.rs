@@ -126,7 +126,7 @@ mod tests {
         session.write(".github/workflows/ci.yml", workflow);
         let (code, text) = session.run(&["ci-parity"]);
         assert_eq!(code, 0, "{text}");
-        assert!(text.starts_with("ci-parity: ok (16 checks)\nformat: make fmt-check\n"));
+        assert!(text.starts_with("ci-parity: ok (15 checks)\nformat: make fmt-check\n"));
         assert!(text.ends_with("build-echo: make build-echo\n"));
         session.write("Makefile", "ci: fmt-check\n");
         let (code, text) = session.run(&["ci-parity"]);
@@ -158,7 +158,7 @@ mod tests {
             session.write(&path, fixed);
             let (code, text) = session.run(&["ci-parity"]);
             assert_eq!(code, 0, "{text}");
-            assert!(text.starts_with("ci-parity: ok (16 checks)\nformat: make fmt-check\n"));
+            assert!(text.starts_with("ci-parity: ok (15 checks)\nformat: make fmt-check\n"));
             assert!(text.ends_with("build-echo: make build-echo\n"));
         }
         session.write(".github/workflows/steps.yml", "jobs:\n  build:\n    env:\n      DIR: literal\n    steps:\n      - run: true\n        env:\n          DIR: ${{ runner.temp }}\n        with:\n          path: ${{ runner.temp }}/output\n");

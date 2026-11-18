@@ -169,7 +169,7 @@ ECHO_PACKAGES := echo-contracts echo-config echo-wyoming echo-audio echo-live ec
 build-echo:
 	sh scripts/build-echo.sh $(ECHO_PACKAGES)
 
-ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-docs lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency coverage build-host build-echo
+ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-docs lint-ci-parity lint-self-tests test-unit test-contract test-sim test-concurrency build-host build-echo
 
 .PHONY: build-codex-armv7
 build-codex-armv7:

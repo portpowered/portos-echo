@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 16
+last modified: 2026, november, 18
 status: active; the program plan. It wins over the drafts in docs/design/
 ---
 
@@ -651,9 +651,9 @@ Required on every pull request:
 | `test-contract` | `make test-contract` | A T2 fixture, captured GPT-Live trace or captured Wyoming exchange that no longer round-trips |
 | `test-sim` | `make test-sim` | Any scenario in `tests/scenarios/` failing under `--driver sim` against the cached `hassmic-host` (T3) |
 | `test-concurrency` | `make test-concurrency` | loom over the refresh, audio queue and ledger paths; Miri over any `ffi` crate's tests |
-| `coverage` | `make coverage` | A floor below missed (`cargo llvm-cov` over T1–T3) |
 
-**Coverage floors** are fixed numbers, not a ratchet file:
+**Coverage is suspended** (owner, 2026-11-18, `decisions.md`): CI runs no `coverage` job and no change must meet
+these floors. `make coverage` still checks them when run by hand. The floors are fixed numbers, not a ratchet file:
 
 | Scope | Line | Branch |
 | --- | --- | --- |
