@@ -127,8 +127,12 @@ impl Case {
         host.expect("host.ack").await?;
         self.settle().await?;
         let host = self.host.as_mut().ok_or("m2: missing host")?;
-        host.send(&json!({"action":"playback"})).await?;
+        host.send(&json!({"action":"playback","wake_earcon":self.earcon}))
+            .await?;
         let playback = host.expect("host.ack").await?;
+        if self.earcon && (playback["earcon_pcm_bytes"] != 7680 || playback["total_pcm_bytes"] != 17280) {
+            return Err("m2: expected complete host earcon and reply".into());
+        }
         self.playback = self
             .relay
             .as_ref()

@@ -1,5 +1,7 @@
 """T1: finite FIFO ownership with direct calls and in-memory I/O."""
 import unittest
+import math
+import struct
 from unittest import mock
 
 import test_controls as controls
@@ -71,6 +73,34 @@ class FiniteControls(unittest.TestCase):
         (self.host.folder / "play.raw").write_bytes(bytes(CONTROLLER.LIMIT + 2))
         with self.assertRaisesRegex(ValueError, "invalid playback observation"):
             self.host.command({"action": "playback"})
+
+    def test_playback_classifies_complete_chime_and_preserves_every_reply_byte(self):
+        tones = []
+        for frequency in [750, 1000]:
+            for index in range(1920):
+                gain = (1 - math.cos(math.pi * min(index, 1919 - index, 240) / 240)) / 2
+                tones.append(round(983 * gain * math.sin(math.tau * frequency * index / 24000)))
+        chime = struct.pack("<3840h", *tones)
+        reply = struct.pack("<4800h", *([1000, 0, -1000, 0] * 1200))
+        self.host.finite_mode = True
+        path = self.host.folder / "play.raw"
+        path.write_bytes(chime + reply)
+        with mock.patch.object(CONTROLLER, "emit") as emit:
+            self.host.command({"action": "playback", "wake_earcon": True})
+        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 9600,
+                                     "nonzero_bytes": 4800, "total_pcm_bytes": 17280,
+                                     "earcon_pcm_bytes": 7680,
+                                     "earcon_nonzero_bytes": sum(byte != 0 for byte in chime)})
+        # No PCM is excluded by default, even if it is quiet or resembles a tone.
+        self.assertEqual(CONTROLLER.playback_counts(chime + reply)["pcm_bytes"], 17280)
+        extra = CONTROLLER.playback_counts(chime + reply + b"\x01\x02", True)
+        self.assertEqual((extra["pcm_bytes"], extra["nonzero_bytes"]), (9602, 4802))
+        for data in [chime[:7678], reply, chime[:100] + b"\xff\x7f" + chime[102:] + reply]:
+            path.write_bytes(data)
+            with mock.patch.object(CONTROLLER, "emit") as emit:
+                with self.assertRaisesRegex(ValueError, "host earcon"):
+                    self.host.command({"action": "playback", "wake_earcon": True})
+                emit.assert_not_called()
 
     def test_muted_input_needs_native_latch_and_consumption_before_ack(self):
         self.host.finite_mode = self.host.finite = True
