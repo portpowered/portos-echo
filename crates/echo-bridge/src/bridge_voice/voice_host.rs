@@ -125,7 +125,7 @@ async fn stopped(mut stopping: watch::Receiver<bool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use echo_link::fake::{FakeConnector, Observer};
+    use echo_link::fake::{Command, FakeConnector, Observer};
 
     #[tokio::test(start_paused = true)]
     async fn configured_capture_watchdog_is_admitted_before_probe_and_cleanup_is_joined() {
@@ -135,7 +135,7 @@ mod tests {
             let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
             let observer = Observer::default();
             let (_stop, stopping) = watch::channel(false);
-            let valid = seconds > 0 && seconds <= i32::MAX as u32;
+            let valid = seconds > 0 && i32::try_from(seconds).is_ok();
             let result = device(
                 &mut io,
                 &FakeConnector::new(observer.clone()),
@@ -149,7 +149,6 @@ mod tests {
             .await;
             assert_eq!(result, Err(if valid { Error::Control } else { Error::Wyoming }));
             assert_eq!(observer.capture_failsafe(), valid.then_some(seconds));
-            use echo_link::fake::Command;
             let expected = if valid {
                 vec![Command::Connect, Command::Capture, Command::Probe, Command::Close]
             } else {
