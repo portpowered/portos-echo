@@ -68,7 +68,7 @@ async fn voice_listen_two_replies_keep_one_run_then_expire_without_noise_renewal
         unreachable!()
     };
     let (tx, rx) = mpsc::channel(64);
-    let mut port = Port(rx, Default::default());
+    let mut port = Port(rx, std::rc::Rc::default());
     let receipts = Cell::new(0);
     let reply_stats = RefCell::new(Vec::new());
     let settled = Cell::new(Instant::now());
@@ -219,7 +219,7 @@ async fn voice_listen_acknowledges_clock_without_renewing_idle_and_expiry_wins()
         unreachable!()
     };
     let (_tx, rx) = mpsc::channel(1);
-    let mut port = Port(rx, Default::default());
+    let mut port = Port(rx, std::rc::Rc::default());
     let mut source = Source::new(200, false).unwrap();
     source.controller.reply_started();
     source.controller.played(true).unwrap();
@@ -276,7 +276,7 @@ async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
         unreachable!()
     };
     let (tx, rx) = mpsc::channel(64);
-    let mut port = Port(rx, Default::default());
+    let mut port = Port(rx, std::rc::Rc::default());
     let (cancel, cancelled) = tokio::sync::oneshot::channel();
     let receipts = Cell::new(0);
     let mut work = Box::pin(super::super::run(
@@ -322,7 +322,7 @@ async fn voice_listen_empty_reply_requires_receipt_then_waits_without_audible_fr
         unreachable!()
     };
     let (tx, rx) = mpsc::channel(1);
-    let mut port = Port(rx, Default::default());
+    let mut port = Port(rx, std::rc::Rc::default());
     let receipts = Cell::new(0);
     let audible = Cell::new(0);
     let mut work = Box::pin(super::super::run(

@@ -4,7 +4,7 @@ use echo_link::{MicFrame, MicrophoneRun, RunStats};
 
 struct Run(mpsc::Receiver<MicFrame>);
 impl MicrophoneRun for Run {
-    fn wake_phrase(&self) -> &str {
+    fn wake_phrase(&self) -> &'static str {
         "Computer"
     }
     async fn recv(&mut self) -> Result<Option<MicFrame>, echo_link::Error> {
@@ -72,7 +72,7 @@ fn source() -> Source {
 async fn voice_listen_capture_continues_and_mute_discards_partial_pcm_without_renewal() {
     let mut input = Input::new();
     let (_tx, rx) = mpsc::channel(1);
-    let mut port = Port(rx, Default::default());
+    let mut port = Port(rx, std::rc::Rc::default());
     let mut source = source();
     let deadline = source.controller.idle_deadline();
     input.samples(1234, 640).await;
@@ -114,7 +114,7 @@ async fn voice_listen_activity_cancels_idle_and_admits_a_fresh_response_window()
     ] {
         let mut input = Input::new();
         let (tx, rx) = mpsc::channel(1);
-        let mut port = Port(rx, Default::default());
+        let mut port = Port(rx, std::rc::Rc::default());
         let mut source = source();
         let start = Instant::now();
         tokio::time::advance(Duration::from_millis(2999)).await;
@@ -134,7 +134,7 @@ async fn voice_listen_activity_cancels_idle_and_admits_a_fresh_response_window()
 async fn voice_listen_due_expiry_wins_over_ready_activity_without_consuming_it() {
     let mut input = Input::new();
     let (tx, rx) = mpsc::channel(1);
-    let mut port = Port(rx, Default::default());
+    let mut port = Port(rx, std::rc::Rc::default());
     let mut source = source();
     let deadline = source.controller.idle_deadline().unwrap();
     tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
@@ -163,7 +163,7 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
     for device_eof in [false, true] {
         let input = Input::new();
         let (tx, rx) = mpsc::channel(1);
-        let mut port = Port(rx, Default::default());
+        let mut port = Port(rx, std::rc::Rc::default());
         let mut source = source();
         let deadline = source.controller.idle_deadline();
         let mut events = input.events;
