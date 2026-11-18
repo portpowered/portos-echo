@@ -8,57 +8,55 @@ mod tools;
 mod voice_entry;
 use fixture::Fixture;
 
-#[tokio::test]
-#[ignore = "T3 requires local Python"]
-async fn codex_operator_cancellation_and_output_failure_await_cleanup() {
-    let fixture = Fixture::new("chatgpt");
-    let args = vec![
-        "signin".into(),
-        "--config".into(),
-        fixture.directory.path().join("bridge.toml").display().to_string(),
-    ];
-    let prepare = || {
-        echo_bridge::bridge_operator::parse(&args, false)
-            .unwrap()
-            .unwrap()
-            .prepare()
-            .unwrap()
-    };
-    let (cancel, cancelled) = tokio::sync::oneshot::channel();
-    let operation = async {
-        let mut output = Vec::new();
-        let result = echo_bridge::bridge_operator::execute_controlled(prepare(), &mut output, async {
-            let _ = cancelled.await;
-        })
-        .await;
-        (result, output)
-    };
-    let observer = async {
-        let control = fixture.control().await;
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
-        loop {
-            let state = bridge_wire_screen::state(&mut screen).await;
-            if state["message"] == "code: TEST-CODE\nurl: http://127.0.0.1:12345/verify\n" {
-                break;
-            }
-        }
-        cancel.send(()).unwrap();
-        drop(control);
-    };
-    let ((result, output), ()) = tokio::join!(operation, observer);
-    assert_eq!(result, Err(echo_bridge::Error::Control));
-    assert_eq!(output, b"code: TEST-CODE\nurl: http://127.0.0.1:12345/verify\n");
-    assert!(!fixture.home.join("auth.json").exists());
-    drop(fixture.owner());
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
-    let mut writer = std::io::Cursor::new([0_u8; 0]);
-    assert_eq!(
-        echo_bridge::bridge_operator::execute(prepare(), &mut writer).await,
-        Err(echo_bridge::Error::Control)
+impl Fixture {
+    pub async fn invoke(&self, args: &[&str], code: i32, stdout: &str, stderr: &str) {
+        let output = tokio::time::timeout(
+            OBSERVATION_TIMEOUT,
+            bridge_wire_auth::command(self.directory.path(), args)
+                .env("OPENAI_API_KEY", "synthetic-inherited-key")
+                .env("OPENAI_ACCESS_TOKEN", "synthetic-inherited-token")
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(output.status.code(), Some(code));
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), stdout);
+        assert_eq!(String::from_utf8(output.stderr).unwrap(), stderr);
+    }
+}
+
+fn presentation_owned(path: &Path) {
+    assert!(
+        trace(path)
+            .iter()
+            .all(|row| row["event"] != "health.released" && row["event"] != "screen.released")
     );
-    drop(fixture.owner());
-    assert!(!fixture.home.join("auth.json").exists());
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+}
+
+fn presentation_released(path: &Path, mode: &str, screen: bool) {
+    let rows = trace(path);
+    let receipts: Vec<_> = rows
+        .iter()
+        .filter(|row| matches!(row["event"].as_str(), Some("health.released" | "screen.released")))
+        .collect();
+    let expected = if screen {
+        vec!["health.released", "screen.released"]
+    } else {
+        vec!["health.released"]
+    };
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|row| row["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    for receipt in receipts {
+        assert_eq!(receipt.as_object().unwrap().len(), 3);
+        assert_eq!(receipt["provider_auth_mode"], mode);
+        assert!(receipt["elapsed_ms"].is_u64());
+    }
 }
 
 #[tokio::test]
@@ -92,7 +90,7 @@ async fn codex_operator_signin_screen_matching_completion_and_reopened_status() 
         process.collect(0).await;
         assert_eq!(process.stderr().await, "");
         assert!(process.lines.next_line().await.unwrap().is_none());
-        drop(screen);
+        voice_entry::screen_ended(&mut screen).await;
         let before = std::fs::read(fixture.home.join("auth.json")).unwrap();
         assert_eq!(before, b"{\"synthetic\":\"local-only\"}\n");
         fixture
@@ -105,7 +103,8 @@ async fn codex_operator_signin_screen_matching_completion_and_reopened_status() 
             .await;
         assert_eq!(std::fs::read(fixture.home.join("auth.json")).unwrap(), before);
         assert!(!fixture.directory.path().join("credential").exists());
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+        // Collection destroys this executable's exclusively owned listeners.
+        assert_eq!(process.child.id(), None);
         drop(fixture.owner());
     }
 }
@@ -139,7 +138,8 @@ async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_reso
             b"synthetic prior state"
         );
         drop(fixture.owner());
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+        assert_eq!(process.child.id(), None);
+        voice_entry::screen_ended(&mut screen).await;
     }
 }
 

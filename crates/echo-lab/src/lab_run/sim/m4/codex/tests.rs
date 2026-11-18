@@ -335,6 +335,7 @@ fn assert_animation(frames: Vec<Value>) {
 }
 
 fn assert_results(case: &Case, timing: &Timing, negative: bool, emotion: bool) {
+    assert_eq!(case.released, ["bridge", "provider", "spoof", "relay"]);
     assert_eq!(timing.captured, 3200);
     assert_eq!(timing.played, 9600);
     let expected = if emotion && !negative {

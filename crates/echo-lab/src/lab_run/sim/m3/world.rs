@@ -25,6 +25,8 @@ pub struct World {
     pub final_wire: Option<Ledger>,
     pub endpoints: Vec<std::net::SocketAddr>,
     root: PathBuf,
+    #[cfg(test)]
+    released: Vec<&'static str>,
 }
 
 // A finite deterministic marker, interpreted only by the synthetic scenario.
@@ -241,7 +243,10 @@ impl World {
         }
         self.screen.take();
         if let Some(mut bridge) = self.bridge.take() {
-            failures.extend(bridge.close().await.err());
+            let closed = bridge.close().await;
+            #[cfg(test)]
+            self.record_release("bridge", &closed);
+            failures.extend(closed.err());
             failures.extend(self.read_trace().err());
             for record in self.trace.records.iter().filter(|r| r["event"] == "bridge.error") {
                 failures.push(format!("M3 bridge: {}", record["reason"]));
@@ -249,14 +254,23 @@ impl World {
         }
         if let Some(relay) = self.relay.take() {
             let observed = relay.observed.clone();
-            failures.extend(relay.close().await.err());
+            let closed = relay.close().await;
+            #[cfg(test)]
+            self.record_release("relay", &closed);
+            failures.extend(closed.err());
             self.final_wire = Some(observed.borrow().clone());
         }
         if let Some(live) = self.live.take() {
-            failures.extend(live.close().await.err());
+            let closed = live.close().await;
+            #[cfg(test)]
+            self.record_release("live", &closed);
+            failures.extend(closed.err());
         }
         if let Some(mut host) = self.host.take() {
-            failures.extend(host.close().await.err());
+            let closed = host.close().await;
+            #[cfg(test)]
+            self.record_release("host", &closed);
+            failures.extend(closed.err());
         }
         if !self.root.as_os_str().is_empty() {
             failures.extend(
@@ -272,3 +286,7 @@ impl World {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "lifecycle.rs"]
+mod tests;

@@ -59,9 +59,13 @@ async fn t3_peer_stun_optional_local_fake_and_default_zero_requests() {
     peer.close().await.unwrap();
     worker.abort();
     let _ = worker.await;
+    // The joined worker no longer holds its socket. This witness tracks this
+    // exact owner even if another parallel test immediately reuses its address.
+    assert_eq!(Arc::strong_count(&socket), 1);
+    let released = Arc::downgrade(&socket);
+    assert!(released.upgrade().is_some());
     drop(socket);
-    let rebound = UdpSocket::bind(addr).await.unwrap();
-    assert_eq!(rebound.local_addr().unwrap(), addr);
+    assert!(released.upgrade().is_none());
 }
 
 #[tokio::test(start_paused = true)]

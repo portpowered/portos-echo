@@ -21,6 +21,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "macros", "fs"] }
 
 [dev-dependencies]
+echo-chatgpt-auth = { version = "0.1.0", path = "../echo-chatgpt-auth", features = ["test-support"] }
 echo-live = { version = "0.1.0", path = "../echo-live", features = ["fake"] }
 echo-agent-api = { version = "0.1.0", path = "../echo-agent-api", features = ["fakes"] }
 base64 = "0.22"

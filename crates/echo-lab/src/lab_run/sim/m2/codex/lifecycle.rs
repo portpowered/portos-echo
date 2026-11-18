@@ -11,6 +11,7 @@ struct Owner {
     wake: mpsc::Sender<()>,
     satellite: tokio::task::JoinHandle<usize>,
     address: std::net::SocketAddr,
+    listener_lifetime: std::sync::Weak<TcpListener>,
     screen: Screen,
 }
 
@@ -19,7 +20,7 @@ impl Owner {
         let options = super::super::tests::options();
         let root = config::Root::new().unwrap();
         let output = tempfile::tempdir().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (listener, listener_lifetime) = observed_listener().await;
         let address = listener.local_addr().unwrap();
         let provider = provider::Provider::start_m1(&options.python).await.unwrap();
         let mut command = tokio::process::Command::new(options.bridge.unwrap());
@@ -52,6 +53,7 @@ impl Owner {
             wake,
             satellite,
             address,
+            listener_lifetime,
             screen,
         }
     }
@@ -81,6 +83,7 @@ impl Owner {
         assert_eq!(self.bridge.close().await, Ok(()));
         drop(self.bridge);
         assert!(self.collected.try_recv().unwrap().success());
+        assert!(self.listener_lifetime.upgrade().is_some());
         drop(self.wake);
         assert_eq!(self.satellite.await.unwrap(), expected_calls);
         let observed = self.provider.close().await.unwrap();
@@ -88,15 +91,12 @@ impl Owner {
             observed,
             json!({"event":"provider.snapshot", "calls":1, "matching_calls":1, "sidebands":1, "external":0, "refreshes":0})
         );
-        // Rebind the actual device address after its task has joined.
-        drop(TcpListener::bind(self.address).await.unwrap());
-        let root = self.root.0.clone();
-        drop(self.root);
-        assert!(!root.exists());
+        assert!(self.listener_lifetime.upgrade().is_none());
+        remove_root(self.root);
     }
 }
 
-async fn satellite(listener: TcpListener, mut requested: mpsc::Receiver<()>) -> usize {
+async fn satellite(listener: Arc<TcpListener>, mut requested: mpsc::Receiver<()>) -> usize {
     use super::tests::{continuous_playback, read, send};
     let mut stream = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
@@ -238,7 +238,7 @@ async fn failed_call(fault: &str) {
     let options = super::super::tests::options();
     let root = config::Root::new().unwrap();
     let output = tempfile::tempdir().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (listener, listener_lifetime) = observed_listener().await;
     let address = listener.local_addr().unwrap();
     let provider = provider::Provider::start_fault(&options.python, fault).await.unwrap();
     let mut command = super::tests::continuous_command(
@@ -255,6 +255,7 @@ async fn failed_call(fault: &str) {
     bridge.expect("bridge.ready").await.unwrap();
     let path = output.path().join("bridge.private.jsonl");
     let mut screen = paired_screen(&path).await;
+    assert!(listener_lifetime.upgrade().is_some());
     wake.send(()).unwrap();
     assert_eq!(screen.next().await.unwrap()["state"]["state"], "listening");
     assert_eq!(screen.next().await.unwrap()["state"]["state"], "error");
@@ -263,13 +264,11 @@ async fn failed_call(fault: &str) {
     let observed = provider.close().await.unwrap();
     failure_receipts(&observed, &path);
     reopened_status(options.bridge.as_ref().unwrap(), &root.0).await;
-    drop(TcpListener::bind(address).await.unwrap());
-    let directory = root.0.clone();
-    drop(root);
-    assert!(!directory.exists());
+    assert!(listener_lifetime.upgrade().is_none());
+    remove_root(root);
 }
 
-async fn failure_satellite(listener: TcpListener, wake: tokio::sync::oneshot::Receiver<()>) {
+async fn failure_satellite(listener: Arc<TcpListener>, wake: tokio::sync::oneshot::Receiver<()>) {
     use super::tests::{read, send};
     let mut stream = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
@@ -336,4 +335,16 @@ async fn failed_process(mut bridge: Process, collected: std::sync::mpsc::Receive
     assert_eq!(bridge.close().await, Err("cleanup: owned child exited nonzero".into()));
     drop(bridge);
     assert_eq!(collected.try_recv().unwrap().code(), Some(1));
+}
+
+pub(super) async fn observed_listener() -> (Arc<TcpListener>, std::sync::Weak<TcpListener>) {
+    let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let lifetime = Arc::downgrade(&listener);
+    (listener, lifetime)
+}
+
+fn remove_root(root: config::Root) {
+    let directory = root.0.clone();
+    drop(root);
+    assert!(!directory.exists());
 }

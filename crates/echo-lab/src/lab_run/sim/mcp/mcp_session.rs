@@ -14,7 +14,7 @@ use super::{
         process::{self, Process},
         trace::Trace,
     },
-    mcp_wire,
+    mcp_wire::{self, endpoint},
 };
 use crate::lab_run::run_options::Options;
 
@@ -41,6 +41,8 @@ pub struct Session {
     pub(super) initial: Option<Secret<Value>>,
     pub(super) replayed: bool,
     pub endpoints: Vec<SocketAddr>,
+    #[cfg(test)]
+    released: Vec<&'static str>,
     root: Option<super::super::m2::codex::config::Root>,
 }
 
@@ -394,9 +396,10 @@ impl Session {
     async fn stop_bridge(&mut self) -> Vec<String> {
         let mut failures = Vec::new();
         if let Some(mut bridge) = self.bridge.take() {
-            if let Err(error) = bridge.close().await {
-                failures.push(error);
-            }
+            let closed = bridge.close().await;
+            #[cfg(test)]
+            self.record_release("bridge", &closed);
+            failures.extend(closed.err());
             if let Err(error) = self.observe().and_then(|()| self.trace.finish()) {
                 failures.push(error);
             }
@@ -430,25 +433,29 @@ impl Session {
         self.stream.take();
         failures.extend(self.close_bridge().await);
         self.initial.take();
-        if let Some(live) = self.live.take()
-            && let Err(error) = live.shutdown().await
-        {
-            failures.push(error);
+        if let Some(live) = self.live.take() {
+            let closed = live.shutdown().await;
+            #[cfg(test)]
+            self.record_release("provider", &closed);
+            failures.extend(closed.err());
         }
-        if let Some(spoof) = self.spoof.take()
-            && spoof.shutdown().await.is_err()
-        {
-            failures.push("M5: resource cleanup failed".into());
+        if let Some(spoof) = self.spoof.take() {
+            let closed = spoof.shutdown().await;
+            #[cfg(test)]
+            self.record_release("spoof", &closed);
+            failures.extend(closed.err().map(|_| "M5: resource cleanup failed".into()));
         }
-        if let Some(fixture) = self.fixture.take()
-            && fixture.shutdown().await.is_err()
-        {
-            failures.push("M5: authorization cleanup failed".into());
+        if let Some(fixture) = self.fixture.take() {
+            let closed = fixture.shutdown().await;
+            #[cfg(test)]
+            self.record_release("authorization", &closed);
+            failures.extend(closed.err().map(|_| "M5: authorization cleanup failed".into()));
         }
-        if let Some(mut host) = self.host.take()
-            && let Err(error) = host.close().await
-        {
-            failures.push(error);
+        if let Some(mut host) = self.host.take() {
+            let closed = host.close().await;
+            #[cfg(test)]
+            self.record_release("host", &closed);
+            failures.extend(closed.err());
         }
         if self.started() && std::fs::remove_dir_all(&self.directory).is_err() {
             failures.push("M5: private state cleanup failed".into());
@@ -467,14 +474,6 @@ impl Drop for Session {
             pending.abort();
         }
     }
-}
-
-fn endpoint(value: &str) -> Result<SocketAddr, String> {
-    value
-        .strip_prefix("http://")
-        .and_then(|value| value.split('/').next())
-        .ok_or_else(|| "M5: invalid local endpoint".into())
-        .and_then(|value| value.parse().map_err(|_| "M5: invalid local endpoint".into()))
 }
 
 #[cfg(test)]

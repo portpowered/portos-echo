@@ -161,15 +161,43 @@ async fn t3_peer_lifecycle_releases_all_advertised_sockets() {
             assert!(std::net::TcpListener::bind(address).is_err());
         }
     }
+    let udp = peer.runtime.udp.lock().unwrap().clone();
+    let tcp = peer.runtime.tcp.lock().unwrap().clone();
+    assert_eq!(owned_sockets(&peer), sockets);
     peer.close().await.unwrap();
-    for (protocol, ip, port) in sockets {
-        let address = std::net::SocketAddr::new(ip, port);
-        if protocol == "udp" {
-            let socket = std::net::UdpSocket::bind(address).unwrap();
-            assert_eq!(socket.local_addr().unwrap(), address);
-        } else {
-            let socket = std::net::TcpListener::bind(address).unwrap();
-            assert_eq!(socket.local_addr().unwrap(), address);
-        }
+    assert!(peer.shared.tasks.lock().unwrap().is_empty());
+    assert!(udp.iter().all(|socket| socket.upgrade().is_none()));
+    assert!(tcp.iter().all(|socket| socket.upgrade().is_none()));
+}
+
+#[tokio::test]
+async fn t3_media_socket_witness_tracks_retained_actual_owners() {
+    let mut peer = Peer::create(config()).await.unwrap();
+    peer.offer().await.unwrap();
+    let udp = peer.runtime.udp.lock().unwrap()[0].clone();
+    let tcp = peer.runtime.tcp.lock().unwrap()[0].clone();
+    let retained_udp = udp.upgrade().unwrap();
+    let retained_tcp = tcp.upgrade().unwrap();
+    peer.close().await.unwrap();
+    assert!(udp.upgrade().is_some());
+    assert!(tcp.upgrade().is_some());
+    drop((retained_udp, retained_tcp));
+    assert!(udp.upgrade().is_none());
+    assert!(tcp.upgrade().is_none());
+    peer.close().await.unwrap();
+    assert!(udp.upgrade().is_none());
+    assert!(tcp.upgrade().is_none());
+}
+
+fn owned_sockets(peer: &Peer) -> std::collections::BTreeSet<(String, IpAddr, u16)> {
+    let mut owned = std::collections::BTreeSet::new();
+    for socket in peer.runtime.udp.lock().unwrap().iter() {
+        let address = socket.upgrade().unwrap().local_addr().unwrap();
+        owned.insert(("udp".to_owned(), address.ip(), address.port()));
     }
+    for socket in peer.runtime.tcp.lock().unwrap().iter() {
+        let address = socket.upgrade().unwrap().local_addr().unwrap();
+        owned.insert(("tcp".to_owned(), address.ip(), address.port()));
+    }
+    owned
 }

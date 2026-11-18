@@ -103,3 +103,11 @@ pub fn link_code(epoch: u64, issuer: &str) -> Value {
     json!({"state":"link_code","user_code":"TEST-CODE",
         "verification_uri":format!("{issuer}/approve"),"expires_at_unix":epoch + 1800})
 }
+
+pub(super) fn endpoint(value: &str) -> Result<std::net::SocketAddr, String> {
+    value
+        .strip_prefix("http://")
+        .and_then(|value| value.split('/').next())
+        .ok_or_else(|| "M5: invalid local endpoint".into())
+        .and_then(|value| value.parse().map_err(|_| "M5: invalid local endpoint".into()))
+}

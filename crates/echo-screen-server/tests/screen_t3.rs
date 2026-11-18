@@ -169,6 +169,10 @@ async fn t3_stream_capacity_assets_and_cleanup() -> Result {
         assert_eq!(request(addr, "GET", path, "", "").await?.0, 404);
     }
     assert_eq!(request(addr, "POST", "/", "", "").await?.0, 405);
+    assert_eq!(
+        server.actions.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    );
     drop(tx);
     for mut stream in streams {
         let mut tail = String::new();
@@ -177,10 +181,10 @@ async fn t3_stream_capacity_assets_and_cleanup() -> Result {
     }
     server.shutdown().await?;
     assert_eq!(server.actions.recv().await, None);
-    let listener = TcpListener::bind(addr).await?;
-    drop(listener);
+    // The action senders belong to the listener router and its connections.
+    // screen_listener::run drops the listener before releasing that router.
     report(
-        "F10/F12/F16: streams=32; excess=503; static bytes exact; unknown=404; method=405; input close EOF/actions EOF/listener rebind",
+        "F10/F12/F16: streams=32; excess=503; static bytes exact; unknown=404; method=405; input close EOF/actions EOF after listener task join",
     );
     Ok(())
 }
@@ -194,6 +198,8 @@ async fn t3_constructor_failures_and_owner_cleanup() -> Result {
         let (mut server, _tx) = server().await?;
         let addr = server.bound_addr;
         let mut stream = events(addr).await?;
+        let mut actions = std::mem::replace(&mut server.actions, tokio::sync::mpsc::channel(1).1);
+        assert_eq!(actions.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Empty));
         if mode == "shutdown" {
             server.shutdown().await?;
         }
@@ -201,8 +207,9 @@ async fn t3_constructor_failures_and_owner_cleanup() -> Result {
         let mut tail = String::new();
         stream.read_to_string(&mut tail).await?;
         assert!(!tail.contains("data:"));
-        let listener = TcpListener::bind(addr).await?;
-        drop(listener);
+        // EOF of this instance's action channel observes destruction of its
+        // router after the listener drop, including the owner-Drop path.
+        assert_eq!(actions.recv().await, None);
     }
     let occupied = TcpListener::bind("127.0.0.1:0").await?;
     let (_, rx) = tokio::sync::mpsc::channel(32);
@@ -228,6 +235,8 @@ async fn t3_constructor_failures_and_owner_cleanup() -> Result {
         .err()
         .ok_or("empty token accepted")?;
     assert!(matches!(error, ScreenServerError::InvalidToken));
-    report("F12/F13: explicit shutdown/Drop EOF + rebind; occupied=Bind; non-loopback=InvalidBind; empty=InvalidToken");
+    report(
+        "F12/F13: explicit shutdown/Drop stream EOF + router-owned actions EOF; occupied=Bind; non-loopback=InvalidBind; empty=InvalidToken",
+    );
     Ok(())
 }

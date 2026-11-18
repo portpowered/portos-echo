@@ -61,13 +61,21 @@ async fn journey(phase: &std::cell::Cell<&str>) {
     let ready = session.host.as_mut().unwrap().expect("host.ready").await.unwrap();
     let address = ready["address"].as_str().unwrap().parse().unwrap();
     let origin = session.start_peers(address, &options.python).await.unwrap();
+    assert_eq!(session.released, [] as [&str; 0]);
     phase.set("bridge startup");
     session.launch(&origin).await.unwrap();
+    assert_eq!(session.released, [] as [&str; 0]);
     let result = linked(&mut session, phase).await;
     phase.set("cleanup");
+    assert_eq!(session.released, ["bridge"]); // only the pre-restart generation collected
     let cleanup = session.close().await;
     assert_eq!(result, Ok(()));
     assert_eq!(cleanup, Ok(()));
+    assert_closed(&session);
+    assert!(!path.exists());
+}
+
+fn assert_closed(session: &Session) {
     assert_eq!(
         session.final_measurement(),
         Some(LinkCounts {
@@ -81,21 +89,12 @@ async fn journey(phase: &std::cell::Cell<&str>) {
             unlink: 1
         })
     );
-    phase.set("endpoint release");
-    released(&session.endpoints).await;
-    assert!(!path.exists());
-}
-
-async fn released(endpoints: &[SocketAddr]) {
-    // Refused connects can complete slowly on Windows. Observe each independent
-    // listener concurrently, preserving every release assertion and the ceiling.
-    let mut checks = tokio::task::JoinSet::new();
-    for &address in endpoints {
-        checks.spawn(tokio::net::TcpStream::connect(address));
-    }
-    while let Some(result) = checks.join_next().await {
-        assert!(result.unwrap().is_err());
-    }
+    assert_eq!(
+        session.released,
+        ["bridge", "bridge", "provider", "spoof", "authorization", "host"]
+    );
+    assert!(session.bridge.is_none() && session.host.is_none());
+    assert!(session.live.is_none() && session.spoof.is_none() && session.fixture.is_none());
 }
 
 async fn linked(session: &mut Session, phase: &std::cell::Cell<&str>) -> Result<(), String> {
@@ -115,4 +114,54 @@ async fn linked(session: &mut Session, phase: &std::cell::Cell<&str>) -> Result<
     session.probe().await?;
     session.operator("unlink", "MCP unlinked\n").await?;
     session.observe()
+}
+
+#[tokio::test]
+async fn t3_m5_cleanup_observations_belong_to_each_joined_owner() {
+    let mut first = Session::default();
+    first.spoof = Some(Spoof::start(SpoofOptions::default()).await.unwrap());
+    let mut retained = Session::default();
+    retained.spoof = Some(Spoof::start(SpoofOptions::default()).await.unwrap());
+    let address = endpoint(retained.spoof.as_ref().unwrap().url()).unwrap();
+    assert!(first.released.is_empty() && retained.released.is_empty());
+    assert_eq!(first.close().await, Ok(()));
+    assert_eq!(first.released, ["spoof"]);
+    assert_eq!(retained.released, [] as [&str; 0]);
+    // This owner is still listening; the first session's completion proves
+    // nothing about it. This live connection never probes a released address.
+    let _connection = tokio::net::TcpStream::connect(address).await.unwrap();
+    assert_eq!(retained.close().await, Ok(()));
+    assert_eq!(retained.released, ["spoof"]);
+    assert_eq!(first.close().await, Ok(()));
+    assert_eq!(first.released, ["spoof"]);
+}
+
+#[tokio::test]
+async fn t3_m5_failed_child_collection_does_not_report_successful_release() {
+    let mut command = tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    command.args([
+        "-u",
+        "-c",
+        "import sys; print('{\"event\":\"host.ready\"}'); sys.stdin.read(); sys.exit(7)",
+    ]);
+    let mut host = Process::start(&mut command).unwrap();
+    host.expect("host.ready").await.unwrap();
+    let collected = host.observe_collection();
+    let mut session = Session::default();
+    session.host = Some(host);
+    session.spoof = Some(Spoof::start(SpoofOptions::default()).await.unwrap());
+    assert_eq!(session.close().await, Err("cleanup: owned child exited nonzero".into()));
+    assert_eq!(collected.try_recv().unwrap().code(), Some(7));
+    assert_eq!(session.released, ["spoof"]);
+    assert!(session.host.is_none() && session.spoof.is_none());
+}
+
+impl Session {
+    pub(super) fn record_release<T, E>(&mut self, owner: &'static str, result: &Result<T, E>) {
+        // Successful shutdown APIs join the actual serving tasks; Process::close
+        // awaits this instance's child. Never record intention or a failed join.
+        if result.is_ok() {
+            self.released.push(owner);
+        }
+    }
 }

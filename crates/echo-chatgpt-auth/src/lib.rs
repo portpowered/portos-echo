@@ -73,9 +73,22 @@ pub struct AuthSource {
     client: reqwest::Client,
     clock: Arc<dyn auth_clock::Clock>,
     operation: tokio::sync::Mutex<()>,
+    #[cfg(any(test, feature = "test-support"))]
+    browser_listener: std::sync::Mutex<std::sync::Weak<tokio::net::TcpListener>>,
 }
 
 impl AuthSource {
+    /// Test support for actual callback-listener ownership; not a product contract.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn browser_listener_witness(&self) -> std::sync::Weak<tokio::net::TcpListener> {
+        self.browser_listener
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Read validated stored metadata, including an expired record.
     /// Does not change credentials or the pending-refresh marker.
     ///
@@ -109,6 +122,8 @@ impl AuthSource {
             client,
             clock: Arc::new(auth_clock::SystemClock::new()),
             operation: tokio::sync::Mutex::new(()),
+            #[cfg(any(test, feature = "test-support"))]
+            browser_listener: std::sync::Mutex::new(std::sync::Weak::new()),
         })
     }
 

@@ -1,17 +1,17 @@
 //! T3: real HTTP and ICE/DTLS/SRTP/SCTP, only literal loopback, paused per-test time.
-use std::net::{Ipv4Addr, SocketAddr};
-use std::time::{Duration, Instant};
-
-use echo_contracts::ids::{DelegationId, SessionId};
-use echo_contracts::live::LiveEvent;
-use echo_contracts::secret::Secret;
-use serde_json::json;
-
 use crate::call::{
     CallError, CredentialProvider, LiveAuthMode, LiveCall, LiveCallFactory, LiveCredential, SessionOptions, now,
 };
 use crate::fake::{FakeLive, FakeResponse, FakeScript, ObservedCall};
 use crate::{AudioFrame, Error, LivePeer};
+use echo_contracts::ids::{DelegationId, SessionId};
+use echo_contracts::live::LiveEvent;
+use echo_contracts::secret::Secret;
+use serde_json::json;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Weak;
+use std::time::{Duration, Instant};
+use tokio::net::UdpSocket;
 
 struct Credentials(LiveAuthMode);
 impl CredentialProvider for Credentials {
@@ -51,15 +51,16 @@ async fn peer() -> LivePeer {
         .await
         .unwrap()
 }
-async fn open(fake: &FakeLive, mode: LiveAuthMode) -> (LiveCall, SocketAddr) {
+async fn open(fake: &FakeLive, mode: LiveAuthMode) -> (LiveCall, Weak<UdpSocket>) {
     let peer = peer().await;
-    let address = peer.local_addr();
+    let socket = peer.socket_owner();
+    assert!(socket.upgrade().is_some());
     let factory = LiveCallFactory::new(&fake.base_url(), mode, Credentials(mode)).unwrap();
     let call = factory
         .create(peer, options(mode), now() + Duration::from_secs(10))
         .await
         .unwrap();
-    (call, address)
+    (call, socket)
 }
 
 // T3: sequential calls deliver with paused time held by a runnable observer.
@@ -70,10 +71,10 @@ async fn t3_sequential_calls_deliver_with_both_clocks_frozen() {
     let ceiling = Instant::now() + Duration::from_secs(5);
     for _ in 0..2 {
         let mut operation = Box::pin(async {
-            let (mut call, address) = open(&fake, LiveAuthMode::ApiKey).await;
+            let (mut call, socket) = open(&fake, LiveAuthMode::ApiKey).await;
             replay_script(&mut call).await;
             call.close();
-            drop(tokio::net::UdpSocket::bind(address).await.unwrap());
+            assert!(socket.upgrade().is_none());
         });
         std::future::poll_fn(|cx| {
             assert!(Instant::now() < ceiling, "sequential frozen call stalled");
@@ -177,7 +178,7 @@ fn assert_request(call: &ObservedCall, mode: LiveAuthMode) {
 
 async fn lifecycle(mode: LiveAuthMode) {
     let fake = FakeLive::bind(script()).await.unwrap();
-    let (mut call, address) = open(&fake, mode).await;
+    let (mut call, socket) = open(&fake, mode).await;
     exchange(&mut call, 10_000, script()).await;
     let observed = fake.observer().calls().unwrap();
     assert_eq!(observed.len(), 1);
@@ -190,14 +191,14 @@ async fn lifecycle(mode: LiveAuthMode) {
         observed[0].commentary,
         [r#"{"type":"session.commentary.append","delegation_id":"synthetic-delegation-1","text":"Reply ☃"}"#]
     );
-    assert_closed(&mut call, address).await;
+    assert_closed(&mut call, socket).await;
     print_summary(mode, observed[0].request.path());
     let records = fake.observer();
     fake.shutdown().await;
     assert!(records.calls().unwrap()[0].closed);
 }
 
-async fn assert_closed(call: &mut LiveCall, address: SocketAddr) {
+async fn assert_closed(call: &mut LiveCall, socket: Weak<UdpSocket>) {
     call.close();
     call.close();
     assert_eq!(call.receive_event(now()).await, Err(Error::Closed.into()));
@@ -208,8 +209,7 @@ async fn assert_closed(call: &mut LiveCall, address: SocketAddr) {
     );
     assert_eq!(call.send_audio(frame(0, 0), now()).await, Err(Error::Closed.into()));
     assert_eq!(call.pop_audio(), None);
-    let rebound = tokio::net::UdpSocket::bind(address).await.unwrap();
-    drop(rebound);
+    assert!(socket.upgrade().is_none());
 }
 
 fn print_summary(mode: LiveAuthMode, path: &str) {
@@ -237,14 +237,14 @@ async fn fails(response: FakeResponse, expected: CallError) {
     let fake = FakeLive::bind(script).await.unwrap();
     for mode in [LiveAuthMode::Chatgpt, LiveAuthMode::ApiKey] {
         let peer = peer().await;
-        let address = peer.local_addr();
+        let socket = peer.socket_owner();
+        assert!(socket.upgrade().is_some());
         let factory = LiveCallFactory::new(&fake.base_url(), mode, Credentials(mode)).unwrap();
         let result = factory
             .create(peer, options(mode), now() + Duration::from_secs(2))
             .await;
         assert_eq!(result.err().as_ref(), Some(&expected));
-        let rebound = tokio::net::UdpSocket::bind(address).await.unwrap();
-        drop(rebound);
+        assert!(socket.upgrade().is_none());
     }
     assert_eq!(fake.observer().calls().unwrap().len(), 2);
     fake.shutdown().await;
@@ -290,14 +290,13 @@ async fn t3_call_malformed_event_closes_without_commentary() {
         let mut script = script();
         script.events = vec![event.into()];
         let fake = FakeLive::bind(script).await.unwrap();
-        let (mut call, address) = open(&fake, LiveAuthMode::ApiKey).await;
+        let (mut call, socket) = open(&fake, LiveAuthMode::ApiKey).await;
         assert_eq!(
             call.receive_event(now() + Duration::from_secs(5)).await,
             Err(CallError::Decode)
         );
         call.close();
-        let rebound = tokio::net::UdpSocket::bind(address).await.unwrap();
-        drop(rebound);
+        assert!(socket.upgrade().is_none());
         assert_eq!(fake.observer().calls().unwrap()[0].commentary.len(), 0);
         fake.shutdown().await;
     }
@@ -390,7 +389,8 @@ async fn t3_call_cancel_create_releases_peer_without_retry() {
         script.response = response;
         let fake = FakeLive::bind(script).await.unwrap();
         let peer = peer().await;
-        let address = peer.local_addr();
+        let socket = peer.socket_owner();
+        assert!(socket.upgrade().is_some());
         let factory = LiveCallFactory::new(
             &fake.base_url(),
             LiveAuthMode::ApiKey,
@@ -405,8 +405,7 @@ async fn t3_call_cancel_create_releases_peer_without_retry() {
             result = observer.wait_for_calls(1) => result.unwrap(),
         }
         drop(attempt);
-        let rebound = tokio::net::UdpSocket::bind(address).await.unwrap();
-        drop(rebound);
+        assert!(socket.upgrade().is_none());
         assert_eq!(observer.calls().unwrap().len(), 1);
         fake.shutdown().await;
     }
@@ -485,14 +484,15 @@ async fn t3_call_preflight_failures_release_peer_without_http() {
         (false, false, CallError::Authorization),
     ] {
         let peer = peer().await;
-        let address = peer.local_addr();
+        let socket = peer.socket_owner();
+        assert!(socket.upgrade().is_some());
         let mut opts = options(LiveAuthMode::ApiKey);
         if invalid {
             opts.model = "wrong".into();
         }
         let deadline = if expired { now() } else { now() + Duration::from_secs(1) };
         assert_eq!(factory.create(peer, opts, deadline).await.err(), Some(expected));
-        drop(tokio::net::UdpSocket::bind(address).await.unwrap());
+        assert!(socket.upgrade().is_none());
     }
     assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(fake.observer().calls().unwrap().len(), 0);

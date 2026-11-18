@@ -48,7 +48,7 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     let health = match Health::bind(options.health).await {
         Ok(health) => health,
         Err(error) => {
-            let _ = screen.close().await;
+            let _ = close_screen(&mut screen, &mut trace).await;
             return Err(error);
         }
     };
@@ -56,8 +56,19 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     let mut view = View::new(&screen, &health, &mut trace);
     let result = work(options, connector, &mut peer, cancelled, &mut view).await;
     health.close().await;
-    let cleanup = screen.close().await;
-    result.and(cleanup)
+    let health_receipt = trace.record("health.released", None, serde_json::json!({}));
+    // A trace failure must not skip the remaining presentation cleanup.
+    let cleanup = close_screen(&mut screen, &mut trace).await;
+    result.and(cleanup).and(health_receipt)
+}
+
+async fn close_screen(screen: &mut Screen, trace: &mut Trace) -> Result<(), Error> {
+    let acquired = screen.address().is_some();
+    screen.close().await?;
+    if acquired {
+        trace.record("screen.released", None, serde_json::json!({}))?;
+    }
+    Ok(())
 }
 
 async fn work<C: LinkConnector, P: MediaPeer>(

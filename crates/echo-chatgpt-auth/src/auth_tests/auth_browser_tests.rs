@@ -73,6 +73,7 @@ async fn start(
     let task = tokio::spawn(async move {
         source
             .browser_sign_in(|url| {
+                assert!(source.browser_listener.lock().unwrap().upgrade().is_some());
                 tx.send(url).unwrap();
             })
             .await
@@ -148,11 +149,7 @@ async fn t3_browser_exact_query_pkce_form_and_reload() {
         form.keys()
     )
     .unwrap();
-    let url = reqwest::Url::parse(&query["redirect_uri"]).unwrap();
-    let rebound = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, url.port().unwrap()))
-        .await
-        .unwrap();
-    drop(rebound);
+    assert!(source.browser_listener.lock().unwrap().upgrade().is_none());
     mock.stop().await;
 }
 #[tokio::test]
@@ -179,6 +176,7 @@ async fn t3_browser_invalid_callbacks_preserve_old_bytes_without_exchange() {
         assert_eq!(task.await.unwrap().err(), Some(expected));
         assert_eq!(std::fs::read(&source.file).unwrap(), old);
         assert_eq!(mock.requests.lock().unwrap().len(), 0);
+        assert!(source.browser_listener.lock().unwrap().upgrade().is_none());
         mock.stop().await;
     }
 }
@@ -189,8 +187,7 @@ async fn t3_browser_timeout_and_cancellation_release_listener() {
         let directory = directory();
         let source = Arc::new(source(&mock, &directory));
         let (task, url) = start(source.clone()).await;
-        let query = fields(&url);
-        let redirect = reqwest::Url::parse(&query["redirect_uri"]).unwrap();
+        assert_eq!(fields(&url).len(), 10);
         if cancel {
             task.abort();
             assert!(task.await.err().unwrap().is_cancelled());
@@ -198,10 +195,7 @@ async fn t3_browser_timeout_and_cancellation_release_listener() {
             tokio::time::advance(Duration::from_mins(15)).await;
             assert_eq!(task.await.unwrap().err(), Some(AuthError::Timeout));
         }
-        let rebound = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, redirect.port().unwrap()))
-            .await
-            .unwrap();
-        drop(rebound);
+        assert!(source.browser_listener.lock().unwrap().upgrade().is_none());
         assert_eq!(mock.requests.lock().unwrap().len(), 0);
         assert!(!source.file.exists());
         mock.stop().await;
@@ -245,7 +239,7 @@ async fn t3_browser_malformed_and_oversized_requests_return_400() {
         let mock = Mock::start(vec![]).await;
         let directory = directory();
         let source = Arc::new(source(&mock, &directory));
-        let (task, url) = start(source).await;
+        let (task, url) = start(source.clone()).await;
         let query = fields(&url);
         let redirect = reqwest::Url::parse(&query["redirect_uri"]).unwrap();
         let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, redirect.port().unwrap()))
@@ -257,6 +251,7 @@ async fn t3_browser_malformed_and_oversized_requests_return_400() {
         assert!(response.starts_with(b"HTTP/1.1 400 "));
         assert_eq!(task.await.unwrap().err(), Some(AuthError::InvalidCredential));
         assert_eq!(mock.requests.lock().unwrap().len(), 0);
+        assert!(source.browser_listener.lock().unwrap().upgrade().is_none());
         mock.stop().await;
     }
 }
@@ -285,6 +280,7 @@ async fn t3_browser_exchange_failures_do_not_replace_credential() {
         assert_eq!(task.await.unwrap().err(), Some(expected));
         assert_eq!(std::fs::read(&source.file).unwrap(), old);
         assert_eq!(mock.requests.lock().unwrap().len(), 1);
+        assert!(source.browser_listener.lock().unwrap().upgrade().is_none());
         mock.stop().await;
     }
 }
@@ -315,13 +311,27 @@ async fn t3_browser_stalled_exchange_timeout_or_drop_stops_publication() {
             assert_eq!(task.await.unwrap().err(), Some(AuthError::Timeout));
             tokio::time::resume();
         }
-        let url = reqwest::Url::parse(&query["redirect_uri"]).unwrap();
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, url.port().unwrap()))
-            .await
-            .unwrap();
-        drop(listener);
+        assert!(source.browser_listener.lock().unwrap().upgrade().is_none());
         assert!(!source.file.exists());
         assert_eq!(mock.requests.lock().unwrap().len(), 1);
         mock.stop().await;
     }
+}
+
+#[tokio::test]
+async fn t3_browser_release_witness_follows_last_listener_owner() {
+    let mock = Mock::start(vec![]).await;
+    let directory = directory();
+    let source = Arc::new(source(&mock, &directory));
+    let (task, _) = start(source.clone()).await;
+    let witness = source.browser_listener.lock().unwrap().clone();
+    let retained = witness.upgrade().unwrap();
+    task.abort();
+    assert!(task.await.err().unwrap().is_cancelled());
+    assert!(witness.upgrade().is_some());
+    drop(retained);
+    assert!(witness.upgrade().is_none());
+    assert_eq!(mock.requests.lock().unwrap().len(), 0);
+    assert!(!source.file.exists());
+    mock.stop().await;
 }

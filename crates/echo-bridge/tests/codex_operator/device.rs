@@ -84,6 +84,7 @@ async fn codex_voice_runtime_prewake_ready_and_cancel_reap_before_presentation_c
             observer.commands(),
             [Command::Connect, Command::Capture, Command::Probe]
         );
+        presentation_owned(&path);
         stop.send(()).unwrap();
     };
     let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
@@ -97,7 +98,7 @@ async fn codex_voice_runtime_prewake_ready_and_cancel_reap_before_presentation_c
         [Command::Connect, Command::Capture, Command::Probe, Command::Close]
     );
     super::host::released(&fixture).await;
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    presentation_released(&path, "chatgpt", true);
     assert_eq!(
         trace(&path).iter().filter(|row| row["event"] == "bridge.ready").count(),
         1
@@ -144,6 +145,7 @@ async fn codex_voice_runtime_relink_stays_visible_without_device_or_lease_until_
         }
         super::host::released(&fixture).await;
         assert_eq!(observer.commands(), []);
+        presentation_owned(&path);
         stop.send(()).unwrap();
     };
     let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
@@ -152,7 +154,7 @@ async fn codex_voice_runtime_relink_stays_visible_without_device_or_lease_until_
     .await
     .unwrap();
     assert_eq!(result, Err(Error::Authorization));
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    presentation_released(&path, "chatgpt", true);
     let rows = trace(&path);
     assert_eq!(
         rows.iter().filter(|row| row["event"] == "auth.relink_required").count(),
@@ -188,8 +190,7 @@ async fn codex_voice_runtime_missing_binary_has_zero_child_device_and_call_effec
         trace(&path).iter().filter(|row| row["event"] == "bridge.ready").count(),
         0
     );
-    let health_address = trace(&path)[0]["health_addr"].as_str().unwrap().to_owned();
-    assert!(tokio::net::TcpStream::connect(health_address).await.is_err());
+    presentation_released(&path, "chatgpt", false);
 }
 
 fn config(fixture: &Fixture) -> CodexConfig {
@@ -413,6 +414,7 @@ async fn codex_voice_runtime_kill_overlay_clear_and_cancel_keep_one_owned_proces
     let inspect = async {
         let _control = fixture.control().await;
         clear_kill_screen(&fixture, &kill_path).await;
+        presentation_owned(&trace_path);
         stop.send(()).unwrap();
     };
     let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
