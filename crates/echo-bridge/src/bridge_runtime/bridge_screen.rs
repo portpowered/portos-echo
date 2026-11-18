@@ -25,7 +25,7 @@ impl Screen {
     pub(crate) fn release_observer(&mut self) -> mpsc::Receiver<echo_screen_contract::UiAction> {
         // Signin never consumes actions. The listener router owns every sender;
         // it is destroyed only after the listener and connection tasks end.
-        let server = self.server.as_mut().unwrap();
+        let server = Arc::get_mut(self.server.as_mut().unwrap()).unwrap();
         std::mem::replace(&mut server.actions, mpsc::channel(1).1)
     }
 

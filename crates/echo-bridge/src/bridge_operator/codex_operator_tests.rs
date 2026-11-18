@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 // Observation ceiling; no product timeout changes.
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[path = "../../tests/codex_operator/fixture.rs"]
+#[path = "codex_fixture.rs"]
 mod fixture;
 use fixture::Fixture;
 
