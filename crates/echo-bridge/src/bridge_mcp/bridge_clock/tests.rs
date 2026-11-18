@@ -78,6 +78,7 @@ async fn missing_task_or_pcm_acknowledgement_expires_without_advancing_time() {
         Err(Error::Control)
     );
     drop(publisher_owner);
+    let context = Context::new();
     context.submitted().unwrap();
     assert_eq!(
         receipt::bounded(context.advance(20), Duration::from_millis(1)).await,
@@ -105,6 +106,7 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
     );
     context.screen(&server).unwrap();
     let mut voice = context.voice().unwrap();
+    let mut publisher = context.publisher().unwrap();
     context.submitted().unwrap();
     context.wrote(&65_i16.to_le_bytes().repeat(480)).unwrap();
     states.send(UiState::Speaking).await.unwrap();
@@ -122,12 +124,17 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
     };
     let owner = async {
         voice.acknowledge().await;
+        publisher.acknowledge().await;
         voice.acknowledge().await;
+        publisher.acknowledge().await;
     };
     super::drive(async {
         tokio::join!(step, owner);
     })
     .await;
+    drop(voice);
+    drop(publisher);
+    assert_eq!(context.advance(0).await, Err(Error::Control));
     Arc::try_unwrap(server).ok().unwrap().shutdown().await.unwrap();
 }
 

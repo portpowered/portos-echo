@@ -38,6 +38,7 @@ struct State {
     states: Vec<Value>,
     voice: Weak<mpsc::UnboundedSender<Request>>,
     publisher: Weak<mpsc::UnboundedSender<Request>>,
+    publisher_registered: bool,
     screen: Weak<ScreenServer>,
 }
 
@@ -92,6 +93,7 @@ impl Context {
             return Err(Error::Control);
         }
         state.publisher = Arc::downgrade(&send);
+        state.publisher_registered = true;
         Ok(VoiceDrain { _keep: send, receive })
     }
 
@@ -153,7 +155,14 @@ impl Context {
             voice.send(send).map_err(|_| Error::Control)?;
             receive.await.map_err(|_| Error::Control)?;
         }
-        let publisher = self.0.state.lock().map_err(|_| Error::Control)?.publisher.upgrade();
+        let publisher = {
+            let state = self.0.state.lock().map_err(|_| Error::Control)?;
+            let publisher = state.publisher.upgrade();
+            if state.publisher_registered && publisher.is_none() {
+                return Err(Error::Control);
+            }
+            publisher
+        };
         if let Some(publisher) = publisher {
             let (send, receive) = oneshot::channel();
             publisher.send(send).map_err(|_| Error::Control)?;
