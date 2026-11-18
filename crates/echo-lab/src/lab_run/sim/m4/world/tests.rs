@@ -7,7 +7,10 @@ async fn journey(negative: bool) {
     assert_eq!(completion, json!({"event":"bridge.run_completed","run_id":"run-1"}));
     assert_eq!(timing.captured, world::fixture().len() + 25600);
     assert_eq!(timing.played, 9600);
-    assert!(timing.sample().unwrap() <= Duration::from_millis(1500));
+    let sample = timing.sample();
+    let instrumented = option_env!("CARGO_LLVM_COV").is_some();
+    eprintln!("M4_SAMPLE negative={negative} instrumented={instrumented} sample={sample:?}");
+    reply_latency(sample, instrumented).unwrap();
     assert_eq!(case.close().await, Ok(()));
     assert_eq!(
         case.transcript.as_deref(),
@@ -20,6 +23,37 @@ async fn journey(negative: bool) {
     assert_trace(&case.trace);
     owners.closed(&case);
     assert_eq!(case.close().await, Ok(()));
+}
+
+// Native full-binary branch coverage: max 3575.1736 ms across both outcomes,
+// plus 25% scheduling headroom, rounded up to 100 ms = 4500 ms. See the
+// 2026-11-18 M4 decision. The scenario and ordinary builds retain 1500 ms.
+fn reply_latency(sample: Result<Duration, String>, instrumented: bool) -> Result<(), String> {
+    let sample = sample?;
+    let budget = Duration::from_millis(if instrumented { 4500 } else { 1500 });
+    if sample > budget {
+        return Err(format!(
+            "M4 first reply PCM {sample:?} exceeds {budget:?} (instrumented={instrumented})"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn reply_latency_preserves_plain_budget_and_bounds_coverage_allowance() {
+    for (instrumented, milliseconds) in [(false, 1500), (true, 4500)] {
+        let budget = Duration::from_millis(milliseconds);
+        assert_eq!(reply_latency(Ok(budget), instrumented), Ok(()));
+        assert_eq!(
+            reply_latency(Ok(budget + Duration::from_nanos(1)), instrumented),
+            Err(format!(
+                "M4 first reply PCM {:?} exceeds {budget:?} (instrumented={instrumented})",
+                budget + Duration::from_nanos(1)
+            ))
+        );
+        let missing = "wire: missing finite utterance endpoint".to_owned();
+        assert_eq!(reply_latency(Err(missing.clone()), instrumented), Err(missing));
+    }
 }
 
 #[tokio::test]
