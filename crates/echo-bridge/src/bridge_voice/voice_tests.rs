@@ -120,6 +120,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
         |notice| {
             notices.push(match notice {
                 Notice::ReplyStarted => "speaking",
+                Notice::ReplyPaused => "paused",
                 Notice::ReplyPlayed => "played",
                 Notice::Transcript { .. } => "transcript",
                 Notice::Device(_) => "device",
@@ -153,7 +154,8 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
             reply_dropped: 0
         }
     );
-    assert_eq!(notices, vec!["transcript", "speaking", "device", "played"]);
+    // Silence never opens the mouth.
+    assert_eq!(notices, vec!["transcript", "device", "played"]);
 }
 
 #[tokio::test(start_paused = true)]
