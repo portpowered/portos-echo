@@ -146,10 +146,106 @@ fn evaluate(makefile: &str, workflow: &str) -> Result<(), String> {
     Ok(())
 }
 
+// Repository workflows use block mappings. Track indentation and opaque block
+// scalars so step env/with and shell text cannot become job-level env entries.
+fn without_comment(value: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, ch) {
+            (Some('"'), '\\') => escaped = true,
+            (Some(current), ch) if current == ch => quote = None,
+            (None, '\'' | '"') => quote = Some(ch),
+            (None, '#') if offset == 0 || value[..offset].ends_with(char::is_whitespace) => return &value[..offset],
+            _ => {}
+        }
+    }
+    value
+}
+
+fn workflow_contexts(path: &str, workflow: &str) -> Result<(), String> {
+    let mut scope: Vec<(usize, &str)> = Vec::new();
+    let mut scalar = None;
+    for (line, raw) in workflow.lines().enumerate() {
+        let text = raw.trim_start();
+        if text.is_empty() || text.starts_with('#') {
+            continue;
+        }
+        let indent = raw.len() - text.len();
+        if scalar.is_some_and(|level| indent > level) {
+            continue;
+        }
+        scalar = None;
+        while scope.last().is_some_and(|(level, _)| *level >= indent) {
+            scope.pop();
+        }
+        let Some((key, value)) = text.split_once(':') else {
+            continue;
+        };
+        let job_env = scope.len() >= 3 && scope[0].1 == "jobs" && scope[2].1 == "env";
+        let inline_env = scope.len() == 2 && scope[0].1 == "jobs" && key == "env";
+        if (job_env || inline_env) && runner_expression(value) {
+            return Err(format!(
+                "{path}:{}: runner context is unavailable in job-level env",
+                line + 1
+            ));
+        }
+        let value = without_comment(value).trim();
+        if value.starts_with(['|', '>']) {
+            scalar = Some(indent);
+        }
+        scope.push((indent, key));
+    }
+    Ok(())
+}
+
+fn runner_expression(value: &str) -> bool {
+    let value = without_comment(value);
+    value.split("${{").skip(1).any(|tail| {
+        let Some((expression, _)) = tail.split_once("}}") else {
+            return false;
+        };
+        // Single-quoted expression strings (including doubled quotes) are data.
+        expression.split('\'').step_by(2).any(|code| {
+            let spaced = code.replace('.', " . ").replace('[', " [ ");
+            let tokens: Vec<_> = spaced
+                .split(|c: char| !c.is_alphanumeric() && !matches!(c, '_' | '.' | '['))
+                .filter(|token| !token.is_empty())
+                .collect();
+            tokens.windows(2).enumerate().any(|(i, pair)| {
+                pair[0] == "runner" && matches!(pair[1], "." | "[") && (i == 0 || tokens[i - 1] != ".")
+            })
+        })
+    })
+}
+
+fn check_workflows() -> Result<(), String> {
+    let entries = fs::read_dir(".github/workflows").map_err(|e| format!(".github/workflows: {e}"))?;
+    let mut paths = entries
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!(".github/workflows: {e}"))?;
+    paths.sort();
+    for path in paths {
+        if !path.extension().is_some_and(|ext| ext == "yml" || ext == "yaml") {
+            continue;
+        }
+        let name = path.to_string_lossy().replace('\\', "/");
+        let workflow = fs::read_to_string(&path).map_err(|e| format!("{name}: {e}"))?;
+        workflow_contexts(&name, &workflow)?;
+    }
+    Ok(())
+}
+
 pub fn run() -> Result<(), String> {
     let makefile = fs::read_to_string("Makefile").map_err(|error| format!("Makefile: {error}"))?;
     let workflow = fs::read_to_string(".github/workflows/ci.yml").map_err(|error| format!("ci.yml: {error}"))?;
     evaluate(&makefile.replace("\r\n", "\n"), &workflow.replace("\r\n", "\n"))?;
+    check_workflows()?;
     println!("ci-parity: ok (16 checks)");
     for (name, target) in GATES {
         println!("{name}: make {target}");
@@ -160,20 +256,50 @@ pub fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn fixture() -> (String, String) {
         (
             format!("ci: {}\n", GATES.iter().map(|(_, t)| *t).collect::<Vec<_>>().join(" ")),
             format!("{PREFIX}{}", GATES.iter().map(|(n, t)| job(n, t)).collect::<String>()),
         )
     }
-
+    fn assert_failure(makefile: &str, workflow: &str, reason: &str) {
+        let error = evaluate(makefile, workflow).unwrap_err();
+        assert!(error.contains(reason), "{error}");
+    }
+    #[test]
+    fn workflow_contexts_rejects_job_env_and_preserves_step_scope() {
+        let fixed = include_str!("../../.github/workflows/build-codex-armv7.yml");
+        for newline in ["\n", "\r\n"] {
+            assert_eq!(workflow_contexts("arm.yml", &fixed.replace('\n', newline)), Ok(()));
+            for expression in [
+                "${{ runner.temp }}",
+                "${{runner.temp}}",
+                "${{ runner . temp }}",
+                "${{ runner['temp'] }}",
+            ] {
+                for key in ["CODEX_ARMV7_WORK_DIR", "CODEX_ARMV7_OUTPUT_DIR"] {
+                    let yaml = format!("jobs:\n  build:\n    env:\n      {key}: {expression}\n").replace('\n', newline);
+                    assert_eq!(
+                        workflow_contexts("arm.yml", &yaml),
+                        Err("arm.yml:4: runner context is unavailable in job-level env".into())
+                    );
+                }
+            }
+        }
+        let allowed = "jobs:\n  build:\n    env:\n      TEXT: runner.temp\n      QUOTED: ${{ 'runner.temp' }}\n      OTHER: ${{ github . runner . temp }}\n      # COMMENT: ${{ runner.temp }}\n      SAFE: literal # ${{ runner.temp }}\n    steps:\n      - run: |\n          env:\n            TEXT: ${{ runner.temp }}\n        env:\n          DIR: ${{ runner.temp }}\n        with:\n          path: ${{ runner.temp }}/output\n  next:\n    steps:\n      - run: true\n        env:\n          DIR: ${{ runner.temp }}\n";
+        assert_eq!(workflow_contexts("arm.yml", allowed), Ok(()));
+        let invalid = format!("{allowed}    env:\n      DIR: ${{{{ runner.temp }}}}\n");
+        assert!(
+            workflow_contexts("arm.yml", &invalid)
+                .unwrap_err()
+                .contains("runner context is unavailable")
+        );
+    }
     #[test]
     fn matching_ordered_gates_pass() {
         let (makefile, workflow) = fixture();
         assert_eq!(evaluate(&makefile, &workflow), Ok(()));
     }
-
     #[test]
     fn codex_provisioning_cannot_be_removed_or_made_optional() {
         let (makefile, workflow) = fixture();
@@ -190,7 +316,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn echo_gate_requires_exact_provisioning_build_and_publication() {
         let (makefile, workflow) = fixture();
@@ -215,7 +340,6 @@ mod tests {
         );
         assert!(evaluate(&makefile, &reordered).is_err());
     }
-
     #[test]
     fn missing_extra_duplicate_and_reordered_gates_fail() {
         let (makefile, workflow) = fixture();
@@ -235,37 +359,20 @@ mod tests {
                 "gate order differs",
             ),
         ] {
-            assert!(evaluate(&input, &workflow).unwrap_err().contains(diagnostic));
+            assert_failure(&input, &workflow, diagnostic);
         }
         let missing = workflow.replace(&job("lint-shape", "lint-shape"), "");
-        assert!(
-            evaluate(&makefile, &missing)
-                .unwrap_err()
-                .contains("missing gate lint-shape")
-        );
+        assert_failure(&makefile, &missing, "missing gate lint-shape");
         let duplicate = format!("{workflow}{}", job("format", "fmt-check"));
-        assert!(
-            evaluate(&makefile, &duplicate)
-                .unwrap_err()
-                .contains("duplicate gate format")
-        );
+        assert_failure(&makefile, &duplicate, "duplicate gate format");
         let extra = format!("{workflow}{}", job("extra", "extra"));
-        assert!(
-            evaluate(&makefile, &extra)
-                .unwrap_err()
-                .contains("unsupported gate extra")
-        );
+        assert_failure(&makefile, &extra, "unsupported gate extra");
         let reordered = workflow.replace(
             &(job("test-unit", "test-unit") + &job("test-contract", "test-contract")),
             &(job("test-contract", "test-contract") + &job("test-unit", "test-unit")),
         );
-        assert!(
-            evaluate(&makefile, &reordered)
-                .unwrap_err()
-                .contains("gate order differs")
-        );
+        assert_failure(&makefile, &reordered, "gate order differs");
     }
-
     #[test]
     fn unsupported_yaml_and_shell_fail_closed() {
         let (makefile, workflow) = fixture();
@@ -277,13 +384,8 @@ mod tests {
         ] {
             assert!(evaluate(&makefile, &input).is_err());
         }
-        assert!(
-            evaluate("ci: $(GATES)", &workflow)
-                .unwrap_err()
-                .contains("missing gate")
-        );
+        assert_failure("ci: $(GATES)", &workflow, "missing gate");
     }
-
     #[test]
     fn screen_provisioning_requires_exact_steps_and_unconditional_gates() {
         let (makefile, workflow) = fixture();
@@ -323,7 +425,6 @@ mod tests {
             assert!(evaluate(&makefile, &workflow.replace(from, to)).is_err());
         }
     }
-
     #[test]
     fn coverage_quarantine_requires_exact_reviewed_tail() {
         let (makefile, workflow) = fixture();
@@ -340,23 +441,14 @@ mod tests {
         ] {
             let changed = workflow.replace(&coverage, &coverage.replace(from, to));
             assert_ne!(changed, workflow);
-            assert!(
-                evaluate(&makefile, &changed)
-                    .unwrap_err()
-                    .contains("unsupported job coverage")
-            );
+            assert_failure(&makefile, &changed, "unsupported job coverage");
         }
         let removed = workflow.replace(
             &coverage,
             &coverage[..coverage.find("      - name: Detect quarantined").unwrap()],
         );
-        assert!(
-            evaluate(&makefile, &removed)
-                .unwrap_err()
-                .contains("unsupported job coverage")
-        );
+        assert_failure(&makefile, &removed, "unsupported job coverage");
     }
-
     #[test]
     fn host_jobs_require_each_exact_host_step() {
         let (makefile, workflow) = fixture();

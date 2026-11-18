@@ -135,6 +135,45 @@ mod tests {
     }
 
     #[test]
+    fn parity_cli_secondary_workflows_reject_and_recover() {
+        let session = Session::new();
+        session.write("Makefile", include_str!("../../Makefile"));
+        session.write(
+            ".github/workflows/ci.yml",
+            include_str!("../../.github/workflows/ci.yml"),
+        );
+        let fixed = include_str!("../../.github/workflows/build-codex-armv7.yml");
+        let invalid = fixed.replace("      CARGO_BUILD_JOBS: '4'", "      CARGO_BUILD_JOBS: '4'\n      CODEX_ARMV7_WORK_DIR: ${{ runner.temp }}/codex-armv7-work\n      CODEX_ARMV7_OUTPUT_DIR: ${{ runner.temp }}/codex-armv7-output");
+        for file in ["build-codex-armv7.yml", "secondary.yaml"] {
+            let path = format!(".github/workflows/{file}");
+            session.write(&path, &invalid);
+            let (code, text) = session.run(&["ci-parity"]);
+            assert_eq!(code, 1, "{text}");
+            assert!(
+                text.contains(&format!("{path}:17: runner context is unavailable in job-level env")),
+                "{text}"
+            );
+            assert!(text.ends_with("ci-parity failed\n"), "{text}");
+            assert!(!text.contains("ci-parity: ok"));
+            session.write(&path, fixed);
+            let (code, text) = session.run(&["ci-parity"]);
+            assert_eq!(code, 0, "{text}");
+            assert!(text.starts_with("ci-parity: ok (16 checks)\nformat: make fmt-check\n"));
+            assert!(text.ends_with("build-echo: make build-echo\n"));
+        }
+        session.write(".github/workflows/steps.yml", "jobs:\n  build:\n    env:\n      DIR: literal\n    steps:\n      - run: true\n        env:\n          DIR: ${{ runner.temp }}\n        with:\n          path: ${{ runner.temp }}/output\n");
+        assert_eq!(session.run(&["ci-parity"]).0, 0);
+        let workflow = include_str!("../../.github/workflows/ci.yml");
+        for changed in [
+            workflow.replace("    name: format", "    if: false\n    name: format"),
+            workflow.replace("  format:", "  renamed:"),
+        ] {
+            session.write(".github/workflows/ci.yml", &changed);
+            assert_eq!(session.run(&["ci-parity"]).0, 1);
+        }
+    }
+
+    #[test]
     fn coverage_cli_reports_real_scopes_and_propagates_evidence_errors() {
         let session = Session::new();
         session.workspace();
