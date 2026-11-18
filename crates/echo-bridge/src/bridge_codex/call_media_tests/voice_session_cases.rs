@@ -111,7 +111,7 @@ async fn session_reuses_one_call_resets_idle_deadline_and_discards_old_pcm() {
                 match notice {
                     SessionNotice::Completed(outcome) => completed.lock().unwrap().push(outcome),
                     SessionNotice::Started => again.send(()).unwrap(),
-                    SessionNotice::Connected | SessionNotice::Run(_) => (),
+                    SessionNotice::Connected | SessionNotice::Run(_) | SessionNotice::ReplyCompleted(_) => (),
                 }
                 Ok(())
             },

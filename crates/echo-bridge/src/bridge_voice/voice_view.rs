@@ -144,6 +144,7 @@ impl<'a> View<'a> {
                 self.screen.ready()
             }
             SessionNotice::Run(Notice::ReplyPlayed | Notice::Transcript { .. }) => Ok(()),
+            SessionNotice::ReplyCompleted(stats) => self.reply_completed(&stats),
             SessionNotice::Completed(stats) => self.completed(&stats),
         }
     }
@@ -160,13 +161,6 @@ impl<'a> View<'a> {
                 "dropped_chunks":stats.dropped_chunks, "tail_samples":stats.microphone_tail
             }),
         )?;
-        self.trace.record(
-            "reply.played",
-            Some(id),
-            json!({"outcome":"played",
-                "frames":stats.reply_sent, "received_frames":stats.reply_received, "dropped_frames":stats.reply_dropped
-            }),
-        )?;
         self.trace.record("wyoming.run_ended", Some(id), json!({}))?;
         self.health.state.send_modify(|state| state.live = "idle");
         if !self.mouth_paused {
@@ -177,6 +171,17 @@ impl<'a> View<'a> {
         self.run = None;
         self.trace.tool_run(None)?;
         Ok(())
+    }
+
+    fn reply_completed(&mut self, stats: &Stats) -> Result<(), Error> {
+        let id = self.run.as_deref().ok_or(Error::Unavailable)?;
+        self.trace.record(
+            "reply.played",
+            Some(id),
+            json!({"outcome":"played",
+                "frames":stats.reply_sent, "received_frames":stats.reply_received, "dropped_frames":stats.reply_dropped
+            }),
+        )
     }
 
     pub fn closed(&mut self, reason: &'static str) -> Result<(), Error> {

@@ -225,6 +225,11 @@ async fn opening_waits_for_media_before_connected_and_settles_played_before_comp
             match notice {
                 SessionNotice::Connected => notices.borrow_mut().push("connected"),
                 SessionNotice::Started => notices.borrow_mut().push("started"),
+                SessionNotice::ReplyCompleted(outcome) => {
+                    assert_eq!(outcome.microphone_frames, 1);
+                    assert_eq!(outcome.reply_sent, 0);
+                    notices.borrow_mut().push("reply_completed");
+                }
                 SessionNotice::Completed(outcome) => {
                     assert_eq!(outcome.microphone_frames, 1);
                     assert_eq!(outcome.reply_sent, 0);
@@ -251,7 +256,10 @@ async fn opening_waits_for_media_before_connected_and_settles_played_before_comp
     assert_eq!(observer.commands().last(), Some(&Command::Stop));
     observer.finish(Ok(()));
     pump(work.as_mut()).await;
-    assert_eq!(*notices.borrow(), ["connected", "started", "completed"]);
+    assert_eq!(
+        *notices.borrow(),
+        ["connected", "started", "reply_completed", "completed"]
+    );
     tokio::time::advance(Duration::from_secs(5)).await;
     assert_eq!(work.await, Ok(1));
     assert_eq!(state.closes.load(Ordering::SeqCst), 1);

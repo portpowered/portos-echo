@@ -126,6 +126,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reply_completion_keeps_kill_authority_until_run_completion() {
+        for ended in [false, true] {
+            let termination = Termination::default();
+            termination.observe(&ServeNotice::Listening);
+            termination.observe(&ServeNotice::Session(super::super::SessionNotice::ReplyCompleted(
+                super::super::Stats::default(),
+            )));
+            if ended {
+                termination.observe(&ServeNotice::Session(super::super::SessionNotice::Completed(
+                    super::super::Stats::default(),
+                )));
+            }
+            termination.trip();
+            let mut publications = 0;
+            let result = termination.finish(Ok(()), false, None, &mut |notice| {
+                assert!(matches!(notice, ServeNotice::Kill(true)));
+                publications += 1;
+                Ok(())
+            });
+            assert_eq!(result, if ended { Ok(()) } else { Err(Error::Control) });
+            assert_eq!(publications, usize::from(!ended));
+        }
+    }
+
+    #[test]
     fn latched_kill_survives_clear_during_cleanup_and_failed_publication_is_not_committed() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("kill");

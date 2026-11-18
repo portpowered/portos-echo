@@ -27,6 +27,9 @@ pub enum SessionNotice {
     Connected,
     Started,
     Run(Notice),
+    /// One reply settled; capture and the run may remain active.
+    ReplyCompleted(Stats),
+    /// Explicit run end and capture EOF settled successfully.
     Completed(Stats),
 }
 
@@ -282,6 +285,7 @@ async fn drive<L: EchoLink>(
         )
         .await?;
         completed = completed.checked_add(1).ok_or(Error::Unavailable)?;
+        observe(SessionNotice::ReplyCompleted(stats.clone()))?;
         observe(SessionNotice::Completed(stats))?;
         let expires = Instant::now().checked_add(options.idle);
         let next = wait(events, call, expires, &mut options.muted, cancelled.as_mut(), observe).await?;

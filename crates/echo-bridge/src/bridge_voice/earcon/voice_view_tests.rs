@@ -315,16 +315,76 @@ fn complete(view: &mut View<'_>, receive: &mut mpsc::Receiver<UiState>) {
             message: "Echo Live ready".into()
         }
     );
-    view.observe(ServeNotice::Session(SessionNotice::Completed(Stats {
+    let stats = Stats {
         received_chunks: 7,
         microphone_frames: 3,
         reply_received: 9,
         reply_sent: 8,
         reply_dropped: 1,
         ..Stats::default()
-    })))
-    .unwrap();
+    };
+    view.observe(ServeNotice::Session(SessionNotice::ReplyCompleted(stats.clone())))
+        .unwrap();
+    view.observe(ServeNotice::Session(SessionNotice::Completed(stats)))
+        .unwrap();
     assert!(receive.try_recv().is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn reply_receipts_keep_run_and_tool_correlation_until_explicit_end() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    let mut trace = Trace::open(&path, "chatgpt").unwrap();
+    let mut effect = trace.clone();
+    let health = Health::offline();
+    let screen = Screen::bind(None).await.unwrap();
+    let mut view = View::new(&screen, &health, &mut trace);
+    view.observe(ServeNotice::Listening).unwrap();
+    view.observe(ServeNotice::Session(SessionNotice::Connected)).unwrap();
+    for frames in [3, 7] {
+        let notice = ServeNotice::Session(SessionNotice::ReplyCompleted(Stats {
+            reply_sent: frames,
+            ..Stats::default()
+        }));
+        view.observe(notice).unwrap();
+        effect.tool_attempt("test.echo", "1:t1:u1:c").unwrap();
+        assert_eq!(health.state.borrow().live, "connected");
+    }
+    let before_end = rows(&path);
+    assert_eq!(
+        before_end.iter().filter(|r| r["event"] == "wyoming.run_ended").count(),
+        0
+    );
+    assert_eq!(
+        before_end
+            .iter()
+            .filter(|r| r["event"] == "bridge.run_completed")
+            .count(),
+        0
+    );
+    let replies: Vec<_> = before_end.iter().filter(|r| r["event"] == "reply.played").collect();
+    assert_eq!(
+        replies.iter().map(|r| r["frames"].clone()).collect::<Vec<_>>(),
+        [json!(3), json!(7)]
+    );
+    for row in &before_end {
+        if row["event"] == "reply.played" || row["event"] == "tools/call" {
+            assert_eq!(row["run_id"], "run-1");
+        }
+    }
+    view.observe(ServeNotice::Session(SessionNotice::Completed(Stats::default())))
+        .unwrap();
+    assert_eq!(
+        rows(&path)
+            .iter()
+            .filter(|r| r["event"] == "bridge.run_completed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        view.observe(ServeNotice::Session(SessionNotice::ReplyCompleted(Stats::default()))),
+        Err(Error::Unavailable)
+    );
 }
 
 #[tokio::test(start_paused = true)]

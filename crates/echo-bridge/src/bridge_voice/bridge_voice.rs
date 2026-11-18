@@ -100,7 +100,7 @@ pub struct Options {
     pub muted: bool,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     pub received_chunks: u64,
     pub dropped_chunks: u64,
