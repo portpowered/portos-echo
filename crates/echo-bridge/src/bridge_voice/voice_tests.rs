@@ -17,8 +17,12 @@ struct Port {
     ready: VecDeque<PcmFrame>,
     sent: Arc<Mutex<Vec<PcmFrame>>>,
     reject: Option<usize>,
+    retired: usize,
 }
 impl VoicePort for Port {
+    fn retire_audio(&mut self) {
+        self.retired += 1;
+    }
     fn send(&self, frame: PcmFrame) -> Result<(), Error> {
         let mut sent = self.sent.lock().unwrap();
         if self.reject == Some(sent.len()) {
@@ -42,6 +46,7 @@ fn port() -> (Port, mpsc::Sender<Result<MediaEvent, Error>>) {
             ready: VecDeque::new(),
             sent: Arc::default(),
             reject: None,
+            retired: 0,
         },
         tx,
     )
@@ -94,6 +99,8 @@ fn done() -> MediaEvent {
     })
 }
 
+#[path = "voice_barge_cases.rs"]
+mod barge_cases;
 #[path = "voice_cases.rs"]
 mod cases;
 #[tokio::test(start_paused = true)]
@@ -216,6 +223,7 @@ async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
     wake(&observer, 0);
     let mic = microphone(&mut events).await;
     let (mut port, tx) = port();
+    tx.send(Ok(MediaEvent::Audio(Box::new([456; 320])))).await.unwrap();
     tx.send(Ok(MediaEvent::Control(Event::Transcript {
         role: "user".into(),
         text: "question".into(),
@@ -236,6 +244,7 @@ async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
     )
     .await;
     assert_eq!(result, Err(Error::Deadline));
+    assert_eq!(port.retired, 0);
     assert_eq!(Instant::now(), end);
     assert!(observer.commands().contains(&Command::Cut(0)));
     assert!(!observer.commands().contains(&Command::Stop));
@@ -318,31 +327,7 @@ async fn voice_eof_cancellation_and_callback_failure_cannot_publish_played() {
     }
 }
 #[tokio::test(start_paused = true)]
-async fn voice_late_media_is_an_error_instead_of_silent_reply_truncation() {
-    let observer = Observer::default();
-    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
-    let mut events = client.events().unwrap();
-    wake(&observer, 0);
-    let mic = microphone(&mut events).await;
-    let (mut port, tx) = port();
-    tx.send(Ok(done())).await.unwrap();
-    let mut work = Box::pin(run(
-        &client,
-        &mut events,
-        mic,
-        &mut port,
-        options(),
-        std::future::pending(),
-        |_| Ok(()),
-    ));
-    pending(work.as_mut()).await;
-    tx.send(Ok(MediaEvent::Audio(Box::new([123; 320])))).await.unwrap();
-    assert_eq!(work.await, Err(Error::Audio));
-    assert_eq!(frames(&observer).len(), 0);
-    assert!(observer.commands().contains(&Command::Cut(0)));
-}
-#[tokio::test(start_paused = true)]
-async fn voice_quiet_webrtc_media_after_done_is_not_queued_and_audible_media_still_fails() {
+async fn voice_all_webrtc_media_after_done_is_discarded() {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -366,7 +351,9 @@ async fn voice_quiet_webrtc_media_after_done_is_not_queued_and_audible_media_sti
     }
     assert_eq!(frames(&observer).len(), 0);
     tx.send(Ok(MediaEvent::Audio(Box::new([65; 320])))).await.unwrap();
-    assert_eq!(work.await, Err(Error::Audio));
+    pending(work.as_mut()).await;
+    observer.finish(Ok(()));
+    assert_eq!(work.await.unwrap().reply_received, 4);
     assert_eq!(frames(&observer).len(), 0);
 }
 
@@ -497,4 +484,10 @@ async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_witho
     observer.finish(Ok(()));
     let stats = work.await.unwrap();
     assert_eq!((stats.reply_received, stats.reply_sent), (13, 12));
+}
+
+fn assert_drained_reply(observer: &Observer, old_frames: usize) {
+    if old_frames == 3 {
+        assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    }
 }

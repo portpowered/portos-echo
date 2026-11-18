@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub struct World {
+    #[cfg(test)]
+    pub(super) cut_order: Option<super::CutOrder>,
     pub relay: Option<Relay>,
     pub live: Option<Live>,
     host: Option<Process>,
@@ -27,6 +29,9 @@ pub struct World {
     root: PathBuf,
     #[cfg(test)]
     released: Vec<&'static str>,
+    private: Option<super::super::m2::codex::config::Root>,
+    clock: Value,
+    completed: bool,
 }
 
 // A finite deterministic marker, interpreted only by the synthetic scenario.
@@ -44,13 +49,26 @@ pub fn fixture() -> Vec<u8> {
 
 impl World {
     pub async fn start(&mut self, python: &str, bridge: &Path, root: &Path) -> Result<(), String> {
+        let order = super::CutOrder::DoneFirst;
+        #[cfg(test)]
+        let order = self.cut_order.unwrap_or(order);
+        self.start_case(python, bridge, root, order).await
+    }
+
+    async fn start_case(
+        &mut self,
+        python: &str,
+        bridge: &Path,
+        root: &Path,
+        order: super::CutOrder,
+    ) -> Result<(), String> {
         if !production::selected(bridge) {
             return Err("M3 requires the prebuilt production echo-bridge".into());
         }
-        std::fs::create_dir(root).map_err(|_| "M3: private directory acquisition failed")?;
+        self.private = Some(super::super::m2::codex::config::Root::create(root.into())?);
         self.root = root.into();
         self.host = Some(Process::start(process::host(python).arg("--finite"))?);
-        let ready = self.host.as_mut().ok_or("M3: missing host")?.expect("host.ready");
+        let ready = host_ready(self.host.as_mut().ok_or("M3: missing host")?);
         let address = process::admit_host(
             &mut self.endpoints,
             ready,
@@ -60,7 +78,7 @@ impl World {
         .await?;
         self.relay = Some(Relay::bind(address, &fixture()).await?);
         let relay = self.relay.as_ref().ok_or("M3: missing wire")?;
-        self.live = Some(Live::bind(relay.observed.clone()).await?);
+        self.live = Some(Live::bind(python, relay.observed.clone(), order).await?);
         self.endpoints.push(relay.address);
         self.endpoints.push(
             self.live
@@ -72,21 +90,12 @@ impl World {
                 .map_err(|_| "M3: invalid Live endpoint")?,
         );
         let mut command = tokio::process::Command::new(bridge);
-        production::configure(
+        configure(
             &mut command,
             root,
-            relay.address,
+            relay.address.port(),
             &self.live.as_ref().ok_or("M3: missing Live")?.origin,
-            "http://127.0.0.1:1/mcp",
         )?;
-        // M3 observes the same provider through the later native mute span.
-        let config = root.join("configured.private/bridge.toml");
-        let contents = std::fs::read_to_string(&config).map_err(|_| "M3: missing configuration")?;
-        std::fs::write(
-            config,
-            contents.replace("session_idle_seconds = 0", "session_idle_seconds = 120"),
-        )
-        .map_err(|_| "M3: cannot retain Live session")?;
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
             .as_mut()
@@ -131,7 +140,7 @@ impl World {
 
     pub async fn first(&mut self) -> Result<(), String> {
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
-        self.wait("first reply PCM", |s| s.bytes[0] >= 960).await?;
+        self.wait("long reply overlap point", |s| s.bytes[0] >= 3840).await?;
         loop {
             let played = self.control(json!({"action":"playback"})).await?;
             let bytes = played["pcm_bytes"]
@@ -148,18 +157,42 @@ impl World {
     async fn first_started(&mut self) -> Result<(), String> {
         // PCM can reach the device before the bridge observes its send receipt.
         // Speaking is published after reply.started is written, so it is the
-        // causal barrier for the next exact trace assertion.
-        let screen = self.screen.as_mut().ok_or("M3: missing screen")?;
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            screen.expect(&json!({"state":"speaking"})),
-        )
-        .await
-        .map_err(|_| "M3 first reply: missing Speaking before 5000 ms deadline")??;
+        // causal barrier for the next exact trace assertion. The mouth opens on
+        // the bridge's paused playout clock, so keep stepping it while waiting.
+        let expected = json!({"state":"speaking"});
+        {
+            let screen = self.screen.as_mut().ok_or("M3: missing screen")?;
+            let mut bridge = self.bridge.as_mut();
+            let speaking = screen.expect(&expected);
+            let deadline = tokio::time::sleep(std::time::Duration::from_secs(5));
+            tokio::pin!(speaking, deadline);
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
+            loop {
+                tokio::select! {
+                    result = &mut speaking => break result?,
+                    () = &mut deadline => return Err("M3 first reply: missing Speaking before 5000 ms deadline".into()),
+                    _ = tick.tick(), if bridge.is_some() => {
+                        if let Some(bridge) = bridge.as_deref_mut() {
+                            let result = super::super::m2::codex::collect_playout(bridge, &mut self.clock, 20).await?;
+                            self.completed |= result.is_some();
+                        }
+                    }
+                }
+            }
+        }
         self.read_trace()
     }
 
     pub async fn second(&mut self) -> Result<(), String> {
+        let baseline = self.live.as_ref().ok_or("M3: missing Live")?.snapshot().await?;
+        self.relay
+            .as_ref()
+            .ok_or("M3: missing wire")?
+            .observed
+            .send_modify(|state| {
+                state.overlap_base = Some(baseline);
+                state.stimulus = Some(tokio::time::Instant::now());
+            });
         self.control(json!({"action":"inject","pcm":fixture()})).await?;
         let old = self.wait("old reply Played", |s| s.played.len() == 1).await?;
         // Socket Played and the complete native stderr record have separate readers.
@@ -192,11 +225,15 @@ impl World {
                 .and_then(|count| count.checked_sub(old_pcm))
                 .ok_or("M3 second answer: missing or backwards host PCM count")?,
         );
-        self.bridge
-            .as_mut()
-            .ok_or("M3: missing bridge")?
-            .expect("bridge.run_completed")
-            .await?;
+        while !self.completed {
+            self.completed = super::super::m2::codex::collect_playout(
+                self.bridge.as_mut().ok_or("M3: missing bridge")?,
+                &mut self.clock,
+                20,
+            )
+            .await?
+            .is_some();
+        }
         self.read_trace()
     }
 
@@ -223,40 +260,127 @@ impl World {
         Ok(())
     }
 
-    pub async fn wait(&self, phase: &str, property: impl Fn(&Ledger) -> bool) -> Result<Ledger, String> {
-        let relay = self.relay.as_ref().ok_or("M3: missing wire")?;
-        let mut live = self.live.as_ref().ok_or("M3: missing Live")?.observed.subscribe();
-        let failure = async {
-            loop {
-                if let Some(error) = live.borrow().failure.clone() {
-                    return Err(error);
-                }
-                live.changed().await.map_err(|_| "M3: Live observer ended")?;
+    pub async fn wait(&mut self, phase: &str, property: impl Fn(&Ledger) -> bool) -> Result<Ledger, String> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
+        loop {
+            self.read_trace()?;
+            let state = self.relay.as_ref().ok_or("M3: missing wire")?.observed.borrow().clone();
+            self.relay.as_ref().ok_or("M3: missing wire")?.wait(|_| true).await?;
+            if property(&state) {
+                return Ok(state);
             }
-        };
-        tokio::select! {
-            result = relay.wait(property) => result,
-            result = failure => result,
-            () = tokio::time::sleep(std::time::Duration::from_secs(5)) => Err(format!(
-                "M3 {phase}: missing observation before 5000 ms deadline; capture_tail_bytes={} flushes={} Live_frames={}",
-                relay.observed.borrow().tail_bytes,
-                relay.observed.borrow().flushes,
-                self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().frames,
-            )),
+            if let Some(error) = self
+                .live
+                .as_ref()
+                .ok_or("M3: missing Live")?
+                .observed
+                .borrow()
+                .failure
+                .clone()
+            {
+                return Err(error);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "M3 {phase}: missing observation before 5000 ms deadline; capture_chunks={} Live_frames={} capture_tail_bytes={} flushes={} provider_phase={} reply_bytes={:?} starts={} stops={} Played={}",
+                    state.capture_frames,
+                    self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().frames,
+                    state.tail_bytes,
+                    state.flushes,
+                    self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().phase,
+                    state.bytes,
+                    state.started,
+                    state.stops,
+                    state.played.len()
+                ));
+            }
+            tick.tick().await;
+            let result = super::super::m2::codex::collect_playout(
+                self.bridge.as_mut().ok_or("M3: missing bridge")?,
+                &mut self.clock,
+                20,
+            )
+            .await?;
+            self.completed |= result.is_some();
         }
     }
 
+    /// Read while the bridge may still be appending a record.
     pub fn read_trace(&mut self) -> Result<(), String> {
-        let bytes = std::fs::read(self.root.join("bridge.private.jsonl")).map_err(|_| "M3: missing bridge trace")?;
+        self.load_trace(false)
+    }
+
+    /// The bridge writes a record and its newline separately. While it runs,
+    /// keep an unterminated tail pending; once it is collected, a partial line fails.
+    fn load_trace(&mut self, collected: bool) -> Result<(), String> {
+        let path = self.root.join("bridge.private.jsonl");
         let mut trace = Trace::default();
-        trace.append(&bytes)?;
-        trace.finish()?;
+        trace.append(&std::fs::read(path).map_err(|_| "M3: missing bridge trace")?)?;
+        if collected {
+            trace.finish()?;
+        }
+        if let Some(relay) = &self.relay {
+            let interrupts = trace
+                .records
+                .iter()
+                .filter(|row| row["event"] == "turn.interrupt_acknowledged")
+                .count();
+            let resets = trace
+                .records
+                .iter()
+                .filter(|row| row["event"] == "call.receive_reset")
+                .count();
+            relay.observed.send_if_modified(|state| {
+                if state.receive_resets == resets && state.interrupts == interrupts {
+                    return false;
+                }
+                state.receive_resets = resets;
+                state.interrupts = interrupts;
+                true
+            });
+            trace.records.extend(relay.observed.borrow().observations());
+        }
         self.trace = trace;
+        Ok(())
+    }
+
+    fn retain_trace(&self) -> Result<(), String> {
+        let parent = self.root.parent().ok_or("M3: missing artifact parent")?;
+        std::fs::copy(self.root.join("bridge.private.jsonl"), parent.join("m3.trace.jsonl"))
+            .map(|_| ())
+            .map_err(|_| "M3: cannot retain payload-free bridge trace".into())
+    }
+
+    async fn idle(&mut self) -> Result<(), String> {
+        self.live.as_ref().ok_or("M3: missing Live")?.quiesce().await?;
+        let bridge = self.bridge.as_mut().ok_or("M3: missing bridge")?;
+        bridge
+            .send(&json!({"action":"advance_clock","milliseconds":120_000}))
+            .await?;
+        let advanced = bridge.expect("bridge.clock_advanced").await?;
+        if advanced["milliseconds"] != 120_000 {
+            return Err("M3: invalid idle clock receipt".into());
+        }
+        bridge.expect("bridge.ready").await?;
+        self.read_trace()?;
+        let closed: Vec<_> = self
+            .trace
+            .records
+            .iter()
+            .filter(|row| row["event"] == "live.closed")
+            .collect();
+        if closed.len() != 1 || closed[0]["reason"] != "idle" {
+            return Err("M3: expected exactly one healthy idle close".into());
+        }
         Ok(())
     }
 
     pub async fn close(&mut self) -> Result<(), String> {
         let mut failures = Vec::new();
+        if self.second_pcm.is_some() {
+            failures.extend(self.idle().await.err());
+        }
         if let Some(live) = &self.live {
             live.prepare_close();
         }
@@ -266,7 +390,8 @@ impl World {
             #[cfg(test)]
             self.record_release("bridge", &closed);
             failures.extend(closed.err());
-            failures.extend(self.read_trace().err());
+            failures.extend(self.load_trace(true).err());
+            failures.extend(self.retain_trace().err());
             for record in self.trace.records.iter().filter(|r| r["event"] == "bridge.error") {
                 failures.push(format!("M3 bridge: {}", record["reason"]));
             }
@@ -291,7 +416,8 @@ impl World {
             self.record_release("host", &closed);
             failures.extend(closed.err());
         }
-        if !self.root.as_os_str().is_empty() {
+        self.private.take();
+        if !self.root.as_os_str().is_empty() && self.root.exists() {
             failures.extend(
                 std::fs::remove_dir_all(&self.root)
                     .err()
@@ -309,3 +435,39 @@ impl World {
 #[cfg(test)]
 #[path = "lifecycle.rs"]
 mod tests;
+fn configure(command: &mut tokio::process::Command, root: &Path, port: u16, origin: &str) -> Result<(), String> {
+    production::configure(
+        command,
+        root,
+        ([127, 0, 0, 1], port).into(),
+        origin,
+        "http://127.0.0.1:1/mcp",
+    )?;
+    let path = root.join("configured.private/bridge.toml");
+    let template = std::fs::read_to_string(&path).map_err(|_| "M3: missing configuration")?;
+    let start = template.find("[[mcp.server]]").ok_or("M3: missing example MCP")?;
+    let end = start + template[start..].find("[screen]").ok_or("M3: missing example screen")?;
+    let text = format!("{}[mcp]\nserver = []\n\n{}", &template[..start], &template[end..])
+        .replace("voice = \"alloy\"\n", "")
+        .replace("session_idle_seconds = 0", "session_idle_seconds = 120");
+    std::fs::write(
+        path,
+        // Match the controlled Responses provider rather than the pin's default.
+        format!(
+            "{text}\n[codex]\nhome = '{}'\ndelegate_model = 'gpt-5.4'\n",
+            root.join("home").display()
+        ),
+    )
+    .map_err(|_| "M3: cannot configure Codex")?;
+    command.arg("--sim-clock");
+    Ok(())
+}
+
+async fn host_ready(host: &mut Process) -> Result<Value, String> {
+    let value = host.line().await?;
+    match value["event"].as_str() {
+        Some("host.ready") => Ok(value),
+        Some("host.failed") => Err("M3: pinned hassmic-host startup failed before readiness".into()),
+        _ => Err("M3: unexpected hassmic-host startup observation".into()),
+    }
+}

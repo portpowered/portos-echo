@@ -276,7 +276,7 @@ async fn produce(client: &impl EchoLink, sink: &impl ReplySink, context: &Contex
         .await
         .map_err(|_| Error::Deadline)??;
     if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
-        clock.discarded_earcon(cut.dropped_frames)?;
+        clock.discarded("earcon", cut.dropped_frames)?;
     }
     let dropped = u32::try_from(cut.dropped_frames).map_err(|_| Error::Wyoming)?;
     Ok(FRAME * sent.checked_sub(dropped).ok_or(Error::Wyoming)?)

@@ -11,6 +11,7 @@ pub(crate) struct Shared {
     pub(crate) recv: Queue<PcmFrame>,
     pub(crate) ingress: Arc<Queue<rtc::rtp::Packet>>,
     pub(crate) tasks: Mutex<Vec<JoinHandle<()>>>,
+    pub(crate) resets: Queue<tokio::sync::oneshot::Sender<Result<(), Error>>>,
     readiness: Mutex<(bool, bool)>,
     setup: Mutex<(Option<SetupObserver>, u8)>,
     #[cfg(test)]
@@ -27,6 +28,7 @@ impl Shared {
             recv: Queue::new(capacity),
             ingress: Arc::new(Queue::new(capacity)),
             tasks: Mutex::new(Vec::new()),
+            resets: Queue::new(1),
             readiness: Mutex::new((false, false)),
             setup: Mutex::new((None, 0)),
             #[cfg(test)]
@@ -123,12 +125,47 @@ impl Shared {
         self.send.close();
         self.recv.close();
         self.ingress.close();
+        self.resets.close();
     }
     pub(crate) fn check(&self) -> Result<(), Error> {
         match *self.state.borrow() {
             PeerState::Closed => Err(Error::Closed),
             PeerState::Failed => Err(*self.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner)),
             _ => Ok(()),
+        }
+    }
+}
+
+impl Shared {
+    pub(crate) async fn receive(&self, mut decoder: crate::media_audio::Decoder) {
+        loop {
+            tokio::select! {
+                biased;
+                reset = self.resets.pop() => {
+                    let Some(ack) = reset else { break };
+                    let result = decoder.reset();
+                    // The receive task is the sole decoder/PCM producer. These
+                    // discards and acknowledgement have no intervening await.
+                    self.ingress.discard_with(|| {
+                        self.recv.discard();
+                        let _ = ack.send(result);
+                    });
+                    if let Err(error) = result { self.fail(error); break; }
+                }
+                packet = self.ingress.pop() => {
+                    let Some(packet) = packet else { break };
+                    let expansion = decoder.decode(&packet);
+                    #[cfg(test)]
+                    let emitted = expansion.as_ref().is_ok_and(Option::is_some);
+                    match expansion {
+                        Ok(Some(frame)) => self.recv.push(frame),
+                        Ok(None) => {}
+                        Err(error) => { self.fail(error); break; }
+                    }
+                    #[cfg(test)]
+                    self.received.send_modify(|p| { p.0 += 1; p.1 += u32::from(emitted); });
+                }
+            }
         }
     }
 }

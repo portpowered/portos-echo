@@ -93,6 +93,12 @@ impl Decoder {
             stream: None,
         })
     }
+    pub(crate) fn reset(&mut self) -> Result<(), Error> {
+        // Sequence/SSRC ownership survives replacement; a replay is still stale.
+        self.converter = Converter::new(960, 1.0 / 3.0)?;
+        self.codec = opus::Decoder::new(48_000, opus::Channels::Mono).map_err(|_| Error::Audio)?;
+        Ok(())
+    }
     pub(crate) fn decode(&mut self, packet: &rtc::rtp::Packet) -> Result<Option<PcmFrame>, Error> {
         let sequence = packet.header.sequence_number;
         if self.stream.is_some_and(|ssrc| ssrc != packet.header.ssrc) {

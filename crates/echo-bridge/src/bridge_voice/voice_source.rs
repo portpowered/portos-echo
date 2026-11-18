@@ -8,12 +8,25 @@ use tokio::time::{Duration, Instant};
 /// Samples at or below this level are WebRTC silence, not speech.
 const QUIET: u16 = 64;
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) enum ReplyState {
+    #[default]
+    Idle,
+    Speaking,
+    Cutting,
+    Retired,
+}
+
 pub(super) struct Source {
     pub microphone: Option<CaptureAudio>,
     pub microphone_finished: bool,
     pub muted: bool,
     pub reply: ReplyAudio,
     pub played: bool,
+    pub state: ReplyState,
+    pub cut_receipts: usize,
+    pub failure: &'static str,
+    lead_ms: u16,
     pub delegation: Delegation,
     pub mouth: Mouth,
     pub stats: Stats,
@@ -27,10 +40,32 @@ impl Source {
             muted,
             reply: ReplyAudio::new(lead_ms)?,
             played: false,
+            state: ReplyState::Idle,
+            cut_receipts: 0,
+            failure: "playback",
+            lead_ms,
             delegation: Delegation::default(),
             mouth: Mouth::default(),
             stats: Stats::default(),
         })
+    }
+
+    /// Retire all old playback state together; never flush an abandoned tail.
+    /// Stream order identifies the replacement at its next assistant delta.
+    pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
+        port.interrupt_turn()?;
+        if self.state != ReplyState::Speaking && !(self.state == ReplyState::Idle && self.delegation.turns > 0) {
+            return Ok(());
+        }
+        if self.state == ReplyState::Speaking {
+            port.retire_audio();
+        }
+        self.stats.reply_dropped += self.reply.dropped_frames();
+        self.reply = ReplyAudio::new(self.lead_ms)?;
+        self.delegation = Delegation::default();
+        self.mouth = Mouth::default();
+        self.state = ReplyState::Cutting;
+        Ok(())
     }
 
     /// Return whether this chunk was suppressed by the defensive mute gate.
@@ -62,24 +97,20 @@ impl Source {
         Ok(false)
     }
 
-    /// WebRTC media is continuous: quiet frames keep arriving after the
-    /// assistant transcript is done and the reply was flushed. They are counted
-    /// as received but not queued; audible late media still fails closed
-    /// rather than truncating the reply silently, except an abandoned
-    /// delegated answer.
+    /// Continuous RTP received after a completed reply belongs to the retired
+    /// converter. Discard both quiet and audible media at that boundary.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
-        let dropped = self.delegation.abandoned || quiet(frame);
-        if !(self.reply.finished() && dropped) {
+        if !matches!(self.state, ReplyState::Cutting | ReplyState::Retired)
+            && !self.reply.finished()
+            && !self.delegation.abandoned
+        {
+            // PCM has no utterance identity. Only ordered assistant control
+            // opens Speaking; the initial user transcript can lag audible RTP.
             self.reply.push(frame)?;
         }
         self.stats.reply_received += 1;
         Ok(())
     }
-}
-
-/// Peak at most 64 (about -54 dBFS): decoded silence, not speech.
-fn quiet(frame: &PcmFrame) -> bool {
-    frame.iter().all(|sample| sample.unsigned_abs() <= QUIET)
 }
 
 /// Preserve playback ownership until the device acknowledges an interrupted
@@ -101,6 +132,51 @@ pub(super) async fn settle_cut(
         Some(Err(error)) => Err(error.into()),
         None => Err(Error::Wyoming),
     }
+}
+
+/// Failure-only, closed-vocabulary diagnostics: never include device frames,
+/// provider text, addresses or credentials. Preserve the original failure.
+pub(super) async fn cut_generation(
+    client: &impl echo_link::EchoLink,
+    playback: impl std::future::Future<Output = Result<(), Error>>,
+    result: &std::cell::Cell<Option<Result<echo_link::PlayOutcome, echo_link::Error>>>,
+    deadline: std::time::Duration,
+    source: &Source,
+    sink_open: bool,
+) -> Result<(), Error> {
+    let cut = tokio::time::timeout(std::time::Duration::from_secs(1), client.cut_with_stats()).await;
+    let settled = async {
+        let stats = cut.map_err(|_| Error::Deadline)??;
+        // The cut discarded reply frames the paused clock counted as accepted.
+        if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
+            clock.discarded("reply", stats.dropped_frames)?;
+        }
+        settle_cut(playback, result, deadline).await
+    }
+    .await;
+    if let Err(error) = &settled {
+        playback_failure("cut_ack", error, source, sink_open, result.get());
+    }
+    settled
+}
+
+pub(super) fn playback_failure(
+    stage: &'static str,
+    error: &Error,
+    source: &Source,
+    sink_open: bool,
+    playback: Option<Result<echo_link::PlayOutcome, echo_link::Error>>,
+) {
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr(),
+        "echo-bridge: wyoming stage={stage} error={error:?} state={:?} sink_open={sink_open} finished={} drained={} played={} cut_receipts={} playback={playback:?}",
+        source.state,
+        source.reply.finished(),
+        source.reply.drained(),
+        source.played,
+        source.cut_receipts,
+    );
 }
 
 /// Delegated Codex turns and the assistant utterance they bracket. Each

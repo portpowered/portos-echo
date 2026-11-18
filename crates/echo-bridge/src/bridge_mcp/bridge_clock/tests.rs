@@ -160,7 +160,7 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
     context.submitted("earcon").unwrap();
     context.wrote(&65_i16.to_le_bytes().repeat(480)).unwrap();
     context.submitted("earcon").unwrap();
-    context.discarded_earcon(1).unwrap();
+    context.discarded("earcon", 1).unwrap();
     states.send(UiState::Speaking).await.unwrap();
     context.projected(&UiState::Speaking).unwrap();
     let step = async {
@@ -205,12 +205,17 @@ async fn receipt_rejects_unknown_sources_and_cut_cannot_hide_reply_or_written_pc
     let context = Context::new();
     assert_eq!(context.submitted("unknown"), Err(Error::Control));
     context.submitted("reply").unwrap();
-    assert_eq!(context.discarded_earcon(1), Err(Error::Control));
+    assert_eq!(context.discarded("earcon", 1), Err(Error::Control));
     let context = Context::new();
     context.submitted("earcon").unwrap();
     context.wrote(&65_i16.to_le_bytes()).unwrap();
-    assert_eq!(context.discarded_earcon(1), Err(Error::Control));
+    assert_eq!(context.discarded("earcon", 1), Err(Error::Control));
     assert_eq!(context.advance(0).await, Err(Error::Control));
+    let context = Context::new();
+    context.submitted("reply").unwrap();
+    context.submitted("earcon").unwrap();
+    assert_eq!(context.discarded("reply", 1), Err(Error::Control));
+    assert_eq!(context.discarded("reply", 2), Err(Error::Control));
 }
 
 /// T3: real loopback sockets at the guarded bridge write boundary.

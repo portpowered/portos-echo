@@ -135,15 +135,15 @@ async fn echo_link_cut_is_idempotent_and_preserves_tail_through_played() {
     let server = async {
         assert_eq!(receive(&mut peer).await.header.r#type, "audio-start");
         assert_eq!(receive(&mut peer).await.header.r#type, "audio-stop");
-        // A cancellation after the normal stop cannot request continuation.
-        assert_eq!(
-            EchoLink::cut_with_stats(&client).await.unwrap(),
-            CutStats { dropped_frames: 0 }
-        );
         send(&mut peer, "played", json!(null), vec![]).await;
     };
     let (result, ()) = tokio::join!(normal, server);
     assert_eq!(result, Ok(PlayOutcome::Played));
+    // Played retires the owner; only then is a subsequent cut a no-op.
+    assert_eq!(
+        EchoLink::cut_with_stats(&client).await.unwrap(),
+        CutStats { dropped_frames: 0 }
+    );
     assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
     EchoLink::close(&client).await.unwrap();
 }

@@ -105,8 +105,9 @@ impl Owner {
             assert_eq!(self.screen.next().await.unwrap()["state"]["state"], *state);
         }
     }
+    /// The bridge is still running whenever an owner reads its trace.
     pub(super) fn trace(&self) -> Trace {
-        read_trace(&self.output.path().join("bridge.private.jsonl")).unwrap()
+        running_trace(&self.output.path().join("bridge.private.jsonl")).unwrap()
     }
 
     pub(super) async fn close(mut self, expected_calls: usize) {

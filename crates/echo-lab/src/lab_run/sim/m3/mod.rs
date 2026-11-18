@@ -10,6 +10,110 @@ use serde_json::Value;
 pub const FIRST: &str = "Computer, what time is it?";
 pub const SECOND: &str = "Computer, what day is it?";
 
+/// Fixture-local control ordering; never a bridge or scenario configuration.
+#[derive(Clone, Copy)]
+pub(super) enum CutOrder {
+    DoneFirst,
+    #[cfg(test)]
+    TranscriptFirst,
+    #[cfg(test)]
+    Delegated,
+}
+
+impl CutOrder {
+    fn events(self) -> Vec<Value> {
+        let done = serde_json::json!({"type":"turn.done", "turn":{"role":"assistant", "transcript":"The time"}});
+        let user = serde_json::json!({"type":"input_transcript.added", "item":{"text":"What day is it?"}});
+        match self {
+            Self::DoneFirst => vec![done, user],
+            #[cfg(test)]
+            Self::TranscriptFirst => vec![user, done],
+            #[cfg(test)]
+            Self::Delegated => vec![done, user.clone(), user],
+        }
+    }
+
+    fn delegated(self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::Delegated => true,
+            _ => false,
+        }
+    }
+
+    async fn begin(self, process: &mut super::process::Process) -> Result<(), String> {
+        if !self.delegated() {
+            return Ok(());
+        }
+        process
+            .send(&serde_json::json!({"tag":"delegate", "events":[{
+                "type":"delegation.created", "item":{"type":"delegation", "target":"client",
+                "id":"barge-delegation", "content":[{"type":"input_text", "text":"Give the old answer."}]}
+            }]}))
+            .await?;
+        let mut observations = Vec::new();
+        for _ in 0..2 {
+            let observation = process.line().await?;
+            if observation["event"] == "provider.failure" {
+                return Err("M3 delegation: controlled provider rejected the model request".into());
+            }
+            observations.push(observation["event"].as_str().unwrap_or_default().to_owned());
+        }
+        observations.sort();
+        if observations != ["provider.model_started", "provider.sent"] {
+            return Err("M3 delegation: expected exactly one pending model and sideband receipt".into());
+        }
+        Ok(())
+    }
+
+    async fn release(self, process: &mut super::process::Process) -> Result<(), String> {
+        if self.delegated() {
+            process.send(&serde_json::json!({"release_model":true})).await?;
+            process.expect("provider.model_released").await?;
+        }
+        Ok(())
+    }
+
+    async fn release_if_ready(
+        self,
+        process: &mut super::process::Process,
+        acknowledgements: usize,
+        phase: &mut u8,
+    ) -> Result<bool, String> {
+        if !self.delegated() || *phase != 3 {
+            return Ok(true);
+        }
+        match acknowledgements {
+            0 => return Ok(false),
+            1 => self.release(process).await?,
+            _ => return Err("M3 delegation: duplicate turn/interrupt acknowledgement".into()),
+        }
+        *phase = 8;
+        Ok(true)
+    }
+
+    async fn verify(self, process: &mut super::process::Process) -> Result<(), String> {
+        if self.delegated() {
+            process.send(&serde_json::json!({"snapshot":true})).await?;
+            let snapshot = process.expect("provider.snapshot").await?;
+            if snapshot["models"] != 1
+                || snapshot["released"] != 1
+                || snapshot["external"] != 0
+                || snapshot["appends"].as_array().is_none_or(|items| {
+                    items
+                        .iter()
+                        .any(|item| item.to_string().contains("stale delegated answer"))
+                })
+            {
+                return Err(
+                    "M3 delegation: late completion leaked or model boundary was not exercised exactly once".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 pub fn utterance(value: &str) -> Result<Step, String> {
     if !matches!(value, FIRST | SECOND) {
         return Err("M3: no synthetic marker for this utterance".into());
@@ -132,7 +236,7 @@ impl Driver for M3<'_> {
             artifacts.observation(record)?;
         }
         if let Some(state) = &self.world.final_wire {
-            artifacts.event("m3.wire", None, Some(&format!("runs={} inputs={} Live-frames={:?} reply_bytes={:?} stops={} Played={} first_host_pcm={:?} second_host_pcm={:?}", state.runs, state.inputs, self.world.muted_live_before, state.bytes, state.stops, state.played.len(), self.world.first_pcm, self.world.second_pcm)))?;
+            artifacts.event("m3.wire", None, Some(&format!("runs={} inputs={} Live-frames={:?} reply_bytes={:?} stops={} Played={} cut_order={:?} first_host_pcm={:?} second_host_pcm={:?}", state.runs, state.inputs, self.world.muted_live_before, state.bytes, state.stops, state.played.len(), state.cut_order, self.world.first_pcm, self.world.second_pcm)))?;
         }
         cleanup?;
         for (values, first) in &self.traces {

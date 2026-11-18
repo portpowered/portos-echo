@@ -322,7 +322,7 @@ async fn voice_wire_mute_drains_preceding_capture_and_counts_only_suppressed_chu
     assert_eq!(*sent.lock().unwrap(), [[1; 320], [2; 320]]);
 }
 
-struct Stalled;
+pub(super) struct Stalled;
 impl ReplySink for Stalled {
     fn send(&self, _: Vec<u8>) -> impl Future<Output = Result<(), echo_link::Error>> + Send {
         std::future::pending()

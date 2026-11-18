@@ -476,14 +476,12 @@ async fn m2_codex_negative_cases_reject_before_admission_and_release_private_hom
             .await
             .unwrap();
         assert_eq!(result, Ok(()), "{measured}");
-        assert_eq!(
-            measured["refreshes"],
-            if case == "expired" {
-                oracle::EXPIRED_REFRESHES
-            } else {
-                0
-            }
-        );
+        let refreshes = if case == "expired" {
+            oracle::EXPIRED_REFRESHES
+        } else {
+            0
+        };
+        assert_eq!(measured["refreshes"], refreshes);
         assert_eq!(measured["home_released"], true);
         assert_eq!(measured["auth_unchanged"], true);
         assert_eq!(measured["wyoming_admissions"], 0);

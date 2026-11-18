@@ -303,7 +303,10 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         let mut stats = CutStats::default();
         if let Some(play) = &mut self.play {
             stats.dropped_frames = play.quiesce().await?;
-            if !play.stopped {
+            // Source EOF stops writes, but the device can still be playing.
+            // Until Played retires this owner, a first cut must retain capture
+            // and receive its own Cut outcome even after the ordinary stop.
+            if !play.cut {
                 play.cut = true;
                 play.stopped = true;
                 self.send(WyomingEvent::Other("hassmic-flush".into(), Value::Null), vec![])

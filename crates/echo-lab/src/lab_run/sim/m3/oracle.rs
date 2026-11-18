@@ -21,7 +21,7 @@ pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) ->
     }
     if wire.played.len() != 2
         || wire.started != 2
-        || wire.stops != 1
+        || wire.stops != 1 + usize::from(wire.cut_order == Some("after_stop_before_played"))
         || wire.ends != 1
         || second_pcm != Some(9600)
         || wire.bytes[1] != 9600
@@ -34,8 +34,9 @@ pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) ->
             wire.bytes[1]
         ));
     }
+    let timing = stimulus_timing(wire)?;
     Ok(format!(
-        "first_reply_played=true barge_in_cut_ms={cut_ms:.3} barge_in_budget_ms=600 reply_send_window_ms=200 reply_bytes_after_cancel_window=0 second_answer_played=true flushes=1 {flush} post_played_tail_bytes=3200 live_tail_frames=5"
+        "{timing} first_reply_played=true barge_in_cut_ms={cut_ms:.3} barge_in_budget_ms=600 reply_send_window_ms=200 reply_bytes_after_cancel_window=0 second_answer_played=true flushes=1 {flush} post_played_tail_bytes=3200 live_tail_frames=5"
     ))
 }
 
@@ -90,6 +91,33 @@ pub fn flush(value: &Value, sent: usize, sink: u64) -> Result<String, String> {
     ))
 }
 
+fn stimulus_timing(wire: &Ledger) -> Result<String, String> {
+    let stimulus = wire.stimulus.ok_or("M3 timing: missing input stimulus")?;
+    let transcript = wire.cancel.ok_or("M3 timing: missing transcript stimulus")?;
+    let cut = wire.cut_stop.ok_or("M3 timing: missing acknowledged cut stop")?;
+    let last = wire.last_old_reply.ok_or("M3 timing: missing old reply frame")?;
+    let elapsed = |end: tokio::time::Instant| {
+        end.checked_duration_since(stimulus)
+            .map(|duration| duration.as_secs_f64() * 1000.0)
+            .ok_or("M3 timing: observation precedes stimulus")
+    };
+    if last > cut || cut < transcript {
+        return Err("M3 timing: reply frame after cut or cut before transcript".into());
+    }
+    // The send window can finish before the stimulus while native playout is
+    // still active. Keep that measured lead signed; Played above proves silence.
+    let last_ms = if last >= stimulus {
+        last.duration_since(stimulus).as_secs_f64() * 1000.0
+    } else {
+        -stimulus.duration_since(last).as_secs_f64() * 1000.0
+    };
+    Ok(format!(
+        "fixture_transcript_delay_ms=0 stimulus_to_transcript_ms={:.3} stimulus_to_cut_ms={:.3} stimulus_to_last_reply_ms={last_ms:.3}",
+        elapsed(transcript)?,
+        elapsed(cut)?,
+    ))
+}
+
 pub fn muted(records: &[Value], before: u64, after: u64) -> Result<String, String> {
     let windows: Vec<_> = records
         .iter()
@@ -141,9 +169,57 @@ mod tests {
             bytes: [28800, 9600],
             old_sink_pcm: Some(19200),
             cancel: Some(cancel),
+            stimulus: Some(cancel - Duration::from_millis(100)),
+            cut_stop: Some(cancel + Duration::from_millis(50)),
+            last_old_reply: Some(cancel + Duration::from_millis(20)),
             played: vec![cancel + Duration::from_millis(200), cancel + Duration::from_millis(500)],
             ..Ledger::default()
         }
+    }
+
+    #[test]
+    fn stimulus_timing_reports_measured_boundaries_and_rejects_missing_or_reordered_edges() {
+        let state = observed();
+        assert_eq!(
+            stimulus_timing(&state).unwrap(),
+            "fixture_transcript_delay_ms=0 stimulus_to_transcript_ms=100.000 stimulus_to_cut_ms=150.000 stimulus_to_last_reply_ms=120.000"
+        );
+        for invalid in [
+            Ledger {
+                stimulus: None,
+                ..state.clone()
+            },
+            Ledger {
+                cut_stop: None,
+                ..state.clone()
+            },
+            Ledger {
+                last_old_reply: state.played.last().copied(),
+                ..state.clone()
+            },
+            Ledger {
+                stimulus: state.cut_stop,
+                ..state.clone()
+            },
+        ] {
+            assert!(stimulus_timing(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn buffered_native_playout_can_outlast_the_last_sent_frame() {
+        let mut state = observed();
+        state.last_old_reply = Some(state.stimulus.unwrap() - Duration::from_millis(20));
+        let report = duplex(&state, Some(960), Some(9600)).unwrap();
+        assert!(report.contains("stimulus_to_last_reply_ms=-20.000"));
+        assert!(report.contains("barge_in_cut_ms=200.000"));
+        state.played[0] = state.cancel.unwrap() + Duration::from_millis(600);
+        assert!(duplex(&state, Some(960), Some(9600)).is_err());
+        state.played[0] = state.cancel.unwrap() - Duration::from_millis(1);
+        assert!(duplex(&state, Some(960), Some(9600)).is_err());
+        state.played[0] = state.cancel.unwrap() + Duration::from_millis(200);
+        state.after_window = 960;
+        assert!(duplex(&state, Some(960), Some(9600)).is_err());
     }
 
     #[test]
@@ -159,6 +235,18 @@ mod tests {
                 duplex(&state, Some(960), Some(9600)).unwrap_err(),
                 "M3 continuation: expected one flush, 3200 post-Played bytes and 5 Live tail frames"
             );
+        }
+    }
+
+    #[test]
+    fn drained_first_reply_keeps_its_stop_separate_from_flush() {
+        let mut state = observed();
+        state.cut_order = Some("after_stop_before_played");
+        state.stops = 2;
+        assert!(duplex(&state, Some(960), Some(9600)).is_ok());
+        for stops in [0, 1, 3] {
+            state.stops = stops;
+            assert!(duplex(&state, Some(960), Some(9600)).is_err());
         }
     }
 

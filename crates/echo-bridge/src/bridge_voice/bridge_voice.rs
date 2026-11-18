@@ -40,7 +40,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::{Instant, timeout, timeout_at},
 };
-use voice_source::Source;
+use voice_source::{ReplyState, Source};
 
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
@@ -50,6 +50,14 @@ pub trait VoicePort {
     fn next(&mut self) -> impl Future<Output = Result<MediaEvent, Error>>;
     /// Never wait for future audio. EOF/error must be an error, not an empty queue.
     fn ready_audio(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, Error>>;
+    /// Mark the interrupted media generation for retirement at replacement.
+    fn retire_audio(&mut self) {}
+    /// Cancel the owned delegated turn once; ports without turns do nothing.
+    /// # Errors
+    /// Reports the existing bounded interrupt admission failure.
+    fn interrupt_turn(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> VoicePort for MediaCall<'_, R, W, P> {
@@ -61,6 +69,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> VoicePort for Me
     }
     async fn ready_audio(&mut self) -> Result<Option<PcmFrame>, Error> {
         Self::ready_audio(self).await
+    }
+    fn retire_audio(&mut self) {
+        Self::retire_audio(self);
     }
 }
 
@@ -106,7 +117,7 @@ pub struct Stats {
 /// played. A stopped source, empty queue or transcript alone cannot finish.
 ///
 /// # Errors
-/// Late audio after the drain boundary, tools without a dispatcher, unexpected
+/// Tools without a dispatcher, unexpected
 /// wake, EOF, cancellation and fixed deadlines fail closed. Error cleanup
 /// requests a bounded cut; the host must then await call and device close.
 /// Drop/cancellation also requires host cleanup. This owner does not close a
@@ -124,7 +135,60 @@ pub async fn run<L: EchoLink>(
         return Err(Error::Deadline);
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
+    // A cut replaces playback, while the run still owns pending clock receipts.
+    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
+        .map(|clock| clock.voice())
+        .transpose()?;
+    tokio::pin!(cancelled);
+    loop {
+        let result = generation(
+            client,
+            (events, &mut microphone),
+            port,
+            (&mut source, &mut drain),
+            &options,
+            cancelled.as_mut(),
+            &mut observe,
+        )
+        .await;
+        if result == Err(Error::Control) && source.state == ReplyState::Cutting {
+            source.state = ReplyState::Retired;
+            source.cut_receipts += usize::from(!source.played);
+            source.played = false;
+            observe(Notice::ReplyPaused)?;
+        } else {
+            result?;
+            break;
+        }
+    }
+    if let Some(drain) = drain.take() {
+        drain.finish();
+    }
+    observe(Notice::ReplyPlayed)?;
+    source.stats.received_chunks = microphone.stats().received;
+    source.stats.dropped_chunks = microphone.stats().dropped;
+    source.stats.reply_dropped += source.reply.dropped_frames();
+    Ok(source.stats)
+}
+
+async fn generation<L: EchoLink>(
+    client: &L,
+    input: (&mut L::Events, &mut <L::Events as LinkEvents>::Run),
+    port: &mut impl VoicePort,
+    context: (
+        &mut Source,
+        &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
+    ),
+    options: &Options,
+    cancelled: impl Future<Output = ()>,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let (events, microphone) = input;
+    let (source, drain) = context;
     let (sink, reply) = client.reply_channel(NonZeroUsize::MIN);
+    // Keep the producer alive until cut is acknowledged. Closing it first can
+    // race the cut command with an ordinary audio-stop in the device owner.
+    let mut sink = Some(sink);
     let ceiling = options.response_deadline.saturating_duration_since(Instant::now()) + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
     let playback_started = std::cell::Cell::new(false);
@@ -145,7 +209,7 @@ pub async fn run<L: EchoLink>(
         tokio::select! {
             biased;
             () = cancelled => Err(Error::Control),
-            result = drive(events, &mut microphone, port, sink, &mut source, &options, &mut observe) => result,
+            result = drive(events, microphone, port, &mut sink, (source, drain), options, observe) => result,
         }
     };
     let result = timeout_at(options.response_deadline + options.played_timeout, async {
@@ -154,41 +218,51 @@ pub async fn run<L: EchoLink>(
     .await
     .unwrap_or(Err(Error::Deadline));
     if let Err(error) = result {
+        if error == Error::Wyoming {
+            voice_source::playback_failure(source.failure, &error, source, sink.is_some(), playback_result.get());
+        }
         // The earcon scope still owns the speaker until reply playback starts.
         // Its joined supervisor cuts/collects that operation on borrower exit.
         if !playback_started.get() {
             return Err(error);
         }
-        let cut = timeout(Duration::from_secs(1), client.cut_with_stats()).await;
         if error == Error::Control {
-            cut.map_err(|_| Error::Deadline)??;
-            voice_source::settle_cut(playback.as_mut(), &playback_result, options.played_timeout).await?;
+            voice_source::cut_generation(
+                client,
+                playback.as_mut(),
+                &playback_result,
+                options.played_timeout,
+                source,
+                sink.is_some(),
+            )
+            .await?;
+        } else {
+            let _ = timeout(Duration::from_secs(1), client.cut_with_stats()).await;
         }
         return Err(error);
     }
-    observe(Notice::ReplyPlayed)?;
-    source.stats.received_chunks = microphone.stats().received;
-    source.stats.dropped_chunks = microphone.stats().dropped;
-    source.stats.reply_dropped = source.reply.dropped_frames();
-    Ok(source.stats)
+    Ok(())
 }
 
 async fn drive<E: LinkEvents>(
     events: &mut E,
     microphone: &mut E::Run,
     port: &mut impl VoicePort,
-    sink: impl ReplySink,
-    source: &mut Source,
+    sink: &mut Option<impl ReplySink>,
+    context: (
+        &mut Source,
+        &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
+    ),
     options: &Options,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    let mut sink = Some(sink);
-    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
-        .map(|clock| clock.voice())
-        .transpose()?;
+    let (source, drain) = context;
     let mut pending = None;
     let mut deadline = options.response_deadline;
     loop {
+        if source.state == ReplyState::Cutting {
+            return Err(Error::Control);
+        }
         if source.reply.drained() && pending.is_none() && sink.is_some() {
             drop(sink.take());
             deadline = Instant::now() + options.played_timeout;
@@ -214,16 +288,18 @@ async fn drive<E: LinkEvents>(
             },
             result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,
             () = async {
-                match &mut drain {
+                match drain {
                     Some(drain) => drain.acknowledge().await,
                     None => std::future::pending().await,
                 }
             }, if pending.is_none() => {},
         }
-        if source.played && source.microphone_finished && sink.is_none() && source.mouth.due().is_none() {
-            if let Some(drain) = drain.take() {
-                drain.finish();
-            }
+        if source.state != ReplyState::Cutting
+            && source.played
+            && source.microphone_finished
+            && sink.is_none()
+            && source.mouth.due().is_none()
+        {
             return Ok(());
         }
     }
@@ -239,9 +315,14 @@ async fn step<E: LinkEvents>(
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     tokio::select! {
-        event = events.recv() => device(&event?.ok_or(Error::Wyoming)?, sink.is_none(), source, observe),
+        event = events.recv() => match event {
+            Ok(Some(event)) => device(&event, sink.is_none(), source, observe),
+            Ok(None) => { source.failure = "events_eof"; Err(Error::Wyoming) },
+            Err(error) => { source.failure = "events_recv"; Err(error.into()) },
+        },
         frame = earcon::microphone(microphone), if !source.microphone_finished => {
-            if source.capture(frame?, port)? {
+            let frame = frame.map_err(|error| { source.failure = "microphone_recv"; Error::from(error) })?;
+            if source.capture(frame, port)? {
                 observe(Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
             }
             Ok(())
@@ -252,7 +333,7 @@ async fn step<E: LinkEvents>(
             Ok(())
         },
         result = forward(sink, pending.as_deref()), if pending.is_some() => {
-            result?;
+            result.inspect_err(|_| { source.failure = "reply_send"; })?;
             if let Some(frame) = pending.take() {
                 source.mouth.wrote(&frame, Instant::now());
                 if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
@@ -285,7 +366,12 @@ fn device<R>(
     }
     let event = match event {
         LinkEvent::Played => {
+            if source.cut_receipts > 0 {
+                source.cut_receipts -= 1;
+                return Ok(());
+            }
             if !stopped {
+                source.failure = "premature_played";
                 return Err(Error::Wyoming);
             }
             source.played = true;
@@ -302,7 +388,10 @@ fn device<R>(
         }
         LinkEvent::MicrophoneDropped(count) => LinkEvent::MicrophoneDropped(*count),
         LinkEvent::Other => LinkEvent::Other,
-        LinkEvent::Wake(_) => return Err(Error::Wyoming),
+        LinkEvent::Wake(_) => {
+            source.failure = "unexpected_wake";
+            return Err(Error::Wyoming);
+        }
     };
     observe(Notice::Device(event))
 }
@@ -316,6 +405,9 @@ async fn media(
     match event {
         MediaEvent::Audio(frame) => source.audio(&frame),
         MediaEvent::Control(Event::ReplyDone { text }) => {
+            if source.state == ReplyState::Retired {
+                return Ok(());
+            }
             observe(Notice::Transcript {
                 role: "assistant".into(),
                 text,
@@ -334,7 +426,10 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::Transcript { role, text, done }) => {
-            if role == "assistant" && !done {
+            if role == "user" {
+                source.interrupt(port)?;
+            } else if role == "assistant" && !done {
+                source.state = ReplyState::Speaking;
                 source.delegation.spoke();
             }
             observe(Notice::Transcript { role, text, done })
@@ -347,6 +442,7 @@ async fn media(
             source.delegation.completed();
             Ok(())
         }
+        MediaEvent::Control(Event::SpeechStarted) => source.interrupt(port),
         MediaEvent::Control(Event::Other) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }
