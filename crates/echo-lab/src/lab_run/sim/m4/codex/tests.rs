@@ -67,17 +67,13 @@ fn paired_sequence_rejects_a_discarded_late_mouth_interval() {
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production bridge and offline Codex pin"]
 async fn t3_m4_canonical_provider_matches_real_pin_tools_media_and_native_receipts() {
-    tokio::time::timeout(Duration::from_secs(25), Box::pin(exercise(false)))
-        .await
-        .unwrap();
+    exercise(false).await;
 }
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production bridge and offline Codex pin"]
 async fn t3_m4_canonical_provider_reports_mcp_failure_with_one_native_append() {
-    tokio::time::timeout(Duration::from_secs(25), Box::pin(exercise(true)))
-        .await
-        .unwrap();
+    exercise(true).await;
 }
 
 async fn exercise(negative: bool) {
@@ -86,49 +82,81 @@ async fn exercise(negative: bool) {
 
 async fn exercise_mode(negative: bool, emotion: bool) {
     let measurement = phase::Measurement::new(negative, emotion);
+    let phases = phase::Phase::new("bridge ready", phase::STARTUP);
     let options = options();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (wake, awakened) = oneshot::channel();
-    let satellite = tokio::spawn(satellite(listener, awakened, measurement));
+    let mut satellite = tokio::spawn(satellite(listener, awakened, measurement, phases.clone()));
     let mut case = Case {
         emotion,
         ..Case::default()
     };
-    case.connect(&options, negative, address).await.unwrap();
-    measurement.mark("bridge ready");
-    let path = case.root.as_ref().unwrap().0.clone();
-    let mut screen = Screen::connect(&path).await.unwrap();
-    screen.expect("ready").await.unwrap();
-    wake.send(()).unwrap();
+    let observed = phases
+        .wait(async {
+            case.connect(&options, negative, address).await?;
+            phases.seen("bridge.ready");
+            measurement.mark("bridge ready");
+            let path = &case.root.as_ref().unwrap().0;
+            let mut screen = Screen::connect(path).await?;
+            screen.expect("ready").await?;
+            phases.seen("screen.ready");
+            wake.send(()).map_err(|()| "satellite: wake receiver closed")?;
+            phases.next("provider/session ready", phase::STARTUP);
+            work(&mut case, &mut screen, negative, emotion, measurement, &phases).await
+        })
+        .await;
+    let path = case.root.as_ref().map(|root| root.0.clone());
+    let timing = case.relay.as_ref().map(Relay::timing);
+    phases.next("receipts collected", phase::CLEANUP);
+    let closed = phases.wait(case.close()).await;
+    if closed.is_ok() {
+        measurement.mark("receipts collected");
+    }
+    let result = phase::finish(observed, closed);
+    if result.is_err() {
+        satellite.abort();
+    }
+    let joined = phases
+        .wait(async { (&mut satellite).await.map_err(|_| "satellite: task failed".to_owned()) })
+        .await;
+    satellite.abort();
+    assert!(result.is_ok(), "work: {result:?}; satellite: {joined:?}");
+    let (completion, frames) = result.unwrap();
+    assert_eq!(completion, json!({"event":"bridge.run_completed","run_id":"run-1"}));
+    assert_results(&case, &timing.unwrap(), negative, emotion);
+    assert_eq!(joined.unwrap(), 9600);
+    assert_presentation(&frames, negative, emotion);
+    assert!(!path.unwrap().exists());
+}
+
+async fn work(
+    case: &mut Case,
+    screen: &mut Screen,
+    negative: bool,
+    emotion: bool,
+    measurement: phase::Measurement,
+    phases: &phase::Phase,
+) -> Result<(Value, Vec<Value>), String> {
     let (connected, ready) = oneshot::channel();
-    let spoof = case.spoof.as_ref().unwrap();
     let replies = case.provider.as_ref().unwrap().commands.clone();
-    let observed = tokio::time::timeout(Duration::from_secs(20), async {
-        tokio::try_join!(
-            settle(
-                case.bridge.as_mut().unwrap(),
-                case.provider.as_mut().unwrap(),
-                case.relay.as_ref().unwrap(),
-                ready,
-                &mut case.clock
-            ),
-            presentation(&mut screen, spoof, (negative, emotion), connected, replies, measurement)
+    tokio::try_join!(
+        settle(
+            case.bridge.as_mut().unwrap(),
+            case.provider.as_mut().unwrap(),
+            case.relay.as_ref().unwrap(),
+            ready,
+            &mut case.clock
+        ),
+        presentation(
+            screen,
+            case.spoof.as_ref().unwrap(),
+            (negative, emotion),
+            connected,
+            replies,
+            (measurement, phases)
         )
-    })
-    .await;
-    let timing = case.relay.as_ref().unwrap().timing();
-    let closed = case.close().await;
-    measurement.mark("receipts collected");
-    assert_eq!(closed, Ok(()), "work: {observed:?}");
-    assert_eq!(
-        observed.as_ref().unwrap().as_ref().unwrap().0,
-        json!({"event":"bridge.run_completed","run_id":"run-1"})
-    );
-    assert_results(&case, &timing, negative, emotion);
-    assert_eq!(satellite.await.unwrap(), 9600);
-    assert_presentation(&observed.as_ref().unwrap().as_ref().unwrap().1, negative, emotion);
-    assert!(!path.exists());
+    )
 }
 
 fn assert_presentation(frames: &[Value], negative: bool, emotion: bool) {
@@ -149,10 +177,16 @@ fn assert_presentation(frames: &[Value], negative: bool, emotion: bool) {
     }
 }
 
-async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>, measurement: phase::Measurement) -> usize {
+async fn satellite(
+    listener: TcpListener,
+    wake: oneshot::Receiver<()>,
+    measurement: phase::Measurement,
+    phases: phase::Phase,
+) -> usize {
     let mut socket = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut socket).await.0["type"], "run-satellite");
     assert_eq!(read(&mut socket).await.0["type"], "describe");
+    phases.seen("satellite.describe");
     send(&mut socket, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await;
     wake.await.unwrap();
     let row: Value = serde_json::from_str(
@@ -167,12 +201,13 @@ async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>, measureme
     .unwrap();
     send(&mut socket, "run-pipeline", row["header"]["data"].clone(), vec![]).await;
     capture(&mut socket).await;
-    let count = playback(&mut socket).await;
+    let count = playback(&mut socket, &phases).await;
+    phases.seen("satellite.played");
     measurement.mark("media done");
     assert_eq!(socket.read(&mut [0]).await.unwrap(), 0);
     count
 }
-async fn playback(socket: &mut TcpStream) -> usize {
+async fn playback(socket: &mut TcpStream, phases: &phase::Phase) -> usize {
     let mut pcm = vec![];
     loop {
         let (header, bytes) = read(socket).await;
@@ -182,6 +217,7 @@ async fn playback(socket: &mut TcpStream) -> usize {
             "audio-chunk" => {
                 assert_eq!(bytes.len(), 960);
                 pcm.extend(bytes);
+                phases.seen("satellite.audio-chunk");
             }
             "audio-stop" => {
                 send(socket, "played", json!({}), vec![]).await;
@@ -267,13 +303,17 @@ async fn presentation(
     mode: (bool, bool),
     connected: oneshot::Sender<()>,
     replies: tokio::sync::mpsc::Sender<Control>,
-    measurement: phase::Measurement,
+    timing: (phase::Measurement, &phase::Phase),
 ) -> Result<Vec<Value>, String> {
+    let (measurement, phases) = timing;
     let (negative, emotion) = mode;
     let mut states = vec![];
     observe(screen, &mut states, "listening").await?;
+    phases.seen("screen.listening");
     observe(screen, &mut states, "connected").await?;
+    phases.seen("screen.connected");
     measurement.mark("provider/session ready");
+    phases.next("tools listed", Duration::from_secs(1));
     // Catalog discovery precedes session startup. This is an observation upper
     // bound at connected, not an invented tools/list arrival timestamp.
     if spoof
@@ -283,8 +323,12 @@ async fn presentation(
         .iter()
         .any(|request| request.method == "tools/list")
     {
+        phases.seen("mcp.tools/list");
         measurement.mark("tools listed (observed by connected)");
+    } else {
+        return Err("m4: missing MCP tools/list observation".into());
     }
+    phases.next("media done", phase::MEDIA);
     if negative {
         spoof.set_fault(Fault::Http500).unwrap();
     }
@@ -297,7 +341,9 @@ async fn presentation(
         replies.send(Control::Reply).await.unwrap();
     }
     observe(screen, &mut states, "speaking").await?;
+    phases.seen("screen.speaking");
     observe(screen, &mut states, "ready").await?;
+    phases.seen("screen.ready");
     Ok(states)
 }
 fn stages(trace: &Trace) {
@@ -342,9 +388,7 @@ fn text(negative: bool) -> &'static str {
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production bridge and offline Codex pin"]
 async fn t3_m6_canonical_provider_preserves_exact_animation_transcript_and_pcm() {
-    tokio::time::timeout(Duration::from_secs(25), Box::pin(exercise_mode(false, true)))
-        .await
-        .unwrap();
+    exercise_mode(false, true).await;
 }
 
 fn assert_animation(frames: Vec<Value>) {
@@ -381,7 +425,5 @@ fn assert_results(case: &Case, timing: &Timing, negative: bool, emotion: bool) {
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production bridge and offline Codex pin"]
 async fn t3_m6_canonical_http500_never_animates_and_retains_honest_fallback() {
-    tokio::time::timeout(Duration::from_secs(25), Box::pin(exercise_mode(true, true)))
-        .await
-        .unwrap();
+    exercise_mode(true, true).await;
 }
