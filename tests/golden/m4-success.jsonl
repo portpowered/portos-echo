@@ -3,6 +3,14 @@
 {"elapsed_ms":0,"event":"bridge.ready","provider_auth_mode":"api_key"}
 {"elapsed_ms":0,"event":"wyoming.run_started","provider_auth_mode":"api_key","run_id":"run_id-1"}
 {"elapsed_ms":0,"event":"run.started","provider_auth_mode":"api_key","run_id":"run_id-1"}
+{"elapsed_ms":0,"event":"call.peer_created","provider_auth_mode":"api_key"}
+{"elapsed_ms":0,"event":"call.offer_ready","provider_auth_mode":"api_key"}
+{"elapsed_ms":0,"event":"call.realtime_start_sent","provider_auth_mode":"api_key"}
+{"elapsed_ms":0,"event":"call.answer_received","provider_auth_mode":"api_key"}
+{"elapsed_ms":0,"event":"call.answer_applied","provider_auth_mode":"api_key"}
+{"elapsed_ms":0,"event":"call.ice_connected","provider_auth_mode":"api_key"}
+{"elapsed_ms":0,"event":"call.data_channel_open","provider_auth_mode":"api_key"}
+{"elapsed_ms":0,"event":"call.live_connected","provider_auth_mode":"api_key"}
 {"call_id":"call_id-1","delegation_id":"delegation_id-1","elapsed_ms":0,"event":"delegation.created","provider_auth_mode":"api_key","run_id":"run_id-1","source":"provider.sideband","thread_id":"thread_id-1","turn_id":"turn_id-1"}
 {"call_id":"call_id-1","elapsed_ms":0,"event":"item/tool/call","name":"test.echo","provider_auth_mode":"api_key","request_id":0,"run_id":"run_id-1","thread_id":"thread_id-1","turn_id":"turn_id-1"}
 {"call_id":"call_id-1","elapsed_ms":0,"event":"tools/call","name":"test.echo","provider_auth_mode":"api_key","run_id":"run_id-1","thread_id":"thread_id-1","turn_id":"turn_id-1"}
