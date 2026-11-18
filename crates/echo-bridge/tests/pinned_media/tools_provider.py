@@ -104,6 +104,10 @@ class Delegation:
         description = blocks[0][0]['tools'][0]['description']
         nested = re.findall(r'^### `([^`]+)`$', description, re.M)
         print(json.dumps({'model': self.model, 'tools': names, 'nested': nested}), file=sys.stderr, flush=True)
+        # Pin spec_plan.rs:1178-1204 registers async input from bundled model
+        # metadata independently of tools.experimental_request_user_input.enabled.
+        # :1225-1251 registers clock from that metadata and default sleep_tool.
+        # The binding amendment permits these exact extras, not synchronous input.
         assert names == ['functions.exec', 'functions.wait', 'functions.request_user_input_async', 'clock.sleep'], names
         assert nested == sorted(tool['name'] for tool in self.tools) + ['clock__curr_time'], nested
         for tool, fields in zip(self.tools, ['text: string;', 'ms: number;', '', 'name: string;']):
@@ -116,7 +120,10 @@ class Delegation:
 
     def check_output(self, output):
         if self.native:
-            assert len(output) == 2, 'native output content count mismatch'
+            # Observe the entire synthetic result before decoding, including a
+            # runtime failure or unexpected platform-specific representation.
+            print(json.dumps({'native_raw_output': output}), file=sys.stderr, flush=True)
+            assert isinstance(output, list) and len(output) == 2, 'native output content count mismatch: ' + repr(output)
             assert output[0]['type'] == 'input_text'
             assert re.fullmatch(r'Script completed\nWall time [0-9.]+ seconds\nOutput:\n', output[0]['text']), 'native execution did not complete'
             assert output[1]['type'] == 'input_text'
