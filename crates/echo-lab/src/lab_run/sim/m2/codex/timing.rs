@@ -263,3 +263,19 @@ async fn t3_controlled_wake_services_idle_probes_without_admitting_a_run() {
         assert_eq!(row["type"], "audio-start");
     }
 }
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_mouth_sync_quiet_edges_and_early_played_never_open_early_or_extend_the_mouth() {
+    tokio::time::timeout(DEADLINE, Box::pin(exercise(true, false)))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn t3_mouth_sync_pcm_arriving_after_zero_snapshot_cannot_advance_admission() {
+    tokio::time::timeout(DEADLINE, Box::pin(exercise(false, true)))
+        .await
+        .unwrap();
+}

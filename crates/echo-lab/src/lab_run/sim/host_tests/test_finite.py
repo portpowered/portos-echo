@@ -90,7 +90,27 @@ class FiniteControls(unittest.TestCase):
         emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 9600,
                                      "nonzero_bytes": 4800, "total_pcm_bytes": 17280,
                                      "earcon_pcm_bytes": 7680,
-                                     "earcon_nonzero_bytes": sum(byte != 0 for byte in chime)})
+                                     "earcon_nonzero_bytes": sum(byte != 0 for byte in chime), "flush": None})
+        record = b"duplex flush: receipt_ms=100 closed_ms=119 before=7680 written=17280 discarded=9600\n"
+        path.write_bytes(chime[:7678])
+        self.host.log = bytearray(record[:-1])
+        with mock.patch.object(CONTROLLER, "emit") as emit:
+            def delivery(predicate, timeout):
+                self.assertEqual(timeout, 5)
+                self.assertFalse(predicate())
+                emit.assert_not_called()
+                path.write_bytes(chime + reply)
+                self.host.log.extend(b"\n")
+                return predicate()
+            with mock.patch.object(self.host.condition, "wait_for", side_effect=delivery) as wait:
+                self.host.command({"action": "playback", "wake_earcon": True, "wait_flush": True})
+            wait.assert_called_once()
+        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 9600,
+                                     "nonzero_bytes": 4800, "total_pcm_bytes": 17280,
+                                     "earcon_pcm_bytes": 7680,
+                                     "earcon_nonzero_bytes": sum(byte != 0 for byte in chime),
+                                     "flush": {"receipt_ms": 100, "closed_ms": 119, "before": 7680,
+                                               "written": 17280, "discarded": 9600}})
         # No PCM is excluded by default, even if it is quiet or resembles a tone.
         self.assertEqual(CONTROLLER.playback_counts(chime + reply)["pcm_bytes"], 17280)
         extra = CONTROLLER.playback_counts(chime + reply + b"\x01\x02", True)
