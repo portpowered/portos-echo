@@ -20,6 +20,7 @@ status: active; documentation index
 
 ## Architecture decisions
 
+- [Architecture and conversation lifecycle](architecture.md)
 - [Five-target touch calibration](adr/0019-touch-calibration.md)
 
 - [Port OS OAuth client dependencies](adr/0010-mcp-auth.md)
