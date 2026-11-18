@@ -613,8 +613,8 @@ scripted T3 bridges test those observations without claiming W2 integration.
 
 `make test-sim` runs two halves, which CI runs as parallel jobs. Both build the
 lab binaries once. `make test-sim-suites` validates scenarios, runs the
-bridge/Wyoming component tests and discovers all T3 scenarios.
-`make test-sim-host` runs the host smoke test, the ignored `sim_host` integration cases and the
+host/Wyoming component tests and discovers all T3 scenarios.
+`make test-sim-host` runs the ignored `sim_host` integration cases and the
 binary's ignored T3 cases, each with two workers. Discovery prints pass/fail/not-runnable
 outcomes and `executed`, `passed`, `failed`, `not_runnable` totals. A runnable
 failure or zero executed scenarios returns 1; M4 is never counted as passed.

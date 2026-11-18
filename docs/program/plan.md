@@ -649,8 +649,8 @@ Required on every pull request:
 | `lint-docs` | `make lint-docs` | markdownlint, lychee, Mermaid compile, frontmatter |
 | `test-unit` | `make test-unit` | Any T1 failure. nextest runs each test once with no retries: a test that passes on retry is a failure |
 | `test-contract` | `make test-contract` | A T2 fixture, captured GPT-Live trace or captured Wyoming exchange that no longer round-trips |
-| `test-sim-suites` | `make test-sim-suites` | Any scenario in `tests/scenarios/` failing under `--driver sim` against the cached `hassmic-host`, or a bridge/Wyoming T3 suite failing (T3) |
-| `test-sim-host` | `make test-sim-host` | The `hassmic-host` smoke test, or an `echo-lab` `sim_host` or binary T3 case, failing. `make test-sim` runs both halves |
+| `test-sim-suites` | `make test-sim-suites` | Any scenario in `tests/scenarios/` failing under `--driver sim` against the cached `hassmic-host`, or the `hassmic-host` smoke test or a bridge/Wyoming T3 suite failing (T3) |
+| `test-sim-host` | `make test-sim-host` | An `echo-lab` `sim_host` or binary T3 case failing. `make test-sim` runs both halves |
 | `test-concurrency` | `make test-concurrency` | loom over the refresh, audio queue and ledger paths; Miri over any `ffi` crate's tests |
 
 **Coverage is suspended** (owner, 2026-11-18, `decisions.md`): CI runs no `coverage` job and no change must meet
