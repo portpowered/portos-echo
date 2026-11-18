@@ -38,7 +38,8 @@ async fn kill_schedule(collect_first: bool) {
     while observed.recv().await.unwrap() != Phase::ReplyStopped {}
     kill(&mut owner).await;
     resume.send(()).await.unwrap();
-    while observed.recv().await.unwrap() != Phase::PlaybackEnded {}
+    while observed.recv().await.unwrap() != Phase::CutAcknowledged {}
+    assert_killed(&mut owner).await;
     collect(owner, observed, resume, collect_first).await;
 }
 
@@ -61,6 +62,7 @@ async fn collect(
                     break;
                 }
                 Phase::Control(kind) => assert_eq!(kind, "describe"),
+                Phase::PlaybackEnded => (),
                 phase => panic!("unexpected peer phase: {phase:?}"),
             }
         }
@@ -78,6 +80,7 @@ async fn collect(
             Phase::Control(kind) if kind == "hassmic-end" => idle_ends += 1,
             Phase::Control(kind) if kind == "error" => refusals += 1,
             Phase::Control(kind) => assert_eq!(kind, "describe"),
+            Phase::PlaybackEnded => (),
             Phase::Eof => break,
             phase => panic!("unexpected peer phase: {phase:?}"),
         }
@@ -126,6 +129,9 @@ async fn kill(owner: &mut Owner) {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"kill-switch: on\n");
     assert_eq!(output.stderr, b"");
+}
+
+async fn assert_killed(owner: &mut Owner) {
     assert_eq!(
         owner.screen.next().await.unwrap()["state"],
         json!({

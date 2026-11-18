@@ -4,6 +4,7 @@ use super::*;
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Phase {
     ReplyStopped,
+    CutAcknowledged,
     PlaybackEnded,
     Control(String),
     Eof,
@@ -52,7 +53,7 @@ pub(super) async fn observed_satellite(
         stream = run_playback(stream, earcon, &mut observer, completed == 1).await;
         completed += 1;
         if completed == 2 {
-            checkpoint(&mut observer, Phase::PlaybackEnded).await;
+            notify(&observer, Phase::PlaybackEnded);
         }
     }
     // Socket EOF does not release this test-owned listener. The controller
@@ -78,29 +79,33 @@ async fn run_playback(
     let (mut input, mut output) = stream.into_split();
     let mut cadence = tokio::time::interval(std::time::Duration::from_millis(20));
     let mut replying = false;
+    let mut cut = false;
     loop {
-        let (row, bytes) = {
-            let next = read(&mut input);
-            tokio::pin!(next);
-            loop {
-                tokio::select! {
-                    row = &mut next => break row,
-                    _ = cadence.tick() => send(&mut output, "audio-chunk", format.clone(), vec![0;640]).await,
-                }
-            }
-        };
+        let (row, bytes) = capture_frame(&mut input, &mut output, &mut cadence, &format).await;
         match row["type"].as_str().unwrap() {
             "describe" => send(&mut output, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
             "audio-start" => replying = true,
             "audio-chunk" => panic!("capture-only lifecycle must receive zero reply PCM"),
+            "hassmic-end" if cut => {
+                control(&row, &bytes, &mut output, observer).await;
+                send(&mut output, "audio-stop", json!({}), vec![]).await;
+                break;
+            }
             "hassmic-flush" | "hassmic-end" => {
                 if end_capture(row, bytes, &mut output, &mut replying).await {
                     break;
+                }
+                cut = true;
+                if second {
+                    checkpoint(observer, Phase::CutAcknowledged).await;
                 }
             }
             "audio-stop" => {
                 if second {
                     checkpoint(observer, Phase::ReplyStopped).await;
+                    if observer.is_some() {
+                        continue;
+                    }
                 }
                 send(&mut output, "audio-stop", json!({}), vec![]).await;
                 send(&mut output, "played", json!({}), vec![]).await;
@@ -151,7 +156,7 @@ pub(super) async fn wait_for_wake(
     observer: &mut Option<Observer>,
     drain_on_collect: bool,
 ) -> bool {
-    use super::super::tests::{read, send};
+    use super::super::tests::read;
     tokio::pin!(requested);
     let mut collecting = false;
     loop {
@@ -165,18 +170,7 @@ pub(super) async fn wait_for_wake(
             ready = stream.peek(&mut byte) => if ready.unwrap() == 0 { return false; },
         }
         let (row, payload) = read(stream).await;
-        assert!(valid_control(&row, &payload), "invalid idle control: {row}");
-        match row["type"].as_str().unwrap() {
-            "describe" => send(stream, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
-            "error" | "hassmic-end" => (),
-            other => assert_eq!(other, "expected idle probe or kill refusal"),
-        }
-        if let Some(observer) = observer {
-            observer
-                .events
-                .send(Phase::Control(row["type"].as_str().unwrap().into()))
-                .unwrap();
-        }
+        control(&row, &payload, stream, observer).await;
     }
 }
 
@@ -191,5 +185,44 @@ pub(super) fn valid_control(row: &Value, payload: &[u8]) -> bool {
         Some("error") => row["data"]["code"] == "echo-kill-switch" && row["data"]["text"].is_string(),
         Some("describe") => true,
         _ => false,
+    }
+}
+
+fn notify(observer: &Option<Observer>, phase: Phase) {
+    if let Some(observer) = observer {
+        observer.events.send(phase).unwrap();
+    }
+}
+
+async fn control(
+    row: &Value,
+    payload: &[u8],
+    output: &mut (impl tokio::io::AsyncWrite + Unpin),
+    observer: &Option<Observer>,
+) {
+    assert!(valid_control(row, payload), "invalid idle control: {row}");
+    if row["type"] == "describe" {
+        super::super::tests::send(output, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await;
+    }
+    notify(observer, Phase::Control(row["type"].as_str().unwrap().into()));
+}
+
+// Keep the same full-frame future alive while capture ticks; cancellation can
+// never discard a partly consumed header. Buffered controls win over a tick.
+async fn capture_frame(
+    input: &mut tokio::net::tcp::OwnedReadHalf,
+    output: &mut tokio::net::tcp::OwnedWriteHalf,
+    cadence: &mut tokio::time::Interval,
+    format: &Value,
+) -> (Value, Vec<u8>) {
+    use super::super::tests::{read, send};
+    let next = read(input);
+    tokio::pin!(next);
+    loop {
+        tokio::select! {
+            biased;
+            row = &mut next => return row,
+            _ = cadence.tick() => send(output, "audio-chunk", format.clone(), vec![0;640]).await,
+        }
     }
 }
