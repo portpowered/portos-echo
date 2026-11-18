@@ -157,14 +157,29 @@ impl World {
     async fn first_started(&mut self) -> Result<(), String> {
         // PCM can reach the device before the bridge observes its send receipt.
         // Speaking is published after reply.started is written, so it is the
-        // causal barrier for the next exact trace assertion.
-        let screen = self.screen.as_mut().ok_or("M3: missing screen")?;
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            screen.expect(&json!({"state":"speaking"})),
-        )
-        .await
-        .map_err(|_| "M3 first reply: missing Speaking before 5000 ms deadline")??;
+        // causal barrier for the next exact trace assertion. The mouth opens on
+        // the bridge's paused playout clock, so keep stepping it while waiting.
+        let expected = json!({"state":"speaking"});
+        {
+            let screen = self.screen.as_mut().ok_or("M3: missing screen")?;
+            let mut bridge = self.bridge.as_mut();
+            let speaking = screen.expect(&expected);
+            let deadline = tokio::time::sleep(std::time::Duration::from_secs(5));
+            tokio::pin!(speaking, deadline);
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
+            loop {
+                tokio::select! {
+                    result = &mut speaking => break result?,
+                    () = &mut deadline => return Err("M3 first reply: missing Speaking before 5000 ms deadline".into()),
+                    _ = tick.tick(), if bridge.is_some() => {
+                        if let Some(bridge) = bridge.as_deref_mut() {
+                            let result = super::super::m2::codex::collect_playout(bridge, &mut self.clock, 20).await?;
+                            self.completed |= result.is_some();
+                        }
+                    }
+                }
+            }
+        }
         self.read_trace()
     }
 

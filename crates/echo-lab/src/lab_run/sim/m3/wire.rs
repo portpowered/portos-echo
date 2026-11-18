@@ -97,7 +97,6 @@ impl Ledger {
                 self.stops += 1;
             }
             "hassmic-end" => self.ends += 1,
-
             "audio-chunk" => {
                 let phase = self.started.checked_sub(1).ok_or("M3 wire: PCM before start")?;
                 if phase >= 2 || event.payload.len() != 960 {

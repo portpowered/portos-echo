@@ -324,7 +324,6 @@ async fn cut_at_reply_end(drained: bool) {
     };
     let server = async {
         assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-flush");
-
         // The describe barrier also proves the repeated cut emitted no frames.
         assert_eq!(peer::receive(&mut stream).await.header.r#type, "describe");
         peer::send(&mut stream, "info", json!({}), vec![]).await;
@@ -336,6 +335,9 @@ async fn cut_at_reply_end(drained: bool) {
             vec![3, 4],
         )
         .await;
+        // Played retired the cut reply, but the run still owns capture:
+        // closing it ends the device run explicitly.
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-end");
         assert_eq!(tokio::io::AsyncReadExt::read(&mut stream, &mut [0]).await.unwrap(), 0);
     };
     tokio::join!(caller, server);
