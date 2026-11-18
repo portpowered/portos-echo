@@ -122,12 +122,13 @@ fn running_bridge_trace_skips_unterminated_record_until_collected() {
     let path = root.path().join("bridge.private.jsonl");
     let complete = "{\"event\":\"run.started\",\"elapsed_ms\":1,\"run_id\":\"run-1\"}\n";
     // The bridge has written a record body but not yet its separate newline.
-    std::fs::write(&path, format!("{complete}{{\"event\":\"reply.played\",\"elapsed_ms\":2}}")).unwrap();
+    let partial = format!("{complete}{{\"event\":\"reply.played\",\"elapsed_ms\":2}}");
+    std::fs::write(&path, &partial).unwrap();
     assert_eq!(world.read_trace(), Ok(()));
     assert_eq!(world.trace.records.len(), 1);
     assert_eq!(world.trace.records[0]["event"], "run.started");
     assert_eq!(world.load_trace(true), Err("trace: incomplete final JSON line".into()));
-    std::fs::write(&path, format!("{complete}{{\"event\":\"reply.played\",\"elapsed_ms\":2}}\n")).unwrap();
+    std::fs::write(&path, partial + "\n").unwrap();
     assert_eq!(world.load_trace(true), Ok(()));
     assert_eq!(world.trace.records.len(), 2);
 }
