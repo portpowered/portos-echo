@@ -124,13 +124,18 @@ async fn t3_m4_parallel_world_failure_does_not_borrow_success_or_leave_listeners
     assert!(failed.speaking.is_none());
     assert_eq!(success.unwrap().0["run_id"], "run-1");
     let (failure, success) = tokio::join!(failed.close(), passed.close());
+    let failure = failure.unwrap_err();
     assert!(
-        failure
-            .unwrap_err()
-            .contains("missing or duplicate native delegation.created")
+        failure.contains("missing or duplicate native delegation.created"),
+        "{failure}"
     );
     assert_eq!(success, Ok(()));
-    assert_eq!(failed.released, ["provider", "bridge", "spoof", "relay", "host"]);
+    assert_eq!(
+        failed.released,
+        ["provider", "bridge", "spoof", "relay", "host"],
+        "{}",
+        failed.failure(&failure)
+    );
     assert_eq!(passed.released, ["bridge", "provider", "spoof", "relay", "host"]);
     a.closed(&failed);
     b.closed(&passed);

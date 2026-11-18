@@ -331,8 +331,13 @@ async fn settle(
     let mut completed = false;
     let mut tail = false;
     let mut released = false;
+    let mut idle = false;
     loop {
-        provider.tick().await?;
+        // RTP and transcript gates follow the media cadence. Once the whole
+        // reply is released and received, only the bridge's listen clock remains.
+        if !idle {
+            provider.tick().await?;
+        }
         if !admitted {
             admitted = match connected.try_recv() {
                 Ok(()) => true,
@@ -365,6 +370,7 @@ async fn settle(
             completed = true;
         }
         let milliseconds = if released && timing.played < 9600 { 0 } else { 20 };
+        idle = completed && timing.played >= 9600;
         let result = crate::lab_run::sim::m2::codex::collect_playout(bridge, clock, milliseconds).await?;
         if let Some(result) = result {
             relay.wait_session(1, 1).await?;
