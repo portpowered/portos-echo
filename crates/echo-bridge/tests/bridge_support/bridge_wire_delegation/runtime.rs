@@ -148,6 +148,7 @@ impl Application {
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
+        bridge_lifecycle::control(&mut self.satellite, "hassmic-end").await;
     }
 
     async fn finish(self) {

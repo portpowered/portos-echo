@@ -189,17 +189,14 @@ mod tests {
                 &mut |_| Ok(()),
             )
             .await;
-            match failure {
-                None => {
-                    assert_eq!(result, Ok(()));
-                    assert!(source.controller.complete(true, true));
-                    assert_eq!(observer.commands(), vec![Command::Connect, Command::EndRun]);
-                }
-                Some(_) => {
-                    assert_eq!(result, Err(Error::Deadline));
-                    assert!(!source.controller.complete(true, true));
-                    assert_eq!(observer.commands(), vec![Command::Connect]);
-                }
+            if failure.is_none() {
+                assert_eq!(result, Ok(()));
+                assert!(source.controller.complete(true, true));
+                assert_eq!(observer.commands(), vec![Command::Connect, Command::EndRun]);
+            } else {
+                assert_eq!(result, Err(Error::Deadline));
+                assert!(!source.controller.complete(true, true));
+                assert_eq!(observer.commands(), vec![Command::Connect]);
             }
         }
     }
