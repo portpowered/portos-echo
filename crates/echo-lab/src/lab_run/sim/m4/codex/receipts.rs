@@ -42,14 +42,7 @@ pub(super) fn merge_mode(
     if snapshot["appends"] != json!(["delegation-local"]) {
         return Err("m4: missing verified tool result/delegation.context.append for delegation-local".into());
     }
-    let expected = json!({"event":"provider.snapshot", "calls":[{
-        "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
-        "delegations":["delegation-local"], "appends":["delegation-local"],
-        "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::model::FALLBACK} else if emotion {super::super::emotion::REPLY} else {super::super::model::SUCCESS}}],
-        "models":[{"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
-                  {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}]});
-    if snapshot != &expected {
+    if snapshot != &expected(negative, emotion) {
         return Err("m4: exact pinned provider/model observation mismatch".into());
     }
     check_mcp(mcp, name, args)?;
@@ -88,6 +81,16 @@ pub(super) fn merge_mode(
     trace.records.insert(attempt + 1, appended);
     trace.records.insert(request, created);
     Ok(())
+}
+
+pub(super) fn expected(negative: bool, emotion: bool) -> Value {
+    json!({"event":"provider.snapshot", "calls":[{
+        "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
+        "delegations":["delegation-local"], "appends":["delegation-local"],
+        "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::model::FALLBACK} else if emotion {super::super::emotion::REPLY} else {super::super::model::SUCCESS}}],
+        "models":[{"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
+                  {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}]})
 }
 
 fn position(trace: &Trace, event: &str) -> Result<usize, String> {

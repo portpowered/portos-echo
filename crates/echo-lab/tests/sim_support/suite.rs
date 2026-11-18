@@ -63,7 +63,8 @@ fn discovery_executes_w1_and_both_m4_cases_and_skips_other_tiers() {
             assert_eq!(
                 output.status.code(),
                 Some(0),
-                "{}",
+                "stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
             let stdout = String::from_utf8(output.stdout).unwrap();

@@ -28,6 +28,7 @@ fn failed_journey_retains_primary_error_exit_and_independent_observations() {
     assert_eq!(observed["bridge_exit"], "exit status: 1; forced=false");
     assert_eq!(observed["bridge_trace"], json!(case.trace.records));
     assert_eq!(observed["provider"], case.snapshot);
+    assert_eq!(observed["provider_expected"], receipts::expected(false, false));
     assert_eq!(observed["playout_clock"], case.clock);
     assert!(
         case.failure("cancelled")

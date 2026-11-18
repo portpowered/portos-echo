@@ -102,6 +102,7 @@ impl Case {
         let observations = json!({
             "bridge_exit":self.bridge_exit,
             "bridge_trace":self.trace.records,
+            "provider_expected":receipts::expected(self.negative, self.emotion),
             "provider":self.snapshot,
             "playout_clock":self.clock,
         });
