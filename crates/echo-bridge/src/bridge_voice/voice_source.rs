@@ -8,12 +8,24 @@ use tokio::time::{Duration, Instant};
 /// Samples at or below this level are WebRTC silence, not speech.
 const QUIET: u16 = 64;
 
+#[derive(Default, PartialEq, Eq)]
+pub(super) enum ReplyState {
+    #[default]
+    Idle,
+    Speaking,
+    Cutting,
+    Retired,
+}
+
 pub(super) struct Source {
     pub microphone: Option<CaptureAudio>,
     pub microphone_finished: bool,
     pub muted: bool,
     pub reply: ReplyAudio,
     pub played: bool,
+    pub state: ReplyState,
+    pub cut_receipts: usize,
+    lead_ms: u16,
     pub delegation: Delegation,
     pub mouth: Mouth,
     pub stats: Stats,
@@ -27,10 +39,28 @@ impl Source {
             muted,
             reply: ReplyAudio::new(lead_ms)?,
             played: false,
+            state: ReplyState::Idle,
+            cut_receipts: 0,
+            lead_ms,
             delegation: Delegation::default(),
             mouth: Mouth::default(),
             stats: Stats::default(),
         })
+    }
+
+    /// Retire all old playback state together; never flush an abandoned tail.
+    /// Stream order identifies the replacement at its next assistant delta.
+    pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
+        port.interrupt_turn()?;
+        if self.state != ReplyState::Speaking && !(self.state == ReplyState::Idle && self.delegation.turns > 0) {
+            return Ok(());
+        }
+        self.stats.reply_dropped += self.reply.dropped_frames();
+        self.reply = ReplyAudio::new(self.lead_ms)?;
+        self.delegation = Delegation::default();
+        self.mouth = Mouth::default();
+        self.state = ReplyState::Cutting;
+        Ok(())
     }
 
     /// Return whether this chunk was suppressed by the defensive mute gate.
@@ -65,7 +95,11 @@ impl Source {
     /// Continuous RTP received after a completed reply belongs to the retired
     /// converter. Discard both quiet and audible media at that boundary.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
-        if !self.reply.finished() && !self.delegation.abandoned {
+        if !matches!(self.state, ReplyState::Cutting | ReplyState::Retired)
+            && !self.reply.finished()
+            && !self.delegation.abandoned
+        {
+            self.state = ReplyState::Speaking;
             self.reply.push(frame)?;
         }
         self.stats.reply_received += 1;

@@ -475,3 +475,172 @@ async fn voice_late_audible_media_after_done_is_discarded() {
     assert_eq!(frames(&observer).len(), 0);
     assert!(!observer.commands().contains(&Command::Cut(0)));
 }
+
+/// T1: a real cut receipt must settle before the replacement playback starts.
+#[tokio::test(start_paused = true)]
+async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() {
+    for (done_first, signal) in [(false, 0), (true, 0), (false, 1), (true, 2)] {
+        let observer = Observer::default();
+        let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        let mut events = client.events().unwrap();
+        wake(&observer, 640);
+        let mic = microphone(&mut events).await;
+        let (mut port, tx) = port();
+        let mut work = Box::pin(run(
+            &client,
+            &mut events,
+            mic,
+            &mut port,
+            options(),
+            std::future::pending(),
+            |_| Ok(()),
+        ));
+        send(&tx, [said("Yes")]).await;
+        send(&tx, audible(12)).await;
+        pending(work.as_mut()).await;
+        assert_eq!(frames(&observer).len(), 10);
+        if done_first {
+            send(&tx, [same_text_done()]).await;
+            pending(work.as_mut()).await;
+        }
+        let signal = if signal == 0 {
+            Event::SpeechStarted
+        } else {
+            Event::Transcript {
+                role: "user".into(),
+                text: "new question".into(),
+                done: signal == 2,
+            }
+        };
+        send(&tx, [MediaEvent::Control(signal)]).await;
+        pending(work.as_mut()).await;
+        assert_eq!(command_count(&observer, false), 1);
+        assert_eq!(command_count(&observer, true), 1);
+        // Media already admitted to the old generation and pending PCM are retired.
+        observer.finish(Ok(()));
+        pending(work.as_mut()).await;
+        assert_eq!(command_count(&observer, true), 2);
+        send(&tx, [same_text_done(), MediaEvent::Control(Event::SpeechStarted)]).await;
+        send(&tx, audible(2)).await;
+        send(&tx, [MediaEvent::Audio(Box::new([0; 320]))]).await;
+        pending(work.as_mut()).await;
+        assert_eq!(frames(&observer).len(), 10);
+        send(&tx, [said("Yes")]).await;
+        send(&tx, audible(3)).await;
+        send(&tx, [same_text_done()]).await;
+        pending(work.as_mut()).await;
+        assert_eq!(frames(&observer).len(), 13);
+        assert_eq!(observer.commands().last(), Some(&Command::Stop));
+        observer.finish(Ok(()));
+        let stats = work.await.unwrap();
+        assert_eq!(stats.reply_received, 18);
+        assert_eq!(stats.reply_sent, 13);
+        assert_eq!(stats.microphone_frames, 2);
+        assert_eq!(command_count(&observer, false), 1);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_barge_without_cut_receipt_never_opens_replacement_playback() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    send(
+        &tx,
+        [
+            said("old"),
+            MediaEvent::Control(Event::SpeechStarted),
+            said("new"),
+            done(),
+        ],
+    )
+    .await;
+    assert_eq!(
+        run(
+            &client,
+            &mut events,
+            mic,
+            &mut port,
+            options(),
+            std::future::pending(),
+            |_| Ok(())
+        )
+        .await,
+        Err(Error::Deadline)
+    );
+    assert_eq!(command_count(&observer, true), 1);
+    assert_eq!(frames(&observer).len(), 0);
+}
+
+fn command_count(observer: &Observer, starts: bool) -> usize {
+    observer
+        .commands()
+        .iter()
+        .filter(|command| {
+            if starts {
+                matches!(command, Command::Start(..))
+            } else {
+                matches!(command, Command::Cut(_))
+            }
+        })
+        .count()
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mut mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    let mut source = Source::new(200, false).unwrap();
+    media(turn(true), &mut port, &mut source, &mut |_| Ok(()))
+        .await
+        .unwrap();
+    source.interrupt(&mut port).unwrap();
+    assert!(source.state == ReplyState::Cutting);
+    source = Source::new(200, false).unwrap();
+    source.microphone_finished = true;
+    // One input frame is still held inside the streaming resampler.
+    source.audio(&[123; 320]).unwrap();
+    assert!(!source.reply.has_frames());
+    let mut pending_frame = Some(vec![77; 960]);
+    tx.send(Ok(MediaEvent::Control(Event::SpeechStarted))).await.unwrap();
+    step(
+        &mut events,
+        &mut mic,
+        &mut port,
+        Some(&Stalled),
+        &mut source,
+        &mut pending_frame,
+        &mut |_| Ok(()),
+    )
+    .await
+    .unwrap();
+    assert!(source.state == ReplyState::Cutting);
+    assert!(!source.reply.finished());
+    assert!(!source.reply.has_frames());
+    // drive exits on Cutting and drops its pending frame before the cut request.
+    source.state = ReplyState::Retired;
+    media(done(), &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
+    source.audio(&[123; 320]).unwrap();
+    source.audio(&[0; 320]).unwrap();
+    assert!(!source.reply.has_frames());
+    assert!(!source.reply.finished());
+    media(said("Yes"), &mut port, &mut source, &mut |_| Ok(()))
+        .await
+        .unwrap();
+    source.audio(&[456; 320]).unwrap();
+    media(done(), &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
+    assert!(source.reply.finished());
+    assert_eq!(source.reply.next_frame().await.unwrap().len(), 960);
+    assert!(!source.reply.has_frames());
+}
+
+fn same_text_done() -> MediaEvent {
+    MediaEvent::Control(Event::ReplyDone { text: "Yes.".into() })
+}
