@@ -239,11 +239,10 @@ async fn step<E: LinkEvents>(
         result = forward(sink, pending.as_deref()), if pending.is_some() => {
             result?;
             if let Some(frame) = pending.take() {
-                let written = if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
+                source.mouth.wrote(&frame, Instant::now());
+                if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
                     clock.submitted()?;
-                    clock.handoff().await?
-                } else { Instant::now() };
-                source.mouth.wrote(&frame, written);
+                }
             }
             source.stats.reply_sent += 1;
             Ok(())

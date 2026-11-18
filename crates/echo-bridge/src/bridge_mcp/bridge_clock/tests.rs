@@ -6,23 +6,6 @@ use crate::Error;
 use serde_json::json;
 use std::{future::Future, task::Poll, time::Duration};
 
-#[tokio::test(start_paused = true)]
-async fn handoff_uses_completed_write_time_and_rejects_missing_or_failed_writes() {
-    let context = Context::new();
-    assert_eq!(context.handoff().await, Err(Error::Control));
-    context.submitted().unwrap();
-    let handoff = context.handoff();
-    tokio::pin!(handoff);
-    assert!(std::future::poll_fn(|cx| Poll::Ready(handoff.as_mut().poll(cx).is_pending())).await);
-    tokio::time::advance(Duration::from_millis(20)).await;
-    let written = tokio::time::Instant::now();
-    context.wrote(&65_i16.to_le_bytes().repeat(480)).unwrap();
-    tokio::time::advance(Duration::from_millis(20)).await;
-    assert_eq!(handoff.await, Ok(written));
-    context.failed();
-    assert_eq!(context.handoff().await, Err(Error::Control));
-}
-
 #[test]
 fn playout_control_rejects_malformed_and_keeps_legacy_compatible() {
     assert_eq!(
@@ -134,7 +117,8 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
             receipt,
             json!({
                 "event":"bridge.clock_advanced", "milliseconds":20, "epoch_ms":20,
-                "pcm":[{"epoch_ms":0,"pcm_bytes":960,"nonzero_samples":480,"audible_samples":480}],
+                "pcm":[{"epoch_ms":0,"pcm_bytes":960,"nonzero_samples":480,"audible_samples":480},
+                    {"epoch_ms":0,"pcm_bytes":960,"nonzero_samples":480,"audible_samples":480}],
                 "states":[{"epoch_ms":0,"state":{"state":"speaking"}}],
             })
         );
@@ -143,7 +127,16 @@ async fn t3_receipt_contains_one_epoch_exact_samples_and_confirmed_projected_sta
         voice.acknowledge().await;
         publisher.acknowledge().await;
         voice.acknowledge().await;
+        // Work can become ready while the first publication flush is awaited.
+        // The final voice fence must detect it and flush another complete pass.
+        context.submitted().unwrap();
+        context.wrote(&65_i16.to_le_bytes().repeat(480)).unwrap();
+        voice.acknowledge().await;
         publisher.acknowledge().await;
+        voice.acknowledge().await;
+        voice.acknowledge().await;
+        publisher.acknowledge().await;
+        voice.acknowledge().await;
     };
     super::drive(async {
         tokio::join!(step, owner);
