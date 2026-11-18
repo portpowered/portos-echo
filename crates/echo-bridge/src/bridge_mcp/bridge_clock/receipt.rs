@@ -118,16 +118,17 @@ impl Context {
         Ok(())
     }
 
-    /// Only a settled earcon cut can discard its accepted, unwritten suffix.
-    pub(crate) fn discarded_earcon(&self, count: u64) -> Result<(), Error> {
+    /// Only a settled cut can discard its owner's accepted, unwritten suffix:
+    /// the earcon's, or a reply generation's retired by a barge.
+    pub(crate) fn discarded(&self, source: &'static str, count: u64) -> Result<(), Error> {
         let mut state = self.0.state.lock().map_err(|_| Error::Control)?;
         let pending = state.submitted.checked_sub(state.written).ok_or(Error::Control)?;
         let size = usize::try_from(count).map_err(|_| Error::Control)?;
-        if count > pending || state.sources.iter().rev().take(size).any(|source| *source != "earcon") {
+        if count > pending || state.sources.iter().rev().take(size).any(|owner| *owner != source) {
             return Err(Error::Control);
         }
         for _ in 0..count {
-            if state.sources.pop_back() != Some("earcon") {
+            if state.sources.pop_back() != Some(source) {
                 return Err(Error::Control);
             }
             state.submitted = state.submitted.checked_sub(1).ok_or(Error::Control)?;
@@ -268,6 +269,22 @@ impl Context {
         Ok(json!({"event":"bridge.clock_advanced", "milliseconds":milliseconds,
             "epoch_ms":self.epoch()?, "pcm":pcm,
             "states":std::mem::take(&mut state.states)}))
+    }
+}
+
+/// Voice-owner test seam: the production receipt without its proxy or bridge.
+#[cfg(test)]
+impl Context {
+    pub(crate) fn for_voice_test() -> Self {
+        Self::new()
+    }
+
+    pub(crate) async fn owning<F: Future>(&self, owner: F) -> F::Output {
+        CURRENT.scope(self.clone(), owner).await
+    }
+
+    pub(crate) async fn next_step(&self) -> Result<Value, Error> {
+        bounded(self.advance(0), Duration::from_secs(1)).await
     }
 }
 

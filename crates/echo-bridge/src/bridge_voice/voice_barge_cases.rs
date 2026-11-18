@@ -92,6 +92,55 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
     }
 }
 
+/// T3: under the paused clock, a barge cut withdraws the reply frames the
+/// device queue discarded, so the next clock step settles instead of waiting.
+#[tokio::test(start_paused = true)]
+async fn voice_barge_cut_withdraws_discarded_reply_frames_from_the_paused_clock() {
+    use echo_contracts::secret::Secret;
+    let clock = crate::bridge_mcp::bridge_clock::receipt::Context::for_voice_test();
+    let (_states, input) = tokio::sync::mpsc::channel(4);
+    let address = ([127, 0, 0, 1], 0).into();
+    let server = echo_screen_server::serve(address, Secret::new("synthetic-clock-pair".into()), input);
+    let server = std::sync::Arc::new(server.await.unwrap());
+    clock.screen(&server).unwrap();
+    let observer = Observer::default();
+    let client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let (sink, reply) = client.reply_channel(std::num::NonZeroUsize::new(3).unwrap());
+    let result = std::cell::Cell::new(None);
+    let ceiling = std::time::Duration::from_secs(5);
+    let mut playback = Box::pin(async {
+        result.set(Some(
+            client
+                .play_with_timeout(crate::bridge_audio::format(24_000), reply, ceiling)
+                .await,
+        ));
+        Ok(())
+    });
+    pending(playback.as_mut()).await;
+    // Accepted by the device queue and counted by the clock, never written.
+    for value in 1..=3 {
+        sink.send(vec![value; 960]).await.unwrap();
+        clock.submitted("reply").unwrap();
+    }
+    observer.finish(Ok(()));
+    let source = Source::new(200, false).unwrap();
+    let second = std::time::Duration::from_secs(1);
+    let cut = voice_source::cut_generation(&client, playback, &result, second, &source, true);
+    assert_eq!(clock.owning(cut).await, Ok(()));
+    assert_eq!(command_count(&observer, false), 1);
+    assert!(observer.commands().contains(&Command::Cut(3)));
+    assert_eq!(frames(&observer).len(), 0);
+    let step = clock.next_step().await.unwrap();
+    assert_eq!(step["pcm"], serde_json::json!([]));
+    drop(sink);
+    std::sync::Arc::try_unwrap(server)
+        .ok()
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn voice_barge_without_cut_receipt_never_opens_replacement_playback() {
     let observer = Observer::default();

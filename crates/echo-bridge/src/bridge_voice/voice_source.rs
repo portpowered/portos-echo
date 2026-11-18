@@ -146,7 +146,11 @@ pub(super) async fn cut_generation(
 ) -> Result<(), Error> {
     let cut = tokio::time::timeout(std::time::Duration::from_secs(1), client.cut_with_stats()).await;
     let settled = async {
-        cut.map_err(|_| Error::Deadline)??;
+        let stats = cut.map_err(|_| Error::Deadline)??;
+        // The cut discarded reply frames the paused clock counted as accepted.
+        if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
+            clock.discarded("reply", stats.dropped_frames)?;
+        }
         settle_cut(playback, result, deadline).await
     }
     .await;
