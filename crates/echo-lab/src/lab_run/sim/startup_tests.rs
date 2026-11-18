@@ -29,8 +29,9 @@ async fn t3_failed_live_start_releases_the_already_running_host_and_spoof() {
     });
     close.stop();
     let (mut world, result) = close.assert_closed().await;
-    assert_eq!(result, Ok(()));
-    assert!(collected.try_recv().unwrap().success());
+    let status = collected.try_recv();
+    assert_eq!(result, Ok(()), "partial-start host collection: {status:?}");
+    assert!(status.unwrap().success());
     owner.assert_closed();
     assert_eq!(world.close().await, Ok(()));
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);

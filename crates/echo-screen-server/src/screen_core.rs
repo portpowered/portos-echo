@@ -17,6 +17,7 @@ struct Writer {
 pub(crate) struct Core {
     digest: Secret<[u8; 32]>,
     revoked: bool,
+    draining: bool,
     seq: u64,
     current: Option<String>,
     clients: Vec<Writer>,
@@ -27,6 +28,7 @@ impl Core {
         Self {
             digest: Secret::new(Sha256::digest(token.expose().as_bytes()).into()),
             revoked: false,
+            draining: false,
             seq: 0,
             current: None,
             clients: Vec::new(),
@@ -47,6 +49,10 @@ impl Core {
         self.close_clients();
     }
 
+    pub fn drain(&mut self) {
+        self.draining = true;
+    }
+
     fn close_clients(&mut self) {
         for client in self.clients.drain(..) {
             client.cancel.send_replace(true);
@@ -54,6 +60,9 @@ impl Core {
     }
 
     pub fn attach(&mut self, cancel: watch::Sender<bool>) -> Option<Client> {
+        if self.draining {
+            return None;
+        }
         self.clients.retain(|client| !client.frames.is_closed());
         if self.clients.len() == 32 {
             return None;
@@ -76,6 +85,9 @@ impl Core {
             return false;
         };
         self.current = Some(wire.clone());
+        if self.draining {
+            return true;
+        }
         self.clients.retain(|client| {
             if client.frames.try_send(wire.clone()).is_ok() {
                 true
