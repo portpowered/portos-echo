@@ -272,3 +272,71 @@ async fn pause_and_close_end_active_reply_without_fabricating_played() {
         assert_eq!(tokio::io::AsyncReadExt::read(&mut stream, &mut [0]).await.unwrap(), 0);
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn cut_after_drain_before_played_preserves_capture() {
+    cut_at_reply_end(true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn cut_at_last_chunk_preserves_capture() {
+    cut_at_reply_end(false).await;
+}
+
+async fn cut_at_reply_end(drained: bool) {
+    let (io, mut stream) = duplex(4096);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = client.events().unwrap();
+    peer::send(
+        &mut stream,
+        "run-pipeline",
+        json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"Computer"}),
+        vec![],
+    )
+    .await;
+    let mut run = events.recv().await.unwrap().unwrap().run.unwrap();
+    let (tx, rx) = mpsc::channel(1);
+    tx.send(vec![1, 2]).await.unwrap();
+    let mut tx = Some(tx);
+    let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+    let mut play = Box::pin(client.play(format, rx));
+    let boundary = async {
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
+        assert_eq!(peer::receive(&mut stream).await.payload, vec![1, 2]);
+        if drained {
+            drop(tx.take());
+            assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
+        }
+    };
+    tokio::select! { biased; result = &mut play => unreachable!("unexpected {result:?}"), () = boundary => () }
+    let caller = async {
+        assert_eq!(client.cut_with_stats().await.unwrap(), CutStats::default());
+        assert_eq!(client.cut_with_stats().await.unwrap(), CutStats::default());
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(play.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        client.describe().await.unwrap();
+        assert_eq!(play.await, Ok(PlayOutcome::Cut));
+        assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![3, 4]);
+        client.close().await.unwrap();
+    };
+    let server = async {
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-flush");
+        // The describe barrier also proves the repeated cut emitted no frames.
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "describe");
+        peer::send(&mut stream, "info", json!({}), vec![]).await;
+        peer::send(&mut stream, "played", json!({}), vec![]).await;
+        peer::send(
+            &mut stream,
+            "audio-chunk",
+            json!({"rate":16000,"width":2,"channels":1}),
+            vec![3, 4],
+        )
+        .await;
+        assert_eq!(tokio::io::AsyncReadExt::read(&mut stream, &mut [0]).await.unwrap(), 0);
+    };
+    tokio::join!(caller, server);
+
+}
