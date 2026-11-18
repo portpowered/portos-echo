@@ -483,3 +483,9 @@ async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_witho
     let stats = work.await.unwrap();
     assert_eq!((stats.reply_received, stats.reply_sent), (13, 12));
 }
+
+fn assert_drained_reply(observer: &Observer, old_frames: usize) {
+    if old_frames == 3 {
+        assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    }
+}

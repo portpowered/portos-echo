@@ -71,11 +71,12 @@ impl Ledger {
                 self.started += 1;
             }
             "hassmic-flush" => {
-                if self.started != 1 || self.stops != 0 || self.flushes != 0 {
+                if self.started != 1 || !self.played.is_empty() || self.flushes != 0 {
                     return Err("M3 wire: flush must cut the first reply exactly once".into());
                 }
                 self.flushes += 1;
                 self.cut_stop = Some(Instant::now());
+
             }
             "audio-stop" => self.stops += 1,
             "hassmic-end" => self.ends += 1,
@@ -286,6 +287,33 @@ mod tests {
         state.reply(&event("audio-chunk", 960)).unwrap();
         assert_eq!(state.bytes, [2880, 960]);
         assert_eq!((state.after_stop, state.after_window), (960, 1920));
+    }
+
+    #[test]
+    fn cut_after_stop_before_played_is_once_and_keeps_replacement_phase() {
+        let mut state = Ledger::default();
+        state.reply(&event("audio-start", 0)).unwrap();
+        state.reply(&event("audio-chunk", 960)).unwrap();
+        state.reply(&event("audio-stop", 0)).unwrap();
+        assert_eq!(state.stops, 1);
+        assert_eq!(state.played.len(), 0);
+        state.reply(&event("hassmic-continue", 0)).unwrap();
+        assert!(state.reply(&event("hassmic-continue", 0)).is_err());
+        state.reply(&event("audio-stop", 0)).unwrap();
+        assert!(state.cut_stop.is_some());
+        assert_eq!((state.stops, state.continues), (1, 1));
+        state.played.push(Instant::now());
+        state.reply(&event("audio-start", 0)).unwrap();
+        state.reply(&event("audio-chunk", 960)).unwrap();
+        state.reply(&event("audio-stop", 0)).unwrap();
+        assert_eq!((state.bytes, state.stops, state.after_stop), ([960, 960], 2, 0));
+        let mut completed = Ledger {
+            started: 1,
+            stops: 1,
+            played: vec![Instant::now()],
+            ..Ledger::default()
+        };
+        assert!(completed.reply(&event("hassmic-continue", 0)).is_err());
     }
 
     #[test]

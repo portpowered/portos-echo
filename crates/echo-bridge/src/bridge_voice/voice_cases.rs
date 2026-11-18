@@ -496,13 +496,15 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
             |_| Ok(()),
         ));
         send(&tx, [said("Yes")]).await;
-        send(&tx, audible(12)).await;
+        let old_frames = if done_first && signal == 2 { 3 } else { 12 };
+        send(&tx, audible(old_frames)).await;
         pending(work.as_mut()).await;
-        assert_eq!(frames(&observer).len(), 10);
+        assert_eq!(frames(&observer).len(), (old_frames - 1).min(10));
         if done_first {
             send(&tx, [same_text_done()]).await;
             pending(work.as_mut()).await;
         }
+        assert_drained_reply(&observer, old_frames);
         let signal = if signal == 0 {
             Event::SpeechStarted
         } else {
@@ -516,7 +518,6 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
         pending(work.as_mut()).await;
         assert_eq!(command_count(&observer, false), 1);
         assert_eq!(command_count(&observer, true), 1);
-        // Media already admitted to the old generation and pending PCM are retired.
         observer.finish(Ok(()));
         pending(work.as_mut()).await;
         assert_eq!(command_count(&observer, true), 2);
@@ -524,17 +525,17 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
         send(&tx, audible(2)).await;
         send(&tx, [MediaEvent::Audio(Box::new([0; 320]))]).await;
         pending(work.as_mut()).await;
-        assert_eq!(frames(&observer).len(), 10);
+        assert_eq!(frames(&observer).len(), old_frames.min(10));
         send(&tx, [said("Yes")]).await;
         send(&tx, audible(3)).await;
         send(&tx, [same_text_done()]).await;
         pending(work.as_mut()).await;
-        assert_eq!(frames(&observer).len(), 13);
+        assert_eq!(frames(&observer).len(), old_frames.min(10) + 3);
         assert_eq!(observer.commands().last(), Some(&Command::Stop));
         observer.finish(Ok(()));
         let stats = work.await.unwrap();
-        assert_eq!(stats.reply_received, 18);
-        assert_eq!(stats.reply_sent, 13);
+        assert_eq!(stats.reply_received, (old_frames + 6) as u64);
+        assert_eq!(stats.reply_sent, (old_frames.min(10) + 3) as u64);
         assert_eq!(stats.microphone_frames, 2);
         assert_eq!(command_count(&observer, false), 1);
     }
