@@ -8,6 +8,9 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 echo-config = { version = "0.1.0", path = "../echo-config" }
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }

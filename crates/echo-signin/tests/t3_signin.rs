@@ -1,9 +1,6 @@
 //! Component T3: public commands with real auth/client/store and a loopback issuer.
 //! Each test owns a temporary directory and an ephemeral port; no real credentials.
 #[cfg(test)]
-#[path = "support/signin_browser.rs"]
-mod signin_browser;
-#[cfg(test)]
 #[path = "support/signin_codex.rs"]
 mod signin_codex;
 #[cfg(test)]

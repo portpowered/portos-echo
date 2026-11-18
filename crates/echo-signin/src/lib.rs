@@ -107,3 +107,6 @@ impl Providers {
         }
     }
 }
+
+#[cfg(test)]
+mod signin_browser_tests;

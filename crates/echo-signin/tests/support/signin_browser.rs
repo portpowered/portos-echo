@@ -5,7 +5,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::TcpStream,
 };
 
 struct Prompt {
@@ -93,7 +93,7 @@ async fn f07_browser_exchange_timeout_and_drop_preserve_storage() {
             assert_eq!(callback(&parameters["redirect_uri"], &parameters["state"]).await, 200);
             (prompt, parameters)
         };
-        let (prompt, parameters) = tokio::select! {
+        let (prompt, _parameters) = tokio::select! {
             result = &mut operation => panic!("completed before exchange: {result:?}"),
             result = browser => result,
         };
@@ -101,6 +101,7 @@ async fn f07_browser_exchange_timeout_and_drop_preserve_storage() {
             result = &mut operation => panic!("stalled exchange completed: {result:?}"),
             seen = mock.seen.recv() => assert_eq!(seen, Some(0)),
         }
+        let listener = listener_witness(&providers);
         if cancel {
             drop(operation);
         } else {
@@ -112,7 +113,7 @@ async fn f07_browser_exchange_timeout_and_drop_preserve_storage() {
         assert_eq!(*bytes.lock().unwrap(), prompt.as_bytes());
         assert_eq!(fs::read(&live.credential_file).unwrap(), b"previous bytes");
         assert_eq!(mock.requests.lock().unwrap().len(), 1);
-        released(&parameters["redirect_uri"]).await;
+        assert!(listener.upgrade().is_none());
         assert_eq!(
             providers.execute(OperatorCommand::Status, &mut Vec::new()).await,
             Err(SigninError::Auth(AuthError::InvalidCredential))
@@ -140,10 +141,13 @@ async fn callback(redirect: &str, state: &str) -> u16 {
         .parse()
         .unwrap()
 }
-async fn released(redirect: &str) {
-    let address = redirect.strip_prefix("http://").unwrap().split('/').next().unwrap();
-    let listener = TcpListener::bind(address).await.unwrap();
-    assert_eq!(listener.local_addr().unwrap().ip(), std::net::Ipv4Addr::LOCALHOST);
+fn listener_witness(providers: &crate::Providers) -> std::sync::Weak<tokio::net::TcpListener> {
+    let listener = providers.state.auth.as_ref().unwrap().browser_listener_witness();
+    assert_eq!(
+        listener.upgrade().unwrap().local_addr().unwrap().ip(),
+        std::net::Ipv4Addr::LOCALHOST
+    );
+    listener
 }
 
 #[tokio::test]
@@ -163,10 +167,11 @@ async fn f06_browser_callback_commits_then_reports_success() {
     let browser = async {
         let prompt = receive.await.unwrap();
         let parameters = authorization(&prompt, &mock);
+        let listener = listener_witness(&providers);
         assert_eq!(callback(&parameters["redirect_uri"], &parameters["state"]).await, 200);
-        (prompt, parameters)
+        (prompt, parameters, listener)
     };
-    let (result, (prompt, parameters)) = tokio::join!(operation, browser);
+    let (result, (prompt, parameters, listener)) = tokio::join!(operation, browser);
     assert_eq!(result, Ok(()));
     assert_eq!(*bytes.lock().unwrap(), format!("{prompt}signed in\n").as_bytes());
     let source = AuthSource::new(mock.config.clone(), live.credential_file).unwrap();
@@ -186,7 +191,7 @@ async fn f06_browser_callback_commits_then_reports_success() {
         assert_eq!(form.len(), 5);
     }
     no_secrets(&bytes.lock().unwrap());
-    released(&parameters["redirect_uri"]).await;
+    assert!(listener.upgrade().is_none());
     mock.stop().await;
     writeln!(
         std::io::stdout(),
@@ -216,6 +221,8 @@ async fn f07_browser_wrong_state_timeout_and_drop_preserve_storage() {
             prompt = &mut receive => prompt.unwrap(),
         };
         let parameters = authorization(&prompt, &mock);
+        let listener = listener_witness(&providers);
+        let retained = listener.upgrade().unwrap();
         match action {
             "wrong-state" => {
                 let (result, status) = tokio::join!(operation, callback(&parameters["redirect_uri"], "wrong"));
@@ -233,7 +240,12 @@ async fn f07_browser_wrong_state_timeout_and_drop_preserve_storage() {
         assert_eq!(*bytes.lock().unwrap(), prompt.as_bytes());
         assert_eq!(fs::read(&live.credential_file).unwrap(), b"previous bytes");
         assert_eq!(mock.requests.lock().unwrap().len(), 0);
-        released(&parameters["redirect_uri"]).await;
+        assert!(
+            listener.upgrade().is_some(),
+            "retained real listener prevents release proof"
+        );
+        drop(retained);
+        assert!(listener.upgrade().is_none());
         assert_eq!(
             providers.execute(OperatorCommand::Status, &mut Vec::new()).await,
             Err(SigninError::Auth(AuthError::InvalidCredential))
@@ -245,4 +257,32 @@ async fn f07_browser_wrong_state_timeout_and_drop_preserve_storage() {
         "F07: state mismatch/fake-clock timeout/drop; old bytes preserved; listeners and locks released; exchanges=0"
     )
     .unwrap();
+}
+
+#[tokio::test]
+async fn browser_prompt_output_failure_releases_listener_without_exchange() {
+    let mut mock = Mock::start(vec![]).await;
+    mock.config.browser_redirect_uri = "http://127.0.0.1:0/auth/callback".into();
+    let directory = Directory::new().unwrap();
+    let live = directory.live(LiveMode::Chatgpt);
+    fs::write(&live.credential_file, b"previous bytes").unwrap();
+    let providers = resolve_mode(live.clone(), mock.config.clone()).unwrap();
+    let mut output = Writer::new(&mock, 0);
+    assert_eq!(
+        providers
+            .execute(OperatorCommand::Signin { browser: true }, &mut output)
+            .await,
+        Err(SigninError::Output)
+    );
+    let listener = providers.state.auth.as_ref().unwrap().browser_listener_witness();
+    assert!(
+        !listener.ptr_eq(&std::sync::Weak::new()),
+        "callback listener was acquired"
+    );
+    assert!(listener.upgrade().is_none());
+    assert_eq!(output.bytes, b"");
+    assert_eq!(fs::read(&live.credential_file).unwrap(), b"previous bytes");
+    assert_eq!(mock.requests.lock().unwrap().len(), 0);
+    assert_eq!(*mock.events.lock().unwrap(), Vec::<String>::new());
+    mock.stop().await;
 }

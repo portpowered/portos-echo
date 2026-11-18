@@ -42,10 +42,13 @@ pub(crate) async fn sign_in(source: &AuthSource, callback: impl FnOnce(String)) 
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
         .await
         .map_err(|_| AuthError::Busy)?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let listener = {
         let listener = std::sync::Arc::new(listener);
-        *source.browser_listener.lock().unwrap() = std::sync::Arc::downgrade(&listener);
+        *source
+            .browser_listener
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = std::sync::Arc::downgrade(&listener);
         listener
     };
     if port == 0 {
