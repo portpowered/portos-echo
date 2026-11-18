@@ -1,6 +1,133 @@
 use super::*;
 
 #[tokio::test(start_paused = true)]
+async fn reply_preempts_earcon_and_waits_for_its_receipt_before_owning_speaker() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 640);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    port.ready = (0..10).map(|_| [5000; 320]).collect();
+    let mut notices = Vec::new();
+    let mut stats = None;
+    let work = super::super::earcon::scope(&client, true, async {
+        super::super::earcon::start()?;
+        stats = Some(
+            run(
+                &client,
+                &mut events,
+                mic,
+                &mut port,
+                options(),
+                std::future::pending(),
+                |notice| {
+                    notices.push(preemption_notice(&notice));
+                    Ok(())
+                },
+            )
+            .await?,
+        );
+        Ok(())
+    });
+    let mut work = Box::pin(work);
+    pending(work.as_mut()).await;
+    assert_eq!(frames(&observer).len(), 1);
+    tx.send(Ok(done())).await.unwrap();
+    pending(work.as_mut()).await;
+    assert_eq!(frames(&observer).len(), 1);
+    assert_speaker_operations(&observer, 1, 1);
+    observer.finish(Ok(()));
+    pending(work.as_mut()).await;
+    assert_speaker_operations(&observer, 2, 1);
+    assert_eq!(frames(&observer).len(), 11);
+    assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    tokio::time::advance(Duration::from_millis(400)).await;
+    pending(work.as_mut()).await;
+    observer.finish(Ok(()));
+    assert_eq!(work.await, Ok(()));
+    assert_preempted_reply(&stats.unwrap(), &notices, &observer);
+    assert_eq!(frames(&observer)[1..].concat(), reply_without_earcon().await);
+}
+
+async fn reply_without_earcon() -> Vec<u8> {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 640);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    port.ready = (0..10).map(|_| [5000; 320]).collect();
+    tx.send(Ok(done())).await.unwrap();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        options(),
+        std::future::pending(),
+        |_| Ok(()),
+    ));
+    pending(work.as_mut()).await;
+    assert_eq!(frames(&observer).len(), 10);
+    assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    tokio::time::advance(Duration::from_millis(400)).await;
+    pending(work.as_mut()).await;
+    observer.finish(Ok(()));
+    assert_eq!(work.await.unwrap().reply_sent, 10);
+    frames(&observer).concat()
+}
+
+fn preemption_notice(notice: &Notice) -> &'static str {
+    match notice {
+        Notice::EarconPlayed(duration) => {
+            assert_eq!(*duration, Duration::from_millis(20));
+            "earcon"
+        }
+        Notice::ReplyStarted => "speaking",
+        Notice::ReplyPaused => "paused",
+        Notice::ReplyPlayed => "played",
+        Notice::Transcript { .. } => "transcript",
+        Notice::Device(_) => "device",
+    }
+}
+
+fn assert_speaker_operations(observer: &Observer, starts: usize, cuts: usize) {
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Start(..)))
+            .count(),
+        starts
+    );
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Cut(_)))
+            .count(),
+        cuts
+    );
+}
+
+fn assert_preempted_reply(stats: &Stats, notices: &[&str], observer: &Observer) {
+    assert_eq!(stats.reply_received, 10);
+    assert_eq!(stats.reply_sent, 10);
+    assert_eq!(stats.reply_dropped, 0);
+    assert_eq!(stats.microphone_frames, 2);
+    assert_eq!(stats.dropped_chunks, 0);
+    assert_eq!(stats.microphone_tail, 0);
+    let pcm = frames(observer);
+    assert_eq!(pcm[1..].concat().len(), 9600);
+    assert_eq!(notices.iter().filter(|n| **n == "earcon").count(), 1);
+    assert_eq!(notices.iter().filter(|n| **n == "played").count(), 1);
+    let earcon = notices.iter().position(|n| *n == "earcon").unwrap();
+    let speaking = notices.iter().position(|n| *n == "speaking").unwrap();
+    assert!(earcon < speaking);
+}
+
+#[tokio::test(start_paused = true)]
 async fn voice_second_run_reuses_port_without_old_pcm_or_reply_state() {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();

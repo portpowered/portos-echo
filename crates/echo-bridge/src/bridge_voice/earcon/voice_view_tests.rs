@@ -1,7 +1,159 @@
 use super::*;
 use crate::bridge_mcp::bridge_presentation::Presentation;
 use echo_link::LinkEvent;
+use echo_link::{
+    EchoLink, LinkConnector, LinkEvents,
+    fake::{Command, FakeConnector, Observer},
+};
 use tokio::sync::mpsc;
+
+#[tokio::test(start_paused = true)]
+async fn fast_connection_keeps_listening_until_earcon_receipt_and_reuse_never_republishes_connected() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    let mut trace = Trace::open(&path, "chatgpt").unwrap();
+    let health = Health::offline();
+    let (send, mut receive) = mpsc::channel(16);
+    let mut screen = Screen::bind(None).await.unwrap();
+    screen.presentation = Presentation::new(Some(send));
+    let mut view = View::new(&screen, &health, &mut trace);
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    let work = super::super::earcon::scope(&client, true, async {
+        for index in 1..=2 {
+            project_chime(&mut view, &mut receive, &mut events, index == 1).await;
+            complete(&mut view, &mut receive);
+        }
+        Ok(())
+    });
+    let remote = async {
+        for index in 1..=2 {
+            while observer
+                .commands()
+                .iter()
+                .filter(|c| matches!(c, Command::Cut(_)))
+                .count()
+                < index
+            {
+                tokio::task::yield_now().await;
+                tokio::time::advance(std::time::Duration::from_millis(20)).await;
+            }
+            observer.finish(Ok(()));
+        }
+    };
+    let (result, ()) = tokio::join!(work, remote);
+    assert_eq!(result, Ok(()));
+    let chimes: Vec<_> = rows(&path)
+        .into_iter()
+        .filter(|r| r["event"] == "wake.earcon_played")
+        .collect();
+    assert_eq!(chimes.len(), 2);
+    for (index, chime) in chimes.iter().enumerate() {
+        assert_eq!(chime["run_id"], format!("run-{}", index + 1));
+        assert_eq!(chime["duration_ms"], 160);
+    }
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Frame(_)))
+            .count(),
+        16
+    );
+}
+
+async fn project_chime(
+    view: &mut View<'_>,
+    receive: &mut mpsc::Receiver<UiState>,
+    events: &mut impl LinkEvents,
+    fresh: bool,
+) {
+    use super::super::earcon;
+    if fresh {
+        view.observe(ServeNotice::Listening).unwrap();
+    } else {
+        view.observe(ServeNotice::Session(SessionNotice::Started)).unwrap();
+    }
+    assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+    earcon::start().unwrap();
+    if fresh {
+        let origin = tokio::time::Instant::now();
+        earcon::negotiating(events, async { Ok(()) }, &mut |_| unreachable!())
+            .await
+            .unwrap();
+        assert_eq!(tokio::time::Instant::now(), origin);
+        view.observe(ServeNotice::Session(SessionNotice::Connected)).unwrap();
+        assert_eq!(view.health.state.borrow().live, "connected");
+    }
+    assert!(earcon::active());
+    assert!(receive.try_recv().is_err());
+    let duration = chime_receipt(events, receive).await;
+    assert_eq!(duration, std::time::Duration::from_millis(160));
+    view.observe(ServeNotice::Session(SessionNotice::Run(Notice::EarconPlayed(duration))))
+        .unwrap();
+    if fresh {
+        assert_eq!(receive.try_recv().unwrap(), UiState::Connected);
+    }
+    assert!(receive.try_recv().is_err());
+}
+
+async fn chime_receipt(events: &mut impl LinkEvents, receive: &mut mpsc::Receiver<UiState>) -> std::time::Duration {
+    use super::super::earcon;
+    loop {
+        tokio::select! {
+            biased;
+            duration = earcon::completed() => return duration,
+            event = events.recv() => {
+                assert!(earcon::receipt(&event.unwrap().unwrap()));
+                assert!(receive.try_recv().is_err());
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_negotiation_clears_pending_connected_without_earcon_or_reply_success() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    let mut trace = Trace::open(&path, "chatgpt").unwrap();
+    let health = Health::offline();
+    let (send, mut receive) = mpsc::channel(16);
+    let mut screen = Screen::bind(None).await.unwrap();
+    screen.presentation = Presentation::new(Some(send));
+    let mut view = View::new(&screen, &health, &mut trace);
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    let work = super::super::earcon::scope(&client, true, async {
+        view.observe(ServeNotice::Listening)?;
+        super::super::earcon::start()?;
+        let result = super::super::earcon::negotiating(
+            &mut events,
+            async { Err::<(), _>(Error::Unavailable) },
+            &mut |_| unreachable!(),
+        )
+        .await;
+        assert_eq!(result, Err(Error::Unavailable));
+        view.closed("failed")?;
+        assert!(!view.pending_connected);
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        assert!(receive.try_recv().is_err());
+        Ok(())
+    });
+    let remote = async {
+        while !observer.commands().iter().any(|c| matches!(c, Command::Cut(_))) {
+            tokio::task::yield_now().await;
+        }
+        observer.finish(Ok(()));
+    };
+    let (result, ()) = tokio::join!(work, remote);
+    assert_eq!(result, Ok(()));
+    assert_eq!(health.state.borrow().live, "idle");
+    for event in ["wake.earcon_played", "reply.played", "bridge.run_completed"] {
+        assert_eq!(rows(&path).iter().filter(|r| r["event"] == event).count(), 0);
+    }
+}
 
 fn rows(path: &std::path::Path) -> Vec<serde_json::Value> {
     std::fs::read_to_string(path)
