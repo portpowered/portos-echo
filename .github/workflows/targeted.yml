@@ -1,5 +1,7 @@
 name: Targeted
 on:
+  push:
+    branches: [htr-targeted-negative-20261118]
   workflow_dispatch:
     inputs:
       nextest_filter:
@@ -40,10 +42,10 @@ jobs:
       - name: Execute requested selections
         shell: sh
         env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
+          TARGETED_FILTER: ${{ inputs.nextest_filter || 'test(htr_deliberate_no_match_20261118)' }}
           TARGETED_SCENARIOS: ${{ inputs.scenarios }}
-          TARGETED_REPEAT: ${{ inputs.repeat }}
-          TARGETED_IGNORED: ${{ inputs.ignored }}
+          TARGETED_REPEAT: ${{ inputs.repeat || '2' }}
+          TARGETED_IGNORED: ${{ inputs.ignored || 'true' }}
         run: |
           python - <<'PY'
           import os
