@@ -47,6 +47,7 @@ struct Case {
     speaking: Option<Value>,
     transcript: Option<String>,
     snapshot: Value,
+    bridge_exit: Option<String>,
     playback: Option<Value>,
     clock: Value,
 }
@@ -76,8 +77,8 @@ pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, St
     .await;
     let close = case.close().await;
     let (completion, timing) = match (work, close) {
-        (Err(primary), Err(cleanup)) => return Err(format!("{primary}; {cleanup}")),
-        (Err(error), _) | (_, Err(error)) => return Err(error),
+        (Err(primary), Err(cleanup)) => return Err(case.failure(&format!("{primary}; {cleanup}"))),
+        (Err(error), _) | (_, Err(error)) => return Err(case.failure(&error)),
         (Ok(value), Ok(())) => value,
     };
     let text = case.transcript.ok_or("m4: missing observed assistant transcript")?;
@@ -94,6 +95,19 @@ pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, St
 }
 
 impl Case {
+    // These are local synthetic-fixture observations, never credential files,
+    // raw process stderr or arbitrary model requests. Keep them after cleanup
+    // so a failed CLI journey retains its primary evidence in the caller's log.
+    fn failure(&self, error: &str) -> String {
+        let observations = json!({
+            "bridge_exit":self.bridge_exit,
+            "bridge_trace":self.trace.records,
+            "provider":self.snapshot,
+            "playout_clock":self.clock,
+        });
+        format!("{error}; m4 failure observations: {observations}")
+    }
+
     async fn start(&mut self, options: &Options, negative: bool) -> Result<(), String> {
         self.start_host(options, negative, &options.python).await
     }
@@ -247,6 +261,7 @@ impl Case {
     async fn close_bridge(&mut self, errors: &mut Vec<String>) {
         if let Some(mut bridge) = self.bridge.take() {
             errors.extend(bridge.close().await.err());
+            self.bridge_exit = Some(bridge.exit_summary());
             if let Some(root) = &self.root {
                 let read = std::fs::read(root.0.join("trace")).map_err(|_| "m4: missing final trace".to_owned());
                 errors.extend(read.and_then(|bytes| self.trace.append(&bytes)).err());

@@ -10,6 +10,32 @@ use tokio::{
 };
 
 #[test]
+fn failed_journey_retains_primary_error_exit_and_independent_observations() {
+    let mut case = Case {
+        bridge_exit: Some("exit status: 1; forced=false".into()),
+        snapshot: json!({"models":[{"outputs":0}],"appends":[],"transcripts":[]}),
+        clock: json!({"epoch_ms":480,"pcm":[],"states":[]}),
+        ..Case::default()
+    };
+    case.trace.records.push(json!({"event":"tools/call","elapsed_ms":480}));
+    let error = case.failure("process: exited before observation; cleanup: owned child exited nonzero");
+    let (primary, observed) = error.split_once("; m4 failure observations: ").unwrap();
+    assert_eq!(
+        primary,
+        "process: exited before observation; cleanup: owned child exited nonzero"
+    );
+    let observed: Value = serde_json::from_str(observed).unwrap();
+    assert_eq!(observed["bridge_exit"], "exit status: 1; forced=false");
+    assert_eq!(observed["bridge_trace"], json!(case.trace.records));
+    assert_eq!(observed["provider"], case.snapshot);
+    assert_eq!(observed["playout_clock"], case.clock);
+    assert!(
+        case.failure("cancelled")
+            .starts_with("cancelled; m4 failure observations: ")
+    );
+}
+
+#[test]
 fn paired_sequence_rejects_a_discarded_late_mouth_interval() {
     let states: Vec<_> = ["ready", "speaking", "ready", "speaking", "ready"]
         .iter()
