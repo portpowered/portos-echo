@@ -145,8 +145,8 @@ mod tests {
         async fn next(&mut self) -> Result<MediaEvent, Error> {
             self.0.recv().await.ok_or(Error::Unavailable)
         }
-        async fn ready_audio(&mut self) -> Result<Option<echo_media::PcmFrame>, Error> {
-            Ok(None)
+        fn ready_audio(&mut self) -> impl Future<Output = Result<Option<echo_media::PcmFrame>, Error>> {
+            std::future::ready(Ok(None))
         }
     }
 
@@ -217,9 +217,29 @@ mod tests {
                 Ok(())
             },
         ));
+        two_replies(&mut work, &tx, &observer, &receipts).await;
+        idle_noise(&tx).await;
+        poll(work.as_mut()).await;
+        tokio::time::advance(Duration::from_secs(3) - Duration::from_nanos(1)).await;
+        poll(work.as_mut()).await;
+        assert!(!observer.commands().contains(&Command::EndRun));
+        tokio::time::advance(Duration::from_nanos(1)).await;
+        let stats = work.await.unwrap();
+        assert_eq!(Instant::now() - settled.get(), Duration::from_secs(3));
+        assert_eq!(receipts.get(), 2);
+        assert_eq!(*reply_stats.borrow(), [(12, 12), (12, 12)]);
+        assert_two_replies(&observer, &stats);
+    }
+
+    async fn two_replies(
+        work: &mut Pin<Box<impl Future<Output = Result<super::super::Stats, Error>>>>,
+        tx: &mpsc::Sender<MediaEvent>,
+        observer: &Observer,
+        receipts: &Cell<usize>,
+    ) {
         for number in 1..=2 {
-            reply(&tx, if number == 1 { 5000 } else { -5000 }).await;
-            settle(&mut work, &observer, &receipts, number).await;
+            reply(tx, if number == 1 { 5000 } else { -5000 }).await;
+            settle(work, observer, receipts, number).await;
             assert!(!observer.commands().contains(&Command::EndRun));
             assert_eq!(
                 observer
@@ -235,16 +255,9 @@ mod tests {
                 poll(work.as_mut()).await;
             }
         }
-        idle_noise(&tx).await;
-        poll(work.as_mut()).await;
-        tokio::time::advance(Duration::from_secs(3) - Duration::from_nanos(1)).await;
-        poll(work.as_mut()).await;
-        assert!(!observer.commands().contains(&Command::EndRun));
-        tokio::time::advance(Duration::from_nanos(1)).await;
-        let stats = work.await.unwrap();
-        assert_eq!(Instant::now() - settled.get(), Duration::from_secs(3));
-        assert_eq!(receipts.get(), 2);
-        assert_eq!(*reply_stats.borrow(), [(12, 12), (12, 12)]);
+    }
+
+    fn assert_two_replies(observer: &Observer, stats: &super::super::Stats) {
         assert_eq!(stats.reply_sent, 24);
         assert_eq!(
             observer

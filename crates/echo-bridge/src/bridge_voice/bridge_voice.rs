@@ -158,7 +158,9 @@ pub async fn run<L: EchoLink>(
         .map(|clock| clock.voice())
         .transpose()?;
     tokio::pin!(cancelled);
-    voice_listen::replies(
+    // Retain the reply-loop state once per run rather than embedding it in
+    // every conversation/admission future above this boundary.
+    Box::pin(voice_listen::replies(
         client,
         (events, &mut microphone),
         port,
@@ -166,7 +168,7 @@ pub async fn run<L: EchoLink>(
         &options,
         cancelled.as_mut(),
         &mut observe,
-    )
+    ))
     .await?;
     session_controller::close(
         client,
