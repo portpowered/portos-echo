@@ -159,11 +159,19 @@ where
         let trace = tools.trace.as_ref().ok_or(Error::Unavailable)?.clone();
         call.trace_setup(trace.clone())?;
         call.trace_tools(trace, &catalog);
-        tokio::select! {
-            biased;
-            () = cancelled.as_mut() => return Err(Error::Control),
-            result = call.start(&options.call, catalog.tools().to_vec(), options.deadline) => result?,
-        }
+        super::earcon::negotiating(
+            device.1,
+            async {
+                tokio::select! {
+                    biased;
+                    () = cancelled.as_mut() => return Err(Error::Control),
+                    result = call.start(&options.call, catalog.tools().to_vec(), options.deadline) => result?,
+                }
+                Ok(())
+            },
+            &mut observe,
+        )
+        .await?;
         observe(super::SessionNotice::Connected)?;
         // Keep the retained scheduler/run future off the Windows main stack.
         Box::pin(super::tool_conversation(

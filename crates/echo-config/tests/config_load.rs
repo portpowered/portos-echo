@@ -41,6 +41,7 @@ impl Drop for Directory {
 #[test]
 fn committed_example_loads_with_all_expected_values() {
     let expected = BridgeConfig {
+        wake_earcon: true,
         codex: echo_config::CodexConfig::default(),
         agent_backend: echo_config::AgentBackend::Client,
         muse: None,
@@ -83,6 +84,35 @@ fn committed_example_loads_with_all_expected_values() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/bridge.example.toml");
     assert_eq!(BridgeConfig::load(path).unwrap(), expected);
     assert_eq!(BridgeConfig::from_toml_str(EXAMPLE).unwrap(), expected);
+}
+
+#[test]
+fn wake_earcon_defaults_and_boolean_overrides_are_offline() {
+    let directory = Directory::new().unwrap();
+    for (prefix, expected) in [("", true), ("wake_earcon=true\n", true), ("wake_earcon=false\n", false)] {
+        let input = format!("{prefix}{MINIMAL}");
+        let parsed = BridgeConfig::from_toml_str(&input).unwrap();
+        assert_eq!(parsed.wake_earcon, expected);
+        assert_eq!(BridgeConfig::load(directory.write(input).unwrap()).unwrap(), parsed);
+    }
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+}
+
+#[test]
+fn wake_earcon_rejects_types_without_echoing_values() {
+    let directory = Directory::new().unwrap();
+    for value in ["'DISCARDED_VALUE'", "1", "[]", "{}"] {
+        let input = format!("wake_earcon={value}\n{MINIMAL}");
+        for result in [
+            BridgeConfig::from_toml_str(&input),
+            BridgeConfig::load(directory.write(&input).unwrap()),
+        ] {
+            let error = result.unwrap_err();
+            assert_eq!(error.to_string(), "wake_earcon: invalid type or value");
+            assert!(!format!("{error:?}").contains("DISCARDED_VALUE"));
+            assert!(error.source().is_none());
+        }
+    }
 }
 
 #[test]
@@ -215,6 +245,7 @@ fn minimal_config_defaults_match_both_loaders() {
     let directory = Directory::new().unwrap();
     let config = BridgeConfig::load(directory.write(MINIMAL).unwrap()).unwrap();
     assert_eq!(config, BridgeConfig::from_toml_str(MINIMAL).unwrap());
+    assert!(config.wake_earcon);
     assert_eq!(config.echo.wyoming_port, 16700);
     assert_eq!(config.live.mode, LiveMode::Chatgpt);
     assert_eq!(config.live.voice, None);

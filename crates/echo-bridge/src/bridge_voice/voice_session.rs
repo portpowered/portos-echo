@@ -101,16 +101,24 @@ where
     tokio::pin!(cancelled);
     let work = async {
         // Refuse an already expired deadline before generating an offer or RPC.
-        tokio::select! {
-            biased;
-            () = cancelled.as_mut() => return Err(Error::Control),
-            result = async {
-                if Instant::now() >= options.deadline { return Err(Error::Deadline); }
-                validate(&options.session)?;
-                if let Some(trace) = trace { call.trace_setup(trace)?; }
-                call.start(&options.call, options.tools, options.deadline).await
-            } => result?,
-        }
+        super::earcon::negotiating(
+            device.1,
+            async {
+                tokio::select! {
+                    biased;
+                    () = cancelled.as_mut() => return Err(Error::Control),
+                    result = async {
+                        if Instant::now() >= options.deadline { return Err(Error::Deadline); }
+                        validate(&options.session)?;
+                        if let Some(trace) = trace { call.trace_setup(trace)?; }
+                        call.start(&options.call, options.tools, options.deadline).await
+                    } => result?,
+                }
+                Ok(())
+            },
+            &mut observe,
+        )
+        .await?;
         observe(SessionNotice::Connected)?;
         conversation(device, &mut call, options.session, cancelled.as_mut(), &mut observe).await
     };
@@ -250,6 +258,9 @@ async fn drive<L: EchoLink>(
             .ok_or(Error::Input)?;
         deadline.checked_add(options.played_timeout).ok_or(Error::Input)?;
         observe(SessionNotice::Started)?;
+        if completed > 0 {
+            super::earcon::start()?;
+        }
         let stats = run(
             client,
             events,

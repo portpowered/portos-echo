@@ -12,7 +12,6 @@ use std::{
     task::Poll,
 };
 use tokio::sync::mpsc;
-
 struct Port {
     events: mpsc::Receiver<Result<MediaEvent, Error>>,
     ready: VecDeque<PcmFrame>,
@@ -118,6 +117,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
         std::future::pending(),
         |notice| {
             notices.push(match notice {
+                Notice::EarconPlayed(_) => "earcon",
                 Notice::ReplyStarted => "speaking",
                 Notice::ReplyPaused => "paused",
                 Notice::ReplyPlayed => "played",

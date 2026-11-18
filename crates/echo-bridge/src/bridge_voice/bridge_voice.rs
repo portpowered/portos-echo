@@ -1,4 +1,6 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
+#[path = "earcon/earcon.rs"]
+mod earcon;
 #[path = "controls/tool_ledger.rs"]
 mod tool_ledger;
 #[path = "controls/tool_policy.rs"]
@@ -64,6 +66,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> VoicePort for Me
 
 /// No payload-bearing observation implements Debug or Display.
 pub enum Notice {
+    EarconPlayed(Duration),
     Device(LinkEvent<()>),
     Transcript {
         role: String,
@@ -125,6 +128,7 @@ pub async fn run<L: EchoLink>(
     let ceiling = options.response_deadline.saturating_duration_since(Instant::now()) + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
     let playback = async {
+        earcon::idle().await?;
         let result = client
             .play_with_timeout(crate::bridge_audio::format(24_000), reply, ceiling)
             .await;
@@ -185,6 +189,7 @@ async fn drive<E: LinkEvents>(
         tokio::select! {
             // Timeouts cannot be starved by a continuously ready peer.
             biased;
+            duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
             () = tokio::time::sleep_until(deadline) => {
                 if sink.is_none() || !source.delegation.held() {
                     return Err(Error::Deadline);
@@ -256,6 +261,8 @@ async fn step<E: LinkEvents>(
 async fn forward(sink: Option<&impl ReplySink>, pending: Option<&[u8]>) -> Result<(), Error> {
     let sink = sink.ok_or(Error::Wyoming)?;
     let frame = pending.ok_or(Error::Audio)?;
+    earcon::preempt();
+    earcon::idle().await?;
     // Retain the single frame across cancelled bounded sends.
     sink.send(frame.to_vec()).await.map_err(Error::from)
 }
@@ -266,6 +273,9 @@ fn device<R>(
     source: &mut Source,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    if earcon::receipt(event) {
+        return Ok(());
+    }
     let event = match event {
         LinkEvent::Played => {
             if !stopped {

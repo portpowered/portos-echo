@@ -106,7 +106,7 @@ async fn work<C: LinkConnector, P: MediaPeer>(
             let result = match ready {
                 Ok(()) => super::voice_admission::service(client, io, options.voice, peer, stopped(stopping), |notice| {
                 view.observe(notice)
-                }, (tools.as_mut(), Some(setup_trace))).await,
+                }, (tools.as_mut(), Some(setup_trace), options.delegation.is_some_and(|config| config.wake_earcon))).await,
                 Err(error) => Err(error),
             };
             if let Some(tools) = &mut tools { tools.close().await; }
