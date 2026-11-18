@@ -157,7 +157,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 biased;
                 () = cancelled(&mut self.play) => self.cancel_playback().await,
                 command = commands.recv() => self.command(command).await,
-                frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))).await,
+                frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))),
                 frame = async { match frames { Some(queue) => queue.recv().await, None => std::future::pending().await } } => match frame {
                     Ok(frame) => self.audio(frame).await,
                     Err(error) => Err(error),
@@ -185,7 +185,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
-    async fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
+    fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
         let frame = frame?;
         if self.paused
             && matches!(
