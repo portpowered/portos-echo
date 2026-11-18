@@ -104,11 +104,17 @@ fn stimulus_timing(wire: &Ledger) -> Result<String, String> {
     if last > cut || cut < transcript {
         return Err("M3 timing: reply frame after cut or cut before transcript".into());
     }
+    // The send window can finish before the stimulus while native playout is
+    // still active. Keep that measured lead signed; Played above proves silence.
+    let last_ms = if last >= stimulus {
+        last.duration_since(stimulus).as_secs_f64() * 1000.0
+    } else {
+        -stimulus.duration_since(last).as_secs_f64() * 1000.0
+    };
     Ok(format!(
-        "fixture_transcript_delay_ms=0 stimulus_to_transcript_ms={:.3} stimulus_to_cut_ms={:.3} stimulus_to_last_reply_ms={:.3}",
+        "fixture_transcript_delay_ms=0 stimulus_to_transcript_ms={:.3} stimulus_to_cut_ms={:.3} stimulus_to_last_reply_ms={last_ms:.3}",
         elapsed(transcript)?,
         elapsed(cut)?,
-        elapsed(last)?
 
     ))
 }
@@ -199,6 +205,22 @@ mod tests {
         ] {
             assert!(stimulus_timing(&invalid).is_err());
         }
+    }
+
+    #[test]
+    fn buffered_native_playout_can_outlast_the_last_sent_frame() {
+        let mut state = observed();
+        state.last_old_reply = Some(state.stimulus.unwrap() - Duration::from_millis(20));
+        let report = duplex(&state, Some(960), Some(9600)).unwrap();
+        assert!(report.contains("stimulus_to_last_reply_ms=-20.000"));
+        assert!(report.contains("barge_in_cut_ms=200.000"));
+        state.played[0] = state.cancel.unwrap() + Duration::from_millis(600);
+        assert!(duplex(&state, Some(960), Some(9600)).is_err());
+        state.played[0] = state.cancel.unwrap() - Duration::from_millis(1);
+        assert!(duplex(&state, Some(960), Some(9600)).is_err());
+        state.played[0] = state.cancel.unwrap() + Duration::from_millis(200);
+        state.after_window = 960;
+        assert!(duplex(&state, Some(960), Some(9600)).is_err());
     }
 
     #[test]
