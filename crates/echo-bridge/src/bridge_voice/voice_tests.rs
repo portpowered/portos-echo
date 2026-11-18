@@ -414,12 +414,14 @@ async fn delegated_answer(filler: Vec<MediaEvent>, answer: MediaEvent) -> (u64, 
     send(&tx, audible(12)).await;
     pending(work.as_mut()).await;
     assert_eq!(frames(&observer).len(), 10);
+    assert!(!observer.commands().contains(&Command::EndRun));
     send(&tx, [answer, done()]).await;
     tick(work.as_mut(), 2).await;
     assert_eq!(frames(&observer).len(), 12);
     assert_eq!(observer.commands().last(), Some(&Command::Stop));
     observer.finish(Ok(()));
     let stats = work.await.unwrap();
+    assert_eq!(observer.commands().iter().filter(|c| **c == Command::EndRun).count(), 1);
     (stats.reply_received, stats.reply_sent)
 }
 #[tokio::test(start_paused = true)]
@@ -472,6 +474,7 @@ async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_witho
     // The filler played up to the resampler's held tail; the reply stays open.
     assert_eq!(frames(&observer).len(), 11);
     assert_ne!(observer.commands().last(), Some(&Command::Stop));
+    assert!(!observer.commands().contains(&Command::EndRun));
     tokio::time::advance(Duration::from_secs(1)).await;
     pending(work.as_mut()).await;
     tick(work.as_mut(), 1).await;
@@ -484,6 +487,7 @@ async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_witho
     observer.finish(Ok(()));
     let stats = work.await.unwrap();
     assert_eq!((stats.reply_received, stats.reply_sent), (13, 12));
+    assert_eq!(observer.commands().last(), Some(&Command::EndRun));
 }
 
 fn assert_drained_reply(observer: &Observer, old_frames: usize) {
