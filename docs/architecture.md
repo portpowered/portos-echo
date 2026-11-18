@@ -10,7 +10,7 @@ status: current main overview; W4 deployment and in-progress changes are labelle
 ## Purpose and placement
 
 This page explains the running parts and follows a conversation across them. It describes main at
-`f83a5e807ff580bf1a3bb108f6872a07f673d04a`, rather than the older design drafts or unmerged branches.
+`a019e053234d2dd316c2233ae7cf241aad9a49df`, rather than the older design drafts or unmerged branches.
 The [program plan, sections 1–3](program/plan.md#1-what-we-are-building),
 [section 6](program/plan.md#6-the-bridge-what-it-runs-and-where) and
 [W4](program/plan.md#12-phase-order-after-m0) define placement: **the Echo detects “Computer” locally**,
@@ -492,6 +492,518 @@ native Windows tests use [wsl_relay.py](../scripts/wsl_relay.py) to reach the se
 dead host connections when a restarted fixture is ready. The relay is test-only. Scripts consume prebuilt
 artifacts; no Echo, Ring or real account is part of this documentation witness.
 
+## Key concepts
+
+These concepts connect the component descriptions above to the journeys below. Each code link names the
+implementation boundary, rather than implying that a local test proves a physical or cloud outcome.
+
+### Wyoming
+
+#### What it is — Wyoming
+
+Wyoming is the Home Assistant voice satellite protocol. A TCP stream carries newline-terminated JSON
+headers, optional separate JSON data and length-delimited binary payloads, such as microphone PCM.
+
+#### How we use it — Wyoming
+
+The bridge sends `run-satellite` to register for wakes and `describe` to request `info`. hassmic sends
+`run-pipeline` after a confirmed wake, then microphone `audio-chunk` events. Reply playback travels the
+other way as `audio-start`, `audio-chunk`, `audio-stop`; hassmic returns `played`. Our fork adds
+`hassmic-continue` to cut a reply while retaining capture, and `hassmic-mute` to report effective mute.
+There is no microphone `audio-start` in this exchange; each microphone chunk carries its format.
+
+#### Why — Wyoming
+
+hassmic already speaks it. The protocol separates the Echo's hardware audio from the bridge's conversation
+logic, letting the same bridge use the device or a pinned file-audio host in tests.
+
+#### Where in the code — Wyoming
+
+[Wire framing](../crates/echo-wyoming/src/wyoming_wire.rs),
+[event routing](../crates/echo-wyoming/src/wyoming_route.rs) and
+[playback controls](../crates/echo-wyoming/src/wyoming_session.rs) implement the adapter.
+[echo-link](../crates/echo-link/src/lib.rs) exposes protocol-neutral capture, wake, mute, acknowledged
+playback and cut operations. [ADR 0025](adr/0025-echo-link.md) explicitly makes it the seam for a future
+local transport adapter; it is not a new wire protocol or an implemented replacement for Wyoming.
+
+#### Limits and plans — Wyoming
+
+Today Wyoming is plaintext and unauthenticated across the LAN. The fork's source-address restriction
+limits who can connect; it does not encrypt microphone traffic. The [W4 plan](program/plan.md#12-phase-order-after-m0)
+moves the bridge onto the Echo and sets `LISTEN_FROM` to numeric loopback only. That removes LAN exposure
+but **keeps Wyoming**. No decision in [decisions.md](program/decisions.md) selects its replacement.
+
+| Undecided options, not plans | Trade-off |
+| --- | --- |
+| Keep Wyoming on loopback | Cheapest reuse of the tested adapter; retains framing and a local TCP service |
+| Private local socket or IPC, through another echo-link adapter | Can use local access controls and avoid TCP; needs a matching hassmic implementation and compatibility tests |
+| Link the bridge audio path into the hassmic fork | Can remove the protocol boundary; couples languages, process lifetimes, releases and hardware ownership |
+
+Open owner question: after W4, should Wyoming remain local or be replaced, and which trade-off is acceptable?
+This documentation does not choose or implement an option.
+
+### Wake word
+
+#### What it is — Wake word
+
+A local keyword detector decides when room speech should start an assistant interaction. Pryon runs on
+the Echo with the firmware's “Computer” model; the PC performs no wake inference or model training.
+
+#### How we use it — Wake word
+
+After `run-satellite` registration, hassmic turns a confirmed wake into `run-pipeline` with
+`wake_word_name=computer-en-US`, followed by capture including its lead-in. The bridge admits that run
+through mute, kill and budget gates. Under `-D`, a speaking-time wake does not itself start a second run.
+
+#### Why — Wake word
+
+Local detection avoids sending continuous room audio to the PC or cloud while idle and uses the device's
+existing microphone front end. It also gives each new ordinary question a deliberate activation point.
+
+#### Where in the code — Wake word
+
+Pinned hassmic's `src/hassmic/main.c` owns Pryon and the state machine;
+[Wyoming routing](../crates/echo-wyoming/src/wyoming_route.rs) creates runs and
+[voice admission](../crates/echo-bridge/src/bridge_voice/voice_admission.rs) accepts them.
+
+#### Limits and plans — Wake word
+
+False wakes can admit unintended speech; missed wakes never reach the bridge. The small recorded
+[Computer-model trials](program/baselines.md#the-device) are not a household false-positive or miss-rate
+guarantee. Host tests inject wakes and cannot measure Pryon accuracy. Wake earcon work remains in progress.
+
+### AEC and duplex capture
+
+#### What it is — AEC and duplex capture
+
+Acoustic echo cancellation (AEC) removes speaker sound from captured room audio. Amazon's audio front
+end supplies AEC and beamforming through `micAsr`. Duplex means capture and playback can happen together;
+hassmic's `-D` enables that overlap and is **not** the echo canceller.
+
+#### How we use it — AEC and duplex capture
+
+hassmic reads `MIXER_REC_ASR` and plays through `MIXER_PLAY_TTS`, preserving the firmware reference path.
+With `-D`, microphone chunks continue during a reply so user speech can reach Live while it speaks.
+
+#### Why — AEC and duplex capture
+
+Without effective AEC the assistant can hear its own reply as new speech. That can cause self-interruption
+or false barge-in; concurrent capture alone cannot distinguish speaker echo from the person speaking.
+
+#### Where in the code — AEC and duplex capture
+
+Pinned hassmic's `src/hassmic/audio_mixer.c` selects the mixer paths and `src/hassmic/main.c` owns duplex
+capture. [The component description](#hassmic) and [S2](spikes/s2-barge-in.md) distinguish host playback
+control from device acoustics.
+
+#### Limits and plans — AEC and duplex capture
+
+Residual echo and real-room barge-in rejection are unmeasured. File-audio hassmic-host tests have no
+Amazon acoustic front end. The coordinator must measure effectiveness at T5; this page claims no AEC score.
+
+### Audio formats and resampling
+
+#### What it is — Audio formats and resampling
+
+PCM is a stream of sample values; Opus compresses those values for transport. Resampling changes the
+sample rate while preserving pitch and elapsed audio time. Sample width and sample rate are different:
+the reply's “PCM24” here means 24 kHz, still signed 16-bit samples.
+
+#### How we use it — Audio formats and resampling
+
+| Boundary | Format and conversion |
+| --- | --- |
+| hassmic microphone → capture adapter | 16 kHz signed 16-bit little-endian mono; chunks become 320-sample, 20 ms frames |
+| echo-media → Live | Persistent Rubato resampling to 48 kHz; mono Opus encoding of 960 samples per 20 ms packet; RTP capability `opus/48000/2` |
+| Live → echo-media | Opus decode at 48 kHz, then Rubato to 16 kHz mono frames |
+| Reply adapter → hassmic | echo-audio resamples 16 kHz to 24 kHz signed 16-bit mono; 480 samples or 960 bytes per 20 ms chunk |
+
+The reply pacer uses a monotonic audio clock and `audio.reply_lead_ms` to limit how far sent PCM leads
+playout. Draining local queues or finishing a transcript does not prove that the speaker finished: the
+bridge still awaits `played`.
+
+#### Why — Audio formats and resampling
+
+The hardware, caller API and network codec use different rates. Explicit conversion prevents pitch and
+duration errors; pacing bounds queued speaker audio so a future interruption need not drain a whole reply.
+
+#### Where in the code — Audio formats and resampling
+
+[call_audio.rs](../crates/echo-bridge/src/bridge_codex/call_audio.rs) uses
+[echo-audio](../crates/echo-audio/src/audio_pcm.rs) for PCM conversion;
+[media_audio.rs](../crates/echo-media/src/media_audio.rs) owns Rubato/Opus and
+[ClockPacer](../crates/echo-bridge/src/bridge_runtime/bridge_pacing.rs) schedules reply chunks.
+
+#### Limits and plans — Audio formats and resampling
+
+Queues are bounded and count discarded frames. Filter delay, network jitter, queued device playback and
+acoustics remain separate costs. A playout clock estimates sent audio time; it is not an Echo speaker sensor.
+
+### Streaming connectivity
+
+#### What it is — Streaming connectivity
+
+A conversation uses several simultaneous streams. Media, control, tools and presentation have separate
+connections and owners; “connected” cannot mean that an SDP response alone proves working audio.
+
+#### How we use it — Streaming connectivity
+
+| Link | Transport and contents | If it drops |
+| --- | --- | --- |
+| Echo ↔ bridge | TCP Wyoming: wake/run controls, PCM, mute and playback receipts | Adapter invalidates the run and reconnects with backoff while owned; a failed configured voice owner closes and needs explicit restart |
+| Bridge ↔ app server | Child stdio, newline JSON-RPC: account, thread, call and tool messages | Pending RPC/call fails; owner cleans up media/device and reaps child; no automatic replay |
+| Bridge ↔ OpenAI media | WebRTC: Opus RTP protected by SRTP, plus ordered SCTP `oai-events` | Transport or data-channel loss fails the media peer and conversation |
+| App server ↔ Live | HTTPS SDP call creation and WSS sideband: transcripts, native delegation and call control | Creation can fail; control errors/closure are surfaced by the pin; bridge terminates on projected error/closed, rather than promising seamless recovery |
+| App server ↔ Codex model | HTTPS Responses streaming: delegated reasoning, tool requests and results | Delegated turn cannot normally complete; pin reports turn outcome; bridge response/task deadlines bound waiting |
+| App server ↔ ChatGPT issuer | HTTPS: device-code authorization and refresh | Sign-in/admission can fail or require relink; no silent interactive login |
+| Bridge ↔ Port OS issuer | HTTPS OAuth: discovery, device authorization, token and refresh | Grant operation fails or latches relink; no unauthorized tool effect is retried |
+| Bridge ↔ Port OS MCP | HTTPS POST JSON-RPC: initialize, `tools/list`, `tools/call`, Bearer grant | Discovery/call fails; tool error returns to the model, authorization failure requires linking |
+| Bridge ↔ screen | Loopback HTTP assets, SSE `ScreenFrame`, POST `UiAction`; remote Echo needs forwarding | Page shows lost connection and reconnects; a lost action does not imply approval or stop the independent audio connection |
+
+#### Why — Streaming connectivity
+
+Separating these links keeps microphone media out of stdio, credentials out of the screen and MCP execution
+on the bridge. It also explains why a visible page can survive an auth failure without a usable Live call.
+
+#### Where in the code — Streaming connectivity
+
+[voice_host.rs](../crates/echo-bridge/src/bridge_voice/voice_host.rs) owns device/child lifetime,
+[call_media.rs](../crates/echo-bridge/src/bridge_codex/call_media.rs) joins control and media readiness,
+and [screen server](../crates/echo-screen-server/src/lib.rs) owns presentation transport. Cloud client
+boundaries are [echo-codex](../crates/echo-codex/src/lib.rs) and [echo-mcp-client](../crates/echo-mcp-client/src/lib.rs).
+
+#### Limits and plans — Streaming connectivity
+
+These are current failure boundaries, not automatic recovery promises. W4 changes local placement;
+OpenAI and Port OS remain remote dependencies. Paired LAN TLS for the page remains a plan, not this server's behavior.
+
+### WebRTC
+
+#### What it is — WebRTC
+
+WebRTC negotiates a live peer connection. SDP describes the offered media and answer; ICE candidates
+describe possible network paths. ICE selects a working path, DTLS establishes keys, SRTP protects audio,
+and SCTP carries the data channel over the protected connection.
+
+#### How we use it — WebRTC
+
+echo-media creates the Opus track and ordered `oai-events` channel, gathers an SDP offer and hands it to
+the app server's `thread/realtime/start`. It applies the returned answer and waits for both transport and
+channel readiness. Native delegation and transcripts use the app server's sideband; the bridge does not
+use data-channel messages as a second delegation dispatcher.
+
+#### Why — WebRTC
+
+The pinned app server's ChatGPT sign-in path requires a WebRTC media peer; its all-JSON WebSocket audio
+path is refused. WebRTC also supplies timed compressed media and transport security without carrying PCM
+as JSON control messages. A sideband WebSocket still handles control independently.
+
+#### Where in the code — WebRTC
+
+[media_peer.rs](../crates/echo-media/src/media_peer.rs) configures webrtc-rs (`webrtc`/`rtc` 0.21.1),
+[media_signal.rs](../crates/echo-media/src/media_signal.rs) admits addresses/SDP and observes readiness,
+and [ADR 0027](adr/0027-echo-media.md) records the adaptation from Codex's voice-host.
+
+#### Limits and plans — WebRTC
+
+Production advertises usable non-loopback interfaces, with optional explicit allowlist/STUN settings;
+loopback is opt-in for local tests and cannot reach a cloud peer. mDNS resolves remote `.local` host
+candidates in the normal QueryOnly mode; an explicitly all-loopback allowlist disables it to avoid a
+multicast dependency in local tests. A successful local pair proves neither NAT traversal nor provider access.
+
+### Calls, runs, turns and multi-turn
+
+#### What it is — Calls, runs, turns and multi-turn
+
+| Term | Meaning in this implementation |
+| --- | --- |
+| Call | Retained Live session with one app-server thread/control owner and WebRTC media peer |
+| Run | One device wake's microphone and reply-playback lifecycle, ending after capture EOF and acknowledged playback |
+| Turn | Here, a delegated Codex unit of work identified by `turn/started` and `turn/completed`; can make several tool calls |
+| Utterance | A speech segment tracked through transcript deltas/done; assistant segments can be filler or the answer within one run |
+
+#### How we use it — Calls, runs, turns and multi-turn
+
+The first admitted wake creates the call. A successful reply returns the page to `Ready` and starts
+`session_idle_seconds`. A second wake before expiry starts fresh run bookkeeping on the same call, thread
+and peer, without new SDP or another `Connected`. Idle audio is discarded. At expiry the bridge stops
+realtime control and closes media; a later wake creates a new call.
+
+#### Why — Calls, runs, turns and multi-turn
+
+Retaining the call preserves conversation context and avoids setup for every question. Distinct lifetimes
+prevent filler completion or a tool result from being mistaken for speaker completion.
+
+#### Where in the code — Calls, runs, turns and multi-turn
+
+[voice_session.rs](../crates/echo-bridge/src/bridge_voice/voice_session.rs) owns retained calls/idle close,
+[bridge_voice.rs](../crates/echo-bridge/src/bridge_voice/bridge_voice.rs) drives a run, and
+[voice_source.rs](../crates/echo-bridge/src/bridge_voice/voice_source.rs) tracks filler/answer utterances.
+
+#### Limits and plans — Calls, runs, turns and multi-turn
+
+Multi-turn today still requires “Computer” for each ordinary new question; it is not continuous hands-free
+follow-up after playback. Expiry wins over a wake at equality and muted wakes do not renew it. The UTC
+call-start prompt snapshot is retained unchanged, not resampled for each question.
+
+### Barge-in
+
+#### What it is — Barge-in
+
+Barge-in means a person can interrupt a spoken reply, stop obsolete playback promptly and continue with
+new speech. It requires coordinated capture, model cancellation, queue cutting and run lifetime.
+
+#### How we use it — Barge-in
+
+On current main, `-D` continues capture during reply audio, but configured Codex voice maps
+`thread/realtime/itemAdded` speech/cancellation notifications to `Event::Other`. It does not use those
+events to cut playback. Error/kill cleanup can cut through `hassmic-continue` and `audio-stop`, then await
+`played`; that cleanup closes/fails the voice run instead of continuing a normal interrupted question.
+
+#### Why — Barge-in
+
+It lets someone correct or stop a reply without waiting, provided the assistant's own speaker audio does
+not trigger the same interruption. Duplex and the device cut API are prerequisites, not the complete behavior.
+
+#### Where in the code — Barge-in
+
+[call_events.rs](../crates/echo-bridge/src/bridge_codex/call_events.rs) projects notifications;
+[voice loop](../crates/echo-bridge/src/bridge_voice/bridge_voice.rs) owns cancellation and
+[Wyoming session](../crates/echo-wyoming/src/wyoming_session.rs) implements the acknowledged cut.
+
+#### Limits and plans — Barge-in
+
+`el-f-barge-in-keeps-run` is in progress. Its continued-capture outcome is not implemented by today's
+configured owner. Legacy M3 sim evidence and host queue tests do not prove this owner or physical AEC.
+
+### Delegation
+
+#### What it is — Delegation
+
+Live is the realtime speech model; a delegated Codex model performs longer reasoning and tool work.
+The pinned V3 default is `gpt-live-1-codex`, while the plan names `gpt-live-1.1-codex`; this discrepancy
+does not establish which model a real provider resolves. The delegated model is separately selected.
+
+#### How we use it — Delegation
+
+Live sends native `delegation.created` on the sideband. The app server runs a Codex turn with bridge
+`dynamicTools`, requests effects from the bridge and returns text via native `delegation.context.append`.
+The bridge sees `turn/started`, tool RPCs and `turn/completed`. Live can speak filler while work runs;
+the bridge holds the reply open across that filler. Budget/deadline enforcement uses `turn/interrupt`
+for the matching turn. A response timeout can abandon a late answer and finish the filler.
+
+#### Why — Delegation
+
+The fast voice interaction can acknowledge work while the reasoning model handles tools. Direct answers
+using prompt context need not incur another model turn or tool round trips.
+
+#### Where in the code — Delegation
+
+[call_tools.rs](../crates/echo-bridge/src/bridge_codex/call_tools.rs) owns dispatch and interrupts,
+[codex_dispatch.rs](../crates/echo-delegation/src/codex_dispatch.rs) correlates requests, and
+[voice_source.rs](../crates/echo-bridge/src/bridge_voice/voice_source.rs) distinguishes filler from answer.
+
+#### Limits and plans — Delegation
+
+Main already selects `codex.model`, falling back to `agent.model`, or the app-server default if omitted.
+The dedicated `delegate_model` configuration work in [PR 193](https://github.com/portpowered/portos-echo/pull/193)
+is in progress. Delegation adds model and tool waiting; the repository baselines do not record the
+suggested 3.3–24 s range as a delegated-turn measurement, so no numeric latency claim is made here.
+The pin can route model work before bridge admission observes `turn/started`; daily caps cannot undo that work.
+
+### MCP invocation
+
+#### What it is — MCP invocation
+
+Model Context Protocol (MCP) exposes named tools and structured results. A dynamic tool is the app-server
+thread's model-facing definition of one admitted MCP tool; it does not grant execution permission by itself.
+
+#### How we use it — MCP invocation
+
+Before the first call's `thread/start`, the bridge initializes MCP, discovers `tools/list`, caches the
+specifications and maps allowed entries into `dynamicTools`. A model call becomes `item/tool/call` with
+thread, turn and call correlation. The bridge checks identity, deadline, daily/tool caps and exact
+allowlist, reserves the durable effect key, and requests approval where policy requires it. The current
+approval special case is `test.requires_approval`, not every Port OS action.
+
+The bridge sends HTTPS MCP `tools/call` with the Port OS Bearer access token. DPoP protects device-grant
+and refresh operations, not this MCP request. The correlated result returns as JSON-RPC `contentItems`
+and `success`, continues the Codex turn, then reaches Live as context for speech. Denial produces an
+unsuccessful result with no authorized effect; a reserved key is not replayed after denial. Tool errors
+return to the model; authorization failure latches relink rather than retrying the effect.
+
+#### Why — MCP invocation
+
+It gives the model a controlled home-tool catalog while the bridge keeps the credential, policy and
+single-writer authority. A model request never substitutes for local permission or proof of an effect.
+
+#### Where in the code — MCP invocation
+
+[voice_tools.rs](../crates/echo-bridge/src/bridge_voice/controls/voice_tools.rs) owns cached discovery,
+[tool_policy.rs](../crates/echo-bridge/src/bridge_voice/controls/tool_policy.rs) checks effects/approval,
+[call_tools.rs](../crates/echo-bridge/src/bridge_codex/call_tools.rs) dispatches, and
+[echo-mcp-client](../crates/echo-mcp-client/src/lib.rs) performs HTTP MCP.
+
+#### Limits and plans — MCP invocation
+
+Discovery uses the first configured MCP server and occurs once, not at each question or boot readiness.
+The configured path has no separate local time dynamic tool; `ui.show_emotion` is an MCP result interpreted
+locally. A successful fake tool proves no real home effect, and a spoken fallback after a tool error depends
+on the model. Port OS authorization-service changes remain separate backend work.
+
+### Authentication
+
+#### What it is — Authentication
+
+Two independent grants establish OpenAI access and Port OS home access. Signing in to one does not link the other.
+
+#### How we use it — Authentication
+
+Explicit ChatGPT device-code sign-in uses `account/login/start` with `chatgptDeviceCode`, then waits for
+`account/login/completed`. The child stores/refreshes its account in private `CODEX_HOME`; an exclusive
+home lease prevents simultaneous ownership. Port OS device authorization creates a separately stored
+grant with a DPoP key and rotating refresh token. Normal startup reads existing account state.
+
+#### Why — Authentication
+
+Separate owners allow independent unlink/relink and keep home credentials out of the model service,
+app-server configuration and screen page.
+
+#### Where in the code — Authentication
+
+[signin_codex.rs](../crates/echo-signin/src/signin_codex.rs),
+[Codex supervisor](../crates/echo-codex/src/codex_supervisor/mod.rs) and
+[echo-mcp-auth](../crates/echo-mcp-auth/src/lib.rs) own these boundaries.
+
+#### Limits and plans — Authentication
+
+Auth failure requires relink, not automatic interactive sign-in. W4 moves private stores to the Echo's
+bridge user; screen-app exclusion still needs device proof. No real credential is used to validate this page.
+
+### Screen and mouth state
+
+#### What it is — Screen and mouth state
+
+The screen presents conversation activity and controls. A speaking state is a lifecycle signal; precise
+mouth animation would need timing aligned with audible playback.
+
+#### How we use it — Screen and mouth state
+
+The bridge publishes `UiState` through SSE `ScreenFrame`s; the page renders `Ready`, `Listening`,
+`Connected`, `Speaking`, errors, mute, link and approval presentations. Touch sends HTTP `UiAction`s.
+Mute can mask other presentations; emotion expiry restores activity. `Speaking` follows forwarded reply PCM.
+
+#### Why — Screen and mouth state
+
+It makes listening, linking and consent visible without exposing credentials, and gives touch actions a
+correlated route back to bridge policy.
+
+#### Where in the code — Screen and mouth state
+
+[voice_view.rs](../crates/echo-bridge/src/bridge_voice/voice_view.rs),
+[screen contract](../crates/echo-screen-contract/src/lib.rs),
+[server](../crates/echo-screen-server/src/lib.rs) and [page.ts](../web/screen/src/page.ts).
+
+#### Limits and plans — Screen and mouth state
+
+Main has speaking/emotion presentation, not audible-time mouth sync.
+[PR 192](https://github.com/portpowered/portos-echo/pull/192) is in progress. A screen disconnect does not
+prove that audio stopped; loopback serving currently needs forwarding for the remote Echo WebView.
+
+### Mute and kill switch
+
+#### What it is — Mute and kill switch
+
+Mute suppresses microphone forwarding. The bridge kill switch cancels conversation execution; it is
+distinct from the Echo's hardware privacy latch.
+
+#### How we use it — Mute and kill switch
+
+`hassmic-mute` reports effective device mute. The adapter terminates capture at the mute boundary and
+counts discarded chunks; the voice owner also gates forwarding and presents `Muted`. Kill blocks new
+admission and cancels active work, settling playback and stopping realtime/media during cleanup.
+
+#### Why — Mute and kill switch
+
+The physical device remains microphone authority, while the bridge can independently halt remote work.
+A page animation or model instruction is insufficient to enforce either boundary.
+
+#### Where in the code — Mute and kill switch
+
+[Wyoming routing](../crates/echo-wyoming/src/wyoming_route.rs),
+[voice admission](../crates/echo-bridge/src/bridge_voice/voice_admission.rs),
+[voice source](../crates/echo-bridge/src/bridge_voice/voice_source.rs) and
+[controls](../crates/echo-bridge/src/bridge_voice/controls/voice_config.rs).
+
+#### Limits and plans — Mute and kill switch
+
+Neither action revokes already completed remote effects. Host tests establish ordered suppression, not
+the physical latch's electrical behavior; the recorded M1 device run left the mute steps unproved.
+
+### Latency budget
+
+#### What it is — Latency budget
+
+Latency includes wake admission, cold call setup, first answer audio, delegated work and final speaker
+drain. Each interval has different start/end events; a timeout is a bound on waiting, not a measurement.
+
+#### How we use it — Latency budget
+
+Retained calls avoid repeat SDP/ICE setup. Bounded queues and reply lead limit buffering. Direct prompt
+answers avoid delegation; filler can acknowledge longer work but is not the final answer. Response,
+task, negotiation and playback deadlines stop indefinite waiting.
+
+#### Why — Latency budget
+
+A quick acknowledgement, a connected transport and a completed answer are different experiences.
+Keeping their clocks separate prevents reporting filler or SDP completion as answer latency.
+
+#### Where in the code — Latency budget
+
+[voice session](../crates/echo-bridge/src/bridge_voice/voice_session.rs),
+[voice source](../crates/echo-bridge/src/bridge_voice/voice_source.rs),
+[reply clock](../crates/echo-bridge/src/bridge_runtime/bridge_pacing.rs) and
+[baselines](program/baselines.md) define the relevant lifetimes and recorded observations.
+
+#### Limits and plans — Latency budget
+
+The repository baselines do not record current configured-path wake-to-connected or question-to-answer
+measurements. They are being measured by the coordinator; this page supplies no invented numbers.
+`el-f-call-setup-stages` is in progress for clearer stage traces. Acoustic timing requires the T5 bench.
+
+### Security and trust boundaries
+
+#### What it is — Security and trust boundaries
+
+A trust boundary separates components with different authority: room/device audio, local bridge policy,
+child account state, cloud models, home tools and the presentation client.
+
+#### How we use it — Security and trust boundaries
+
+The bridge alone executes MCP with its private grant and enforces allowlist, caps and effect correlation.
+The child gets only bridge dynamic tools; shell/unified execution, environments and its own MCP servers
+are disabled. The screen receives states/prompts, not provider credentials. OpenAI receives admitted
+audio, conversation context and tool results; local execution does not make those contents local-only.
+
+#### Why — Security and trust boundaries
+
+Keeping consent and credentials under local authority limits what a cloud tool request or compromised
+page can do. Distinct grants and process leases preserve ownership during failures and restarts.
+
+#### Where in the code — Security and trust boundaries
+
+[tool policy](../crates/echo-bridge/src/bridge_voice/controls/tool_policy.rs),
+[Codex call configuration](../crates/echo-bridge/src/bridge_codex/bridge_codex.rs),
+[supervisor](../crates/echo-codex/src/codex_supervisor/mod.rs) and
+[plan trust boundary](program/plan.md#2-architecture).
+
+#### Limits and plans — Security and trust boundaries
+
+Wyoming has no encryption/authentication today; W4 confines it to loopback rather than replacing it.
+Port OS MCP uses Bearer access without resource-server DPoP proofs. The screen server is loopback HTTP;
+paired LAN TLS remains planned. W4 private-store permissions and real device isolation require coordinator
+proof, and the child can begin model work before the bridge observes its turn.
+
 ## Crate map
 
 There are **21 directories in `crates/`** at the documented snapshot, one row each below. `xtask` is outside
@@ -839,8 +1351,8 @@ sequenceDiagram
 Transport reconnection does not guarantee recovery of an already failed configured conversation. A failed
 idle probe or active run terminates this borrower; there is no automatic app-server restart or replay.
 The lab restarts its pinned host/bridge as explicit scenario actions. Its Windows relay drops stale sockets
-and switches guest generation on readiness; it is not a device recovery service. Open lane
-`el-f-m1-host-restart-flake` PR 190 is investigating the host restart witness.
+and switches guest generation on readiness; it is not a device recovery service. Merged PR 190
+(`el-f-m1-host-restart-flake`) fixes the lab restart witness; it does not add automatic product recovery.
 Provider `thread/realtime/error` becomes a terminal fixed error. Missing/invalid OpenAI auth displays relink;
 MCP authorization failure has its own link overlay and grant owner. Mute may mask either until unmuted.
 Main has **no local spoken recovery fallback** for these transport/auth failures. Non-auth errors can be
