@@ -309,6 +309,8 @@ async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
     assert!(!observer.commands().contains(&Command::EndRun));
 }
 
+#[path = "voice_listen_barge.rs"]
+mod barge;
 #[path = "voice_listen_safety.rs"]
 mod safety;
 
