@@ -71,7 +71,6 @@ async fn t3_m3_missing_admission_presentation_keeps_original_deadline() {
     assert_eq!(world.trace.records, [] as [Value; 0]);
 }
 
-
 impl World {
     pub(super) fn record_release<T, E>(&mut self, owner: &'static str, result: &Result<T, E>) {
         if result.is_ok() {

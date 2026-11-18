@@ -337,7 +337,6 @@ fn verify_tail(state: &Ledger, frames: u64) -> Result<u64, String> {
             "M3 continuation: expected 5 prefix and 5 tail Live frames, 3200 post-Played bytes and one run/flush"
                 .into(),
         );
-
     }
     tail.ok_or("M3: missing measured Live tail".into())
 }

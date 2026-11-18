@@ -55,7 +55,7 @@ impl Ledger {
         if self.bytes[0] > 0 {
             record("reply.started", None::<&str>);
         }
-        if self.cancel.is_some() && self.continues == 1 && self.stops > 0 {
+        if self.cancel.is_some() && self.flushes == 1 {
             record("reply.cut", None);
             if !self.played.is_empty() {
                 record("reply.played", Some("cut"));
@@ -67,7 +67,7 @@ impl Ledger {
     fn reply(&mut self, event: &Event) -> Result<(), String> {
         match event.header.r#type.as_str() {
             "audio-start" => {
-                if self.started >= 2 || self.started != self.stops + self.flushes {
+                if self.started >= 2 || self.started != self.played.len() && self.started != self.stops + self.flushes {
                     return Err("M3 wire: unexpected reply start".into());
                 }
                 self.started += 1;
@@ -82,13 +82,20 @@ impl Ledger {
                 });
                 if self.started != 1 || !self.played.is_empty() || self.flushes != 0 {
                     return Err("M3 wire: flush must cut the first reply exactly once".into());
-
                 }
                 self.flushes += 1;
                 self.cut_stop = Some(Instant::now());
-
             }
-            "audio-stop" => self.stops += 1,
+            "audio-stop" => {
+                let prior_stop = usize::from(self.flushes == 0 || self.cut_order == Some("after_stop_before_played"));
+                if self.started == 0
+                    || self.stops > prior_stop && self.started == 2
+                    || self.stops != 0 && self.started == 1
+                {
+                    return Err("M3 wire: duplicate reply stop".into());
+                }
+                self.stops += 1;
+            }
             "hassmic-end" => self.ends += 1,
 
             "audio-chunk" => {
@@ -100,8 +107,11 @@ impl Ledger {
                 if phase == 0 {
                     self.last_old_reply = Some(Instant::now());
                 }
-                if self.stops + self.flushes == self.started {
-
+                if phase == 0 && (self.stops > 0 || self.flushes > 0)
+                    || phase == 1
+                        && self.stops
+                            > usize::from(self.flushes == 0 || self.cut_order == Some("after_stop_before_played"))
+                {
                     self.after_stop += event.payload.len();
                 }
                 if phase == 0 && self.cancel.is_some_and(|at| at.elapsed() >= Duration::from_millis(200)) {
@@ -307,12 +317,12 @@ mod tests {
         state.reply(&event("audio-stop", 0)).unwrap();
         assert_eq!(state.stops, 1);
         assert_eq!(state.played.len(), 0);
-        state.reply(&event("hassmic-continue", 0)).unwrap();
-        assert!(state.reply(&event("hassmic-continue", 0)).is_err());
+        state.reply(&event("hassmic-flush", 0)).unwrap();
+        assert!(state.reply(&event("hassmic-flush", 0)).is_err());
         assert!(state.reply(&event("audio-stop", 0)).is_err());
         assert!(state.cut_stop.is_some());
         assert_eq!(state.cut_order, Some("after_stop_before_played"));
-        assert_eq!((state.stops, state.continues), (1, 1));
+        assert_eq!((state.stops, state.flushes), (1, 1));
         state.played.push(Instant::now());
         state.reply(&event("audio-start", 0)).unwrap();
         state.reply(&event("audio-chunk", 960)).unwrap();
@@ -324,7 +334,7 @@ mod tests {
             played: vec![Instant::now()],
             ..Ledger::default()
         };
-        assert!(completed.reply(&event("hassmic-continue", 0)).is_err());
+        assert!(completed.reply(&event("hassmic-flush", 0)).is_err());
         assert_eq!(completed.cut_order, Some("after_played"));
     }
 
@@ -340,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn cut_observations_require_native_continuation_stop_and_played() {
+    fn cut_observations_require_native_flush_and_played() {
         let mut state = Ledger {
             cancel: Some(Instant::now()),
             bytes: [960, 0],
@@ -349,7 +359,7 @@ mod tests {
             ..Ledger::default()
         };
         assert_eq!(state.observations().len(), 1);
-        state.continues = 1;
+        state.flushes = 1;
         let records = state.observations();
         assert_eq!(records.len(), 3);
         assert_eq!(records[1]["event"], "reply.cut");
@@ -357,7 +367,7 @@ mod tests {
         assert_eq!(records[2]["outcome"], "cut");
         state.played.clear();
         assert_eq!(state.observations().len(), 2);
-        state.stops = 0;
+        state.flushes = 0;
         assert_eq!(state.observations().len(), 1);
     }
 }

@@ -339,5 +339,4 @@ async fn cut_at_reply_end(drained: bool) {
         assert_eq!(tokio::io::AsyncReadExt::read(&mut stream, &mut [0]).await.unwrap(), 0);
     };
     tokio::join!(caller, server);
-
 }

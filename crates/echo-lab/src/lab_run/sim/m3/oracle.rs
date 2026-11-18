@@ -21,7 +21,7 @@ pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) ->
     }
     if wire.played.len() != 2
         || wire.started != 2
-        || wire.stops != 1
+        || wire.stops != 1 + usize::from(wire.cut_order == Some("after_stop_before_played"))
         || wire.ends != 1
         || second_pcm != Some(9600)
         || wire.bytes[1] != 9600
@@ -115,7 +115,6 @@ fn stimulus_timing(wire: &Ledger) -> Result<String, String> {
         "fixture_transcript_delay_ms=0 stimulus_to_transcript_ms={:.3} stimulus_to_cut_ms={:.3} stimulus_to_last_reply_ms={last_ms:.3}",
         elapsed(transcript)?,
         elapsed(cut)?,
-
     ))
 }
 
@@ -236,6 +235,18 @@ mod tests {
                 duplex(&state, Some(960), Some(9600)).unwrap_err(),
                 "M3 continuation: expected one flush, 3200 post-Played bytes and 5 Live tail frames"
             );
+        }
+    }
+
+    #[test]
+    fn drained_first_reply_keeps_its_stop_separate_from_flush() {
+        let mut state = observed();
+        state.cut_order = Some("after_stop_before_played");
+        state.stops = 2;
+        assert!(duplex(&state, Some(960), Some(9600)).is_ok());
+        for stops in [0, 1, 3] {
+            state.stops = stops;
+            assert!(duplex(&state, Some(960), Some(9600)).is_err());
         }
     }
 

@@ -279,3 +279,22 @@ async fn t3_mouth_sync_pcm_arriving_after_zero_snapshot_cannot_advance_admission
         .await
         .unwrap();
 }
+
+#[test]
+fn running_trace_keeps_an_unterminated_record_pending_until_collected() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("bridge.private.jsonl");
+    let complete = "{\"event\":\"wyoming.probe_ok\",\"elapsed_ms\":1,\"run_id\":\"run-1\"}\n";
+    // The bridge has written a record body but not yet its separate newline.
+    let partial = format!("{complete}{{\"event\":\"bridge.ready\",\"elapsed_ms\":2}}");
+    std::fs::write(&path, &partial).unwrap();
+    let running = running_trace(&path).unwrap();
+    assert_eq!(running.records.len(), 1);
+    assert_eq!(running.records[0]["event"], "wyoming.probe_ok");
+    assert_eq!(
+        read_trace(&path).err(),
+        Some("trace: incomplete final JSON line".into())
+    );
+    std::fs::write(&path, partial + "\n").unwrap();
+    assert_eq!(read_trace(&path).unwrap().records.len(), 2);
+}

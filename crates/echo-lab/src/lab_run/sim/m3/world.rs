@@ -268,11 +268,11 @@ impl World {
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(format!(
-                    "M3 {phase}: missing observation before 5000 ms deadline; capture_chunks={} Live_frames={} capture_tail_bytes={} continues={} provider_phase={} reply_bytes={:?} starts={} stops={} Played={}",
+                    "M3 {phase}: missing observation before 5000 ms deadline; capture_chunks={} Live_frames={} capture_tail_bytes={} flushes={} provider_phase={} reply_bytes={:?} starts={} stops={} Played={}",
                     state.capture_frames,
                     self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().frames,
                     state.tail_bytes,
-                    state.continues,
+                    state.flushes,
                     self.live.as_ref().ok_or("M3: missing Live")?.observed.borrow().phase,
                     state.bytes,
                     state.started,
@@ -288,7 +288,6 @@ impl World {
             )
             .await?;
             self.completed |= result.is_some();
-
         }
     }
 
