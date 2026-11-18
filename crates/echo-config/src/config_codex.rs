@@ -11,6 +11,9 @@ pub struct CodexConfig {
     pub voice: Option<String>,
     pub instructions: String,
     pub model: Option<String>,
+    pub delegate_model: Option<String>,
+    pub delegate_effort: Option<String>,
+    pub time_zone: Option<String>,
 }
 
 impl Default for CodexConfig {
@@ -21,6 +24,9 @@ impl Default for CodexConfig {
             voice: None,
             instructions: "Client audio bridge".into(),
             model: None,
+            delegate_model: None,
+            delegate_effort: None,
+            time_zone: None,
         }
     }
 }
@@ -47,7 +53,11 @@ impl BridgeConfig {
     /// The delegated thread's model; the realtime model stays owned by the app server.
     #[must_use]
     pub fn codex_model(&self) -> Option<&str> {
-        self.codex.model.as_deref().or(self.agent.model.as_deref())
+        self.codex
+            .delegate_model
+            .as_deref()
+            .or(self.codex.model.as_deref())
+            .or(self.agent.model.as_deref())
     }
 }
 
@@ -61,6 +71,9 @@ pub(super) fn decode(value: DeValue<'_>) -> Result<CodexConfig, ConfigError> {
             .optional("instructions")?
             .unwrap_or_else(|| CodexConfig::default().instructions),
         model: fields.optional("model")?,
+        delegate_model: fields.optional("delegate_model")?,
+        delegate_effort: fields.optional("delegate_effort")?,
+        time_zone: fields.optional("time_zone")?,
     };
     fields.finish()?;
     Ok(config)
@@ -90,11 +103,25 @@ pub(super) fn validate(config: &CodexConfig) -> Result<(), ConfigError> {
     for (field, value) in [
         ("codex.voice", config.voice.as_deref()),
         ("codex.model", config.model.as_deref()),
+        ("codex.delegate_model", config.delegate_model.as_deref()),
         ("codex.instructions", Some(config.instructions.as_str())),
     ] {
         if value.is_some_and(|value| value.trim().is_empty()) {
             return Err(ConfigError::new(field, "must be nonblank"));
         }
+    }
+    if config.delegate_effort.as_ref().is_some_and(String::is_empty) {
+        return Err(ConfigError::new("codex.delegate_effort", "must be nonempty"));
+    }
+    if let Some(zone) = &config.time_zone
+        && !zone.split('/').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_+-".contains(&byte))
+        })
+    {
+        return Err(ConfigError::new("codex.time_zone", "expected IANA-name syntax"));
     }
     Ok(())
 }

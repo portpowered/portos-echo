@@ -41,11 +41,13 @@ pub enum Event {
     Other,
 }
 
-/// Call configuration, distinct from the delegated thread's optional model.
+/// Call media and thread profile; admission consumes the zone as instruction text.
 pub struct Options<'a> {
     pub voice: Option<&'a str>,
     pub instructions: &'a str,
     pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
+    pub time_zone: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -123,6 +125,9 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         params["baseInstructions"] = options.instructions.into();
         if let Some(model) = options.model {
             params["model"] = model.into();
+        }
+        if let Some(effort) = options.effort {
+            params["config"]["model_reasoning_effort"] = effort.into();
         }
         let request = self.io.begin_request("thread/start", &params).map_err(rpc_error)?;
         let response: ThreadStartResult =

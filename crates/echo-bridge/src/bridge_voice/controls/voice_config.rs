@@ -120,6 +120,8 @@ impl Configured {
                     voice: self.config.codex_voice(),
                     instructions: &self.config.codex.instructions,
                     model: self.config.codex_model(),
+                    effort: self.config.codex.delegate_effort.as_deref(),
+                    time_zone: self.config.codex.time_zone.as_deref(),
                 },
                 tools,
                 session: SessionOptions {
@@ -142,7 +144,7 @@ impl Configured {
 }
 
 /// Append a call-local snapshot. Std has no portable local-zone discovery.
-pub(super) fn call_instructions(prefix: &str, now: std::time::SystemTime) -> Result<String, Error> {
+pub(super) fn call_instructions(prefix: &str, now: std::time::SystemTime, zone: Option<&str>) -> Result<String, Error> {
     let seconds = match now.duration_since(std::time::UNIX_EPOCH) {
         Ok(value) => i64::try_from(value.as_secs()).map_err(|_| Error::Input)?,
         Err(value) => {
@@ -165,8 +167,12 @@ pub(super) fn call_instructions(prefix: &str, now: std::time::SystemTime) -> Res
         5 => "Friday",
         _ => "Saturday",
     };
+    let zone = zone.map_or_else(
+        || "local offset unavailable".into(),
+        |zone| format!("operator time zone: {zone}; answer time questions in {zone}"),
+    );
     Ok(format!(
-        "{prefix}\n[Call-start context: {year:04}-{month:02}-{day:02} {weekday} {:02}:{:02}:{:02} UTC+00:00; local offset unavailable]",
+        "{prefix}\n[Call-start context: {year:04}-{month:02}-{day:02} {weekday} {:02}:{:02}:{:02} UTC+00:00; {zone}]",
         time / 3600,
         time / 60 % 60,
         time % 60
@@ -195,36 +201,7 @@ pub(super) mod tests {
     use echo_media::MediaPeer;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    #[test]
-    fn context_fixed_utc_calendar_and_prefix() {
-        for (epoch, expected) in [
-            (0_i64, "1970-01-01 Thursday 00:00:00"), // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-            (-1, "1969-12-31 Wednesday 23:59:59"), // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-            (951_868_799, "2000-02-29 Tuesday 23:59:59"), // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-            (4_107_542_400, "2100-03-01 Monday 00:00:00"), // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-            (1_798_761_599, "2026-12-31 Thursday 23:59:59"), // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-            (1_798_761_600, "2027-01-01 Friday 00:00:00"), // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-            (1_794_918_896, "2026-11-17 Tuesday 12:34:56"), // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-        ] {
-            let now = if epoch < 0 {
-                std::time::UNIX_EPOCH - Duration::from_secs(epoch.unsigned_abs())
-            } else {
-                std::time::UNIX_EPOCH + Duration::from_secs(epoch.unsigned_abs())
-            };
-            for prefix in ["Client audio bridge", "\u{8a9e}\n[Call-start context: authored] \n"] {
-                assert_eq!(
-                    call_instructions(prefix, now).unwrap(),
-                    format!("{prefix}\n[Call-start context: {expected} UTC+00:00; local offset unavailable]") // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-                );
-            }
-        }
-        assert_eq!(
-            call_instructions("", std::time::UNIX_EPOCH - Duration::from_nanos(100)).unwrap(),
-            "\n[Call-start context: 1969-12-31 Wednesday 23:59:59 UTC+00:00; local offset unavailable]" // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-        );
-        let invalid = std::time::UNIX_EPOCH + Duration::from_hours(70_389_528);
-        assert_eq!(call_instructions("prefix", invalid), Err(Error::Input));
-    }
+    mod voice_context_tests;
 
     #[tokio::test(start_paused = true)]
     async fn configured_call_options_include_context_and_preserve_policy() {
@@ -239,7 +216,12 @@ pub(super) mod tests {
             input_schema: serde_json::json!({"type":"object"}),
         };
         let options = prepared.options(None, vec![tool.clone()]);
-        let text = call_instructions(options.voice.call.instructions, std::time::UNIX_EPOCH).unwrap();
+        let text = call_instructions(
+            options.voice.call.instructions,
+            std::time::UNIX_EPOCH,
+            options.voice.call.time_zone,
+        )
+        .unwrap();
         let call = options.voice.conversation(&text, options.host.deadline);
         assert_eq!(
             call.call.instructions,
@@ -294,6 +276,8 @@ pub(super) mod tests {
             call: bridge_codex::Options {
                 voice: Some("cedar"),
                 model: Some("fixture-model"),
+                effort: Some("low"),
+                time_zone: Some("Europe/Berlin"),
                 instructions: "configured\n\u{8a9e} \n",
             },
             tools: vec![],
@@ -324,10 +308,9 @@ pub(super) mod tests {
             assert_eq!(request["method"], method);
             let params = &request["params"];
             match method {
-                "thread/start" => assert_eq!(params["baseInstructions"], expected),
+                "thread/start" => check_thread_context(params, &expected),
                 "thread/realtime/start" => {
-                    assert_eq!(params["prompt"], expected);
-                    assert_eq!(params["voice"], "cedar");
+                    check_realtime_context(params, &expected);
                     server.get_mut().write_all(b"{\"method\":\"thread/realtime/sdp\",\"params\":{\"threadId\":\"thread-1\",\"sdp\":\"fixture-answer\"}}\n").await.unwrap();
                 }
                 _ => {
@@ -347,6 +330,19 @@ pub(super) mod tests {
             if method == "thread/realtime/start" {
                 retained_replies(&mut server, observer, started).await;
             }
+        }
+    }
+    fn check_thread_context(params: &serde_json::Value, expected: &str) {
+        assert_eq!(params["baseInstructions"], expected);
+        assert_eq!(params["model"], "fixture-model");
+        assert_eq!(params["config"]["model_reasoning_effort"], "low");
+        assert_eq!(params.get("time_zone"), None);
+    }
+    fn check_realtime_context(params: &serde_json::Value, expected: &str) {
+        assert_eq!(params["prompt"], expected);
+        assert_eq!(params["voice"], "cedar");
+        for field in ["model", "model_reasoning_effort", "time_zone"] {
+            assert_eq!(params.get(field), None);
         }
     }
     pub(in crate::bridge_voice) fn retained_observer<'a>(
@@ -405,45 +401,6 @@ pub(super) mod tests {
         .unwrap();
         config.codex.home = Some(std::env::temp_dir().join("unused-codex-config-home"));
         Configured::new(config, "unused-trace".into(), ([127, 0, 0, 1], 0).into()).unwrap()
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn configured_options_preserve_overrides_budgets_tools_and_default_voice() {
-        let mut prepared = configured();
-        prepared.config.codex.voice = Some("cedar".into());
-        prepared.config.live.voice = Some("alloy".into());
-        prepared.config.codex.model = Some("configured-model".into());
-        prepared.config.agent.model = Some("legacy-model".into());
-        prepared.config.codex.instructions = "configured instructions".into();
-        prepared.config.live.session_idle_seconds = 43;
-        prepared.config.agent.task_deadline_seconds = 17;
-        prepared.config.audio.reply_lead_ms = 120;
-        let tool = DynamicTool {
-            name: "test.echo".into(),
-            description: "Echo".into(),
-            input_schema: serde_json::json!({"type":"object"}),
-        };
-        let options = prepared.options(None, vec![tool.clone()]);
-        assert_eq!(options.mcp_epoch, None);
-        assert_eq!(options.voice.call.voice, Some("cedar"));
-        assert_eq!(options.voice.call.model, Some("configured-model"));
-        assert_eq!(options.voice.call.instructions, "configured instructions");
-        assert_eq!(options.voice.tools, [tool]);
-        assert_eq!(options.voice.session.idle, Duration::from_secs(43));
-        assert_eq!(options.voice.session.response_timeout, Duration::from_secs(17));
-        assert_eq!(options.voice.session.reply_lead_ms, 120);
-        assert_eq!(options.voice.kill_path, Some(prepared.kill_path.as_path()));
-        assert_eq!(options.host.deadline, Instant::now() + Duration::from_secs(30));
-        prepared.config.codex.voice = None;
-        prepared.config.codex.model = None;
-        assert_eq!(prepared.options(None, vec![]).voice.call.voice, Some("alloy"));
-        assert_eq!(prepared.options(None, vec![]).voice.call.model, Some("legacy-model"));
-        prepared.config.live.voice = None;
-        prepared.config.agent.model = None;
-        assert_eq!(prepared.options(None, vec![]).voice.call.voice, None);
-        assert_eq!(prepared.options(None, vec![]).voice.call.model, None);
-        let prepared = prepared.with_mcp_epoch(Some(1_800_000_000));
-        assert_eq!(prepared.options(None, vec![]).mcp_epoch, Some(1_800_000_000));
     }
 
     #[test]

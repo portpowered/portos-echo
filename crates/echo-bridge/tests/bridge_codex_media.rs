@@ -128,6 +128,8 @@ async fn round_trip() {
             voice: Some("alloy"),
             instructions: "Client audio bridge",
             model: None,
+            effort: None,
+            time_zone: None,
         };
         call.start(&options, vec![], Instant::now() + Duration::from_secs(10))
             .await

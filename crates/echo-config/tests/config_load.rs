@@ -392,3 +392,5 @@ fn nested_secret_diagnostics_use_only_trusted_schema_context() {
         }
     }
 }
+
+mod config_profile;

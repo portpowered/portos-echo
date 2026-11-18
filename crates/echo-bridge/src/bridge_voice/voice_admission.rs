@@ -28,6 +28,8 @@ impl<'o> ServeOptions<'o> {
                 voice: self.call.voice,
                 instructions,
                 model: self.call.model,
+                effort: self.call.effort,
+                time_zone: self.call.time_zone,
             },
             tools: self.tools.clone(),
             deadline,
@@ -172,7 +174,7 @@ where
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
         result = async {
-            let instructions = super::voice_config::call_instructions(options.call.instructions, clock())?;
+            let instructions = super::voice_config::call_instructions(options.call.instructions, clock(), options.call.time_zone)?;
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
             Ok::<_, Error>((media, instructions))
         } => result?,
@@ -280,12 +282,17 @@ mod tests {
         fake::{Command, FakeConnector, Observer},
     };
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
     #[tokio::test(start_paused = true)]
     async fn admission_samples_fresh_context_in_both_fields_without_accumulation() {
         let samples = std::cell::Cell::new(0);
         let mut options = options();
-        for seconds in [0, 86_400] {
+        for (seconds, zone) in [
+            (0, None),
+            (86_400, None),
+            (1_794_918_896, Some("Europe/Berlin")),
+            (1_795_005_296, Some("Europe/Berlin")),
+        ] {
+            options.call.time_zone = zone;
             let (stream, server) = tokio::io::duplex(16_384);
             let (read, write) = tokio::io::split(stream);
             let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
@@ -315,16 +322,15 @@ mod tests {
             );
             let remote = check_context(
                 (server, &observer, &started),
-                super::super::voice_config::call_instructions("configured\n\u{8a9e} \n", now).unwrap(),
+                super::super::voice_config::call_instructions("configured\n\u{8a9e} \n", now, zone).unwrap(),
             );
             let (result, ()) = tokio::join!(work, remote);
             drop(observe);
             assert_eq!((result, completed), (Ok(()), 2));
             assert_eq!(options.call.instructions, "configured\n\u{8a9e} \n");
         }
-        assert_eq!(samples.get(), 2);
+        assert_eq!(samples.get(), 4);
     }
-
     #[tokio::test(start_paused = true)]
     async fn admission_invalid_clock_and_ready_cancellation_emit_no_rpc_or_peer() {
         for cancelled in [false, true] {
