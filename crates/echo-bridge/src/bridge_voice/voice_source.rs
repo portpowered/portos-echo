@@ -22,11 +22,11 @@ pub(super) struct Source {
 
 impl Source {
     pub fn resume_reply(&mut self) -> Result<(), Error> {
+        self.controller.resume()?;
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.reply = ReplyAudio::new(self.lead_ms)?;
         self.delegation = Delegation::default();
         self.mouth = Mouth::default();
-        self.controller.resume();
         Ok(())
     }
 
