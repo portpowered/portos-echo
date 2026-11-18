@@ -86,13 +86,123 @@ impl Controller {
     }
 
     pub fn complete(&self, stopped: bool, mouth_drained: bool) -> bool {
-        !self.cutting() && self.played && self.microphone_finished && stopped && mouth_drained
+        self.ready_to_close(stopped, mouth_drained) && self.microphone_finished
+    }
+
+    /// Playback can settle while duplex capture is still open. Never wait for
+    /// the EOF caused by the end command before deciding to issue that command.
+    pub fn ready_to_close(&self, stopped: bool, mouth_drained: bool) -> bool {
+        !self.cutting() && self.played && stopped && mouth_drained
+    }
+}
+
+/// Execute the preserving one-reply close after both playback acknowledgments.
+/// Keep observing mute and draining accepted capture until explicit-end EOF.
+pub(super) async fn close<L: echo_link::EchoLink>(
+    client: &L,
+    input: (&mut L::Events, &mut <L::Events as echo_link::LinkEvents>::Run),
+    port: &impl super::VoicePort,
+    source: &mut super::Source,
+    ceiling: std::time::Duration,
+    cancelled: impl std::future::Future<Output = ()>,
+    observe: &mut impl FnMut(super::Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    use echo_link::{LinkEvent, LinkEvents};
+    let (events, microphone) = input;
+    let work = async {
+        if !source.controller.ready_to_close(true, source.mouth.due().is_none()) {
+            return Err(Error::Wyoming);
+        }
+        client.end_run().await?;
+        while !source.controller.microphone_finished() {
+            tokio::select! {
+                event = events.recv() => match event? {
+                    Some(event) => super::device(&event, true, source, observe)?,
+                    None => return Err(Error::Wyoming),
+                },
+                frame = super::earcon::microphone(microphone) => {
+                    if source.capture(frame?, port)? {
+                        observe(super::Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
+                    }
+                },
+            }
+        }
+        if source.controller.complete(true, source.mouth.due().is_none()) {
+            Ok(())
+        } else {
+            Err(Error::Wyoming)
+        }
+    };
+    tokio::select! {
+        biased;
+        () = cancelled => Err(Error::Control),
+        result = tokio::time::timeout(ceiling, work) => result.map_err(|_| Error::Deadline)?,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::{MediaEvent, Source, VoicePort};
     use super::*;
+    use echo_link::{
+        EchoLink, LinkConnector, LinkEvent, LinkEvents,
+        fake::{Command, FakeConnector, Observer},
+    };
+
+    struct Port;
+    impl VoicePort for Port {
+        fn send(&self, _: echo_media::PcmFrame) -> Result<(), Error> {
+            Ok(())
+        }
+        async fn next(&mut self) -> Result<MediaEvent, Error> {
+            std::future::pending().await
+        }
+        async fn ready_audio(&mut self) -> Result<Option<echo_media::PcmFrame>, Error> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn session_controller_explicit_end_precedes_capture_eof_and_failure_never_completes() {
+        for failure in [None, Some(echo_link::Error::Timeout)] {
+            let observer = Observer::default();
+            let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+            let mut events = client.events().unwrap();
+            observer.wake("Computer", vec![]);
+            let Some(LinkEvent::Wake(mut microphone)) = events.recv().await.unwrap() else {
+                unreachable!()
+            };
+            let mut source = Source::new(200, false).unwrap();
+            source.controller.reply_started();
+            assert_eq!(source.controller.played(true), Ok(true));
+            assert!(!source.controller.microphone_finished());
+            if let Some(error) = failure {
+                observer.end_failure(error);
+            }
+            let result = close(
+                &client,
+                (&mut events, &mut microphone),
+                &Port,
+                &mut source,
+                std::time::Duration::from_secs(1),
+                std::future::pending(),
+                &mut |_| Ok(()),
+            )
+            .await;
+            match failure {
+                None => {
+                    assert_eq!(result, Ok(()));
+                    assert!(source.controller.complete(true, true));
+                    assert_eq!(observer.commands(), vec![Command::Connect, Command::EndRun]);
+                }
+                Some(_) => {
+                    assert_eq!(result, Err(Error::Deadline));
+                    assert!(!source.controller.complete(true, true));
+                    assert_eq!(observer.commands(), vec![Command::Connect]);
+                }
+            }
+        }
+    }
 
     #[test]
     fn session_controller_requires_played_capture_eof_stop_and_mouth_drain() {
@@ -102,6 +212,9 @@ mod tests {
         assert_eq!(controller.played(false), Err(Error::Wyoming));
         assert!(!controller.has_played());
         assert_eq!(controller.played(true), Ok(true));
+        assert!(controller.ready_to_close(true, true));
+        assert!(!controller.ready_to_close(false, true));
+        assert!(!controller.ready_to_close(true, false));
         assert!(!controller.complete(true, true));
         controller.microphone_ended();
         assert!(!controller.complete(false, true));

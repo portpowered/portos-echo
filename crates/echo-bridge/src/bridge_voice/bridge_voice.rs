@@ -161,6 +161,16 @@ pub async fn run<L: EchoLink>(
             break;
         }
     }
+    session_controller::close(
+        client,
+        (events, &mut microphone),
+        port,
+        &mut source,
+        options.played_timeout,
+        cancelled.as_mut(),
+        &mut observe,
+    )
+    .await?;
     if let Some(drain) = drain.take() {
         drain.finish();
     }
@@ -294,7 +304,10 @@ async fn drive<E: LinkEvents>(
                 }
             }, if pending.is_none() => {},
         }
-        if source.controller.complete(sink.is_none(), source.mouth.due().is_none()) {
+        if source
+            .controller
+            .ready_to_close(sink.is_none(), source.mouth.due().is_none())
+        {
             return Ok(());
         }
     }

@@ -40,6 +40,7 @@ struct State {
     event_waker: Option<Waker>,
     play_waker: Option<Waker>,
     outcome: Option<Result<(), Error>>,
+    end_failure: Option<Error>,
     cut: bool,
     stopped: bool,
     run_open: Option<()>,
@@ -50,6 +51,11 @@ struct State {
 #[derive(Clone, Default)]
 pub struct Observer(Arc<Mutex<State>>);
 impl Observer {
+    /// Script an explicit-end failure without changing capture or playback.
+    pub fn end_failure(&self, error: Error) {
+        lock(&self.0).end_failure = Some(error);
+    }
+
     #[must_use]
     pub fn commands(&self) -> Vec<Command> {
         lock(&self.0).commands.clone()
@@ -194,7 +200,7 @@ impl MicrophoneRun for FakeRun {
         }
         poll_fn(|cx| {
             let mut state = lock(&self.observer.0);
-            if state.stopped {
+            if state.run_open.is_none() || state.closed {
                 return Poll::Ready(Ok(None));
             }
             state.play_waker = Some(cx.waker().clone());
@@ -412,6 +418,9 @@ impl EchoLink for FakeLink {
         }
         if state.source.is_some() {
             return std::future::ready(Err(Error::Busy));
+        }
+        if let Some(error) = state.end_failure {
+            return std::future::ready(Err(error));
         }
         if state.run_open.take().is_some() {
             state.commands.push(Command::EndRun);

@@ -62,6 +62,7 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         context.played = false;
         context.speaking = false;
     }
+    client.end_run().await?;
     tokio::time::timeout(Duration::from_secs(1), async {
         while let Some(frame) = run.recv().await? {
             if !source.cancelled && context.cancellation == Cancellation::Response {
