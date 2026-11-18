@@ -318,31 +318,7 @@ async fn voice_eof_cancellation_and_callback_failure_cannot_publish_played() {
     }
 }
 #[tokio::test(start_paused = true)]
-async fn voice_late_media_is_an_error_instead_of_silent_reply_truncation() {
-    let observer = Observer::default();
-    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
-    let mut events = client.events().unwrap();
-    wake(&observer, 0);
-    let mic = microphone(&mut events).await;
-    let (mut port, tx) = port();
-    tx.send(Ok(done())).await.unwrap();
-    let mut work = Box::pin(run(
-        &client,
-        &mut events,
-        mic,
-        &mut port,
-        options(),
-        std::future::pending(),
-        |_| Ok(()),
-    ));
-    pending(work.as_mut()).await;
-    tx.send(Ok(MediaEvent::Audio(Box::new([123; 320])))).await.unwrap();
-    assert_eq!(work.await, Err(Error::Audio));
-    assert_eq!(frames(&observer).len(), 0);
-    assert!(observer.commands().contains(&Command::Cut(0)));
-}
-#[tokio::test(start_paused = true)]
-async fn voice_quiet_webrtc_media_after_done_is_not_queued_and_audible_media_still_fails() {
+async fn voice_all_webrtc_media_after_done_is_discarded() {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -366,7 +342,9 @@ async fn voice_quiet_webrtc_media_after_done_is_not_queued_and_audible_media_sti
     }
     assert_eq!(frames(&observer).len(), 0);
     tx.send(Ok(MediaEvent::Audio(Box::new([65; 320])))).await.unwrap();
-    assert_eq!(work.await, Err(Error::Audio));
+    pending(work.as_mut()).await;
+    observer.finish(Ok(()));
+    assert_eq!(work.await.unwrap().reply_received, 4);
     assert_eq!(frames(&observer).len(), 0);
 }
 

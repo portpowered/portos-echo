@@ -62,24 +62,15 @@ impl Source {
         Ok(false)
     }
 
-    /// WebRTC media is continuous: quiet frames keep arriving after the
-    /// assistant transcript is done and the reply was flushed. They are counted
-    /// as received but not queued; audible late media still fails closed
-    /// rather than truncating the reply silently, except an abandoned
-    /// delegated answer.
+    /// Continuous RTP received after a completed reply belongs to the retired
+    /// converter. Discard both quiet and audible media at that boundary.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
-        let dropped = self.delegation.abandoned || quiet(frame);
-        if !(self.reply.finished() && dropped) {
+        if !self.reply.finished() && !self.delegation.abandoned {
             self.reply.push(frame)?;
         }
         self.stats.reply_received += 1;
         Ok(())
     }
-}
-
-/// Peak at most 64 (about -54 dBFS): decoded silence, not speech.
-fn quiet(frame: &PcmFrame) -> bool {
-    frame.iter().all(|sample| sample.unsigned_abs() <= QUIET)
 }
 
 /// Preserve playback ownership until the device acknowledges an interrupted

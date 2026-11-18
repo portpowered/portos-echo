@@ -185,3 +185,39 @@ async fn call_interrupt_deadline_and_remote_failure_close_the_generation() {
         );
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn call_projects_only_matching_speech_items_and_ignores_unknown_items() {
+    let (mut io, mut server) = fixture();
+    let client = async {
+        let mut call = Call::new(&mut io);
+        call.start(&options(), vec![], "fixture-offer", deadline())
+            .await
+            .unwrap();
+        for expected in [false, false, true] {
+            let event = call.next().await.unwrap();
+            assert_eq!(matches!(event, Event::SpeechStarted), expected);
+            if !expected {
+                assert!(matches!(event, Event::Other));
+            }
+        }
+        call.stop(deadline()).await.unwrap();
+    };
+    let remote = async {
+        start(&mut server).await;
+        for (thread, kind) in [
+            ("foreign", "input_audio_buffer.speech_started"),
+            ("thread-1", "future.item"),
+            ("thread-1", "input_audio_buffer.speech_started"),
+        ] {
+            notification(
+                &mut server,
+                "thread/realtime/itemAdded",
+                json!({"threadId":thread,"item":{"type":kind}}),
+            )
+            .await;
+        }
+        stop(&mut server).await;
+    };
+    tokio::join!(client, remote);
+}

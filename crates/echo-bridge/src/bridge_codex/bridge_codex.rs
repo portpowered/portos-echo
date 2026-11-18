@@ -37,6 +37,7 @@ pub enum Event {
     Tool { id: RequestId, call: ToolCall },
     TurnStarted { thread: String, turn: String },
     TurnCompleted { thread: String, turn: String },
+    SpeechStarted,
     Closed,
     Other,
 }

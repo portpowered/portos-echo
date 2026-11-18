@@ -50,6 +50,12 @@ pub trait VoicePort {
     fn next(&mut self) -> impl Future<Output = Result<MediaEvent, Error>>;
     /// Never wait for future audio. EOF/error must be an error, not an empty queue.
     fn ready_audio(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, Error>>;
+    /// Cancel the owned delegated turn once; ports without turns do nothing.
+    /// # Errors
+    /// Reports the existing bounded interrupt admission failure.
+    fn interrupt_turn(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> VoicePort for MediaCall<'_, R, W, P> {
@@ -106,7 +112,7 @@ pub struct Stats {
 /// played. A stopped source, empty queue or transcript alone cannot finish.
 ///
 /// # Errors
-/// Late audio after the drain boundary, tools without a dispatcher, unexpected
+/// Tools without a dispatcher, unexpected
 /// wake, EOF, cancellation and fixed deadlines fail closed. Error cleanup
 /// requests a bounded cut; the host must then await call and device close.
 /// Drop/cancellation also requires host cleanup. This owner does not close a
@@ -347,7 +353,7 @@ async fn media(
             source.delegation.completed();
             Ok(())
         }
-        MediaEvent::Control(Event::Other) => Ok(()),
+        MediaEvent::Control(Event::Other | Event::SpeechStarted) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }
 }

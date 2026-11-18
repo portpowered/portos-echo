@@ -448,3 +448,30 @@ async fn shutdown_during_earcon_collects_only_the_started_speaker_owner() {
     client.close().await.unwrap();
     assert_eq!(observer.commands().last(), Some(&Command::Close));
 }
+
+#[tokio::test(start_paused = true)]
+async fn voice_late_audible_media_after_done_is_discarded() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    tx.send(Ok(done())).await.unwrap();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        options(),
+        std::future::pending(),
+        |_| Ok(()),
+    ));
+    pending(work.as_mut()).await;
+    tx.send(Ok(MediaEvent::Audio(Box::new([123; 320])))).await.unwrap();
+    pending(work.as_mut()).await;
+    observer.finish(Ok(()));
+    assert_eq!(work.await.unwrap().reply_received, 1);
+    assert_eq!(frames(&observer).len(), 0);
+    assert!(!observer.commands().contains(&Command::Cut(0)));
+}
