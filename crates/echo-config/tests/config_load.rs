@@ -110,6 +110,7 @@ fn voice_listen_defaults_and_overrides_match_both_offline_loaders() {
         ("", 15, 600),
         ("[voice]\n", 15, 600),
         ("[voice]\nsession_listen_seconds=3\n", 3, 600),
+        ("[voice]\nsession_listen_seconds=3\nsession_max_seconds=3\n", 3, 3),
         ("[voice]\nsession_max_seconds=15\n", 15, 15),
         (
             "[voice]\nsession_listen_seconds=300\nsession_max_seconds=2147483647\n",

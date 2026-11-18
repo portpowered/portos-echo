@@ -19,7 +19,7 @@ impl Default for VoiceConfig {
 }
 
 impl VoiceConfig {
-    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+    pub(super) fn validate(self) -> Result<(), ConfigError> {
         if !(3..=300).contains(&self.session_listen_seconds) {
             return Err(ConfigError::new(
                 "voice.session_listen_seconds",
