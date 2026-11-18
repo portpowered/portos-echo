@@ -324,6 +324,7 @@ async fn cut_at_reply_end(drained: bool) {
     };
     let server = async {
         assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-flush");
+
         // The describe barrier also proves the repeated cut emitted no frames.
         assert_eq!(peer::receive(&mut stream).await.header.r#type, "describe");
         peer::send(&mut stream, "info", json!({}), vec![]).await;

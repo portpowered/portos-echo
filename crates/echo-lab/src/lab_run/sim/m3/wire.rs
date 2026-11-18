@@ -30,6 +30,7 @@ pub struct Ledger {
     pub cancel: Option<Instant>,
     pub stimulus: Option<Instant>,
     pub cut_stop: Option<Instant>,
+    pub cut_order: Option<&'static str>,
     pub last_old_reply: Option<Instant>,
     pub after_window: usize,
     pub after_stop: usize,
@@ -71,8 +72,16 @@ impl Ledger {
                 self.started += 1;
             }
             "hassmic-flush" => {
+                self.cut_order = Some(if !self.played.is_empty() {
+                    "after_played"
+                } else if self.stops == 1 {
+                    "after_stop_before_played"
+                } else {
+                    "before_stop"
+                });
                 if self.started != 1 || !self.played.is_empty() || self.flushes != 0 {
                     return Err("M3 wire: flush must cut the first reply exactly once".into());
+
                 }
                 self.flushes += 1;
                 self.cut_stop = Some(Instant::now());
@@ -299,8 +308,9 @@ mod tests {
         assert_eq!(state.played.len(), 0);
         state.reply(&event("hassmic-continue", 0)).unwrap();
         assert!(state.reply(&event("hassmic-continue", 0)).is_err());
-        state.reply(&event("audio-stop", 0)).unwrap();
+        assert!(state.reply(&event("audio-stop", 0)).is_err());
         assert!(state.cut_stop.is_some());
+        assert_eq!(state.cut_order, Some("after_stop_before_played"));
         assert_eq!((state.stops, state.continues), (1, 1));
         state.played.push(Instant::now());
         state.reply(&event("audio-start", 0)).unwrap();
@@ -314,6 +324,7 @@ mod tests {
             ..Ledger::default()
         };
         assert!(completed.reply(&event("hassmic-continue", 0)).is_err());
+        assert_eq!(completed.cut_order, Some("after_played"));
     }
 
     #[test]

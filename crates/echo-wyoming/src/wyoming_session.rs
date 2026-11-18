@@ -311,6 +311,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 play.stopped = true;
                 self.send(WyomingEvent::Other("hassmic-flush".into(), Value::Null), vec![])
                     .await?;
+
             }
         }
         Ok(stats)

@@ -132,7 +132,7 @@ impl Driver for M3<'_> {
             artifacts.observation(record)?;
         }
         if let Some(state) = &self.world.final_wire {
-            artifacts.event("m3.wire", None, Some(&format!("runs={} inputs={} Live-frames={:?} reply_bytes={:?} stops={} Played={} first_host_pcm={:?} second_host_pcm={:?}", state.runs, state.inputs, self.world.muted_live_before, state.bytes, state.stops, state.played.len(), self.world.first_pcm, self.world.second_pcm)))?;
+            artifacts.event("m3.wire", None, Some(&format!("runs={} inputs={} Live-frames={:?} reply_bytes={:?} stops={} Played={} cut_order={:?} first_host_pcm={:?} second_host_pcm={:?}", state.runs, state.inputs, self.world.muted_live_before, state.bytes, state.stops, state.played.len(), state.cut_order, self.world.first_pcm, self.world.second_pcm)))?;
         }
         cleanup?;
         for (values, first) in &self.traces {
