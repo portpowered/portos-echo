@@ -349,8 +349,8 @@ mod tests {
             (vec![], QueryOnly),
             (vec!["127.0.0.1"], Disabled),
             (vec!["127.0.0.2"], Disabled),
-            (vec!["::1"], Disabled),
-            (vec!["127.0.0.1", "::1"], Disabled),
+            (vec!["::1"], Disabled), // lint-rules: allow-literal inert socket-free settings assertion
+            (vec!["127.0.0.1", "::1"], Disabled), // lint-rules: allow-literal inert socket-free settings assertion
             (vec!["192.0.2.10"], QueryOnly), // lint-rules: allow-literal inert socket-free settings assertion
             (vec!["127.0.0.1", "192.0.2.10"], QueryOnly), // lint-rules: allow-literal inert socket-free settings assertion
         ] {
