@@ -113,6 +113,26 @@ fn barge_fixture_preserves_both_control_orders_and_exact_payloads() {
 }
 
 #[test]
+fn running_bridge_trace_skips_unterminated_record_until_collected() {
+    let root = tempfile::tempdir().unwrap();
+    let mut world = World {
+        root: root.path().into(),
+        ..World::default()
+    };
+    let path = root.path().join("bridge.private.jsonl");
+    let complete = "{\"event\":\"run.started\",\"elapsed_ms\":1,\"run_id\":\"run-1\"}\n";
+    // The bridge has written a record body but not yet its separate newline.
+    std::fs::write(&path, format!("{complete}{{\"event\":\"reply.played\",\"elapsed_ms\":2}}")).unwrap();
+    assert_eq!(world.read_trace(), Ok(()));
+    assert_eq!(world.trace.records.len(), 1);
+    assert_eq!(world.trace.records[0]["event"], "run.started");
+    assert_eq!(world.load_trace(true), Err("trace: incomplete final JSON line".into()));
+    std::fs::write(&path, format!("{complete}{{\"event\":\"reply.played\",\"elapsed_ms\":2}}\n")).unwrap();
+    assert_eq!(world.load_trace(true), Ok(()));
+    assert_eq!(world.trace.records.len(), 2);
+}
+
+#[test]
 #[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host and Codex"]
 fn t3_m3_done_before_transcript_plays_replacement_and_closes_on_idle() {
     native_case(super::super::CutOrder::DoneFirst, "done_before_transcript");

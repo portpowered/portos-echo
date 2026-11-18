@@ -292,8 +292,19 @@ impl World {
         }
     }
 
+    /// Read while the bridge may still be appending a record.
     pub fn read_trace(&mut self) -> Result<(), String> {
-        let bytes = std::fs::read(self.root.join("bridge.private.jsonl")).map_err(|_| "M3: missing bridge trace")?;
+        self.load_trace(false)
+    }
+
+    /// The bridge writes a record and its newline separately. While it runs,
+    /// parse complete lines only; once it is collected, a partial line fails.
+    fn load_trace(&mut self, collected: bool) -> Result<(), String> {
+        let path = self.root.join("bridge.private.jsonl");
+        let mut bytes = std::fs::read(path).map_err(|_| "M3: missing bridge trace")?;
+        if !collected {
+            bytes.truncate(bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |end| end + 1));
+        }
         let mut trace = Trace::default();
         trace.append(&bytes)?;
         trace.finish()?;
@@ -367,7 +378,7 @@ impl World {
             #[cfg(test)]
             self.record_release("bridge", &closed);
             failures.extend(closed.err());
-            failures.extend(self.read_trace().err());
+            failures.extend(self.load_trace(true).err());
             failures.extend(self.retain_trace().err());
             for record in self.trace.records.iter().filter(|r| r["event"] == "bridge.error") {
                 failures.push(format!("M3 bridge: {}", record["reason"]));
