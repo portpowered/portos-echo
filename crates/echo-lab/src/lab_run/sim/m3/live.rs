@@ -16,6 +16,7 @@ use tokio::{
 #[derive(Clone, Debug, Default)]
 pub struct Received {
     pub frames: u64,
+    pub phase: u8,
     pub active: bool,
     pub first: bool,
     pub second: bool,
@@ -199,6 +200,7 @@ async fn replay(
         }
         if !quiesced {
             respond(peer, process, &wire, observed, frames, &mut phase).await?;
+            observed.send_modify(|state| state.phase = phase);
         }
     }
 }
@@ -274,7 +276,10 @@ async fn replacement(
         *phase = 4;
     }
     if *phase == 4 && state.bytes[1] >= 2880 {
-        answer(peer, 58..63).await?;
+        // Match M2's eleven-packet finite reply: the remote decoder/resampler
+        // retains one packet, so ten packets cannot reach the nine-frame
+        // pre-done barrier. Keep the final 9600-byte oracle unchanged.
+        answer(peer, 58..64).await?;
         *phase = 5;
     }
     if *phase == 5 && state.bytes[1] >= 8640 {
