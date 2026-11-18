@@ -147,7 +147,7 @@ async fn complete(
     acknowledge: bool,
 ) {
     if acknowledge {
-        send(stream, "played", json!({})).await;
+        bridge_lifecycle::played(stream).await;
         assert_eq!(
             serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
             json!({"event":"bridge.run_completed","run_id":"run-1"})

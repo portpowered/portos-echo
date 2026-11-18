@@ -43,11 +43,7 @@ async fn cancelled(app: &mut Application, screen: &mut Events) {
         .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
         .await
         .unwrap();
-    for kind in ["hassmic-continue", "audio-stop"] {
-        let (header, payload) = bridge_short::read_reply(&mut app.satellite).await;
-        assert_eq!(header["type"], kind);
-        assert_eq!(payload, Vec::<u8>::new());
-    }
+    bridge_lifecycle::control(&mut app.satellite, "hassmic-flush").await;
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
     assert_eq!(bridge_wire_screen::state(screen).await, json!({"state":"connected"}));

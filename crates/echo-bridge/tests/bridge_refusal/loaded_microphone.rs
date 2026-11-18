@@ -478,7 +478,7 @@ async fn prepare_retirement(
         .unwrap();
     until(|| schedule.cut_polls.load(Ordering::SeqCst) > 0).await;
     schedule.competing.store(false, Ordering::SeqCst);
-    while bridge_short::read_reply(peer).await.0["type"] != "audio-stop" {}
+    bridge_cut::drain_to_stop(peer).await;
     bridge_short::send(peer, "played", json!({})).await;
     until(|| schedule.retirement_polls.load(Ordering::SeqCst) > 0).await;
 }
@@ -495,6 +495,6 @@ async fn finish_retirement(peer: &mut tokio::net::TcpStream, live: &bridge_peer:
             .await
             .unwrap();
         while bridge_short::read_reply(peer).await.0["type"] != "audio-stop" {}
-        bridge_short::send(peer, "played", json!({})).await;
+        bridge_lifecycle::played(peer).await;
     }
 }

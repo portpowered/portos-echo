@@ -193,6 +193,7 @@ async fn bridge_wire_delegation_mcp_500_is_one_attempt_and_exact_error() {
 }
 
 pub(super) async fn assert_relink_error(satellite: &mut bridge_short::Satellite) {
+    bridge_lifecycle::control(satellite, "hassmic-end").await;
     let (header, payload) = bridge_short::read_reply(satellite).await;
     assert_eq!(
         header,

@@ -196,6 +196,8 @@ pub(super) async fn continuous_playback(stream: TcpStream, format: Value) -> (Tc
             "audio-stop" => {
                 send(&mut output, "audio-stop", json!({}), vec![]).await;
                 send(&mut output, "played", json!({}), vec![]).await;
+                let expected = json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0});
+                assert_eq!(read(&mut input).await, (expected, vec![]));
                 break;
             }
             other => assert_eq!(other, "expected reply end"),
@@ -387,6 +389,8 @@ async fn playback(stream: &mut TcpStream) -> (usize, i64) {
             "audio-stop" => {
                 assert!(frames >= 1);
                 send(stream, "played", json!({}), vec![]).await;
+                let expected = json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0});
+                assert_eq!(read(stream).await, (expected, vec![]));
                 break;
             }
             other => assert_eq!(other, "expected reply audio", "unexpected Wyoming event"),

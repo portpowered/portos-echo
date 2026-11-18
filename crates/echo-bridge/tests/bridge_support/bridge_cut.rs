@@ -188,7 +188,7 @@ async fn receive_initial(stream: &mut bridge_short::Satellite, initial: u16) {
         assert_eq!(payload, vec![0; 960]);
     }
 }
-async fn drain_to_stop(stream: &mut bridge_short::Satellite) -> u16 {
+pub(super) async fn drain_to_stop(stream: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)) -> u16 {
     let mut sent = 0;
     loop {
         let (header, payload) = read(stream).await;

@@ -76,13 +76,12 @@ impl Rig {
     async fn cut(&mut self) -> usize {
         let mut chunks = 0;
         loop {
-            let (header, _) = bridge_short::read_reply(&mut self.satellite).await;
+            let (header, payload) = bridge_short::read_reply(&mut self.satellite).await;
             match header["type"].as_str().unwrap() {
                 "audio-chunk" => chunks += 1,
-                "hassmic-continue" => {
-                    let (stop, payload) = bridge_short::read_reply(&mut self.satellite).await;
-                    assert_eq!(stop["type"], "audio-stop");
-                    assert_eq!(payload, Vec::<u8>::new());
+                "hassmic-flush" => {
+                    let expected = json!({"type":"hassmic-flush","data":null,"data_length":0,"payload_length":0});
+                    assert_eq!((header, payload), (expected, vec![]));
                     break;
                 }
                 kind => assert_eq!(kind, "audio-chunk"),
@@ -118,12 +117,11 @@ impl Rig {
 }
 
 async fn assert_kill_error(satellite: &mut bridge_short::Satellite) {
+    bridge_lifecycle::control(satellite, "hassmic-end").await;
     let (header, payload) = bridge_short::read_reply(satellite).await;
     assert_eq!(header["type"], "error");
-    assert_eq!(
-        header["data"],
-        json!({"code":"echo-kill-switch","text":"Kill switch enabled."})
-    );
+    let expected = json!({"code":"echo-kill-switch","text":"Kill switch enabled."});
+    assert_eq!(header["data"], expected);
     assert_eq!(payload, Vec::<u8>::new());
 }
 
@@ -252,7 +250,7 @@ async fn answer(socket: &mut TcpStream, text: &str) {
 
 async fn completed(rig: &mut Rig, run: &str) {
     while bridge_short::read_reply(&mut rig.satellite).await.0["type"] != "audio-stop" {}
-    bridge_short::send(&mut rig.satellite, "played", json!({})).await;
+    bridge_lifecycle::played(&mut rig.satellite).await;
     bridge_short::send(&mut rig.satellite, "audio-stop", json!({})).await;
     assert_eq!(
         serde_json::from_str::<Value>(&rig.bridge.as_mut().unwrap().line().await).unwrap(),
@@ -454,6 +452,7 @@ async fn bridge_wire_kill_waiting_for_played_abandons_pending_model_before_ack()
             .count(),
         0
     );
+    bridge_lifecycle::control(&mut rig.satellite, "hassmic-end").await;
     bridge_short::send(&mut rig.satellite, "played", json!({})).await;
     bridge_short::send(&mut rig.satellite, "audio-stop", json!({})).await;
     bridge_wire_auth_failure::wait_event(&rig.path(), "live.closed", rig.bridge.as_mut().unwrap()).await;

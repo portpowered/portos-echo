@@ -59,6 +59,13 @@ mod tests {
             }
             assert_eq!(receive(&mut peer, &mut decoder).await.header.r#type, "audio-stop");
             send(&mut peer, "played", Value::Null, vec![]).await;
+            let end = receive(&mut peer, &mut decoder).await;
+            assert_eq!(
+                serde_json::to_value(end.header).unwrap(),
+                json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0})
+            );
+            assert_eq!(end.data, None);
+            assert_eq!(end.payload, [] as [u8; 0]);
             assert_eq!(
                 bridge.line().await,
                 json!({"event":"bridge.run_completed","run_id":format!("run-{index}")})

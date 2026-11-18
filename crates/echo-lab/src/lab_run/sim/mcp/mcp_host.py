@@ -36,6 +36,9 @@ def serve():
                     send(connection, 'info', {'satellite': {'name': 'synthetic'}})
                 elif header['type'] == 'audio-stop':
                     send(connection, 'played', {})
+                elif header['type'] == 'hassmic-end':
+                    assert header == {'type': 'hassmic-end', 'data': None,
+                                      'data_length': 0, 'payload_length': 0}
         finally:
             connection.close()
 

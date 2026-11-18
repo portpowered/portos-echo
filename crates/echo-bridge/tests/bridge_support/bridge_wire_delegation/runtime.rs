@@ -136,11 +136,7 @@ impl Application {
             .send(json!({"type":"response.done","response":{"status":"cancelled"}}).to_string())
             .await
             .unwrap();
-        for kind in ["hassmic-continue", "audio-stop"] {
-            let (header, payload) = bridge_short::read_reply(&mut self.satellite).await;
-            assert_eq!(header["type"], kind);
-            assert_eq!(payload, Vec::<u8>::new());
-        }
+        bridge_lifecycle::control(&mut self.satellite, "hassmic-flush").await;
         bridge_short::send(&mut self.satellite, "played", json!({})).await;
         bridge_short::send(&mut self.satellite, "audio-stop", json!({})).await;
         loop {
@@ -273,11 +269,7 @@ async fn bridge_wire_runtime_failed_commentary_append_cuts_and_closes_without_su
     respond(&mut request, &"private provider text".repeat(900))
         .await
         .unwrap();
-    for kind in ["hassmic-continue", "audio-stop"] {
-        let (header, payload) = bridge_short::read_reply(&mut app.satellite).await;
-        assert_eq!(header["type"], kind);
-        assert_eq!(payload, Vec::<u8>::new());
-    }
+    bridge_lifecycle::control(&mut app.satellite, "hassmic-flush").await;
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
     app.wait_event("run.failed").await;
@@ -401,11 +393,7 @@ async fn bridge_wire_runtime_long_delegation_kill_abandons_and_shutdown_remains_
     elapse(Duration::from_secs(12)).await;
     std::fs::create_dir_all(app.directory.path().join("audit")).unwrap();
     std::fs::write(app.directory.path().join("audit/bridge-kill"), []).unwrap();
-    for kind in ["hassmic-continue", "audio-stop"] {
-        let (header, payload) = bridge_short::read_reply(&mut app.satellite).await;
-        assert_eq!(header["type"], kind);
-        assert_eq!(payload, Vec::<u8>::new());
-    }
+    bridge_lifecycle::control(&mut app.satellite, "hassmic-flush").await;
     assert_eq!(model.read(&mut [0]).await.unwrap(), 0);
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
