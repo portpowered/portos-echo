@@ -1,6 +1,8 @@
 //! A scoped, bounded speaker owner, independent of reply audio and mouth state.
 mod capture;
 #[cfg(test)]
+mod discovery_tests;
+#[cfg(test)]
 mod tests;
 mod waveform;
 pub(super) use capture::{during as capture_during, recv as microphone};
