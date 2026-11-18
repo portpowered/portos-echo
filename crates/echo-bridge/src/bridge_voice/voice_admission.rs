@@ -91,7 +91,8 @@ where
         return Err(Error::Input);
     }
     let mut events = client.events()?;
-    super::earcon::scope(client, wake_earcon, async {
+    // Heap-own the service to keep scoped supervision within the Windows stack.
+    let work = Box::pin(async {
         let cancelled = async {
             tokio::select! {
                 () = cancelled => (),
@@ -142,8 +143,8 @@ where
                 result?;
             }
         }
-    })
-    .await
+    });
+    super::earcon::scope(client, wake_earcon, work).await
 }
 
 async fn admitted<L, R, W, P>(

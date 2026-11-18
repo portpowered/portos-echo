@@ -12,6 +12,8 @@ pub(super) fn token() -> String {
 
 pub(super) fn config(directory: &Path, mode: &str, auth: &str) -> PathBuf {
     let template = include_str!("../../../../examples/bridge.example.toml")
+        // These fixtures own reply/control behavior; wake tests exercise the chime.
+        .replace("wake_earcon = true", "wake_earcon = false")
         .replace("echo.example.invalid", "127.0.0.1")
         .replace("0.0.0.0:16900", "127.0.0.1:0") // lint-rules: allow-literal replace inert example listener with loopback
         .replace("credentials/live.json", "credential")

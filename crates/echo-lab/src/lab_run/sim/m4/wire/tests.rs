@@ -20,6 +20,82 @@ fn reply(bytes: usize) -> Event {
     value
 }
 
+fn chime_frame(index: u32) -> Event {
+    let mut event = reply(960);
+    event.payload = (index * 480..(index + 1) * 480)
+        .flat_map(|sample| {
+            let position = sample % 1920;
+            let edge = f64::from(position.min(1919 - position).min(240));
+            let gain = 983.0 * (1.0 - (std::f64::consts::PI * edge / 240.0).cos()) / 2.0;
+            let frequency = if sample < 1920 { 750.0 } else { 1000.0 };
+            let sample = (gain * (std::f64::consts::TAU * frequency * f64::from(position) / 24000.0).sin()).round();
+            sample.to_string().parse::<i16>().unwrap().to_le_bytes()
+        })
+        .collect();
+    event
+}
+
+#[test]
+fn earcon_is_distinct_from_reply_and_its_cut_does_not_supply_reply_success() {
+    let mut state = Timing {
+        run: true,
+        ..Timing::default()
+    };
+    for index in 0..8 {
+        state
+            .playback(&chime_frame(index), Duration::from_millis(u64::from(index) * 20))
+            .unwrap();
+    }
+    assert_eq!(state.earcon.bytes, 7680);
+    assert_eq!(state.earcon.first, Some(Duration::ZERO));
+    assert_eq!((state.played, state.nonzero_samples, state.audible_samples), (0, 0, 0));
+    assert!(
+        state
+            .audible_reply(&serde_json::json!({"pcm_bytes":7680,"nonzero_bytes":7000}))
+            .is_err()
+    );
+    state
+        .playback(&event("hassmic-continue", 0), Duration::from_millis(360))
+        .unwrap();
+    state
+        .playback(&event("audio-stop", 0), Duration::from_millis(360))
+        .unwrap();
+    let mut reply = reply(9600);
+    reply.payload = 12000_i16.to_le_bytes().repeat(4800);
+    state.playback(&reply, Duration::from_millis(400)).unwrap();
+    let measured = state
+        .audible_reply(&serde_json::json!({"pcm_bytes":9600,"nonzero_bytes":9000}))
+        .unwrap();
+    assert_eq!(measured["pcm_bytes"], 9600);
+    assert_eq!(measured["audible_samples"], 4800);
+    assert_eq!(state.first_pcm, Some(Duration::from_millis(400)));
+}
+
+#[test]
+fn earcon_observer_rejects_corruption_mixing_and_capture_ending_stop() {
+    let mut state = Timing {
+        run: true,
+        ..Timing::default()
+    };
+    state.playback(&chime_frame(0), Duration::ZERO).unwrap();
+    let mut wrong = chime_frame(1);
+    wrong.payload[200] ^= 127;
+    assert!(state.clone().playback(&wrong, Duration::ZERO).is_err());
+    assert!(state.clone().playback(&reply(960), Duration::ZERO).is_err());
+    assert!(state.clone().playback(&event("audio-stop", 0), Duration::ZERO).is_err());
+    state.playback(&event("hassmic-continue", 0), Duration::ZERO).unwrap();
+    state.playback(&event("audio-stop", 0), Duration::ZERO).unwrap();
+    state.playback(&reply(960), Duration::ZERO).unwrap();
+    assert_eq!((state.earcon.bytes, state.played), (960, 960));
+    // An unknown first frame is counted as reply, never silently excluded.
+    let mut state = Timing {
+        run: true,
+        ..Timing::default()
+    };
+    state.playback(&wrong, Duration::ZERO).unwrap();
+    assert_eq!((state.earcon.bytes, state.played), (0, 960));
+}
+
 #[test]
 fn finite_waveform_endpoint_ignores_silence_and_matches_gain_across_frames() {
     let fixture = super::super::world::fixture();
@@ -204,6 +280,51 @@ async fn t3_relay_forwards_both_directions_and_reaps_on_close() {
         host.read_u8().await.unwrap_err().kind(),
         std::io::ErrorKind::UnexpectedEof
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_relay_observes_chime_before_reply_and_preserves_cut_bytes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay = Relay::bind(listener.local_addr().unwrap(), 4).await.unwrap();
+    let mut bridge = TcpStream::connect(relay.address).await.unwrap();
+    let (mut host, _) = listener.accept().await.unwrap();
+    let wake = encode(&event("run-pipeline", 0));
+    host.write_all(&wake).await.unwrap();
+    let mut buffer = vec![0; wake.len()];
+    bridge.read_exact(&mut buffer).await.unwrap();
+    assert_eq!(buffer, wake);
+    tokio::time::advance(Duration::from_millis(20)).await;
+    for value in [
+        chime_frame(0),
+        chime_frame(1),
+        event("hassmic-continue", 0),
+        event("audio-stop", 0),
+    ] {
+        let bytes = encode(&value);
+        bridge.write_all(&bytes).await.unwrap();
+        buffer.resize(bytes.len(), 0);
+        host.read_exact(&mut buffer).await.unwrap();
+        assert_eq!(buffer, bytes);
+    }
+    let played = encode(&event("played", 0));
+    host.write_all(&played).await.unwrap();
+    buffer.resize(played.len(), 0);
+    bridge.read_exact(&mut buffer).await.unwrap();
+    assert_eq!(buffer, played);
+    let mut reply = reply(9600);
+    reply.payload = 12000_i16.to_le_bytes().repeat(4800);
+    let bytes = encode(&reply);
+    bridge.write_all(&bytes).await.unwrap();
+    buffer.resize(bytes.len(), 0);
+    host.read_exact(&mut buffer).await.unwrap();
+    assert_eq!(buffer, bytes);
+    let state = relay.close().await.unwrap();
+    assert_eq!((state.earcon.bytes, state.played), (1920, 9600));
+    assert_eq!(
+        state.earcon.first.unwrap().checked_sub(state.wake.unwrap()).unwrap(),
+        Duration::from_millis(20)
+    );
+    assert_eq!(state.audible_samples, 4800);
 }
 
 #[tokio::test]

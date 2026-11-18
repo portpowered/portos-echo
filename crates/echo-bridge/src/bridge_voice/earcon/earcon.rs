@@ -253,6 +253,9 @@ async fn produce(client: &impl EchoLink, sink: &impl ReplySink, context: &Contex
                 timeout(SETTLE, sink.send(frame)).await.map_err(|_| echo_link::Error::Timeout)?
             } => result?,
         }
+        if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
+            clock.submitted("earcon")?;
+        }
         sent += 1;
     }
     tokio::select! {
@@ -260,8 +263,11 @@ async fn produce(client: &impl EchoLink, sink: &impl ReplySink, context: &Contex
         () = context.until(|state| state.stop || state.closing) => (),
         () = tokio::time::sleep_until(origin + FRAME * sent + OUTPUT_DELAY) => (),
     }
-    timeout(SETTLE, client.cut_with_stats())
+    let cut = timeout(SETTLE, client.cut_with_stats())
         .await
         .map_err(|_| Error::Deadline)??;
+    if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
+        clock.discarded_earcon(cut.dropped_frames)?;
+    }
     Ok(FRAME * sent)
 }

@@ -1,5 +1,24 @@
 //! T3: prebuilt bridge, real pin/media, controlled Wyoming and provider boundaries.
 use super::*;
+
+#[test]
+fn playout_receipts_keep_earcon_separate_and_reject_unknown_or_missing_sources() {
+    let mut clock = json!({"pcm":[],"states":[]});
+    let row = json!({"pcm":[{"source":"earcon","pcm_bytes":960},
+        {"source":"reply","pcm_bytes":960}],"states":[{"state":{"state":"listening"}}]});
+    collect_observations(&mut clock, &row).unwrap();
+    assert_eq!(clock["pcm"], json!([{"source":"reply","pcm_bytes":960}]));
+    assert_eq!(clock["earcon_pcm"], json!([{"source":"earcon","pcm_bytes":960}]));
+    assert_eq!(clock["states"], row["states"]);
+    for source in [Value::Null, json!("unknown")] {
+        let mut wrong = row.clone();
+        wrong["pcm"][0]["source"] = source;
+        assert_eq!(
+            collect_observations(&mut clock, &wrong),
+            Err("playout: unknown PCM source".into())
+        );
+    }
+}
 use tokio::{net::TcpListener, sync::mpsc};
 
 struct Owner {

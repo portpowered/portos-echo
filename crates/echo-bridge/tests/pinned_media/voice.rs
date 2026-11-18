@@ -85,7 +85,9 @@ pub(super) fn configure(root: &Path, port: u16) -> CodexConfig {
     };
     std::fs::write(root.join("key"), "dummy-local-only\n").unwrap();
     std::fs::write(root.join("screen-token"), "synthetic-screen-pair").unwrap();
-    let template = include_str!("../../../../examples/bridge.example.toml");
+    // Reply/control fixtures retain their baseline; wake tests own chime proof.
+    let template =
+        include_str!("../../../../examples/bridge.example.toml").replace("wake_earcon = true", "wake_earcon = false");
     let start = template.find("[[mcp.server]]").unwrap();
     let end = start + template[start..].find("[screen]").unwrap();
     let text = format!("{}[mcp]\nserver = []\n\n{}", &template[..start], &template[end..])

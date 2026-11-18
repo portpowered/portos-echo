@@ -4,6 +4,7 @@ use echo_screen_contract::UiState;
 use echo_screen_server::ScreenServer;
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     future::Future,
     sync::{Arc, Mutex, Weak},
     task::Poll,
@@ -33,6 +34,7 @@ struct Shared {
 struct State {
     submitted: u64,
     written: u64,
+    sources: VecDeque<&'static str>,
     failed: bool,
     pcm: Vec<Value>,
     states: Vec<Value>,
@@ -106,9 +108,31 @@ impl Context {
         Ok(VoiceDrain { _keep: send, receive })
     }
 
-    pub(crate) fn submitted(&self) -> Result<(), Error> {
+    pub(crate) fn submitted(&self, source: &'static str) -> Result<(), Error> {
         let mut state = self.0.state.lock().map_err(|_| Error::Control)?;
+        if !matches!(source, "reply" | "earcon") || state.sources.len() >= 8192 {
+            return Err(Error::Control);
+        }
         state.submitted = state.submitted.checked_add(1).ok_or(Error::Control)?;
+        state.sources.push_back(source);
+        Ok(())
+    }
+
+    /// Only a settled earcon cut can discard its accepted, unwritten suffix.
+    pub(crate) fn discarded_earcon(&self, count: u64) -> Result<(), Error> {
+        let mut state = self.0.state.lock().map_err(|_| Error::Control)?;
+        let pending = state.submitted.checked_sub(state.written).ok_or(Error::Control)?;
+        let size = usize::try_from(count).map_err(|_| Error::Control)?;
+        if count > pending || state.sources.iter().rev().take(size).any(|source| *source != "earcon") {
+            return Err(Error::Control);
+        }
+        for _ in 0..count {
+            if state.sources.pop_back() != Some("earcon") {
+                return Err(Error::Control);
+            }
+            state.submitted = state.submitted.checked_sub(1).ok_or(Error::Control)?;
+        }
+        self.0.changed.notify_one();
         Ok(())
     }
 
@@ -234,8 +258,15 @@ impl Context {
         tokio::time::advance(duration).await;
         self.drain().await?;
         let mut state = self.0.state.lock().map_err(|_| Error::Control)?;
+        let mut pcm = std::mem::take(&mut state.pcm);
+        if pcm.len() != state.sources.len() {
+            return Err(Error::Control);
+        }
+        for row in &mut pcm {
+            row["source"] = json!(state.sources.pop_front().ok_or(Error::Control)?);
+        }
         Ok(json!({"event":"bridge.clock_advanced", "milliseconds":milliseconds,
-            "epoch_ms":self.epoch()?, "pcm":std::mem::take(&mut state.pcm),
+            "epoch_ms":self.epoch()?, "pcm":pcm,
             "states":std::mem::take(&mut state.states)}))
     }
 }

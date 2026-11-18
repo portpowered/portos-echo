@@ -9,6 +9,8 @@ mod tests;
 #[cfg(test)]
 mod timing;
 pub(in crate::lab_run::sim) mod tone;
+#[cfg(test)]
+mod wake;
 
 use super::{DEADLINE, oracle};
 use crate::lab_run::{
@@ -28,6 +30,7 @@ use std::{
 
 #[derive(Default)]
 struct Case {
+    earcon: bool,
     host: Option<Process>,
     relay: Option<crate::lab_run::sim::m4::wire::Relay>,
     playback: Value,
@@ -76,6 +79,13 @@ impl Case {
         let port = relay.address.port();
         self.relay = Some(relay);
         config::configure(&mut command, &root.0, port, origin, &self.trace_path)?;
+        if !self.earcon {
+            // Existing reply-only component fixtures retain their baseline.
+            let path = root.0.join("bridge.toml");
+            let text = std::fs::read_to_string(&path).map_err(|_| "m2: missing private config")?;
+            std::fs::write(path, text.replace("wake_earcon = true", "wake_earcon = false"))
+                .map_err(|_| "m2: cannot disable fixture earcon")?;
+        }
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
             .as_mut()
@@ -222,7 +232,10 @@ impl Case {
 }
 
 pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Value, Result<(), String>) {
-    let mut state = Case::default();
+    let mut state = Case {
+        earcon: true,
+        ..Case::default()
+    };
     let output = root.join("private-success");
     let result = controlled(
         async {
@@ -331,18 +344,38 @@ pub(in crate::lab_run::sim) async fn collect_playout(
                     *clock = json!({"pcm":[],"states":[]});
                 }
                 clock["epoch_ms"] = row["epoch_ms"].clone();
-                for key in ["pcm", "states"] {
-                    let values = row[key].as_array().ok_or("playout: missing receipt observations")?;
-                    clock[key]
-                        .as_array_mut()
-                        .ok_or("playout: malformed stored clock")?
-                        .extend(values.iter().cloned());
-                }
+                collect_observations(clock, &row)?;
                 return Ok(completed);
             }
             _ => return Err("playout: unexpected bridge clock observation".into()),
         }
     }
+}
+
+fn collect_observations(clock: &mut Value, row: &Value) -> Result<(), String> {
+    if clock["earcon_pcm"].is_null() {
+        clock["earcon_pcm"] = json!([]);
+    }
+    let pcm = row["pcm"].as_array().ok_or("playout: missing receipt observations")?;
+    for frame in pcm {
+        let key = match frame["source"].as_str() {
+            Some("reply") => "pcm",
+            Some("earcon") => "earcon_pcm",
+            _ => return Err("playout: unknown PCM source".into()),
+        };
+        clock[key]
+            .as_array_mut()
+            .ok_or("playout: malformed stored clock")?
+            .push(frame.clone());
+    }
+    let states = row["states"]
+        .as_array()
+        .ok_or("playout: missing receipt observations")?;
+    clock["states"]
+        .as_array_mut()
+        .ok_or("playout: malformed stored clock")?
+        .extend(states.iter().cloned());
+    Ok(())
 }
 
 fn connected(clock: &Value) -> bool {

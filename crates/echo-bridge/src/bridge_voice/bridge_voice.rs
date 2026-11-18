@@ -249,7 +249,7 @@ async fn step<E: LinkEvents>(
             if let Some(frame) = pending.take() {
                 source.mouth.wrote(&frame, Instant::now());
                 if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
-                    clock.submitted()?;
+                    clock.submitted("reply")?;
                 }
             }
             source.stats.reply_sent += 1;

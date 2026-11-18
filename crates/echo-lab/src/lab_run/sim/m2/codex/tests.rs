@@ -301,6 +301,14 @@ async fn exercise() {
 }
 
 pub(super) async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>) -> (usize, i64) {
+    satellite_configured(listener, wake, false).await
+}
+
+pub(super) async fn satellite_configured(
+    listener: TcpListener,
+    wake: oneshot::Receiver<()>,
+    earcon: bool,
+) -> (usize, i64) {
     let mut stream = listener.accept().await.unwrap().0;
     drop(listener);
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
@@ -319,6 +327,9 @@ pub(super) async fn satellite(listener: TcpListener, wake: oneshot::Receiver<()>
     .unwrap();
     send(&mut stream, "run-pipeline", row["header"]["data"].clone(), vec![]).await;
     capture(&mut stream).await;
+    if earcon {
+        super::wake::acknowledge(&mut stream).await;
+    }
     let result = playback(&mut stream).await;
     // Retain socket through bridge EOF; answer idle probes without another run.
     let mut byte = [0];
