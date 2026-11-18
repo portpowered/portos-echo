@@ -57,11 +57,31 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
         }
     };
     tokio::join!(observation, interrupted);
+    // Stop advancing the bridge clock at the animation, then finish the native
+    // tool-result round trip before EOF. Its progress is independent of the
+    // paused expiry timer and must not select a different partial-run oracle.
+    let observed = &mut case.provider.as_mut().unwrap().observed;
+    observed
+        .wait_for(|snapshot| snapshot["appends"] == json!(["delegation-local"]))
+        .await
+        .unwrap();
     let timing = case.relay.as_ref().unwrap().timing();
     assert_eq!(timing.played, 0);
     assert!(case.speaking.is_none());
     let result = case.close().await;
-    assert!(result.as_ref().unwrap_err().contains("m4: missing"), "{result:?}");
+    assert_eq!(
+        result,
+        Err("m4: exact pinned provider/model observation mismatch".into())
+    );
+    assert_eq!(case.snapshot["delegations"], json!(["delegation-local"]));
+    assert_eq!(case.snapshot["appends"], json!(["delegation-local"]));
+    assert_eq!(
+        case.snapshot["models"],
+        json!([
+            {"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":0},
+            {"tools":["tool_0","tool_1","tool_2","tool_3"],"outputs":1}
+        ])
+    );
     assert_eq!(case.snapshot["transcripts"], json!([]));
     assert_eq!(screen.next().await, Err("screen: EOF before observation".into()));
     assert!(!case.trace.records.iter().any(|r| r["event"] == "bridge.run_completed"));
