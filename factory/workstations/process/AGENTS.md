@@ -163,9 +163,14 @@ owns its independent checks, terminal CI, conflicts, merge and later validation.
   verdict; if it does not improve, continue with the next bounded optimization.
   Actual behavior regressions caused by the diff remain blocking.
 - Commit verified changes locally; the worktree persists between visits.
-  Push at most once per visit, at its end, after focused tests/lint, when the visit changed code.
+  Push after focused tests/lint, when the visit changed code.
   If previous-head CI is still running, push anyway; the superseding push cancels it.
-  Never spend a visit only waiting for CI or return CONTINUE solely because CI is running.
+  When you need a hosted CI result to decide your next step (a scratch-branch diagnostic, a `targeted.yml`
+  dispatch, or a fix you must see pass before handing off), wait for it in this same session:
+  `gh run watch <run-id> --exit-status`, then `gh run view <run-id> --log-failed` if it failed, and act on the
+  result in this visit. A hosted run takes about 10 minutes. Never end a visit so that a later visit can read a
+  run, and never return CONTINUE solely because CI is running.
+  For the final head you hand to review, return ACCEPTED once CI has started; ci-wait and review own terminal CI.
   No ACCEPTED with final push pending.
   Create/ready a non-draft PR via `gh pr create`/`gh pr ready <n>`; never run `gh pr merge` (auto-merge is disabled here; review merges).
   Stop with final head pushed, non-draft PR, CI started and blockers addressed; review owns terminal CI/conflicts/merge.
@@ -179,7 +184,7 @@ owns its independent checks, terminal CI, conflicts, merge and later validation.
   quality command above on your final head and pasting its output in a PR
   comment. Run builds and tests in your worktree, never in the repository ROOT
   checkout. A lane that must stop on a contract conflict commits and pushes
-  verified unblocked changes at visit end after focused tests/lint, within the one-push limit, and opens a
+  verified unblocked changes at visit end after focused tests/lint, and opens a
   non-draft PR naming the blocker; never claim an unresolved current-slice
   blocker is ready for acceptance.
 - Keep CI green: fix failures your diff caused. Untouched-package required-CI
@@ -198,7 +203,7 @@ owns its independent checks, terminal CI, conflicts, merge and later validation.
   describes, and restarts CI. Evidence about a CI run belongs in a PR comment.
   After your final validation push, the only permitted new commits are actual
   code or review fixes.
-- Do not spend process visits watching CI. After the final push, the
+- Do not spend process visits watching CI for the final head. After the final push, the
   `ci-wait` gate between process and review owns waiting for terminal CI.
 - Sync with origin/main when GitHub reports a real conflict or when review
   requests conflict reconciliation. Review also owns the explicit
@@ -314,7 +319,7 @@ defects. A lane without a project tag keeps the current operator route.
    the existing project-report path; do not create a second request or move Work.
 3. Temporary (AM-T0 stopgap, removed by AM-T11): do not poll in the visit.
    Commit verified unblocked changes and push at visit end after focused tests/lint,
-   within the one-push limit, then end the visit with
+   then end the visit with
    `CONTINUE` whose `feedback` STARTS with `AWAITING_OPERATOR_ANSWER`, followed
    by the lane name only (the request file holds the path and your no-answer path). That parks the task in
    `awaiting-answer`, where the `mailbox-wait` script waits up to 60 minutes
