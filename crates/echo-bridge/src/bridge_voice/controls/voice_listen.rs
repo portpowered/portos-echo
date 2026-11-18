@@ -102,9 +102,10 @@ async fn listening_step<E: LinkEvents>(
 ) -> Result<bool, Error> {
     tokio::select! {
         event = events.recv() => super::device(&event?.ok_or(Error::Wyoming)?, true, source, observe)?,
-        frame = super::earcon::microphone(microphone) => {
-            let frame = frame?.ok_or(Error::Wyoming)?;
-            if source.capture(Some(frame), port)? {
+        // A device that already ended capture keeps the run until idle or
+        // explicit end; its settled EOF is never polled again.
+        frame = super::earcon::microphone(microphone), if !source.controller.microphone_finished() => {
+            if source.capture(frame?, port)? {
                 observe(Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
             }
         },
