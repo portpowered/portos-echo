@@ -3,9 +3,9 @@
 use super::*;
 use echo_bridge::bridge_voice::Configured;
 use echo_link::fake::{FakeConnector, Observer};
-use echo_media::{DropCounts, MediaPeer, PcmFrame, PeerConfig, PeerState};
+use echo_media::{DropCounts, MediaPeer, PcmFrame, PeerConfig, PeerState, SetupObserver, SetupStage};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicUsize, Ordering},
 };
 use tokio::sync::watch;
@@ -13,6 +13,7 @@ use tokio::sync::watch;
 struct Media {
     state: watch::Sender<PeerState>,
     closed: Arc<AtomicUsize>,
+    setup: OnceLock<SetupObserver>,
 }
 impl MediaPeer for Media {
     fn create(_: PeerConfig) -> impl Future<Output = Result<Self, echo_media::Error>> {
@@ -23,11 +24,20 @@ impl MediaPeer for Media {
     }
     fn apply_answer(&self, answer: &str) -> impl Future<Output = Result<(), echo_media::Error>> {
         assert_eq!(answer, "fixture-answer");
-        self.state.send_replace(PeerState::Connected);
-        std::future::ready(Ok(()))
+        std::future::ready((|| {
+            if let Some(observer) = self.setup.get() {
+                observer(SetupStage::IceConnected)?;
+                observer(SetupStage::DataChannelOpen)?;
+            }
+            self.state.send_replace(PeerState::Connected);
+            Ok(())
+        })())
     }
     fn states(&self) -> watch::Receiver<PeerState> {
         self.state.subscribe()
+    }
+    fn observe_setup(&self, observer: SetupObserver) -> Result<(), echo_media::Error> {
+        self.setup.set(observer).map_err(|_| echo_media::Error::State)
     }
     fn send(&self, _: PcmFrame) -> Result<(), echo_media::Error> {
         Ok(())
@@ -84,6 +94,7 @@ async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accept
             Ok(Media {
                 state: watch::channel(PeerState::New).0,
                 closed: closed.clone(),
+                setup: OnceLock::new(),
             })
         },
         vec![],
