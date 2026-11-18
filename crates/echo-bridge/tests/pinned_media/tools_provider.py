@@ -1,6 +1,8 @@
 """Local Responses/delegation observer; emits no arbitrary model input or secrets."""
 import json
 import struct
+import re
+import sys
 from copy import deepcopy
 
 
@@ -30,8 +32,10 @@ def read_frame(connection):
 
 
 class Delegation:
-    def __init__(self, tools, negative, exhausted=False):
+    def __init__(self, tools, negative, exhausted=False, model="gpt-5.4"):
         self.tools = tools
+        self.model = model
+        self.native = model != "gpt-5.4"
         self.negative = negative
         self.exhausted = exhausted
         self.reply = "I couldn't call test echo." if negative else 'test echo: delegated echo'
@@ -59,9 +63,9 @@ class Delegation:
         # The same pin drops numeric minimum while lowering JSON schema to its
         # tool-schema type. Assert that measured representation exactly.
         expected[1]['parameters']['properties']['ms'].pop('minimum')
-        assert body['tools'] == expected, 'model exposed tools beyond exact dynamic catalog'
-        assert body['model'] == 'gpt-5.4', 'wrong delegated model'
-        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
+        names = self.check_tools(body, expected)
+        assert body['model'] == self.model, 'wrong delegated model'
+        outputs = [item for item in body['input'] if item.get('type') == ('custom_tool_call_output' if self.native else 'function_call_output')]
         assert outputs[:len(self.history)] == self.history, 'prior tool outputs changed across turns'
         outputs = outputs[len(self.history):]
         index = len(self.models)
@@ -70,6 +74,10 @@ class Delegation:
             assert not outputs, 'premature tool output'
             item = {'type': 'function_call', 'id': 'fc-local', 'call_id': self.call_id,
                     'name': 'tool_0', 'arguments': '{"text":"delegated echo"}', 'status': 'completed'}
+            if self.native:
+                item = {'type': 'custom_tool_call', 'id': 'fc-local', 'call_id': self.call_id,
+                        'name': 'exec', 'namespace': 'functions',
+                        'input': 'text(await tools.tool_0({text: "delegated echo"}));', 'status': 'completed'}
         else:
             assert len(outputs) == 1 and outputs[0]['call_id'] == self.call_id, 'tool identity mismatch'
             # The pinned engine encodes dynamic-tool content as a JSON text value.
@@ -77,14 +85,44 @@ class Delegation:
             self.outputs = deepcopy(outputs)
             item = {'type': 'message', 'id': 'msg-local', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
-        self.models.append({'tools': [tool['name'] for tool in body['tools']], 'outputs': len(outputs)})
+        self.models.append({'tools': names, 'outputs': len(outputs)})
         response = {'id': f'response-{index}', 'status': 'completed', 'output': [item]}
         events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
                   {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
                   {'type': 'response.completed', 'response': response}]
         return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
 
+    def check_tools(self, body, expected):
+        if not self.native:
+            assert body['tools'] == expected, 'model exposed tools beyond exact dynamic catalog'
+            return [tool['name'] for tool in body['tools']]
+        # Bundled sol uses Responses Lite: declarations are input tool blocks.
+        blocks = [item['tools'] for item in body['input'] if 'tools' in item]
+        assert len(blocks) == 1, 'missing or repeated native tool block'
+        names = [namespace['name'] + '.' + tool['name']
+                 for namespace in blocks[0] for tool in namespace['tools']]
+        description = blocks[0][0]['tools'][0]['description']
+        nested = re.findall(r'^### `([^`]+)`$', description, re.M)
+        print(json.dumps({'model': self.model, 'tools': names, 'nested': nested}), file=sys.stderr, flush=True)
+        assert names == ['functions.exec', 'functions.wait', 'functions.request_user_input_async', 'clock.sleep'], names
+        assert nested == [tool['name'] for tool in self.tools] + ['clock__curr_time'], nested
+        for tool, fields in zip(self.tools, ['text: string;', 'ms: number;', '', 'name: string;']):
+            declaration = 'declare const tools: { ' + tool['name'] + '(args: { ' + fields + ' }): Promise<unknown>; };'
+            if not fields:
+                declaration = declaration.replace('{  }', '{}')
+            assert declaration in description, 'native schema mismatch: ' + declaration
+            assert tool['description'] in description, 'native description changed'
+        return names
+
     def check_output(self, output):
+        if self.native:
+            assert len(output) == 2, 'native output content count mismatch'
+            assert output[0]['type'] == 'input_text'
+            assert re.fullmatch(r'Script completed\nWall time [0-9.]+ seconds\nOutput:\n', output[0]['text']), 'native execution did not complete'
+            assert output[1]['type'] == 'input_text'
+            output = output[1]['text']
+        if self.native:
+            print(json.dumps({'native_tool_output': output}), file=sys.stderr, flush=True)
         if self.negative:
             assert output == 'tool execution failed', 'exact failure output mismatch'
         else:
@@ -100,4 +138,6 @@ class Delegation:
         assert len(self.appends) == 1, 'duplicate append'
 
     def snapshot(self):
+        if self.native:
+            print(json.dumps({'models': self.models, 'correlated_appends': self.appends}), file=sys.stderr, flush=True)
         return {'delegations': self.delegations, 'models': self.models, 'appends': self.appends}
