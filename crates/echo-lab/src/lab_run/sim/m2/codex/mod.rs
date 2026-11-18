@@ -226,7 +226,7 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
         "calls":observed["calls"].as_array().map(Vec::len),
         "provider_wire":provider::valid(&observed), "refreshes":0, "provider":observed,
         "frames":state.frames.lock().ok().map(|f| f.clone()), "trace":state.trace.records,
-        "reply_pcm":state.playback});
+        "reply_pcm":state.playback, "playout_clock":state.clock});
     let cleanup = if state.trace_path.is_file() {
         std::fs::remove_file(&state.trace_path)
             .and_then(|()| std::fs::remove_dir(&output))

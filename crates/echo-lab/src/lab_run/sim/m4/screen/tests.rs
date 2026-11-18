@@ -27,6 +27,33 @@ async fn response(bytes: &'static [u8]) -> (Screen, tokio::task::JoinHandle<()>)
 }
 
 #[tokio::test]
+async fn t3_final_collection_retains_late_mouth_publications_and_rejects_truncation() {
+    let (mut screen, task) = response(
+        b"data: {\"seq\":5,\"state\":{\"state\":\"ready\"}}\n\ndata: {\"seq\":6,\"state\":{\"state\":\"speaking\"}}\n\ndata: {\"seq\":7,\"state\":{\"state\":\"ready\"}}\n\n",
+    )
+    .await;
+    screen.expect("ready").await.unwrap();
+    assert_eq!(
+        screen.remaining().await.unwrap(),
+        vec![
+            serde_json::json!({"seq":6,"state":{"state":"speaking"}}),
+            serde_json::json!({"seq":7,"state":{"state":"ready"}}),
+        ]
+    );
+    task.await.unwrap();
+    let (mut screen, task) = response(b"data: {\"state\":{\"state\":\"ready\"}}\n\n").await;
+    screen.expect("ready").await.unwrap();
+    assert_eq!(screen.remaining().await.unwrap(), Vec::<Value>::new());
+    task.await.unwrap();
+    let (screen, task) = response(b"data: {\"seq\":6}").await;
+    assert_eq!(
+        screen.remaining().await,
+        Err("screen: incomplete or oversized final publication".into())
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "T3 loopback SSE observer"]
 async fn t3_screen_missing_stale_malformed_and_eof_never_supply_speaking() {
     for (bytes, expected) in [

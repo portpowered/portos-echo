@@ -9,6 +9,32 @@ use tokio::{
     sync::oneshot,
 };
 
+#[test]
+fn paired_sequence_rejects_a_discarded_late_mouth_interval() {
+    let states: Vec<_> = ["ready", "speaking", "ready", "speaking", "ready"]
+        .iter()
+        .enumerate()
+        .map(|(index, state)| json!({"epoch_ms":index * 20,"state":{"state":state}}))
+        .collect();
+    let frames: Vec<_> = states
+        .iter()
+        .enumerate()
+        .map(|(index, stamp)| json!({"seq":index + 1,"state":stamp["state"]}))
+        .collect();
+    let clock = json!({"states":states});
+    assert_eq!(receipts::screen(&frames, &clock), Ok(()));
+    assert_eq!(
+        receipts::screen(&frames[..3], &clock),
+        Err("m4: incomplete paired screen sequence".into())
+    );
+    let mut wrong = frames;
+    wrong[3]["state"] = json!({"state":"ready"});
+    assert_eq!(
+        receipts::screen(&wrong, &clock),
+        Err("m4: paired screen/clock sequence mismatch".into())
+    );
+}
+
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production bridge and offline Codex pin"]
 async fn t3_m4_canonical_provider_matches_real_pin_tools_media_and_native_receipts() {

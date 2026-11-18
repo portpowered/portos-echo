@@ -153,7 +153,6 @@ async fn conversation(
 ) -> Result<(), String> {
     let mut reply = false;
     let mut allow_reply = !emotion;
-    let mut remaining = None;
     let mut quiesced = false;
     // Drive the bridge's explicit clock at the media frame cadence even when
     // the remote has no UDP traffic. Sparse ICE timers must not stall its clock.
@@ -167,7 +166,7 @@ async fn conversation(
             loop {
                 tokio::select! {
                     value = &mut line => break Some(value?),
-                    result = step(peer, &mut remaining), if !quiesced => { result?; },
+                    result = step(peer), if !quiesced => { result?; },
                     _ = clock.tick(), if !quiesced => {let _ = ticks.try_send(());},
                     control = commands.recv() => { action = control; break None; },
                 }
@@ -181,7 +180,7 @@ async fn conversation(
                 }
                 reply = true;
                 if allow_reply {
-                    remaining = Some((0, Instant::now()));
+                    send_reply(peer).await?;
                 }
             }
         } else {
@@ -190,7 +189,7 @@ async fn conversation(
                 Some(Control::Reply) if emotion && !allow_reply => {
                     allow_reply = true;
                     if reply {
-                        remaining = Some((0, Instant::now()));
+                        send_reply(peer).await?;
                     }
                 }
                 Some(Control::Reply) => return Err("m6: premature reply release".into()),
@@ -225,24 +224,26 @@ fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), Str
     Ok(())
 }
 
-async fn step(peer: &mut LivePeer, remaining: &mut Option<(u16, Instant)>) -> Result<(), String> {
-    while peer.pop_audio().is_some() {}
-    if peer.ready()
-        && let Some((sequence, due)) = *remaining
-        && Instant::now() >= due
-    {
+/// Admit the finite utterance before advancing the bridge clock. RTP spacing
+/// stays 20 ms; playback pacing belongs to the delivered bridge, not this host.
+async fn send_reply(peer: &mut LivePeer) -> Result<(), String> {
+    if !peer.ready() {
+        return Err("m4: reply before media readiness".into());
+    }
+    for sequence in 0..11 {
         peer.send_audio(
             crate::lab_run::sim::m2::codex::tone::packet(sequence).ok_or("m4: invalid tone sequence")?,
             Instant::now().into_std(),
         )
         .await
         .map_err(|_| "m4: reply media")?;
-        *remaining = (sequence < 10).then_some((sequence + 1, due + std::time::Duration::from_millis(20)));
     }
-    let mut next = Instant::from_std(peer.flush().await.map_err(|_| "m4: media flush")?);
-    if let Some((_, due)) = remaining {
-        next = next.min(*due);
-    }
+    Ok(())
+}
+
+async fn step(peer: &mut LivePeer) -> Result<(), String> {
+    while peer.pop_audio().is_some() {}
+    let next = Instant::from_std(peer.flush().await.map_err(|_| "m4: media flush")?);
     tokio::select! {
         ready = peer.readable() => {
             ready.map_err(|_| "m4: media readiness")?;

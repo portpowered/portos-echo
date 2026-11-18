@@ -36,6 +36,7 @@ struct Case {
     negative: bool,
     emotion: bool,
     ui_states: Vec<Value>,
+    screen: Option<Screen>,
     root: Option<Root>,
     host: Option<Process>,
     bridge: Option<Process>,
@@ -80,6 +81,7 @@ pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, St
         (Ok(value), Ok(())) => value,
     };
     let text = case.transcript.ok_or("m4: missing observed assistant transcript")?;
+    receipts::screen(&case.ui_states, &case.clock)?;
     Ok(Journey {
         trace: case.trace,
         speaking: case.speaking,
@@ -193,6 +195,7 @@ impl Case {
         let (completion, speaking) =
             tokio::try_join!(settle(bridge, provider, relay, ready, &mut self.clock), presentation)?;
         self.speaking = Some(speaking);
+        self.screen = Some(screen);
         let playback = self.host_control(json!({"action":"playback"})).await?;
         let timing = self.relay.as_ref().ok_or("m4: missing relay")?.timing();
         let samples = timing.audible_reply(&playback)?;
@@ -211,6 +214,7 @@ impl Case {
             errors.extend(provider.quiesce().await.err());
         }
         self.close_bridge(&mut errors).await;
+        errors.extend(self.collect_screen().await.err());
         let mut snapshot = Value::Null;
         if let Some(provider) = self.provider.take() {
             match provider.close().await {
@@ -233,6 +237,12 @@ impl Case {
         } else {
             Err(errors.join("; "))
         }
+    }
+    async fn collect_screen(&mut self) -> Result<(), String> {
+        if let Some(screen) = self.screen.take() {
+            self.ui_states.extend(screen.remaining().await?);
+        }
+        Ok(())
     }
     async fn close_bridge(&mut self, errors: &mut Vec<String>) {
         if let Some(mut bridge) = self.bridge.take() {

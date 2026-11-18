@@ -3,6 +3,26 @@ use crate::lab_run::sim::trace::Trace;
 use echo_spoof_mcp::{CallRecord, Snapshot};
 use serde_json::{Value, json};
 
+/// Every projected clock receipt must have a matching paired SSE publication.
+pub(super) fn screen(frames: &[Value], clock: &Value) -> Result<(), String> {
+    let states = clock["states"].as_array().ok_or("m4: missing screen clock receipts")?;
+    if frames.len() != states.len() {
+        return Err("m4: incomplete paired screen sequence".into());
+    }
+    let mut previous = 0;
+    for (index, (frame, stamp)) in frames.iter().zip(states).enumerate() {
+        let epoch = stamp["epoch_ms"].as_u64().ok_or("m4: missing screen timestamp")?;
+        if frame["seq"].as_u64() != u64::try_from(index + 1).ok()
+            || frame["state"] != stamp["state"]
+            || epoch < previous
+        {
+            return Err("m4: paired screen/clock sequence mismatch".into());
+        }
+        previous = epoch;
+    }
+    Ok(())
+}
+
 pub(super) fn merge_mode(
     trace: &mut Trace,
     snapshot: &Value,

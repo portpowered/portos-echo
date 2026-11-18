@@ -134,25 +134,61 @@ async fn drive(
     let mut started = false;
     let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
     loop {
+        let work = async {
+            if quiesced {
+                std::future::pending().await
+            } else {
+                step(peer, &mut reply, quiet_edges).await
+            }
+        };
+        let progress = progress(work, process, commands, ticks, &mut clock, quiesced).await?;
+        match progress {
+            Progress::Media(received) if received > 0 && !started => {
+                started = true;
+                reply = true;
+            }
+            Progress::Media(_) => {}
+            Progress::Quiesced => quiesced = true,
+            Progress::Closed => break,
+        }
+    }
+    process.send(&json!({"snapshot":true})).await?;
+    process.expect("provider.snapshot").await
+}
+
+enum Progress {
+    Media(usize),
+    Quiesced,
+    Closed,
+}
+
+/// Clock ticks and transcript controls must not cancel a partial media step.
+/// Only quiescing or closing deliberately abandons that operation.
+async fn progress(
+    work: impl std::future::Future<Output = Result<usize, String>>,
+    process: &mut Process,
+    commands: &mut mpsc::Receiver<Control>,
+    ticks: &mpsc::Sender<()>,
+    clock: &mut tokio::time::Interval,
+    quiesced: bool,
+) -> Result<Progress, String> {
+    tokio::pin!(work);
+    loop {
         tokio::select! {
-            result = step(peer, &mut reply, quiet_edges), if !quiesced => {
-                if result? > 0 && !started {
-                    started = true;
-                    reply = true;
-                }
-            },
+            result = &mut work => return result.map(Progress::Media),
             _ = clock.tick(), if !quiesced => { let _ = ticks.try_send(()); },
             control = commands.recv() => match control {
                 Some(Control::Transcripts) => process.send(&json!({"transcripts":true})).await?,
-                Some(Control::Quiesce(done)) => { quiesced = true; let _ = done.send(()); },
-                Some(Control::Close) | None => break,
+                Some(Control::Quiesce(done)) => {
+                    let _ = done.send(());
+                    return Ok(Progress::Quiesced);
+                }
+                Some(Control::Close) | None => return Ok(Progress::Closed),
                 #[cfg(test)]
                 Some(Control::NextCapture) => return Err("m2: capture-only control".into()),
             },
         }
     }
-    process.send(&json!({"snapshot":true})).await?;
-    process.expect("provider.snapshot").await
 }
 
 /// M1 preserves its capture-only oracle: no reply RTP is generated.
@@ -259,4 +295,49 @@ pub(super) fn valid(snapshot: &Value) -> bool {
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
         "model":"gpt-live-1-codex", "alpha":"quicksilver=v2", "nominated_key":true,
         "account_header":null}], "sidebands":1, "external":0, "refreshes":0})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn t3_media_progress_survives_clock_ticks_and_transcript_control() {
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let mut command = tokio::process::Command::new(python);
+        command.args([
+            "-u",
+            "-c",
+            "import sys\nfor line in sys.stdin: print(line, end='', flush=True)",
+        ]);
+        let mut process = Process::start(&mut command).unwrap();
+        let (commands, mut receive) = mpsc::channel(2);
+        let (ticks, mut clock_ticks) = mpsc::channel(1);
+        let (finish, finished) = oneshot::channel();
+        let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
+        let starts = std::sync::atomic::AtomicUsize::new(0);
+        let work = async {
+            starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            finished.await.unwrap();
+            Ok(11)
+        };
+        let controls = async {
+            for _ in 0..3 {
+                clock_ticks.recv().await.unwrap();
+            }
+            commands.send(Control::Transcripts).await.unwrap();
+            clock_ticks.recv().await.unwrap();
+            finish.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            progress(work, &mut process, &mut receive, &ticks, &mut clock, false),
+            controls
+        );
+        assert!(matches!(result.unwrap(), Progress::Media(11)));
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(process.line().await.unwrap(), json!({"transcripts":true}));
+        // The external process exits on wall time; only media progress used fake time.
+        tokio::time::resume();
+        assert_eq!(process.close().await, Ok(()));
+    }
 }

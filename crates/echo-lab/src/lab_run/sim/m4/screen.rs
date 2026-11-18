@@ -72,6 +72,24 @@ impl Screen {
         }
         Err("screen: missing state within frame limit".into())
     }
+
+    /// After the bridge is collected, retain every remaining publication up to EOF.
+    pub async fn remaining(self) -> Result<Vec<Value>, String> {
+        let mut bytes = Vec::new();
+        self.0
+            .take(65537)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| "screen: final collection failed")?;
+        if bytes.len() > 65536 || (!bytes.is_empty() && bytes != b"\n" && !bytes.ends_with(b"\n\n")) {
+            return Err("screen: incomplete or oversized final publication".into());
+        }
+        let text = std::str::from_utf8(&bytes).map_err(|_| "screen: malformed final publication")?;
+        text.lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|data| serde_json::from_str(data).map_err(|_| "screen: malformed state".into()))
+            .collect()
+    }
 }
 
 #[cfg(test)]
