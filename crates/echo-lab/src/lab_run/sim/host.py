@@ -230,7 +230,7 @@ class Host:
         elif action == "mute":
             self.mute()
         elif action == "playback" and self.finite_mode:
-            emit(playback_observation(self, LIMIT, playback_counts,
+            emit(playback_observation(self, LIMIT, playback_counts, HostCancelled,
                                       wait=value.get("wait_flush", False),
                                       earcon=value.get("wake_earcon", False)))
             return

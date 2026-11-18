@@ -32,7 +32,7 @@ def finite_input(host, value, wake_signal):
                 raise RuntimeError("muted native capture consumption failed")
 
 
-def flush_observation(host, wait=False):
+def flush_observation(host, cancelled_error, wait=False):
     """Native worker receipt/close and independent discarded PCM, never relay estimates."""
     import re
     with host.condition:
@@ -42,8 +42,7 @@ def flush_observation(host, wait=False):
             ready = host.condition.wait_for(
                 lambda: complete() or host.error or host.cancelled.is_set(), 5)
             if host.cancelled.is_set():
-                from wsl_host import HostCancelled
-                raise HostCancelled("host command cancelled")
+                raise cancelled_error("host command cancelled")
             if not ready or host.error:
                 raise RuntimeError("native flush observation readiness failed")
         lines = complete()
@@ -56,9 +55,9 @@ def flush_observation(host, wait=False):
     return dict(zip(keys, map(int, records[0])))
 
 
-def playback_observation(host, limit, counts, wait=False, earcon=False):
+def playback_observation(host, limit, counts, cancelled_error, wait=False, earcon=False):
     """Observe native flush readiness before taking the bounded PCM snapshot."""
-    flush = flush_observation(host, wait=wait)
+    flush = flush_observation(host, cancelled_error, wait=wait)
     with (host.folder / "play.raw").open("rb") as recording:
         data = recording.read(limit + 1)
     if len(data) > limit or len(data) % 2:
