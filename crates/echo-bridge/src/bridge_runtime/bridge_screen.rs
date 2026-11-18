@@ -190,15 +190,27 @@ impl Screen {
     }
 
     pub async fn close(&mut self) -> Result<(), Error> {
+        self.close_with_mode(false).await.map(|_| ())
+    }
+
+    pub(crate) async fn close_gracefully(&mut self) -> Result<usize, Error> {
+        self.close_with_mode(true).await
+    }
+
+    async fn close_with_mode(&mut self, graceful: bool) -> Result<usize, Error> {
         if let Some(task) = self.actions.take() {
             task.abort();
             let _ = task.await;
         }
         if let Some(server) = self.server.take() {
             let mut server = Arc::try_unwrap(server).map_err(|_| Error::Screen)?;
-            server.shutdown().await.map_err(|_| Error::Screen)?;
+            return if graceful {
+                server.shutdown_gracefully().await.map_err(|_| Error::Screen)
+            } else {
+                server.shutdown().await.map_err(|_| Error::Screen).map(|()| 0)
+            };
         }
-        Ok(())
+        Ok(0)
     }
 }
 

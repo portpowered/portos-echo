@@ -4,8 +4,62 @@ use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use support::{Result, TOKEN, events, frame, post, report, request, server};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 
+#[tokio::test(start_paused = true)]
+async fn t3_interrupted_graceful_shutdown_keeps_original_deadline() -> Result {
+    use std::{future::Future, task::Poll, time::Duration};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let (mut server, _tx) = server().await?;
+    let mut socket = tokio::net::TcpStream::connect(server.bound_addr).await?;
+    socket.write_all(format!("POST /actions?token={TOKEN} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n").as_bytes()).await?;
+    let mut socket = BufReader::new(socket);
+    let mut line = String::new();
+    socket.read_line(&mut line).await?;
+    assert_eq!(line, "HTTP/1.1 100 Continue\r\n");
+    line.clear();
+    socket.read_line(&mut line).await?;
+    assert_eq!(line, "\r\n");
+    let start = tokio::time::Instant::now();
+    {
+        let closing = server.shutdown_gracefully();
+        tokio::pin!(closing);
+        assert!(std::future::poll_fn(|cx| Poll::Ready(closing.as_mut().poll(cx).is_pending())).await);
+        tokio::time::advance(Duration::from_millis(100)).await;
+    }
+    assert_eq!(server.shutdown_gracefully().await?, 1);
+    assert_eq!(start.elapsed(), Duration::from_millis(250));
+    assert_eq!(server.shutdown_gracefully().await?, 0);
+    let mut tail = String::new();
+    socket.read_to_string(&mut tail).await?;
+    assert_eq!(tail, "");
+    report("interrupted drain: original 250 ms deadline, one stalled HTTP owner collected, repeated close=0");
+    Ok(())
+}
+
 #[tokio::test]
-async fn t3_shutdown_delivers_committed_failure_before_stream_eof() -> Result {
+async fn t3_terminal_publication_survives_graceful_close_200_times() -> Result {
+    for iteration in 0..200 {
+        let (mut server, tx) = server().await?;
+        let mut stream = events(server.bound_addr).await?;
+        let state = UiState::Error {
+            message: format!("synthetic terminal {iteration}"),
+            relink: false,
+        };
+        tx.send(state.clone()).await?;
+        server
+            .flush(tokio::time::Instant::now() + std::time::Duration::from_secs(5))
+            .await?;
+        assert_eq!(server.shutdown_gracefully().await?, 0);
+        assert_eq!(frame(&mut stream).await?, ScreenFrame { seq: 1, state });
+        let mut tail = String::new();
+        stream.read_to_string(&mut tail).await?;
+        assert!(!tail.contains("data:"));
+    }
+    report("terminal publication then graceful close: 200/200 exact terminal frames followed by EOF");
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_graceful_shutdown_delivers_committed_failure_before_stream_eof() -> Result {
     let (mut server, tx) = server().await?;
     let address = server.bound_addr;
     let mut stream = events(address).await?;
@@ -24,7 +78,7 @@ async fn t3_shutdown_delivers_committed_failure_before_stream_eof() -> Result {
         .await?;
     // Hold the observer until teardown completes: it must receive the actual
     // committed Error frame, even when no client read races server shutdown.
-    server.shutdown().await?;
+    assert_eq!(server.shutdown_gracefully().await?, 0);
     for (index, state) in states.into_iter().enumerate() {
         assert_eq!(
             frame(&mut stream).await?,

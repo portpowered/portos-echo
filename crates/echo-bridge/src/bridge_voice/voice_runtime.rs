@@ -48,25 +48,36 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     let health = match Health::bind(options.health).await {
         Ok(health) => health,
         Err(error) => {
-            let _ = close_screen(&mut screen, &mut trace).await;
+            let _ = close_screen(&mut screen, &mut trace, false).await;
             return Err(error);
         }
     };
     screen.supervise_actions(health.state.subscribe());
     let mut view = View::new(&screen, &health, &mut trace);
-    let result = work(options, connector, &mut peer, cancelled, &mut view).await;
+    let requested = Cell::new(false);
+    let result = work(options, connector, &mut peer, cancelled, &mut view, &requested).await;
     health.close().await;
     let health_receipt = trace.record("health.released", None, serde_json::json!({}));
     // A trace failure must not skip the remaining presentation cleanup.
-    let cleanup = close_screen(&mut screen, &mut trace).await;
+    let cleanup = close_screen(
+        &mut screen,
+        &mut trace,
+        !requested.get() && result != Err(Error::Control),
+    )
+    .await;
     result.and(cleanup).and(health_receipt)
 }
 
-async fn close_screen(screen: &mut Screen, trace: &mut Trace) -> Result<(), Error> {
+async fn close_screen(screen: &mut Screen, trace: &mut Trace, graceful: bool) -> Result<(), Error> {
     let acquired = screen.address().is_some();
-    screen.close().await?;
+    let dropped = if graceful {
+        screen.close_gracefully().await?
+    } else {
+        screen.close().await?;
+        0
+    };
     if acquired {
-        trace.record("screen.released", None, serde_json::json!({}))?;
+        trace.record("screen.released", None, serde_json::json!({"dropped_clients":dropped}))?;
     }
     Ok(())
 }
@@ -77,9 +88,9 @@ async fn work<C: LinkConnector, P: MediaPeer>(
     peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     view: &mut View<'_>,
+    requested: &Cell<bool>,
 ) -> Result<(), Error> {
     view.startup()?;
-    let requested = Cell::new(false);
     let cancelled = async {
         cancelled.await;
         requested.set(true);
@@ -135,6 +146,107 @@ async fn stopped(mut stopping: watch::Receiver<bool>) {
     loop {
         if *stopping.borrow_and_update() || stopping.changed().await.is_err() {
             return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    async fn screen(directory: &Path) -> Screen {
+        let token = directory.join("pairing");
+        std::fs::write(&token, "synthetic-screen-pair").unwrap();
+        Screen::bind(Some(&ScreenConfig {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            pairing_token_file: token,
+        }))
+        .await
+        .unwrap()
+    }
+
+    async fn request(screen: &Screen, request: &str) -> BufReader<TcpStream> {
+        let mut stream = TcpStream::connect(screen.address().unwrap()).await.unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut headers = String::new();
+        loop {
+            let mut line = String::new();
+            assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
+            headers.push_str(&line);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        assert!(headers.starts_with("HTTP/1.1 200 OK") || headers.starts_with("HTTP/1.1 100 Continue"));
+        reader
+    }
+
+    // T3: actual loopback SSE, production error publication and release trace.
+    #[tokio::test]
+    async fn t3_uncancelled_terminal_error_reaches_screen_before_release() {
+        for _ in 0..100 {
+            let directory = tempfile::tempdir().unwrap();
+            let mut screen = screen(directory.path()).await;
+            let path = directory.path().join("trace");
+            let mut trace = Trace::open(&path, "api_key").unwrap();
+            let mut stream = request(
+                &screen,
+                "GET /events?token=synthetic-screen-pair HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            )
+            .await;
+            let health = Health::offline();
+            View::new(&screen, &health, &mut trace)
+                .failed(&Error::Unavailable)
+                .await
+                .unwrap();
+            close_screen(&mut screen, &mut trace, true).await.unwrap();
+            let mut tail = String::new();
+            stream.read_to_string(&mut tail).await.unwrap();
+            let frame = tail.lines().find_map(|line| line.strip_prefix("data: ")).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(frame).unwrap(),
+                json!({
+                    "seq":1, "state":{"state":"error", "message":"Conversation unavailable. Try another wake.", "relink":false}
+                })
+            );
+            let rows: Vec<Value> = std::fs::read_to_string(path)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(rows[0]["event"], "bridge.error");
+            assert_eq!(rows[1]["event"], "screen.released");
+            assert_eq!(rows[1]["dropped_clients"], 0);
+        }
+    }
+
+    // T3: 100 Continue proves this owned HTTP handler is awaiting a real body.
+    // Unsent body bytes cannot be drained; cancellation must bypass that wait.
+    #[tokio::test(start_paused = true)]
+    async fn t3_screen_release_bounds_stalled_client_and_cancellation_skips_drain() {
+        for graceful in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut screen = screen(directory.path()).await;
+            let path = directory.path().join("trace");
+            let mut trace = Trace::open(&path, "api_key").unwrap();
+            let mut stream = request(&screen, "POST /actions?token=synthetic-screen-pair HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n").await;
+            let start = tokio::time::Instant::now();
+            close_screen(&mut screen, &mut trace, graceful).await.unwrap();
+            assert_eq!(
+                start.elapsed(),
+                std::time::Duration::from_millis(if graceful { 250 } else { 0 })
+            );
+            let row: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(row["event"], "screen.released");
+            assert_eq!(row["dropped_clients"], usize::from(graceful));
+            let mut tail = Vec::new();
+            stream.read_to_end(&mut tail).await.unwrap();
+            assert_eq!(tail, [] as [u8; 0]);
+            assert!(screen.address().is_none());
         }
     }
 }

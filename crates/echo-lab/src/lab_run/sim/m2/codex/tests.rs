@@ -160,14 +160,14 @@ async fn continuous_satellite(listener: Arc<TcpListener>, mut requested: tokio::
     let format = json!({"rate":16000,"width":2,"channels":1});
     let mut frames = 0;
     for _ in 0..2 {
-        requested.recv().await.unwrap();
+        assert!(super::lifecycle::wait_for_wake(&mut stream, requested.recv()).await);
         send(&mut stream, "run-pipeline", wake["header"]["data"].clone(), vec![]).await;
         send(&mut stream, "audio-start", format.clone(), vec![]).await;
         let (returned, count) = continuous_playback(stream, format.clone()).await;
         stream = returned;
         frames += count;
     }
-    assert_eq!(stream.read(&mut [0]).await.unwrap(), 0);
+    assert!(!super::lifecycle::wait_for_wake(&mut stream, std::future::pending()).await);
     frames
 }
 

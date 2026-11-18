@@ -39,7 +39,8 @@ pub struct ScreenServer {
     publication_requests: mpsc::Sender<tokio::sync::oneshot::Sender<()>>,
     core: Arc<Mutex<Core>>,
     stop: watch::Sender<bool>,
-    drain: watch::Sender<bool>,
+    drain: watch::Sender<Option<tokio::time::Instant>>,
+    listener: Option<JoinHandle<usize>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -75,23 +76,47 @@ impl ScreenServer {
         Ok(())
     }
 
-    /// Drain committed frames for at most one second, then cancel and join
-    /// owned tasks, closing streams and the action channel.
+    /// Drain already-queued frames and join owned tasks. One 250 ms deadline
+    /// bounds all connections together. Returns the number dropped at that bound.
+    /// This delivery guarantee is separate from snapshot admission by `flush`.
+    /// Dropping the server cancels immediately; revocation never drains.
+    ///
+    /// # Errors
+    /// Returns `Task` when an owned task failed.
+    pub async fn shutdown_gracefully(&mut self) -> Result<usize, ScreenServerError> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(250);
+        self.core.lock().await.drain();
+        self.drain.send_if_modified(|value| {
+            if value.is_some() {
+                return false;
+            }
+            *value = Some(deadline);
+            true
+        });
+        self.join_tasks().await
+    }
+
+    /// Cancel immediately and join owned tasks without draining frames.
     ///
     /// # Errors
     /// Returns `Task` when an owned task failed.
     pub async fn shutdown(&mut self) -> Result<(), ScreenServerError> {
-        // Finish committed SSE frames before cancellation tears down sockets.
-        self.core.lock().await.finish();
-        self.drain.send_replace(true);
-        if let Some(listener) = self.tasks.pop() {
-            listener.await.map_err(|_| ScreenServerError::Task)?;
-        }
+        self.stop.send_replace(true);
+        self.join_tasks().await.map(|_| ())
+    }
+
+    async fn join_tasks(&mut self) -> Result<usize, ScreenServerError> {
+        let dropped = if let Some(listener) = &mut self.listener {
+            listener.await.map_err(|_| ScreenServerError::Task)?
+        } else {
+            0
+        };
+        self.listener.take();
         self.stop.send_replace(true);
         for task in self.tasks.drain(..) {
             task.await.map_err(|_| ScreenServerError::Task)?;
         }
-        Ok(())
+        Ok(dropped)
     }
 }
 
@@ -123,8 +148,8 @@ pub async fn serve(
     let bound_addr = listener.local_addr().map_err(|_| ScreenServerError::Bind)?;
     let (actions_tx, actions) = mpsc::channel(32);
     let (stop, stop_rx) = watch::channel(false);
-    let (drain, drain_rx) = watch::channel(false);
-    let app = screen_http::router(core.clone(), actions_tx, stop_rx.clone(), bound_addr);
+    let (drain, drain_rx) = watch::channel(None);
+    let app = screen_http::router(core.clone(), actions_tx, stop_rx.clone(), drain_rx.clone(), bound_addr);
     let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx, drain_rx));
     let (publication_requests, requests) = mpsc::channel(32);
     let state_task = tokio::spawn(screen_core::pump(core.clone(), states, requests, stop.clone()));
@@ -135,7 +160,8 @@ pub async fn serve(
         core,
         stop,
         drain,
-        tasks: vec![state_task, listener_task],
+        listener: Some(listener_task),
+        tasks: vec![state_task],
     })
 }
 
@@ -143,6 +169,10 @@ pub(crate) async fn cancelled(mut signal: watch::Receiver<bool>) {
     if !*signal.borrow() {
         let _ = signal.wait_for(|value| *value).await;
     }
+}
+
+pub(crate) async fn draining(mut signal: watch::Receiver<Option<tokio::time::Instant>>) {
+    let _ = signal.wait_for(Option::is_some).await;
 }
 
 #[cfg(test)]
@@ -160,7 +190,8 @@ mod tests {
                 publication_requests,
                 core: Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into())))),
                 stop: watch::channel(false).0,
-                drain: watch::channel(false).0,
+                drain: watch::channel(None).0,
+                listener: None,
                 tasks: vec![],
             },
             requests,

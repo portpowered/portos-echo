@@ -83,7 +83,17 @@ impl Owner {
         if index > 1 {
             self.provider.next_capture().await;
         }
-        let row = self.bridge.expect("bridge.run_completed").await.unwrap();
+        let completed = self.bridge.expect("bridge.run_completed").await;
+        if let Err(error) = &completed {
+            let exited = self.bridge.exited();
+            assert!(
+                completed.is_ok(),
+                "M2 run {index}: {error}; exited={exited:?}; status={}; trace={:?}",
+                self.bridge.exit_summary(),
+                self.trace().records
+            );
+        }
+        let row = completed.unwrap();
         assert_eq!(row["run_id"], format!("run-{index}"));
         let states: &[&str] = if index == 1 {
             &["listening", "connected", "ready"]
@@ -117,7 +127,7 @@ impl Owner {
 }
 
 async fn satellite(listener: Arc<TcpListener>, mut requested: mpsc::Receiver<()>, earcon: bool) -> usize {
-    use super::tests::{continuous_playback, read, send};
+    use super::tests::{read, send};
     let mut stream = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
     assert_eq!(read(&mut stream).await.0["type"], "describe");
@@ -133,19 +143,52 @@ async fn satellite(listener: Arc<TcpListener>, mut requested: mpsc::Receiver<()>
     )
     .unwrap();
     let mut completed = 0;
-    while requested.recv().await.is_some() {
+    while wait_for_wake(&mut stream, requested.recv()).await {
         send(&mut stream, "run-pipeline", wake["header"]["data"].clone(), vec![]).await;
-        let format = json!({"rate":16000,"width":2,"channels":1});
-        send(&mut stream, "audio-start", format.clone(), vec![]).await;
-        if earcon {
-            super::wake::acknowledge(&mut stream).await;
-        }
-        let (returned, frames) = continuous_playback(stream, format).await;
-        stream = returned;
-        assert_eq!(frames, 0);
+        stream = run_playback(stream, earcon).await;
         completed += 1;
     }
+    // Socket EOF does not release this test-owned listener. The controller
+    // explicitly drops its wake sender after collecting the bridge.
+    assert!(requested.recv().await.is_none());
+    drop(listener);
     completed
+}
+
+async fn run_playback(mut stream: tokio::net::TcpStream, earcon: bool) -> tokio::net::TcpStream {
+    let format = json!({"rate":16000,"width":2,"channels":1});
+    super::tests::send(&mut stream, "audio-start", format.clone(), vec![]).await;
+    if earcon {
+        super::wake::acknowledge(&mut stream).await;
+    }
+    let (stream, frames) = super::tests::continuous_playback(stream, format).await;
+    assert_eq!(frames, 0);
+    stream
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
+async fn codex_lifecycle_idle_probe_completes_before_first_wake() {
+    tokio::time::timeout(DEADLINE, async {
+        let mut owner = Owner::start(120, false).await;
+        loop {
+            let trace = owner.trace();
+            assert!(
+                !owner.bridge.exited().unwrap(),
+                "idle bridge exited: {:?}",
+                trace.records
+            );
+            assert_eq!(trace.records.iter().filter(|r| r["event"] == "run.started").count(), 0);
+            if trace.records.iter().any(|r| r["event"] == "wyoming.probe_ok") {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        owner.run(1).await;
+        owner.close(1).await;
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -315,7 +358,7 @@ async fn failure_satellite(listener: Arc<TcpListener>, wake: tokio::sync::onesho
     assert_eq!(read(&mut stream).await.0["type"], "run-satellite");
     assert_eq!(read(&mut stream).await.0["type"], "describe");
     send(&mut stream, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await;
-    wake.await.unwrap();
+    assert!(wait_for_wake(&mut stream, async { wake.await.ok() }).await);
     send(
         &mut stream,
         "run-pipeline",
@@ -393,6 +436,51 @@ pub(super) async fn observed_listener() -> (Arc<TcpListener>, std::sync::Weak<Tc
     let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
     let lifetime = Arc::downgrade(&listener);
     (listener, lifetime)
+}
+
+// A synthetic satellite must keep answering the real bridge's idle probes
+// while the test controls wake admission. Peek is cancellation safe: a wake
+// cannot discard a partially read frame that playback still needs to consume.
+pub(super) async fn wait_for_wake(
+    stream: &mut tokio::net::TcpStream,
+    requested: impl std::future::Future<Output = Option<()>>,
+) -> bool {
+    use super::tests::{read, send};
+    tokio::pin!(requested);
+    loop {
+        let mut byte = [0];
+        tokio::select! {
+            requested = &mut requested => return requested.is_some(),
+            ready = stream.peek(&mut byte) => if ready.unwrap() == 0 { return false; },
+        }
+        let (row, payload) = read(stream).await;
+        assert_eq!(payload, [] as [u8; 0]);
+        match row["type"].as_str().unwrap() {
+            "describe" => send(stream, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await,
+            "error" => assert_eq!(row["data"]["code"], "echo-kill-switch"),
+            other => assert_eq!(other, "expected idle probe or kill refusal"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn t3_lifecycle_satellite_answers_probes_before_the_test_releases_wake() {
+    use super::tests::{read, send};
+    let (listener, lifetime) = observed_listener().await;
+    let address = listener.local_addr().unwrap();
+    let (wake, requested) = mpsc::channel(1);
+    let task = tokio::spawn(satellite(listener, requested, false));
+    let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+    send(&mut client, "run-satellite", json!({}), vec![]).await;
+    for _ in 0..3 {
+        send(&mut client, "describe", json!({}), vec![]).await;
+        let row = tokio::time::timeout(DEADLINE, read(&mut client)).await.unwrap().0;
+        assert_eq!(row["type"], "info");
+        assert_eq!(row["data"]["satellite"]["name"], "synthetic");
+    }
+    drop(wake);
+    assert_eq!(task.await.unwrap(), 0);
+    assert!(lifetime.upgrade().is_none());
 }
 
 fn remove_root(root: config::Root) {

@@ -3,6 +3,65 @@ use super::*;
 use echo_bridge::{Error, bridge_voice::Configured};
 use echo_link::fake::{Command, FakeConnector, Observer};
 
+#[derive(Clone, Default)]
+struct RefusedDevice {
+    entered: std::sync::Arc<tokio::sync::Notify>,
+    release: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl echo_link::LinkConnector for RefusedDevice {
+    type Link = echo_link::fake::FakeLink;
+
+    async fn connect(&self) -> Result<Self::Link, echo_link::Error> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Err(echo_link::Error::Transport)
+    }
+}
+
+#[tokio::test]
+#[ignore = "T3 controlled process and paired loopback screen"]
+async fn codex_configured_uncancelled_error_delivers_terminal_state_before_release() {
+    let fixture = Fixture::new("chatgpt");
+    let config = config(&fixture);
+    let path = fixture.directory.path().join("trace");
+    let connector = RefusedDevice::default();
+    let prepared = Configured::new(config, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
+    let work = prepared.execute(
+        connector.clone(),
+        async || -> Result<echo_media::Peer, Error> { unreachable!() },
+        vec![],
+        std::future::pending(),
+    );
+    let inspect = async {
+        let _control = fixture.control().await;
+        connector.entered.notified().await;
+        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        connector.release.notify_one();
+        assert_eq!(
+            bridge_wire_screen::state(&mut screen).await,
+            json!({
+                "state":"error", "message":"Conversation unavailable. Try another wake.", "relink":false
+            })
+        );
+        while let Some(line) = screen.next_line().await.unwrap() {
+            assert!(!line.starts_with("data:"));
+        }
+    };
+    let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        tokio::join!(work, inspect)
+    }))
+    .await
+    .unwrap();
+    assert_eq!(result, Err(Error::Wyoming));
+    super::host::released(&fixture).await;
+    presentation_released(&path, "chatgpt", true);
+    assert_eq!(
+        trace(&path).iter().filter(|row| row["event"] == "bridge.error").count(),
+        1
+    );
+}
+
 fn config(fixture: &Fixture) -> echo_config::BridgeConfig {
     let mut config = echo_config::BridgeConfig::load(fixture.directory.path().join("bridge.toml")).unwrap();
     config.audit.log_dir = fixture.directory.path().join("audit");
@@ -155,7 +214,8 @@ async fn codex_configured_service_health_bind_failure_releases_only_acquired_scr
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["event"], "screen.released");
     assert_eq!(rows[0]["provider_auth_mode"], "chatgpt");
-    assert_eq!(rows[0].as_object().unwrap().len(), 3);
+    assert_eq!(rows[0].as_object().unwrap().len(), 4);
+    assert_eq!(rows[0]["dropped_clients"], 0);
     assert!(rows[0]["elapsed_ms"].is_u64());
     // The refused health listener belongs to this test and remains live.
     let client = tokio::net::TcpStream::connect(occupied.local_addr().unwrap())

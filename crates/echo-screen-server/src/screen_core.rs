@@ -17,6 +17,7 @@ struct Writer {
 pub(crate) struct Core {
     digest: Secret<[u8; 32]>,
     revoked: bool,
+    draining: bool,
     seq: u64,
     current: Option<String>,
     clients: Vec<Writer>,
@@ -27,6 +28,7 @@ impl Core {
         Self {
             digest: Secret::new(Sha256::digest(token.expose().as_bytes()).into()),
             revoked: false,
+            draining: false,
             seq: 0,
             current: None,
             clients: Vec::new(),
@@ -47,11 +49,8 @@ impl Core {
         self.close_clients();
     }
 
-    pub fn finish(&mut self) {
-        self.revoked = true;
-        // Closing senders lets existing streams consume their finite FIFO
-        // prefix and reach EOF. Revocation/Drop still cancel immediately.
-        self.clients.clear();
+    pub fn drain(&mut self) {
+        self.draining = true;
     }
 
     fn close_clients(&mut self) {
@@ -61,6 +60,9 @@ impl Core {
     }
 
     pub fn attach(&mut self, cancel: watch::Sender<bool>) -> Option<Client> {
+        if self.draining {
+            return None;
+        }
         self.clients.retain(|client| !client.frames.is_closed());
         if self.clients.len() == 32 {
             return None;
@@ -83,6 +85,9 @@ impl Core {
             return false;
         };
         self.current = Some(wire.clone());
+        if self.draining {
+            return true;
+        }
         self.clients.retain(|client| {
             if client.frames.try_send(wire.clone()).is_ok() {
                 true
@@ -140,7 +145,7 @@ mod tests {
     use std::future::Future;
 
     #[tokio::test]
-    async fn finish_preserves_queued_failure_while_revocation_cancels() {
+    async fn drain_preserves_queued_failure_while_revocation_cancels() {
         for graceful in [true, false] {
             let mut core = Core::new(&Secret::new("synthetic-screen-pair".into()));
             let (cancel, _) = watch::channel(false);
@@ -156,11 +161,15 @@ mod tests {
                 assert!(core.publish(state.clone()));
             }
             if graceful {
-                core.finish();
+                core.drain();
+                client.frames.close();
             } else {
                 core.revoke();
             }
-            assert!(!core.authorized("synthetic-screen-pair"));
+            assert_eq!(core.authorized("synthetic-screen-pair"), graceful);
+            if graceful {
+                assert!(core.attach(watch::channel(false).0).is_none());
+            }
             assert_eq!(*client.cancelled.borrow(), !graceful);
             for (index, state) in states.into_iter().enumerate() {
                 let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap()).unwrap();

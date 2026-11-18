@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::fs;
-
 pub const GATES: &[(&str, &str)] = &[
     ("format", "fmt-check"),
     ("lint-rust", "lint-rust"),
@@ -19,14 +18,19 @@ pub const GATES: &[(&str, &str)] = &[
     ("build-host", "build-host"),
     ("build-echo", "build-echo"),
 ];
-
 const PREFIX: &str = "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\npermissions:\n  contents: read\ndefaults:\n  run:\n    shell: sh\njobs:\n";
 
 // This intentionally accepts only the reviewed, explicit job grammar. YAML
 // aliases, matrices, conditional gates and arbitrary shell are not equivalent.
 fn job(name: &str, target: &str) -> String {
+    let timeout = match name {
+        "test-unit" => 15,
+        "test-sim" => 25,
+        "coverage" | "lint-self-tests" => 20,
+        _ => 10,
+    };
     let mut block = format!(
-        "  {name}:\n    name: {name}\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n      - uses: ./.github/actions/setup\n        with:\n          target: {target}\n      - name: {name}\n        run: make {target}\n"
+        "  {name}:\n    name: {name}\n    runs-on: ubuntu-latest\n    timeout-minutes: {timeout}\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n      - uses: ./.github/actions/setup\n        with:\n          target: {target}\n      - name: {name}\n        run: make {target}\n"
     );
     if matches!(name, "format" | "lint-scripts-web" | "test-unit") {
         let step = format!("      - name: {name}\n");
@@ -69,7 +73,6 @@ fn job(name: &str, target: &str) -> String {
     }
     block
 }
-
 fn make_targets(makefile: &str) -> Result<Vec<&str>, String> {
     let declarations: Vec<_> = makefile.lines().filter_map(|line| line.strip_prefix("ci:")).collect();
     if declarations.len() != 1 {
@@ -79,7 +82,6 @@ fn make_targets(makefile: &str) -> Result<Vec<&str>, String> {
     unique(&targets, "Makefile")?;
     Ok(targets)
 }
-
 fn unique(names: &[&str], source: &str) -> Result<(), String> {
     let mut seen = BTreeSet::new();
     for name in names {
@@ -89,7 +91,6 @@ fn unique(names: &[&str], source: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn ordered(actual: &[&str], expected: &[&str], source: &str) -> Result<(), String> {
     unique(actual, source)?;
     for name in expected {
@@ -107,7 +108,6 @@ fn ordered(actual: &[&str], expected: &[&str], source: &str) -> Result<(), Strin
     }
     Ok(())
 }
-
 fn workflow_jobs(workflow: &str) -> Result<Vec<&str>, String> {
     let body = workflow
         .strip_prefix(PREFIX)
