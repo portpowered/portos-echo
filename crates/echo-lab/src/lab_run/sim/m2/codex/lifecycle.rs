@@ -23,6 +23,7 @@ use tokio::{net::TcpListener, sync::mpsc};
 mod overlap;
 mod peer;
 mod termination;
+mod validation;
 use peer::satellite;
 
 pub(super) struct Owner {
@@ -414,7 +415,7 @@ pub(super) async fn wait_for_wake(
     stream: &mut tokio::net::TcpStream,
     requested: impl std::future::Future<Output = Option<()>>,
 ) -> bool {
-    peer::wait_for_wake(stream, requested, &mut None).await
+    peer::wait_for_wake(stream, requested, &mut None, false).await
 }
 
 #[tokio::test]

@@ -34,7 +34,10 @@ async fn kill_schedule(collect_first: bool) {
     owner.provider.quiesce().await.unwrap();
     owner.wake.send(()).await.unwrap();
     assert_eq!(owner.screen.next().await.unwrap()["state"]["state"], "listening");
+    owner.provider.next_capture().await;
+    while observed.recv().await.unwrap() != Phase::ReplyStopped {}
     kill(&mut owner).await;
+    resume.send(()).await.unwrap();
     while observed.recv().await.unwrap() != Phase::PlaybackEnded {}
     collect(owner, observed, resume, collect_first).await;
 }
@@ -46,11 +49,19 @@ async fn collect(
     collect_first: bool,
 ) {
     let mut wake = Some(owner.wake);
+    let mut idle_ends = 0;
+    let mut refusals = 0;
     if !collect_first {
         resume.send(()).await.unwrap();
         loop {
-            if observed.recv().await.unwrap() == Phase::Control("error".into()) {
-                break;
+            match observed.recv().await.unwrap() {
+                Phase::Control(kind) if kind == "hassmic-end" => idle_ends += 1,
+                Phase::Control(kind) if kind == "error" => {
+                    refusals += 1;
+                    break;
+                }
+                Phase::Control(kind) => assert_eq!(kind, "describe"),
+                phase => panic!("unexpected peer phase: {phase:?}"),
             }
         }
     }
@@ -62,8 +73,6 @@ async fn collect(
         drop(wake.take());
         resume.send(()).await.unwrap();
     }
-    let mut idle_ends = 0;
-    let mut refusals = usize::from(!collect_first);
     loop {
         match observed.recv().await.unwrap() {
             Phase::Control(kind) if kind == "hassmic-end" => idle_ends += 1,
