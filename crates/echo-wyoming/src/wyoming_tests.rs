@@ -12,7 +12,11 @@ async fn first_reconnected_wake_completes_with_lifecycle_consumer_held() {
     let (io, mut old) = duplex(4096);
     let (connections, incoming) = mpsc::channel(1);
     let incoming = Arc::new(Mutex::new(incoming));
-    let mut client = WyomingClient::reconnecting(io, ClientOptions::default(), move || {
+    let options = ClientOptions {
+        mic_capacity: 32,
+        ..ClientOptions::default()
+    };
+    let mut client = WyomingClient::reconnecting(io, options, move || {
         let incoming = incoming.clone();
         async move { incoming.lock().await.recv().await.unwrap() }
     });
