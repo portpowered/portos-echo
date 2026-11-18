@@ -97,6 +97,35 @@ fn earcon_observer_rejects_corruption_mixing_and_capture_ending_stop() {
 }
 
 #[test]
+fn earcon_flush_settles_chime_without_counting_it_as_reply() {
+    let mut state = Timing {
+        run: true,
+        ..Timing::default()
+    };
+    state.playback(&chime_frame(0), Duration::ZERO).unwrap();
+    let mut corrupt = chime_frame(1);
+    corrupt.payload[200] ^= 127;
+    assert_eq!(
+        state.clone().playback(&corrupt, Duration::ZERO),
+        Err("wire: mixed or corrupted earcon PCM".into())
+    );
+    state
+        .playback(&event("hassmic-flush", 0), Duration::from_millis(20))
+        .unwrap();
+    state
+        .playback(&event("hassmic-flush", 0), Duration::from_millis(20))
+        .unwrap();
+    let mut reply = reply(960);
+    reply.payload = 12000_i16.to_le_bytes().repeat(480);
+    state.playback(&reply, Duration::from_millis(40)).unwrap();
+    assert_eq!(
+        (state.earcon.bytes, state.played, state.audible_samples),
+        (960, 960, 480)
+    );
+    assert_eq!(state.first_pcm, Some(Duration::from_millis(40)));
+}
+
+#[test]
 fn finite_waveform_endpoint_ignores_silence_and_matches_gain_across_frames() {
     let fixture = super::super::world::fixture();
     let mut endpoint = Endpoint::Fixture {
@@ -321,12 +350,7 @@ async fn t3_relay_observes_chime_before_reply_and_preserves_cut_bytes() {
     bridge.read_exact(&mut buffer).await.unwrap();
     assert_eq!(buffer, wake);
     tokio::time::advance(Duration::from_millis(20)).await;
-    for value in [
-        chime_frame(0),
-        chime_frame(1),
-        event("hassmic-continue", 0),
-        event("audio-stop", 0),
-    ] {
+    for value in [chime_frame(0), chime_frame(1), event("hassmic-flush", 0)] {
         let bytes = encode(&value);
         bridge.write_all(&bytes).await.unwrap();
         buffer.resize(bytes.len(), 0);

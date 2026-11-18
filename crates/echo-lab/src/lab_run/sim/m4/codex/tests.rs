@@ -221,6 +221,8 @@ async fn playback(socket: &mut TcpStream, phases: &phase::Phase) -> usize {
             }
             "audio-stop" => {
                 send(socket, "played", json!({}), vec![]).await;
+                let expected = json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0});
+                assert_eq!(read(socket).await, (expected, vec![]));
                 break;
             }
             other => assert_eq!(other, "expected reply audio"),

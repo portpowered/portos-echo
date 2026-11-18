@@ -209,8 +209,8 @@ async fn replay(
 fn verify_tail(state: &Ledger, frames: u64) -> Result<(), String> {
     // The continuous resampler retains its partial frame across the cut:
     // 44 initial frames + 5 interrupting prefix + 5 post-Played tail.
-    if frames != 54 || state.tail_bytes != 3200 || state.runs != 1 || state.continues != 1 {
-        return Err("M3 continuation: expected 54 Live frames, 3200 post-Played bytes and one run/continue".into());
+    if frames != 54 || state.tail_bytes != 3200 || state.runs != 1 || state.flushes != 1 {
+        return Err("M3 continuation: expected 54 Live frames, 3200 post-Played bytes and one run/flush".into());
     }
     Ok(())
 }
@@ -305,7 +305,7 @@ mod tests {
         let state = Ledger {
             tail_bytes: 3200,
             runs: 1,
-            continues: 1,
+            flushes: 1,
             ..Ledger::default()
         };
         assert!(verify_tail(&state, 54).is_ok());

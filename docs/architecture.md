@@ -509,7 +509,16 @@ headers, optional separate JSON data and length-delimited binary payloads, such 
 The bridge sends `run-satellite` to register for wakes and `describe` to request `info`. hassmic sends
 `run-pipeline` after a confirmed wake, then microphone `audio-chunk` events. Reply playback travels the
 other way as `audio-start`, `audio-chunk`, `audio-stop`; hassmic returns `played`. Our fork adds
-`hassmic-continue` to cut a reply while retaining capture, and `hassmic-mute` to report effective mute.
+`hassmic-flush` under `-D` to discard queued and in-player reply PCM without drain, then acknowledge
+with one `played` while capture continues. `hassmic-end` explicitly ends capture and aborts an active
+reply; duplicate controls are idle no-ops. Transcript, voice-stopped and natural audio-stop keep the
+device listening. The bridge sends end after the normal reply's real played, preserving its existing
+one-reply run lifetime. Error, pause, cancellation and close also end while transport is owned.
+`hassmic-continue` remains a compatibility hint; `hassmic-mute` reports effective mute.
+Optional `run-satellite.data.hassmic_failsafe_seconds` configures a connection-local safety watchdog
+(integer 1..2147483647, default 30 seconds, reset on reconnect). Valid client progress refreshes it;
+microphone traffic and ping/describe do not. Invalid values preserve the prior valid setting.
+The bridge omits this field. Non-duplex and ESPHome behavior retain their existing lifecycle.
 There is no microphone `audio-start` in this exchange; each microphone chunk carries its format.
 
 #### Why — Wyoming

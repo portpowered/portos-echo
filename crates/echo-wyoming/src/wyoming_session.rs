@@ -150,9 +150,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 .map(|play| play.frames.clone());
             let result = tokio::select! {
                 biased;
-                () = cancelled(&mut self.play) => self.cancel_playback(),
+                () = cancelled(&mut self.play) => self.cancel_playback().await,
                 command = commands.recv() => self.command(command).await,
-                frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))),
+                frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))).await,
                 frame = async { match frames { Some(queue) => queue.recv().await, None => std::future::pending().await } } => match frame {
                     Ok(frame) => self.audio(frame).await,
                     Err(error) => Err(error),
@@ -164,7 +164,8 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         }
     }
 
-    fn cancel_playback(&mut self) -> Result<(), Error> {
+    async fn cancel_playback(&mut self) -> Result<(), Error> {
+        self.end_device().await?;
         // A missing Played can expire the run's control deadline after the
         // complete stop was written. Retire that failed run without claiming
         // playback success or invalidating the connection for its error frame.
@@ -179,7 +180,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
-    fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
+    async fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
         let frame = frame?;
         if self.paused
             && matches!(
@@ -191,6 +192,12 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             return Ok(());
         }
         let capture_continues = self.play.as_ref().is_some_and(|play| play.cut);
+        if frame.header.r#type == "played" && self.play.as_ref().is_some_and(|play| play.stopped && !play.cut) {
+            // Complete the device write before publishing terminal Played or
+            // resolving playback to the caller. A failed write is not success.
+            frame.typed().map_err(|_| Error::Protocol)?;
+            self.end_device().await?;
+        }
         match self.router.route_with_capture(frame, capture_continues)? {
             event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
@@ -251,26 +258,43 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 let _ = reply.send(Ok(stats));
             }
             Some(Command::Pause(reply)) => {
-                if !self.paused {
-                    self.send(WyomingEvent::PauseSatellite(Value::Null), vec![]).await?;
-                    self.paused = true;
-                    self.registered = false;
-                    self.router.end(Ok(()));
-                }
+                self.pause_capture().await?;
                 let _ = reply.send(Ok(()));
             }
             Some(Command::Error(code, text, reply)) => {
                 self.fail_run(code, text, reply).await?;
             }
             Some(Command::Close(reply)) => {
+                self.end_device_if_active().await?;
                 let _ = reply.send(Ok(()));
                 self.closing = true;
                 return Err(Error::Closed);
             }
             None => {
+                self.end_device_if_active().await?;
                 self.closing = true;
                 return Err(Error::Closed);
             }
+        }
+        Ok(())
+    }
+
+    async fn pause_capture(&mut self) -> Result<(), Error> {
+        if !self.paused {
+            self.retire_playback().await?;
+            self.end_device().await?;
+            self.send(WyomingEvent::PauseSatellite(Value::Null), vec![]).await?;
+            self.paused = true;
+            self.registered = false;
+            self.router.end(Ok(()));
+        }
+        Ok(())
+    }
+
+    async fn retire_playback(&mut self) -> Result<(), Error> {
+        if let Some(mut play) = self.play.take() {
+            play.quiesce().await?;
+            play.finish(Err(Error::Closed));
         }
         Ok(())
     }
@@ -282,15 +306,32 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             if !play.stopped {
                 play.cut = true;
                 play.stopped = true;
-                self.send(WyomingEvent::Other("hassmic-continue".into(), Value::Null), vec![])
+                self.send(WyomingEvent::Other("hassmic-flush".into(), Value::Null), vec![])
                     .await?;
-                self.send(WyomingEvent::AudioStop(Value::Null), vec![]).await?;
             }
         }
         Ok(stats)
     }
 
+    async fn end_device(&mut self) -> Result<(), Error> {
+        self.send(WyomingEvent::Other("hassmic-end".into(), Value::Null), vec![])
+            .await
+    }
+
+    async fn end_device_if_active(&mut self) -> Result<(), Error> {
+        if self.router.current.is_some() || self.play.is_some() {
+            self.end_device().await?;
+        }
+        Ok(())
+    }
+
     async fn fail_run(&mut self, code: String, text: String, reply: Reply<()>) -> Result<(), Error> {
+        // A cut already quiesced its producer. Keep its outstanding Played
+        // receipt alive when an unserved run is refused during shutdown.
+        if !self.play.as_ref().is_some_and(|play| play.cut) {
+            self.retire_playback().await?;
+        }
+        self.end_device().await?;
         self.send(
             WyomingEvent::Error(serde_json::json!({"code":code,"text":text})),
             vec![],

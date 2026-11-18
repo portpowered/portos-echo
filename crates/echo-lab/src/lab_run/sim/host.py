@@ -11,7 +11,8 @@ import tempfile
 import threading
 import time
 
-finite_input = runpy.run_path(str(Path(__file__).with_name("m3") / "host_input.py"))["finite_input"]
+_m3 = runpy.run_path(str(Path(__file__).with_name("m3") / "host_input.py"))
+finite_input, playback_observation = _m3["finite_input"], _m3["playback_observation"]
 playback_counts = runpy.run_path(str(Path(__file__).with_name("m2") / "host_playback.py"))["playback_counts"]
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -58,7 +59,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from wsl_distro import resolve_wsl_distro
 from wsl_host import LauncherError, LauncherChild, HostCancelled
 
-# Both T3 launchers share the native transport; the Linux Host stays direct.
 from wsl_relay import observations, guest, diagnostic_tail
 
 def launcher_input(events):
@@ -392,11 +392,9 @@ class Host:
         elif action == "mute":
             self.mute()
         elif action == "playback" and self.finite_mode:
-            with (self.folder / "play.raw").open("rb") as recording:
-                data = recording.read(LIMIT + 1)
-            if len(data) > LIMIT or len(data) % 2:
-                raise ValueError("invalid playback observation")
-            emit(playback_counts(data, value.get("wake_earcon", False)))
+            emit(playback_observation(self, LIMIT, playback_counts,
+                                      wait=value.get("wait_flush", False),
+                                      earcon=value.get("wake_earcon", False)))
             return
         elif action in ("finite", "inject", "muted"):
             finite_input(self, value, signal.SIGUSR1)
@@ -456,9 +454,8 @@ class Host:
                 raise RuntimeError("host thread cleanup failed")
         self.closed = True
 def host_input(host, events):
-    # Read EOF independently of log/FIFO waits. Only the main owner closes the
-    # host: interrupt its wait, then let its finally stop and collect the group
-    # before the Windows client's retained four-second deadline expires.
+    # Read EOF independently; the main owner interrupts waits and collects the
+    # host group before the Windows client's retained four-second deadline.
     clean = False
     try:
         clean = launcher_input(events)

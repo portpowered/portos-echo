@@ -1,15 +1,27 @@
 //! T2 exact synthetic task/Live messages; uncaptured Wyoming arms are synthetic.
-use echo_contracts::{live::*, wyoming::*};
+use echo_contracts::{ids::DelegationId, live::*, wyoming::*};
 use serde_json::{Value, json};
 
 #[test]
 fn provisional_live_tags_targets_and_extras() {
-    for target in ["client", "responses"] {
+    for (target, expected_target) in [
+        ("client", DelegationTarget::Client),
+        ("responses", DelegationTarget::Responses),
+    ] {
         let wire = json!({"type":"session.delegation.created", "delegation": {
             "id":"delegation-1", "target":target,"opaque":[1,2]}, "outer":true});
         let event: LiveEvent = serde_json::from_value(wire.clone()).unwrap();
-        assert!(matches!(&event, LiveEvent::DelegationCreated { delegation, extra }
-            if delegation.id.to_string() == "delegation-1" && extra["outer"] == true));
+        assert_eq!(
+            event,
+            LiveEvent::DelegationCreated {
+                delegation: Delegation {
+                    id: DelegationId::new("delegation-1").unwrap(),
+                    target: expected_target,
+                    extra: [("opaque".into(), json!([1, 2]))].into(),
+                },
+                extra: [("outer".into(), json!(true))].into(),
+            }
+        );
         assert_eq!(serde_json::to_value(&event).unwrap(), wire);
     }
     for wire in [

@@ -16,6 +16,10 @@ impl Earcon {
     pub fn observe(&mut self, event: &Event, now: Duration) -> Result<bool, String> {
         match event.header.r#type.as_str() {
             "hassmic-continue" if self.active => self.continued = true,
+            "hassmic-flush" if self.active => {
+                self.active = false;
+                self.settled = true;
+            }
             "audio-stop" if self.active => {
                 if !self.continued {
                     return Err("wire: earcon ended capture instead of cutting".into());

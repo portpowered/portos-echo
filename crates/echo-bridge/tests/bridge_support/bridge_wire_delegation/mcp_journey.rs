@@ -222,37 +222,38 @@ pub(super) async fn answer(socket: TcpStream, mut next_wake: tokio::sync::mpsc::
         };
         let header: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(header["payload_length"].as_u64().unwrap_or(0), 0);
-        match header["type"].as_str().unwrap() {
-            "describe" => bridge_short::send(&mut writer, "info", json!({"satellite":{"name":"synthetic"}})).await,
-            "error" => {
-                assert_eq!(
-                    header["data"],
-                    json!({"code":"echo-unavailable","text":"Live unavailable."})
-                );
-                errors += 1;
-            }
-            "hassmic-continue" => {
-                continued_stop(&mut lines, &mut writer).await;
-            }
-            "audio-stop" => {
-                bridge_short::send(&mut writer, "played", json!({})).await;
-                bridge_short::send(&mut writer, "audio-stop", json!({})).await;
-            }
-            _ => assert_eq!(header["type"], "audio-start"),
-        }
+        respond(header, &mut writer, &mut errors).await;
     }
 }
 
-async fn continued_stop(
-    lines: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,
-    writer: &mut tokio::net::tcp::OwnedWriteHalf,
-) {
-    let stop = lines.next_line().await.unwrap().unwrap();
-    let stop: Value = serde_json::from_str(&stop).unwrap();
-    assert_eq!(stop["type"], "audio-stop");
-    assert_eq!(stop["payload_length"].as_u64().unwrap_or(0), 0);
-    bridge_short::send(writer, "played", json!({})).await;
-    bridge_short::send(writer, "audio-stop", json!({})).await;
+async fn respond(header: Value, writer: &mut tokio::net::tcp::OwnedWriteHalf, errors: &mut usize) {
+    match header["type"].as_str().unwrap() {
+        "describe" => bridge_short::send(writer, "info", json!({"satellite":{"name":"synthetic"}})).await,
+        "error" => {
+            assert_eq!(
+                header["data"],
+                json!({"code":"echo-unavailable","text":"Live unavailable."})
+            );
+            *errors += 1;
+        }
+        "hassmic-end" => assert_eq!(
+            header,
+            json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0})
+        ),
+        "hassmic-flush" => {
+            assert_eq!(
+                header,
+                json!({"type":"hassmic-flush","data":null,"data_length":0,"payload_length":0})
+            );
+            bridge_short::send(writer, "played", json!({})).await;
+            bridge_short::send(writer, "audio-stop", json!({})).await;
+        }
+        "audio-stop" => {
+            bridge_short::send(writer, "played", json!({})).await;
+            bridge_short::send(writer, "audio-stop", json!({})).await;
+        }
+        _ => assert_eq!(header["type"], "audio-start"),
+    }
 }
 
 pub(super) fn fresh_probe(bytes: &[u8], cursor: usize) -> bool {

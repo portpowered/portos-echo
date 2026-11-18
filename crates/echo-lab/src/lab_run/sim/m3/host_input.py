@@ -30,3 +30,39 @@ def finite_input(host, value, wake_signal):
                 lambda: host.fed >= target or host.error or host.cancelled.is_set(), 20)
             if not ready or host.error or host.cancelled.is_set():
                 raise RuntimeError("muted native capture consumption failed")
+
+
+def flush_observation(host, wait=False):
+    """Native worker receipt/close and independent discarded PCM, never relay estimates."""
+    import re
+    with host.condition:
+        def complete():
+            return re.findall(rb"duplex flush:[^\n]*\n", host.log)
+        if wait:
+            ready = host.condition.wait_for(
+                lambda: complete() or host.error or host.cancelled.is_set(), 5)
+            if host.cancelled.is_set():
+                from wsl_host import HostCancelled
+                raise HostCancelled("host command cancelled")
+            if not ready or host.error:
+                raise RuntimeError("native flush observation readiness failed")
+        lines = complete()
+        if not lines and not wait:
+            return None
+        records = re.findall(rb"duplex flush: receipt_ms=(\d+) closed_ms=(\d+) before=(\d+) written=(\d+) discarded=(\d+)\n", host.log)
+        if len(lines) != 1 or len(records) != 1 or host.log.count(b"duplex flush:") != 1:
+            raise ValueError("expected one native flush observation")
+    keys = ("receipt_ms", "closed_ms", "before", "written", "discarded")
+    return dict(zip(keys, map(int, records[0])))
+
+
+def playback_observation(host, limit, counts, wait=False, earcon=False):
+    """Observe native flush readiness before taking the bounded PCM snapshot."""
+    flush = flush_observation(host, wait=wait)
+    with (host.folder / "play.raw").open("rb") as recording:
+        data = recording.read(limit + 1)
+    if len(data) > limit or len(data) % 2:
+        raise ValueError("invalid playback observation")
+    result = counts(data, earcon)
+    result["flush"] = flush
+    return result

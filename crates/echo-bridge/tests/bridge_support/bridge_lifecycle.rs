@@ -1,6 +1,20 @@
 //! T3: separate wakes through the delivered binary and pinned host share one call.
 use super::*;
 
+pub(super) async fn played(stream: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)) {
+    bridge_short::send(stream, "played", json!({})).await;
+    control(stream, "hassmic-end").await;
+}
+
+pub(super) async fn control(stream: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin), kind: &str) {
+    let (header, payload) = bridge_short::read_reply(stream).await;
+    assert_eq!(
+        header,
+        json!({"type":kind,"data":null,"data_length":0,"payload_length":0})
+    );
+    assert_eq!(payload, [] as [u8; 0]);
+}
+
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn bridge_lifecycle_idle_provider_failure_next_wake_creates_fresh_call() {
@@ -12,7 +26,7 @@ async fn bridge_lifecycle_idle_provider_failure_next_wake_creates_fresh_call() {
     for run in 1..=2 {
         assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-start");
         bridge_short::receive_short(&mut satellite, &live, &path, 3).await;
-        bridge_short::send(&mut satellite, "played", json!({})).await;
+        played(&mut satellite).await;
         assert_eq!(
             serde_json::from_str::<Value>(&process.line().await).unwrap(),
             json!({"event":"bridge.run_completed","run_id":format!("run-{run}")})
@@ -302,7 +316,7 @@ async fn idle_turn(
         bridge_short::send(satellite, "audio-stop", json!({})).await;
         assert_eq!(bridge_short::read_reply(satellite).await.0["type"], "audio-start");
         bridge_short::receive_short(satellite, live, path, 3).await;
-        bridge_short::send(satellite, "played", json!({})).await;
+        played(satellite).await;
         assert_eq!(
             serde_json::from_str::<Value>(&process.line().await).unwrap(),
             json!({"event":"bridge.run_completed","run_id":id})

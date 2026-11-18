@@ -81,12 +81,14 @@ async fn t3_fake_cancelled_play_closes_generation() {
     let server = async {
         assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "audio-start");
         wyoming_peer::send(&mut peer, "ping", json!(null), vec![]).await;
+        assert_eq!(wyoming_peer::receive(&mut peer).await.header.r#type, "hassmic-end");
         assert_eq!(tokio::io::AsyncReadExt::read(&mut peer, &mut [0]).await.unwrap(), 0);
         let (mut next, _) = listener.accept().await.unwrap();
         wyoming_peer::send(&mut next, "played", json!(null), vec![]).await;
         assert_eq!(wyoming_peer::receive(&mut next).await.header.r#type, "audio-start");
         assert_eq!(wyoming_peer::receive(&mut next).await.header.r#type, "audio-stop");
         wyoming_peer::send(&mut next, "played", json!(null), vec![]).await;
+        assert_eq!(wyoming_peer::receive(&mut next).await.header.r#type, "hassmic-end");
         assert_eq!(tokio::io::AsyncReadExt::read(&mut next, &mut [0]).await.unwrap(), 0);
     };
     tokio::join!(caller, server);

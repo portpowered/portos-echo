@@ -156,6 +156,13 @@ async fn settle(
     assert_eq!(count(root, "reply.played"), run - 1);
     assert_eq!(count(root, "bridge.run_completed"), run - 1);
     send(satellite, "played", json!({}), vec![]).await;
+    // A normal Played ends this device run before the next wake reuses the call.
+    let (end, payload) = read_wire(satellite).await;
+    assert_eq!(
+        end,
+        json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0})
+    );
+    assert_eq!(payload, [] as [u8; 0]);
     let mut pending = false;
     let mut completed = false;
     // Played can precede the delayed mouth boundary. Keep the same clock moving,

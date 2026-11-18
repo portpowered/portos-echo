@@ -85,6 +85,7 @@ fn assert_refusal(result: &Value, cause: &str, wake: usize) {
 }
 
 pub(super) async fn error(satellite: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin), relink: bool) {
+    bridge_lifecycle::control(satellite, "hassmic-end").await;
     let (header, payload) = bridge_short::read_reply(satellite).await;
     assert_eq!(header["type"], "error");
     let (code, text) = if relink {

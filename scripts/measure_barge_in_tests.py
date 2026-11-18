@@ -21,12 +21,11 @@ class LogicTests(unittest.TestCase):
                 with mock.patch.object(M.C, "read_event", return_value=(mic, bytes(1600))), mock.patch.object(time, "monotonic", side_effect=ticks), mock.patch.object(select, "select", return_value=([session.sock], [], [])):
                     trial.pump(1)
             session.send("pause-satellite")
-            events = ([(mic, bytes(1600))] if queued else []) + [pong]
+            events = ([(mic, bytes(1600))] if queued else []) + [({"type": "played", "data": {}}, b""), pong]
             with mock.patch.object(M.C, "read_event", side_effect=events):
                 session.acknowledge_pause()
-            session.send("audio-stop")
-            with mock.patch.object(M.C, "read_event", return_value=({"type": "played", "data": {}}, b"")):
-                session.until("played")
+            with mock.patch.object(M.C, "read_event", return_value=pong):
+                session.end_run()
             windows.append(M.rows_bytes(session.rows))
         self.assertEqual(*windows)
         fixture = [M.C.json.loads(line) for line in (M.OUTPUT / "barge-in-pause-satellite.jsonl").read_bytes().splitlines()]
@@ -49,8 +48,25 @@ class LogicTests(unittest.TestCase):
         session.stop_pending = True
         with mock.patch.object(M.C, "read_event", return_value=({"type": "played", "data": {}}, b"")):
             session.until("played")
-            with self.assertRaisesRegex(AssertionError, "audio-stop before played"):
+            with self.assertRaisesRegex(AssertionError, "before played"):
                 session.until("played")
+    def test_end_run_requires_exactly_one_played_only_for_active_reply(self):
+        played = ({"type": "played", "data": {}}, b"")
+        pong = ({"type": "pong", "data": {}}, b"")
+        for active in (False, True):
+            session = M.Session("unused")
+            session.sock, session.remaining = mock.Mock(), lambda: 1
+            session.mic = "active"
+            with mock.patch.object(M.C, "read_event", side_effect=([played] if active else []) + [pong]):
+                session.end_run(reply_active=active)
+            self.assertEqual((session.mic, session.stop_pending), ("idle", False))
+            self.assertEqual([row["header"]["type"] for row in session.rows],
+                             ["hassmic-end"] + (["played"] if active else []))
+            session.mic = "active"
+            with mock.patch.object(M.C, "read_event", side_effect=[played, played] if active else [played]), self.assertRaisesRegex(AssertionError, "expected pong|before played"):
+                session.end_run(reply_active=active)
+        with mock.patch.object(M.C, "read_event", return_value=pong), self.assertRaisesRegex(AssertionError, "expected played, actual=pong"):
+            session.end_run(reply_active=True)
     def test_lead_in_is_exact_and_precedes_regular_pcm(self):
         session = M.Session("unused")
         session.sock, session.remaining = mock.Mock(), lambda: 1
@@ -70,19 +86,19 @@ class LogicTests(unittest.TestCase):
     def test_exact_playback_oracle(self):
         for strategy in M.STRATEGIES:
             drained = strategy in ("audio-stop", "none")
-            count, played = (144000, 1) if drained else (143360, 0)
-            playback = mock.Mock(data=(M.PAYLOAD * 30)[:count], end=3 if drained else None)
+            count, played = (144000, 1) if drained else (48000, 1 if strategy == "pause-satellite" else 0)
+            playback = mock.Mock(data=(M.PAYLOAD * 30)[:count], end=3)
             trial = mock.Mock(played=played, pipelines=0)
-            result = {"bytes": count}
+            result = {"bytes": count, "cut_bytes": 45056}
             M.assert_result(strategy, playback, trial, result)
             for field, value, diagnostic in (("played", 2, "bytes/played/EOF"), ("pipelines", 1, "pipelines=0")):
                 with mock.patch.object(trial, field, value), self.assertRaisesRegex(AssertionError, diagnostic):
                     M.assert_result(strategy, playback, trial, result)
-            for field, value, diagnostic in (("end", None if drained else 3, "bytes/played/EOF"), ("data", b"x" * count, "reply PCM")):
+            for field, value, diagnostic in (("end", None, "bytes/played/EOF"), ("data", b"x" * count, "reply PCM")):
                 with mock.patch.object(playback, field, value), self.assertRaisesRegex(AssertionError, diagnostic):
                     M.assert_result(strategy, playback, trial, result)
-            with self.assertRaisesRegex(AssertionError, "bytes/played/EOF"):
-                M.assert_result(strategy, playback, trial, {"bytes": count - 1})
+            with self.assertRaisesRegex(AssertionError, "bytes/played/EOF|bounded abort PCM"):
+                M.assert_result(strategy, playback, trial, {"bytes": count - 1 if drained else 143360, "cut_bytes": 45056})
     def test_mismatch_names_the_differing_lines(self):
         M.assert_same(b"a\nb\n", b"a\nb\n", "same")
         with self.assertRaises(AssertionError) as caught:

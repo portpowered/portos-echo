@@ -3,26 +3,7 @@ use super::wire::Ledger;
 use serde_json::Value;
 
 pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) -> Result<String, String> {
-    if let Some(error) = &wire.failure {
-        return Err(error.clone());
-    }
-    if wire.runs != 1 || wire.inputs != 2 {
-        return Err(format!(
-            "M3 overlap: expected runs=1 inputs=2, observed runs={} inputs={}",
-            wire.runs, wire.inputs
-        ));
-    }
-    if first_pcm.is_none_or(|bytes| bytes < 960 || !bytes.is_multiple_of(2)) {
-        return Err("M3 first reply: missing complete decoded host PCM before interruption".into());
-    }
-    if wire.old_sink_pcm.and_then(|n| usize::try_from(n).ok()) != Some(wire.bytes[0])
-        || first_pcm.is_some_and(|n| Some(n) > wire.old_sink_pcm)
-    {
-        return Err("M3 first reply: missing or inconsistent closed decoded sink PCM".into());
-    }
-    if wire.continues != 1 || wire.tail_bytes != 3200 || wire.live_tail_frames != 5 {
-        return Err("M3 continuation: expected one continue, 3200 post-Played bytes and 5 Live tail frames".into());
-    }
+    let flush = first_reply(wire, first_pcm)?;
     let cancel = wire.cancel.ok_or("M3 cut: missing provider cancellation")?;
     let first = wire.played.first().ok_or("M3 cut: missing actual first Played")?;
     let elapsed = first
@@ -40,7 +21,8 @@ pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) ->
     }
     if wire.played.len() != 2
         || wire.started != 2
-        || wire.stops != 2
+        || wire.stops != 1
+        || wire.ends != 1
         || second_pcm != Some(9600)
         || wire.bytes[1] != 9600
     {
@@ -53,7 +35,58 @@ pub fn duplex(wire: &Ledger, first_pcm: Option<u64>, second_pcm: Option<u64>) ->
         ));
     }
     Ok(format!(
-        "first_reply_played=true barge_in_cut_ms={cut_ms:.3} barge_in_budget_ms=600 reply_send_window_ms=200 reply_bytes_after_cancel_window=0 second_answer_played=true continues=1 post_played_tail_bytes=3200 live_tail_frames=5"
+        "first_reply_played=true barge_in_cut_ms={cut_ms:.3} barge_in_budget_ms=600 reply_send_window_ms=200 reply_bytes_after_cancel_window=0 second_answer_played=true flushes=1 {flush} post_played_tail_bytes=3200 live_tail_frames=5"
+    ))
+}
+
+fn first_reply(wire: &Ledger, first_pcm: Option<u64>) -> Result<String, String> {
+    if let Some(error) = &wire.failure {
+        return Err(error.clone());
+    }
+    if wire.runs != 1 || wire.inputs != 2 {
+        return Err(format!(
+            "M3 overlap: expected runs=1 inputs=2, observed runs={} inputs={}",
+            wire.runs, wire.inputs
+        ));
+    }
+    if first_pcm.is_none_or(|bytes| bytes < 960 || !bytes.is_multiple_of(2)) {
+        return Err("M3 first reply: missing complete decoded host PCM before interruption".into());
+    }
+    if wire.old_sink_pcm.is_none() || first_pcm.is_some_and(|n| Some(n) > wire.old_sink_pcm) {
+        return Err("M3 first reply: missing or inconsistent closed decoded sink PCM".into());
+    }
+    let flush = flush(
+        wire.flush_observation
+            .as_ref()
+            .ok_or("M3 cut: missing worker observation")?,
+        wire.bytes[0],
+        wire.old_sink_pcm.ok_or("M3 cut: missing old sink")?,
+    )?;
+    if wire.flushes != 1 || wire.tail_bytes != 3200 || wire.live_tail_frames != 5 {
+        return Err("M3 continuation: expected one flush, 3200 post-Played bytes and 5 Live tail frames".into());
+    }
+    Ok(flush)
+}
+
+pub fn flush(value: &Value, sent: usize, sink: u64) -> Result<String, String> {
+    let count = |key: &str| value[key].as_u64().ok_or_else(|| format!("M3 flush: missing {key}"));
+    let elapsed = count("closed_ms")?
+        .checked_sub(count("receipt_ms")?)
+        .ok_or("M3 flush: backwards clock")?;
+    let written = count("written")?;
+    let discarded = count("discarded")?;
+    let growth = written.checked_sub(count("before")?).ok_or("M3 flush: backwards PCM")?;
+    if elapsed > 40
+        || growth > 960
+        || written != sink
+        || written.checked_add(discarded).and_then(|n| usize::try_from(n).ok()) != Some(sent)
+    {
+        return Err(format!(
+            "M3 flush: expected <=40ms, <=960 growth and sent=written+discarded; ms={elapsed} growth={growth} sent={sent} sink={sink} written={written} discarded={discarded}"
+        ));
+    }
+    Ok(format!(
+        "flush_to_silence_ms={elapsed} post_flush_pcm_bytes={growth} old_sink_pcm_bytes={written} device_discarded_pcm_bytes={discarded}"
     ))
 }
 
@@ -96,12 +129,16 @@ mod tests {
         Ledger {
             runs: 1,
             inputs: 2,
-            continues: 1,
+            flushes: 1,
             tail_bytes: 3200,
             live_tail_frames: 5,
             started: 2,
-            stops: 2,
-            bytes: [19200, 9600],
+            stops: 1,
+            ends: 1,
+            flush_observation: Some(
+                json!({"receipt_ms":100,"closed_ms":120,"before":18240,"written":19200,"discarded":9600}),
+            ),
+            bytes: [28800, 9600],
             old_sink_pcm: Some(19200),
             cancel: Some(cancel),
             played: vec![cancel + Duration::from_millis(200), cancel + Duration::from_millis(500)],
@@ -114,13 +151,13 @@ mod tests {
         for field in 0..3 {
             let mut state = observed();
             match field {
-                0 => state.continues = 0,
+                0 => state.flushes = 0,
                 1 => state.tail_bytes = 0,
                 _ => state.live_tail_frames = 0,
             }
             assert_eq!(
                 duplex(&state, Some(960), Some(9600)).unwrap_err(),
-                "M3 continuation: expected one continue, 3200 post-Played bytes and 5 Live tail frames"
+                "M3 continuation: expected one flush, 3200 post-Played bytes and 5 Live tail frames"
             );
         }
     }
@@ -166,6 +203,27 @@ mod tests {
                 _ => state.played[0] = state.cancel.unwrap() - Duration::from_millis(1),
             }
             assert!(duplex(&state, Some(960), Some(9600)).is_err(), "{field}");
+        }
+    }
+
+    #[test]
+    fn flush_rejects_missing_late_or_unconserved_worker_evidence() {
+        let valid = json!({"receipt_ms":100,"closed_ms":140,"before":960,"written":1920,"discarded":9600});
+        assert!(flush(&valid, 11520, 1920).is_ok());
+        for (key, bad) in [
+            ("closed_ms", 141),
+            ("before", 959),
+            ("written", 1918),
+            ("discarded", 9602),
+        ] {
+            let mut value = valid.clone();
+            value[key] = json!(bad);
+            assert!(flush(&value, 11520, 1920).is_err());
+        }
+        for key in ["receipt_ms", "closed_ms", "before", "written", "discarded"] {
+            let mut value = valid.clone();
+            value.as_object_mut().unwrap().remove(key);
+            assert!(flush(&value, 11520, 1920).is_err());
         }
     }
 

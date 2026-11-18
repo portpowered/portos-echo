@@ -4,6 +4,57 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::{io::duplex, sync::mpsc};
 
+#[tokio::test]
+async fn failure_after_cut_preserves_real_played_and_completes_capture() {
+    let (io, mut stream) = duplex(4096);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = client.events().unwrap();
+    let client = Arc::new(client);
+    peer::send(
+        &mut stream,
+        "run-pipeline",
+        json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"alexa"}),
+        vec![],
+    )
+    .await;
+    let mut run = events.recv().await.unwrap().unwrap().run.unwrap();
+    peer::send(
+        &mut stream,
+        "audio-chunk",
+        json!({"rate":16000,"width":2,"channels":1}),
+        vec![1, 2],
+    )
+    .await;
+    assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![1, 2]);
+    let (_tx, rx) = mpsc::channel(1);
+    let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+    let owner = client.clone();
+    let play = tokio::spawn(async move { owner.play(format, rx).await });
+    assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
+    client.cut_with_stats().await.unwrap();
+    client.send_error("echo-killed", "Kill switch enabled.").await.unwrap();
+    for name in ["hassmic-flush", "hassmic-end", "error"] {
+        let frame = peer::receive(&mut stream).await;
+        assert_eq!(frame.header.r#type, name);
+        assert_eq!(frame.payload, Vec::<u8>::new());
+        if name != "error" {
+            assert_eq!(frame.header.data, Some(serde_json::Value::Null));
+            assert_eq!(frame.header.payload_length, 0);
+        }
+    }
+    // The failure ends capture, but only the satellite can settle the cut.
+    assert_eq!(run.recv().await.unwrap(), None);
+    assert_eq!(run.stats().received, 1);
+    assert_eq!(run.stats().dropped, 0);
+    assert!(
+        !play.is_finished(),
+        "failure must retain the outstanding Played receipt"
+    );
+    peer::send(&mut stream, "played", json!({}), vec![]).await;
+    assert_eq!(play.await.unwrap(), Ok(PlayOutcome::Cut));
+    client.close().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn missing_played_deadline_retires_failed_run_and_serves_next_run() {
     let (io, mut stream) = duplex(4096);
@@ -19,17 +70,11 @@ async fn missing_played_deadline_retires_failed_run_and_serves_next_run() {
     };
     tokio::select! { biased; result = &mut play => unreachable!("unexpected {result:?}"), () = stop => () }
     // Model the journey's control deadline, not the client's transport timeout.
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(1), &mut play)
-            .await
-            .is_err()
-    );
+    let expired = tokio::time::timeout(std::time::Duration::from_secs(1), &mut play).await;
+    assert!(expired.is_err());
     drop(play);
     let caller = async {
-        client
-            .send_error("echo-unavailable", "Live unavailable.")
-            .await
-            .unwrap();
+        report_failure(&client).await;
         let mut run = events.recv().await.unwrap().unwrap().run.unwrap();
         assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![1, 2]);
         let (tx, rx) = mpsc::channel(1);
@@ -40,6 +85,9 @@ async fn missing_played_deadline_retires_failed_run_and_serves_next_run() {
         client.close().await.unwrap();
     };
     let server = async {
+        for _ in 0..2 {
+            assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-end");
+        }
         let error = peer::receive(&mut stream).await;
         assert_eq!(error.header.r#type, "error");
         assert_eq!(
@@ -64,6 +112,7 @@ async fn missing_played_deadline_retires_failed_run_and_serves_next_run() {
         assert_eq!(peer::receive(&mut stream).await.payload, vec![3, 4]);
         assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
         peer::send(&mut stream, "played", json!({}), vec![]).await;
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-end");
         // Keep the duplex peer alive until the caller has consumed Played.
         assert_eq!(tokio::io::AsyncReadExt::read(&mut stream, &mut [0]).await.unwrap(), 0);
     };
@@ -95,8 +144,7 @@ async fn exact_cut_before_first_send_drops_every_frame_once() {
     // Both commands precede session scheduling. Command priority makes the cut
     // linearize before the first audio write, regardless of pump scheduling.
     assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
-    assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-continue");
-    assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
+    assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-flush");
     assert_eq!(cut.await.unwrap(), CutStats { dropped_frames: 3 });
     assert!(tx.is_closed());
     peer::send(&mut stream, "played", json!({}), vec![]).await;
@@ -146,8 +194,7 @@ async fn exact_cut_conserves_sent_and_dropped_and_requires_played() {
     let mut sent = 1_u8;
     loop {
         let frame = peer::receive(&mut stream).await;
-        if frame.header.r#type == "hassmic-continue" {
-            assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
+        if frame.header.r#type == "hassmic-flush" {
             break;
         }
         assert_eq!(frame.header.r#type, "audio-chunk");
@@ -171,4 +218,57 @@ async fn exact_cut_conserves_sent_and_dropped_and_requires_played() {
     assert_eq!(client.cut_with_stats().await.unwrap(), CutStats::default());
     assert!(tx.is_closed());
     client.close().await.unwrap();
+}
+
+async fn report_failure(client: &WyomingClient) {
+    client
+        .send_error("echo-unavailable", "Live unavailable.")
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn played_end_write_timeout_never_reports_playback_success() {
+    let (io, mut stream) = duplex(1);
+    let client = WyomingClient::from_io(io, ClientOptions::default());
+    let (tx, rx) = mpsc::channel(1);
+    drop(tx);
+    let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+    let play = client.play(format, rx);
+    let server = async {
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-stop");
+        peer::send(&mut stream, "played", json!({}), vec![]).await;
+        std::future::pending::<()>().await;
+    };
+    tokio::pin!(play);
+    tokio::select! {
+        result = &mut play => assert_eq!(result, Err(crate::Error::Timeout)),
+        () = server => unreachable!(),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn pause_and_close_end_active_reply_without_fabricating_played() {
+    for pause in [true, false] {
+        let (io, mut stream) = duplex(4096);
+        let client = Arc::new(WyomingClient::from_io(io, ClientOptions::default()));
+        let (_tx, rx) = mpsc::channel(1);
+        let owner = client.clone();
+        let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
+        let play = tokio::spawn(async move { owner.play(format, rx).await });
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "audio-start");
+        if pause {
+            client.pause().await.unwrap();
+        } else {
+            client.close().await.unwrap();
+        }
+        assert_eq!(peer::receive(&mut stream).await.header.r#type, "hassmic-end");
+        assert_eq!(play.await.unwrap(), Err(crate::Error::Closed));
+        if pause {
+            assert_eq!(peer::receive(&mut stream).await.header.r#type, "pause-satellite");
+            client.close().await.unwrap();
+        }
+        assert_eq!(tokio::io::AsyncReadExt::read(&mut stream, &mut [0]).await.unwrap(), 0);
+    }
 }

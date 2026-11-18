@@ -69,7 +69,7 @@ class FiniteControls(unittest.TestCase):
         (self.host.folder / "play.raw").write_bytes(bytes([0, 0, 1, 2]))
         with mock.patch.object(CONTROLLER, "emit") as emit:
             self.host.command({"action": "playback"})
-        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 4, "nonzero_bytes": 2})
+        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 4, "nonzero_bytes": 2, "flush": None})
         (self.host.folder / "play.raw").write_bytes(bytes(CONTROLLER.LIMIT + 2))
         with self.assertRaisesRegex(ValueError, "invalid playback observation"):
             self.host.command({"action": "playback"})
@@ -90,7 +90,27 @@ class FiniteControls(unittest.TestCase):
         emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 9600,
                                      "nonzero_bytes": 4800, "total_pcm_bytes": 17280,
                                      "earcon_pcm_bytes": 7680,
-                                     "earcon_nonzero_bytes": sum(byte != 0 for byte in chime)})
+                                     "earcon_nonzero_bytes": sum(byte != 0 for byte in chime), "flush": None})
+        record = b"duplex flush: receipt_ms=100 closed_ms=119 before=7680 written=17280 discarded=9600\n"
+        path.write_bytes(chime[:7678])
+        self.host.log = bytearray(record[:-1])
+        with mock.patch.object(CONTROLLER, "emit") as emit:
+            def delivery(predicate, timeout):
+                self.assertEqual(timeout, 5)
+                self.assertFalse(predicate())
+                emit.assert_not_called()
+                path.write_bytes(chime + reply)
+                self.host.log.extend(b"\n")
+                return predicate()
+            with mock.patch.object(self.host.condition, "wait_for", side_effect=delivery) as wait:
+                self.host.command({"action": "playback", "wake_earcon": True, "wait_flush": True})
+            wait.assert_called_once()
+        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 9600,
+                                     "nonzero_bytes": 4800, "total_pcm_bytes": 17280,
+                                     "earcon_pcm_bytes": 7680,
+                                     "earcon_nonzero_bytes": sum(byte != 0 for byte in chime),
+                                     "flush": {"receipt_ms": 100, "closed_ms": 119, "before": 7680,
+                                               "written": 17280, "discarded": 9600}})
         # No PCM is excluded by default, even if it is quiet or resembles a tone.
         self.assertEqual(CONTROLLER.playback_counts(chime + reply)["pcm_bytes"], 17280)
         extra = CONTROLLER.playback_counts(chime + reply + b"\x01\x02", True)
@@ -123,3 +143,76 @@ class FiniteControls(unittest.TestCase):
                 self.host.command({"action": "muted", "pcm": pcm})
             emit.assert_called_once_with({"event": "host.ack"})
             self.host.proc.send_signal.assert_called_once_with(10)
+
+    def test_playback_reports_native_flush_counters_and_rejects_ambiguous_evidence(self):
+        self.host.finite_mode = True
+        (self.host.folder / "play.raw").write_bytes(bytes([1, 0]) * 960)
+        record = b"duplex flush: receipt_ms=100 closed_ms=119 before=960 written=1920 discarded=9600\n"
+        self.host.log = bytearray(record)
+        with mock.patch.object(CONTROLLER, "emit") as emit:
+            self.host.command({"action": "playback"})
+        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 1920, "nonzero_bytes": 960,
+                                     "flush": {"receipt_ms": 100, "closed_ms": 119, "before": 960,
+                                               "written": 1920, "discarded": 9600}})
+        for invalid in [record + record, record + record[:-1], b"duplex flush: malformed\n"]:
+            self.host.log = bytearray(invalid)
+            with self.assertRaisesRegex(ValueError, "one native flush observation"):
+                self.host.command({"action": "playback"})
+
+    def test_post_cut_waits_for_complete_fragmented_log_before_sink_snapshot(self):
+        self.host.finite_mode = True
+        sink = self.host.folder / "play.raw"
+        sink.write_bytes(bytes(960))
+        record = b"duplex flush: receipt_ms=100 closed_ms=119 before=960 written=1920 discarded=9600\n"
+        with mock.patch.object(CONTROLLER, "emit") as emit:
+            def delivery(predicate, timeout):
+                self.assertEqual(timeout, 5)
+                self.assertFalse(predicate())
+                for fragment in [record[:7], record[7:-1]]:
+                    self.host.log.extend(fragment)
+                    self.assertFalse(predicate())
+                    emit.assert_not_called()
+                sink.write_bytes(bytes([1, 0]) * 960)
+                self.host.log.extend(b"\n")
+                return predicate()
+            with mock.patch.object(self.host.condition, "wait_for", side_effect=delivery) as wait:
+                self.host.command({"action": "playback", "wait_flush": True})
+            wait.assert_called_once()
+        emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 1920, "nonzero_bytes": 960,
+                                     "flush": {"receipt_ms": 100, "closed_ms": 119, "before": 960,
+                                               "written": 1920, "discarded": 9600}})
+
+    def test_pre_cut_queries_do_not_wait_for_missing_or_partial_flush_record(self):
+        self.host.finite_mode = True
+        (self.host.folder / "play.raw").write_bytes(bytes(960))
+        for pending in [b"", b"duplex flush: receipt_ms=100"]:
+            self.host.log = bytearray(pending)
+            with mock.patch.object(self.host.condition, "wait_for") as wait, \
+                    mock.patch.object(CONTROLLER, "emit") as emit:
+                self.host.command({"action": "playback"})
+            wait.assert_not_called()
+            emit.assert_called_once_with({"event": "host.ack", "pcm_bytes": 960,
+                                         "nonzero_bytes": 0, "flush": None})
+
+    def test_post_cut_missing_error_cancelled_and_invalid_logs_cannot_ack(self):
+        self.host.finite_mode = True
+        record = b"duplex flush: receipt_ms=100 closed_ms=119 before=960 written=1920 discarded=9600\n"
+        for failure in ["missing", "partial", "error", "cancel", "duplicate", "malformed"]:
+            with self.subTest(failure=failure):
+                self.host.log = bytearray()
+                self.host.error = False
+                self.host.cancelled.clear()
+                def delivery(predicate, timeout):
+                    self.assertEqual(timeout, 5)
+                    self.assertFalse(predicate())
+                    self.host.log.extend({"partial": record[:-1], "duplicate": record * 2,
+                                          "malformed": b"duplex flush: malformed\n"}.get(failure, b""))
+                    self.host.error = failure == "error"
+                    if failure == "cancel":
+                        self.host.cancelled.set()
+                    return predicate()
+                with mock.patch.object(self.host.condition, "wait_for", side_effect=delivery), \
+                        mock.patch.object(CONTROLLER, "emit") as emit:
+                    with self.assertRaises((RuntimeError, ValueError)):
+                        self.host.command({"action": "playback", "wait_flush": True})
+                emit.assert_not_called()
