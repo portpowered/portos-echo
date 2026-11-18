@@ -119,17 +119,14 @@ where
                 io,
                 &mut options,
                 &mut peer,
-                async {
-                    tokio::select! {
-                        biased;
-                        () = cancelled.as_mut() => (),
-                        () = gate.wait() => killed.set(true),
-                    }
-                },
+                gate.cancel(cancelled.as_mut(), &killed),
                 &mut observe,
                 (tools.as_deref_mut(), std::time::SystemTime::now, trace.clone()),
             ))
             .await;
+            if killed.get() {
+                gate.tripped(&mut observe)?;
+            }
             if killed.get() && result == Err(Error::Control) {
                 // Cancelled negotiation can invalidate IO. Never resume that
                 // generation or present readiness after an unsuccessful stop.
@@ -138,7 +135,6 @@ where
                     .map_err(|_| Error::Deadline)?
                     .map_err(bridge_codex::rpc_error)?;
                 client.fail_run(echo_link::RunFailure::KillSwitch).await?;
-                gate.tripped(&mut observe)?;
             } else {
                 result?;
             }

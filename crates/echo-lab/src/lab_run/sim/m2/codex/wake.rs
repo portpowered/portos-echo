@@ -403,6 +403,15 @@ async fn interrupt_control(binary: &Path, root: &Path, screen: &mut Screen, faul
 
 fn interrupted_receipts(path: &Path, fault: &str) {
     let trace = read_trace(path).unwrap();
+    if fault == "kill" {
+        assert_eq!(trace.records.iter().filter(|r| r["event"] == "kill.enabled").count(), 1);
+        assert!(
+            !trace
+                .records
+                .iter()
+                .any(|r| r["event"] == "live.closed" && r["reason"] == "shutdown")
+        );
+    }
     for event in [
         "wake.earcon_played",
         "reply.started",

@@ -96,6 +96,8 @@ async fn work<C: LinkConnector, P: MediaPeer>(
         requested.set(true);
     };
     tokio::pin!(cancelled);
+    let termination = super::voice_kill::Termination::default();
+    let kill_path = options.voice.kill_path;
     let result = with_device(
         options.host,
         connector,
@@ -116,21 +118,20 @@ async fn work<C: LinkConnector, P: MediaPeer>(
             let setup_trace = view.setup_trace();
             let result = match ready {
                 Ok(()) => super::voice_admission::service(client, io, options.voice, peer, stopped(stopping), |notice| {
+                termination.observe(&notice);
                 view.observe(notice)
                 }, (tools.as_mut(), Some(setup_trace), options.delegation.is_some_and(|config| config.wake_earcon))).await,
                 Err(error) => Err(error),
             };
+            termination.returned(&result, requested.get());
             if let Some(tools) = &mut tools { tools.close().await; }
             result
         },
     )
     .await;
     // with_device has now awaited call/media, device and process shutdown.
+    let result = termination.finish(result, requested.get(), kill_path, &mut |notice| view.observe(notice));
     match result {
-        Err(Error::Control) if requested.get() => {
-            view.closed("shutdown")?;
-            Ok(())
-        }
         Err(error) => {
             view.failed(&error).await?;
             if error == Error::Authorization && !requested.get() {
@@ -138,7 +139,7 @@ async fn work<C: LinkConnector, P: MediaPeer>(
             }
             Err(error)
         }
-        Ok(()) => view.closed("stopped"),
+        Ok(()) => view.closed(if requested.get() { "shutdown" } else { "stopped" }),
     }
 }
 
@@ -156,6 +157,142 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpStream;
+
+    // T1: real terminal arbitration and trace projection, memory-only cleanup
+    // barriers and a private durable marker. No timer or socket is needed.
+    #[tokio::test(start_paused = true)]
+    async fn wake_earcon_kill_shutdown_ordering() {
+        for order in [
+            "kill_first",
+            "eof_first",
+            "both_ready",
+            "kill_cleared",
+            "shutdown",
+            "failure",
+            "mute",
+        ] {
+            terminal_order(order).await;
+        }
+    }
+
+    async fn terminal_order(order: &str) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("kill");
+        let trace_path = directory.path().join("trace");
+        let mut trace = Trace::open(&trace_path, "api_key").unwrap();
+        let screen = Screen::bind(None).await.unwrap();
+        let health = Health::offline();
+        let mut view = View::new(&screen, &health, &mut trace);
+        let termination = super::super::voice_kill::Termination::default();
+        let requested = Cell::new(false);
+        let (entered, cleanup_entered) = tokio::sync::oneshot::channel();
+        let (release, cleanup_released) = tokio::sync::oneshot::channel();
+        let work = async {
+            observe_terminal(&termination, &mut view, super::super::ServeNotice::Listening);
+            let result = interrupt(order, &path, &termination, &mut view).await;
+            requested.set(order == "eof_first" || order == "both_ready" || order == "shutdown");
+            termination.returned(&result, requested.get());
+            entered.send(()).unwrap();
+            cleanup_released.await.unwrap();
+            termination.finish(result, requested.get(), Some(&path), &mut |notice| view.observe(notice))
+        };
+        let signals = async {
+            cleanup_entered.await.unwrap();
+            if order == "eof_first" {
+                std::fs::write(&path, b"").unwrap();
+            } else if order == "kill_cleared" {
+                std::fs::remove_file(&path).unwrap();
+            }
+            requested.set(true);
+            release.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(work, signals);
+        assert_eq!(
+            result,
+            if order == "shutdown" {
+                Ok(())
+            } else if order == "failure" {
+                Err(Error::Wyoming)
+            } else {
+                Err(Error::Control)
+            },
+            "{order}"
+        );
+        terminal_receipts(&trace_path, order);
+        // Clear/recovery starts a new run rather than poisoning future EOF.
+        let _ = std::fs::remove_file(&path);
+        observe_terminal(&termination, &mut view, super::super::ServeNotice::Listening);
+        assert_eq!(
+            termination.finish(Err(Error::Control), true, Some(&path), &mut |notice| view
+                .observe(notice)),
+            Ok(())
+        );
+    }
+
+    fn terminal_receipts(trace_path: &Path, order: &str) {
+        let rows: Vec<Value> = std::fs::read_to_string(trace_path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            rows.iter().filter(|row| row["event"] == "kill.enabled").count(),
+            usize::from(matches!(
+                order,
+                "kill_first" | "eof_first" | "both_ready" | "kill_cleared"
+            )),
+            "{order}"
+        );
+        assert!(!rows.iter().any(|row| matches!(
+            row["event"].as_str(),
+            Some("wake.earcon_played" | "reply.played" | "bridge.run_completed")
+        )));
+    }
+
+    fn observe_terminal(
+        termination: &super::super::voice_kill::Termination,
+        view: &mut View<'_>,
+        notice: super::super::ServeNotice,
+    ) {
+        termination.observe(&notice);
+        view.observe(notice).unwrap();
+    }
+
+    async fn interrupt(
+        order: &str,
+        path: &Path,
+        termination: &super::super::voice_kill::Termination,
+        view: &mut View<'_>,
+    ) -> Result<(), Error> {
+        use super::super::{Notice, ServeNotice, SessionNotice};
+        if matches!(order, "kill_first" | "kill_cleared" | "both_ready") {
+            std::fs::write(path, b"").unwrap();
+            let killed = Cell::new(false);
+            let gate = super::super::voice_kill::Gate::new(Some(path));
+            gate.cancel(
+                async {
+                    if order != "both_ready" {
+                        std::future::pending::<()>().await;
+                    }
+                },
+                &killed,
+            )
+            .await;
+            assert!(killed.get(), "{order}: ready kill must beat EOF");
+            observe_terminal(termination, view, ServeNotice::Kill(true));
+        } else if order == "mute" {
+            observe_terminal(
+                termination,
+                view,
+                ServeNotice::Session(SessionNotice::Run(Notice::Device(echo_link::LinkEvent::Mute(true)))),
+            );
+        }
+        Err(if order == "failure" {
+            Error::Wyoming
+        } else {
+            Error::Control
+        })
+    }
 
     async fn screen(directory: &Path) -> Screen {
         let token = directory.join("pairing");

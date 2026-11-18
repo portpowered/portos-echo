@@ -1,7 +1,62 @@
 //! Reuse the operator kill marker; never acquire or mutate credentials here.
 use super::ServeNotice;
 use crate::{Error, bridge_runtime::bridge_kill::inspect};
-use std::{path::Path, time::Duration};
+use std::{cell::Cell, path::Path, time::Duration};
+
+/// The terminating run keeps its cause even if EOF arrives during cleanup or
+/// the operator clears the marker. A newly admitted run starts fresh.
+#[derive(Default)]
+pub(super) struct Termination {
+    active: Cell<bool>,
+    killed: Cell<bool>,
+    failed: Cell<bool>,
+}
+
+impl Termination {
+    pub fn observe(&self, notice: &ServeNotice) {
+        match notice {
+            ServeNotice::Listening => {
+                self.active.set(true);
+                self.killed.set(false);
+                self.failed.set(false);
+            }
+            ServeNotice::Kill(true) if self.active.get() => self.killed.set(true),
+            ServeNotice::Session(super::SessionNotice::Completed(_)) | ServeNotice::Ready => self.active.set(false),
+            ServeNotice::Session(super::SessionNotice::Run(super::Notice::Device(echo_link::LinkEvent::Mute(
+                true,
+            )))) if self.active.get() => self.failed.set(true),
+            _ => (),
+        }
+    }
+
+    pub fn returned(&self, result: &Result<(), Error>, requested: bool) {
+        if result.is_err() && !requested {
+            self.failed.set(true);
+        }
+    }
+
+    pub fn finish(
+        &self,
+        result: Result<(), Error>,
+        requested: bool,
+        path: Option<&Path>,
+        observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        // Host/device/process cleanup has finished. This is the final read:
+        // EOF may have won the select before the service's next marker poll.
+        if self.active.get() && !self.killed.get() && path.is_some_and(|path| inspect(path).unwrap_or(true)) {
+            self.killed.set(true);
+            observe(ServeNotice::Kill(true))?;
+        }
+        if self.killed.get() {
+            Err(Error::Control)
+        } else if result == Err(Error::Control) && requested && !self.failed.get() {
+            Ok(())
+        } else {
+            result
+        }
+    }
+}
 
 pub(super) struct Gate<'a> {
     path: Option<&'a Path>,
@@ -40,6 +95,14 @@ impl<'a> Gate<'a> {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    pub async fn cancel(&self, shutdown: impl std::future::Future<Output = ()>, killed: &Cell<bool>) {
+        tokio::select! {
+            biased;
+            () = self.wait() => killed.set(true),
+            () = shutdown => (),
         }
     }
 }
