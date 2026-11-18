@@ -1,7 +1,7 @@
 //! T3 facade browser lifecycle with the real callback owner and synthetic issuer.
-#[path = "../tests/support/signin_browser.rs"]
+#[path = "signin_test_support/signin_browser.rs"]
 mod signin_browser;
-#[path = "../tests/support/mod.rs"]
+#[path = "signin_test_support/mod.rs"]
 mod support;
 
 use crate::{OperatorCommand, SigninError, resolve_mode};
