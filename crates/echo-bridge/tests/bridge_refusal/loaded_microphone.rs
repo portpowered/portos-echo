@@ -58,9 +58,15 @@ impl LinkConnector for Connector {
     type Link = Link;
     async fn connect(&self) -> Result<Link, echo_link::Error> {
         Ok(Link(
-            echo_wyoming::WyomingClient::connect(self.0, echo_wyoming::ClientOptions::default())
-                .await
-                .unwrap(),
+            echo_wyoming::WyomingClient::connect(
+                self.0,
+                echo_wyoming::ClientOptions {
+                    mic_capacity: 32,
+                    ..echo_wyoming::ClientOptions::default()
+                },
+            )
+            .await
+            .unwrap(),
             self.1.clone(),
         ))
     }
