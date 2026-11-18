@@ -98,18 +98,7 @@ async fn socket_journey() {
     let relay = crate::lab_run::sim::m4::wire::Relay::bind_reply(address).await.unwrap();
     let mut bridge = tokio::net::TcpStream::connect(relay.address).await.unwrap();
     let mut host = listener.accept().await.unwrap().0;
-    let wake = event("run-pipeline", 0);
-    host.write_all(&encode(&wake)).await.unwrap();
-    assert_eq!(frame(&mut bridge).await.unwrap().unwrap().1, wake);
-    for level in [1200, -2400] {
-        exchange_reply(&mut bridge, &mut host, level).await;
-        let capture = event("audio-chunk", 640);
-        host.write_all(&encode(&capture)).await.unwrap();
-        assert_eq!(frame(&mut bridge).await.unwrap().unwrap().1, capture);
-    }
-    let end = event("hassmic-end", 0);
-    bridge.write_all(&encode(&end)).await.unwrap();
-    assert_eq!(frame(&mut host).await.unwrap().unwrap().1, end);
+    exchange_run(&mut bridge, &mut host).await;
     let mut receipts = relay.observed.clone();
     receipts
         .wait_for(|timing| {
@@ -117,7 +106,25 @@ async fn socket_journey() {
         })
         .await
         .unwrap();
-    let observed = relay.close().await.unwrap().session.observation();
+    check_observation(&relay.close().await.unwrap().session.observation());
+}
+
+async fn exchange_run(bridge: &mut tokio::net::TcpStream, host: &mut tokio::net::TcpStream) {
+    let wake = event("run-pipeline", 0);
+    host.write_all(&encode(&wake)).await.unwrap();
+    assert_eq!(frame(bridge).await.unwrap().unwrap().1, wake);
+    for level in [1200, -2400] {
+        exchange_reply(bridge, host, level).await;
+        let capture = event("audio-chunk", 640);
+        host.write_all(&encode(&capture)).await.unwrap();
+        assert_eq!(frame(bridge).await.unwrap().unwrap().1, capture);
+    }
+    let end = event("hassmic-end", 0);
+    bridge.write_all(&encode(&end)).await.unwrap();
+    assert_eq!(frame(host).await.unwrap().unwrap().1, end);
+}
+
+fn check_observation(observed: &Value) {
     assert_eq!(observed["run_opened_us"].as_array().unwrap().len(), 1);
     assert_eq!(observed["explicit_end_us"].as_array().unwrap().len(), 1);
     assert_eq!(observed["capture_chunks_after_reply_played"], 2);
