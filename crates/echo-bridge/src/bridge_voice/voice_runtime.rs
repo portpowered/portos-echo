@@ -120,7 +120,7 @@ async fn work<C: LinkConnector, P: MediaPeer>(
                 Ok(()) => super::voice_admission::service(client, io, options.voice, peer, stopped(stopping), |notice| {
                 termination.observe(&notice);
                 view.observe(notice)
-                }, (tools.as_mut(), Some(setup_trace), options.delegation.is_some_and(|config| config.wake_earcon))).await,
+                }, (tools.as_mut(), Some(setup_trace), options.delegation.is_some_and(|config| config.wake_earcon), Some(&termination))).await,
                 Err(error) => Err(error),
             };
             termination.returned(&result, requested.get());
@@ -279,7 +279,11 @@ mod tests {
             )
             .await;
             assert!(killed.get(), "{order}: ready kill must beat EOF");
-            observe_terminal(termination, view, ServeNotice::Kill(true));
+            if order == "kill_first" {
+                observe_terminal(termination, view, ServeNotice::Kill(true));
+            } else {
+                termination.trip();
+            }
         } else if order == "mute" {
             observe_terminal(
                 termination,

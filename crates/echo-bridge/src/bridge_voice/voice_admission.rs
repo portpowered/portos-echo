@@ -61,7 +61,7 @@ where
         peer,
         cancelled,
         observe,
-        (None, None, false),
+        (None, None, false, None),
     ))
     .await
 }
@@ -77,6 +77,7 @@ pub(super) async fn service<L, R, W, P>(
         Option<&mut super::voice_tools::Tools>,
         Option<crate::bridge_trace::Trace>,
         bool,
+        Option<&super::voice_kill::Termination>,
     ),
 ) -> Result<(), Error>
 where
@@ -85,7 +86,7 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
-    let (mut tools, trace, wake_earcon) = context;
+    let (mut tools, trace, wake_earcon, termination) = context;
     super::voice_session::validate(&options.session)?;
     if options.connect_timeout.is_zero() || Instant::now().checked_add(options.connect_timeout).is_none() {
         return Err(Error::Input);
@@ -124,8 +125,10 @@ where
                 (tools.as_deref_mut(), std::time::SystemTime::now, trace.clone()),
             ))
             .await;
-            if killed.get() {
-                gate.tripped(&mut observe)?;
+            if killed.get()
+                && let Some(termination) = termination
+            {
+                termination.trip();
             }
             if killed.get() && result == Err(Error::Control) {
                 // Cancelled negotiation can invalidate IO. Never resume that
@@ -135,6 +138,7 @@ where
                     .map_err(|_| Error::Deadline)?
                     .map_err(bridge_codex::rpc_error)?;
                 client.fail_run(echo_link::RunFailure::KillSwitch).await?;
+                gate.tripped(&mut observe)?;
             } else {
                 result?;
             }

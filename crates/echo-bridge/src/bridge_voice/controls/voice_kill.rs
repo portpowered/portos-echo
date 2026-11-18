@@ -9,6 +9,7 @@ use std::{cell::Cell, path::Path, time::Duration};
 pub(super) struct Termination {
     active: Cell<bool>,
     killed: Cell<bool>,
+    reported: Cell<bool>,
     failed: Cell<bool>,
 }
 
@@ -18,14 +19,24 @@ impl Termination {
             ServeNotice::Listening => {
                 self.active.set(true);
                 self.killed.set(false);
+                self.reported.set(false);
                 self.failed.set(false);
             }
-            ServeNotice::Kill(true) if self.active.get() => self.killed.set(true),
+            ServeNotice::Kill(true) if self.active.get() => {
+                self.trip();
+                self.reported.set(true);
+            }
             ServeNotice::Session(super::SessionNotice::Completed(_)) | ServeNotice::Ready => self.active.set(false),
             ServeNotice::Session(super::SessionNotice::Run(super::Notice::Device(echo_link::LinkEvent::Mute(
                 true,
             )))) if self.active.get() => self.failed.set(true),
             _ => (),
+        }
+    }
+
+    pub fn trip(&self) {
+        if self.active.get() {
+            self.killed.set(true);
         }
     }
 
@@ -45,8 +56,11 @@ impl Termination {
         // Host/device/process cleanup has finished. This is the final read:
         // EOF may have won the select before the service's next marker poll.
         if self.active.get() && !self.killed.get() && path.is_some_and(|path| inspect(path).unwrap_or(true)) {
-            self.killed.set(true);
+            self.trip();
+        }
+        if self.killed.get() && !self.reported.get() {
             observe(ServeNotice::Kill(true))?;
+            self.reported.set(true);
         }
         if self.killed.get() {
             Err(Error::Control)
