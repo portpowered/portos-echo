@@ -281,7 +281,7 @@ async fn web_search_invalid_cli_rejects_before_child_trace_home_or_connection() 
     let absent = fixture.directory.path().join("absent-codex-home");
     let text = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("[codex]", &format!("[codex]\nweb_search='invalid-private-input'"))
+        .replace("[codex]", "[codex]\nweb_search='invalid-private-input'")
         .replace(&fixture.home.display().to_string(), &absent.display().to_string());
     std::fs::write(path, text).unwrap();
     let mut process = Process::spawn(&mut voice_entry::command(&fixture));

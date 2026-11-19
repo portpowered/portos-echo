@@ -104,15 +104,19 @@ class Delegation:
                 search['search_content_types'] = ['text', 'image']
             hosted = [search]
         if not self.native:
-            assert body['tools'] == hosted + expected, 'model exposed tools beyond exact dynamic catalog'
+            assert body['tools'] == expected + hosted, 'model exposed tools beyond exact dynamic catalog: ' + json.dumps(body['tools'])
             return [tool['name'] for tool in expected]
-        assert body['tools'] == hosted, 'native hosted search catalog mismatch'
+        assert 'tools' not in body, 'unexpected conventional native tools field'
         # Bundled sol uses Responses Lite: declarations are input tool blocks.
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
+        namespaces = blocks[0]
+        if hosted:
+            assert namespaces[-1:] == hosted, 'native hosted search catalog mismatch: ' + json.dumps(namespaces)
+            namespaces = namespaces[:-1]
         names = [namespace['name'] + '.' + tool['name']
-                 for namespace in blocks[0] for tool in namespace['tools']]
-        description = blocks[0][0]['tools'][0]['description']
+                 for namespace in namespaces for tool in namespace['tools']]
+        description = namespaces[0]['tools'][0]['description']
         nested = re.findall(r'^### `([^`]+)`$', description, re.M)
         print(json.dumps({'model': self.model, 'tools': names, 'nested': nested}), file=sys.stderr, flush=True)
         # Pin spec_plan.rs:1178-1204 registers async input from bundled model

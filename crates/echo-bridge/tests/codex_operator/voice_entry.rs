@@ -422,14 +422,8 @@ async fn codex_voice_entry_binary_local_routes_reach_only_owned_child_before_rea
             listener.local_addr().unwrap().port(),
             &live,
             mode == "api_key",
+            search,
         );
-        if let Some(search) = search {
-            let path = fixture.directory.path().join("bridge.toml");
-            let text = std::fs::read_to_string(&path)
-                .unwrap()
-                .replace("[codex]", &format!("[codex]\nweb_search='{search}'"));
-            std::fs::write(path, text).unwrap();
-        }
         let mut command = command(&fixture);
         command.args(["--live-loopback", &live, "--model-loopback", &model]);
         if mode == "api_key" {
@@ -469,10 +463,13 @@ async fn codex_voice_entry_binary_local_routes_reach_only_owned_child_before_rea
     assert_eq!(std::env::var_os("HTTP_PROXY"), inherited);
 }
 
-fn configure_routes(fixture: &Fixture, port: u16, live: &str, api_key: bool) {
+fn configure_routes(fixture: &Fixture, port: u16, live: &str, api_key: bool, search: Option<&str>) {
     configure(fixture, port);
     let path = fixture.directory.path().join("bridge.toml");
-    let text = std::fs::read_to_string(&path).unwrap();
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    if let Some(search) = search {
+        text = text.replace("[codex]", &format!("[codex]\nweb_search='{search}'"));
+    }
     std::fs::write(path, format!("{text}\n[chatgpt_auth]\ntoken_endpoint='{live}/token'\n")).unwrap();
     if api_key {
         std::fs::write(fixture.directory.path().join("credential"), "synthetic-nominated-key\n").unwrap();

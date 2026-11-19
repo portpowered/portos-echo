@@ -128,7 +128,14 @@ async fn exercise(negative: bool) {
 }
 
 async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, model: &str) {
-    exercise_search(negative, exhausted, budget, model, echo_config::WebSearch::Live).await;
+    Box::pin(exercise_search(
+        negative,
+        exhausted,
+        budget,
+        model,
+        echo_config::WebSearch::Live,
+    ))
+    .await;
 }
 
 async fn exercise_search(

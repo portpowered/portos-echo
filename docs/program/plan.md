@@ -199,7 +199,8 @@ need, since the Echo's disk is small.
   Owner amendment (2026-11-19): hosted read-only web search is the sole exception, with
   `[codex] web_search` selecting `live` (default), `cached` or `disabled`; enabled adds exactly one hosted
   declaration, disabled none. Exact dynamic catalogs, native wrappers and nested callables remain required.
-  Every other built-in effect stays off. Codex's local tools are off: `features.shell_tool=false`, `features.unified_exec=false`, empty `environments`, no MCP
+  Every other built-in effect stays off. Codex's local tools are off: `features.shell_tool=false`,
+  `features.unified_exec=false`, empty `environments`, no MCP
   servers in Codex's config, `approvalPolicy: never` with a read-only sandbox. The result goes back as
   `delegation.context.append` without bridge code. The bridge enforces the 8-call and deadline caps and ends an
   over-budget turn with `turn/interrupt`.
