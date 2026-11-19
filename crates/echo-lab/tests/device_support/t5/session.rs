@@ -21,11 +21,11 @@ fn prepare_session(replies: u64, extra: Value) -> (Session, std::thread::JoinHan
     fs::write(path, config).unwrap();
     drop(nominated);
     let root = session.0.clone();
-    let peer = std::thread::spawn(move || host(upstream, &root, replies));
+    let peer = std::thread::spawn(move || host(&upstream, &root, replies));
     (session, peer)
 }
 
-fn host(listener: TcpListener, root: &Path, replies: u64) {
+fn host(listener: &TcpListener, root: &Path, replies: u64) {
     listener.set_nonblocking(true).unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut wire = loop {

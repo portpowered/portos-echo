@@ -252,8 +252,8 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
 
 fn configured_fixture(op: &str, args: &[String], fixture: &Value) -> Result<Option<u8>, Box<dyn std::error::Error>> {
     if args.first().is_some_and(|arg| arg == "forward") && fixture["wire_port"].is_u64() {
-        if args.get(1).is_some_and(|arg| arg == "tcp:0") {
-            // lint-rules: allow-literal inert fake adb argument comparison
+        let dynamic_port = "tcp:0"; // lint-rules: allow-literal inert fake adb argument comparison, never a connection target
+        if args.get(1).is_some_and(|arg| arg == dynamic_port) {
             writeln!(io::stdout(), "{}", fixture["wire_port"])?;
         }
         return Ok(Some(0));
