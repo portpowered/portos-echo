@@ -88,6 +88,21 @@ impl Prompt {
     }
 }
 
+/// The settings snapshot starts from the runtime's accepted cache, never a
+/// second filesystem read that could admit an edit after startup validation.
+pub(super) fn accepted() -> Result<echo_screen_contract::settings_v1::PromptTextsV1, Error> {
+    CURRENT
+        .try_with(|current| {
+            let current = current.borrow();
+            let prompts = current.as_ref().ok_or(Error::Input)?;
+            Ok(echo_screen_contract::settings_v1::PromptTextsV1 {
+                voice: prompts.voice.text.clone(),
+                runner: prompts.runner.text.clone(),
+            })
+        })
+        .unwrap_or(Err(Error::Input))
+}
+
 pub(super) fn publish(trace: &mut Trace) -> Result<(), Error> {
     CURRENT
         .try_with(|current| {

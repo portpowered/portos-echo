@@ -10,6 +10,37 @@ fn rows(path: &Path) -> Vec<Value> {
 }
 
 #[tokio::test(start_paused = true)]
+async fn settings_prompt_snapshot_uses_admitted_cache_until_call_reload() {
+    assert!(matches!(accepted(), Err(Error::Input)));
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("prompts");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("voice.md"), "admitted voice\n").unwrap();
+    let mut trace = Some(Trace::open(&root.path().join("trace"), "api_key").unwrap());
+    scope(Some(root.path()), async {
+        let initial = accepted().unwrap();
+        assert_eq!(initial.voice, "admitted voice\n");
+        assert_eq!(initial.runner, RUNNER_INSTRUCTIONS);
+        std::fs::write(dir.join("voice.md"), "later voice\n").unwrap();
+        assert_eq!(accepted().unwrap(), initial);
+        snapshot("unused", "unused", &mut trace).unwrap();
+        assert_eq!(accepted().unwrap().voice, "later voice\n");
+        std::fs::write(dir.join("voice.md"), " \n").unwrap();
+        snapshot("unused", "unused", &mut trace).unwrap();
+        assert_eq!(accepted().unwrap().voice, "later voice\n");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    scope(None, async {
+        assert!(matches!(accepted(), Err(Error::Input)));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn agent_home_missing_defaults_once_per_kind_per_runtime_and_no_home_is_silent() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("trace");

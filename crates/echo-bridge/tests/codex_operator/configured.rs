@@ -79,32 +79,30 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
         let mut base = config(&fixture);
         let home = fixture.directory.path().join("agent-home");
         base.home = Some(echo_config::HomeConfig { dir: home.clone() });
+        std::fs::create_dir_all(home.join("prompts")).unwrap();
+        std::fs::write(home.join("prompts/voice.md"), "admitted voice").unwrap();
+        std::fs::write(home.join("prompts/runner.md"), "admitted runner").unwrap();
+        base.agent.max_tool_calls = 6;
+        let overlay = echo_config::SettingsOverlay::from_toml_str("[agent]\nmax_tool_calls = 8\n").unwrap();
+        std::fs::write(home.join("settings.toml"), overlay.to_toml_string().unwrap()).unwrap();
         let effective = echo_config::EffectiveConfig {
-            config: base.clone(),
-            base: base.clone(),
-            overlay: Default::default(),
+            config: overlay.apply_to(&base).unwrap(),
+            base,
+            overlay,
             warning: None,
         };
-        let (owner, send) = echo_bridge::bridge_settings::SettingsService::open(
-            effective,
-            echo_screen_contract::settings_v1::PromptTextsV1 {
-                voice: "admitted voice".into(),
-                runner: "admitted runner".into(),
-            },
-        )
-        .unwrap();
         let observer = Observer::default();
         let path = fixture.directory.path().join("runtime-trace");
         let (stop, stopping) = tokio::sync::oneshot::channel();
         let linked = std::cell::Cell::new(false);
-        let work = echo_bridge::bridge_voice::execute_with_settings(
-            super::device::runtime_options(&base.codex, Some(&base.screen), &path),
+        let configured = Configured::from_effective(effective, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
+        let work = configured.execute_with_settings(
             FakeConnector::new(observer.clone()),
             async || -> Result<echo_media::Peer, Error> { unreachable!("no wake admits no peer") },
+            vec![],
             async {
                 stopping.await.unwrap();
             },
-            (owner, send),
             || {
                 if linked.get() {
                     echo_screen_contract::settings_v1::LinkStatusV1::Linked
