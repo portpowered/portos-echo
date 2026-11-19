@@ -13,8 +13,17 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+type SessionRequests = (
+    tokio::sync::mpsc::Receiver<crate::bridge_codex::SessionRequest>,
+    tokio::sync::watch::Sender<Option<std::sync::Arc<()>>>,
+);
+
 #[derive(Clone, Copy)]
 pub struct SessionOptions {
+    /// None retains one reply per wake; Some retains capture between replies.
+    pub listen_timeout: Option<Duration>,
+    /// Ceiling for tool-granted waiting, measured from each run's opening.
+    pub session_max: Duration,
     pub idle: Duration,
     pub response_timeout: Duration,
     pub played_timeout: Duration,
@@ -27,6 +36,11 @@ pub enum SessionNotice {
     Connected,
     Started,
     Run(Notice),
+    /// Capture EOF settled; this is independent of individual reply receipts.
+    MicrophoneCompleted(Stats),
+    /// One reply settled; capture and the run may remain active.
+    ReplyCompleted(Stats),
+    /// Explicit run end and capture EOF settled successfully.
     Completed(Stats),
 }
 
@@ -185,6 +199,32 @@ pub async fn tool_conversation<L, R, W, P, H>(
         echo_config::AgentConfig,
         crate::bridge_codex::ToolBudget,
     ),
+    options: SessionOptions,
+    cancelled: impl Future<Output = ()>,
+    observe: impl FnMut(SessionNotice) -> Result<(), Error>,
+) -> Result<u64, Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+    H: echo_agent_api::ToolHost + 'static,
+{
+    session_conversation(device, call, tools, None, options, cancelled, observe).await
+}
+
+/// Production composes a host that forwards session tool requests to this
+/// same run owner through `requests`.
+pub(super) async fn session_conversation<L, R, W, P, H>(
+    device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
+    call: &mut MediaCall<'_, R, W, P>,
+    tools: (
+        H,
+        echo_delegation::codex_dispatch::Catalog,
+        echo_config::AgentConfig,
+        crate::bridge_codex::ToolBudget,
+    ),
+    requests: Option<SessionRequests>,
     mut options: SessionOptions,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
@@ -200,6 +240,9 @@ where
         validate(&options)?;
         let (host, catalog, config, budget) = tools;
         let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, config, budget)?;
+        if let Some((requests, run)) = requests {
+            session = session.with_session(requests, run);
+        }
         drive(device, &mut session, &mut options, cancelled, &mut observe).await
     };
     let result = work.await;
@@ -232,7 +275,14 @@ pub(super) async fn peer_created(
 }
 
 pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
-    if options.response_timeout.is_zero() || options.played_timeout.is_zero() {
+    if options.response_timeout.is_zero()
+        || options.played_timeout.is_zero()
+        || options
+            .listen_timeout
+            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+        || options.session_max.is_zero()
+        || Instant::now().checked_add(options.session_max).is_none()
+    {
         return Err(Error::Input);
     }
     Instant::now()
@@ -267,21 +317,22 @@ async fn drive<L: EchoLink>(
             microphone,
             call,
             Options {
+                listen_timeout: options.listen_timeout,
+                session_max: options.session_max,
                 response_deadline: deadline,
                 played_timeout: options.played_timeout,
                 reply_lead_ms: options.reply_lead_ms,
                 muted: options.muted,
             },
             cancelled.as_mut(),
-            |notice| {
-                if let Notice::Device(LinkEvent::Mute(muted)) = &notice {
-                    options.muted = *muted;
-                }
-                observe(SessionNotice::Run(notice))
-            },
+            |notice| project_reply(notice, &mut options.muted, observe),
         )
         .await?;
         completed = completed.checked_add(1).ok_or(Error::Unavailable)?;
+        observe(SessionNotice::MicrophoneCompleted(stats.clone()))?;
+        if options.listen_timeout.is_none() {
+            observe(SessionNotice::ReplyCompleted(stats.clone()))?;
+        }
         observe(SessionNotice::Completed(stats))?;
         let expires = Instant::now().checked_add(options.idle);
         let next = wait(events, call, expires, &mut options.muted, cancelled.as_mut(), observe).await?;
@@ -298,6 +349,21 @@ async fn drive<L: EchoLink>(
                 result.map_err(|_| Error::Deadline)??;
             }
         }
+    }
+}
+
+fn project_reply(
+    notice: Notice,
+    muted: &mut bool,
+    observe: &mut impl FnMut(SessionNotice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    match notice {
+        Notice::ReplySettled(stats) => observe(SessionNotice::ReplyCompleted(stats)),
+        Notice::Device(LinkEvent::Mute(value)) => {
+            *muted = value;
+            observe(SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))))
+        }
+        notice => observe(SessionNotice::Run(notice)),
     }
 }
 
@@ -344,6 +410,9 @@ async fn idle_step<E: LinkEvents>(
             }
         },
         event = call.next() => match event? {
+            MediaEvent::Control(Event::Session(request)) => {
+                super::session_tools::inactive(request, |notice| observe(SessionNotice::Run(notice)))?;
+            }
             MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
             // Neither an idle transcript nor old PCM starts a new reply.
             MediaEvent::Control(_) | MediaEvent::Audio(_) => (),

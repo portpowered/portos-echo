@@ -30,6 +30,8 @@ fn runtime_options<'a>(
             },
             tools: vec![],
             session: bridge_voice::SessionOptions {
+                listen_timeout: None,
+                session_max: std::time::Duration::from_secs(600),
                 idle: std::time::Duration::from_secs(1),
                 response_timeout: OBSERVATION_TIMEOUT,
                 played_timeout: OBSERVATION_TIMEOUT,

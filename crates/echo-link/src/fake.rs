@@ -26,6 +26,7 @@ pub enum Command {
     Frame(Vec<u8>),
     Stop,
     Cut(u64),
+    EndRun,
     FailRun(RunFailure),
     Pause,
     Close,
@@ -33,14 +34,17 @@ pub enum Command {
 #[derive(Default)]
 struct State {
     commands: Vec<Command>,
+    capture_failsafe: Option<u32>,
     initial_mute: Option<()>,
     mute_drain: Option<Arc<Mutex<bool>>>,
     events: VecDeque<LinkEvent<FakeRun>>,
     event_waker: Option<Waker>,
     play_waker: Option<Waker>,
     outcome: Option<Result<(), Error>>,
+    end_failure: Option<Error>,
     cut: bool,
     stopped: bool,
+    run_open: Option<()>,
     source: Option<Arc<Mutex<Queue>>>,
     closed: bool,
 }
@@ -48,6 +52,17 @@ struct State {
 #[derive(Clone, Default)]
 pub struct Observer(Arc<Mutex<State>>);
 impl Observer {
+    /// Last successfully admitted device watchdog, in seconds.
+    #[must_use]
+    pub fn capture_failsafe(&self) -> Option<u32> {
+        lock(&self.0).capture_failsafe
+    }
+
+    /// Script an explicit-end failure without changing capture or playback.
+    pub fn end_failure(&self, error: Error) {
+        lock(&self.0).end_failure = Some(error);
+    }
+
     #[must_use]
     pub fn commands(&self) -> Vec<Command> {
         lock(&self.0).commands.clone()
@@ -192,7 +207,7 @@ impl MicrophoneRun for FakeRun {
         }
         poll_fn(|cx| {
             let mut state = lock(&self.observer.0);
-            if state.stopped {
+            if state.run_open.is_none() || state.closed {
                 return Poll::Ready(Ok(None));
             }
             state.play_waker = Some(cx.waker().clone());
@@ -218,6 +233,10 @@ impl LinkEvents for Events {
                 return Poll::Pending;
             }
             if let Some(event) = state.events.pop_front() {
+                if matches!(event, LinkEvent::Wake(_)) {
+                    state.run_open = Some(());
+                    state.stopped = false;
+                }
                 return Poll::Ready(Ok(Some(event)));
             }
             if state.closed {
@@ -307,9 +326,13 @@ impl EchoLink for FakeLink {
         }));
         (Sink(queue.clone()), Source(queue))
     }
-    fn enable_capture(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        std::future::ready({
-            lock(&self.observer.0).commands.push(Command::Capture);
+    fn enable_capture(&self, failsafe_seconds: u32) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::ready(if failsafe_seconds == 0 || failsafe_seconds > i32::MAX as u32 {
+            Err(Error::InvalidOptions)
+        } else {
+            let mut state = lock(&self.observer.0);
+            state.capture_failsafe = Some(failsafe_seconds);
+            state.commands.push(Command::Capture);
             Ok(())
         })
     }
@@ -397,6 +420,26 @@ impl EchoLink for FakeLink {
             })
         })
     }
+    fn end_run(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        let mut state = lock(&self.observer.0);
+        if state.closed {
+            return std::future::ready(Err(Error::Closed));
+        }
+        if state.source.is_some() {
+            return std::future::ready(Err(Error::Busy));
+        }
+        if let Some(error) = state.end_failure {
+            return std::future::ready(Err(error));
+        }
+        if state.run_open.take().is_some() {
+            state.commands.push(Command::EndRun);
+            state.stopped = true;
+            if let Some(waker) = state.play_waker.take() {
+                waker.wake();
+            }
+        }
+        std::future::ready(Ok(()))
+    }
     fn pause(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         std::future::ready({
             lock(&self.observer.0).commands.push(Command::Pause);
@@ -409,6 +452,7 @@ impl EchoLink for FakeLink {
             return std::future::ready(Err(Error::Closed));
         }
         state.commands.push(Command::FailRun(code));
+        state.run_open = None;
         state.stopped = true;
         if let Some(waker) = state.play_waker.take() {
             waker.wake();

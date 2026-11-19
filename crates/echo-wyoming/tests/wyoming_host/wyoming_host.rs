@@ -120,7 +120,7 @@ pub(super) async fn lifecycle() {
     client.run_satellite().await.unwrap();
     let mut first = wake(&mut host, &mut events).await;
     reply(&client, &mut events).await;
-    while first.recv().await.unwrap().is_some() {}
+    end_capture(&client, &mut first).await;
     host.command("stop");
     host.command("restart");
     let second = wake(&mut host, &mut events).await;
@@ -129,6 +129,11 @@ pub(super) async fn lifecycle() {
     writeln!(std::io::stdout(), "host restart: fresh_run=true old_run_closed=true").unwrap();
     client.close().await.unwrap();
     host.finish();
+}
+
+async fn end_capture(client: &WyomingClient, run: &mut Run) {
+    client.end_run().await.unwrap();
+    while run.recv().await.unwrap().is_some() {}
 }
 
 pub(super) async fn controls() {

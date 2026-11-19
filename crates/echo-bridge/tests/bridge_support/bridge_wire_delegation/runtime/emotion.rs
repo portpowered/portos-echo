@@ -51,6 +51,7 @@ async fn cancelled(app: &mut Application, screen: &mut Events) {
         bridge_wire_screen::state(screen).await,
         json!({"state":"ready","message":"Echo Live ready"})
     );
+    bridge_lifecycle::control(&mut app.satellite, "hassmic-end").await;
 }
 
 #[tokio::test(start_paused = true)]

@@ -51,6 +51,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         "" => &[
             "echo",
             "live",
+            "voice",
             "audio",
             "agent",
             "muse",
@@ -61,6 +62,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "codex",
         ],
         "audio" => &["reply_lead_ms"],
+        "voice" => &["session_listen_seconds", "session_max_seconds"],
         "codex" => &["home", "binary", "voice", "instructions", "model"],
         "chatgpt_auth" => crate::config_auth::FIELDS,
         "echo" => &["host", "wyoming_port"],
@@ -96,6 +98,7 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
+    config.voice.validate()?;
     crate::config_codex::validate(&config.codex)?;
     crate::config_codex::validate_voice(config)?;
     crate::config_muse::validate(config)?;

@@ -130,7 +130,20 @@ impl WyomingClient {
     /// Connection failure or operation timeout.
     pub async fn run_satellite(&self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
-        self.request(Command::Register(tx), rx).await
+        self.request(Command::Register(serde_json::Value::Null, tx), rx).await
+    }
+
+    /// Enable capture with the pin's stalled-progress watchdog, in seconds.
+    /// # Errors
+    /// `InvalidOptions` before any write for zero or values above signed 32-bit;
+    /// otherwise connection failure or operation timeout.
+    pub async fn run_satellite_with_failsafe(&self, seconds: u32) -> Result<(), Error> {
+        if seconds == 0 || seconds > i32::MAX as u32 {
+            return Err(Error::InvalidOptions);
+        }
+        let (tx, rx) = oneshot::channel();
+        let data = serde_json::json!({"hassmic_failsafe_seconds": seconds});
+        self.request(Command::Register(data, tx), rx).await
     }
 
     /// Take the sole event receiver.
@@ -184,6 +197,15 @@ impl WyomingClient {
     pub async fn cut_with_stats(&self) -> Result<CutStats, Error> {
         let (tx, rx) = oneshot::channel();
         self.request(Command::CutWithStats(tx), rx).await
+    }
+
+    /// Successfully end the current run without pausing wake registration.
+    /// Capture closes only after the device has accepted the complete end frame.
+    /// # Errors
+    /// Busy until playback settles; connection failure or operation timeout.
+    pub async fn end_run(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::EndRun(tx), rx).await
     }
 
     /// Pause microphone capture and end the local run. Repeated calls are

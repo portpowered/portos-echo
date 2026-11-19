@@ -51,7 +51,7 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         if !context.continuing(&source) {
             if source.cancelled && source.sent > 0 {
                 client.pause().await?;
-                client.enable_capture().await?;
+                client.enable_capture(30).await?;
                 client.probe().await?;
             }
             break;
@@ -62,6 +62,7 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         context.played = false;
         context.speaking = false;
     }
+    client.end_run().await?;
     tokio::time::timeout(Duration::from_secs(1), async {
         while let Some(frame) = run.recv().await? {
             if !source.cancelled && context.cancellation == Cancellation::Response {
@@ -122,7 +123,7 @@ async fn play<L: EchoLink>(
         // A failed response has no replacement answer to end continued capture.
         // Settle Played first, then return the same satellite to wake readiness.
         client.pause().await?;
-        client.enable_capture().await?;
+        client.enable_capture(30).await?;
         client.probe().await?;
     }
     failure.map_or(Ok(()), Err)?;

@@ -58,7 +58,9 @@ pub(super) fn configure(
         .replace("credentials/live.json", "key")
         .replace("voice = \"default\"\n", "")
         .replace("0.0.0.0:16900", "127.0.0.1:0") // lint-rules: allow-literal inert example listener replaced with loopback
-        .replace("credentials/screen-pairing.txt", "pairing");
+        .replace("credentials/screen-pairing.txt", "pairing")
+        // Keep each persistent duplex run's post-reply listen short.
+        .replace("session_listen_seconds = 15", "session_listen_seconds = 3");
     for (name, contents) in [
         (
             "bridge.toml",

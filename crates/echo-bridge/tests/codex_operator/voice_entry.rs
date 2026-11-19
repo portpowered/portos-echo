@@ -34,6 +34,11 @@ async fn codex_voice_entry_binary_authenticates_before_ready_and_reaps_after_eof
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         configure(&fixture, listener.local_addr().unwrap().port());
         if mode == "api_key" {
+            let path = fixture.directory.path().join("bridge.toml");
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("session_max_seconds = 600", "session_max_seconds = 60");
+            std::fs::write(path, text).unwrap();
             std::fs::write(fixture.directory.path().join("credential"), "synthetic-nominated-key\n").unwrap();
         } else {
             std::fs::create_dir(fixture.directory.path().join("credential")).unwrap();
@@ -52,7 +57,12 @@ async fn codex_voice_entry_binary_authenticates_before_ready_and_reaps_after_eof
             std::fs::read_to_string(fixture.home.join("last-method")).unwrap(),
             "account/read"
         );
-        assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
+        let registration = bridge_short::read(&mut satellite).await.0;
+        assert_eq!(registration["type"], "run-satellite");
+        assert_eq!(
+            registration["data"],
+            json!({"hassmic_failsafe_seconds": if mode == "api_key" { 65 } else { 605 }})
+        );
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
         bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
         assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);

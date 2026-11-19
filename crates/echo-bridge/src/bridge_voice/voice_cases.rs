@@ -1,6 +1,39 @@
 use super::*;
 
 #[tokio::test(start_paused = true)]
+async fn voice_failed_explicit_end_never_reports_run_success_after_played() {
+    let observer = Observer::default();
+    observer.end_failure(echo_link::Error::Timeout);
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 640);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    tx.send(Ok(done())).await.unwrap();
+    let mut played = 0;
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        options(),
+        std::future::pending(),
+        |notice| {
+            if matches!(notice, Notice::ReplyPlayed) {
+                played += 1;
+            }
+            Ok(())
+        },
+    ));
+    pending(work.as_mut()).await;
+    assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    observer.finish(Ok(()));
+    assert_eq!(work.await, Err(Error::Deadline));
+    assert_eq!(played, 0);
+    assert!(!observer.commands().contains(&Command::EndRun));
+}
+
+#[tokio::test(start_paused = true)]
 async fn reply_preempts_earcon_and_waits_for_its_receipt_before_owning_speaker() {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
@@ -86,9 +119,10 @@ fn preemption_notice(notice: &Notice) -> &'static str {
         }
         Notice::ReplyStarted => "speaking",
         Notice::ReplyPaused => "paused",
-        Notice::ReplyPlayed => "played",
+        Notice::ReplyPlayed | Notice::ReplySettled(_) => "played",
         Notice::Transcript { .. } => "transcript",
         Notice::Device(_) => "device",
+        Notice::SessionTool(_) => "session_tool",
     }
 }
 
@@ -153,6 +187,7 @@ async fn voice_second_run_reuses_port_without_old_pcm_or_reply_state() {
         assert_eq!(observer.commands().last(), Some(&Command::Stop));
         observer.finish(Ok(()));
         let stats = work.await.unwrap();
+        assert_eq!(observer.commands().last(), Some(&Command::EndRun));
         assert_eq!(stats.reply_sent, count as u64);
         assert_eq!(stats.reply_received, count as u64);
         assert_eq!(stats.reply_dropped, 0);
@@ -189,6 +224,7 @@ async fn voice_premature_played_and_failed_playback_never_succeed() {
         observer.finish(outcome);
         assert_eq!(work.await, Err(Error::Wyoming));
         assert_eq!(played, 0);
+        assert!(!observer.commands().contains(&Command::EndRun));
         assert!(observer.commands().contains(&Command::Cut(0)));
     }
 }
@@ -338,7 +374,7 @@ async fn voice_backpressure_keeps_pending_pcm_and_continues_control() {
     let mut mic = microphone(&mut events).await;
     let (mut port, tx) = port();
     let mut source = Source::new(200, false).unwrap();
-    source.microphone_finished = true;
+    source.controller.microphone_ended();
     let mut pending = Some(vec![12; 960]);
     let mut notices = Vec::new();
     for text in ["first", "second"] {

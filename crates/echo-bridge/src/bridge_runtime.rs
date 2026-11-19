@@ -193,7 +193,7 @@ async fn connected<L: EchoLink>(
     screen: &bridge_screen::Screen,
     delegation: &mut bridge_delegation::Host,
 ) -> Result<(), Error> {
-    client.enable_capture().await?;
+    client.enable_capture(30).await?;
     client.probe().await?;
     health.state.send_modify(|state| state.wyoming = "connected");
     trace.record("wyoming.connected", Some("connection-1"), json!({}))?;

@@ -128,7 +128,7 @@ async fn echo_link_paused_reconnect_stays_paused_then_enabled_reconnect_register
     });
     let mut events = EchoLink::events(&mut client).unwrap();
     let caller = async {
-        client.enable_capture().await.unwrap();
+        client.enable_capture(30).await.unwrap();
         EchoLink::pause(&client).await.unwrap();
         // Fresh peer readiness arrives through the same retained receiver.
         assert!(matches!(
@@ -140,8 +140,8 @@ async fn echo_link_paused_reconnect_stays_paused_then_enabled_reconnect_register
             LinkEvents::recv(&mut events).await.unwrap(),
             Some(LinkEvent::Other)
         ));
-        client.enable_capture().await.unwrap();
-        client.enable_capture().await.unwrap();
+        client.enable_capture(30).await.unwrap();
+        client.enable_capture(30).await.unwrap();
         assert!(matches!(
             LinkEvents::recv(&mut events).await.unwrap(),
             Some(LinkEvent::Other)

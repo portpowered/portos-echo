@@ -1,0 +1,17 @@
+id: session-extend-capped
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - expect_trace:
+      - run.started
+      - "session.tool_receipt {tool: extend_session, outcome: applied, deadline_ms: 12000, capped: true, count: 2}"
+      - "reply.played {outcome: played}"
+      - wyoming.run_ended
+# The delegated agent extends twice; both grants stop at the run cap, which
+# keeps the run open past the default listen window until exactly 12 s.
+budgets:
+  session_listen_seconds: 3
+  session_max_seconds: 12
+negative: []

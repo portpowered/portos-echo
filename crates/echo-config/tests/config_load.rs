@@ -47,6 +47,7 @@ fn committed_example_loads_with_all_expected_values() {
         muse: None,
         chatgpt_auth: echo_config::ChatGptAuthConfig::default(),
         audio: echo_config::AudioConfig::default(),
+        voice: echo_config::VoiceConfig::default(),
         echo: EchoConfig {
             host: "echo.example.invalid".into(),
             wyoming_port: 16700,
@@ -96,6 +97,72 @@ fn wake_earcon_defaults_and_boolean_overrides_are_offline() {
         assert_eq!(BridgeConfig::load(directory.write(input).unwrap()).unwrap(), parsed);
     }
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+}
+
+#[test]
+fn voice_listen_defaults_and_overrides_match_both_offline_loaders() {
+    use echo_config::VoiceConfig;
+    let directory = Directory::new().unwrap();
+    let credential = directory.0.join("unopened-credential-directory");
+    std::fs::create_dir(&credential).unwrap();
+    let minimal = MINIMAL.replace("absent/live", &credential.to_string_lossy().replace('\\', "/"));
+    for (fields, listen, max) in [
+        ("", 15, 600),
+        ("[voice]\n", 15, 600),
+        ("[voice]\nsession_listen_seconds=3\n", 3, 600),
+        ("[voice]\nsession_listen_seconds=3\nsession_max_seconds=3\n", 3, 3),
+        ("[voice]\nsession_max_seconds=15\n", 15, 15),
+        (
+            "[voice]\nsession_listen_seconds=300\nsession_max_seconds=2147483647\n",
+            300,
+            2_147_483_647,
+        ),
+    ] {
+        let input = format!("{minimal}\n{fields}");
+        let parsed = BridgeConfig::from_toml_str(&input).unwrap();
+        assert_eq!(BridgeConfig::load(directory.write(input).unwrap()).unwrap(), parsed);
+        assert_eq!(
+            parsed.voice,
+            VoiceConfig {
+                session_listen_seconds: listen,
+                session_max_seconds: max
+            }
+        );
+        assert_eq!(parsed.live.session_idle_seconds, 120);
+        assert_eq!(parsed.live.credential_file, credential);
+    }
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 2);
+}
+
+#[test]
+fn voice_invalid_config_is_safe_and_identical_in_both_loaders() {
+    let directory = Directory::new().unwrap();
+    for (fields, expected) in [
+        (
+            "session_listen_seconds=2",
+            "voice.session_listen_seconds: must be within 3..=300",
+        ),
+        (
+            "session_max_seconds=14",
+            "voice.session_max_seconds: must be at least voice.session_listen_seconds",
+        ),
+        (
+            "session_max_seconds='DISCARDED_VALUE'",
+            "voice.session_max_seconds: invalid type or value",
+        ),
+        ("DISCARDED_VALUE=3", "voice: unknown field"),
+    ] {
+        let input = format!("{MINIMAL}\n[voice]\n{fields}\n");
+        for result in [
+            BridgeConfig::from_toml_str(&input),
+            BridgeConfig::load(directory.write(input).unwrap()),
+        ] {
+            let error = result.unwrap_err();
+            assert_eq!(error.to_string(), expected);
+            assert!(!format!("{error:?}").contains("DISCARDED_VALUE"));
+            assert!(error.source().is_none());
+        }
+    }
 }
 
 #[test]

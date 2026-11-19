@@ -112,8 +112,8 @@ impl<L: EchoLink> EchoLink for Link<L> {
     fn reply_channel(&self, capacity: NonZeroUsize) -> (Self::ReplySink, Self::ReplySource) {
         self.inner.reply_channel(capacity)
     }
-    async fn enable_capture(&self) -> Result<(), Error> {
-        self.inner.enable_capture().await
+    async fn enable_capture(&self, failsafe_seconds: u32) -> Result<(), Error> {
+        self.inner.enable_capture(failsafe_seconds).await
     }
     async fn probe(&self) -> Result<(), Error> {
         self.inner.probe().await
@@ -123,6 +123,9 @@ impl<L: EchoLink> EchoLink for Link<L> {
     }
     async fn fail_run(&self, code: RunFailure) -> Result<(), Error> {
         self.inner.fail_run(code).await
+    }
+    async fn end_run(&self) -> Result<(), Error> {
+        self.inner.end_run().await
     }
     async fn close(&self) -> Result<(), Error> {
         self.inner.close().await

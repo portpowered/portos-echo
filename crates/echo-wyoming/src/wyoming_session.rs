@@ -19,12 +19,13 @@ mod wyoming_cut_tests;
 
 pub(crate) enum Command {
     Describe(Reply<WyomingEvent>),
-    Register(Reply<()>),
+    Register(Value, Reply<()>),
     Play(AudioFormat, mpsc::Receiver<Vec<u8>>, Reply<PlayOutcome>),
     // Retain the legacy internal command exercised by the unchanged W1 tests.
     #[cfg(test)]
     Cut(Reply<()>),
     CutWithStats(Reply<CutStats>),
+    EndRun(Reply<()>),
     Error(String, String, Reply<()>),
     Pause(Reply<()>),
     Close(Reply<()>),
@@ -37,8 +38,10 @@ struct Session<W> {
     describe: Option<Reply<WyomingEvent>>,
     play: Option<Playback>,
     registered: bool,
+    registration: Value,
     paused: bool,
     closing: bool,
+    run_open: Option<()>,
 }
 
 struct ReaderTask(JoinHandle<()>);
@@ -57,7 +60,7 @@ pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     end: watch::Sender<Option<Error>>,
 ) {
     let (_reset, mut reset) = watch::channel(0_u64);
-    let mut enabled = false;
+    let mut enabled = None;
     let (result, _) = generation(io, opts, &mut commands, events, &mut reset, &mut enabled).await;
     end.send_replace(Some(result));
 }
@@ -68,7 +71,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     commands: &mut mpsc::Receiver<Command>,
     events: wyoming_events::Sender,
     reset: &mut watch::Receiver<u64>,
-    enabled: &mut bool,
+    enabled: &mut Option<Value>,
 ) -> (Error, bool) {
     let (reader, writer) = tokio::io::split(io);
     let (tx, mut incoming) = mpsc::channel(1);
@@ -95,14 +98,16 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         opts,
         describe: None,
         play: None,
-        registered: *enabled,
+        registered: enabled.is_some(),
+        registration: enabled.clone().unwrap_or(Value::Null),
         paused: false,
         closing: false,
+        run_open: None,
     };
     reset.borrow_and_update();
     let work = async {
-        if *enabled {
-            if let Err(error) = session.send(WyomingEvent::RunSatellite(Value::Null), vec![]).await {
+        if enabled.is_some() {
+            if let Err(error) = session.register(session.registration.clone()).await {
                 return error;
             }
             session.registered = true;
@@ -114,7 +119,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         _ = reset.changed() => Error::Timeout,
         result = work => result,
     };
-    *enabled = session.registered;
+    *enabled = session.registered.then_some(session.registration.clone());
     session.router.end(if session.closing { Ok(()) } else { Err(result) });
     if let Some(reply) = session.describe.take() {
         let _ = reply.send(Err(result));
@@ -152,7 +157,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 biased;
                 () = cancelled(&mut self.play) => self.cancel_playback().await,
                 command = commands.recv() => self.command(command).await,
-                frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))).await,
+                frame = incoming.recv() => self.received(frame.unwrap_or(Err(Error::Disconnected))),
                 frame = async { match frames { Some(queue) => queue.recv().await, None => std::future::pending().await } } => match frame {
                     Ok(frame) => self.audio(frame).await,
                     Err(error) => Err(error),
@@ -180,7 +185,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
-    async fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
+    fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
         let frame = frame?;
         if self.paused
             && matches!(
@@ -191,14 +196,8 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             frame.typed().map_err(|_| Error::Protocol)?;
             return Ok(());
         }
-        let capture_continues = self.play.as_ref().is_some_and(|play| play.cut);
-        if frame.header.r#type == "played" && self.play.as_ref().is_some_and(|play| play.stopped && !play.cut) {
-            // Complete the device write before publishing terminal Played or
-            // resolving playback to the caller. A failed write is not success.
-            frame.typed().map_err(|_| Error::Protocol)?;
-            self.end_device().await?;
-        }
-        match self.router.route_with_capture(frame, capture_continues)? {
+        match self.router.route(frame)? {
+            WyomingEvent::RunPipeline(_) => self.run_open = Some(()),
             event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
                     let _ = reply.send(Ok(event));
@@ -212,9 +211,6 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                         PlayOutcome::Played
                     };
                     play.finish(Ok(outcome));
-                }
-                if !capture_continues {
-                    self.router.end(Ok(()));
                 }
             }
             _ => {}
@@ -232,11 +228,9 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                     self.send(WyomingEvent::Describe(Value::Null), vec![]).await?;
                 }
             }
-            Some(Command::Register(reply)) => {
+            Some(Command::Register(data, reply)) => {
                 if !self.registered {
-                    self.send(WyomingEvent::RunSatellite(Value::Null), vec![]).await?;
-                    self.registered = true;
-                    self.paused = false;
+                    self.register(data).await?;
                 }
                 let _ = reply.send(Ok(()));
             }
@@ -261,6 +255,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 self.pause_capture().await?;
                 let _ = reply.send(Ok(()));
             }
+            Some(Command::EndRun(reply)) => self.end_run(reply).await?,
             Some(Command::Error(code, text, reply)) => {
                 self.fail_run(code, text, reply).await?;
             }
@@ -279,6 +274,14 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
+    async fn register(&mut self, data: Value) -> Result<(), Error> {
+        self.send(WyomingEvent::RunSatellite(data.clone()), vec![]).await?;
+        self.registration = data;
+        self.registered = true;
+        self.paused = false;
+        Ok(())
+    }
+
     async fn pause_capture(&mut self) -> Result<(), Error> {
         if !self.paused {
             self.retire_playback().await?;
@@ -289,6 +292,23 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             self.router.end(Ok(()));
         }
         Ok(())
+    }
+
+    async fn end_run(&mut self, reply: Reply<()>) -> Result<(), Error> {
+        if self.play.is_some() {
+            let _ = reply.send(Err(Error::Busy));
+            return Ok(());
+        }
+        let result = if self.run_open.is_some() {
+            self.end_device().await
+        } else {
+            Ok(())
+        };
+        if result.is_ok() {
+            self.router.end(Ok(()));
+        }
+        let _ = reply.send(result);
+        result
     }
 
     async fn retire_playback(&mut self) -> Result<(), Error> {
@@ -318,11 +338,13 @@ impl<W: AsyncWrite + Unpin> Session<W> {
 
     async fn end_device(&mut self) -> Result<(), Error> {
         self.send(WyomingEvent::Other("hassmic-end".into(), Value::Null), vec![])
-            .await
+            .await?;
+        self.run_open = None;
+        Ok(())
     }
 
     async fn end_device_if_active(&mut self) -> Result<(), Error> {
-        if self.router.current.is_some() || self.play.is_some() {
+        if self.run_open.is_some() || self.play.is_some() {
             self.end_device().await?;
         }
         Ok(())

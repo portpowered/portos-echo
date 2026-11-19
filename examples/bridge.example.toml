@@ -49,5 +49,12 @@ allow_tools = ["test.echo"]
 listen = "0.0.0.0:16900"
 pairing_token_file = "credentials/screen-pairing.txt"
 
+# Duplex run listening after activity/reply. This differs from live.session_idle_seconds,
+# which retains the Live call between separate wake runs. Omitted table/keys use these defaults.
+# Remove this table before rolling back to a binary that predates voice configuration.
+[voice]
+session_listen_seconds = 15 # Integer 3..300.
+session_max_seconds = 600 # Integer 3..2147483647, at least listen; bounds tool-granted waiting.
+
 [audit]
 log_dir = "logs/audit"

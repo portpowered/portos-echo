@@ -55,6 +55,8 @@ allow_tools = ["test.echo"]
 [screen]
 listen = "127.0.0.1:0"
 pairing_token_file = "pairing"
+[voice]
+session_listen_seconds = 3
 [audit]
 log_dir = "audit"
 [chatgpt_auth]

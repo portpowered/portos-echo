@@ -93,6 +93,10 @@ impl Rig {
         bridge_short::send(&mut self.satellite, "played", json!({})).await;
         bridge_short::send(&mut self.satellite, "audio-stop", json!({})).await;
         bridge_wire_auth_failure::wait_event(&self.path(), "live.closed", self.bridge.as_mut().unwrap()).await;
+        if chunks > 0 {
+            // Settle the cut run's explicit end before a later wake is refused.
+            bridge_lifecycle::control(&mut self.satellite, "hassmic-end").await;
+        }
         chunks
     }
 

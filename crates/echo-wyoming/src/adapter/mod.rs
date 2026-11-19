@@ -94,8 +94,8 @@ impl EchoLink for WyomingClient {
         let (tx, rx) = mpsc::channel(capacity.get());
         (Sink(tx), rx)
     }
-    async fn enable_capture(&self) -> Result<(), Error> {
-        self.run_satellite().await.map_err(error)
+    async fn enable_capture(&self, failsafe_seconds: u32) -> Result<(), Error> {
+        self.run_satellite_with_failsafe(failsafe_seconds).await.map_err(error)
     }
     async fn probe(&self) -> Result<(), Error> {
         self.describe().await.map(|_| ()).map_err(error)
@@ -124,6 +124,9 @@ impl EchoLink for WyomingClient {
     }
     async fn pause(&self) -> Result<(), Error> {
         Self::pause(self).await.map_err(error)
+    }
+    async fn end_run(&self) -> Result<(), Error> {
+        Self::end_run(self).await.map_err(error)
     }
     async fn fail_run(&self, code: RunFailure) -> Result<(), Error> {
         let (code, text) = match code {

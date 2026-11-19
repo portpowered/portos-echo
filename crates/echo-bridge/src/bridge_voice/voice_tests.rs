@@ -53,6 +53,8 @@ fn port() -> (Port, mpsc::Sender<Result<MediaEvent, Error>>) {
 }
 fn options() -> Options {
     Options {
+        listen_timeout: None,
+        session_max: Duration::from_secs(600),
         reply_lead_ms: 200,
         response_deadline: Instant::now() + Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),
@@ -127,9 +129,10 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
                 Notice::EarconPlayed(_) => "earcon",
                 Notice::ReplyStarted => "speaking",
                 Notice::ReplyPaused => "paused",
-                Notice::ReplyPlayed => "played",
+                Notice::ReplyPlayed | Notice::ReplySettled(_) => "played",
                 Notice::Transcript { .. } => "transcript",
                 Notice::Device(_) => "device",
+                Notice::SessionTool(_) => "session_tool",
             });
             Ok(())
         },
@@ -414,12 +417,14 @@ async fn delegated_answer(filler: Vec<MediaEvent>, answer: MediaEvent) -> (u64, 
     send(&tx, audible(12)).await;
     pending(work.as_mut()).await;
     assert_eq!(frames(&observer).len(), 10);
+    assert!(!observer.commands().contains(&Command::EndRun));
     send(&tx, [answer, done()]).await;
     tick(work.as_mut(), 2).await;
     assert_eq!(frames(&observer).len(), 12);
     assert_eq!(observer.commands().last(), Some(&Command::Stop));
     observer.finish(Ok(()));
     let stats = work.await.unwrap();
+    assert_eq!(observer.commands().iter().filter(|c| **c == Command::EndRun).count(), 1);
     (stats.reply_received, stats.reply_sent)
 }
 #[tokio::test(start_paused = true)]
@@ -472,6 +477,7 @@ async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_witho
     // The filler played up to the resampler's held tail; the reply stays open.
     assert_eq!(frames(&observer).len(), 11);
     assert_ne!(observer.commands().last(), Some(&Command::Stop));
+    assert!(!observer.commands().contains(&Command::EndRun));
     tokio::time::advance(Duration::from_secs(1)).await;
     pending(work.as_mut()).await;
     tick(work.as_mut(), 1).await;
@@ -484,6 +490,7 @@ async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_witho
     observer.finish(Ok(()));
     let stats = work.await.unwrap();
     assert_eq!((stats.reply_received, stats.reply_sent), (13, 12));
+    assert_eq!(observer.commands().last(), Some(&Command::EndRun));
 }
 
 fn assert_drained_reply(observer: &Observer, old_frames: usize) {

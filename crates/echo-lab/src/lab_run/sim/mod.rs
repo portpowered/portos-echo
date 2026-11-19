@@ -7,6 +7,7 @@ pub(super) mod observers;
 pub(super) mod process;
 pub(super) mod production;
 pub(super) mod selectors;
+pub mod session;
 pub mod suite;
 pub(super) mod trace;
 mod world;

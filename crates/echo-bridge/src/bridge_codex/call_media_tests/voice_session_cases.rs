@@ -16,12 +16,102 @@ use std::{
 
 fn session_options() -> SessionOptions {
     SessionOptions {
+        listen_timeout: None,
+        session_max: Duration::from_secs(600),
         idle: Duration::from_secs(5),
         response_timeout: Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),
         reply_lead_ms: 200,
         muted: false,
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn session_listening_projects_two_replies_before_one_run_and_microphone_completion() {
+    let (mut io, mut server) = fixture();
+    let (peer, state, _audio) = peer(true, None);
+    let (link, mut events, microphone, observer) = device().await;
+    let notices = std::cell::RefCell::new(Vec::new());
+    let (send, receive) = mpsc::unbounded_channel();
+    let mut options = session_options();
+    options.listen_timeout = Some(Duration::from_secs(3));
+    let client = async {
+        let mut call = MediaCall::new(&mut io, peer);
+        call.start(&super::options(), vec![], deadline()).await.unwrap();
+        conversation(
+            (&link, &mut events, microphone),
+            &mut call,
+            options,
+            std::future::pending(),
+            |notice| {
+                persistent_notice(notice, &notices);
+                Ok(())
+            },
+        )
+        .await
+    };
+    let remote = persistent_replies(&mut server, receive);
+    let mut work = Box::pin(async { tokio::join!(client, remote).0 });
+    for number in 1..=2 {
+        send.send(()).unwrap();
+        pump(work.as_mut()).await;
+        assert_eq!(observer.commands().last(), Some(&Command::Stop));
+        observer.finish(Ok(()));
+        pump(work.as_mut()).await;
+        let expected = if number == 1 {
+            vec!["started", "reply"]
+        } else {
+            vec!["started", "reply", "reply"]
+        };
+        assert_eq!(*notices.borrow(), expected);
+        assert!(!observer.commands().contains(&Command::EndRun));
+        tokio::time::advance(Duration::from_secs(2)).await;
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    pump(work.as_mut()).await;
+    assert_eq!(*notices.borrow(), ["started", "reply", "reply", "microphone", "run"]);
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::EndRun))
+            .count(),
+        1
+    );
+    assert_eq!(state.closes.load(Ordering::SeqCst), 0);
+    tokio::time::advance(Duration::from_secs(5)).await;
+    assert_eq!(work.await, Ok(1));
+    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+}
+
+fn persistent_notice(notice: SessionNotice, notices: &std::cell::RefCell<Vec<&str>>) {
+    match notice {
+        SessionNotice::Started => notices.borrow_mut().push("started"),
+        SessionNotice::ReplyCompleted(stats) => {
+            assert_eq!((stats.reply_received, stats.reply_sent), (0, 0));
+            notices.borrow_mut().push("reply");
+        }
+        SessionNotice::MicrophoneCompleted(_) => notices.borrow_mut().push("microphone"),
+        SessionNotice::Completed(_) => notices.borrow_mut().push("run"),
+        _ => (),
+    }
+}
+
+async fn persistent_replies(server: &mut Server, mut receive: mpsc::UnboundedReceiver<()>) {
+    start(server).await;
+    for _ in 0..2 {
+        receive.recv().await.unwrap();
+        notification(
+            server,
+            "thread/realtime/transcript/delta",
+            json!({
+                "threadId":"thread-1", "role":"assistant", "delta":"fixture"
+            }),
+        )
+        .await;
+        reply(server).await;
+    }
+    stop(server).await;
 }
 
 fn wake(observer: &Observer) {
@@ -111,7 +201,10 @@ async fn session_reuses_one_call_resets_idle_deadline_and_discards_old_pcm() {
                 match notice {
                     SessionNotice::Completed(outcome) => completed.lock().unwrap().push(outcome),
                     SessionNotice::Started => again.send(()).unwrap(),
-                    SessionNotice::Connected | SessionNotice::Run(_) => (),
+                    SessionNotice::Connected
+                    | SessionNotice::Run(_)
+                    | SessionNotice::ReplyCompleted(_)
+                    | SessionNotice::MicrophoneCompleted(_) => (),
                 }
                 Ok(())
             },
@@ -306,7 +399,7 @@ async fn session_expiry_wins_queued_wake_at_equality_and_muted_wakes_do_not_rene
 
 #[tokio::test(start_paused = true)]
 async fn session_observer_error_and_invalid_options_always_close() {
-    for invalid in 0..5 {
+    for invalid in 0..7 {
         let (mut io, mut server) = fixture();
         let (peer, state, _audio) = peer(true, None);
         let observer = Observer::default();
@@ -323,6 +416,8 @@ async fn session_observer_error_and_invalid_options_always_close() {
                 2 => settings.played_timeout = Duration::ZERO,
                 3 => settings.response_timeout = Duration::MAX,
                 4 => settings.played_timeout = Duration::MAX,
+                5 => settings.listen_timeout = Some(Duration::ZERO),
+                6 => settings.listen_timeout = Some(Duration::MAX),
                 _ => (),
             }
             conversation(

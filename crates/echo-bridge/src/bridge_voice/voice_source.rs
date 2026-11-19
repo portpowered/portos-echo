@@ -1,4 +1,4 @@
-use super::{Error, Stats, VoicePort};
+use super::{Error, Stats, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
@@ -8,45 +8,41 @@ use tokio::time::{Duration, Instant};
 /// Samples at or below this level are WebRTC silence, not speech.
 const QUIET: u16 = 64;
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(super) enum ReplyState {
-    #[default]
-    Idle,
-    Speaking,
-    Cutting,
-    Retired,
-}
-
 pub(super) struct Source {
     pub microphone: Option<CaptureAudio>,
-    pub microphone_finished: bool,
     pub muted: bool,
     pub reply: ReplyAudio,
-    pub played: bool,
-    pub state: ReplyState,
-    pub cut_receipts: usize,
+    pub controller: Controller,
     pub failure: &'static str,
     lead_ms: u16,
     pub delegation: Delegation,
     pub mouth: Mouth,
     pub stats: Stats,
+    pub session: super::session_tools::Grants,
 }
 
 impl Source {
+    pub fn resume_reply(&mut self) -> Result<(), Error> {
+        self.controller.resume()?;
+        self.stats.reply_dropped += self.reply.dropped_frames();
+        self.reply = ReplyAudio::new(self.lead_ms)?;
+        self.delegation = Delegation::default();
+        self.mouth = Mouth::default();
+        Ok(())
+    }
+
     pub fn new(lead_ms: u16, muted: bool) -> Result<Self, Error> {
         Ok(Self {
             microphone: None,
-            microphone_finished: false,
             muted,
             reply: ReplyAudio::new(lead_ms)?,
-            played: false,
-            state: ReplyState::Idle,
-            cut_receipts: 0,
+            controller: Controller::default(),
             failure: "playback",
             lead_ms,
             delegation: Delegation::default(),
             mouth: Mouth::default(),
             stats: Stats::default(),
+            session: super::session_tools::Grants::default(),
         })
     }
 
@@ -54,17 +50,17 @@ impl Source {
     /// Stream order identifies the replacement at its next assistant delta.
     pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
         port.interrupt_turn()?;
-        if self.state != ReplyState::Speaking && !(self.state == ReplyState::Idle && self.delegation.turns > 0) {
+        if !self.controller.interruptible(self.delegation.turns > 0) {
             return Ok(());
         }
-        if self.state == ReplyState::Speaking {
+        if self.controller.speaking() {
             port.retire_audio();
         }
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.reply = ReplyAudio::new(self.lead_ms)?;
         self.delegation = Delegation::default();
         self.mouth = Mouth::default();
-        self.state = ReplyState::Cutting;
+        self.controller.cut();
         Ok(())
     }
 
@@ -72,7 +68,7 @@ impl Source {
     /// Adapter-suppressed chunks arrive separately as ordered device events.
     pub fn capture(&mut self, frame: Option<MicFrame>, port: &impl VoicePort) -> Result<bool, Error> {
         let Some(frame) = frame else {
-            self.microphone_finished = true;
+            self.controller.microphone_ended();
             if let Some(microphone) = &mut self.microphone {
                 for frame in microphone.finish()? {
                     port.send(frame)?;
@@ -100,10 +96,7 @@ impl Source {
     /// Continuous RTP received after a completed reply belongs to the retired
     /// converter. Discard both quiet and audible media at that boundary.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
-        if !matches!(self.state, ReplyState::Cutting | ReplyState::Retired)
-            && !self.reply.finished()
-            && !self.delegation.abandoned
-        {
+        if self.controller.accepts_audio() && !self.reply.finished() && !self.delegation.abandoned {
             // PCM has no utterance identity. Only ordered assistant control
             // opens Speaking; the initial user transcript can lag audible RTP.
             self.reply.push(frame)?;
@@ -171,11 +164,11 @@ pub(super) fn playback_failure(
     let _ = writeln!(
         std::io::stderr(),
         "echo-bridge: wyoming stage={stage} error={error:?} state={:?} sink_open={sink_open} finished={} drained={} played={} cut_receipts={} playback={playback:?}",
-        source.state,
+        source.controller,
         source.reply.finished(),
         source.reply.drained(),
-        source.played,
-        source.cut_receipts,
+        source.controller.has_played(),
+        source.controller.pending_cut_receipts(),
     );
 }
 

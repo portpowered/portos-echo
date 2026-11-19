@@ -1,5 +1,6 @@
 //! One local provider process and one single-owner Opus remote per M2 case.
 pub(super) mod driver;
+mod stream;
 use crate::lab_run::sim::process::Process;
 use echo_live::LivePeer;
 use serde_json::{Value, json};
@@ -168,13 +169,14 @@ async fn drive(
     let mut started = false;
     let mut released = false;
     let mut tail = false;
+    let mut stream = stream::Stream::default();
     let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
     loop {
         let work = async {
             if quiesced {
                 std::future::pending().await
             } else {
-                step(peer, &mut reply, &mut tail, quiet_edges).await
+                step(peer, &mut reply, &mut tail, quiet_edges, &mut stream).await
             }
         };
         let progress = progress(work, process, commands, ticks, &mut clock, quiesced).await?;
@@ -248,15 +250,17 @@ async fn repeat(
     let mut servicing = false;
     let mut reply = false;
     let mut tail = false;
+    let mut stream = stream::Stream::default();
     loop {
         tokio::select! {
             offer = process.expect("provider.offer") => {
                 if let Some(peer) = peer.as_mut() { peer.close(); }
                 negotiate(process, peer, &offer?).await?;
+                stream = stream::Stream::default();
                 capture = Some(0);
                 servicing = true;
             },
-            result = driver::advance(step(peer, &mut reply, &mut tail, false), commands, &mut capture, &mut servicing, retained) => {
+            result = driver::advance(step(peer, &mut reply, &mut tail, false, &mut stream), commands, &mut capture, &mut servicing, retained) => {
                 match result? {
                     Some(true) => {
                     process.send(&json!({"transcripts":true})).await?;
@@ -301,6 +305,7 @@ async fn step(
     reply: &mut bool,
     tail: &mut bool,
     quiet_edges: bool,
+    stream: &mut stream::Stream,
 ) -> Result<usize, String> {
     let mut received = 0;
     let peer = peer.as_mut().ok_or("m2: missing remote media")?;
@@ -318,11 +323,7 @@ async fn step(
         // Keep each burst below the production ingress capacity. The tail is
         // released only after three actual PCM writes prove initial consumption.
         for sequence in sequences {
-            let mut frame = super::tone::packet(sequence).ok_or("m2: invalid tone sequence")?;
-            if quiet_edges && !(2..8).contains(&sequence) {
-                // Standard 20 ms mono Opus digital silence, never microphone PCM.
-                frame.payload = vec![0xf8, 0xff, 0xfe];
-            }
+            let frame = stream.packet(sequence, quiet_edges)?;
             peer.send_audio(frame, Instant::now().into_std())
                 .await
                 .map_err(|_| "m2: synthetic reply media")?;

@@ -6,9 +6,11 @@ mod config_codex;
 mod config_decode;
 mod config_muse;
 mod config_validate;
+mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
 pub use config_codex::CodexConfig;
 pub use config_muse::{AgentBackend, MuseConfig};
+pub use config_voice::VoiceConfig;
 
 #[cfg(test)]
 mod config_rule_tests;
@@ -72,6 +74,7 @@ pub struct BridgeConfig {
     pub codex: CodexConfig,
     pub echo: EchoConfig,
     pub live: LiveConfig,
+    pub voice: VoiceConfig,
     pub audio: AudioConfig,
     pub agent: AgentConfig,
     pub agent_backend: AgentBackend,

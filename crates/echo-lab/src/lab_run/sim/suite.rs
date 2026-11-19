@@ -33,6 +33,7 @@ pub fn default_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> {
                 scenario["id"].as_str(),
                 Some("m3-full-duplex" | "m4-spoof-tool" | "m6-emotion" | "m7-muse")
             )
+            || scenario["id"].as_str().is_some_and(|id| id.starts_with("session-"))
         {
             "echo-bridge"
         } else {
@@ -128,7 +129,9 @@ fn scenario_command(bridge: &Path, name: &str, scenario: &serde_json::Value) -> 
         || matches!(
             scenario["id"].as_str(),
             Some("m3-full-duplex" | "m4-spoof-tool" | "m6-emotion" | "m7-muse")
-        ) {
+        )
+        || scenario["id"].as_str().is_some_and(|id| id.starts_with("session-"))
+    {
         production = default_bridge(scenario)?;
         production.as_path()
     } else {

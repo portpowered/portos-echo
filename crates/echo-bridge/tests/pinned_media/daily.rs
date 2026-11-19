@@ -46,8 +46,10 @@ impl Provider {
         self.input.write_all(format!("{value}\n").as_bytes()).await.unwrap();
     }
     async fn cycle(&mut self, identity: &str, exhausted: bool) {
-        let tools: Vec<_> = echo_spoof_mcp::catalog().as_array().unwrap().iter().enumerate()
+        let mut tools: Vec<_> = echo_spoof_mcp::catalog().as_array().unwrap().iter().enumerate()
             .map(|(i, t)| json!({"name":(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"][i]),"description":t["description"],"inputSchema":t["inputSchema"]})).collect();
+        // The configured bridge appends its two session builtins after discovery.
+        tools.extend(session_tools());
         self.model_ingress = 0;
         self.send(json!({"tools":tools,"negative":false,"exhausted":exhausted,"manual":true,"identity":identity}))
             .await;
@@ -246,6 +248,18 @@ async fn inspect(
     stopped(observer).await;
 }
 
+fn session_tools() -> [Value; 2] {
+    [
+        json!({"name":"extend_session",
+            "description":"Extend listening for this voice session within its configured bound.",
+            "inputSchema":{"type":"object","properties":{"seconds":{"type":"integer","minimum":1}},
+                "required":["seconds"],"additionalProperties":false}}),
+        json!({"name":"end_session",
+            "description":"End this voice session after its current reply has played.",
+            "inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
+    ]
+}
+
 async fn success(provider: &mut Provider, identity: &str) -> Value {
     provider.cycle(identity, false).await;
     assert_eq!(provider.read().await, json!({"append":identity}));
@@ -253,8 +267,8 @@ async fn success(provider: &mut Provider, identity: &str) -> Value {
     assert_eq!(
         snapshot["models"],
         json!([
-            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
-            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}
+            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":0},
+            {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":1}
         ])
     );
     assert_eq!(snapshot["appends"], json!([identity]));
@@ -270,7 +284,7 @@ async fn interrupted(root: &Path, provider: &mut Provider) {
     // before polling. Here every native ingress receipt must match the exact
     // final request list, with no returned tool output or post-interrupt work.
     let expected = vec![
-        json!({"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0});
+        json!({"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":0});
         provider.model_ingress
     ];
     assert_eq!(snapshot["models"], json!(expected));

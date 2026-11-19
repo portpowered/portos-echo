@@ -97,7 +97,9 @@ pub(super) fn configure(root: &Path, port: u16) -> CodexConfig {
         .replace("credentials/live.json", "key")
         .replace("voice = \"default\"\n", "")
         .replace("0.0.0.0:16900", "127.0.0.1:0") // lint-rules: allow-literal replace inert example listener with loopback
-        .replace("credentials/screen-pairing.txt", "screen-token");
+        .replace("credentials/screen-pairing.txt", "screen-token")
+        // Keep each persistent duplex run's post-reply listen short.
+        .replace("session_listen_seconds = 15", "session_listen_seconds = 3");
     std::fs::write(
         root.join("bridge.toml"),
         format!(
@@ -156,31 +158,41 @@ async fn settle(
     assert_eq!(count(root, "reply.played"), run - 1);
     assert_eq!(count(root, "bridge.run_completed"), run - 1);
     send(satellite, "played", json!({}), vec![]).await;
-    // A normal Played ends this device run before the next wake reuses the call.
-    let (end, payload) = read_wire(satellite).await;
-    assert_eq!(
-        end,
-        json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0})
-    );
-    assert_eq!(payload, [] as [u8; 0]);
     let mut pending = false;
     let mut completed = false;
     // Played can precede the delayed mouth boundary. Keep the same clock moving,
     // and drain its receipt even when completion is published before the receipt.
+    // After Played the persistent run listens until its configured deadline with
+    // no media pacing the remote, so a short wall interval also releases a step.
     while !completed || pending {
         tokio::select! {
             line = output.next_line() => {
                 let observed: Value = serde_json::from_str(&line.unwrap().unwrap()).unwrap();
                 settle_receipt(&observed, &mut pending, &mut completed, run);
             },
-            tick = clock.recv(), if !pending && !completed => {
-                assert_eq!(tick, Some(()));
+            () = paced(clock), if !pending && !completed => {
                 input.write_all(b"{\"action\":\"advance_playout\",\"milliseconds\":20}\n").await.unwrap();
                 pending = true;
             },
         }
     }
+    // The controller ends only after Played, the delayed mouth boundary and the
+    // configured listen deadline. Then await the explicit device end command.
+    let (end, payload) = read_wire(satellite).await;
+    assert_eq!(
+        end,
+        json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0})
+    );
+    assert_eq!(payload, [] as [u8; 0]);
     assert_eq!(count(root, "reply.played"), run);
+}
+
+/// A remote media step, or a short wall interval once no media paces it.
+async fn paced(clock: &mut mpsc::Receiver<()>) {
+    tokio::select! {
+        tick = clock.recv() => assert_eq!(tick, Some(())),
+        () = tokio::time::sleep(Duration::from_millis(5)) => (),
+    }
 }
 
 fn settle_receipt(observed: &Value, pending: &mut bool, completed: &mut bool, run: usize) {

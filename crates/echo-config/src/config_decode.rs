@@ -87,6 +87,12 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .unwrap_or_default(),
         echo: echo(root.node("echo")?)?,
         live: live(root.node("live")?)?,
+        voice: root
+            .table
+            .remove("voice")
+            .map(|v| crate::config_voice::decode(v.into_inner()))
+            .transpose()?
+            .unwrap_or_default(),
         audio: root
             .table
             .remove("audio")

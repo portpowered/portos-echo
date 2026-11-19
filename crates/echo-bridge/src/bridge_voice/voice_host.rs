@@ -31,6 +31,17 @@ pub async fn with_device<C: LinkConnector, T>(
     cancelled: impl Future<Output = ()>,
     session: impl AsyncFnOnce(&mut RpcIo<ChildStdout, ChildStdin>, &mut C::Link, watch::Receiver<bool>) -> Result<T, Error>,
 ) -> Result<T, Error> {
+    with_capture(options, connector, 30, cancelled, session).await
+}
+
+/// Use the configured stalled-progress watchdog without changing call policy.
+pub(super) async fn with_capture<C: LinkConnector, T>(
+    options: HostOptions<'_>,
+    connector: C,
+    failsafe_seconds: u32,
+    cancelled: impl Future<Output = ()>,
+    session: impl AsyncFnOnce(&mut RpcIo<ChildStdout, ChildStdin>, &mut C::Link, watch::Receiver<bool>) -> Result<T, Error>,
+) -> Result<T, Error> {
     let admitted = Cell::new(false);
     let (stop, stopping) = watch::channel(false);
     let startup_stop = stopping.clone();
@@ -45,7 +56,7 @@ pub async fn with_device<C: LinkConnector, T>(
         },
         async |io| {
             admitted.set(true);
-            device(io, &connector, deadline, stopping, session).await
+            device(io, &connector, (deadline, failsafe_seconds), stopping, session).await
         },
     );
     tokio::pin!(operation, cancelled);
@@ -62,10 +73,11 @@ pub async fn with_device<C: LinkConnector, T>(
 async fn device<C: LinkConnector, T, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     io: &mut RpcIo<R, W>,
     connector: &C,
-    deadline: Instant,
+    startup: (Instant, u32),
     stopping: watch::Receiver<bool>,
     session: impl AsyncFnOnce(&mut RpcIo<R, W>, &mut C::Link, watch::Receiver<bool>) -> Result<T, Error>,
 ) -> Result<T, Error> {
+    let (deadline, failsafe_seconds) = startup;
     if *stopping.borrow() {
         return Err(Error::Control);
     }
@@ -78,7 +90,7 @@ async fn device<C: LinkConnector, T, R: AsyncRead + Unpin, W: AsyncWrite + Unpin
         result = timeout_at(deadline, connector.connect()) => result.map_err(|_| Error::Deadline)??,
     };
     let startup = async {
-        client.enable_capture().await?;
+        client.enable_capture(failsafe_seconds).await?;
         client.probe().await.map_err(Error::from)
     };
     let ready = tokio::select! {
@@ -113,7 +125,38 @@ async fn stopped(mut stopping: watch::Receiver<bool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use echo_link::fake::{FakeConnector, Observer};
+    use echo_link::fake::{Command, FakeConnector, Observer};
+
+    #[tokio::test(start_paused = true)]
+    async fn configured_capture_watchdog_is_admitted_before_probe_and_cleanup_is_joined() {
+        for seconds in [605, 95, 2_147_483_647, 0, 2_147_483_648] {
+            let (stream, _server) = tokio::io::duplex(1024);
+            let (read, write) = tokio::io::split(stream);
+            let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+            let observer = Observer::default();
+            let (_stop, stopping) = watch::channel(false);
+            let valid = seconds > 0 && i32::try_from(seconds).is_ok();
+            let result = device(
+                &mut io,
+                &FakeConnector::new(observer.clone()),
+                (Instant::now() + Duration::from_secs(5), seconds),
+                stopping,
+                async |_, _, _| {
+                    assert_eq!(observer.capture_failsafe(), Some(seconds));
+                    Err::<(), _>(Error::Control)
+                },
+            )
+            .await;
+            assert_eq!(result, Err(if valid { Error::Control } else { Error::Wyoming }));
+            assert_eq!(observer.capture_failsafe(), valid.then_some(seconds));
+            let expected = if valid {
+                vec![Command::Connect, Command::Capture, Command::Probe, Command::Close]
+            } else {
+                vec![Command::Connect, Command::Close]
+            };
+            assert_eq!(observer.commands(), expected);
+        }
+    }
 
     #[tokio::test(start_paused = true)]
     async fn expired_or_cancelled_device_admission_never_connects() {
@@ -126,7 +169,7 @@ mod tests {
             let result = device(
                 &mut io,
                 &FakeConnector::new(observer.clone()),
-                Instant::now(),
+                (Instant::now(), 30),
                 stopping,
                 async |_, _, _| -> Result<(), Error> { unreachable!() },
             )
@@ -159,7 +202,7 @@ mod tests {
             let operation = device(
                 &mut io,
                 &connector,
-                start + Duration::from_secs(5),
+                (start + Duration::from_secs(5), 30),
                 stopping,
                 async |_, _, _| -> Result<(), Error> { unreachable!() },
             );

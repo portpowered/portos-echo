@@ -87,7 +87,7 @@ fn validate(value: &Value) -> Result<(), String> {
         "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}])
     };
     let models = (0..ids.len() * 2)
-        .map(|index| json!({"tools":["test_echo"],"outputs":index.div_ceil(2)}))
+        .map(|index| json!({"tools":["test_echo","extend_session","end_session"],"outputs":index.div_ceil(2)}))
         .collect::<Vec<_>>();
     let expected = json!({"event":"provider.snapshot", "calls":calls,"sidebands":u8::from(!ids.is_empty()),
         "external":0, "delegations":ids, "appends":ids,"transcripts":[],"models":models});

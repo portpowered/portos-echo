@@ -2,6 +2,8 @@
 //! socket writes, never from capture FIFO writes or playback-file growth.
 use std::{net::SocketAddr, time::Duration};
 mod earcon;
+mod reconnect;
+mod session;
 
 use echo_contracts::wyoming::{Decoder, Event, Header, WyomingEvent};
 use tokio::{
@@ -14,6 +16,7 @@ use tokio::{
 
 #[derive(Clone, Debug, Default)]
 pub struct Timing {
+    session: session::Session,
     pub captured: usize,
     captured_chunks: usize,
     endpoint_sample: Option<usize>,
@@ -47,6 +50,7 @@ impl Timing {
     }
 
     fn capture(&mut self, event: &Event, target: usize, now: Duration) -> Result<(), String> {
+        self.session.capture(event, now);
         match event.header.r#type.as_str() {
             "run-pipeline" if self.run => return Err("wire: multiple runs in one world".into()),
             "run-pipeline" => {
@@ -85,6 +89,7 @@ impl Timing {
 
     fn playback(&mut self, event: &Event, now: Duration) -> Result<(), String> {
         let earcon = self.earcon.observe(event, now)?;
+        self.session.playback(event, now, earcon);
         if event.header.r#type == "audio-chunk" {
             if !self.run || !pcm(event, 24000) {
                 return Err("wire: invalid reply PCM".into());
@@ -111,6 +116,7 @@ impl Timing {
             "nonzero_samples":self.nonzero_samples,"audible_samples":self.audible_samples,
             "wake":self.wake_observation(),
             "capture":self.capture_observation(),
+            "session":self.session.observation(),
             "host":host});
         if let Some(error) = &self.failure {
             return Err(error.clone());
@@ -183,6 +189,7 @@ pub struct Relay {
     observed: watch::Receiver<Timing>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), String>>,
+    restart: Option<oneshot::Sender<()>>,
 }
 
 impl Relay {
@@ -196,10 +203,14 @@ impl Relay {
         if capture_bytes == 0 || capture_bytes > 65536 || !capture_bytes.is_multiple_of(2) {
             return Err("wire: invalid finite utterance size".into());
         }
-        Self::start(host, Endpoint::Count(capture_bytes)).await
+        Self::start(host, Endpoint::Count(capture_bytes), false).await
     }
 
     pub async fn bind_fixture(host: SocketAddr, fixture: Vec<u8>) -> Result<Self, String> {
+        Self::bind_session(host, fixture, false).await
+    }
+
+    pub async fn bind_session(host: SocketAddr, fixture: Vec<u8>, reconnect: bool) -> Result<Self, String> {
         if host.ip() != std::net::Ipv4Addr::LOCALHOST || host.port() == 0 {
             return Err("wire: host must be bound on 127.0.0.1".into());
         }
@@ -212,6 +223,7 @@ impl Relay {
                 bytes: signs(&fixture),
                 tail: vec![],
             },
+            reconnect,
         )
         .await
     }
@@ -220,19 +232,20 @@ impl Relay {
         if host.ip() != std::net::Ipv4Addr::LOCALHOST || host.port() == 0 {
             return Err("wire: host must be bound on 127.0.0.1".into());
         }
-        Self::start(host, Endpoint::Reply).await
+        Self::start(host, Endpoint::Reply, false).await
     }
 
-    async fn start(host: SocketAddr, endpoint: Endpoint) -> Result<Self, String> {
+    async fn start(host: SocketAddr, endpoint: Endpoint, reconnect: bool) -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|_| "wire: bind failed")?;
         let address = listener.local_addr().map_err(|_| "wire: address failed")?;
         let (observed, receive) = watch::channel(Timing::default());
         let (stop, stopped) = oneshot::channel();
+        let (restart, restarted) = oneshot::channel();
         let task = tokio::spawn(async move {
             let result = tokio::select! {
-                result = serve(listener, host, endpoint, &observed) => result,
+                result = reconnect::serve(listener, host, endpoint, &observed, reconnect.then_some(restarted)) => result,
                 _ = stopped => Ok(()),
             };
             if let Err(error) = &result {
@@ -245,6 +258,7 @@ impl Relay {
             observed: receive,
             stop: Some(stop),
             task,
+            restart: reconnect.then_some(restart),
         })
     }
 
@@ -286,13 +300,13 @@ impl Drop for Relay {
 }
 
 async fn serve(
-    listener: TcpListener,
+    listener: &TcpListener,
     host: SocketAddr,
-    mut endpoint: Endpoint,
+    endpoint: &mut Endpoint,
     observed: &watch::Sender<Timing>,
 ) -> Result<(), String> {
     let (bridge, _) = listener.accept().await.map_err(|_| "wire: accept failed")?;
-    drop(listener); // Exactly one bridge, no queued or orphaned connections.
+    observed.send_modify(|state| state.session.generation());
     let host = TcpStream::connect(host)
         .await
         .map_err(|_| "wire: host connect failed")?;

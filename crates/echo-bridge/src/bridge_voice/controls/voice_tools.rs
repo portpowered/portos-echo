@@ -1,8 +1,9 @@
 //! One process-owned MCP/policy/ledger lifetime spans every voice call.
+use super::session_tools::{END, EXTEND};
 use super::tool_policy::Policy;
 use crate::{
     Error,
-    bridge_codex::ToolBudget,
+    bridge_codex::{SessionCommand, SessionRequest, ToolBudget},
     bridge_mcp::{self, Token},
     bridge_runtime::bridge_screen::Screen,
     bridge_trace::Trace,
@@ -11,8 +12,9 @@ use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::{AgentConfig, BridgeConfig};
 use echo_delegation::codex_dispatch::Catalog;
 use echo_mcp_client::McpClient;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
+use tokio::sync::{mpsc, oneshot};
 
 pub(super) struct Mcp {
     client: Option<McpClient<Token>>,
@@ -32,6 +34,72 @@ impl ToolHost for Mcp {
             .tool_attempt(name, key)
             .map_err(|_| ToolError::Transport)?;
         client.call_tool(name, args, key).await
+    }
+}
+
+/// Bridge-owned session tools, advertised after the discovered MCP tools.
+pub(super) fn session_specs() -> [ToolSpec; 2] {
+    [
+        ToolSpec {
+            name: EXTEND.into(),
+            description: "Extend listening for this voice session within its configured bound.".into(),
+            input_schema: json!({"type":"object","properties":{"seconds":{"type":"integer","minimum":1}},
+                "required":["seconds"],"additionalProperties":false}),
+        },
+        ToolSpec {
+            name: END.into(),
+            description: "End this voice session after its current reply has played.".into(),
+            input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+        },
+    ]
+}
+
+/// Routes session builtins to the run owner as validated commands; every
+/// other name keeps the MCP policy host's consent, ledger and authorization.
+#[derive(Clone)]
+pub(super) struct Session<H> {
+    host: H,
+    requests: mpsc::Sender<SessionRequest>,
+    run: tokio::sync::watch::Receiver<Option<Arc<()>>>,
+}
+
+impl<H> Session<H> {
+    pub(super) fn new(
+        host: H,
+        requests: mpsc::Sender<SessionRequest>,
+        run: tokio::sync::watch::Receiver<Option<Arc<()>>>,
+    ) -> Self {
+        Self { host, requests, run }
+    }
+}
+
+impl<H: ToolHost + Sync> ToolHost for Session<H> {
+    async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
+        self.host.list_tools().await
+    }
+    async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
+        // Raw arguments never leave this host; only the parsed command does.
+        let command = match name {
+            EXTEND => match args.as_object().map(|object| (object.len(), object.get("seconds"))) {
+                Some((1, Some(seconds))) => seconds
+                    .as_u64()
+                    .filter(|seconds| *seconds > 0)
+                    .map_or(SessionCommand::Invalid { end: false }, SessionCommand::Extend),
+                _ => SessionCommand::Invalid { end: false },
+            },
+            END if args.as_object().is_some_and(serde_json::Map::is_empty) => SessionCommand::End,
+            END => SessionCommand::Invalid { end: true },
+            _ => return self.host.call_tool(name, args, key).await,
+        };
+        let (reply, answer) = oneshot::channel();
+        let request = SessionRequest {
+            command,
+            key: key.into(),
+            run: self.run.borrow().clone(),
+            reply,
+        };
+        self.requests.send(request).await.map_err(|_| ToolError::Transport)?;
+        answer.await.map_err(|_| ToolError::Transport)
     }
 }
 
@@ -122,7 +190,7 @@ impl Tools {
         }
         // Link can complete through the operator endpoint before the first wake.
         // Discovery occurs once, before thread/start, and never grants authority.
-        Catalog::new(self.specs.as_ref().ok_or(Error::Unavailable)?.clone(), &self.allowed).map_err(|_| Error::Input)
+        session_catalog(self.specs.as_ref().ok_or(Error::Unavailable)?.clone(), &self.allowed)
     }
 
     pub async fn close(&mut self) {
@@ -131,6 +199,19 @@ impl Tools {
             runtime.close().await;
         }
     }
+}
+
+/// Append both builtins after discovery. A discovered tool may neither
+/// duplicate nor displace either builtin's exact alias.
+pub(super) fn session_catalog(mut specs: Vec<ToolSpec>, allowed: &[String]) -> Result<Catalog, Error> {
+    specs.extend(session_specs());
+    let mut allowed = allowed.to_vec();
+    allowed.extend([EXTEND.to_owned(), END.to_owned()]);
+    let catalog = Catalog::new(specs, &allowed).map_err(|_| Error::Input)?;
+    if [EXTEND, END].iter().any(|name| catalog.resolve(name) != Some(*name)) {
+        return Err(Error::Input);
+    }
+    Ok(catalog)
 }
 
 pub(super) async fn conversation<L, R, W, P>(
@@ -175,16 +256,20 @@ where
         )
         .await?;
         observe(super::SessionNotice::Connected)?;
+        // One bounded request at a time; the dispatch awaits the run's answer.
+        let (requests, receiver) = mpsc::channel(1);
+        let (run, active) = tokio::sync::watch::channel(None);
         // Keep the retained scheduler/run future off the Windows main stack.
-        Box::pin(super::tool_conversation(
+        Box::pin(super::voice_session::session_conversation(
             device,
             &mut call,
             (
-                tools.host.as_ref().ok_or(Error::Unavailable)?.clone(),
+                Session::new(tools.host.as_ref().ok_or(Error::Unavailable)?.clone(), requests, active),
                 catalog,
                 tools.config.clone(),
                 tools.budget.clone(),
             ),
+            Some((receiver, run)),
             options.session,
             cancelled.as_mut(),
             &mut observe,

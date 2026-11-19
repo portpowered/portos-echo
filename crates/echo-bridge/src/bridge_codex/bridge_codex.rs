@@ -8,7 +8,7 @@ mod call_tools;
 pub use call_audio::{CaptureAudio, ReplyAudio};
 pub use call_host::{HostOptions, with_host, with_host_options};
 pub use call_media::{MediaCall, MediaEvent};
-pub use call_tools::{ToolBudget, ToolSession};
+pub use call_tools::{SessionCommand, SessionRequest, ToolBudget, ToolSession};
 #[cfg(test)]
 mod call_failure_tests;
 #[cfg(test)]
@@ -38,6 +38,7 @@ pub enum Event {
     TurnStarted { thread: String, turn: String },
     TurnCompleted { thread: String, turn: String },
     SpeechStarted,
+    Session(SessionRequest),
     Closed,
     Other,
 }

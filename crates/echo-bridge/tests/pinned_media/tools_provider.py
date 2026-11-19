@@ -63,6 +63,9 @@ class Delegation:
         # The same pin drops numeric minimum while lowering JSON schema to its
         # tool-schema type. Assert that measured representation exactly.
         expected[1]['parameters']['properties']['ms'].pop('minimum')
+        for tool in expected:
+            if tool['name'] == 'extend_session':
+                tool['parameters']['properties']['seconds'].pop('minimum')
         names = self.check_tools(body, expected)
         assert body['model'] == self.model, 'wrong delegated model'
         outputs = [item for item in body['input'] if item.get('type') == ('custom_tool_call_output' if self.native else 'function_call_output')]

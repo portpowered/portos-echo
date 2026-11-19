@@ -180,6 +180,14 @@ async fn cut_reply(offered: u16, initial: u16) {
 async fn complete_capture(stream: &mut bridge_short::Satellite) {
     send(stream, "played", json!({})).await;
     send(stream, "audio-stop", json!({})).await;
+    // The controller explicitly ends the settled run even if input EOF arrived
+    // independently. Keep the idle/EOF assertion strict about every later frame.
+    let (header, payload) = read(stream).await;
+    assert_eq!(
+        header,
+        json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0})
+    );
+    assert_eq!(payload, Vec::<u8>::new());
 }
 async fn receive_initial(stream: &mut bridge_short::Satellite, initial: u16) {
     for _ in 0..initial {

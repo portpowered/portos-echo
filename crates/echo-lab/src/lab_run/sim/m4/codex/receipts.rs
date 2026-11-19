@@ -89,8 +89,8 @@ pub(super) fn expected(negative: bool, emotion: bool) -> Value {
         "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
         "delegations":["delegation-local"], "appends":["delegation-local"],
         "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::model::FALLBACK} else if emotion {super::super::emotion::REPLY} else {super::super::model::SUCCESS}}],
-        "models":[{"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":0},
-                  {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion"],"outputs":1}]})
+        "models":[{"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":0},
+                  {"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":1}]})
 }
 
 fn position(trace: &Trace, event: &str) -> Result<usize, String> {

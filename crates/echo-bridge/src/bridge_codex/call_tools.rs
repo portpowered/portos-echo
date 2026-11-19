@@ -15,11 +15,30 @@ use std::{
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    sync::oneshot,
+    sync::{mpsc, oneshot},
     time::Instant,
 };
 
 type Work<H> = Pin<Box<dyn Future<Output = (Dispatcher<H>, Option<Outcome>)>>>;
+
+/// Validated bridge-owned session control; raw arguments never leave the host.
+/// `Invalid` carries rejected arguments for the named builtin (`end` for
+/// `end_session`), so the controller still writes the receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionCommand {
+    Extend(u64),
+    End,
+    Invalid { end: bool },
+}
+
+/// One admitted session tool invocation. Only the run controller answers it;
+/// a dropped request fails the tool instead of reporting success.
+pub struct SessionRequest {
+    pub command: SessionCommand,
+    pub key: String,
+    pub run: Option<Arc<()>>,
+    pub reply: oneshot::Sender<echo_agent_api::ToolResult>,
+}
 
 /// Process-owned accounting shared across call and supervisor generations.
 #[derive(Clone)]
@@ -78,6 +97,8 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     retired: HashSet<(String, String)>,
     deferred: VecDeque<Event>,
     budget: ToolBudget,
+    session: Option<mpsc::Receiver<SessionRequest>>,
+    run: Option<tokio::sync::watch::Sender<Option<Arc<()>>>>,
 }
 
 impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static>
@@ -105,7 +126,21 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             retired: HashSet::new(),
             deferred: VecDeque::new(),
             budget,
+            session: None,
+            run: None,
         })
+    }
+
+    /// Surface the composite host's session requests to the run controller.
+    #[must_use]
+    pub fn with_session(
+        mut self,
+        requests: mpsc::Receiver<SessionRequest>,
+        run: tokio::sync::watch::Sender<Option<Arc<()>>>,
+    ) -> Self {
+        self.session = Some(requests);
+        self.run = Some(run);
+        self
     }
 
     /// Poll PCM, process IO, absolute turn expiry and tool work fairly.
@@ -133,6 +168,8 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 self.settle(result)?;
                 Ok(other())
             },
+            // The pending dispatch awaits this answer; never block it on media.
+            request = requested(&mut self.session) => Ok(MediaEvent::Control(Event::Session(request))),
             // Keep nested real-media polling off the Windows main stack.
             event = Box::pin(self.port.next()) => match event? {
                 MediaEvent::Control(event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => {
@@ -297,6 +334,11 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 's
     fn retire_audio(&mut self) {
         self.port.retire_audio();
     }
+    fn bind_session(&mut self, run: Option<Arc<()>>) {
+        if let Some(owner) = &self.run {
+            owner.send_replace(run);
+        }
+    }
     fn interrupt_turn(&mut self) -> Result<(), Error> {
         let Some(active) = self.active.clone() else {
             return Ok(());
@@ -329,6 +371,16 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 's
 async fn completed<H>(work: &mut Option<Work<H>>) -> (Dispatcher<H>, Option<Outcome>) {
     match work {
         Some(work) => work.await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn requested(session: &mut Option<mpsc::Receiver<SessionRequest>>) -> SessionRequest {
+    match session {
+        Some(requests) => match requests.recv().await {
+            Some(request) => request,
+            None => std::future::pending().await,
+        },
         None => std::future::pending().await,
     }
 }

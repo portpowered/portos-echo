@@ -1,6 +1,10 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
 #[path = "earcon/earcon.rs"]
 mod earcon;
+#[path = "controls/session_controller.rs"]
+mod session_controller;
+#[path = "controls/session_tools.rs"]
+mod session_tools;
 #[path = "controls/tool_ledger.rs"]
 mod tool_ledger;
 #[path = "controls/tool_policy.rs"]
@@ -13,6 +17,8 @@ pub(crate) mod voice_entry;
 mod voice_host;
 #[path = "controls/voice_kill.rs"]
 mod voice_kill;
+#[path = "controls/voice_listen.rs"]
+mod voice_listen;
 mod voice_runtime;
 mod voice_session;
 mod voice_source;
@@ -40,10 +46,12 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::{Instant, timeout, timeout_at},
 };
-use voice_source::{ReplyState, Source};
+use voice_source::Source;
 
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
+    /// Publish the admitted run identity; queued tools retain their original binding.
+    fn bind_session(&mut self, _run: Option<std::sync::Arc<()>>) {}
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
@@ -89,16 +97,23 @@ pub enum Notice {
     /// The speaker went quiet: the mouth closes until audio resumes.
     ReplyPaused,
     ReplyPlayed,
+    /// Per-reply counters while a persistent run retains capture.
+    ReplySettled(Stats),
+    SessionTool(session_tools::Receipt),
 }
 
+#[derive(Clone, Copy)]
 pub struct Options {
+    /// None retains the explicit one-reply boundary for existing callers.
+    pub listen_timeout: Option<Duration>,
+    pub session_max: Duration,
     pub reply_lead_ms: u16,
     pub response_deadline: Instant,
     pub played_timeout: Duration,
     pub muted: bool,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     pub received_chunks: u64,
     pub dropped_chunks: u64,
@@ -115,6 +130,9 @@ pub struct Stats {
 /// handoff, the device Played event AND the playback operation's Played result.
 /// Poll control/capture while pacing, under playback backpressure and awaiting
 /// played. A stopped source, empty queue or transcript alone cannot finish.
+/// An admitted listen interval retains capture after each reply; ordered user
+/// speech or assistant activity starts the next response window. Idle media
+/// cannot renew it. None keeps the explicit one-reply lifetime.
 ///
 /// # Errors
 /// Tools without a dispatcher, unexpected
@@ -131,40 +149,54 @@ pub async fn run<L: EchoLink>(
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<Stats, Error> {
-    if options.played_timeout.is_zero() || Instant::now() >= options.response_deadline {
+    if options.played_timeout.is_zero()
+        || Instant::now() >= options.response_deadline
+        || options
+            .listen_timeout
+            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+        || Instant::now().checked_add(options.session_max).is_none()
+    {
         return Err(Error::Deadline);
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
+    source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
+    port.bind_session(Some(source.session.run.clone()));
+    source.controller.admit_response(options.response_deadline)?;
     // A cut replaces playback, while the run still owns pending clock receipts.
     let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
         .map(|clock| clock.voice())
         .transpose()?;
     tokio::pin!(cancelled);
-    loop {
-        let result = generation(
-            client,
-            (events, &mut microphone),
-            port,
-            (&mut source, &mut drain),
-            &options,
-            cancelled.as_mut(),
-            &mut observe,
-        )
-        .await;
-        if result == Err(Error::Control) && source.state == ReplyState::Cutting {
-            source.state = ReplyState::Retired;
-            source.cut_receipts += usize::from(!source.played);
-            source.played = false;
-            observe(Notice::ReplyPaused)?;
-        } else {
-            result?;
-            break;
-        }
-    }
+    // Retain the reply-loop state once per run rather than embedding it in
+    // every conversation/admission future above this boundary.
+    let result = Box::pin(voice_listen::replies(
+        client,
+        (events, &mut microphone),
+        port,
+        (&mut source, &mut drain),
+        &options,
+        cancelled.as_mut(),
+        &mut observe,
+    ))
+    .await;
+    port.bind_session(None);
+    result?;
+    session_controller::close(
+        client,
+        (events, &mut microphone),
+        port,
+        &mut source,
+        options.played_timeout,
+        cancelled.as_mut(),
+        &mut observe,
+    )
+    .await?;
     if let Some(drain) = drain.take() {
         drain.finish();
     }
-    observe(Notice::ReplyPlayed)?;
+    if options.listen_timeout.is_none() {
+        observe(Notice::ReplyPlayed)?;
+    }
     source.stats.received_chunks = microphone.stats().received;
     source.stats.dropped_chunks = microphone.stats().dropped;
     source.stats.reply_dropped += source.reply.dropped_frames();
@@ -260,7 +292,7 @@ async fn drive<E: LinkEvents>(
     let mut pending = None;
     let mut deadline = options.response_deadline;
     loop {
-        if source.state == ReplyState::Cutting {
+        if source.controller.cutting() {
             return Err(Error::Control);
         }
         if source.reply.drained() && pending.is_none() && sink.is_some() {
@@ -294,11 +326,9 @@ async fn drive<E: LinkEvents>(
                 }
             }, if pending.is_none() => {},
         }
-        if source.state != ReplyState::Cutting
-            && source.played
-            && source.microphone_finished
-            && sink.is_none()
-            && source.mouth.due().is_none()
+        if source
+            .controller
+            .ready_to_close(sink.is_none(), source.mouth.due().is_none())
         {
             return Ok(());
         }
@@ -320,7 +350,7 @@ async fn step<E: LinkEvents>(
             Ok(None) => { source.failure = "events_eof"; Err(Error::Wyoming) },
             Err(error) => { source.failure = "events_recv"; Err(error.into()) },
         },
-        frame = earcon::microphone(microphone), if !source.microphone_finished => {
+        frame = earcon::microphone(microphone), if !source.controller.microphone_finished() => {
             let frame = frame.map_err(|error| { source.failure = "microphone_recv"; Error::from(error) })?;
             if source.capture(frame, port)? {
                 observe(Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
@@ -366,15 +396,14 @@ fn device<R>(
     }
     let event = match event {
         LinkEvent::Played => {
-            if source.cut_receipts > 0 {
-                source.cut_receipts -= 1;
-                return Ok(());
+            match source.controller.played(stopped) {
+                Ok(false) => return Ok(()),
+                Ok(true) => {}
+                Err(error) => {
+                    source.failure = "premature_played";
+                    return Err(error);
+                }
             }
-            if !stopped {
-                source.failure = "premature_played";
-                return Err(Error::Wyoming);
-            }
-            source.played = true;
             LinkEvent::Played
         }
         LinkEvent::Mute(muted) => {
@@ -405,7 +434,7 @@ async fn media(
     match event {
         MediaEvent::Audio(frame) => source.audio(&frame),
         MediaEvent::Control(Event::ReplyDone { text }) => {
-            if source.state == ReplyState::Retired {
+            if source.controller.retired() {
                 return Ok(());
             }
             observe(Notice::Transcript {
@@ -429,7 +458,7 @@ async fn media(
             if role == "user" {
                 source.interrupt(port)?;
             } else if role == "assistant" && !done {
-                source.state = ReplyState::Speaking;
+                source.controller.reply_started();
                 source.delegation.spoke();
             }
             observe(Notice::Transcript { role, text, done })
@@ -443,6 +472,9 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStarted) => source.interrupt(port),
+        MediaEvent::Control(Event::Session(request)) => {
+            session_tools::answer(request, &mut source.session, &mut source.controller, observe)
+        }
         MediaEvent::Control(Event::Other) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }
