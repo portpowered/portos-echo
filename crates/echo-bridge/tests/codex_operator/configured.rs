@@ -69,6 +69,159 @@ fn config(fixture: &Fixture) -> echo_config::BridgeConfig {
     config
 }
 
+// T3: the runtime's actual HTTP, settings store and owned controlled child.
+// This observes a cleanup-complete restart request, not binary exec.
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart() {
+    for restart in [false, true] {
+        let fixture = Fixture::new("chatgpt");
+        let mut base = config(&fixture);
+        let home = fixture.directory.path().join("agent-home");
+        base.home = Some(echo_config::HomeConfig { dir: home.clone() });
+        let effective = echo_config::EffectiveConfig {
+            config: base.clone(),
+            base: base.clone(),
+            overlay: Default::default(),
+            warning: None,
+        };
+        let (owner, send) = echo_bridge::bridge_settings::SettingsService::open(
+            effective,
+            echo_screen_contract::settings_v1::PromptTextsV1 {
+                voice: "admitted voice".into(),
+                runner: "admitted runner".into(),
+            },
+        )
+        .unwrap();
+        let observer = Observer::default();
+        let path = fixture.directory.path().join("runtime-trace");
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let linked = std::cell::Cell::new(false);
+        let work = echo_bridge::bridge_voice::execute_with_settings(
+            super::device::runtime_options(&base.codex, Some(&base.screen), &path),
+            FakeConnector::new(observer.clone()),
+            async || -> Result<echo_media::Peer, Error> { unreachable!("no wake admits no peer") },
+            async {
+                stopping.await.unwrap();
+            },
+            (owner, send),
+            || {
+                if linked.get() {
+                    echo_screen_contract::settings_v1::LinkStatusV1::Linked
+                } else {
+                    echo_screen_contract::settings_v1::LinkStatusV1::LinkRequired
+                }
+            },
+        );
+        let inspect = async {
+            let _control = fixture.control().await;
+            let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+            while bridge_wire_screen::state(&mut screen).await["message"] != "Echo Live ready" {}
+            settings_runtime_requests(&fixture, &linked, &home).await;
+            presentation_owned(&path);
+            assert!(!observer.commands().contains(&Command::Close));
+            if restart {
+                let response = settings_runtime_patch(&fixture, json!({"agent":{"max_tool_calls":3}})).await;
+                assert_eq!(response, json!({"version":1,"restart_pending":true}));
+                assert_eq!(
+                    bridge_wire_screen::state(&mut screen).await,
+                    json!({"state":"ready","message":"Restarting bridge..."})
+                );
+                while let Some(line) = screen.next_line().await.unwrap() {
+                    assert!(!line.starts_with("data:"));
+                }
+            } else {
+                stop.send(()).unwrap();
+            }
+        };
+        let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+            tokio::join!(work, inspect)
+        }))
+        .await
+        .unwrap();
+        assert_eq!(result, Ok(restart));
+        assert_eq!(
+            observer.commands(),
+            [Command::Connect, Command::Capture, Command::Probe, Command::Close]
+        );
+        super::host::released(&fixture).await;
+        presentation_released(&path, "chatgpt", true);
+        let rows = trace(&path);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["event"] == "settings.restart_prepared")
+                .count(),
+            usize::from(restart)
+        );
+        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    }
+}
+
+async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) -> serde_json::Value {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "http://{}/settings/v1?token=synthetic-screen-pair",
+            fixture.screen
+        ))
+        .json(&json!({"version":1,"settings":settings}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    response.json().await.unwrap()
+}
+
+async fn settings_runtime_requests(fixture: &Fixture, linked: &std::cell::Cell<bool>, home: &Path) {
+    let client = reqwest::Client::new();
+    let url = format!("http://{}/settings/v1", fixture.screen);
+    assert_eq!(
+        client.get(&url).send().await.unwrap().status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let url = format!("{url}?token=synthetic-screen-pair");
+    for (value, expected) in [(false, "link_required"), (true, "linked")] {
+        linked.set(value);
+        let snapshot: serde_json::Value = client.get(&url).send().await.unwrap().json().await.unwrap();
+        assert_eq!(snapshot["link_status"], expected);
+        assert_eq!(
+            snapshot["prompts"],
+            json!({"voice":"admitted voice","runner":"admitted runner"})
+        );
+        assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 8);
+    }
+    assert_eq!(
+        settings_runtime_patch(fixture, json!({"agent":{"max_tool_calls":8}})).await,
+        json!({"version":1,"restart_pending":false})
+    );
+    let previous = std::fs::read(home.join("settings.toml")).unwrap();
+    let invalid = client
+        .post(&url)
+        .json(&json!({"version":1,"settings":{"agent":{"max_tool_calls":33}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(std::fs::read(home.join("settings.toml")).unwrap(), previous);
+    let prompt = client
+        .post(format!(
+            "http://{}/settings/v1/prompts/voice?token=synthetic-screen-pair",
+            fixture.screen
+        ))
+        .json(&json!({"version":1,"text":"saved voice\n"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(prompt.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        prompt.json::<serde_json::Value>().await.unwrap(),
+        json!({"version":1,"restart_pending":false})
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("prompts/voice.md")).unwrap(),
+        "saved voice\n"
+    );
+}
+
 #[tokio::test]
 #[ignore = "T3 requires local Python"]
 async fn codex_configured_service_authenticates_both_modes_before_ready_and_reaps_on_cancel() {

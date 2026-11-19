@@ -11,7 +11,7 @@ use echo_link::{
 };
 use tokio::time::Instant;
 
-fn runtime_options<'a>(
+pub(super) fn runtime_options<'a>(
     config: &'a CodexConfig,
     screen: Option<&'a echo_config::ScreenConfig>,
     trace: &'a Path,

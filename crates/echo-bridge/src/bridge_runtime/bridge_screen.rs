@@ -35,6 +35,13 @@ impl Screen {
     }
 
     pub async fn bind(config: Option<&ScreenConfig>) -> Result<Self, Error> {
+        Self::bind_with_settings(config, None).await
+    }
+
+    pub(crate) async fn bind_with_settings(
+        config: Option<&ScreenConfig>,
+        settings: Option<mpsc::Sender<echo_screen_server::SettingsRequest>>,
+    ) -> Result<Self, Error> {
         let Some(config) = config else {
             return Ok(Self {
                 mute: Arc::default(),
@@ -61,7 +68,7 @@ impl Screen {
             return Err(Error::Screen);
         }
         let (states, input) = mpsc::channel(32);
-        let server = echo_screen_server::serve(bind, Secret::new(token.into()), input)
+        let server = echo_screen_server::serve_with_settings(bind, Secret::new(token.into()), input, settings)
             .await
             .map_err(|_| Error::Screen)?;
         let screen = Self {

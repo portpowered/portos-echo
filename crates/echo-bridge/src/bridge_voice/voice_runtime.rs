@@ -1,9 +1,12 @@
 //! Presentation lifetime encloses authenticated device and conversation cleanup.
 use super::{HostOptions, ServeOptions, voice_host::with_capture, voice_view::View};
+use crate::bridge_settings::SettingsService;
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_config::{LiveMode, ScreenConfig};
 use echo_link::LinkConnector;
 use echo_media::MediaPeer;
+use echo_screen_contract::settings_v1::LinkStatusV1;
+use echo_screen_server::SettingsRequest;
 use std::{cell::Cell, future::Future, net::SocketAddr, path::Path};
 use tokio::sync::watch;
 
@@ -50,6 +53,40 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
 ) -> Result<(), Error> {
+    execute_owned(options, connector, &mut peer, cancelled, None, || {
+        LinkStatusV1::Unconfigured
+    })
+    .await
+    .map(|_| ())
+}
+
+/// Mount the bounded authorized settings owner for this runtime generation.
+/// A true result requests replacement only after call/device/process, health
+/// and HTTP cleanup. The caller must still arbitrate final EOF/kill, drop the
+/// runtime, and perform exec or recover the old active configuration on failure.
+/// Link status is sampled at commit from the caller's live grant owner.
+///
+/// # Errors
+/// Uses the same startup, service and cleanup failures as `execute`.
+pub async fn execute_with_settings<C: LinkConnector, P: MediaPeer>(
+    options: RuntimeOptions<'_>,
+    connector: C,
+    mut peer: impl AsyncFnMut() -> Result<P, Error>,
+    cancelled: impl Future<Output = ()>,
+    settings: (SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>),
+    link_status: impl Fn() -> LinkStatusV1,
+) -> Result<bool, Error> {
+    execute_owned(options, connector, &mut peer, cancelled, Some(settings), link_status).await
+}
+
+async fn execute_owned<C: LinkConnector, P: MediaPeer>(
+    options: RuntimeOptions<'_>,
+    connector: C,
+    mut peer: impl AsyncFnMut() -> Result<P, Error>,
+    cancelled: impl Future<Output = ()>,
+    settings: Option<(SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>)>,
+    link_status: impl Fn() -> LinkStatusV1,
+) -> Result<bool, Error> {
     let mut trace = Trace::open(
         options.trace,
         match options.host.mode {
@@ -58,7 +95,8 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
         },
     )?;
     super::prompts::publish(&mut trace)?;
-    let mut screen = Screen::bind(options.screen).await?;
+    let (service, send) = settings.map_or((None, None), |(service, send)| (Some(service), Some(send)));
+    let mut screen = Screen::bind_with_settings(options.screen, send).await?;
     screen.settings_warning(options.settings_warning, &mut trace)?;
     let health = match Health::bind(options.health).await {
         Ok(health) => health,
@@ -70,17 +108,43 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     screen.supervise_actions(health.state.subscribe());
     let mut view = View::new(&screen, &health, &mut trace);
     let requested = Cell::new(false);
-    let result = work(options, connector, &mut peer, cancelled, &mut view, &requested).await;
+    let work = work(options, connector, &mut peer, cancelled, &mut view, &requested);
+    let (result, pending) = if let Some(service) = service {
+        service.scope(work, link_status).await
+    } else {
+        (work.await, false)
+    };
+    finish(screen, health, trace, result, pending, requested.get()).await
+}
+
+async fn finish(
+    mut screen: Screen,
+    health: Health,
+    mut trace: Trace,
+    result: Result<(), Error>,
+    pending: bool,
+    requested: bool,
+) -> Result<bool, Error> {
+    let restart = pending && result.is_ok() && !requested;
+    let presentation = if restart {
+        screen
+            .publish_confirmed(echo_screen_contract::UiState::Ready {
+                message: "Restarting bridge...".into(),
+            })
+            .await
+            .and_then(|()| trace.record("settings.restart_prepared", None, serde_json::json!({})))
+    } else {
+        Ok(())
+    };
     health.close().await;
     let health_receipt = trace.record("health.released", None, serde_json::json!({}));
     // A trace failure must not skip the remaining presentation cleanup.
-    let cleanup = close_screen(
-        &mut screen,
-        &mut trace,
-        !requested.get() && result != Err(Error::Control),
-    )
-    .await;
-    result.and(cleanup).and(health_receipt)
+    let cleanup = close_screen(&mut screen, &mut trace, !requested && result != Err(Error::Control)).await;
+    result
+        .and(presentation)
+        .and(cleanup)
+        .and(health_receipt)
+        .map(|()| restart)
 }
 
 async fn close_screen(screen: &mut Screen, trace: &mut Trace, graceful: bool) -> Result<(), Error> {
