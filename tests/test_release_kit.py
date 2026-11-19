@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from unittest.mock import patch
 
 from test_echo_install import Sandbox, fake_adb, require, SENTINEL
 
@@ -289,6 +290,7 @@ def interruption_case():
 
 def package_cases():
     path_diagnostic_cases()
+    native_flags_cases()
     for value in ("0.1.0", "0.0.0-dev.abc123"):
         require(PACK.version(value) == value, "version changed")
     for value in ("v0.1.0", "../escape", "0.1.0\n", "0.1.0;true"):
@@ -353,6 +355,15 @@ def path_diagnostic_cases():
             "sanitized path category counts differ")
     require(all(count == 0 for count in PACK.private_path_counts(b'/data/local/echo/home/prompts').values()),
             "device home classified as a host path")
+    for boundary in (b'\v', b'\f', b'='):
+        require(PACK.private_path_counts(boundary + paths[0])["registry"] == 1,
+                "path delimiter changed classification")
+    with patch.object(PACK.Path, "home", return_value=Path("/home/example")), \
+            patch.object(PACK, "ROOT", Path("/home/example/source")):
+        flags = b'-ffile-prefix-map=/home/example=/build/user -ffile-prefix-map=/home/example/source=/build/echo\x00'
+        mapped = PACK.private_path_counts(flags * 2)
+        require(mapped["checkout"] == 2 and mapped["other"] == 2 and mapped["current_home"] == 4
+                and mapped["external"] == 0, "remap arguments misclassified as external paths")
     with tempfile.TemporaryDirectory() as temporary:
         assets = Path(temporary)
         codex = assets / "codex"
@@ -375,6 +386,42 @@ def path_diagnostic_cases():
         require(result.stderr == "release-kit: rejected path categories " + json.dumps(expected, sort_keys=True)
                 + "\nrelease-kit: private path or key in bin/codex-app-server\n", "diagnostic leaked or counts differ")
     print("U-PACK sanitized path diagnostics: PASS")
+
+
+def native_metadata_case(work):
+    env = {"CFLAGS": "-DRELEASE_MARKER=7", "CXXFLAGS": "-DRELEASE_MARKER=8"}
+    PACK.native_remaps(env, work)
+    for key, marker in (("CFLAGS", "7"), ("CXXFLAGS", "8")):
+        arguments = shlex.split(env[key])
+        require(arguments[0] == "-DRELEASE_MARKER=" + marker and len(arguments) == 2,
+                "native caller flags changed")
+        require(arguments[1].startswith("@"), "native response argument missing")
+        response = Path(arguments[1][1:])
+        require(response.parent == work, "response file escaped invocation workspace")
+        require(shlex.split(response.read_text()) == [
+            "-ffile-prefix-map=" + str(Path.home()) + "=/build/user",
+            "-ffile-prefix-map=" + str(ROOT) + "=/build/echo"], "native source maps changed")
+        # Mirrors OpenSSL's published build-info boundary: record literal flags.
+        require(PACK.PRIVATE.search(("compiler: cc " + env[key]).encode()) is None,
+                "native build metadata exposes a private path")
+    return env
+
+
+def native_flags_cases():
+    with tempfile.TemporaryDirectory(prefix="release-native-", dir="/tmp") as temporary:
+        env = native_metadata_case(Path(temporary))
+        # Preprocess only; never build or execute an additional application.
+        with tempfile.TemporaryDirectory(prefix=".release-native-", dir=ROOT) as source:
+            probe = Path(source) / "probe.c"
+            probe.write_text("RELEASE_MARKER\n__FILE__\n")
+            expected = "/build/echo/" + probe.relative_to(ROOT).as_posix()
+            for tool, key, marker in (("cc", "CFLAGS", "7"), ("c++", "CXXFLAGS", "8")):
+                result = subprocess.run([tool, *shlex.split(env[key]), "-E", "-P", str(probe)],
+                                        capture_output=True, text=True, timeout=20)
+                require(result.returncode == 0, "native remap preprocessing failed")
+                require(result.stdout.splitlines() == [marker, json.dumps(expected)],
+                        "native response changed macro value or failed to remap source path")
+    print("U-PACK native remap and metadata: PASS")
 
 
 def main():

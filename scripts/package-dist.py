@@ -44,20 +44,21 @@ def private_path_counts(data):
                ("current_rustup", Path(os.environ.get("RUSTUP_HOME", Path.home() / ".rustup"))),
                ("current_home", Path.home()))
     for match in PERSONAL.finditer(data):
-        start = match.start() + len(match[0]) - len(match[0].lstrip(b" \t\r\n\x00\"'="))
+        start = match.start() + len(match[0]) - len(match[0].lstrip(b" \t\r\n\v\f\x00\"'="))
         path = re.split(rb'''[\x00\s"'<>]''', data[start:start + 4096], maxsplit=1)[0]
         normalized = path.replace(b"\\", b"/")
         if b"/registry/src/" in normalized or b"/registry/cache/" in normalized:
             category = "registry"
         elif b"/toolchains/" in normalized or b"/.rustup/" in normalized:
             category = "toolchain"
-        elif normalized.startswith(str(ROOT).encode().replace(b"\\", b"/") + b"/"):
+        elif any(normalized.startswith(str(ROOT).encode().replace(b"\\", b"/") + boundary) for boundary in (b"/", b"=")):
             category = "checkout"
         else:
             category = "other"
         counts[category] += 1
         origin = next((label for label, prefix in origins
-                       if normalized.startswith(str(prefix).encode().replace(b"\\", b"/") + b"/")), "external")
+                       if any(normalized.startswith(str(prefix).encode().replace(b"\\", b"/") + boundary)
+                              for boundary in (b"/", b"="))), "external")
         counts[origin] += 1
     return counts
 
@@ -222,6 +223,16 @@ def license_inputs(codex_work):
     return result
 
 
+def native_remaps(env, work):
+    # OpenSSL embeds CFLAGS in its version metadata. Keep private prefixes in
+    # an invocation-owned response file while compilers still apply every map.
+    response = work / "native-remap.rsp"
+    response.write_text(shlex.join("-ffile-prefix-map=" + str(path) + "=" + replacement
+                                  for path, replacement in ((Path.home(), "/build/user"), (ROOT, "/build/echo"))))
+    for key in ("CFLAGS", "CXXFLAGS"):
+        env[key] = (env.get(key, "") + " " + shlex.quote("@" + str(response))).strip()
+
+
 def build(args):
     if sys.platform != "linux":
         raise BundleError("Linux is required")
@@ -230,7 +241,9 @@ def build(args):
         raise BundleError("output directory must not exist; preserve or remove prior assets explicitly")
     out.parent.mkdir(parents=True, exist_ok=True)
     # One owned stage makes publication atomic; build failures expose no new dist assets.
-    with tempfile.TemporaryDirectory(prefix="echo-release-") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
+    # Response-file arguments can themselves be embedded: never place this
+    # build workspace beneath a user's TMPDIR/home directory.
+    with tempfile.TemporaryDirectory(prefix="echo-release-", dir="/tmp") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
         work = Path(work)
         env = dict(os.environ, CODEX_ARMV7_WORK_DIR=str(work / "codex-work"), CODEX_ARMV7_OUTPUT_DIR=str(work / "codex-out"))
         flags = env.get("CARGO_ENCODED_RUSTFLAGS", "").split("\x1f")
@@ -240,10 +253,7 @@ def build(args):
         env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
         # Native dependency assertions can embed __FILE__ even in stripped ELF.
         # Rust's remap flag does not reach their C/C++ compilers.
-        for key in ("CFLAGS", "CXXFLAGS"):
-            remaps = shlex.join("-ffile-prefix-map=" + str(path) + "=" + replacement
-                                for path, replacement in ((Path.home(), "/build/user"), (ROOT, "/build/echo")))
-            env[key] = (env.get(key, "") + " " + remaps).strip()
+        native_remaps(env, work)
         subprocess.run(["make", "build-echo", "ECHO_PACKAGES=echo-bridge"], cwd=ROOT, env=env, check=True)
         result = subprocess.run(["make", "--no-print-directory", "-s", "build-codex-armv7"], cwd=ROOT, env=env, check=True, stdout=subprocess.PIPE, text=True)
         identity = re.findall(r"(?m)^source_commit=([0-9a-f]{40})$", result.stdout)
