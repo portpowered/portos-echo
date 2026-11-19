@@ -2,13 +2,6 @@ name: Release
 on:
   push:
     tags: ['v*']
-  # Temporary artifact-only registration; removed before implementation handoff.
-  pull_request:
-    paths:
-      - '.github/workflows/release.yml'
-      - 'scripts/install.sh'
-      - 'scripts/package-dist.py'
-      - 'tests/test_release_kit.py'
   workflow_dispatch:
     inputs:
       version:
@@ -56,8 +49,6 @@ jobs:
         run: |
           if [ "$RELEASE_EVENT" = push ]; then
             RELEASE_VERSION=${RELEASE_REF_NAME#v}
-          elif [ "$RELEASE_EVENT" = pull_request ]; then
-            RELEASE_VERSION=0.0.0-pr.$(git rev-parse --short=12 HEAD)
           fi
           python3 -c 'import re,sys; sys.exit(not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?", sys.argv[1]))' "$RELEASE_VERSION"
           make dist DIST_VERSION="$RELEASE_VERSION"

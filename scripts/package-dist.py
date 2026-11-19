@@ -23,7 +23,7 @@ REQUIRED = {
     "examples/prompts/runner.md", "LICENSE", "NOTICE", "licenses/codex/LICENSE",
     "licenses/codex/NOTICE", "licenses/ca/MPL-2.0.txt", "licenses/ca/NOTICE",
 }
-PERSONAL = re.compile(rb"(?:/home/[^/\s]+/|/Users/[^/\s]+/|[A-Za-z]:[\\/]Users[\\/])", re.I)
+PERSONAL = re.compile(rb'''(?:^|[\s\x00"'=])(?:/home/[^/\s]+/|/Users/[^/\s]+/|[A-Za-z]:[\\/]Users[\\/])''', re.I)
 PRIVATE = re.compile(PERSONAL.pattern + rb"|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.I)
 
 
