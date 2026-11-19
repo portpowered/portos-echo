@@ -66,6 +66,12 @@ impl<'a> View<'a> {
                 crate::bridge_runtime::publish("bridge.ready", None)
             }
             ServeNotice::Listening => self.begin(),
+            ServeNotice::Unanswered => {
+                let run = self.run.take();
+                self.trace
+                    .record("run.ended", run.as_deref(), json!({"reason":"no_response"}))?;
+                self.closed("no_response")
+            }
             ServeNotice::Probe => self.trace.record("wyoming.probe_ok", Some("connection-1"), json!({})),
             ServeNotice::Device(event) => self.screen.observe(&event, self.trace).map(|_| ()),
             ServeNotice::Session(notice) => self.session(notice),

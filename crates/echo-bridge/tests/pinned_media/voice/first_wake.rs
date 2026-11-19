@@ -54,7 +54,7 @@ async fn exercise() {
         commands.send(RemoteCommand::Begin).await.unwrap();
         advance(&mut input, &mut output).await;
         playback(root, &mut satellite, &commands, &mut input, &mut output, &mut clock).await;
-        settle(root, &mut satellite, &mut input, &mut output, &mut clock, 1).await;
+        settle(root, &mut satellite, &mut input, &mut output, &mut clock, (1, 1)).await;
         commands.send(RemoteCommand::Close).await.unwrap();
         commands.closed().await;
     };

@@ -246,7 +246,7 @@ async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
         |_| Ok(()),
     )
     .await;
-    assert_eq!(result, Err(Error::Deadline));
+    assert_eq!(result, Err(Error::NoResponse));
     assert_eq!(port.retired, 0);
     assert_eq!(Instant::now(), end);
     assert!(observer.commands().contains(&Command::Cut(0)));
