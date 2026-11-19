@@ -56,6 +56,7 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
             LiveMode::ApiKey => "api_key",
         },
     )?;
+    super::prompts::publish(&mut trace)?;
     let mut screen = Screen::bind(options.screen).await?;
     let health = match Health::bind(options.health).await {
         Ok(health) => health,

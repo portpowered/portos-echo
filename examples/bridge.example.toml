@@ -12,14 +12,10 @@ credential_file = "credentials/live.json"
 voice = "default"
 session_idle_seconds = 120
 
-# Optional Codex instructions (add a table named codex to customize):
-# instructions is the delegated turn's base text only (thread/start baseInstructions).
-# Each new call receives a delimited snapshot after these instructions and after the Live prompt.
-# The authorized fallback explicitly labels UTC when local offset is unavailable.
-# instructions = """Client audio bridge"""
-# live_instructions is the GPT-Live prompt (thread/realtime/start prompt); neither key falls back to
-# the other. Unset uses this built-in default: conversation first, a hand-off as the exception.
-# live_instructions = """You are a friendly voice assistant on a smart speaker. Conversation is the default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do not hand off just to check or verify something you can answer. Hand off to the background agent only when the request truly needs a tool: an action on a device or service, or live or personal data you do not have. If you are unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start snapshot; UTC does not establish the user's local time zone."""
+# Optional Codex settings (add a table named codex to customize):
+# Base instructions are files in the optional agent home: prompts/runner.md for thread/start,
+# prompts/voice.md for the Live prompt. Each new call appends the same UTC context snapshot.
+# With no home, built-in defaults remain: conversation first, a hand-off as the exception.
 # Optional keys in that same codex table; all default to unset:
 # delegate_model = "fixture-model"
 # delegate_effort = "low"
@@ -65,3 +61,12 @@ session_max_seconds = 600 # Integer 3..2147483647, at least listen; bounds tool-
 
 [audit]
 log_dir = "logs/audit"
+
+# Optional non-secret agent home (absolute path; no environment expansion).
+# [home]
+# dir = "/tmp/echo-bridge-home"
+# Copy examples/prompts/{voice,runner}.md to <home>/prompts/ and edit there.
+# New calls/threads reload; retained calls keep their original text.
+# Missing files use built-ins once-traced; invalid reloads keep the last valid text.
+# codex.instructions and codex.live_instructions are removed; use the files above.
+# settings.toml is reserved for screen settings; this prompt loader never opens it.

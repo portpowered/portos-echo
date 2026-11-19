@@ -41,6 +41,7 @@ impl Drop for Directory {
 #[test]
 fn committed_example_loads_with_all_expected_values() {
     let expected = BridgeConfig {
+        home: None,
         wake_earcon: true,
         codex: echo_config::CodexConfig::default(),
         agent_backend: echo_config::AgentBackend::Client,
@@ -198,22 +199,19 @@ fn codex_defaults_and_override_precedence_are_offline() {
     assert_eq!(legacy.codex_voice(), Some("cedar"));
     assert_eq!(legacy.codex_model(), Some("legacy-model"));
     let input = format!(
-        "{input}\n[codex]\nhome='{}'\nbinary='{}'\nvoice='marin'\nmodel='thread-model'\ninstructions='Local instructions'\nlive_instructions='Local prompt'\n",
+        "{input}\n[home]\ndir='{}'\n[codex]\nhome='{}'\nbinary='{}'\nvoice='marin'\nmodel='thread-model'\n",
+        home.display(),
         home.display(),
         binary.display()
     );
     let path = directory.write(&input).unwrap();
     let config = BridgeConfig::load(&path).unwrap();
     assert_eq!(config, BridgeConfig::from_toml_str(&input).unwrap());
+    assert_eq!(config.home.as_ref().unwrap().dir, home);
     assert_eq!(config.codex.home, Some(home.clone()));
     assert_eq!(config.codex.binary, Some(binary.clone()));
     assert_eq!(config.codex_voice(), Some("marin"));
     assert_eq!(config.codex_model(), Some("thread-model"));
-    let texts = (
-        config.codex.instructions.as_str(),
-        config.codex.live_instructions.as_str(),
-    );
-    assert_eq!(texts, ("Local instructions", "Local prompt"));
     assert!(!home.exists());
     assert!(!binary.exists());
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
@@ -281,7 +279,7 @@ fn codex_rejects_bad_paths_blank_fields_types_and_inline_secrets_safely() {
             );
         }
     }
-    for field in ["voice", "model", "instructions", "live_instructions"] {
+    for field in ["voice", "model"] {
         for value in ["''", "'   '", "false"] {
             let input = format!("{MINIMAL}\n[codex]\n{field}={value}");
             let error = BridgeConfig::from_toml_str(&input).unwrap_err();

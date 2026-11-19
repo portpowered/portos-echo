@@ -44,3 +44,10 @@ pairing_token_file = "/data/local/echo-bridge/private/screen-pairing.txt"
 # Created by the bridge with mode 0700, and the files in it with mode 0600, whatever the umask.
 [audit]
 log_dir = "/data/local/echo-bridge/private/audit"
+
+# Non-secret agent home, separate from private credentials.
+[home]
+dir = "/data/local/echo-bridge/home"
+# Copy examples/prompts/voice.md and runner.md into this home's prompts directory.
+# Edits apply to new conversations; missing files use built-ins, bad edits retain prior text.
+# settings.toml is reserved; the prompt loader never reads or writes it.

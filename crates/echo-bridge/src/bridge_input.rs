@@ -201,7 +201,7 @@ fn configured(
     health: Option<&str>,
     origins: Option<(&str, &str)>,
 ) -> Result<Option<Settings>, Error> {
-    let config = echo_config::BridgeConfig::load(config).map_err(|_| Error::Input)?;
+    let config = echo_config::BridgeConfig::load(config).map_err(prompt_config_error)?;
     let muse = if config.agent_backend == echo_config::AgentBackend::Muse {
         Some((config.agent.clone(), config.muse.clone().ok_or(Error::Input)?))
     } else {
@@ -341,5 +341,17 @@ mod tests {
         config.echo.host = "127.0.0.1".into();
         config.agent_backend = echo_config::AgentBackend::Muse;
         assert_eq!(configured_origins(&config, origins), Err(Error::Input));
+    }
+}
+
+fn prompt_config_error(error: echo_config::ConfigError) -> Error {
+    let text = error.to_string();
+    if ["home:", "home.dir:", "codex.instructions:", "codex.live_instructions:"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+    {
+        Error::PromptConfig(text)
+    } else {
+        Error::Input
     }
 }

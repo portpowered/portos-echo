@@ -365,9 +365,29 @@ back to the bridge and its correlated result continues that turn. Our
 the model service itself is not implemented here. `codex.model`, falling back to `agent.model`, selects
 the delegated model; omission uses the app-server default. The local-answer change supplies a single UTC
 call-start date/time snapshot to both thread instructions and Live prompt, retained unchanged on reuse.
-The two texts are separate keys: `codex.instructions` is the delegated turn's base instructions and
-`codex.live_instructions` is the Live prompt, whose default makes conversation the rule and a hand-off the
-exception.
+The two texts are separate files in the optional agent home: `<home>/prompts/runner.md` is
+thread/start's base instructions; `<home>/prompts/voice.md` is the Live prompt, whose unchanged default
+makes conversation the rule and a hand-off the exception. A new call and its delegated thread reload both
+files; retained calls keep their original snapshot and text. Edits require no bridge restart.
+
+Configure `[home] dir` with an absolute path (no tilde or environment expansion). On the Echo use
+`/data/local/echo-bridge/home`, separate from `/data/local/echo-bridge/private`, which still holds secrets.
+The bridge creates missing home/prompts directories with mode 0700 and preserves existing modes.
+Copy `examples/prompts/voice.md` and `runner.md` into the home's `prompts/` directory, then edit them.
+Omitting `[home]` intentionally selects built-ins without file access. A missing configured prompt uses
+its built-in default and emits one payload-free `prompt.defaulted` per kind per runtime lifetime.
+
+Files must be nonblank UTF-8 and at most 32768 bytes. Empty, oversized, invalid UTF-8, unreadable or
+nonregular files fail startup before credentials, child or device admission, with the logical filename
+in the error. An invalid edit on reload emits `prompt.reload_refused` with a fixed kind/reason and keeps
+that kind's previous accepted text; the other prompt can still reload. Deletion selects the default.
+Prompt text and full paths never enter these trace records. The bridge never writes prompt files.
+`<home>/settings.toml` is reserved for the screen-settings lane; prompt loading never reads or writes it.
+
+Migration: remove `codex.instructions` and `codex.live_instructions` from TOML and save their values as
+`prompts/runner.md` and `prompts/voice.md` respectively. Either old key is refused with the replacement
+filename, regardless of its value. To roll back, restore the previous binary and its inline config
+values together, removing `[home]`; keep the prompt files for a future upgrade.
 
 #### Language — Codex / Responses model service
 

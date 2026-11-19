@@ -77,9 +77,12 @@ impl Configured {
         tools: Vec<DynamicTool>,
         cancelled: impl Future<Output = ()>,
     ) -> Result<(), Error> {
-        let api_key = self.api_key()?;
-        let options = self.options(api_key.as_ref(), tools);
-        super::execute(options, connector, peer, cancelled).await
+        super::prompts::scope(self.config.home.as_ref().map(|home| home.dir.as_path()), async {
+            let api_key = self.api_key()?;
+            let options = self.options(api_key.as_ref(), tools);
+            super::execute(options, connector, peer, cancelled).await
+        })
+        .await
     }
 
     fn api_key(&self) -> Result<Option<Secret<String>>, Error> {
@@ -118,8 +121,8 @@ impl Configured {
                 kill_path: Some(&self.kill_path),
                 call: bridge_codex::Options {
                     voice: self.config.codex_voice(),
-                    instructions: &self.config.codex.instructions,
-                    prompt: &self.config.codex.live_instructions,
+                    instructions: echo_config::RUNNER_INSTRUCTIONS,
+                    prompt: echo_config::LIVE_INSTRUCTIONS,
                     model: self.config.codex_model(),
                     effort: self.config.codex.delegate_effort.as_deref(),
                     time_zone: self.config.codex.time_zone.as_deref(),
@@ -238,7 +241,7 @@ pub(super) mod tests {
     #[tokio::test(start_paused = true)]
     async fn configured_call_options_include_context_and_preserve_policy() {
         let prepared = configured().with_mcp_epoch(Some(123));
-        assert_eq!(prepared.config.codex.instructions, "Client audio bridge");
+        assert_eq!(echo_config::RUNNER_INSTRUCTIONS, "Client audio bridge");
         let tool = DynamicTool {
             name: "test.echo".into(),
             description: "Echo".into(),
@@ -256,12 +259,12 @@ pub(super) mod tests {
             .conversation((&text, "live snapshot"), options.host.deadline);
         assert_eq!(call.call.prompt, "live snapshot");
         assert!(options.voice.call.prompt.contains("Conversation is the default"));
-        assert_eq!(options.voice.call.prompt, prepared.config.codex.live_instructions);
+        assert_eq!(options.voice.call.prompt, echo_config::LIVE_INSTRUCTIONS);
         assert_eq!(
             call.call.instructions,
             format!(
                 "{}\n[Call-start context: 1970-01-01 Thursday 00:00:00 UTC+00:00; local offset unavailable]", // lint-rules: allow-literal UTC calendar expectation, never an endpoint
-                prepared.config.codex.instructions
+                echo_config::RUNNER_INSTRUCTIONS
             )
         );
         assert_eq!(call.call.voice, options.voice.call.voice);
@@ -276,7 +279,7 @@ pub(super) mod tests {
         assert_eq!(call.deadline, options.host.deadline);
         assert_eq!(options.voice.kill_path, Some(prepared.kill_path.as_path()));
         assert_eq!(options.mcp_epoch, Some(123));
-        assert_eq!(options.voice.call.instructions, prepared.config.codex.instructions);
+        assert_eq!(options.voice.call.instructions, echo_config::RUNNER_INSTRUCTIONS);
     }
 
     pub(in crate::bridge_voice) struct MemoryPeer;
@@ -429,15 +432,8 @@ pub(super) mod tests {
         }
     }
     fn configured() -> Configured {
-        let mut config = BridgeConfig::from_toml_str(
-            &include_str!("../../../../../examples/bridge.example.toml")
-                .replace(
-                    "# Optional Codex instructions (add a table named codex to customize):",
-                    "[codex]",
-                )
-                .replace("# instructions =", "instructions ="),
-        )
-        .unwrap();
+        let mut config =
+            BridgeConfig::from_toml_str(include_str!("../../../../../examples/bridge.example.toml")).unwrap();
         config.codex.home = Some(std::env::temp_dir().join("unused-codex-config-home"));
         Configured::new(config, "unused-trace".into(), ([127, 0, 0, 1], 0).into()).unwrap()
     }

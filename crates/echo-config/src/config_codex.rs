@@ -22,10 +22,6 @@ pub struct CodexConfig {
     /// A PEM bundle the child receives as `SSL_CERT_FILE`; opened only by the child.
     pub ca_file: Option<PathBuf>,
     pub voice: Option<String>,
-    /// The delegated turn's base instructions (`thread/start`), never the Live prompt.
-    pub instructions: String,
-    /// The GPT-Live prompt (`thread/realtime/start`): conversation first, hand-off the exception.
-    pub live_instructions: String,
     pub model: Option<String>,
     pub delegate_model: Option<String>,
     pub delegate_effort: Option<String>,
@@ -33,7 +29,7 @@ pub struct CodexConfig {
 }
 
 /// Owner, 2026-11-18: conversation is the default and a hand-off is the exception.
-const LIVE_INSTRUCTIONS: &str = "You are a friendly voice assistant on a smart speaker. Conversation is the \
+pub const LIVE_INSTRUCTIONS: &str = "You are a friendly voice assistant on a smart speaker. Conversation is the \
 default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. \
 Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do \
 not hand off just to check or verify something you can answer. Hand off to the background agent only when the \
@@ -41,6 +37,9 @@ request truly needs a tool: an action on a device or service, or live or persona
 unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one \
 short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start \
 snapshot; UTC does not establish the user's local time zone.";
+
+/// Built-in delegated runner instructions, unchanged by the file migration.
+pub const RUNNER_INSTRUCTIONS: &str = "Client audio bridge";
 
 impl Default for CodexConfig {
     fn default() -> Self {
@@ -50,8 +49,6 @@ impl Default for CodexConfig {
             launch: CodexLaunch::default(),
             ca_file: None,
             voice: None,
-            instructions: "Client audio bridge".into(),
-            live_instructions: LIVE_INSTRUCTIONS.into(),
             model: None,
             delegate_model: None,
             delegate_effort: None,
@@ -92,18 +89,14 @@ impl BridgeConfig {
 
 pub(super) fn decode(value: DeValue<'_>) -> Result<CodexConfig, ConfigError> {
     let mut fields = Fields::new(value, "codex")?;
+    fields.reject("instructions", "removed; use <home>/prompts/runner.md")?;
+    fields.reject("live_instructions", "removed; use <home>/prompts/voice.md")?;
     let config = CodexConfig {
         home: fields.optional("home")?,
         binary: fields.optional("binary")?,
         launch: fields.optional("launch")?.unwrap_or_default(),
         ca_file: fields.optional("ca_file")?,
         voice: fields.optional("voice")?,
-        instructions: fields
-            .optional("instructions")?
-            .unwrap_or_else(|| CodexConfig::default().instructions),
-        live_instructions: fields
-            .optional("live_instructions")?
-            .unwrap_or_else(|| LIVE_INSTRUCTIONS.into()),
         model: fields.optional("model")?,
         delegate_model: fields.optional("delegate_model")?,
         delegate_effort: fields.optional("delegate_effort")?,
@@ -146,8 +139,6 @@ pub(super) fn validate(config: &CodexConfig) -> Result<(), ConfigError> {
         ("codex.voice", config.voice.as_deref()),
         ("codex.model", config.model.as_deref()),
         ("codex.delegate_model", config.delegate_model.as_deref()),
-        ("codex.instructions", Some(config.instructions.as_str())),
-        ("codex.live_instructions", Some(config.live_instructions.as_str())),
     ] {
         if value.is_some_and(|value| value.trim().is_empty()) {
             return Err(ConfigError::new(field, "must be nonblank"));
@@ -239,32 +230,49 @@ mod tests {
     }
 
     #[test]
-    fn live_prompt_defaults_to_conversation_and_never_shares_the_delegated_text() {
-        let unset = BridgeConfig::from_toml_str(EXAMPLE).unwrap().codex;
-        assert_eq!(unset.instructions, "Client audio bridge");
-        assert_eq!(unset.live_instructions, LIVE_INSTRUCTIONS);
-        assert!(LIVE_INSTRUCTIONS.contains("Conversation is the default: answer directly and briefly"));
-        assert!(LIVE_INSTRUCTIONS.contains("do not hand off just to check or verify something you can answer"));
-        assert!(
-            LIVE_INSTRUCTIONS.contains("Hand off to the background agent only when the request truly needs a tool")
-        );
-        // The example documents the built-in prompt verbatim, so neither drifts.
-        let documented = EXAMPLE
-            .lines()
-            .find_map(|line| line.strip_prefix("# live_instructions = \"\"\""))
-            .and_then(|line| line.strip_suffix("\"\"\""));
-        assert_eq!(documented, Some(LIVE_INSTRUCTIONS));
-        // Each key is independent: neither text falls back to the other.
-        for (key, delegated, live) in [
-            ("instructions", "Only one", LIVE_INSTRUCTIONS),
-            ("live_instructions", "Client audio bridge", "Only one"),
+    fn agent_home_prompt_files_pin_unchanged_defaults() {
+        assert_eq!(include_str!("../../../examples/prompts/voice.md"), LIVE_INSTRUCTIONS);
+        assert_eq!(include_str!("../../../examples/prompts/runner.md"), RUNNER_INSTRUCTIONS);
+        assert_eq!(RUNNER_INSTRUCTIONS, "Client audio bridge");
+    }
+
+    #[test]
+    fn agent_home_removed_prompts_name_files_without_echoing_values() {
+        for (key, file) in [("instructions", "runner"), ("live_instructions", "voice")] {
+            for value in ["'discarded prompt'", "false", "''", "{ nested = 1 }"] {
+                let input = format!("{EXAMPLE}\n[codex]\n{key} = {value}\n");
+                assert_eq!(
+                    BridgeConfig::from_toml_str(&input).unwrap_err().to_string(),
+                    format!("codex.{key}: removed; use <home>/prompts/{file}.md")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn agent_home_is_optional_absolute_offline_and_sanitized() {
+        assert_eq!(BridgeConfig::from_toml_str(EXAMPLE).unwrap().home, None);
+        for (fields, expected) in [
+            ("", "home.dir: missing required field"),
+            ("dir=''", "home.dir: expected nonempty absolute path"),
+            ("dir='relative'", "home.dir: expected nonempty absolute path"),
+            ("dir='~/home'", "home.dir: expected nonempty absolute path"),
+            ("dir=false", "home.dir: invalid type or value"),
+            ("dir='/unused'\nunknown='discarded'", "home: unknown field"),
+            (
+                "dir='/unused'\npassword='discarded'",
+                "home.password: secrets go in files, not config",
+            ),
+            (
+                "dir='/unused'\nunknown={token='discarded'}",
+                "home.token: secrets go in files, not config",
+            ),
         ] {
-            let codex = BridgeConfig::from_toml_str(&format!("{EXAMPLE}\n[codex]\n{key} = 'Only one'\n"))
-                .unwrap()
-                .codex;
             assert_eq!(
-                (codex.instructions.as_str(), codex.live_instructions.as_str()),
-                (delegated, live)
+                BridgeConfig::from_toml_str(&format!("{EXAMPLE}\n[home]\n{fields}"))
+                    .unwrap_err()
+                    .to_string(),
+                expected
             );
         }
     }

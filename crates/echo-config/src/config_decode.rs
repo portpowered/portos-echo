@@ -51,6 +51,13 @@ impl<'a> Fields<'a> {
             .ok_or_else(|| ConfigError::new(self.field(key), "missing required field"))
     }
 
+    pub(super) fn reject(&self, key: &str, message: &str) -> Result<(), ConfigError> {
+        if self.table.contains_key(key) {
+            return Err(ConfigError::new(self.field(key), message));
+        }
+        Ok(())
+    }
+
     fn node(&mut self, key: &str) -> Result<Value<'a>, ConfigError> {
         self.table
             .remove(key)
@@ -70,8 +77,10 @@ impl<'a> Fields<'a> {
 
 pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
     let mut root = Fields::new(value, "config")?;
-    let agent_backend;
+    let home = root.table.remove("home").map(|v| home(v.into_inner())).transpose()?;
+    let (agent, agent_backend) = agent(root.node("agent")?)?;
     let result = BridgeConfig {
+        home,
         wake_earcon: root.optional("wake_earcon")?.unwrap_or(true),
         codex: root
             .table
@@ -99,11 +108,7 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .map(|v| audio(v.into_inner()))
             .transpose()?
             .unwrap_or_default(),
-        agent: {
-            let (agent, backend) = agent(root.node("agent")?)?;
-            agent_backend = backend;
-            agent
-        },
+        agent,
         agent_backend,
         muse: root
             .table
@@ -224,4 +229,14 @@ fn audit(value: Value<'_>) -> Result<AuditConfig, ConfigError> {
     };
     f.finish()?;
     Ok(result)
+}
+
+fn home(value: Value<'_>) -> Result<crate::HomeConfig, ConfigError> {
+    let mut fields = Fields::new(value, "home")?;
+    let dir: std::path::PathBuf = fields.required("dir")?;
+    fields.finish()?;
+    if !dir.is_absolute() {
+        return Err(ConfigError::new("home.dir", "expected nonempty absolute path"));
+    }
+    Ok(crate::HomeConfig { dir })
 }
