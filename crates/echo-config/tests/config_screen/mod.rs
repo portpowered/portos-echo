@@ -17,7 +17,7 @@ fn download(url: &str, sha256: &str) -> String {
 
 #[test]
 fn screen_pack_download_defaults_and_exact_pins_are_offline() {
-    assert!(BridgeConfig::from_toml_str(MINIMAL).unwrap().screen.packs.is_empty());
+    assert_eq!(BridgeConfig::from_toml_str(MINIMAL).unwrap().screen.packs, []);
     let url = "https://127.0.0.1:443/template.screenpack.tar.gz?version=1";
     let digest = "aB01".repeat(16);
     let input = configured(&download(url, &digest));
@@ -29,13 +29,7 @@ fn screen_pack_download_defaults_and_exact_pins_are_offline() {
     assert_eq!(expected.screen.packs[0].sha256, digest);
     assert_eq!(BridgeConfig::load(path).unwrap(), expected);
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
-    assert!(
-        BridgeConfig::from_toml_str(&configured("[]"))
-            .unwrap()
-            .screen
-            .packs
-            .is_empty()
-    );
+    assert_eq!(BridgeConfig::from_toml_str(&configured("[]")).unwrap().screen.packs, []);
 }
 
 #[test]
