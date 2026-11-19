@@ -3,18 +3,17 @@ use crate::{PromptKind, cancelled};
 use axum::{
     body::to_bytes,
     extract::{Path, Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use echo_screen_contract::settings_v1::{PromptSaveV1, SettingsPatchV1};
 
-async fn guard(state: &HttpState, request: &Request) -> Result<(), StatusCode> {
+async fn guard(state: &HttpState, uri: &Uri, headers: &HeaderMap) -> Result<(), StatusCode> {
     let core = state.core.lock().await;
-    if !authorized(&core, request.uri()) {
+    if !authorized(&core, uri) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    if request
-        .headers()
+    if headers
         .get("origin")
         .is_some_and(|origin| origin != state.origin.as_str())
     {
@@ -27,7 +26,7 @@ async fn guard(state: &HttpState, request: &Request) -> Result<(), StatusCode> {
 }
 
 pub(super) async fn snapshot(State(state): State<HttpState>, request: Request) -> Response {
-    if let Err(status) = guard(&state, &request).await {
+    if let Err(status) = guard(&state, request.uri(), request.headers()).await {
         return status.into_response();
     }
     state
@@ -54,7 +53,7 @@ pub(super) async fn save(State(state): State<HttpState>, request: Request) -> Re
 }
 
 pub(super) async fn prompt(State(state): State<HttpState>, Path(kind): Path<String>, request: Request) -> Response {
-    if let Err(status) = guard(&state, &request).await {
+    if let Err(status) = guard(&state, request.uri(), request.headers()).await {
         return status.into_response();
     }
     let kind = match kind.as_str() {
@@ -66,7 +65,7 @@ pub(super) async fn prompt(State(state): State<HttpState>, Path(kind): Path<Stri
 }
 
 async fn submit(state: HttpState, request: Request, kind: Option<PromptKind>) -> Response {
-    if let Err(status) = guard(&state, &request).await {
+    if let Err(status) = guard(&state, request.uri(), request.headers()).await {
         return status.into_response();
     }
     if !json_media(&request) {
