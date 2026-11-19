@@ -194,6 +194,19 @@ fn ring_replay_loss_followed_by_preemption_also_has_only_two_dispatches() {
         .unwrap();
     failed(&output, "attempt 1: play: no wake observed; attempt 2: play: preempted");
     assert_attempt(&session, 2, Some(false));
+    let outputs: Vec<_> = session
+        .ledger()
+        .into_iter()
+        .filter(|row| row["operation"] == "play")
+        .map(|row| {
+            let args = row["args"].as_array().unwrap();
+            let output = args.iter().position(|arg| arg == "--output").unwrap();
+            args[output + 1].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_ne!(outputs[0], outputs[1]);
+    assert!(std::path::Path::new(&outputs[0]).is_file());
+    assert!(!std::path::Path::new(&outputs[1]).exists());
     assert_eq!(
         events(&session)
             .iter()
