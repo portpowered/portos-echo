@@ -45,6 +45,7 @@ def fake_adb():
         command = args[1]
         command = command.replace("/system/bin/sh", "/bin/sh")
         command = command.replace("/data/local", str(base / "remote"))
+        command = command.replace("/proc/", str(base / "proc") + "/")
         pause = base / "pause"
         if pause.exists() and pause.read_text() in command:
             pause.unlink()
@@ -348,7 +349,9 @@ def main():
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))
     from test_echo_install_lifecycle import lifecycle_cases
     lifecycle_cases()
-    print("echo-install tests: install=PASS lifecycle=PASS retention=PASS privacy=PASS; status pending")
+    from test_echo_install_status import status_cases
+    status_cases()
+    print("echo-install tests: install=PASS lifecycle=PASS status=PASS retention=PASS privacy=PASS")
 
 
 if __name__ == "__main__":

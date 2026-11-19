@@ -37,7 +37,6 @@ hassmic boot.log client connected line within 20 seconds.
 stop closes held stdin and verifies absence; never kills an unknown process.
 status shows process, uptime seconds, sanitized hassmic link and five bridge.log lines.
 uninstall retains private/ and home/ unless --purge; never changes hassmic or /system.
-status and uninstall will be delivered in the next implementation increment.
 Exit status: 0 success/help/status observation; 1 operation/prerequisite failure;
 2 usage error. Errors use fixed diagnostics without raw adb output.
 Example: sh scripts/echo-install.sh install --config ./bridge.toml --bridge ./build/echo-bridge --codex ./build/codex-app-server --ca ./build/cacert.pem
@@ -90,7 +89,6 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-case $command_name in status | uninstall) fail 'command not yet available' ;; esac
 if [ "$command_name" = install ]; then
   [ "$purge" = false ] || usage
   [ -n "$config" ] || usage
@@ -160,16 +158,11 @@ selection=$(awk 'NR > 1 && NF { count++; if ($2 == "device") ready++ }
   END { print (count == 1 && ready == 1) ? "ready" : "refuse" }' "$log")
 [ "$selection" = ready ] || fail 'exactly one ready adb device is required'
 run_adb shell "test -x /data/local/hassmic/runas"
-run_adb shell "umask 077; mkdir '$lock'"
-locked=true
 process_state() {
   run_adb shell "ps -A -o PID,NAME"
   running=$(awk '$2 == "echo-bridge" { found=1 } END { print found+0 }' "$log")
 }
 process_state
-if [ "$command_name" != stop ]; then
-  [ "$running" = 0 ] || fail 'bridge is already running; stop first'
-fi
 # All commands refuse redirected state before any read, write or chmod.
 run_adb shell "for p in '$device' '$device/bin' '$device/private' '$device/home' '$device/home/prompts' '$device/private/run'; do
   test ! -L \"\$p\" && { test ! -e \"\$p\" || test -d \"\$p\"; } || exit 1
@@ -178,6 +171,47 @@ for p in launch.sh bridge.log bridge.toml bridge.trace; do test ! -L '$device/pr
 if test -d '$device/private/run'; then
   for p in stdin control stop finished deadline log-inode log-prefix; do test ! -L '$device/private/run/'\$p || exit 1; done
 fi"
+if [ "$command_name" = status ]; then
+  # Read-only observation. Optional unsupported/missing proc data is explicit.
+  run_adb shell "observed=\$(ps -A -o PID,NAME)
+pid=\$(printf '%s\\n' \"\$observed\" | awk '\$2 == \"echo-bridge\" { print \$1; exit }')
+if test -n \"\$pid\"; then
+  printf 'process=running\\n'
+  age=unavailable
+  case \$pid in *[!0-9]* | '') ;; *)
+    if test -r /proc/\$pid/stat && test -r /proc/uptime && ticks=\$(getconf CLK_TCK 2>/dev/null); then
+      age=\$(awk -v ticks=\"\$ticks\" 'NR == FNR { sub(/^.*\\) /, \"\"); start=\$20; next }
+        ticks > 0 && start ~ /^[0-9]+$/ { age=int(\$1-start/ticks); if (age >= 0) print age }' /proc/\$pid/stat /proc/uptime)
+      test -n \"\$age\" || age=unavailable
+    fi ;;
+  esac
+  printf 'uptime_seconds=%s\\n' \"\$age\"
+else printf 'process=stopped\\nuptime_seconds=unavailable\\n'; fi
+if test -f /data/local/hassmic/boot.log && test ! -L /data/local/hassmic/boot.log; then
+  link=\$(awk '/client connected|no Home Assistant link/ { line=\$0 } END { print line }' /data/local/hassmic/boot.log)
+  printf 'hassmic=%s\\n' \"\${link:-unavailable}\"
+else printf 'hassmic=unavailable\\n'; fi
+printf 'bridge.log (last 5):\\n'
+if test -f '$device/private/bridge.log'; then tail -n 5 '$device/private/bridge.log';
+else printf 'unavailable\\n'; fi"
+  # Mask whole suspect lines, including arbitrary long credential-like words.
+  # Buffer first: a failed filter must never cause a raw-output fallback.
+  sanitized=$(awk '
+    { lower=tolower($0); secret=(lower ~ /token|bearer|api[ _-]*key|password|secret|credential/)
+      count=split($0, words, /[^a-zA-Z0-9_+.\/-]/)
+      for (i=1; i<=count; i++) {
+        if (length(words[i]) >= 24 || words[i] ~ /^eyJ.*\..*\./) secret=1
+      }
+      if (secret) print "[masked]"; else print
+    }' "$log") || fail 'status filter failed'
+  printf '%s\n' "$sanitized"
+  exit 0
+fi
+run_adb shell "umask 077; mkdir '$lock'"
+locked=true
+# Reobserve after locking: a competing start may have completed during validation.
+process_state
+case $command_name in install | start) [ "$running" = 0 ] || fail 'bridge is already running; stop first' ;; esac
 stop_bridge() {
   run_adb shell "$close_stdin"
   process_state
@@ -187,6 +221,16 @@ stop_bridge() {
 if [ "$command_name" = stop ]; then
   stop_bridge
   printf '%s\n' 'echo-install: stopped'
+  exit 0
+fi
+if [ "$command_name" = uninstall ]; then
+  stop_bridge
+  run_adb shell "rm -rf '$device/bin'
+rm -f '$device/private/launch.sh'"
+  if [ "$purge" = true ]; then
+    run_adb shell "rm -rf '$device/private' '$device/home'"
+  fi
+  printf '%s\n' 'echo-install: uninstalled'
   exit 0
 fi
 if [ "$command_name" = start ]; then

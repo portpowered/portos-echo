@@ -1,0 +1,179 @@
+"""Read-only status, retention and complete CLI journey against recording adb."""
+import shutil
+import os
+import selectors
+
+from test_echo_install import Sandbox, prepare_lifecycle, require
+
+
+def owner_state(box):
+    values = {"private/bridge.toml": "owner config", "private/credential": "owner private",
+              "home/prompts/voice.md": "owner voice", "home/settings.toml": "owner settings"}
+    for name, value in values.items():
+        (box.device / name).write_text(value)
+    return values
+
+
+def retained(box, values):
+    for name, value in values.items():
+        require((box.device / name).read_text() == value, "owner bytes changed: " + name)
+
+
+def snapshot(box):
+    return {str(path.relative_to(box.device)): (path.stat().st_mode, path.read_bytes())
+            for path in box.device.rglob("*") if path.is_file()}
+
+
+def exited(box):
+    for name in ("child-pid", "holder-pid"):
+        try:
+            fd = os.pidfd_open(int((box.root / name).read_text()))
+        except ProcessLookupError:
+            continue
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(fd, selectors.EVENT_READ)
+                require(bool(selector.select(3)), "journey leaked a fixture process")
+        finally:
+            os.close(fd)
+
+
+def status_observation():
+    with Sandbox() as box:
+        box.install()
+        (box.root / "running").touch()
+        proc = box.root / "proc/13"
+        proc.mkdir(parents=True)
+        # Field 22 is starttime: 100 ticks at the controlled 100 Hz clock.
+        (proc / "stat").write_text("13 (echo-bridge) S " + "0 " * 18 + "100\n")
+        (box.root / "proc/uptime").write_text("43.99 0.00\n")
+        getconf = box.root / "remote-tools/getconf"
+        getconf.write_text("#!/bin/sh\n[ \"$1\" = CLK_TCK ] || exit 1\nprintf '100\\n'\n")
+        getconf.chmod(0o755)
+        (box.root / "remote/hassmic/boot.log").write_text(
+            "client connected / satellite: running\nother harmless line\n")
+        (box.device / "private/bridge.log").write_text("".join(f"line {i}\n" for i in range(6)))
+        before = snapshot(box)
+        index = len(box.calls())
+        result = box.run(["status"])
+        require(result.stdout == "process=running\nuptime_seconds=42\n"
+                "hassmic=client connected / satellite: running\nbridge.log (last 5):\n"
+                "line 1\nline 2\nline 3\nline 4\nline 5\n", "status observation differs")
+        require(before == snapshot(box), "status mutated owner files")
+        calls = box.calls()[index:]
+        require(all(call[0] in ("devices", "shell") for call in calls), "status pushed files")
+        require(not any(word in " ".join(call) for call in calls
+                        for word in ("mkdir", "chmod", "touch", "rm -", "kill ")), "status mutated device")
+        (proc / "stat").unlink()
+        require("uptime_seconds=unavailable\n" in box.run(["status"]).stdout, "missing uptime invented")
+    with Sandbox() as box:
+        result = box.run(["status"])
+        require(result.stdout == "process=stopped\nuptime_seconds=unavailable\nhassmic=unavailable\n"
+                "bridge.log (last 5):\nunavailable\n", "missing status differs")
+        require(not box.device.exists(), "status created device state")
+        (box.root / "fault").write_text("ps -A")
+        box.run(["status"], 1)
+    print("F18 F20: PASS")
+
+
+def status_privacy():
+    # Synthetic strings, assembled so fixtures cannot be mistaken for credentials.
+    values = ["token=" + "fixture-one", "Authorization: Bearer " + "fixture-two",
+              "API_KEY: " + "fixture-three", "eyJ" + "fixture.payload.signature",
+              "x" * 40, '"access_token": "fixture-four"', "password=fixture-five"]
+    with Sandbox() as box:
+        box.install()
+        log = box.device / "private/bridge.log"
+        for value in values:
+            log.write_text("harmless\n" + value + "\n")
+            (box.root / "remote/hassmic/boot.log").write_text("client connected " + value + "\n")
+            result = box.run(["status"])
+            require(value not in result.stdout + result.stderr, "token-like bytes leaked")
+            require(result.stdout.count("[masked]") == 2 and "harmless\n" in result.stdout,
+                    "masking or harmless output differs")
+        # A failing local sanitizer must not print even partially filtered data.
+        awk = box.tools / "awk"
+        real = awk.read_text()
+        awk.write_text("#!/bin/sh\ncase \"$1\" in *secret=*) printf 'unsafe partial output'; exit 1;; esac\n"
+                       + real.split("\n", 1)[1])
+        result = box.run(["status"], 1)
+        require(not result.stdout and "filter failed" in result.stderr, "filter failure leaked output")
+        awk.write_text(real)
+        (box.root / "fault").write_text("tail -n 5")
+        result = box.run(["status"], 1)
+        require(not result.stdout, "adb error leaked status payload")
+    print("F19: PASS")
+
+
+def uninstall_failures():
+    for child in ("", "bin", "private", "home", "private/launch.sh"):
+        with Sandbox() as box:
+            box.install()
+            outside = box.root / "outside"
+            outside.mkdir()
+            sentinel = outside / "sentinel"
+            sentinel.write_text("outside owner state")
+            path = box.device / child
+            if path.is_dir():
+                shutil.rmtree(path)
+                path.symlink_to(outside, target_is_directory=True)
+            else:
+                path.unlink()
+                path.symlink_to(sentinel)
+            box.run(["uninstall", "--purge"], 1)
+            box.install(code=1)
+            require(sentinel.read_text() == "outside owner state", "symlink escaped owned root")
+    for fault in ("rm -rf '/data/local/echo-bridge/bin'", "rm -f '/data/local/echo-bridge/private/launch.sh'",
+                  "rm -rf '/data/local/echo-bridge/private'"):
+        with Sandbox() as box:
+            box.install()
+            values = owner_state(box)
+            (box.root / "fault").write_text(fault)
+            result = box.run(["uninstall", "--purge"], 1)
+            require(not result.stdout, "failed removal reported success")
+            retained(box, values)
+            box.run(["uninstall", "--purge"])
+    print("F22: PASS")
+
+
+def full_journey():
+    with Sandbox() as box:
+        help_text = box.run(["--help"]).stdout
+        require("not yet" not in help_text and "next implementation" not in help_text,
+                "help advertises incomplete command")
+        box.prompt("voice.md", "default voice")
+        prepare_lifecycle(box)
+        values = owner_state(box)
+        box.run(["start"])
+        require("process=running\n" in box.run(["status"]).stdout, "journey status stopped")
+        box.run(["stop"])
+        require((box.root / "eof").read_text() == "EOF", "journey child did not see EOF")
+        exited(box)
+        box.install()
+        retained(box, values)
+        hassmic = (box.root / "remote/hassmic/runas").read_bytes()
+        require(box.run(["uninstall"]).stdout == "echo-install: uninstalled\n", "uninstall output differs")
+        require(not (box.device / "bin").exists() and not (box.device / "private/launch.sh").exists(),
+                "ordinary uninstall left executable payloads")
+        retained(box, values)
+        box.install()
+        retained(box, values)
+        # Uninstall itself must close stdin and wait for EOF before removing anything.
+        (box.root / "eof").unlink()
+        box.run(["start"])
+        box.run(["uninstall", "--purge"])
+        require((box.root / "eof").read_text() == "EOF", "uninstall skipped clean stop")
+        exited(box)
+        require(not any((box.device / part).exists() for part in ("bin", "private", "home")),
+                "purge retained owned payloads")
+        require((box.root / "remote/hassmic/runas").read_bytes() == hassmic, "hassmic changed")
+        require(not (box.root / "remote/echo-bridge.lock").exists(), "journey lock leaked")
+        box.run(["uninstall", "--purge"])
+    print("F21 F23: PASS")
+
+
+def status_cases():
+    status_observation()
+    status_privacy()
+    uninstall_failures()
+    full_journey()

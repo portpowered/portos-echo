@@ -32,12 +32,12 @@ def release_start(box, child, code):
 
 
 def concurrent_cases():
-    for rival in ("start", "install"):
+    for rival in ("start", "install", "uninstall"):
         with Sandbox() as box:
             prepare_lifecycle(box)
             child = paused_start(box, "read -r end <")
             before = len(box.calls())
-            result = box.run([rival] if rival == "start" else box.install_args(), 1)
+            result = box.run(box.install_args() if rival == "install" else [rival], 1)
             require(result.stderr == "echo-install: device operation failed\n",
                     "busy caller result differs")
             require(not any("setsid" in " ".join(call) or call[0] == "push"
@@ -47,7 +47,7 @@ def concurrent_cases():
             require(sum("setsid" in " ".join(call) for call in box.calls()) == 1,
                     "concurrent launch count differs")
             box.run(["stop"])
-    print("F13: PASS (start/start and start/install; uninstall integration belongs to 003)")
+    print("F13: PASS (start/start, start/install and start/uninstall)")
 
 
 def interrupted_cases():
@@ -117,6 +117,9 @@ def lifecycle_cases():
         (box.root / "fault").write_text("ps -A")
         box.run(["stop"], 1)
         require((box.device / "bin/echo-bridge").exists(), "failed verification removed binary")
+        (box.root / "fault").write_text("ps -A")
+        box.run(["uninstall", "--purge"], 1)
+        require((box.device / "private/bridge.toml").exists(), "failed uninstall observation removed config")
         box.run(["stop"])
     with Sandbox() as box:
         prepare_lifecycle(box, "stubborn")
@@ -127,8 +130,10 @@ def lifecycle_cases():
         before = len(box.calls())
         box.run(["start"], 1)
         box.install(code=1)
+        box.run(["uninstall", "--purge"], 1)
+        require((box.device / "private/bridge.toml").exists(), "failed stop removed private state")
         require(not any(call[0] == "push" or "kill " in " ".join(call)
                         for call in box.calls()[before:]), "persistent child replaced or signalled")
     concurrent_cases()
     interrupted_cases()
-    print("F09 F10 F11 F12 F14 F15 F16: PASS (uninstall refusal integration belongs to 003)")
+    print("F09 F10 F11 F12 F14 F15 F16: PASS")
