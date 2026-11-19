@@ -7,6 +7,7 @@ mod screen;
 pub(super) mod session;
 mod setup;
 mod startup;
+pub(super) mod wake;
 pub(super) mod wire;
 
 use echo_live::fake::FakeLive;

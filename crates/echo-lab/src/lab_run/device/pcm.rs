@@ -162,7 +162,7 @@ impl super::Configured<'_> {
         next: Option<&super::super::Step>,
         artifacts: &mut super::super::run_report::Artifacts,
     ) -> Result<(), String> {
-        use super::super::{Driver, Step};
+        use super::super::Step;
         let clip = self.options.wake_clip.as_ref();
         let path = clip.map_or_else(
             || adapt(path, &artifacts.root, index),
@@ -172,11 +172,7 @@ impl super::Configured<'_> {
             self.before_wake()?;
             self.state.arm_wake()?;
         }
-        if self.session {
-            self.bench.session_input(&Step::SayFile(path), index, artifacts)?;
-        } else {
-            self.bench.execute(&Step::SayFile(path), index, next, artifacts)?;
-        }
+        self.say_attempt(&Step::SayFile(path), index, next, artifacts)?;
         let play_index = self.state.plays.len();
         if let Some(clip) = clip {
             self.state.clip = Some(clip.metadata.clone());
@@ -207,13 +203,31 @@ impl super::Configured<'_> {
             self.state.arm_wake()?;
         }
         let step = super::super::Step::SayText(text.to_owned());
-        if self.session {
-            self.bench.session_input(&step, index, artifacts)?;
+        self.say_attempt(&step, index, next, artifacts)?;
+        if self.state.muted() {
+            Ok(())
         } else {
-            use super::super::Driver;
-            self.bench.execute(&step, index, next, artifacts)?;
+            self.wait_wake(index)
         }
-        self.wait_wake(index)
+    }
+
+    fn say_attempt(
+        &mut self,
+        step: &super::super::Step,
+        index: usize,
+        next: Option<&super::super::Step>,
+        artifacts: &mut super::super::run_report::Artifacts,
+    ) -> Result<(), String> {
+        use super::super::run_device::Wake;
+        let eligible = !self.state.muted() && (!self.session || self.wire_replies == 0);
+        let mut observer = super::runtime::wake::Observer::new(&mut self.state, &self.executor, self.options);
+        let wake = eligible.then_some(&mut observer as &mut dyn Wake);
+        self.bench.iteration = self.iteration;
+        if self.session {
+            self.bench.session_input(step, index, artifacts, wake)
+        } else {
+            self.bench.execute_wake(step, index, next, artifacts, wake)
+        }
     }
 
     pub(super) fn wait_played(&mut self, index: usize) -> Result<(), String> {

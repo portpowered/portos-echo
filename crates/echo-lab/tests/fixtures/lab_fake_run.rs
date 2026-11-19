@@ -57,6 +57,9 @@ fn wait_until(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 fn response(op: &str, args: &[String], fixture: &Value) -> Result<Value, Box<dyn std::error::Error>> {
+    if let Some(value) = device_bridge::ring_host(op, fixture)? {
+        return Ok(value);
+    }
     Ok(match op {
         "hold" => json!({"holdId":"fixture-hold", "lease":"fixture-lease", "listening":true, "talking":true}),
         "release" => json!({"holds":[{"id":args.get(2),"state":"ended"}]}),
@@ -115,6 +118,11 @@ fn response(op: &str, args: &[String], fixture: &Value) -> Result<Value, Box<dyn
 }
 
 fn overrides(op: &str, count: usize, fixture: &Value, mut result: Value) -> Value {
+    if op == "reply"
+        && let Some(reply) = fixture["replies"].get(count)
+    {
+        result = reply.clone();
+    }
     if op == "clock"
         && let Some(hour) = fixture["hours"].get(count)
     {
@@ -132,7 +140,8 @@ fn overrides(op: &str, count: usize, fixture: &Value, mut result: Value) -> Valu
     {
         result = value.clone();
     }
-    if op == "status" && fixture["preemptions"].as_u64().is_some_and(|n| n > 0) {
+    if op == "status" && (fixture["preemptions"].as_u64().is_some_and(|n| n > 0) || fixture["preempt_plays"].is_array())
+    {
         let hold = fixture["holds"]
             .get(count)
             .and_then(|h| h["holdId"].as_str())
@@ -192,7 +201,7 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let op = operation(&args);
     let count = ledger(op, &args)?;
-    if let Some(code) = configured_fixture(op, &args, &fixture)? {
+    if let Some(code) = configured_fixture(op, &args, &fixture, count)? {
         return Ok(code);
     }
     if op == "play" {
@@ -209,7 +218,7 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
             std::thread::park();
         }
     }
-    if op == "play" && u64::try_from(count).unwrap_or(u64::MAX) < fixture["preemptions"].as_u64().unwrap_or(0) {
+    if op == "play" && device_bridge::preempted(&fixture, count) {
         return completed_without_recording();
     }
     if fixture["fail"] == op {
@@ -250,7 +259,15 @@ fn run() -> Result<u8, Box<dyn std::error::Error>> {
     Ok(0)
 }
 
-fn configured_fixture(op: &str, args: &[String], fixture: &Value) -> Result<Option<u8>, Box<dyn std::error::Error>> {
+fn configured_fixture(
+    op: &str,
+    args: &[String],
+    fixture: &Value,
+    count: usize,
+) -> Result<Option<u8>, Box<dyn std::error::Error>> {
+    if op == "play" && fixture["device_bridge_fault"] == "ring_replay" {
+        device_bridge::ring_play(count, fixture)?;
+    }
     if args.first().is_some_and(|arg| arg == "forward") && fixture["wire_port"].is_u64() {
         let dynamic_port = "tcp:0"; // lint-rules: allow-literal inert fake adb argument comparison, never a connection target
         if args.get(1).is_some_and(|arg| arg == dynamic_port) {
@@ -265,6 +282,7 @@ fn configured_fixture(op: &str, args: &[String], fixture: &Value) -> Result<Opti
         return device_bridge::run(args, fixture).map(Some);
     }
     if op == "play"
+        && fixture["ring_wakes"].get(count) != Some(&json!(false))
         && let Ok(address) = std::env::var("ECHO_LAB_DEVICE_CONTROL")
     {
         device_wake(&address, args)?;
@@ -282,7 +300,7 @@ fn real_config(op: &str, args: &[String], fixture: &Value) -> bool {
         && fixture["real_config"] == true
         && !matches!(
             op,
-            "clock" | "digest" | "reply" | "wav" | "wait_until" | "wait" | "pixels"
+            "clock" | "digest" | "reply" | "wav" | "wait_until" | "wait" | "pixels" | "wake_wait" | "wake_remaining"
         )
 }
 

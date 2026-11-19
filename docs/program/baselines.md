@@ -154,6 +154,12 @@ under one held camera session.
 | A play without `--listen` returns early | `play-audio --file` alone returns when the clip is queued, about 0.7 s after it starts and about 2 s before it ends; wait for the returned `playEndedAt` before the next command on the hold | 2026-11-15 |
 | Snapshot during playback, before the fix | port main 5ef4727: a snapshot about 1.5 s into the 2.8 s question → the Echo answered with the time 13 of 22 times (3 no answer, 6 wrong reply); controls with no snapshot 15 of 15. Late talkback packets (worst 34 ms) and a keyframe request (never sent) ruled out; the Ring-side mechanism is unknown | 2026-11-15 |
 | Snapshot during playback, with the fix | port main 179c4ab (portos-monolith PR 2741): a snapshot sent mid-clip waits until the clip stops, returns 2.3–3.4 s after it was sent, frame 0.38–0.49 s after `playEndedAt`; the Echo answered with the time 8 of 8, controls 2 of 2 (Fisher one-sided against before, p ≈ 0.035). Whisper `large-v3-turbo` on 8 s after the clip | 2026-11-15 |
+| Ring talkback loss | Bare go-ring harness: 4/5 and 8/9 confirmed wakes; Port CLI: 4/6, 11/20 and 4/4 in separate windows. Coordinator matching playback to `boot.log`, 07:54–08:02 UTC: 12/16 full `wake: COMPUTER type=2` detections across CLI relay/direct and harness none/premic. Misses had no detection at all. Ring's media server acknowledged every packet over RTCP even for lost plays: successful play-audio delivery does not prove speaker playback. Hit onset was 1.3–1.8 s after clip start, with late hits at +3.6–3.8 s. These independent windows are not a pooled reliability estimate; physical replay recovery and wakes beyond six seconds remain unmeasured | 2026-11-19, coordinator playback/`boot.log` matching, supplied Ring replay mission |
+
+Device-cycle acceptance allows at most one replay for a suspected lost say clip, with the first-try wake rate
+and actual replay count reported separately. A positive wake never authorizes a loss replay; the existing
+reply and recovery oracles still apply. M1 retains its 10 bridge and 10 hassmic-host restart recovery counts.
+This policy and its synthetic tests do not establish physical replay reliability or a new T5 milestone.
 
 Not measured yet: the Echo's listening bar in a Ring frame (the bar runs along the bottom edge of the screen,
 which the current camera angle cuts off; see the B0 row under Milestones), and the Ring's lockout threshold for
