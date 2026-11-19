@@ -1,4 +1,5 @@
 //! T3 fault injection at the nominated bridge process/SSE boundary only.
+#[path = "lab_device_bridge/t5.rs"]
 mod t5;
 use serde_json::{Value, json};
 use std::{

@@ -49,9 +49,9 @@ impl<'a> Configured<'a> {
                     &self.config,
                     &artifacts.root,
                     self.options
-                        .live_real
-                        .then_some(self.options.bridge_config.as_deref())
-                        .flatten(),
+                        .bridge_config
+                        .as_deref()
+                        .filter(|_| self.options.live_real()),
                 ),
                 self.options.cancel.as_deref(),
             ));

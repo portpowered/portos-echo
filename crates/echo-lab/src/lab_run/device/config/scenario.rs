@@ -37,18 +37,18 @@ pub fn record(options: &Options, artifacts: &mut Artifacts) -> Result<(), String
     }
     for path in &options.scenarios {
         let scenario = crate::lab_validate::load(path)?;
-        if scenario["id"] != "m2-live-connect" && !options.live_real {
+        if scenario["id"] != "m2-live-connect" && !options.live_real() {
             continue;
         }
-        if !options.live_real {
+        if !options.live_real() {
             artifacts.device_limits.push("live: fake (not milestone proof)".into());
         }
         super::super::observations::append(
             artifacts,
             &json!({
                 "event":"device.startup_mode", "step":null,
-                "live":if options.live_real { "real" } else { "fake" },
-                "limitation":if options.live_real { "physical proof requires coordinator T5" }
+                "live":if options.live_real() { "real" } else { "fake" },
+                "limitation":if options.live_real() { "physical proof requires coordinator T5" }
                     else { "live: fake (not milestone proof)" }
             }),
         )?;

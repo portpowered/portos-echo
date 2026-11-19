@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct Options {
-    pub live_real: bool,
+    pub live: Live,
     pub wake_clip: Option<super::device::pcm::Clip>,
     pub sim: bool,
     pub bridge: Option<PathBuf>,
@@ -41,6 +41,18 @@ pub struct Options {
     pub operator_confirm: Option<PathBuf>,
     /// Owner waiver (decisions.md, 2026-11-17): audio may play before 09:00 local time.
     pub allow_quiet_hours: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Live {
+    Fake,
+    Real,
+}
+
+impl Options {
+    pub fn live_real(&self) -> bool {
+        self.live == Live::Real
+    }
 }
 
 fn required<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str, String> {
@@ -90,7 +102,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     if flags.keys().any(|key| !ALLOWED.contains(&key.as_str())) || scenarios.is_empty() {
         return Err("run: unknown option or missing scenario".into());
     }
-    let live_real = live_selection(&flags)?;
+    let live = live_selection(&flags)?;
     if flags.contains_key("--wake-clip") && required(&flags, "--driver")? == "sim" {
         return Err("run: --wake-clip is only supported with --driver device".into());
     }
@@ -112,7 +124,32 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         .or_else(|| std::env::var("ECHO_LAB_RING").ok())
         .filter(|s| !s.is_empty())
         .ok_or("run requires --ring or ECHO_LAB_RING")?;
-    let out = flags.get("--out").map_or_else(
+    Ok(Options {
+        live,
+        sim: false,
+        wake_clip: wake_clip(&flags)?,
+        operator_confirm: flags.get("--operator-confirm").map(PathBuf::from),
+        bridge: device_bridge(&flags)?,
+        bridge_config: flags
+            .get("--bridge-config")
+            .map(|v| configuration_path(v, live == Live::Real))
+            .transpose()?,
+        scenarios,
+        port: explicit(required(&flags, "--port")?)?,
+        adb: explicit(required(&flags, "--adb")?)?,
+        stt: PathBuf::from(required(&flags, "--stt")?),
+        python: flags.get("--python").cloned().unwrap_or_else(|| "python".into()),
+        ring,
+        out: device_output(&flags),
+        keep_audio: flags.contains_key("--keep-audio"),
+        speech,
+        cancel: flags.get("--cancel-file").map(PathBuf::from),
+        allow_quiet_hours: flags.contains_key("--allow-quiet-hours"),
+    })
+}
+
+fn device_output(flags: &BTreeMap<String, String>) -> PathBuf {
+    flags.get("--out").map_or_else(
         || {
             std::env::temp_dir().join(format!(
                 "echo-lab-run-{}-{}",
@@ -124,29 +161,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
             ))
         },
         PathBuf::from,
-    );
-    Ok(Options {
-        live_real,
-        sim: false,
-        wake_clip: wake_clip(&flags)?,
-        operator_confirm: flags.get("--operator-confirm").map(PathBuf::from),
-        bridge: device_bridge(&flags)?,
-        bridge_config: flags
-            .get("--bridge-config")
-            .map(|v| configuration_path(v, live_real))
-            .transpose()?,
-        scenarios,
-        port: explicit(required(&flags, "--port")?)?,
-        adb: explicit(required(&flags, "--adb")?)?,
-        stt: PathBuf::from(required(&flags, "--stt")?),
-        python: flags.get("--python").cloned().unwrap_or_else(|| "python".into()),
-        ring,
-        out,
-        keep_audio: flags.contains_key("--keep-audio"),
-        speech,
-        cancel: flags.get("--cancel-file").map(PathBuf::from),
-        allow_quiet_hours: flags.contains_key("--allow-quiet-hours"),
-    })
+    )
 }
 
 fn wake_clip(flags: &BTreeMap<String, String>) -> Result<Option<super::device::pcm::Clip>, String> {
@@ -194,7 +209,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
         PathBuf::from,
     );
     Ok(Options {
-        live_real: false,
+        live: Live::Fake,
         sim: true,
         wake_clip: None,
         operator_confirm: None,
@@ -224,9 +239,9 @@ fn device_bridge(flags: &BTreeMap<String, String>) -> Result<Option<PathBuf>, St
     }
 }
 
-fn live_selection(flags: &BTreeMap<String, String>) -> Result<bool, String> {
+fn live_selection(flags: &BTreeMap<String, String>) -> Result<Live, String> {
     let Some(value) = flags.get("--live") else {
-        return Ok(false);
+        return Ok(Live::Fake);
     };
     if value != "real" {
         return Err("device: --live accepts only real".into());
@@ -238,7 +253,7 @@ fn live_selection(flags: &BTreeMap<String, String>) -> Result<bool, String> {
     {
         return Err("device: --live real requires device/ring with --bridge and --bridge-config".into());
     }
-    Ok(true)
+    Ok(Live::Real)
 }
 
 fn configuration_path(value: &str, live_real: bool) -> Result<PathBuf, String> {
@@ -349,7 +364,7 @@ mod tests {
             ("--bridge-config".into(), "nominated.toml".into()),
             ("--live".into(), "real".into()),
         ]);
-        assert_eq!(live_selection(&flags), Ok(true));
+        assert_eq!(live_selection(&flags), Ok(Live::Real));
         for name in ["--driver", "--bench", "--bridge", "--bridge-config"] {
             let mut missing = flags.clone();
             missing.remove(name);
@@ -363,7 +378,7 @@ mod tests {
             wrong.insert("--driver".into(), driver.into());
             assert!(live_selection(&wrong).is_err());
         }
-        assert_eq!(live_selection(&BTreeMap::new()), Ok(false));
+        assert_eq!(live_selection(&BTreeMap::new()), Ok(Live::Fake));
     }
 
     #[test]
