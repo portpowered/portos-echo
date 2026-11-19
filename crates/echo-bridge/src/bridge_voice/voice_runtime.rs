@@ -13,7 +13,13 @@ use echo_link::LinkConnector;
 use echo_media::MediaPeer;
 use echo_screen_contract::settings_v1::LinkStatusV1;
 use echo_screen_server::SettingsRequest;
-use std::{cell::Cell, future::Future, net::SocketAddr, path::Path, pin::Pin};
+use std::{
+    cell::{Cell, RefCell},
+    future::Future,
+    net::SocketAddr,
+    path::Path,
+    pin::Pin,
+};
 use tokio::{sync::watch, time::Instant};
 
 pub struct RuntimeOptions<'a> {
@@ -37,6 +43,50 @@ impl RuntimeOptions<'_> {
             .max(self.voice.session.response_timeout.as_secs())
             .saturating_add(self.voice.session.played_timeout.as_secs());
         u32::try_from(seconds.min(i32::MAX as u64)).unwrap_or(i32::MAX as u32)
+    }
+}
+
+struct SettingsLink {
+    portos: bool,
+    grant: RefCell<Option<std::sync::Arc<crate::bridge_mcp::Grant>>>,
+}
+
+impl SettingsLink {
+    fn new(config: Option<&echo_config::BridgeConfig>) -> Self {
+        Self {
+            portos: config.is_some_and(|config| {
+                config
+                    .mcp
+                    .server
+                    .first()
+                    .is_some_and(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
+            }),
+            grant: RefCell::new(None),
+        }
+    }
+
+    async fn open_tools(
+        &self,
+        view: &mut View<'_>,
+        options: &RuntimeOptions<'_>,
+        tools: &mut Option<super::voice_tools::Tools>,
+    ) -> Result<(), Error> {
+        if let (Some(config), Some(tools)) = (options.delegation, tools) {
+            view.open_tools(tools, config, options.mcp_epoch).await?;
+            *self.grant.borrow_mut() = tools.grant();
+        }
+        Ok(())
+    }
+
+    fn status(&self) -> LinkStatusV1 {
+        if self.portos {
+            self.grant
+                .borrow()
+                .as_ref()
+                .map_or(LinkStatusV1::LinkRequired, |grant| grant.link_status())
+        } else {
+            LinkStatusV1::Unconfigured
+        }
     }
 }
 
@@ -64,18 +114,16 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
 ) -> Result<(), Error> {
-    Box::pin(execute_owned(options, connector, &mut peer, cancelled, None, || {
-        LinkStatusV1::Unconfigured
-    }))
-    .await
-    .map(|_| ())
+    Box::pin(execute_owned(options, connector, &mut peer, cancelled, None))
+        .await
+        .map(|_| ())
 }
 
 /// Mount the bounded authorized settings owner for this runtime generation.
 /// A true result requests replacement only after call/device/process, health
 /// and HTTP cleanup. The caller must still arbitrate final EOF/kill, drop the
 /// runtime, and perform exec or recover the old active configuration on failure.
-/// Link status is sampled at commit from the caller's live grant owner.
+/// Link status is sampled at commit from this runtime's live grant owner.
 ///
 /// # Errors
 /// Uses the same startup, service and cleanup failures as `execute`.
@@ -85,17 +133,8 @@ pub async fn execute_with_settings<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     settings: (SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>),
-    link_status: impl Fn() -> LinkStatusV1,
 ) -> Result<bool, Error> {
-    Box::pin(execute_owned(
-        options,
-        connector,
-        &mut peer,
-        cancelled,
-        Some(settings),
-        link_status,
-    ))
-    .await
+    Box::pin(execute_owned(options, connector, &mut peer, cancelled, Some(settings))).await
 }
 
 async fn execute_owned<C: LinkConnector, P: MediaPeer>(
@@ -104,7 +143,6 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     settings: Option<(SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>)>,
-    link_status: impl Fn() -> LinkStatusV1,
 ) -> Result<bool, Error> {
     let mut trace = Trace::open(
         options.trace,
@@ -127,9 +165,12 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     screen.supervise_actions(health.state.subscribe());
     let mut view = View::new(&screen, &health, &mut trace);
     let requested = Cell::new(false);
-    let work = Box::pin(work(options, connector, &mut peer, cancelled, &mut view, &requested));
+    let link = SettingsLink::new(options.delegation);
+    let work = Box::pin(work(
+        options, connector, &mut peer, cancelled, &mut view, &requested, &link,
+    ));
     let (result, pending) = if let Some(service) = service {
-        Box::pin(service.scope(work, link_status)).await
+        Box::pin(service.scope(work, || link.status())).await
     } else {
         (work.await, false)
     };
@@ -187,6 +228,7 @@ async fn work<C: LinkConnector, P: MediaPeer>(
     cancelled: impl Future<Output = ()>,
     view: &mut View<'_>,
     requested: &Cell<bool>,
+    grant: &SettingsLink,
 ) -> Result<(), Error> {
     view.startup()?;
     let cancelled = async {
@@ -201,6 +243,7 @@ async fn work<C: LinkConnector, P: MediaPeer>(
         peer,
         view,
         requested,
+        grant,
     };
     // Every generation has awaited its call/media and process shutdown; the
     // supervisor has closed the device link.
@@ -225,6 +268,7 @@ struct Live<'a, 'v, 'w, F> {
     peer: F,
     view: &'v mut View<'w>,
     requested: &'v Cell<bool>,
+    grant: &'v SettingsLink,
     /// Startup allowance, granted afresh to every generation.
     budget: std::time::Duration,
 }
@@ -232,6 +276,7 @@ struct Live<'a, 'v, 'w, F> {
 impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<C> for Live<'_, '_, '_, F> {
     async fn generation(&mut self, link: &Retained<C>, cancelled: Pin<&mut impl Future<Output = ()>>) -> Round {
         let (options, view, peer, requested) = (&self.options, &mut *self.view, &mut self.peer, self.requested);
+        let grant = self.grant;
         let termination = super::voice_kill::Termination::default();
         let (ready, served) = (Cell::new(None), Cell::new(false));
         let mut host = options.host.clone();
@@ -247,12 +292,7 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                 let mut tools = options
                     .delegation
                     .map(|config| super::voice_tools::Tools::new(config, options.utc_day.clone()));
-                let setup = async {
-                    if let (Some(config), Some(tools)) = (options.delegation, &mut tools) {
-                        view.open_tools(tools, config, options.mcp_epoch).await?;
-                    }
-                    Ok::<_, Error>(())
-                };
+                let setup = grant.open_tools(view, options, &mut tools);
                 let prepared = tokio::select! {
                     biased;
                     () = stopped(stopping.clone()) => Err(Error::Control),
@@ -276,6 +316,7 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                 if let Some(tools) = &mut tools {
                     tools.close().await;
                 }
+                *grant.grant.borrow_mut() = None;
                 result
             },
         )

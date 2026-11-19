@@ -89,7 +89,7 @@ async fn codex_configured_refused_device_shows_error_then_retries_to_ready() {
     assert_eq!(launches.lines().count(), 2);
 }
 
-fn config(fixture: &Fixture) -> echo_config::BridgeConfig {
+pub(super) fn config(fixture: &Fixture) -> echo_config::BridgeConfig {
     let mut config = echo_config::BridgeConfig::load(fixture.directory.path().join("bridge.toml")).unwrap();
     config.audit.log_dir = fixture.directory.path().join("audit");
     config.live.credential_file = fixture.directory.path().join("nominated-key");
@@ -124,7 +124,6 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
         let observer = Observer::default();
         let path = fixture.directory.path().join("runtime-trace");
         let (stop, stopping) = tokio::sync::oneshot::channel();
-        let linked = std::cell::Cell::new(false);
         let configured = Configured::from_effective(effective, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
         let work = configured.execute_with_settings(
             FakeConnector::new(observer.clone()),
@@ -133,19 +132,12 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
             async {
                 stopping.await.unwrap();
             },
-            || {
-                if linked.get() {
-                    echo_screen_contract::settings_v1::LinkStatusV1::Linked
-                } else {
-                    echo_screen_contract::settings_v1::LinkStatusV1::LinkRequired
-                }
-            },
         );
         let inspect = async {
             let _control = fixture.control().await;
             let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
             while bridge_wire_screen::state(&mut screen).await["message"] != "Echo Live ready" {}
-            settings_runtime_requests(&fixture, &linked, &home).await;
+            settings_runtime_requests(&fixture, &home).await;
             presentation_owned(&path);
             assert!(!observer.commands().contains(&Command::Close));
             if restart {
@@ -185,7 +177,7 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
     }
 }
 
-fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Url {
+pub(super) fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Url {
     assert_eq!(fixture.screen.ip(), std::net::Ipv4Addr::LOCALHOST);
     let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();
     url.set_port(Some(fixture.screen.port())).unwrap();
@@ -205,7 +197,7 @@ async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) 
     response.json().await.unwrap()
 }
 
-async fn settings_runtime_requests(fixture: &Fixture, linked: &std::cell::Cell<bool>, home: &Path) {
+async fn settings_runtime_requests(fixture: &Fixture, home: &Path) {
     let client = reqwest::Client::new();
     let mut url = settings_runtime_url(fixture, "/settings/v1");
     url.set_query(None);
@@ -214,10 +206,9 @@ async fn settings_runtime_requests(fixture: &Fixture, linked: &std::cell::Cell<b
         reqwest::StatusCode::UNAUTHORIZED
     );
     url.set_query(Some("token=synthetic-screen-pair"));
-    for (value, expected) in [(false, "link_required"), (true, "linked")] {
-        linked.set(value);
+    for _ in 0..2 {
         let snapshot: serde_json::Value = client.get(url.as_str()).send().await.unwrap().json().await.unwrap();
-        assert_eq!(snapshot["link_status"], expected);
+        assert_eq!(snapshot["link_status"], "unconfigured");
         assert_eq!(
             snapshot["prompts"],
             json!({"voice":"admitted voice","runner":"admitted runner"})

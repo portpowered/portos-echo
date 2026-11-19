@@ -6,7 +6,6 @@ use echo_config::{BridgeConfig, EffectiveConfig, LiveMode};
 use echo_contracts::secret::Secret;
 use echo_link::LinkConnector;
 use echo_media::MediaPeer;
-use echo_screen_contract::settings_v1::LinkStatusV1;
 use std::{future::Future, io::Read, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::time::Instant;
 
@@ -123,7 +122,6 @@ impl Configured {
         peer: impl AsyncFnMut() -> Result<P, Error>,
         tools: Vec<DynamicTool>,
         cancelled: impl Future<Output = ()>,
-        link_status: impl Fn() -> LinkStatusV1,
     ) -> Result<bool, Error> {
         let startup = self.startup.take().filter(|startup| startup.config.home.is_some());
         Box::pin(super::prompts::scope(
@@ -139,12 +137,7 @@ impl Configured {
                 let options = self.options(api_key.as_ref(), tools);
                 if let Some(settings) = settings {
                     Box::pin(super::execute_with_settings(
-                        options,
-                        connector,
-                        peer,
-                        cancelled,
-                        settings,
-                        link_status,
+                        options, connector, peer, cancelled, settings,
                     ))
                     .await
                 } else {

@@ -94,6 +94,7 @@ async fn t3_refresh_window_and_single_flight_include_short_lived_tokens() {
         async move { c.access_token().await }
     });
     until(|| h.mock.state.lock().unwrap().held).await;
+    assert!(!h.client.has_grant());
     let second = tokio::spawn({
         let c = h.client.clone();
         async move { c.access_token().await }
@@ -107,6 +108,7 @@ async fn t3_refresh_window_and_single_flight_include_short_lived_tokens() {
     assert_eq!(drive(first).await.unwrap().unwrap().expose(), "access-2");
     assert_eq!(drive(second).await.unwrap().unwrap().expose(), "access-2");
     assert_eq!(h.mock.refreshes(), 1);
+    assert!(h.client.has_grant());
     assert_eq!(h.record()["grant"]["access_token"], "access-2");
 }
 
@@ -188,4 +190,23 @@ async fn t3_explicit_epoch_preserves_elapsed_clock_and_normal_open_wall_sample()
     advance(Duration::from_secs(5)).await;
     assert_eq!(client.now(), epoch + 42);
     assert_eq!(normal.now(), normal.epoch + 5);
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_passive_grant_status_follows_link_reload_revoke_without_requests() {
+    let h = Harness::new().await;
+    assert!(!h.client.has_grant());
+    let link = drive(h.client.begin_link()).await.unwrap();
+    let task = start_approval(h.client.clone(), link).await;
+    advance(Duration::from_secs(5)).await;
+    drive(task).await.unwrap().unwrap();
+    let requests = h.mock.state.lock().unwrap().requests.len();
+    for _ in 0..3 {
+        assert!(h.client.has_grant());
+    }
+    assert_eq!(h.mock.state.lock().unwrap().requests.len(), requests);
+    assert!(h.reload().await.unwrap().has_grant());
+    drive(h.client.revoke()).await.unwrap();
+    assert!(!h.client.has_grant());
+    assert!(!h.reload().await.unwrap().has_grant());
 }
