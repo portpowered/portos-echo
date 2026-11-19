@@ -1,6 +1,6 @@
 use super::{Error, TRANSFER_LIMIT};
 use reqwest::{Client, Url};
-use std::{path::Path, time::Duration};
+use std::path::Path;
 use tokio::io::AsyncWriteExt;
 
 pub(super) fn url(value: &str) -> Result<Url, Error> {
@@ -10,6 +10,7 @@ pub(super) fn url(value: &str) -> Result<Url, Error> {
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
+        || value.split('/').nth(2).is_some_and(|authority| authority.contains('@'))
         || value.contains('\\')
         || value.chars().any(char::is_whitespace)
     {
@@ -37,8 +38,7 @@ pub(super) async fn client(ca: Option<&Path>) -> Result<Client, Error> {
         .tls_built_in_root_certs(false)
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .timeout(Duration::from_secs(60));
+        .retry(reqwest::retry::never());
     for root in roots {
         builder = builder.add_root_certificate(root);
     }

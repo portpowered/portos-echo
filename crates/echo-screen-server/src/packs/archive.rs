@@ -77,7 +77,15 @@ fn verify(path: &Path, digest: &str, cancelled: &AtomicBool) -> Result<(), Error
     if input.limit() == 0 {
         return Err(Error::Transfer);
     }
-    if !format!("{:x}", hash.finalize()).eq_ignore_ascii_case(digest) {
+    let actual = hash.finalize();
+    if !actual
+        .iter()
+        .zip(digest.as_bytes().chunks_exact(2))
+        .all(|(byte, pair)| {
+            let value = |b: u8| (b as char).to_digit(16).unwrap_or(256);
+            u32::from(*byte) == value(pair[0]) * 16 + value(pair[1])
+        })
+    {
         return Err(Error::Digest);
     }
     Ok(())

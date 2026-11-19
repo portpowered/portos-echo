@@ -38,7 +38,7 @@ pub(super) fn archive(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
 fn prepare(root: &std::path::Path, bytes: &[u8], digest: Option<&str>) -> Result<archive::Prepared, Error> {
     let mut compressed = tempfile::NamedTempFile::new().unwrap();
     compressed.write_all(bytes).unwrap();
-    let good = format!("{:x}", Sha256::digest(bytes));
+    let good: String = Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect();
     archive::prepare(
         root,
         compressed.path(),

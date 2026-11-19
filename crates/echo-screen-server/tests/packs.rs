@@ -10,6 +10,7 @@ use tokio::{
 
 struct Peer {
     process: Child,
+    output: BufReader<tokio::process::ChildStdout>,
     root: tempfile::TempDir,
     base: String,
     archive: Vec<u8>,
@@ -21,6 +22,14 @@ root = pathlib.Path(sys.argv[1])
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_GET(self):
+        if self.path == '/stall':
+            self.send_response(200)
+            self.send_header('Content-Length', '100')
+            self.end_headers()
+            self.wfile.flush()
+            print('stalled', flush=True)
+            self.rfile.read(1)
+            return
         if self.path == '/http':
             self.send_response(302)
             self.send_header('Location', 'http://127.0.0.1/forbidden')
@@ -101,12 +110,12 @@ impl Peer {
             .kill_on_drop(true)
             .spawn()?;
         let mut line = String::new();
-        BufReader::new(process.stdout.take().ok_or("peer stdout")?)
-            .read_line(&mut line)
-            .await?;
+        let mut output = BufReader::new(process.stdout.take().ok_or("peer stdout")?);
+        output.read_line(&mut line).await?;
         let port: u16 = line.trim().parse()?;
         Ok(Self {
             process,
+            output,
             root,
             base: format!("https://127.0.0.1:{port}"),
             archive,
@@ -117,12 +126,22 @@ impl Peer {
         self.root.path().join("ca.pem")
     }
     fn digest(&self) -> String {
-        format!("{:x}", Sha256::digest(&self.archive))
+        Sha256::digest(&self.archive)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     async fn stop(mut self) -> Result {
         self.process.kill().await?;
         self.process.wait().await?;
+        Ok(())
+    }
+
+    async fn stalled(&mut self) -> Result {
+        let mut line = String::new();
+        self.output.read_line(&mut line).await?;
+        assert_eq!(line.trim(), "stalled");
         Ok(())
     }
 }
@@ -196,5 +215,48 @@ async fn t3_screen_pack_exclusive_ca_and_missing_ca_fail_without_extracting_or_s
         drop(states);
         server.shutdown().await?;
     }
+    peer.stop().await
+}
+
+#[tokio::test]
+async fn t3_screen_pack_shutdown_cancels_stalled_transfer_and_removes_temporary_bytes() -> Result {
+    let mut peer = Peer::start().await?;
+    let home = tempfile::tempdir()?;
+    let (mut server, states) = server().await?;
+    let mut jobs = server.install_configured_packs(
+        home.path().into(),
+        Some(peer.ca()),
+        vec![(format!("{}/stall", peer.base), peer.digest())],
+    );
+    peer.stalled().await?;
+    server.shutdown().await?;
+    assert!(jobs.recv().await.is_none());
+    assert_eq!(std::fs::read_dir(home.path().join("screens"))?.count(), 0);
+    drop(states);
+    peer.stop().await
+}
+
+#[tokio::test]
+async fn t3_screen_pack_fake_clock_deadline_retains_serving_process() -> Result {
+    let mut peer = Peer::start().await?;
+    let home = tempfile::tempdir()?;
+    let (mut server, states) = server().await?;
+    let mut jobs = server.install_configured_packs(
+        home.path().into(),
+        Some(peer.ca()),
+        vec![(format!("{}/stall", peer.base), peer.digest())],
+    );
+    peer.stalled().await?;
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    assert_eq!(
+        jobs.recv().await.ok_or("missing deadline result")?.reason.as_deref(),
+        Some("download deadline exceeded")
+    );
+    tokio::time::resume();
+    assert_eq!(std::fs::read_dir(home.path().join("screens"))?.count(), 0);
+    assert_eq!(request(server.bound_addr, "GET", "/screen.css", "", "").await?.0, 200);
+    drop(states);
+    server.shutdown().await?;
     peer.stop().await
 }

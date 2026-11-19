@@ -102,6 +102,10 @@ type Files = BTreeMap<String, Vec<u8>>;
 
 pub(super) fn parse(files: &Files) -> Result<Manifest, Error> {
     let bytes = files.get("pack.json").ok_or(Error::Manifest)?;
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| Error::Manifest)?;
+    if has_null(&value) {
+        return Err(Error::Manifest);
+    }
     let pack: Manifest = serde_json::from_slice(bytes).map_err(|_| Error::Manifest)?;
     if pack.format != 1
         || !name(&pack.name)
@@ -123,6 +127,15 @@ pub(super) fn parse(files: &Files) -> Result<Manifest, Error> {
         }
     }
     Ok(pack)
+}
+
+fn has_null(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Object(fields) => fields.values().any(has_null),
+        serde_json::Value::Array(values) => values.iter().any(has_null),
+        _ => false,
+    }
 }
 
 fn name(value: &str) -> bool {
