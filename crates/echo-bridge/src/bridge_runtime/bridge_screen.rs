@@ -314,6 +314,52 @@ pub(crate) fn failure_state(relink: bool) -> UiState {
 mod tests {
     use super::*;
 
+    /// T3: configured pack failure is isolated from the real screen listener.
+    #[tokio::test]
+    async fn t3_screen_pack_missing_ca_reports_safely_and_keeps_screen_serving() {
+        let home = tempfile::tempdir().unwrap();
+        let pairing = home.path().join("pairing.txt");
+        std::fs::write(&pairing, "synthetic-screen-pair").unwrap();
+        let config = echo_config::BridgeConfig {
+            home: Some(echo_config::HomeConfig {
+                dir: home.path().into(),
+                agent_tools: echo_config::AgentTools::default(),
+            }),
+            screen: ScreenConfig {
+                listen: ([127, 0, 0, 1], 0).into(),
+                pairing_token_file: pairing,
+                packs: vec![echo_config::ScreenPackDownload {
+                    url: "https://127.0.0.1/pack".into(),
+                    sha256: "0".repeat(64),
+                }],
+            },
+            ..echo_config::BridgeConfig::default()
+        };
+        let path = home.path().join("trace.jsonl");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        let mut screen = Screen::bind(Some(&config.screen)).await.unwrap();
+        screen.download_packs(Some(&config), &trace);
+        screen.pack_results.take().unwrap().await.unwrap();
+        let row: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(row["event"], "screen.pack_download");
+        assert_eq!(row["installed"], serde_json::Value::Null);
+        assert_eq!(row["reason"], "configured CA bundle unavailable");
+        screen.ready().unwrap();
+        screen.flush().await.unwrap();
+        let base = "http://127.0.0.1";
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("{base}:{}/screen.css", screen.address().unwrap().port()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        screen.close().await.unwrap();
+        assert!(!home.path().join("screens").exists());
+    }
+
     #[tokio::test]
     async fn bridge_relink_confirmed_publication_keeps_projection_and_queue_failure() {
         let (send, mut receive) = mpsc::channel(1);
