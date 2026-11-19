@@ -71,6 +71,13 @@ Speech buffered during call setup therefore arrives whole, as one burst. The
 backlog holds 30 s; an eviction there is `mic.uplink_dropped {count, reason:
 backlog_full}`. Mute discards the backlog.
 
+A response window that passes with no finished reply ends that run, not the
+process. The run owner returns `NoResponse`; the service closes the call, fails
+the device run (`hassmic-end`, then an `echo-unavailable` error), records
+`run.ended {reason: no_response}` and `live.closed {reason: no_response}`, and
+publishes `bridge.ready`. The next wake opens a new call. A missing Played
+acknowledgment remains a fatal `deadline`.
+
 One multi-thread Tokio runtime drives one Live call owner. Conversion uses
 fixed scratch and complete 20 ms Opus frames. Reply buffering is bounded and
 evicts oldest frames. The local health listener accepts one bounded request

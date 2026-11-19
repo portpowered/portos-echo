@@ -37,6 +37,9 @@ pub enum Error {
     Unavailable,
     #[error("deadline")]
     Deadline,
+    /// The model finished no reply inside the response window. Ends that run only.
+    #[error("no response")]
+    NoResponse,
     #[error("decode")]
     Decode,
     #[error("trace")]

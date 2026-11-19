@@ -299,8 +299,12 @@ async fn drive<E: LinkEvents>(
             biased;
             duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
             () = tokio::time::sleep_until(deadline) => {
-                if sink.is_none() || !source.delegation.held() {
+                if sink.is_none() {
                     return Err(Error::Deadline);
+                }
+                if !source.delegation.held() {
+                    // The device is healthy; only this run goes unanswered.
+                    return Err(Error::NoResponse);
                 }
                 // The filler played; a delegated answer missing the response
                 // deadline is dropped instead of failing the whole run.

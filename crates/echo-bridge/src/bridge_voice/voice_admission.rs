@@ -24,6 +24,8 @@ pub enum ServeNotice {
     Kill(bool),
     Listening,
     Probe,
+    /// The run ended without a reply; the device was told and service continues.
+    Unanswered,
     Device(LinkEvent<()>),
     Session(SessionNotice),
 }
@@ -139,12 +141,24 @@ where
                     .map_err(bridge_codex::rpc_error)?;
                 client.fail_run(echo_link::RunFailure::KillSwitch).await?;
                 gate.tripped(&mut observe)?;
+            } else if result == Err(Error::NoResponse) {
+                unanswered(&*client, &mut observe).await?;
             } else {
                 result?;
             }
         }
     });
     super::earcon::scope(client, wake_earcon, work).await
+}
+
+/// Only that run failed, and its call is already closed. End the device's run
+/// and stay connected for the next wake.
+async fn unanswered<L: EchoLink>(
+    client: &L,
+    observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    client.fail_run(echo_link::RunFailure::Unavailable).await?;
+    observe(ServeNotice::Unanswered)
 }
 
 async fn admitted<L, R, W, P>(
