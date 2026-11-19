@@ -3,7 +3,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-pub(crate) async fn index_with_settings(settings: bool) -> Response {
+pub(crate) fn index_with_settings(settings: bool) -> Response {
     let html = include_str!("../../../web/screen/src/index.html");
     let html = if settings {
         html.replacen(

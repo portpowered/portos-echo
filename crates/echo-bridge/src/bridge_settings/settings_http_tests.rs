@@ -69,7 +69,11 @@ impl Fixture {
     }
 
     pub(crate) fn url(&self, route: &str) -> String {
-        format!("http://{}{route}?token={TOKEN}", self.server.bound_addr)
+        let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();
+        url.set_port(Some(self.server.bound_addr.port())).unwrap();
+        url.set_path(route);
+        url.set_query(Some(&format!("token={TOKEN}")));
+        url.into()
     }
 
     pub(crate) fn path(&self, file: &str) -> PathBuf {
@@ -160,9 +164,10 @@ fn owner_only(path: &std::path::Path) {
 #[tokio::test]
 async fn t3_settings_host_http_guards_do_not_write_and_invalid_values_do_not_leak() {
     let fixture = Fixture::open().await;
-    let url = format!("http://127.0.0.1:{}/settings/v1", fixture.server.bound_addr.port());
+    let mut url = reqwest::Url::parse(&fixture.url("/settings/v1")).unwrap();
+    url.set_query(None);
     for (url, origin, expected) in [
-        (url, None, StatusCode::UNAUTHORIZED),
+        (url.to_string(), None, StatusCode::UNAUTHORIZED),
         (
             fixture.url("/settings/v1"),
             Some("http://127.0.0.1:1"),

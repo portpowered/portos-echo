@@ -103,7 +103,13 @@ async fn t3_settings_typed_transaction_and_prompt_encoded_limit() -> Result {
         assert!(matches!(inbox.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
     });
     let path = format!("/settings/v1?token={TOKEN}");
-    let headers = format!("{JSON}Origin: http://127.0.0.1:{}\r\n", addr.port());
+    assert_eq!(addr.ip(), std::net::Ipv4Addr::LOCALHOST);
+    let origin = hyper::Uri::builder()
+        .scheme("http")
+        .authority(addr.to_string())
+        .path_and_query("/")
+        .build()?;
+    let headers = format!("{JSON}Origin: {}\r\n", origin.to_string().trim_end_matches('/'));
     assert_eq!(
         request(addr, "POST", &path, PATCH, &headers).await?,
         (200, r#"{"version":1,"restart_pending":false}"#.into())

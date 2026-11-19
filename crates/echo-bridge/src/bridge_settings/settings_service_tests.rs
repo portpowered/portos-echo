@@ -67,10 +67,11 @@ impl Fixture {
     }
 
     fn url(&self, route: &str) -> String {
-        format!(
-            "http://127.0.0.1:{}{route}?token={TOKEN}",
-            self.server.bound_addr.port()
-        )
+        let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();
+        url.set_port(Some(self.server.bound_addr.port())).unwrap();
+        url.set_path(route);
+        url.set_query(Some(&format!("token={TOKEN}")));
+        url.into()
     }
 
     async fn snapshot(&self) -> SettingsSnapshotV1 {

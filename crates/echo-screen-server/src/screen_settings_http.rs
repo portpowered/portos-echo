@@ -82,9 +82,8 @@ async fn submit(state: HttpState, request: Request, kind: Option<PromptKind>) ->
     let Ok(bytes) = bytes else {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
-    let operation = match decode(&bytes, kind) {
-        Some(operation) => operation,
-        None => return StatusCode::BAD_REQUEST.into_response(),
+    let Some(operation) = decode(&bytes, kind) else {
+        return StatusCode::BAD_REQUEST.into_response();
     };
     state.settings_dispatch().send(uri, operation).await
 }

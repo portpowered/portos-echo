@@ -185,12 +185,18 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
     }
 }
 
+fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Url {
+    assert_eq!(fixture.screen.ip(), std::net::Ipv4Addr::LOCALHOST);
+    let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();
+    url.set_port(Some(fixture.screen.port())).unwrap();
+    url.set_path(path);
+    url.set_query(Some("token=synthetic-screen-pair"));
+    url
+}
+
 async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) -> serde_json::Value {
     let response = reqwest::Client::new()
-        .post(format!(
-            "http://127.0.0.1:{}/settings/v1?token=synthetic-screen-pair",
-            fixture.screen.port()
-        ))
+        .post(settings_runtime_url(fixture, "/settings/v1"))
         .json(&json!({"version":1,"settings":settings}))
         .send()
         .await
@@ -201,15 +207,16 @@ async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) 
 
 async fn settings_runtime_requests(fixture: &Fixture, linked: &std::cell::Cell<bool>, home: &Path) {
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{}/settings/v1", fixture.screen.port());
+    let mut url = settings_runtime_url(fixture, "/settings/v1");
+    url.set_query(None);
     assert_eq!(
-        client.get(&url).send().await.unwrap().status(),
+        client.get(url.as_str()).send().await.unwrap().status(),
         reqwest::StatusCode::UNAUTHORIZED
     );
-    let url = format!("{url}?token=synthetic-screen-pair");
+    url.set_query(Some("token=synthetic-screen-pair"));
     for (value, expected) in [(false, "link_required"), (true, "linked")] {
         linked.set(value);
-        let snapshot: serde_json::Value = client.get(&url).send().await.unwrap().json().await.unwrap();
+        let snapshot: serde_json::Value = client.get(url.as_str()).send().await.unwrap().json().await.unwrap();
         assert_eq!(snapshot["link_status"], expected);
         assert_eq!(
             snapshot["prompts"],
@@ -223,7 +230,7 @@ async fn settings_runtime_requests(fixture: &Fixture, linked: &std::cell::Cell<b
     );
     let previous = std::fs::read(home.join("settings.toml")).unwrap();
     let invalid = client
-        .post(&url)
+        .post(url.as_str())
         .json(&json!({"version":1,"settings":{"agent":{"max_tool_calls":33}}}))
         .send()
         .await
@@ -231,10 +238,7 @@ async fn settings_runtime_requests(fixture: &Fixture, linked: &std::cell::Cell<b
     assert_eq!(invalid.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(std::fs::read(home.join("settings.toml")).unwrap(), previous);
     let prompt = client
-        .post(format!(
-            "http://127.0.0.1:{}/settings/v1/prompts/voice?token=synthetic-screen-pair",
-            fixture.screen.port()
-        ))
+        .post(settings_runtime_url(fixture, "/settings/v1/prompts/voice"))
         .json(&json!({"version":1,"text":"saved voice\n"}))
         .send()
         .await

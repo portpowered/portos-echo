@@ -79,7 +79,7 @@ pub(crate) fn authorized(core: &Core, uri: &Uri) -> bool {
 }
 
 async fn index(State(state): State<HttpState>) -> Response {
-    screen_assets::index_with_settings(state.settings.is_some()).await
+    screen_assets::index_with_settings(state.settings.is_some())
 }
 
 impl HttpState {
