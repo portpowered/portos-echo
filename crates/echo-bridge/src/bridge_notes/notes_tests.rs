@@ -19,11 +19,11 @@ fn provider(root: &Path, enabled: bool) -> Notes {
     )
 }
 
-fn call(notes: &Notes, name: &str, args: Value) -> ToolResult {
-    notes.call(name, &args, "1:t1:u1:c").unwrap()
+fn call(notes: &Notes, name: &str, args: &Value) -> ToolResult {
+    notes.call(name, args, "1:t1:u1:c").unwrap()
 }
 
-fn refusal(notes: &Notes, name: &str, args: Value, code: &str) {
+fn refusal(notes: &Notes, name: &str, args: &Value, code: &str) {
     assert_eq!(
         call(notes, name, args),
         ToolResult {
@@ -53,7 +53,7 @@ fn agent_tools_notes_paths_and_schema_refuse_without_creating_home() {
             if name == "notes_write" {
                 args["content"] = json!("unchanged");
             }
-            refusal(&notes, name, args, "invalid_path");
+            refusal(&notes, name, &args, "invalid_path");
         }
     }
     for args in [
@@ -63,12 +63,12 @@ fn agent_tools_notes_paths_and_schema_refuse_without_creating_home() {
         json!({"path":"a.md","content":"x","extra":true}),
         json!([]),
     ] {
-        refusal(&notes, "notes_write", args, "invalid_arguments");
+        refusal(&notes, "notes_write", &args, "invalid_arguments");
     }
-    refusal(&notes, "notes_list", json!({"directory":"a/b/c/d"}), "invalid_path");
-    refusal(&notes, "notes_list", json!({"directory":null}), "invalid_arguments");
-    refusal(&notes, "notes_read", json!({"path":"missing.md"}), "not_found");
-    assert_eq!(call(&notes, "notes_list", json!({})).content, json!({"files":[]}));
+    refusal(&notes, "notes_list", &json!({"directory":"a/b/c/d"}), "invalid_path");
+    refusal(&notes, "notes_list", &json!({"directory":null}), "invalid_arguments");
+    refusal(&notes, "notes_read", &json!({"path":"missing.md"}), "not_found");
+    assert_eq!(call(&notes, "notes_list", &json!({})).content, json!({"files":[]}));
     assert!(!root.path().join("home").exists());
 }
 
@@ -78,7 +78,7 @@ fn agent_tools_notes_persist_utf8_replace_list_metadata_and_modes() {
     let notes = provider(root.path(), true);
     for (path, content) in [("z.md", ""), ("a/b/c/x.md", "remember"), ("a/first.md", "語")] {
         assert_eq!(
-            call(&notes, "notes_write", json!({"path":path,"content":content})),
+            call(&notes, "notes_write", &json!({"path":path,"content":content})),
             ToolResult {
                 is_error: false,
                 content: json!({"path":path,"bytes":content.len()})
@@ -100,10 +100,10 @@ fn agent_tools_notes_persist_utf8_replace_list_metadata_and_modes() {
     }
     let reopened = provider(root.path(), true);
     assert_eq!(
-        call(&reopened, "notes_read", json!({"path":"a/b/c/x.md"})).content,
+        call(&reopened, "notes_read", &json!({"path":"a/b/c/x.md"})).content,
         json!({"path":"a/b/c/x.md","bytes":8,"content":"remember"})
     );
-    let list = call(&reopened, "notes_list", json!({"directory":"a"})).content;
+    let list = call(&reopened, "notes_list", &json!({"directory":"a"})).content;
     let rows = list["files"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     for (row, path, bytes) in [(rows[0].clone(), "a/b/c/x.md", 8), (rows[1].clone(), "a/first.md", 3)] {
@@ -116,9 +116,9 @@ fn agent_tools_notes_persist_utf8_replace_list_metadata_and_modes() {
             .as_millis();
         assert_eq!(row, json!({"path":path,"bytes":bytes,"modified_unix_ms":modified}));
     }
-    assert!(!call(&notes, "notes_write", json!({"path":"a/first.md","content":"new"})).is_error);
+    assert!(!call(&notes, "notes_write", &json!({"path":"a/first.md","content":"new"})).is_error);
     assert_eq!(
-        call(&reopened, "notes_read", json!({"path":"a/first.md"})).content["content"],
+        call(&reopened, "notes_read", &json!({"path":"a/first.md"})).content["content"],
         "new"
     );
 }
@@ -129,7 +129,7 @@ fn agent_tools_notes_byte_boundaries_are_utf8_bytes() {
     let notes = provider(root.path(), true);
     for content in [String::new(), "a".repeat(65_536), "語".repeat(21_845)] {
         assert_eq!(
-            call(&notes, "notes_write", json!({"path":"bound.md","content":content})).content["bytes"],
+            call(&notes, "notes_write", &json!({"path":"bound.md","content":content})).content["bytes"],
             content.len()
         );
     }
@@ -138,7 +138,7 @@ fn agent_tools_notes_byte_boundaries_are_utf8_bytes() {
         refusal(
             &notes,
             "notes_write",
-            json!({"path":"bound.md","content":content}),
+            &json!({"path":"bound.md","content":content}),
             "note_too_large",
         );
         assert_eq!(fs::read(root.path().join("home/notes/bound.md")).unwrap(), previous);
@@ -156,20 +156,20 @@ fn agent_tools_notes_exact_total_bytes_and_overwrite_accounting() {
     }
     let same = "b".repeat(65_536);
     assert_eq!(
-        call(&notes, "notes_write", json!({"path":"0.md","content":same})).content["bytes"],
+        call(&notes, "notes_write", &json!({"path":"0.md","content":same})).content["bytes"],
         65_536
     );
     refusal(
         &notes,
         "notes_write",
-        json!({"path":"overflow.md","content":"x"}),
+        &json!({"path":"overflow.md","content":"x"}),
         "notes_bytes_limit",
     );
     assert!(!dir.join("overflow.md").exists());
-    assert!(!call(&notes, "notes_write", json!({"path":"0.md","content":""})).is_error);
-    assert!(!call(&notes, "notes_write", json!({"path":"overflow.md","content":same})).is_error);
+    assert!(!call(&notes, "notes_write", &json!({"path":"0.md","content":""})).is_error);
+    assert!(!call(&notes, "notes_write", &json!({"path":"overflow.md","content":same})).is_error);
     assert_eq!(
-        call(&notes, "notes_list", json!({})).content["files"]
+        call(&notes, "notes_list", &json!({})).content["files"]
             .as_array()
             .unwrap()
             .len(),
@@ -190,11 +190,11 @@ fn agent_tools_notes_exact_file_count_and_competing_writers() {
     let results = std::thread::scope(|scope| {
         let a = scope.spawn(|| {
             barrier.wait();
-            call(&notes, "notes_write", json!({"path":"a.md","content":"a"}))
+            call(&notes, "notes_write", &json!({"path":"a.md","content":"a"}))
         });
         let b = scope.spawn(|| {
             barrier.wait();
-            call(&notes, "notes_write", json!({"path":"b.md","content":"b"}))
+            call(&notes, "notes_write", &json!({"path":"b.md","content":"b"}))
         });
         [a.join().unwrap(), b.join().unwrap()]
     });
@@ -204,13 +204,49 @@ fn agent_tools_notes_exact_file_count_and_competing_writers() {
         "notes_files_limit"
     );
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 1024);
-    assert!(!call(&notes, "notes_write", json!({"path":"0.md","content":"overwrite"})).is_error);
+    assert!(!call(&notes, "notes_write", &json!({"path":"0.md","content":"overwrite"})).is_error);
     refusal(
         &notes,
         "notes_write",
-        json!({"path":"extra.md","content":""}),
+        &json!({"path":"extra.md","content":""}),
         "notes_files_limit",
     );
+}
+
+#[test]
+fn agent_tools_notes_competing_reopened_writers_share_final_byte_quota() {
+    let root = tempfile::tempdir().unwrap();
+    let first = provider(root.path(), true);
+    let second = provider(root.path(), true);
+    let dir = root.path().join("home/notes");
+    fs::create_dir_all(&dir).unwrap();
+    for index in 0..256 {
+        let length = if index == 255 { 65_535 } else { 65_536 };
+        fs::write(dir.join(format!("{index}.md")), vec![b'a'; length]).unwrap();
+    }
+    let barrier = std::sync::Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let a = scope.spawn(|| {
+            barrier.wait();
+            call(&first, "notes_write", &json!({"path":"a.md","content":"a"}))
+        });
+        let b = scope.spawn(|| {
+            barrier.wait();
+            call(&second, "notes_write", &json!({"path":"b.md","content":"b"}))
+        });
+        [a.join().unwrap(), b.join().unwrap()]
+    });
+    assert_eq!(results.iter().filter(|result| !result.is_error).count(), 1);
+    assert_eq!(
+        results.iter().find(|result| result.is_error).unwrap().content["error"],
+        "notes_bytes_limit"
+    );
+    let total: u64 = fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().metadata().unwrap().len())
+        .sum();
+    assert_eq!(total, 16_777_216);
+    assert_eq!(fs::read_dir(&dir).unwrap().count(), 257);
 }
 
 #[test]
@@ -221,7 +257,7 @@ fn agent_tools_notes_disabled_and_no_home_have_no_filesystem_effects() {
     for notes in [notes, absent] {
         assert_eq!(notes.specs(), vec![]);
         for name in NAMES {
-            refusal(&notes, name, json!({"path":"x.md","content":"x"}), "disabled");
+            refusal(&notes, name, &json!({"path":"x.md","content":"x"}), "disabled");
         }
     }
     assert!(!root.path().join("home").exists());
@@ -236,21 +272,21 @@ fn agent_tools_notes_symlinks_hardlinks_and_nonregular_entries_fail_closed() {
     fs::write(outside.join("x.md"), "private sentinel").unwrap();
     fs::create_dir(root.path().join("home")).unwrap();
     symlink(&outside, root.path().join("home/notes")).unwrap();
-    refusal(&notes, "notes_list", json!({}), "symlink");
+    refusal(&notes, "notes_list", &json!({}), "symlink");
     refusal(
         &notes,
         "notes_write",
-        json!({"path":"x.md","content":"replace"}),
+        &json!({"path":"x.md","content":"replace"}),
         "symlink",
     );
     fs::remove_file(root.path().join("home/notes")).unwrap();
     fs::create_dir(root.path().join("home/notes")).unwrap();
     symlink(&outside, root.path().join("home/notes/parent")).unwrap();
-    refusal(&notes, "notes_read", json!({"path":"parent/x.md"}), "symlink");
-    refusal(&notes, "notes_list", json!({}), "symlink");
+    refusal(&notes, "notes_read", &json!({"path":"parent/x.md"}), "symlink");
+    refusal(&notes, "notes_list", &json!({}), "symlink");
     fs::remove_file(root.path().join("home/notes/parent")).unwrap();
     symlink(outside.join("x.md"), root.path().join("home/notes/x.md")).unwrap();
-    refusal(&notes, "notes_read", json!({"path":"x.md"}), "symlink");
+    refusal(&notes, "notes_read", &json!({"path":"x.md"}), "symlink");
     fs::remove_file(root.path().join("home/notes/x.md")).unwrap();
     fs::hard_link(outside.join("x.md"), root.path().join("home/notes/x.md")).unwrap();
     for name in ["notes_read", "notes_write"] {
@@ -259,9 +295,9 @@ fn agent_tools_notes_symlinks_hardlinks_and_nonregular_entries_fail_closed() {
         } else {
             json!({"path":"x.md","content":"replace"})
         };
-        refusal(&notes, name, args, "not_regular");
+        refusal(&notes, name, &args, "not_regular");
     }
-    refusal(&notes, "notes_list", json!({}), "not_regular");
+    refusal(&notes, "notes_list", &json!({}), "not_regular");
     fs::remove_file(root.path().join("home/notes/x.md")).unwrap();
     rustix::fs::mkfifoat(
         rustix::fs::CWD,
@@ -269,7 +305,7 @@ fn agent_tools_notes_symlinks_hardlinks_and_nonregular_entries_fail_closed() {
         rustix::fs::Mode::RUSR,
     )
     .unwrap();
-    refusal(&notes, "notes_read", json!({"path":"x.md"}), "not_regular");
+    refusal(&notes, "notes_read", &json!({"path":"x.md"}), "not_regular");
     assert_eq!(fs::read_to_string(outside.join("x.md")).unwrap(), "private sentinel");
     assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
 }
@@ -278,7 +314,7 @@ fn agent_tools_notes_symlinks_hardlinks_and_nonregular_entries_fail_closed() {
 fn agent_tools_notes_failed_staging_keeps_old_bytes_and_cleans_temp() {
     let root = tempfile::tempdir().unwrap();
     let notes = provider(root.path(), true);
-    call(&notes, "notes_write", json!({"path":"x.md","content":"old"}));
+    call(&notes, "notes_write", &json!({"path":"x.md","content":"old"}));
     let directory = notes_files::root(&root.path().join("home"), false).unwrap().unwrap();
     assert_eq!(notes_files::replace(&directory, "x.md", b"new", true), Err("io"));
     assert_eq!(fs::read(root.path().join("home/notes/x.md")).unwrap(), b"old");
@@ -290,13 +326,13 @@ fn agent_tools_notes_receipts_never_include_contents_or_rejected_arguments() {
     let root = tempfile::tempdir().unwrap();
     let notes = provider(root.path(), true);
     let marker = "AGENT_NOTE_PRIVATE_MARKER";
-    assert!(!call(&notes, "notes_write", json!({"path":"x.md","content":marker})).is_error);
+    assert!(!call(&notes, "notes_write", &json!({"path":"x.md","content":marker})).is_error);
     assert_eq!(
-        call(&notes, "notes_read", json!({"path":"x.md"})).content["content"],
+        call(&notes, "notes_read", &json!({"path":"x.md"})).content["content"],
         marker
     );
-    call(&notes, "notes_list", json!({}));
-    refusal(&notes, "notes_read", json!({"path":marker}), "invalid_path");
+    call(&notes, "notes_list", &json!({}));
+    refusal(&notes, "notes_read", &json!({"path":marker}), "invalid_path");
     let trace = fs::read_to_string(root.path().join("trace")).unwrap();
     assert_eq!(trace.matches(marker).count(), 0);
     let rows: Vec<Value> = trace

@@ -304,3 +304,34 @@ async fn t3_agent_tools_notes_stale_thread_and_completed_turn_cannot_write() {
     tokio::join!(client, remote);
     assert!(!home.dir.exists());
 }
+
+#[tokio::test(start_paused = true)]
+async fn t3_agent_tools_notes_deadline_interrupts_matching_turn_and_refuses_late_write() {
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    let trace = Trace::open(&root.path().join("trace"), "api_key").unwrap();
+    let notes = Notes::new(Some(&home), trace.clone());
+    let (mut io, mut server) = fixture();
+    let client = drive(&mut io, &notes, &trace);
+    let remote = async {
+        opened(&mut server, "thread", &catalog(&notes)).await;
+        let request = read(&mut server).await;
+        assert_eq!(request["method"], "turn/interrupt");
+        assert_eq!(request["params"], json!({"threadId":"thread","turnId":"turn"}));
+        write(&mut server, json!({"id":request["id"],"result":{}})).await;
+        assert_eq!(
+            tool(
+                &mut server,
+                "thread",
+                "late",
+                "notes_write",
+                json!({"path":"x.md","content":"late"})
+            )
+            .await,
+            json!({"success":false,"contentItems":[{"type":"inputText","text":"stale or duplicate tool request"}]})
+        );
+        closed(&mut server, "thread").await;
+    };
+    tokio::join!(client, remote);
+    assert!(!home.dir.exists());
+}

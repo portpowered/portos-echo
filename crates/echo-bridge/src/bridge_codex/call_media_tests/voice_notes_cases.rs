@@ -18,11 +18,11 @@ mod matrix;
 #[derive(Clone)]
 struct NoMcp;
 impl ToolHost for NoMcp {
-    async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
-        Ok(vec![])
+    fn list_tools(&self) -> impl Future<Output = Result<Vec<ToolSpec>, ToolError>> {
+        std::future::ready(Ok(vec![]))
     }
-    async fn call_tool(&self, _: &str, _: Value, _: &str) -> Result<ToolResult, ToolError> {
-        unreachable!("local calls must never reach MCP")
+    fn call_tool(&self, _: &str, _: Value, _: &str) -> impl Future<Output = Result<ToolResult, ToolError>> {
+        std::future::poll_fn(|_| unreachable!("local calls must never reach MCP"))
     }
 }
 
