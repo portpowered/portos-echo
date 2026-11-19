@@ -38,11 +38,12 @@ impl Source {
     }
 
     /// The device's thinking indication, when it must change. It goes on
-    /// when a dispatch runs with the mouth closed and off when the mouth
-    /// opens, so it stays up from a completed turn until its answer speaks.
+    /// when a dispatch runs with nothing to say and off as soon as audible
+    /// reply audio is written, so it stays up from a completed turn until its
+    /// answer is on its way, and always clears before that reply's audio ends.
     /// The device drops it itself when the run ends.
     fn thinking_change(&mut self) -> Option<bool> {
-        let wanted = !self.mouth.open() && (self.thinking || self.delegation.in_flight());
+        let wanted = !self.mouth.voiced() && (self.thinking || self.delegation.in_flight());
         (wanted != self.thinking).then(|| {
             self.thinking = wanted;
             wanted
@@ -403,10 +404,10 @@ impl Mouth {
         Some(open)
     }
 
-    /// Audible reply audio is playing on the Echo.
+    /// Audible reply audio is written to the Echo and not yet played out.
     #[must_use]
-    pub fn open(&self) -> bool {
-        self.open
+    pub fn voiced(&self) -> bool {
+        self.open || self.due().is_some()
     }
 }
 
