@@ -1,5 +1,7 @@
 //! T3: config through authenticated service; controlled process and device ports.
 use super::*;
+#[path = "configured/restart.rs"]
+mod restart;
 use echo_bridge::{Error, bridge_voice::Configured};
 use echo_link::fake::{Command, FakeConnector, Observer};
 

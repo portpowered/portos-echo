@@ -136,7 +136,12 @@ impl Screen {
     ) -> Result<(), Error> {
         self.settings_warning = warning.map(String::from);
         if warning.is_some() {
-            trace.record("settings.overlay_ignored", None, serde_json::json!({}))?;
+            let event = if warning == Some(crate::bridge_settings::RESTART_FAILED) {
+                "settings.restart_recovered"
+            } else {
+                "settings.overlay_ignored"
+            };
+            trace.record(event, None, serde_json::json!({}))?;
         }
         Ok(())
     }

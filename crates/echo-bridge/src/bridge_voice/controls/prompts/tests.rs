@@ -10,6 +10,47 @@ fn rows(path: &Path) -> Vec<Value> {
 }
 
 #[tokio::test(start_paused = true)]
+async fn settings_prompt_recovery_retains_text_until_valid_call_reload() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("prompts");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("voice.md"), " \n").unwrap();
+    std::fs::write(dir.join("runner.md"), vec![b'x'; 32_769]).unwrap();
+    let path = root.path().join("trace");
+    let mut trace = Some(Trace::open(&path, "chatgpt").unwrap());
+    let retained = echo_screen_contract::settings_v1::PromptTextsV1 {
+        voice: "accepted voice\n".into(),
+        runner: "accepted runner\n".into(),
+    };
+    scope_retained(Some(root.path()), Some(retained.clone()), async {
+        assert_eq!(accepted().unwrap(), retained);
+        publish(trace.as_mut().unwrap()).unwrap();
+        assert_eq!(
+            snapshot("unused", "unused", &mut trace).unwrap(),
+            (retained.runner.clone(), retained.voice.clone())
+        );
+        std::fs::write(dir.join("voice.md"), "next voice\n").unwrap();
+        std::fs::write(dir.join("runner.md"), "next runner\n").unwrap();
+        assert_eq!(accepted().unwrap(), retained);
+        assert_eq!(
+            snapshot("unused", "unused", &mut trace).unwrap(),
+            ("next runner\n".into(), "next voice\n".into())
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let refused = rows(&path);
+    assert_eq!(refused.len(), 2);
+    assert_eq!(refused[0]["event"], "prompt.reload_refused");
+    assert_eq!(refused[0]["prompt"], "runner");
+    assert_eq!(refused[0]["reason"], "oversized");
+    assert_eq!(refused[1]["event"], "prompt.reload_refused");
+    assert_eq!(refused[1]["prompt"], "voice");
+    assert_eq!(refused[1]["reason"], "empty");
+}
+
+#[tokio::test(start_paused = true)]
 async fn settings_prompt_snapshot_uses_admitted_cache_until_call_reload() {
     assert!(matches!(accepted(), Err(Error::Input)));
     let root = tempfile::tempdir().unwrap();

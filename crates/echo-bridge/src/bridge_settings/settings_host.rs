@@ -17,6 +17,17 @@ pub struct SettingsHost {
 }
 
 impl SettingsHost {
+    pub(crate) fn prompts(&self) -> PromptTextsV1 {
+        self.prompts.clone()
+    }
+
+    /// Retain pending edits and report a failed replacement without retrying it.
+    pub(crate) fn replacement_failed(&mut self) {
+        if !self.warnings.iter().any(|warning| warning == super::RESTART_FAILED) {
+            self.warnings.push(super::RESTART_FAILED.into());
+        }
+    }
+
     /// # Errors
     /// Refuses unavailable home, invalid overlay or inadmissible prompt cache.
     pub fn open(

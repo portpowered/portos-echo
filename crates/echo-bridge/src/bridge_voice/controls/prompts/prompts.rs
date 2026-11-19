@@ -28,7 +28,25 @@ struct Prompts {
 }
 
 pub(super) async fn scope<T>(home: Option<&Path>, work: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
-    let prompts = home.map(Prompts::open).transpose()?;
+    scope_retained(home, None, work).await
+}
+
+/// Recovery starts with accepted text, even if a later external edit is invalid.
+/// Normal call admission still reloads disk and refuses invalid replacements.
+pub(super) async fn scope_retained<T>(
+    home: Option<&Path>,
+    retained: Option<echo_screen_contract::settings_v1::PromptTextsV1>,
+    work: impl Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    let prompts = match (home, retained) {
+        (Some(home), Some(text)) => Some(Prompts {
+            dir: home.join("prompts"),
+            runner: Prompt::retained("runner", text.runner),
+            voice: Prompt::retained("voice", text.voice),
+        }),
+        (home, None) => home.map(Prompts::open).transpose()?,
+        (None, Some(_)) => return Err(Error::Input),
+    };
     CURRENT.scope(RefCell::new(prompts), work).await
 }
 
@@ -46,6 +64,15 @@ impl Prompts {
 }
 
 impl Prompt {
+    fn retained(kind: &'static str, text: String) -> Self {
+        Self {
+            kind,
+            text,
+            missing: false,
+            reported: false,
+        }
+    }
+
     fn default_text(kind: &str) -> &'static str {
         if kind == "runner" {
             RUNNER_INSTRUCTIONS

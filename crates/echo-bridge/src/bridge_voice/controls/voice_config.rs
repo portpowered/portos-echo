@@ -124,17 +124,40 @@ impl Configured {
         tools: Vec<DynamicTool>,
         cancelled: impl Future<Output = ()>,
     ) -> Result<super::RuntimeCompletion, Error> {
+        self.execute_generation(connector, peer, tools, cancelled, None).await
+    }
+
+    /// Run another generation under the original active configuration after a
+    /// failed exec. Accepted edits remain pending and the surface stays usable.
+    /// Call only after all previous runtime resources have been released.
+    ///
+    /// # Errors
+    /// Returns fixed startup, credential, runtime and cleanup categories.
+    pub async fn execute_generation<C: LinkConnector, P: MediaPeer>(
+        &mut self,
+        connector: C,
+        peer: impl AsyncFnMut() -> Result<P, Error>,
+        tools: Vec<DynamicTool>,
+        cancelled: impl Future<Output = ()>,
+        retained: Option<Box<crate::bridge_settings::SettingsHost>>,
+    ) -> Result<super::RuntimeCompletion, Error> {
         let startup = self.startup.take().filter(|startup| startup.config.home.is_some());
-        Box::pin(super::prompts::scope(
+        let prompts = retained.as_ref().map(|host| host.prompts());
+        Box::pin(super::prompts::scope_retained(
             self.config.home.as_ref().map(|home| home.dir.as_path()),
+            prompts,
             async {
                 let api_key = self.api_key()?;
-                let settings = startup
-                    .map(|startup| {
-                        crate::bridge_settings::SettingsService::open(*startup, super::prompts::accepted()?)
-                            .map_err(|_| Error::Prompt("home.dir: settings unavailable"))
-                    })
-                    .transpose()?;
+                let settings = if let Some(host) = retained {
+                    Some(crate::bridge_settings::SettingsService::resume(host))
+                } else {
+                    startup
+                        .map(|startup| {
+                            crate::bridge_settings::SettingsService::open(*startup, super::prompts::accepted()?)
+                                .map_err(|_| Error::Prompt("home.dir: settings unavailable"))
+                        })
+                        .transpose()?
+                };
                 let options = self.options(api_key.as_ref(), tools);
                 if let Some(settings) = settings {
                     Box::pin(super::execute_with_settings(
@@ -149,6 +172,26 @@ impl Configured {
             },
         ))
         .await
+    }
+
+    /// Record one failed OS replacement, keeping the original active config.
+    /// The caller passes the returned host into `execute_generation` for an
+    /// explicit remount; this never reads pending settings from disk.
+    ///
+    /// # Errors
+    /// A trace write failure is reported without OS paths or error details.
+    pub fn replacement_failed(&mut self, host: &mut crate::bridge_settings::SettingsHost) -> Result<(), Error> {
+        self.settings_warning = Some(crate::bridge_settings::RESTART_FAILED.into());
+        host.replacement_failed();
+        let mode = match self.config.live.mode {
+            LiveMode::Chatgpt => "chatgpt",
+            LiveMode::ApiKey => "api_key",
+        };
+        crate::bridge_trace::Trace::open(&self.trace, mode)?.record(
+            "settings.restart_failed",
+            None,
+            serde_json::json!({}),
+        )
     }
 
     fn api_key(&self) -> Result<Option<Secret<String>>, Error> {

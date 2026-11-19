@@ -284,6 +284,59 @@ fn configured() -> Configured {
     Configured::new(config, "unused-trace".into(), ([127, 0, 0, 1], 0).into()).unwrap()
 }
 
+// T1: pending values and active policy are separate owners after exec failure.
+#[test]
+fn settings_replacement_failure_preserves_active_policy_and_pending_snapshot() {
+    use crate::bridge_settings::SettingsHost;
+    use echo_screen_contract::settings_v1::{LinkStatusV1, PromptTextsV1};
+    use echo_screen_server::{SettingsOperation, SettingsReply};
+    let directory = tempfile::tempdir().unwrap();
+    let mut prepared = configured();
+    prepared.config.home = Some(echo_config::HomeConfig {
+        dir: directory.path().join("home"),
+        agent_tools: echo_config::AgentTools::default(),
+    });
+    prepared.trace = directory.path().join("trace");
+    let overlay = echo_config::SettingsOverlay::from_toml_str("[agent]\nmax_tool_calls=3\n").unwrap();
+    let mut host = SettingsHost::open(
+        prepared.config.clone(),
+        overlay,
+        PromptTextsV1 {
+            voice: "voice".into(),
+            runner: "runner".into(),
+        },
+        vec![],
+    )
+    .unwrap();
+    prepared.replacement_failed(&mut host).unwrap();
+    let active = prepared.options(None, vec![]);
+    assert_eq!(active.delegation.unwrap().agent.max_tool_calls, 8);
+    assert_eq!(active.voice.session.listen_timeout, Some(Duration::from_secs(15)));
+    assert_eq!(
+        active.settings_warning,
+        Some("Could not restart bridge; saved settings remain pending")
+    );
+    let SettingsReply::Snapshot(snapshot) = host.transaction(SettingsOperation::Snapshot, LinkStatusV1::Unconfigured)
+    else {
+        unreachable!("retained owner refuses snapshot")
+    };
+    assert_eq!(snapshot.settings.agent.max_tool_calls, 3);
+    assert_eq!(snapshot.prompts.voice, "voice");
+    assert_eq!(
+        snapshot.warnings,
+        ["Could not restart bridge; saved settings remain pending"]
+    );
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(&prepared.trace)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["event"], "settings.restart_failed");
+    assert_eq!(rows[0].as_object().unwrap().len(), 3);
+    assert_eq!(std::fs::read_dir(directory.path().join("home")).unwrap().count(), 0);
+}
+
 #[test]
 fn preparation_and_chatgpt_never_open_legacy_credentials_or_home() {
     let directory = tempfile::tempdir().unwrap();

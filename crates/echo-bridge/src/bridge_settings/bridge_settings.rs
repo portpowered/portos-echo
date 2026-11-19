@@ -11,6 +11,8 @@ mod settings_service;
 pub use settings_host::SettingsHost;
 pub use settings_service::{SettingsCompletion, SettingsService};
 
+pub(crate) const RESTART_FAILED: &str = "Could not restart bridge; saved settings remain pending";
+
 /// Safe diagnostics: no submitted prompt, setting value or filesystem path.
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
