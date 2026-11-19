@@ -81,3 +81,70 @@ button:disabled {
     min-height: 40px;
     color: #ffe5a3;
 }
+[hidden] {
+    display: none !important;
+}
+.settings-gear {
+    position: fixed;
+    top: 12px;
+    right: 24px;
+    min-width: 72px;
+    padding: 12px;
+}
+.settings-panel {
+    max-height: 100%;
+    padding: 0;
+}
+.settings-panel > button {
+    align-self: flex-start;
+    flex-shrink: 0;
+}
+.settings-panel h1 {
+    font-size: 40px;
+    margin: 8px 0;
+}
+.settings-panel p {
+    font-size: 22px;
+    margin: 8px 0;
+}
+.settings-fields {
+    overflow: auto;
+    min-height: 0;
+    padding: 8px;
+}
+.settings-fields form {
+    border-bottom: 1px solid #c4d5ff;
+    padding-bottom: 24px;
+    margin-bottom: 24px;
+}
+.settings-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 16px 0;
+    font-size: 24px;
+}
+.settings-fields input,
+.settings-fields select,
+.settings-fields textarea {
+    width: 100%;
+    min-height: 64px;
+    padding: 12px;
+    font: inherit;
+    color: #f4f7ff;
+    background: #101827;
+    border: 2px solid #c4d5ff;
+    border-radius: 0;
+}
+.settings-fields input[type="checkbox"] {
+    width: 64px;
+    height: 64px;
+    accent-color: #c4d5ff;
+}
+.settings-fields textarea {
+    resize: vertical;
+}
+.settings-fields :focus-visible {
+    outline: 4px solid #ffdb70;
+    outline-offset: 2px;
+}

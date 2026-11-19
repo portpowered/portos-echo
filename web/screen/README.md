@@ -18,6 +18,27 @@ receive 503 and lagging streams disconnect. POST accepts JSON up to 65536 bytes
 and refuses a supplied foreign Origin. No action is executed or retried here.
 LAN access must wait for pinned TLS in W3.
 
+The optional home-backed settings host adds a fixed
+`<meta name="echo-settings" content="v1">` capability to the served page.
+That page shows a top-right Settings gear. Back or Escape returns to the
+current authoritative state and restores keyboard focus to the gear. The
+underlying stream keeps accepting newer frames during editing; navigation
+never creates a frame or sends an action. Muted remains visible in Settings.
+
+Settings loads the versioned `/settings/v1` snapshot with the existing action
+endpoint's pairing token. Only changed allowlisted fields are submitted;
+the voice options come from the bridge, and daily caps remain decimal text
+without JavaScript integer rounding. The two prompt editors submit exact
+nonblank UTF-8 text of at most 32 KiB to the fixed voice/runner endpoints.
+Port OS status and bridge version are read-only; Relink sends the existing
+action. Error messages display as inert text and keep the entered values.
+All settings requests have a 10-second bound and no automatic retry. A timed
+out save can already have committed; reopen Settings to load accepted values
+before retrying. Back and unload cancel outstanding requests and timers.
+The settings panel scrolls independently while Back and status stay visible
+at both 1280x800 and 1280x774. Pages without the capability retain the original
+presentation and full-page snapshots.
+
 `npm test` builds the Rust `screen_fixture` example once before running tests.
 The integration file consumes that prebuilt artifact, drives synthetic states
 through stdin and observes exact returned actions through stdout, using native
