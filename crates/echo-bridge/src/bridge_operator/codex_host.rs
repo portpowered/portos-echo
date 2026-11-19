@@ -2,15 +2,12 @@
 use crate::Error;
 use echo_codex::codex_supervisor::{Launch, ProcessError, Supervisor, SupervisorConfig};
 use echo_config::{CodexConfig, CodexLaunch};
-use std::{
-    path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
-};
-use tokio::{
-    process::Command,
-    time::{Instant, timeout, timeout_at},
-};
+use std::path::{Path, PathBuf};
+#[cfg(debug_assertions)]
+use std::{process::Stdio, time::Duration};
+use tokio::time::{Instant, timeout_at};
+#[cfg(debug_assertions)]
+use tokio::{process::Command, time::timeout};
 
 /// Own startup, cancellation and awaited reaping around one borrowed generation.
 pub(crate) async fn run<T>(
@@ -109,6 +106,7 @@ fn executable(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 async fn resolve_binary() -> Result<PathBuf, Error> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut command = helper(&root);
@@ -129,6 +127,12 @@ async fn resolve_binary() -> Result<PathBuf, Error> {
     Ok(path.into())
 }
 
+#[cfg(not(debug_assertions))]
+fn resolve_binary() -> std::future::Ready<Result<PathBuf, Error>> {
+    std::future::ready(Err(Error::CodexBinary))
+}
+
+#[cfg(debug_assertions)]
 fn helper(root: &Path) -> Command {
     let mut command = Command::new("sh");
     command.arg(root.join("scripts/codex-app-server.sh"));
@@ -140,6 +144,7 @@ fn helper(root: &Path) -> Command {
 mod tests {
     use super::*;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    use std::time::Duration;
 
     /// A standalone app server: no subcommand. It records its launch and answers `initialize`.
     const STANDALONE: &str = r#"#!/bin/sh
