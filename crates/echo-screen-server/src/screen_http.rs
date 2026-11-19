@@ -1,4 +1,10 @@
-use crate::{cancelled, screen_assets, screen_core::Core};
+use crate::{
+    cancelled, screen_assets,
+    screen_core::Core,
+    screen_settings::{SettingsDispatch, SettingsOperation, SettingsRequest},
+};
+#[path = "screen_settings_http.rs"]
+mod settings_http;
 use axum::{
     Extension, Router,
     body::to_bytes,
@@ -14,12 +20,13 @@ use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, mpsc, watch};
 
 #[derive(Clone)]
-struct HttpState {
+pub(super) struct HttpState {
     core: Arc<Mutex<Core>>,
     actions: mpsc::Sender<UiAction>,
     stop: watch::Receiver<bool>,
     drain: watch::Receiver<Option<tokio::time::Instant>>,
     origin: String,
+    settings: Option<mpsc::Sender<SettingsRequest>>,
 }
 
 pub(crate) fn router(
@@ -28,13 +35,16 @@ pub(crate) fn router(
     stop: watch::Receiver<bool>,
     drain: watch::Receiver<Option<tokio::time::Instant>>,
     addr: SocketAddr,
+    settings: Option<mpsc::Sender<SettingsRequest>>,
 ) -> Router {
     Router::new()
-        .route("/", get(screen_assets::index))
+        .route("/", get(index))
         .route("/screen.css", get(screen_assets::css))
         .route("/screen.js", get(screen_assets::js))
         .route("/events", get(events))
         .route("/actions", post(actions_post))
+        .route("/settings/v1", get(settings_http::snapshot).post(settings_http::save))
+        .route("/settings/v1/prompts/{kind}", post(settings_http::prompt))
         .layer(middleware::from_fn(headers))
         .with_state(HttpState {
             core,
@@ -42,6 +52,7 @@ pub(crate) fn router(
             stop,
             drain,
             origin: format!("http://{addr}"),
+            settings,
         })
 }
 
@@ -56,7 +67,7 @@ async fn headers(request: Request, next: Next) -> Response {
     response
 }
 
-fn authorized(core: &Core, uri: &Uri) -> bool {
+pub(crate) fn authorized(core: &Core, uri: &Uri) -> bool {
     let Ok(Query(pairs)) = Query::<Vec<(String, String)>>::try_from_uri(uri) else {
         return false;
     };
@@ -65,6 +76,21 @@ fn authorized(core: &Core, uri: &Uri) -> bool {
         return false;
     };
     tokens.next().is_none() && core.authorized(token)
+}
+
+async fn index(State(state): State<HttpState>) -> Response {
+    screen_assets::index_with_settings(state.settings.is_some()).await
+}
+
+impl HttpState {
+    fn settings_dispatch(&self) -> SettingsDispatch {
+        SettingsDispatch {
+            core: self.core.clone(),
+            stop: self.stop.clone(),
+            drain: self.drain.clone(),
+            host: self.settings.clone(),
+        }
+    }
 }
 
 async fn events(
@@ -171,6 +197,7 @@ mod tests {
             stop: stop_rx,
             drain: drain_rx,
             origin: "http://127.0.0.1:1".into(),
+            settings: None,
         };
         let request = Request::builder()
             .uri("/events?token=synthetic-screen-pair")
@@ -205,6 +232,7 @@ mod tests {
                 stop: stop_rx,
                 drain: drain_rx,
                 origin: "http://127.0.0.1:1".into(),
+                settings: None,
             };
             let request = Request::builder()
                 .uri("/events?token=synthetic-screen-pair")

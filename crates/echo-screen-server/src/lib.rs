@@ -3,8 +3,10 @@ mod screen_assets;
 mod screen_core;
 mod screen_http;
 mod screen_listener;
+mod screen_settings;
 mod screen_url;
 
+pub use screen_settings::{PromptKind, SettingsOperation, SettingsReply, SettingsRequest, settings_channel};
 pub use screen_url::page_url;
 
 use echo_contracts::secret::Secret;
@@ -136,6 +138,20 @@ pub async fn serve(
     pairing_token: Secret<String>,
     states: mpsc::Receiver<UiState>,
 ) -> Result<ScreenServer, ScreenServerError> {
+    serve_with_settings(bind, pairing_token, states, None).await
+}
+
+/// Start the same server with an optional home-backed settings inbox.
+/// Existing callers without an inbox retain identical assets and screen frames.
+///
+/// # Errors
+/// Returns the same fixed input/bind diagnostics as `serve`.
+pub async fn serve_with_settings(
+    bind: SocketAddr,
+    pairing_token: Secret<String>,
+    states: mpsc::Receiver<UiState>,
+    settings: Option<mpsc::Sender<SettingsRequest>>,
+) -> Result<ScreenServer, ScreenServerError> {
     if !bind.ip().is_loopback() {
         return Err(ScreenServerError::InvalidBind);
     }
@@ -149,7 +165,14 @@ pub async fn serve(
     let (actions_tx, actions) = mpsc::channel(32);
     let (stop, stop_rx) = watch::channel(false);
     let (drain, drain_rx) = watch::channel(None);
-    let app = screen_http::router(core.clone(), actions_tx, stop_rx.clone(), drain_rx.clone(), bound_addr);
+    let app = screen_http::router(
+        core.clone(),
+        actions_tx,
+        stop_rx.clone(),
+        drain_rx.clone(),
+        bound_addr,
+        settings,
+    );
     let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx, drain_rx));
     let (publication_requests, requests) = mpsc::channel(32);
     let state_task = tokio::spawn(screen_core::pump(core.clone(), states, requests, stop.clone()));
