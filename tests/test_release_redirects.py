@@ -24,8 +24,10 @@ def route_wget():
              "--ca-certificate=" + os.environ["REDIRECT_CERT"], *args])
 
 
-def redirect_cases():
+def redirect_cases(box_class=None):
     from test_release_kit import ReleaseBox, executable
+
+    box_class = box_class or ReleaseBox
 
     real_wget = shutil.which("wget")
     require(real_wget is not None, "real GNU wget required for redirect witness")
@@ -91,7 +93,7 @@ def redirect_cases():
                 for mode, asset in (("good", "archive"), ("direct", "archive"),
                                     ("later", "archive"), ("direct", "SHA256SUMS"),
                                     ("later", "SHA256SUMS"), ("loop", "archive")):
-                    with ReleaseBox(wget=True) as box:
+                    with box_class(wget=True) as box:
                         state.update(mode=mode, assets=box.assets,
                                      asset=box.archive.name if asset == "archive" else asset,
                                      requests=[], http=[])

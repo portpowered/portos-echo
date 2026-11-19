@@ -476,7 +476,7 @@ def main():
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(), (package_cases, happy_cases, integrity_cases, failure_cases, retention_cases, interruption_case)))
     from test_release_redirects import redirect_cases
-    redirect_cases()
+    redirect_cases(ReleaseBox)
     if ASSETS:
         independent_bundle(ASSETS)
         print("release-kit: bundle=PASS manifest=PASS privacy=PASS")
