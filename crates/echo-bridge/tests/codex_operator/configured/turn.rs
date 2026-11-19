@@ -15,6 +15,12 @@ async fn t3_settings_configured_active_saves_wait_for_played_and_coalesce_cleanu
         .await
         .unwrap();
     let mut startup = settings_startup(&fixture);
+    // The existing controlled child pins the MCP/session catalog. Home tools
+    // have their own admission suite; this case exercises the settings surface.
+    startup.base.home.as_mut().unwrap().agent_tools = echo_config::AgentTools {
+        notes: false,
+        prompts: false,
+    };
     startup.base.mcp = super::super::tools::config(&fixture, spoof.url()).mcp;
     startup.config = startup.overlay.apply_to(&startup.base).unwrap();
     let path = fixture.directory.path().join("active-settings-trace");
@@ -62,6 +68,7 @@ async fn save_during_playback(
     let (_control, _screen) = ready(fixture).await;
     observer.wake("held reply", vec![]);
     while !observer.commands().contains(&Command::Stop) {
+        assert!(trace(path).iter().all(|row| row["event"] != "bridge.recovering"));
         tokio::task::yield_now().await;
     }
     for patch in [
