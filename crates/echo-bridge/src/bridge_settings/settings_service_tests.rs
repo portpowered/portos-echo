@@ -14,7 +14,7 @@ const TOKEN: &str = "synthetic-service-pair";
 struct Fixture {
     root: tempfile::TempDir,
     server: ScreenServer,
-    _states: mpsc::Sender<echo_screen_contract::UiState>,
+    states: mpsc::Sender<echo_screen_contract::UiState>,
     client: Client,
 }
 
@@ -58,7 +58,7 @@ impl Fixture {
             Self {
                 root,
                 server,
-                _states: states,
+                states,
                 client,
             },
             owner,
@@ -108,7 +108,8 @@ impl Fixture {
         )
         .await
         .unwrap();
-        self._states = states;
+        self.states = states;
+        assert!(!self.states.is_closed());
         owner
     }
 }
@@ -231,11 +232,15 @@ async fn queued_save(cancel: bool) {
     assert!(send.send(request).await.is_ok());
     finish_owner(owner, cancel).await;
     assert!(send.is_closed());
-    let response = sending.await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(response.bytes().await.unwrap().len(), 0);
+    refused_save(sending.await).await;
     assert_eq!(fixture.overlay(), "");
     fixture.server.shutdown().await.unwrap();
+}
+
+async fn refused_save(response: reqwest::Result<reqwest::Response>) {
+    let response = response.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.bytes().await.unwrap().len(), 0);
 }
 
 async fn finish_owner(owner: SettingsService, cancel: bool) {

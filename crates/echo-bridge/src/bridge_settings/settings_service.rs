@@ -41,6 +41,7 @@ impl SettingsService {
     /// clear: merely restoring the surface must never create an exec retry loop.
     /// An explicit settings save can request another attempt; snapshots and
     /// prompt saves cannot. Pending values, prompts and uncertainty are retained.
+    #[must_use]
     pub fn resume(host: Box<SettingsHost>) -> (Self, mpsc::Sender<SettingsRequest>) {
         let (send, inbox) = settings_channel();
         (
