@@ -76,7 +76,8 @@ fn device_budget_idle_uses_second_reply_activity_and_requires_intervening_captur
         let mut ongoing = Ledger::default();
         receive(&mut ongoing, "capture", "run-pipeline", 0);
         reply(&mut ongoing, 999_997);
-        receive(&mut ongoing, "capture", "audio-chunk", 1_100_000);
+        // A later ordered receipt can share the microsecond of Played.
+        receive(&mut ongoing, "capture", "audio-chunk", 1_000_000);
         reply(&mut ongoing, 1_999_997);
         receive(&mut ongoing, "playback", "hassmic-end", 5_000_000);
         ongoing

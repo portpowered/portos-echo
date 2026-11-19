@@ -82,6 +82,10 @@ fn unique_end(receipts: &[Receipt]) -> Result<u128, String> {
 
 fn capture_between_replies(receipts: &[Receipt], replies: &[(usize, u128)]) -> Result<usize, String> {
     let Some(second) = replies.get(1) else { return Ok(0) };
+    let first = receipts
+        .iter()
+        .find(|r| r.direction == "capture" && r.kind == "played" && r.playback_stream == Some(replies[0].0))
+        .ok_or("device: unmet prerequisite: first reply Played receipt")?;
     let start = receipts
         .iter()
         .find(|r| r.direction == "playback" && r.kind == "audio-start" && r.playback_stream == Some(second.0))
@@ -92,7 +96,7 @@ fn capture_between_replies(receipts: &[Receipt], replies: &[(usize, u128)]) -> R
             r.direction == "capture"
                 && r.kind == "audio-chunk"
                 && r.wire_run == Some(1)
-                && r.elapsed_us > replies[0].1
+                && r.sequence > first.sequence
                 && r.sequence < start.sequence
         })
         .count();

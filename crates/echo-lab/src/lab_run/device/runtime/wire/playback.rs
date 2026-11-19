@@ -119,7 +119,7 @@ impl Session {
                 }
                 Ok((stream.id, played))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, String>>()?;
         if completed.len() != replies {
             return Err(format!(
                 "device: unmet prerequisite: settled reply count; expected {replies}, observed {}",
