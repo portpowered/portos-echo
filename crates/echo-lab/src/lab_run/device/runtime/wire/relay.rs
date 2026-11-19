@@ -139,7 +139,7 @@ async fn forward(
                 kind,
                 elapsed_us,
                 pcm_bytes: if kind == "audio-chunk" { event.payload.len() } else { 0 },
-            })
+            });
         });
     }
     output

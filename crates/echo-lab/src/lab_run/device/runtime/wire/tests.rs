@@ -34,9 +34,13 @@ fn fake_adb(root: &std::path::Path, port: u16) -> Options {
     use std::os::unix::fs::PermissionsExt;
     let options = options(root);
     let ledger = root.join("ledger");
-    fs::write(&options.adb, format!(
-        "#!/usr/bin/env python3\nimport json, sys\nwith open({ledger:?}, 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')\nif sys.argv[1:] == ['forward', 'tcp:0', 'tcp:16700']: print({port})\n"
-    )).unwrap();
+    fs::write(
+        &options.adb,
+        format!(
+            "#!/usr/bin/env python3\nimport json, sys\nwith open({ledger:?}, 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')\nif sys.argv[1:] == ['forward', 'tcp:0', 'tcp:16700']: print({port})\n" // lint-rules: allow-literal synthetic adb argument comparisons, no connection
+        ),
+    )
+    .unwrap();
     fs::set_permissions(&options.adb, fs::Permissions::from_mode(0o700)).unwrap();
     options
 }
@@ -52,7 +56,6 @@ fn frame(kind: &str, payload: &[u8]) -> Vec<u8> {
         data: None,
         payload: payload.to_vec(),
     })
-    .unwrap()
 }
 
 #[tokio::test]
@@ -111,7 +114,7 @@ fn check_receipts(root: &std::path::Path, port: u16) {
         ledger,
         vec![
             json!(["forward", "tcp:0", "tcp:16700"]),
-            json!(["forward", "--remove", format!("tcp:{port}")])
+            json!(["forward", "--remove", format!("tcp:{port}")]) // lint-rules: allow-literal synthetic adb removal argv assertion
         ]
     );
 }
@@ -199,6 +202,6 @@ async fn t3_device_wire_cancel_before_launch_releases_forward_without_cancellati
     assert_eq!(ledger.lines().count(), 2);
     assert_eq!(
         serde_json::from_str::<Value>(ledger.lines().nth(1).unwrap()).unwrap(),
-        json!(["forward", "--remove", "tcp:23456"])
+        json!(["forward", "--remove", "tcp:23456"]) // lint-rules: allow-literal inert fake adb cleanup assertion, no socket
     );
 }
