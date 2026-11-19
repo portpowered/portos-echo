@@ -61,6 +61,51 @@ fn runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
+// T1: the final gate uses the same held reader after runtime destruction. EOF
+// or malformed input received during cleanup cannot be lost with a subscriber.
+#[test]
+fn settings_process_final_gate_observes_cleanup_control_and_durable_kill() {
+    for result in [Ok(0), Ok(1), Err(std::io::ErrorKind::BrokenPipe.into())] {
+        let clean = matches!(result, Ok(0));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (entered, ready) = mpsc::channel();
+        let (release, receive) = mpsc::channel();
+        let input = Input::open(Reader {
+            reads: reads.clone(),
+            entered,
+            release: receive,
+        })
+        .unwrap();
+        ready.recv().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let kill = directory.path().join("bridge-kill");
+        assert_eq!(input.replacement_gate(Some(&kill)), Ok(ReplacementGate::Ready));
+        std::fs::write(&kill, b"").unwrap();
+        assert_eq!(input.replacement_gate(Some(&kill)), Ok(ReplacementGate::Killed));
+        std::fs::write(&kill, b"invalid").unwrap();
+        assert_eq!(input.replacement_gate(Some(&kill)), Err(Error::Control));
+        std::fs::remove_file(&kill).unwrap();
+        assert_eq!(input.replacement_gate(Some(&kill)), Ok(ReplacementGate::Ready));
+        let runtime = runtime();
+        runtime.block_on(async {
+            let stop = input.subscribe();
+            release.send(result).unwrap();
+            assert_eq!(stop.await.unwrap(), clean);
+        });
+        drop(runtime);
+        // A later kill cannot turn an EOF decision into an exec attempt.
+        std::fs::write(&kill, b"").unwrap();
+        let expected = if clean {
+            Ok(ReplacementGate::Shutdown)
+        } else {
+            Err(Error::Control)
+        };
+        assert_eq!(input.replacement_gate(Some(&kill)), expected);
+        assert_eq!(input.replacement_gate(None), expected);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn t3_settings_process_real_exec_keeps_pid_image_argv_and_stdin() {

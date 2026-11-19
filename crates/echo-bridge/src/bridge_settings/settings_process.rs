@@ -13,7 +13,32 @@ struct Input {
     state: watch::Receiver<Stop>,
 }
 
+/// Final process-level decision after asynchronous resource cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplacementGate {
+    Ready,
+    Shutdown,
+    Killed,
+}
+
 impl Input {
+    fn replacement_gate(&self, kill_path: Option<&std::path::Path>) -> Result<ReplacementGate, Error> {
+        match *self.state.borrow() {
+            Stop::Finished(true) => return Ok(ReplacementGate::Shutdown),
+            Stop::Finished(false) => return Err(Error::Control),
+            Stop::Waiting => (),
+        }
+        if kill_path
+            .map(crate::bridge_runtime::bridge_kill::inspect)
+            .transpose()?
+            .unwrap_or(false)
+        {
+            Ok(ReplacementGate::Killed)
+        } else {
+            Ok(ReplacementGate::Ready)
+        }
+    }
+
     fn open(mut reader: impl Read + Send + 'static) -> Result<Self, Error> {
         let (send, state) = watch::channel(Stop::Waiting);
         // This is the sole blocking reader in this process generation. It owns
@@ -57,12 +82,26 @@ async fn wait(state: &mut watch::Receiver<Stop>) -> bool {
 /// # Errors
 /// Returns a fixed control error if the OS reader thread cannot be started.
 pub(crate) fn shutdown() -> Result<oneshot::Receiver<bool>, Error> {
+    input().map(Input::subscribe)
+}
+
+fn input() -> Result<&'static Input, Error> {
     static INPUT: OnceLock<Result<Input, Error>> = OnceLock::new();
     INPUT
         .get_or_init(|| Input::open(std::io::stdin()))
         .as_ref()
-        .map(Input::subscribe)
         .map_err(|_| Error::Control)
+}
+
+/// Recheck held stdin and the durable kill marker after dropping the runtime.
+/// This never creates an async task, retries exec, or clears a kill marker.
+/// A blocked replacement must remain controllable under the old active config.
+///
+/// # Errors
+/// Unexpected stdin input/read failure or an invalid/inaccessible kill marker
+/// refuses replacement with the fixed control category.
+pub fn replacement_gate(kill_path: Option<&std::path::Path>) -> Result<ReplacementGate, Error> {
+    input()?.replacement_gate(kill_path)
 }
 
 /// Original process arguments, captured before any runtime or settings edit.

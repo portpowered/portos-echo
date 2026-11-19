@@ -9,6 +9,7 @@ use std::{
 
 pub struct Settings {
     pub config: Option<echo_config::BridgeConfig>,
+    pub startup: Option<Box<echo_config::EffectiveConfig>>,
     pub settings_warning: Option<String>,
     pub sim_clock: bool,
     pub sim_epoch: Option<u64>,
@@ -175,6 +176,7 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
     };
     Ok(Settings {
         config: None,
+        startup: None,
         settings_warning: None,
         sim_clock: false,
         sim_epoch: None,
@@ -204,7 +206,7 @@ fn configured(
     origins: Option<(&str, &str)>,
 ) -> Result<Option<Settings>, Error> {
     let effective = echo_config::BridgeConfig::load_effective(config).map_err(|error| prompt_config_error(&error))?;
-    let config = effective.config;
+    let config = effective.config.clone();
     let muse = if config.agent_backend == echo_config::AgentBackend::Muse {
         Some((config.agent.clone(), config.muse.clone().ok_or(Error::Input)?))
     } else {
@@ -224,7 +226,8 @@ fn configured(
     };
     Ok(Some(Settings {
         config: Some(config.clone()),
-        settings_warning: effective.warning.map(|error| error.to_string()),
+        settings_warning: effective.warning.as_ref().map(ToString::to_string),
+        startup: Some(Box::new(effective)),
         sim_clock: false,
         sim_epoch: None,
         mcp: if muse.is_none() {

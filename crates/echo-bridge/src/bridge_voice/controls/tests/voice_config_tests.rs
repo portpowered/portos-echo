@@ -7,6 +7,52 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[path = "voice_context_tests.rs"]
 mod voice_context_tests;
 
+// T1: argv admission and the configured owner retain the same original base,
+// accepted overlay and safe warning without reopening a changed config file.
+#[test]
+fn settings_cli_handoff_retains_single_startup_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let path = directory.path().join("bridge.toml");
+    let text = format!(
+        "{}\n[home]\ndir='{}'\n[codex]\nhome='{}'\n",
+        include_str!("../../../../../../examples/bridge.example.toml").replace("echo.example.invalid", "127.0.0.1"),
+        home.display(),
+        directory.path().join("codex").display()
+    );
+    for (overlay, cap, warning) in [
+        ("[agent]\nmax_tool_calls=3\n", 3, false),
+        ("[agent]\nmax_tool_calls=0\n", 8, true),
+    ] {
+        std::fs::write(&path, &text).unwrap();
+        std::fs::write(home.join("settings.toml"), overlay).unwrap();
+        let args = vec![
+            "--config".into(),
+            path.to_str().unwrap().into(),
+            "--trace".into(),
+            directory.path().join("trace").to_str().unwrap().into(),
+        ];
+        let settings = crate::bridge_input::parse(&args, [None, None, None]).unwrap().unwrap();
+        // Any accidental second config/overlay read must fail or see 1.
+        std::fs::write(&path, "invalid").unwrap();
+        std::fs::write(home.join("settings.toml"), "[agent]\nmax_tool_calls=1\n").unwrap();
+        let prepared = super::super::voice_entry::prepare(settings).unwrap();
+        assert_eq!(prepared.config.agent.max_tool_calls, cap);
+        assert_eq!(prepared.settings_warning.is_some(), warning);
+        let startup = prepared.startup.as_ref().unwrap();
+        assert_eq!(startup.base.agent.max_tool_calls, 8);
+        assert_eq!(startup.config.agent.max_tool_calls, cap);
+        assert_eq!(startup.warning.is_some(), warning);
+        assert_eq!(
+            startup.overlay.apply_to(&startup.base).unwrap().agent.max_tool_calls,
+            cap
+        );
+        assert!(!directory.path().join("trace").exists());
+        assert!(!directory.path().join("codex").exists());
+    }
+}
+
 #[test]
 fn configured_capture_watchdog_covers_wait_work_and_playback_with_saturation() {
     for (maximum, response, played, expected) in [
