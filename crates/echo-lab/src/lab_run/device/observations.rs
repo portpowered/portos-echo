@@ -3,6 +3,25 @@ use super::runtime::Runtime;
 use std::io::Write;
 
 impl Runtime {
+    pub(super) fn configure_portos_options(
+        &mut self,
+        options: &super::super::run_options::Options,
+        config: &str,
+    ) -> Result<(), String> {
+        for path in &options.scenarios {
+            if crate::lab_validate::load(path)?["id"] == "m5-port-os-link" {
+                if options.on_device.is_none() || !options.live_real() || options.wake_clip.is_none() {
+                    return Err(
+                        "device: M5 requires --device-bridge, --live real and --wake-clip naming only Echo test light"
+                            .into(),
+                    );
+                }
+                self.configure_portos(config)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn configure_portos(&mut self, config: &str) -> Result<(), String> {
         let config =
             echo_config::BridgeConfig::from_toml_str(config).map_err(|_| "device: invalid Port OS configuration")?;

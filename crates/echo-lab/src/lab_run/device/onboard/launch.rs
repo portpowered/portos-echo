@@ -38,6 +38,10 @@ impl crate::lab_run::device::Configured<'_> {
                 self.window,
             ))
         };
+        let result = result.and_then(|()| {
+            self.state.observe()?;
+            self.state.link_counts(artifacts)
+        });
         self.state.invalid |= result.is_err();
         if result.is_err() {
             artifacts.link_counts = None;

@@ -42,11 +42,7 @@ impl<'a> Configured<'a> {
         let session = runtime::session::selected(options)?;
         let window = runtime::observation(options.live_real(), &config)?;
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
-        for path in &options.scenarios {
-            if crate::lab_validate::load(path)?["id"] == "m5-port-os-link" {
-                state.configure_portos(&config)?;
-            }
-        }
+        state.configure_portos_options(options, &config)?;
         if config::setup::requested(options)? {
             let parsed =
                 echo_config::BridgeConfig::from_toml_str(&config).map_err(|_| "device: invalid setup configuration")?;
@@ -95,6 +91,7 @@ impl<'a> Configured<'a> {
                 ),
                 self.options.cancel.as_deref(),
             ));
+            self.state.invalid |= result.is_err();
             self.state.startup_result(result)?;
         }
         Ok(())
@@ -169,7 +166,12 @@ impl Driver for Configured<'_> {
             None => Ok(()),
         };
         self.wire.take();
-        super::combine(super::combine(bench, owned), wire)
+        let result = super::combine(super::combine(bench, owned), wire);
+        if result.is_err() {
+            self.state.invalid = true;
+            artifacts.link_counts = None;
+        }
+        result
     }
 }
 
