@@ -380,7 +380,14 @@ async fn settle(
 }
 
 async fn observe(screen: &mut Screen, states: &mut Vec<Value>, name: &str) -> Result<Value, String> {
-    let frame = screen.next().await?;
+    // Thinking marks a dispatch running in silence. It may come before any
+    // reply state, so the reply sequence is checked without it.
+    let frame = loop {
+        let frame = screen.next().await?;
+        if frame["state"]["state"] != "thinking" || name == "thinking" {
+            break frame;
+        }
+    };
     states.push(frame.clone());
     if frame["state"]["state"] != name {
         return Err(format!("screen: expected {name}, observed {}", frame["state"]));

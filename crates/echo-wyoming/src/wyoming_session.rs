@@ -284,7 +284,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
-    /// Display only: hassmic shows its thinking face until reply audio plays.
+    /// Display only: hassmic shows its thinking face until told otherwise.
     async fn thinking(&mut self, on: bool, reply: Reply<()>) -> Result<(), Error> {
         let data = serde_json::json!({"thinking":on});
         self.send(WyomingEvent::Other("hassmic-thinking".into(), data), vec![])

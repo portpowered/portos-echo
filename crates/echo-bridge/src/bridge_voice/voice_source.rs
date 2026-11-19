@@ -37,14 +37,16 @@ impl Source {
         Ok(())
     }
 
-    /// True once per silent stretch of a running dispatch: when the turn
-    /// starts with the mouth closed, and again each time the mouth closes
-    /// under it. The device drops the indication itself when audio plays.
-    fn thinking_due(&mut self) -> bool {
-        let quiet = self.delegation.in_flight() && !self.mouth.open();
-        let due = quiet && !self.thinking;
-        self.thinking = quiet;
-        due
+    /// The device's thinking indication, when it must change. It goes on
+    /// when a dispatch runs with the mouth closed and off when the mouth
+    /// opens, so it stays up from a completed turn until its answer speaks.
+    /// The device drops it itself when the run ends.
+    fn thinking_change(&mut self) -> Option<bool> {
+        let wanted = !self.mouth.open() && (self.thinking || self.delegation.in_flight());
+        (wanted != self.thinking).then(|| {
+            self.thinking = wanted;
+            wanted
+        })
     }
 
     /// A dispatch that finished while listening gives its answer a fresh
@@ -355,8 +357,8 @@ pub struct Mouth {
 /// Best effort: the indication is display only, so a device that cannot take
 /// it never fails or delays the reply.
 pub(super) async fn think<L: echo_link::EchoLink>(client: &L, source: &mut Source) {
-    if source.thinking_due() {
-        let _ = tokio::time::timeout(Duration::from_secs(1), client.thinking(true)).await;
+    if let Some(on) = source.thinking_change() {
+        let _ = tokio::time::timeout(Duration::from_secs(1), client.thinking(on)).await;
     }
 }
 

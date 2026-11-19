@@ -120,9 +120,9 @@ pub trait EchoLink: Send + Sync {
     /// Returns a fixed category on failure; no peer data enters diagnostics.
     fn pause(&self) -> impl Future<Output = Result<(), Error>> + Send;
     /// Show on the device that delegated work is running in silence. Display
-    /// only: capture, playback and the run are unaffected. The device clears
-    /// it when reply audio next plays or the run ends. Links without a face
-    /// accept and ignore it.
+    /// only: capture, playback and the run are unaffected. The caller clears
+    /// it when reply audio plays; the device clears it when the run ends.
+    /// Links without a face accept and ignore it.
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.
     fn thinking(&self, on: bool) -> impl Future<Output = Result<(), Error>> + Send {
