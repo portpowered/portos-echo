@@ -4,6 +4,7 @@ use crate::lab_run::{
     device::onboard::tests::{remote, world},
     run_report::Artifacts,
 };
+use std::fmt::Write;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     net::TcpListener,
@@ -154,10 +155,10 @@ async fn t3_on_device_mcp_operator_uses_owned_forward_pairing_and_exact_completi
         world
             .calls
             .iter()
-            .filter(|args| args[0] == "forward" && args[1] == "tcp:0")
+            .filter(|args| args[0] == "forward" && args[1] == "tcp:0") // lint-rules: allow-literal synthetic adb comparison
             .count(),
         1
-    ); // lint-rules: allow-literal synthetic adb comparison
+    );
     assert!(world.ran("head -c 16385 /data/local/echo-bridge/private/screen-pairing.txt"));
     assert!(world.ran(&format!("forward --remove tcp:{}", world.forward)));
 }
@@ -225,15 +226,15 @@ async fn t3_on_device_mcp_operator_rejects_missing_ambiguous_or_nonlocal_listene
     ] {
         let world = world();
         let (mut state, config) = configured(&world);
-        world.borrow_mut().trace = records
-            .into_iter()
-            .map(|address| {
-                format!(
-                    "{}\n",
-                    json!({"event":"mcp.operator.listening","elapsed_ms":1,"address":address})
-                )
-            })
-            .collect();
+        world.borrow_mut().trace.clear();
+        for address in records {
+            writeln!(
+                world.borrow_mut().trace,
+                "{}",
+                json!({"event":"mcp.operator.listening","elapsed_ms":1,"address":address})
+            )
+            .unwrap();
+        }
         assert_eq!(state.mcp_operator(&McpAction::Link, &config).await, Err(CONTROL.into()));
         assert!(state.pending_mcp.is_none());
         assert!(!world.borrow().calls.iter().any(|args| args[0] == "forward"));
