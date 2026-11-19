@@ -67,11 +67,11 @@ impl Relay {
                 if let Some(error) = &ledger.failure {
                     return Err(error.clone());
                 }
-                if ledger.session.checkpoint(run, replies)? {
-                    return Ok(());
-                }
                 if ledger.closed {
                     return Err("device: unmet prerequisite: Played before wire close".into());
+                }
+                if ledger.session.checkpoint(run, replies)? {
+                    return Ok(());
                 }
             }
             self.receipts

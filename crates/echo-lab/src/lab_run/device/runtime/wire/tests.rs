@@ -275,6 +275,10 @@ async fn t3_device_wire_reply_barrier_awaits_receipt_without_ending_capture() {
     assert_eq!(observer.relay.session()["ended_runs"], json!([]));
     let mut artifacts = Artifacts::create(options.out).unwrap();
     observer.close(&mut artifacts).await.unwrap();
+    assert_eq!(
+        observer.wait_reply(1, 1).await,
+        Err("device: unmet prerequisite: Played before wire close".into())
+    );
     assert!(TcpStream::connect(address).await.is_err());
 }
 
