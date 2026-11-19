@@ -351,7 +351,7 @@ fn routing(fixture: &Fixture) -> Value {
     serde_json::from_slice(&std::fs::read(fixture.home.join("routing.json")).unwrap()).unwrap()
 }
 
-fn assert_local_routes(observed: &Value, live: &str, model: &str) {
+fn assert_local_routes(observed: &Value, live: &str, model: &str, search: &str) {
     let mut expected = json!({
         "model_provider":"local",
         "model_providers.local":{"name":"local", "base_url":format!("{model}/v1"),
@@ -359,7 +359,7 @@ fn assert_local_routes(observed: &Value, live: &str, model: &str) {
             "experimental_bearer_token":"dummy-local-only"},
         "experimental_realtime_webrtc_call_base_url":format!("{live}/backend-api/codex"),
         "experimental_realtime_ws_base_url":format!("{live}/v1"),
-        "features.skip_host_skill_discovery":true, "web_search":"disabled",
+        "features.skip_host_skill_discovery":true, "web_search":search,
         "mcp_servers":{}, "cli_auth_credentials_store":"file"
     });
     for key in [
@@ -403,7 +403,12 @@ fn assert_local_routes(observed: &Value, live: &str, model: &str) {
 #[ignore = "T3 requires prebuilt echo-bridge and local Python"]
 async fn codex_voice_entry_binary_local_routes_reach_only_owned_child_before_ready() {
     let inherited = std::env::var_os("HTTP_PROXY");
-    for mode in ["chatgpt", "api_key"] {
+    for (mode, search) in [
+        ("chatgpt", None),
+        ("api_key", Some("live")),
+        ("api_key", Some("cached")),
+        ("chatgpt", Some("disabled")),
+    ] {
         let fixture = Fixture::new(mode);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let live_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -418,6 +423,13 @@ async fn codex_voice_entry_binary_local_routes_reach_only_owned_child_before_rea
             &live,
             mode == "api_key",
         );
+        if let Some(search) = search {
+            let path = fixture.directory.path().join("bridge.toml");
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("[codex]", &format!("[codex]\nweb_search='{search}'"));
+            std::fs::write(path, text).unwrap();
+        }
         let mut command = command(&fixture);
         command.args(["--live-loopback", &live, "--model-loopback", &model]);
         if mode == "api_key" {
@@ -432,7 +444,7 @@ async fn codex_voice_entry_binary_local_routes_reach_only_owned_child_before_rea
             .unwrap()
             .unwrap()
             .0;
-        assert_local_routes(&routing(&fixture), &live, &model);
+        assert_local_routes(&routing(&fixture), &live, &model, search.unwrap_or("live"));
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
         bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;

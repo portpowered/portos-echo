@@ -262,8 +262,26 @@ binary; the [ARM build](adr/0028-codex-armv7.md) carries authorized build patche
 
 - Own ChatGPT sign-in storage/refresh, authenticated call creation, sideband and delegated model execution.
 - Expose only bridge-supplied dynamic tools on ephemeral, read-only threads; built-in execution tools,
-  environments and app-server MCP configuration are disabled by our thread/home settings.
+  environments and app-server MCP configuration are disabled by our thread/home settings. Hosted read-only
+  web search is the sole exception, selected by `[codex] web_search`.
 - It does not capture the Echo mic, play its speaker or hold the Port OS grant. Its media peer is in the bridge.
+
+#### Configuration — Codex app server
+
+`[codex] web_search` accepts exactly `"live"`, `"cached"` or `"disabled"`. Omitting the table or key
+selects `"live"`. Live search allows external web access; cached search uses the provider cache without
+external web access; disabled omits the hosted search declaration. The pin's `indexed` value is not
+exposed. Search runs at the provider and adds no local callable, process, browser or file authority.
+The complete bridge dynamic catalog and native wrappers remain unchanged; every other built-in effect
+stays disabled and `mcp_servers` stays `{}`.
+
+Invalid types or values stop startup with exit 2, empty stdout and exactly
+`echo-bridge: codex.web_search: invalid type or value` on stderr followed by a newline, before child,
+home, trace or listener effects. The supplied value is never echoed. Both thread settings and local-fake
+child overrides receive the selected mode. Restart the bridge after changing it. To roll back search,
+set `web_search = "disabled"` and restart. Remove the key before restoring an older bridge binary,
+which always disables search. No credential, notes or ledger migration is needed; no query/result logging
+is added. Real provider execution and spoken source attribution remain operator T5 evidence.
 
 #### Where it runs — Codex app server
 

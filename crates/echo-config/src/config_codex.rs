@@ -12,6 +12,27 @@ pub enum CodexLaunch {
     Standalone,
 }
 
+/// Hosted read-only search modes admitted by the bridge at the pinned server.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearch {
+    #[default]
+    Live,
+    Cached,
+    Disabled,
+}
+
+impl WebSearch {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Cached => "cached",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
 /// Offline settings for the app server. Runtime admission requires `home`;
 /// parsing never resolves the binary, expands paths or reads credentials.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -26,6 +47,7 @@ pub struct CodexConfig {
     pub delegate_model: Option<String>,
     pub delegate_effort: Option<String>,
     pub time_zone: Option<String>,
+    pub web_search: WebSearch,
 }
 
 /// Owner, 2026-11-18: conversation is the default and a hand-off is the exception.
@@ -90,6 +112,7 @@ pub(super) fn decode(value: DeValue<'_>) -> Result<CodexConfig, ConfigError> {
         delegate_model: fields.optional("delegate_model")?,
         delegate_effort: fields.optional("delegate_effort")?,
         time_zone: fields.optional("time_zone")?,
+        web_search: fields.optional("web_search")?.unwrap_or_default(),
     };
     fields.finish()?;
     Ok(config)
@@ -154,6 +177,40 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = include_str!("../../../examples/bridge.example.toml");
+
+    #[test]
+    fn web_search_modes_default_live_round_trip_and_reject_input_safely() {
+        let load = |fields: &str| BridgeConfig::from_toml_str(&format!("{EXAMPLE}\n[codex]\n{fields}"));
+        assert_eq!(
+            BridgeConfig::from_toml_str(EXAMPLE).unwrap().codex.web_search,
+            WebSearch::Live
+        );
+        assert_eq!(load("").unwrap().codex.web_search, WebSearch::Live);
+        for mode in [WebSearch::Live, WebSearch::Cached, WebSearch::Disabled] {
+            let encoded = toml::to_string(&std::collections::BTreeMap::from([("web_search", mode)])).unwrap();
+            assert_eq!(load(&encoded).unwrap().codex.web_search, mode);
+            assert_eq!(
+                load(&format!("web_search = '{}'", mode.as_str()))
+                    .unwrap()
+                    .codex
+                    .web_search,
+                mode
+            );
+        }
+        for value in ["'unknown'", "''", "'Live'", "'indexed'", "true", "7", "[]", "{}"] {
+            assert_eq!(
+                load(&format!("web_search = {value}")).unwrap_err().to_string(),
+                "codex.web_search: invalid type or value"
+            );
+        }
+        assert_eq!(
+            BridgeConfig::from_toml_str(include_str!("../../../examples/bridge.echo.toml"))
+                .unwrap()
+                .codex
+                .web_search,
+            WebSearch::Live
+        );
+    }
 
     #[test]
     fn launch_form_and_ca_file_default_off_and_are_validated_offline() {

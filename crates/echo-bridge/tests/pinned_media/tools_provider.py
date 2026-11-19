@@ -32,8 +32,9 @@ def read_frame(connection):
 
 
 class Delegation:
-    def __init__(self, tools, negative, exhausted=False, model="gpt-5.4"):
+    def __init__(self, tools, negative, exhausted=False, model="gpt-5.4", web_search="live"):
         self.tools = tools
+        self.web_search = web_search
         self.model = model
         self.native = model != "gpt-5.4"
         self.negative = negative
@@ -96,9 +97,16 @@ class Delegation:
         return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
 
     def check_tools(self, body, expected):
+        hosted = []
+        if self.web_search != 'disabled':
+            search = {'type': 'web_search', 'external_web_access': self.web_search == 'live'}
+            if self.native:
+                search['search_content_types'] = ['text', 'image']
+            hosted = [search]
         if not self.native:
-            assert body['tools'] == expected, 'model exposed tools beyond exact dynamic catalog'
-            return [tool['name'] for tool in body['tools']]
+            assert body['tools'] == hosted + expected, 'model exposed tools beyond exact dynamic catalog'
+            return [tool['name'] for tool in expected]
+        assert body['tools'] == hosted, 'native hosted search catalog mismatch'
         # Bundled sol uses Responses Lite: declarations are input tool blocks.
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'

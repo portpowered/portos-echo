@@ -1145,3 +1145,15 @@ and permits idempotent cleanup. A deterministic replacement-file test preserves
 the foreign file instead of silently deleting it. Exclusive directory creation
 also retains the previous owner's contents on collision. Only synthetic external
 private homes and loopback peers are used.
+
+## Hosted search exception (owner, 2026-11-19)
+
+The owner authorizes one hosted read-only exception to the earlier all-built-ins-off oracle:
+`[codex] web_search` is `live` by default and accepts `cached` or `disabled`. Enabled conventional
+requests contain exactly one `web_search` declaration with `external_web_access` true for live and false
+for cached. Native gpt-6.1-sol also declares `search_content_types: [text, image]`. Disabled omits search.
+The complete dynamic tool catalog, exact native wrappers and nested callable lists remain asserted.
+The reserved `web_search` alias prevents a dynamic tool from shadowing hosted search. All other built-in
+effects stay disabled, environments stay empty and app-server MCP stays `{}`. This adds no local fetch,
+browser, process or file authority. The earlier evidence remains historical; real hosted results and
+spoken attribution require a later operator-started T5 run.

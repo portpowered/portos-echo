@@ -75,14 +75,73 @@ async fn t3_pinned_tools_daily_cap_interrupts_without_mcp() {
     .unwrap();
 }
 
+macro_rules! search_case {
+    ($name:ident, $model:literal, $mode:ident) => {
+        #[tokio::test]
+        async fn $name() {
+            tokio::time::timeout(
+                Duration::from_secs(25),
+                Box::pin(exercise_search(
+                    false,
+                    false,
+                    ToolBudget::new(1, || Ok(7)),
+                    $model,
+                    echo_config::WebSearch::$mode,
+                )),
+            )
+            .await
+            .unwrap();
+        }
+    };
+}
+search_case!(t3_pinned_tools_web_search_cached_conventional, "gpt-5.4", Cached);
+search_case!(t3_pinned_tools_web_search_disabled_conventional, "gpt-5.4", Disabled);
+search_case!(t3_pinned_tools_web_search_cached_native, "gpt-6.1-sol", Cached);
+search_case!(t3_pinned_tools_web_search_disabled_native, "gpt-6.1-sol", Disabled);
+
+#[tokio::test]
+async fn t3_pinned_tools_web_search_concurrent_homes_keep_distinct_modes() {
+    tokio::time::timeout(Duration::from_secs(25), async {
+        tokio::join!(
+            Box::pin(exercise_search(
+                false,
+                false,
+                ToolBudget::new(1, || Ok(7)),
+                "gpt-5.4",
+                echo_config::WebSearch::Live
+            )),
+            Box::pin(exercise_search(
+                false,
+                false,
+                ToolBudget::new(1, || Ok(7)),
+                "gpt-5.4",
+                echo_config::WebSearch::Disabled
+            ))
+        );
+    })
+    .await
+    .unwrap();
+}
+
 async fn exercise(negative: bool) {
     Box::pin(exercise_mode(negative, false, ToolBudget::new(1, || Ok(7)), "gpt-5.4")).await;
 }
 
 async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, model: &str) {
+    exercise_search(negative, exhausted, budget, model, echo_config::WebSearch::Live).await;
+}
+
+async fn exercise_search(
+    negative: bool,
+    exhausted: bool,
+    budget: ToolBudget,
+    model: &str,
+    web_search: echo_config::WebSearch,
+) {
     let directory = tempfile::tempdir().unwrap();
 
     let config = CodexConfig {
+        web_search,
         binary: Some(binary()),
         home: Some(directory.path().join("home")),
         ..CodexConfig::default()
@@ -104,7 +163,7 @@ async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, mode
     let ready: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let origin = ready["origin"].as_str().unwrap();
     let routes = LocalRoutes::new(origin, origin).unwrap();
-    let initialize = json!({"tools":catalog.tools(), "negative":negative, "exhausted":exhausted, "model":model});
+    let initialize = json!({"tools":catalog.tools(), "negative":negative, "exhausted":exhausted, "model":model,"web_search":web_search.as_str()});
     input.write_all(format!("{initialize}\n").as_bytes()).await.unwrap();
     let (commands, receive) = mpsc::channel(2);
     let (started, model_started) = tokio::sync::oneshot::channel();
@@ -201,6 +260,7 @@ async fn client(
                     model: Some(model),
                     effort: None,
                     time_zone: None,
+                    web_search: config.web_search,
                 },
                 catalog.tools().to_vec(),
                 Instant::now() + Duration::from_secs(10),

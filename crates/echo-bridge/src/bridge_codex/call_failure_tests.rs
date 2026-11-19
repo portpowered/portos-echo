@@ -360,3 +360,60 @@ async fn call_matching_error_is_sanitized_and_foreign_error_is_ignored() {
         Err(RpcError::Disconnected)
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn call_profile_fields_are_independent_and_unset_request_is_unchanged() {
+    for web_search in [
+        echo_config::WebSearch::Live,
+        echo_config::WebSearch::Cached,
+        echo_config::WebSearch::Disabled,
+    ] {
+        for (model, effort) in [
+            (None, None),
+            (Some("fixture-model"), Some("low")),
+            (None, Some("low")),
+            (Some("fixture-model"), None),
+        ] {
+            let (mut io, mut server) = fixture();
+            let client = async {
+                let mut call = Call::new(&mut io);
+                let options = Options {
+                    model,
+                    effort,
+                    time_zone: Some("Europe/Berlin"),
+                    web_search,
+                    ..options()
+                };
+                assert_eq!(
+                    call.start(&options, vec![], "fixture-offer", deadline()).await.unwrap(),
+                    "fixture-answer"
+                );
+                call.stop(deadline()).await.unwrap();
+            };
+            let remote = async {
+                // start asserts the full realtime request, including the absence of profile/zone keys.
+                let params = start(&mut server).await;
+                let mut expected = json!({
+                    "ephemeral": true, "approvalPolicy": "never", "sandbox": "read-only",
+                    "environments": [], "dynamicTools": [], "baseInstructions": "Client audio bridge",
+                    "config": {
+                        "features.shell_tool": false, "features.unified_exec": false,
+                        "features.multi_agent": false, "features.multi_agent_v2": false, "agents.enabled": false,
+                        "features.goals": false, "tools.experimental_request_user_input.enabled": false,
+                        "tools.update_plan.enabled": false, "web_search": web_search.as_str(), "mcp_servers": {}
+                    }
+                });
+                if let Some(model) = model {
+                    expected["model"] = model.into();
+                }
+                if let Some(effort) = effort {
+                    expected["config"]["model_reasoning_effort"] = effort.into();
+                }
+                assert_eq!(params, expected);
+                stop(&mut server).await;
+            };
+            tokio::join!(client, remote);
+            assert!(io.begin_request("account/read", &json!({})).is_ok());
+        }
+    }
+}

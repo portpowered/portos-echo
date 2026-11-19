@@ -64,10 +64,11 @@ pub(crate) async fn routed_supervisor(
         CodexLaunch::Subcommand => Launch::Subcommand,
         CodexLaunch::Standalone => Launch::Standalone,
     };
+    let web_search = config.web_search;
     let mut config = SupervisorConfig::new(binary, home);
     config.launch = launch;
     if let Some(routes) = routes {
-        routes.configure(&mut config);
+        routes.configure(&mut config, web_search);
     }
     let mut supervisor = Supervisor::new(config).map_err(process_error)?;
     if let Some(certificates) = certificates {
