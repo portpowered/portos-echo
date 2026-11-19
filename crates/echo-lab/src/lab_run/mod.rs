@@ -193,10 +193,10 @@ fn sim_setup(scenario: &serde_json::Value) -> Result<(), String> {
     }
     if scenario["setup"].as_object().is_none_or(|m| {
         m.iter().any(|(k, v)| {
-            !matches!(
+            !(matches!(
                 (k.as_str(), v.as_str()),
                 ("mcp", Some("spoof")) | ("backend", Some("client"))
-            )
+            ) || scenario["id"] == "m5-port-os-link" && k == "mcp" && v == "portos-pilot")
         })
     }) {
         return Err("sim: unsupported setup mode".into());
@@ -213,6 +213,29 @@ fn sim_setup(scenario: &serde_json::Value) -> Result<(), String> {
         return Err("sim: unsupported negative injection".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn mcp_pilot_setup_selects_local_peers_only_for_common_m5() {
+        let mut scenario = json!({"id":"m5-port-os-link","tiers":["T3","T4","T5"],
+            "setup":{"mcp":"portos-pilot","backend":"client"},"negative":[]});
+        assert_eq!(sim_setup(&scenario), Ok(()));
+        scenario["setup"]["mcp"] = json!("spoof");
+        assert_eq!(sim_setup(&scenario), Ok(()));
+        scenario["setup"]["mcp"] = json!("portos-pilot");
+        for id in ["m1-wake-stream", "m4-spoof-tool", "other"] {
+            scenario["id"] = json!(id);
+            assert_eq!(sim_setup(&scenario), Err("sim: unsupported setup mode".into()));
+        }
+        scenario["id"] = json!("m5-port-os-link");
+        scenario["setup"]["backend"] = json!("muse");
+        assert_eq!(sim_setup(&scenario), Err("sim: unsupported setup mode".into()));
+    }
 }
 
 fn combine(primary: Result<(), String>, cleanup: Result<(), String>) -> Result<(), String> {
