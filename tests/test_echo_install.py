@@ -1,5 +1,7 @@
 """T3 component CLI witness: real POSIX shell, recording adb, no device access."""
 import json
+import selectors
+import signal
 import os
 from pathlib import Path
 import shlex
@@ -41,13 +43,19 @@ def fake_adb():
         return 0
     if args[0] == "shell" and len(args) == 2:
         command = args[1]
-        if command == "set -e\nps -A -o PID,NAME":
-            print("PID NAME\n12 sh\n" + ("13 echo-bridge" if (base / "running").exists() else ""))
-            return 0
+        command = command.replace("/system/bin/sh", "/bin/sh")
         command = command.replace("/data/local", str(base / "remote"))
         result = subprocess.run(["/bin/sh", "-c", command],
-                                env=dict(os.environ, PATH="/usr/bin:/bin"),
+                                env=dict(os.environ, PATH=str(base / "remote-tools") + ":/usr/bin:/bin"),
                                 capture_output=True, timeout=5)
+        if "setsid /bin/sh" in command and result.returncode == 0:
+            # Readiness comes from the real child, not a scheduling sleep.
+            fd = os.open(base / "ready", os.O_RDWR | os.O_NONBLOCK)
+            with selectors.DefaultSelector() as selector:
+                selector.register(fd, selectors.EVENT_READ)
+                require(bool(selector.select(4)), "fixture did not announce readiness")
+                os.read(fd, 100)
+            os.close(fd)
         sys.stdout.buffer.write(result.stdout)
         sys.stderr.buffer.write(result.stderr)
         return result.returncode
@@ -63,6 +71,11 @@ class Sandbox:
         scripts.mkdir()
         self.script = scripts / "echo-install.sh"
         shutil.copyfile(ROOT / "scripts/echo-install.sh", self.script)
+        (self.root / "remote-tools").mkdir()
+        ps = self.root / "remote-tools/ps"
+        ps.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                      + shlex.quote(str(Path(__file__).resolve())) + ' --tool ps "$@"\n')
+        ps.chmod(0o755)
         self.tools = self.root / "tools"
         self.tools.mkdir()
         # A closed caller PATH cannot resolve any real adb, even on a developer host.
@@ -95,6 +108,14 @@ class Sandbox:
         return self
 
     def __exit__(self, *unused):
+        # Only synthetic fixture children can be signalled by test teardown.
+        for name in ("child-pid", "holder-pid"):
+            path = self.root / name
+            if path.exists():
+                try:
+                    os.kill(int(path.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         self.temp.cleanup()
 
     def calls(self):
@@ -247,15 +268,134 @@ def failure_cases():
     print("F08: PASS")
 
 
+
+def remote_tool():
+    base = Path(os.environ["FAKE_ROOT"])
+    name = sys.argv[2]
+    if name == "ps":
+        print("PID NAME\n12 sh echo-bridge launcher")
+        path = base / "child-pid"
+        if (base / "running").exists():
+            print("13 echo-bridge")
+        elif path.exists() and (base / "mode").read_text() != "hidden":
+            try:
+                state = Path("/proc") / path.read_text() / "stat"
+                if state.read_text().split(") ")[1].split()[0] != "Z":
+                    print(path.read_text() + " echo-bridge")
+            except FileNotFoundError:
+                pass
+    elif name == "date":
+        clock = base / "clock"
+        value = int(clock.read_text()) if clock.exists() else 0
+        if (base / "mode").read_text() == "deadline" and value == 1:
+            value = 20
+        clock.write_text(str(value + 1))
+        print(value)
+    elif name == "sleep":
+        pass  # Production polling is driven by the synthetic date clock.
+    return 0
+
+
+def prepare_lifecycle(box, mode="ready"):
+    os.mkfifo(box.root / "ready")
+    runas = box.root / "remote/hassmic/runas"
+    runas.write_text('#!/bin/sh\n[ "$1" = root ] && [ "$2" = 3990,inet ] || exit 1\nshift 2\nexec "$@"\n')
+    (box.root / "remote/hassmic/boot.log").write_text("old client connected\n")
+    fixture = """import os, sys, signal, json
+from pathlib import Path
+base = Path(os.environ['FAKE_ROOT'])
+(base / 'child-pid').write_text(str(os.getpid()))
+(base / 'holder-pid').write_text(str(os.getppid()))
+(base / 'child-args').write_text(json.dumps(sys.argv[1:]))
+(base / 'child-session').write_text(str(os.getsid(0)))
+mode = (base / 'mode').read_text()
+log = base / 'remote/hassmic/boot.log'
+if mode in ('ready', 'hidden', 'deadline'):
+    with log.open('a') as output: output.write('client connected / satellite: running\\n')
+elif mode == 'rotate':
+    log.rename(log.with_suffix('.old'))
+    log.write_text('client connected\\n')
+elif mode == 'truncate':
+    log.write_text('client connected\\n')
+with (base / 'ready').open('w') as ready: ready.write('ready')
+if mode != 'exit':
+    sys.stdin.buffer.read()
+    (base / 'eof').write_text('EOF')
+    if mode == 'stubborn': signal.pause()
+"""
+    box.files["bridge"].write_text("#!" + sys.executable + "\n" + fixture)
+    (box.root / "mode").write_text(mode)
+    for name in ("ps", "date", "sleep"):
+        wrapper = box.root / "remote-tools" / name
+        wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                           + shlex.quote(str(Path(__file__).resolve())) + " --tool " + name + ' "$@"\n')
+        wrapper.chmod(0o755)
+    box.install()
+
+
+def lifecycle_cases():
+    with Sandbox() as box:
+        prepare_lifecycle(box)
+        result = box.run(["start"])
+        require(result.stdout == "echo-install: started\n", "start output differs")
+        require(not (box.root / "eof").exists(), "stdin closed before stop")
+        require((box.root / "child-session").read_text() == (box.root / "holder-pid").read_text(),
+                "launcher did not detach its session")
+        args = json.loads((box.root / "child-args").read_text())
+        require(args == ["--config", str(box.device / "private/bridge.toml"),
+                         "--trace", str(box.device / "private/bridge.trace")], "launch arguments differ")
+        before = len(box.calls())
+        box.run(["start"], 1)
+        box.install(code=1)
+        require(not any(call[0] == "push" or "setsid" in " ".join(call)
+                        for call in box.calls()[before:]), "duplicate launch/replacement")
+        box.run(["stop"])
+        require((box.root / "eof").read_text() == "EOF", "bridge did not observe EOF")
+        require(not (box.device / "private/run").exists(), "owned resources remained")
+        box.run(["stop"])
+    for mode in ("stale", "rotate", "truncate", "exit", "hidden", "deadline"):
+        with Sandbox() as box:
+            prepare_lifecycle(box, mode)
+            result = box.run(["start"], 1)
+            require(not result.stdout, "false start success")
+            box.run(["stop"])
+            require(not (box.device / "private/run").exists(), "failed start resource leak")
+    with Sandbox() as box:
+        prepare_lifecycle(box)
+        (box.root / "running").touch()
+        before = len(box.calls())
+        box.run(["stop"], 1)
+        require(not any("kill " in " ".join(call) for call in box.calls()[before:]),
+                "unknown process signalled")
+        require((box.device / "bin/echo-bridge").exists(), "failed stop removed binary")
+    with Sandbox() as box:
+        prepare_lifecycle(box)
+        lock = box.root / "remote/echo-bridge.lock"
+        lock.mkdir()
+        box.run(["start"], 1)
+        require(not (box.root / "child-pid").exists(), "busy operation launched")
+    with Sandbox() as box:
+        prepare_lifecycle(box)
+        box.run(["start"])
+        (box.root / "fault").write_text("ps -A")
+        box.run(["stop"], 1)
+        require((box.device / "bin/echo-bridge").exists(), "failed verification removed binary")
+        box.run(["stop"])
+    print("F09 F10 F11 F12 F14 F16: PASS; F13 F15 F17 incomplete")
+
+
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))
-    print("echo-install tests: install=PASS retention=PASS privacy=PASS; lifecycle/status pending")
+    lifecycle_cases()
+    print("echo-install tests: install=PASS lifecycle=PARTIAL retention=PASS privacy=PASS; status pending")
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--tool":
+        sys.exit(remote_tool())
     if sys.argv[1:] == ["--fake-adb"] or (len(sys.argv) > 1 and sys.argv[1] == "--fake-adb"):
         sys.exit(fake_adb())
     main()
