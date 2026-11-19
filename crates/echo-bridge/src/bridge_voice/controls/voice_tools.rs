@@ -153,10 +153,16 @@ impl Tools {
             .server
             .first()
             .map(|server| {
-                McpClient::new(
+                let ca_pem = if server.auth == echo_config::McpAuth::PortosDeviceCode {
+                    bridge_mcp::Settings::ca_pem(config)?
+                } else {
+                    None
+                };
+                McpClient::with_ca(
                     server.clone(),
                     Token::new(server.clone(), self.runtime.as_ref().map(|r| r.grant.clone())),
                     Duration::from_secs(config.agent.task_deadline_seconds),
+                    ca_pem.as_deref(),
                 )
                 .map_err(|_| Error::Input)
             })
@@ -282,5 +288,143 @@ where
         cleanup.and(result)
     } else {
         result.and_then(|completed| cleanup.map(|()| completed))
+    }
+}
+
+#[cfg(test)]
+mod mcp_trust_tests {
+    use super::*;
+    use crate::bridge_mcp::bridge_component::{TlsPeer, approve, drive};
+    use echo_mcp_client::McpError;
+
+    #[tokio::test(start_paused = true)]
+    async fn t3_mcp_configured_https_link_catalog_query_and_reload() {
+        drive(async {
+            let peer = TlsPeer::start(false).await;
+            let config = &peer.config;
+            let screen = Screen::bind(None).await.unwrap();
+            let mut trace = Trace::open(&peer.directory.path().join("trace"), "api_key").unwrap();
+            let mut tools = Tools::new(config, Arc::new(|| 0));
+            tools.open(config, &screen, &mut trace, None).await.unwrap();
+            approve(tools.runtime.as_ref().unwrap()).await;
+            let path = config.mcp.state_dir.as_ref().unwrap().join("grant.json");
+            let stored = std::fs::read(&path).unwrap();
+            assert_private(&path);
+            let host = tools.host.as_ref().unwrap();
+            let specs = host.list_tools().await.unwrap();
+            assert_eq!(specs.len(), 1);
+            assert_eq!(specs[0].name, "endpoint_query");
+            assert_eq!(specs[0].input_schema, json!({"type":"object","properties":{}}));
+            let result = host.call_tool("endpoint_query", json!({}), "query-1").await.unwrap();
+            assert!(!result.is_error);
+            assert_eq!(result.content, json!([{"type":"text","text":"synthetic-query-result"}]));
+            assert_mcp_trust_refused(&tools, config).await;
+            tools.close().await;
+            tools.open(config, &screen, &mut trace, None).await.unwrap();
+            assert_eq!(
+                tools.host.as_ref().unwrap().list_tools().await.unwrap()[0].name,
+                "endpoint_query"
+            );
+            assert_eq!(std::fs::read(path).unwrap(), stored);
+            tools.close().await;
+            assert_eq!(peer.finish().await, json!({"link":1,"token":1,"catalog":2,"query":1}));
+        })
+        .await;
+    }
+
+    #[cfg(unix)]
+    fn assert_private(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    async fn assert_mcp_trust_refused(tools: &Tools, config: &BridgeConfig) {
+        let unrelated = TlsPeer::start(false).await;
+        let wrong_host = TlsPeer::start(true).await;
+        let roots = std::fs::read(unrelated.config.codex.ca_file.as_ref().unwrap()).unwrap();
+        let grant = tools.runtime.as_ref().unwrap().grant.clone();
+        let server = config.mcp.server[0].clone();
+        for pem in [None, Some(roots.as_slice())] {
+            let host = McpClient::with_ca(
+                server.clone(),
+                Token::new(server.clone(), Some(grant.clone())),
+                Duration::from_secs(5),
+                pem,
+            )
+            .unwrap();
+            assert_eq!(host.list().await.err(), Some(McpError::Transport));
+        }
+        for pem in [
+            b"".as_slice(),
+            b"not PEM",
+            b"-----BEGIN CERTIFICATE-----\nbad\n-----END CERTIFICATE-----",
+        ] {
+            let host = McpClient::with_ca(
+                server.clone(),
+                Token::new(server.clone(), Some(grant.clone())),
+                Duration::from_secs(5),
+                Some(pem),
+            );
+            assert_eq!(host.err(), Some(McpError::InvalidConfiguration));
+        }
+        let server = wrong_host.config.mcp.server[0].clone();
+        let pem = std::fs::read(wrong_host.config.codex.ca_file.as_ref().unwrap()).unwrap();
+        let host = McpClient::with_ca(
+            server.clone(),
+            Token::new(server, Some(grant)),
+            Duration::from_secs(5),
+            Some(&pem),
+        )
+        .unwrap();
+        assert_eq!(host.list().await.err(), Some(McpError::Transport));
+        let zero = json!({"link":0,"token":0,"catalog":0,"query":0});
+        assert_eq!(unrelated.finish().await, zero);
+        assert_eq!(wrong_host.finish().await, zero);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn t3_mcp_configured_oauth_refuses_missing_invalid_untrusted_and_wrong_hostname() {
+        drive(async {
+            let mut peer = TlsPeer::start(false).await;
+            let unrelated = TlsPeer::start(false).await;
+            let wrong_host = TlsPeer::start(true).await;
+            let trusted = peer.config.codex.ca_file.clone();
+            let invalid = peer.directory.path().join("invalid.pem");
+            std::fs::write(&invalid, b"invalid PEM").unwrap();
+            let screen = Screen::bind(None).await.unwrap();
+            let mut trace = Trace::open(&peer.directory.path().join("trace"), "api_key").unwrap();
+            for ca in [
+                None,
+                Some(invalid),
+                unrelated.config.codex.ca_file.clone(),
+                Some(peer.directory.path().join("missing.pem")),
+            ] {
+                peer.config.codex.ca_file = ca;
+                let mut tools = Tools::new(&peer.config, Arc::new(|| 0));
+                assert!(matches!(
+                    tools.open(&peer.config, &screen, &mut trace, None).await,
+                    Err(Error::Input | Error::Mcp(echo_mcp_auth::AuthError::Transport))
+                ));
+                assert!(!peer.config.mcp.state_dir.as_ref().unwrap().exists());
+                tools.close().await;
+            }
+            peer.config.codex.ca_file = trusted;
+            let mut tools = Tools::new(&wrong_host.config, Arc::new(|| 0));
+            assert!(matches!(
+                tools.open(&wrong_host.config, &screen, &mut trace, None).await,
+                Err(Error::Mcp(echo_mcp_auth::AuthError::Transport))
+            ));
+            assert!(!wrong_host.config.mcp.state_dir.as_ref().unwrap().exists());
+            tools.close().await;
+            let zero = json!({"link":0,"token":0,"catalog":0,"query":0});
+            assert_eq!(peer.finish().await, zero);
+            assert_eq!(unrelated.finish().await, zero);
+            assert_eq!(wrong_host.finish().await, zero);
+        })
+        .await;
     }
 }
