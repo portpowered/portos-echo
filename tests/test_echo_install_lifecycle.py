@@ -24,6 +24,24 @@ def recovered_metadata(box):
         require(path.stat().st_mode & 0o777 == mode, "recovery executable mode differs")
 
 
+def recreate_root_data(box):
+    # Control only the deleted object's inode identity, preserving other tests'
+    # real stat observations even while their sandboxes run in parallel.
+    recycled = box.device / "home/recreated"
+    recycled.write_text("new root-owned data")
+    deleted = box.root / "deleted-stage"
+    deleted.touch()
+    recycled_info = recycled.stat()
+    real_stat = type(deleted).stat
+
+    def observed_stat(path, *args, **kwargs):
+        return recycled_info if path == deleted else real_stat(path, *args, **kwargs)
+
+    with patch.object(type(deleted), "stat", observed_stat):
+        set_owner(box.root, deleted, "9999:3990")
+    deleted.unlink()
+
+
 def recovery_case(box, fault):
     box.prompt("voice.md", "default voice")
     prepare_lifecycle(box)
@@ -44,16 +62,7 @@ def recovery_case(box, fault):
     require(not (box.device / "private/.install-stage").exists(), "stage leaked")
     require(not (box.root / "remote/echo-bridge.lock").exists(), "failed operation leaked lock")
     require(not any("setsid" in " ".join(call) for call in box.calls()[before:]), "failure launched")
-    # Model an allocator recycling a deleted object's inode for fresh retained
-    # data. Only the deleted object's synthetic identity is controlled; the CLI
-    # and subsequent metadata observations use the real new file's identity.
-    recycled = box.device / "home/recreated"
-    recycled.write_text("new root-owned data")
-    deleted = box.root / "deleted-stage"
-    deleted.touch()
-    with patch.object(type(deleted), "stat", return_value=recycled.stat()):
-        set_owner(box.root, deleted, "9999:3990")
-    deleted.unlink()
+    recreate_root_data(box)
     values["home/recreated"] = "new root-owned data"
     box.install(force=True)
     require((box.device / "private/bridge.toml").read_text() == "replacement config", "recovery force ineffective")
