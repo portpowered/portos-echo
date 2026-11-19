@@ -28,6 +28,10 @@ pub(super) fn error(error: Errno) -> &'static str {
 /// Walk even home ancestors without following a link. Never create anything
 /// until a validated write needs it; reads/list of missing notes stay inert.
 pub(super) fn root(home: &Path, create: bool) -> Result<Option<OwnedFd>> {
+    root_named(home, "notes", create)
+}
+
+pub(crate) fn root_named(home: &Path, child: &str, create: bool) -> Result<Option<OwnedFd>> {
     if !home.is_absolute() {
         return Err("io");
     }
@@ -42,10 +46,10 @@ pub(super) fn root(home: &Path, create: bool) -> Result<Option<OwnedFd>> {
             _ => return Err("io"),
         }
     }
-    directory(&fd, std::ffi::OsStr::new("notes"), create)
+    directory(&fd, std::ffi::OsStr::new(child), create)
 }
 
-pub(super) fn directory(fd: &impl AsFd, name: &std::ffi::OsStr, create: bool) -> Result<Option<OwnedFd>> {
+pub(crate) fn directory(fd: &impl AsFd, name: &std::ffi::OsStr, create: bool) -> Result<Option<OwnedFd>> {
     match fs::statat(fd, name, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => match FileType::from_raw_mode(stat.st_mode) {
             FileType::Symlink => return Err("symlink"),
@@ -62,7 +66,7 @@ pub(super) fn directory(fd: &impl AsFd, name: &std::ffi::OsStr, create: bool) ->
     fs::openat(fd, name, DIRECTORY, Mode::empty()).map(Some).map_err(error)
 }
 
-pub(super) fn regular(stat: &Stat) -> Result<u64> {
+pub(crate) fn regular(stat: &Stat) -> Result<u64> {
     match FileType::from_raw_mode(stat.st_mode) {
         FileType::Symlink => Err("symlink"),
         FileType::RegularFile if stat.st_nlink == 1 => u64::try_from(stat.st_size).map_err(|_| "io"),
@@ -70,7 +74,7 @@ pub(super) fn regular(stat: &Stat) -> Result<u64> {
     }
 }
 
-pub(super) fn existing(fd: &impl AsFd, name: &str) -> Result<Option<Stat>> {
+pub(crate) fn existing(fd: &impl AsFd, name: &str) -> Result<Option<Stat>> {
     match fs::statat(fd, name, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => {
             regular(&stat)?;
@@ -81,7 +85,11 @@ pub(super) fn existing(fd: &impl AsFd, name: &str) -> Result<Option<Stat>> {
     }
 }
 
-pub(super) fn read(fd: &impl AsFd, name: &str) -> Result<String> {
+pub(crate) fn read(fd: &impl AsFd, name: &str) -> Result<String> {
+    String::from_utf8(read_limited(fd, name, super::NOTE_BYTES)?).map_err(|_| "io")
+}
+
+pub(crate) fn read_limited(fd: &impl AsFd, name: &str, limit: u64) -> Result<Vec<u8>> {
     existing(fd, name)?.ok_or("not_found")?;
     let file = fs::openat(
         fd,
@@ -90,23 +98,23 @@ pub(super) fn read(fd: &impl AsFd, name: &str) -> Result<String> {
         Mode::empty(),
     )
     .map_err(error)?;
-    if regular(&fs::fstat(&file).map_err(error)?)? > super::NOTE_BYTES {
+    if regular(&fs::fstat(&file).map_err(error)?)? > limit {
         return Err("note_too_large");
     }
     let mut bytes = Vec::new();
     std::fs::File::from(file)
-        .take(super::NOTE_BYTES + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "io")?;
-    if bytes.len() as u64 > super::NOTE_BYTES {
+    if bytes.len() as u64 > limit {
         return Err("note_too_large");
     }
-    String::from_utf8(bytes).map_err(|_| "io")
+    Ok(bytes)
 }
 
 /// Exclusive staging never opens a pre-existing file, even under a hostile
 /// umask or competing writer. Dropping before rename cleans only our temp.
-pub(super) fn replace(fd: &impl AsFd, name: &str, content: &[u8], fail: bool) -> Result<()> {
+pub(crate) fn replace(fd: &impl AsFd, name: &str, content: &[u8], fail: bool) -> Result<()> {
     let staging = format!(
         ".note-tmp-{}-{}",
         std::process::id(),

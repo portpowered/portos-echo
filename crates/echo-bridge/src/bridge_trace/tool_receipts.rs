@@ -73,6 +73,22 @@ impl Trace {
         )
     }
 
+    /// Only the validated prompt selector enters this receipt, never its text.
+    pub(crate) fn agent_prompt(
+        &mut self,
+        tool: &str,
+        which: Option<&str>,
+        bytes: u64,
+        result: &str,
+    ) -> Result<(), Error> {
+        let run = self.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        self.record(
+            "agent.tool",
+            run.as_deref(),
+            json!({"tool":tool,"which":which,"bytes":bytes,"result":result}),
+        )
+    }
+
     /// Record the host attempt after bridge policy/consent, before MCP execution.
     /// The length-prefixed dispatcher key supplies exact correlation without args.
     pub(crate) fn tool_attempt(&mut self, name: &str, key: &str) -> Result<(), Error> {

@@ -11,6 +11,9 @@ use echo_link::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+#[path = "tool_admission_tests.rs"]
+mod tool_cases;
+
 #[tokio::test(start_paused = true)]
 async fn t3_agent_home_edits_reload_exact_rpc_and_bad_edits_retain_previous() {
     let root = tempfile::tempdir().unwrap();

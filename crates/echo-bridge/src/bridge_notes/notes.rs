@@ -1,7 +1,8 @@
 //! Scoped persistent notes. Every filesystem operation is relative to an opened
 //! directory, never to a previously checked pathname. No payload diagnostics.
-mod notes_files;
+pub(crate) mod notes_files;
 mod notes_paths;
+mod notes_prompts;
 mod notes_store;
 #[cfg(test)]
 mod notes_tests;
@@ -19,6 +20,7 @@ const TOTAL_FILES: usize = 1024;
 #[derive(Clone)]
 pub(crate) struct Notes {
     home: Option<PathBuf>,
+    prompt_home: Option<PathBuf>,
     trace: Trace,
 }
 
@@ -26,15 +28,18 @@ impl Notes {
     pub(crate) fn new(home: Option<&echo_config::HomeConfig>, trace: Trace) -> Self {
         Self {
             home: home.filter(|home| home.agent_tools.notes).map(|home| home.dir.clone()),
+            prompt_home: home
+                .filter(|home| home.agent_tools.prompts)
+                .map(|home| home.dir.clone()),
             trace,
         }
     }
 
     pub(crate) fn specs(&self) -> Vec<ToolSpec> {
-        if self.home.is_none() {
-            return vec![];
-        }
-        [
+        let mut specs = if self.home.is_none() {
+            vec![]
+        } else {
+            [
             ("notes_list", "List markdown notes, optionally beneath a relative directory.", json!({"directory":{"type":"string"}}), json!([])),
             ("notes_read", "Read a household markdown note.", json!({"path":{"type":"string"}}), json!(["path"])),
             ("notes_write", "Create or atomically replace a markdown note, at most 65536 UTF-8 bytes.", json!({"path":{"type":"string"},"content":{"type":"string"}}), json!(["path","content"])),
@@ -42,6 +47,11 @@ impl Notes {
             name: name.into(), description: description.into(),
             input_schema: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}),
         }).collect()
+        };
+        if self.prompt_home.is_some() {
+            specs.extend(notes_prompts::specs());
+        }
+        specs
     }
 
     pub(crate) fn call(&self, name: &str, args: &Value, key: &str) -> Result<ToolResult, ToolError> {
@@ -58,10 +68,13 @@ impl Notes {
             Ok(receipt) => (receipt.content, receipt.path, receipt.bytes, "ok"),
             Err(code) => (json!({"error":code,"message":message(code)}), None, 0, code),
         };
-        self.trace
-            .clone()
-            .agent_tool(name, path.as_deref(), bytes, code)
-            .map_err(|_| ToolError::Transport)?;
+        let mut trace = self.trace.clone();
+        if name.starts_with("prompt_") {
+            trace.agent_prompt(name, path.as_deref(), bytes, code)
+        } else {
+            trace.agent_tool(name, path.as_deref(), bytes, code)
+        }
+        .map_err(|_| ToolError::Transport)?;
         Ok(ToolResult {
             content,
             is_error: code != "ok",
@@ -69,6 +82,9 @@ impl Notes {
     }
 
     fn execute(&self, name: &str, args: &Value) -> Result<Receipt, &'static str> {
+        if name.starts_with("prompt_") {
+            return notes_prompts::execute(self.prompt_home.as_deref().ok_or("disabled")?, name, args);
+        }
         let home = self
             .home
             .as_deref()
@@ -96,7 +112,9 @@ fn message(code: &str) -> &'static str {
         "note_too_large" => "A note may contain at most 65536 bytes.",
         "notes_bytes_limit" => "Notes may contain at most 16777216 bytes in total.",
         "notes_files_limit" => "Notes may contain at most 1024 files.",
-        _ => "Notes storage is unavailable.",
+        "invalid_prompt" => "A prompt must be nonblank and at most 32768 bytes.",
+        "history" => "Prompt history could not be completed; read the current prompt before retrying.",
+        _ => "Local storage is unavailable; read the current value before retrying.",
     }
 }
 
