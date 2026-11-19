@@ -132,6 +132,7 @@ impl Driver for Configured<'_> {
                 self.options.cancel.as_deref(),
             )),
             Step::SayFile(path) => self.play(path, index, next, artifacts),
+            Step::SayText(text) if self.session => self.play_text(text, index, artifacts),
             _ => self.bench.execute(step, index, next, artifacts),
         }
     }

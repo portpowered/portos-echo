@@ -7,6 +7,43 @@ use super::super::sim::observers;
 
 pub const INVALID_CLIP: &str = "device: invalid wake clip; expected 16-bit PCM mono WAV at 16000 or 48000 Hz, 0.5-10 s";
 
+// Authored persistent utterances are distinct speech, rather than the sim PCM
+// markers or a single caller-supplied clip repeated for every turn.
+pub fn persistent_input(
+    value: &str,
+    scenario: &str,
+    options: &super::super::run_options::Options,
+) -> Result<Option<super::super::Step>, String> {
+    if options.sim || options.bridge_config.is_none() {
+        return Ok(None);
+    }
+    let scenario = crate::lab_validate::load(scenario)?;
+    session_text(value, &scenario, options.speech.is_some(), options.wake_clip.is_some())
+}
+
+fn session_text(
+    value: &str,
+    scenario: &serde_json::Value,
+    speech: bool,
+    clip: bool,
+) -> Result<Option<super::super::Step>, String> {
+    if !matches!(
+        scenario["id"].as_str(),
+        Some("session-two-turns" | "session-idle-timeout")
+    ) {
+        return Ok(None);
+    }
+    if clip {
+        return Err(
+            "device: session utterances require speech synthesis; --wake-clip would replace authored text".into(),
+        );
+    }
+    if !speech || value.trim().is_empty() {
+        return Err("device: session utterances require --speech-endpoint and --speech-model".into());
+    }
+    Ok(Some(super::super::Step::SayText(value.to_owned())))
+}
+
 pub struct Clip {
     bytes: Vec<u8>,
     pub metadata: serde_json::Value,
@@ -141,14 +178,7 @@ impl super::Configured<'_> {
                 .push(serde_json::json!({"step":index,"iteration":self.iteration,"source":clip.source()}));
         }
         if !self.state.muted() {
-            if let Some(wire) = self.wire.as_mut() {
-                self.executor.block_on(super::runtime::controlled(
-                    wire.wait_reply(1, self.wire_replies + 1),
-                    self.options.cancel.as_deref(),
-                ))?;
-                self.wire_replies += 1;
-            }
-            self.reply_observed(index)?;
+            self.wait_played(index)?;
             if let Some(clip) = clip.filter(|_| !self.session) {
                 let wake = self.state.wakes.last_mut().ok_or("device: missing wake")?;
                 wake["source"] = clip.source();
@@ -156,6 +186,31 @@ impl super::Configured<'_> {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn play_text(
+        &mut self,
+        text: &str,
+        index: usize,
+        artifacts: &mut super::super::run_report::Artifacts,
+    ) -> Result<(), String> {
+        if self.wire_replies == 0 {
+            self.state.arm_wake()?;
+        }
+        self.bench
+            .session_input(&super::super::Step::SayText(text.to_owned()), index, artifacts)?;
+        self.wait_played(index)
+    }
+
+    fn wait_played(&mut self, index: usize) -> Result<(), String> {
+        if let Some(wire) = self.wire.as_mut() {
+            self.executor.block_on(super::runtime::controlled(
+                wire.wait_reply(1, self.wire_replies + 1),
+                self.options.cancel.as_deref(),
+            ))?;
+            self.wire_replies += 1;
+        }
+        self.reply_observed(index)
     }
 
     fn reply_observed(&mut self, index: usize) -> Result<(), String> {
@@ -207,6 +262,48 @@ pub fn adapt(path: &Path, root: &Path, step: usize) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_session_inputs_preserve_authored_distinct_speech_and_refuse_clip_substitution() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/scenarios");
+        for id in ["session-two-turns", "session-idle-timeout"] {
+            let scenario = crate::lab_validate::load(root.join(format!("{id}.yaml")).to_str().unwrap()).unwrap();
+            let mut utterances = Vec::new();
+            for step in scenario["steps"].as_array().unwrap() {
+                let Some(value) = step["say"].as_str() else { continue };
+                let super::super::super::Step::SayText(text) =
+                    session_text(value, &scenario, true, false).unwrap().unwrap()
+                else {
+                    panic!("session input must carry speech");
+                };
+                utterances.push(text);
+                assert_eq!(
+                    session_text(value, &scenario, false, false).err().unwrap(),
+                    "device: session utterances require --speech-endpoint and --speech-model"
+                );
+                assert_eq!(
+                    session_text(value, &scenario, true, true).err().unwrap(),
+                    "device: session utterances require speech synthesis; --wake-clip would replace authored text"
+                );
+            }
+            let expected = if id == "session-two-turns" {
+                vec!["Computer, what time is it?", "Computer, what day is it?"]
+            } else {
+                vec!["Computer, what time is it?"]
+            };
+            assert_eq!(utterances, expected);
+        }
+        assert!(
+            session_text(
+                "utterance.wav",
+                &serde_json::json!({"id":"m1-wake-stream"}),
+                false,
+                true
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
 
     #[test]
     fn wake_clip_staging_uses_snapshot_instead_of_caller_or_previous_copy() {

@@ -80,6 +80,9 @@ pub trait Driver {
 }
 
 fn say(value: &str, scenario: &str, options: &Options) -> Result<Step, String> {
+    if let Some(step) = device::pcm::persistent_input(value, scenario, options)? {
+        return Ok(step);
+    }
     if options.wake_clip.is_some() {
         return Ok(Step::SayFile(PathBuf::new()));
     }
