@@ -19,6 +19,8 @@ pub struct SettingsOverlay {
 /// A rejected overlay is ignored in its entirety, retaining the validated base.
 #[derive(Debug)]
 pub struct EffectiveConfig {
+    /// Original validated operator config, retained for future sparse merges.
+    pub base: BridgeConfig,
     pub config: BridgeConfig,
     pub overlay: SettingsOverlay,
     pub warning: Option<ConfigError>,
@@ -167,11 +169,13 @@ impl BridgeConfig {
         );
         match overlay.and_then(|overlay| overlay.apply_to(&base).map(|config| (overlay, config))) {
             Ok((overlay, config)) => Ok(EffectiveConfig {
+                base,
                 config,
                 overlay,
                 warning: None,
             }),
             Err(error) => Ok(EffectiveConfig {
+                base: base.clone(),
                 config: base,
                 overlay: SettingsOverlay::default(),
                 warning: Some(ConfigError::new("settings.toml", format!("ignored overlay: {error}"))),

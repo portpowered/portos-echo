@@ -7,7 +7,9 @@ mod settings_atomic;
 mod settings_host;
 pub mod settings_process;
 pub mod settings_restart;
+mod settings_service;
 pub use settings_host::SettingsHost;
+pub use settings_service::SettingsService;
 
 /// Safe diagnostics: no submitted prompt, setting value or filesystem path.
 #[derive(Debug, thiserror::Error)]

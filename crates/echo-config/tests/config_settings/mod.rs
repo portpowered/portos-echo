@@ -209,6 +209,7 @@ fn screen_settings_effective_load_overrides_only_the_allowlist_without_writes() 
     for _ in 0..2 {
         let effective = BridgeConfig::load_effective(&path).unwrap();
         assert!(effective.warning.is_none());
+        assert_eq!(effective.base, base);
         assert_eq!(effective.overlay, overlay(text));
         assert_eq!(effective.config, overlay(text).apply_to(&base).unwrap());
         assert_eq!(effective.config.agent.daily_request_cap, 9_007_199_254_740_993);
@@ -243,6 +244,7 @@ fn screen_settings_invalid_overlay_is_ignored_as_a_whole_with_safe_warning() {
         std::fs::write(&overlay_path, &bytes).unwrap();
         let effective = BridgeConfig::load_effective(&path).unwrap();
         assert_eq!(effective.config, base);
+        assert_eq!(effective.base, base);
         assert_eq!(effective.overlay, SettingsOverlay::default());
         let error = effective.warning.unwrap();
         assert_eq!(error.to_string(), format!("settings.toml: ignored overlay: {expected}"));
