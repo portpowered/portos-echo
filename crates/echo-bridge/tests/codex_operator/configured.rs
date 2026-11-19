@@ -103,24 +103,8 @@ pub(super) fn config(fixture: &Fixture) -> echo_config::BridgeConfig {
 async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart() {
     for restart in [false, true] {
         let fixture = Fixture::new("chatgpt");
-        let mut base = config(&fixture);
-        let home = fixture.directory.path().join("agent-home");
-        base.home = Some(echo_config::HomeConfig {
-            dir: home.clone(),
-            agent_tools: echo_config::AgentTools::default(),
-        });
-        std::fs::create_dir_all(home.join("prompts")).unwrap();
-        std::fs::write(home.join("prompts/voice.md"), "admitted voice").unwrap();
-        std::fs::write(home.join("prompts/runner.md"), "admitted runner").unwrap();
-        base.agent.max_tool_calls = 6;
-        let overlay = echo_config::SettingsOverlay::from_toml_str("[agent]\nmax_tool_calls = 8\n").unwrap();
-        std::fs::write(home.join("settings.toml"), overlay.to_toml_string().unwrap()).unwrap();
-        let effective = echo_config::EffectiveConfig {
-            config: overlay.apply_to(&base).unwrap(),
-            base,
-            overlay,
-            warning: None,
-        };
+        let effective = settings_startup(&fixture);
+        let home = effective.config.home.as_ref().unwrap().dir.clone();
         let observer = Observer::default();
         let path = fixture.directory.path().join("runtime-trace");
         let (stop, stopping) = tokio::sync::oneshot::channel();
@@ -159,7 +143,9 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
         }))
         .await
         .unwrap();
-        assert_eq!(result, Ok(restart));
+        let completion = result.unwrap();
+        assert_eq!(completion.restart_requested, restart);
+        retained_settings(&mut completion.settings.unwrap(), restart);
         assert_eq!(
             observer.commands(),
             [Command::Connect, Command::Capture, Command::Probe, Command::Close]
@@ -175,6 +161,40 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
         );
         assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
     }
+}
+
+fn settings_startup(fixture: &Fixture) -> echo_config::EffectiveConfig {
+    let mut base = config(fixture);
+    let home = fixture.directory.path().join("agent-home");
+    base.home = Some(echo_config::HomeConfig {
+        dir: home.clone(),
+        agent_tools: echo_config::AgentTools::default(),
+    });
+    std::fs::create_dir_all(home.join("prompts")).unwrap();
+    std::fs::write(home.join("prompts/voice.md"), "admitted voice").unwrap();
+    std::fs::write(home.join("prompts/runner.md"), "admitted runner").unwrap();
+    base.agent.max_tool_calls = 6;
+    let overlay = echo_config::SettingsOverlay::from_toml_str("[agent]\nmax_tool_calls = 8\n").unwrap();
+    std::fs::write(home.join("settings.toml"), overlay.to_toml_string().unwrap()).unwrap();
+    echo_config::EffectiveConfig {
+        config: overlay.apply_to(&base).unwrap(),
+        base,
+        overlay,
+        warning: None,
+    }
+}
+
+fn retained_settings(host: &mut echo_bridge::bridge_settings::SettingsHost, restart: bool) {
+    use echo_screen_contract::settings_v1::LinkStatusV1;
+    use echo_screen_server::{SettingsOperation, SettingsReply};
+    let SettingsReply::Snapshot(snapshot) = host.transaction(SettingsOperation::Snapshot, LinkStatusV1::Unconfigured)
+    else {
+        unreachable!("retained host refused snapshot")
+    };
+    assert_eq!(snapshot.restart_pending, restart);
+    assert_eq!(snapshot.settings.agent.max_tool_calls, if restart { 3 } else { 8 });
+    assert_eq!(snapshot.prompts.voice, "saved voice\n");
+    assert_eq!(snapshot.prompts.runner, "admitted runner");
 }
 
 pub(super) fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Url {

@@ -10,9 +10,16 @@ use tokio::sync::mpsc;
 /// The caller must still await resource cleanup and arbitrate shutdown/kill
 /// before attempting exec. Completion here is never proof of replacement.
 pub struct SettingsService {
-    host: SettingsHost,
+    host: Box<SettingsHost>,
     inbox: mpsc::Receiver<SettingsRequest>,
     restart: Restart,
+}
+
+/// Accepted state survives resource cleanup without reopening the home. A
+/// failed exec may remount it alongside the unchanged active configuration.
+pub struct SettingsCompletion {
+    pub restart_requested: bool,
+    pub host: Box<SettingsHost>,
 }
 
 impl SettingsService {
@@ -27,22 +34,34 @@ impl SettingsService {
     ) -> Result<(Self, mpsc::Sender<SettingsRequest>), SettingsError> {
         let warnings = config.warning.into_iter().map(|error| error.to_string()).collect();
         let host = SettingsHost::open(config.base, config.overlay, prompts, warnings)?;
+        Ok(Self::resume(Box::new(host)))
+    }
+
+    /// Remount accepted state after a failed replacement. The new signal starts
+    /// clear: merely restoring the surface must never create an exec retry loop.
+    /// An explicit settings save can request another attempt; snapshots and
+    /// prompt saves cannot. Pending values, prompts and uncertainty are retained.
+    pub fn resume(host: Box<SettingsHost>) -> (Self, mpsc::Sender<SettingsRequest>) {
         let (send, inbox) = settings_channel();
-        Ok((
+        (
             Self {
                 host,
                 inbox,
                 restart: Restart::default(),
             },
             send,
-        ))
+        )
     }
 
     /// Drive the bounded inbox only while this service generation is alive.
     /// The work future includes voice and all owned resource cleanup. Completion
     /// wins over queued requests, so no transaction can begin after it returns.
     /// The status callback is sampled at commit, never cached at bind time.
-    pub async fn scope<T>(self, work: impl Future<Output = T>, link_status: impl Fn() -> LinkStatusV1) -> (T, bool) {
+    pub async fn scope<T>(
+        self,
+        work: impl Future<Output = T>,
+        link_status: impl Fn() -> LinkStatusV1,
+    ) -> (T, SettingsCompletion) {
         let Self {
             mut host,
             mut inbox,
@@ -71,7 +90,13 @@ impl SettingsService {
         }).await;
         // Dropping the inbox closes queued receipts. No detached mutation task
         // remains to outlive this generation, including on future cancellation.
-        (result, restart.pending())
+        (
+            result,
+            SettingsCompletion {
+                restart_requested: restart.pending(),
+                host,
+            },
+        )
     }
 }
 

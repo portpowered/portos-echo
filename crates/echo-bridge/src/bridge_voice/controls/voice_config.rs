@@ -112,7 +112,8 @@ impl Configured {
 
     /// Mount settings using the retained base/overlay and already admitted prompts.
     /// No home or no retained startup keeps the original inactive HTTP surface.
-    /// A true result requests replacement after cleanup; the caller still owns
+    /// Completion retains pending settings and requests replacement after cleanup;
+    /// the caller still owns
     /// final shutdown/kill arbitration, runtime destruction, exec and recovery.
     /// # Errors
     /// Adds safe settings-home failure to the normal configured runtime errors.
@@ -122,7 +123,7 @@ impl Configured {
         peer: impl AsyncFnMut() -> Result<P, Error>,
         tools: Vec<DynamicTool>,
         cancelled: impl Future<Output = ()>,
-    ) -> Result<bool, Error> {
+    ) -> Result<super::RuntimeCompletion, Error> {
         let startup = self.startup.take().filter(|startup| startup.config.home.is_some());
         Box::pin(super::prompts::scope(
             self.config.home.as_ref().map(|home| home.dir.as_path()),
@@ -143,7 +144,7 @@ impl Configured {
                 } else {
                     Box::pin(super::execute(options, connector, peer, cancelled))
                         .await
-                        .map(|()| false)
+                        .map(|()| super::RuntimeCompletion::default())
                 }
             },
         ))

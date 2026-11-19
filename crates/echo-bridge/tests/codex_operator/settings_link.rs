@@ -55,7 +55,9 @@ async fn t3_settings_runtime_projects_link_unlink_without_token_acquisition() {
             stop.send(()).unwrap();
         };
         let (result, ()) = Box::pin(async { tokio::join!(work, inspect) }).await;
-        assert_eq!(result, Ok(false));
+        let completion = result.unwrap();
+        assert!(!completion.restart_requested);
+        assert!(completion.settings.is_some());
         super::host::released(&fixture).await;
         presentation_released(&path, "chatgpt", true);
     })

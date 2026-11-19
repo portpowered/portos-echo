@@ -6,7 +6,7 @@ use super::{
     voice_recovery::{Round, Stage, supervise},
     voice_view::View,
 };
-use crate::bridge_settings::SettingsService;
+use crate::bridge_settings::{SettingsCompletion, SettingsHost, SettingsService};
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_config::{LiveMode, ScreenConfig};
 use echo_link::LinkConnector;
@@ -32,6 +32,15 @@ pub struct RuntimeOptions<'a> {
     pub delegation: Option<&'a echo_config::BridgeConfig>,
     pub utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
     pub mcp_epoch: Option<u64>,
+}
+
+/// Cleanup-complete admission plus the latest accepted settings owner. Keep the
+/// active config separately: persisted pending values must not become active if
+/// exec fails. Final EOF/kill arbitration and actual replacement belong to main.
+#[derive(Default)]
+pub struct RuntimeCompletion {
+    pub restart_requested: bool,
+    pub settings: Option<Box<SettingsHost>>,
 }
 
 impl RuntimeOptions<'_> {
@@ -120,10 +129,11 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
 }
 
 /// Mount the bounded authorized settings owner for this runtime generation.
-/// A true result requests replacement only after call/device/process, health
+/// Completion requests replacement only after call/device/process, health
 /// and HTTP cleanup. The caller must still arbitrate final EOF/kill, drop the
 /// runtime, and perform exec or recover the old active configuration on failure.
 /// Link status is sampled at commit from this runtime's live grant owner.
+/// Accepted settings state is returned without reopening disk for recovery.
 ///
 /// # Errors
 /// Uses the same startup, service and cleanup failures as `execute`.
@@ -133,7 +143,7 @@ pub async fn execute_with_settings<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     settings: (SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>),
-) -> Result<bool, Error> {
+) -> Result<RuntimeCompletion, Error> {
     Box::pin(execute_owned(options, connector, &mut peer, cancelled, Some(settings))).await
 }
 
@@ -143,7 +153,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     settings: Option<(SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>)>,
-) -> Result<bool, Error> {
+) -> Result<RuntimeCompletion, Error> {
     let mut trace = Trace::open(
         options.trace,
         match options.host.mode {
@@ -169,12 +179,13 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     let work = Box::pin(work(
         options, connector, &mut peer, cancelled, &mut view, &requested, &link,
     ));
-    let (result, pending) = if let Some(service) = service {
-        Box::pin(service.scope(work, || link.status())).await
+    let (result, settings) = if let Some(service) = service {
+        let (result, completion) = Box::pin(service.scope(work, || link.status())).await;
+        (result, Some(completion))
     } else {
-        (work.await, false)
+        (work.await, None)
     };
-    finish(screen, health, trace, result, pending, requested.get()).await
+    finish(screen, health, trace, result, settings, requested.get()).await
 }
 
 async fn finish(
@@ -182,10 +193,10 @@ async fn finish(
     health: Health,
     mut trace: Trace,
     result: Result<(), Error>,
-    pending: bool,
+    settings: Option<SettingsCompletion>,
     requested: bool,
-) -> Result<bool, Error> {
-    let restart = pending && result.is_ok() && !requested;
+) -> Result<RuntimeCompletion, Error> {
+    let restart = settings.as_ref().is_some_and(|settings| settings.restart_requested) && result.is_ok() && !requested;
     let presentation = if restart {
         screen
             .publish_confirmed(echo_screen_contract::UiState::Ready {
@@ -204,7 +215,10 @@ async fn finish(
         .and(presentation)
         .and(cleanup)
         .and(health_receipt)
-        .map(|()| restart)
+        .map(|()| RuntimeCompletion {
+            restart_requested: restart,
+            settings: settings.map(|settings| settings.host),
+        })
 }
 
 async fn close_screen(screen: &mut Screen, trace: &mut Trace, graceful: bool) -> Result<(), Error> {
