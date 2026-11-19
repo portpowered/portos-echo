@@ -1,7 +1,7 @@
 //! Voice overlay witnesses use authored M2 steps; session runtime stays unclaimed.
 use super::*;
 
-fn with_budgets(session: &Session, budgets: Value) -> PathBuf {
+pub(super) fn with_budgets(session: &Session, budgets: Value) -> PathBuf {
     let mut authored: Value = serde_norway::from_str(&fs::read_to_string(scenario()).unwrap()).unwrap();
     authored["budgets"] = budgets;
     let source = scenario().parent().unwrap().join("../fixtures/lab/w1-utterance.pcm");
@@ -12,7 +12,7 @@ fn with_budgets(session: &Session, budgets: Value) -> PathBuf {
     path
 }
 
-fn budget_command(session: &Session, real: bool, path: &Path) -> Command {
+pub(super) fn budget_command(session: &Session, real: bool, path: &Path) -> Command {
     let original = command(session, real);
     let args: Vec<_> = original.get_args().map(std::borrow::ToOwned::to_owned).collect();
     let mut command = session.command();

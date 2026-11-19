@@ -24,6 +24,11 @@ impl<'a> Configured<'a> {
     pub fn new(options: &'a Options, config: String, errors: &'a mut dyn std::io::Write) -> Result<Self, String> {
         let mut state = runtime::Runtime::default();
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
+        if config::setup::requested(options)? {
+            let parsed =
+                echo_config::BridgeConfig::from_toml_str(&config).map_err(|_| "device: invalid setup configuration")?;
+            state.spoof_port = Some(config::setup::port(&parsed)?);
+        }
         Ok(Self {
             options,
             errors,

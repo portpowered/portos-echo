@@ -1,15 +1,11 @@
 //! Synthetic M2 bridge: real process, loopback SSE, no provider or device call.
 use super::{TcpListener, Value, Write, authenticated, fs, io, json};
 use std::io::Read;
+#[path = "spoof.rs"]
+mod spoof;
 
 pub(super) fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::Error>> {
-    let index = args.iter().position(|s| s == "--config").ok_or("missing config")?;
-    let config_path = args.get(index + 1).ok_or("missing config path")?;
-    let contents = fs::read_to_string(config_path)?;
-    fs::write(
-        fixture["launch_record"].as_str().ok_or("missing launch record")?,
-        json!({"args":args,"cwd":std::env::current_dir()?,"config":contents}).to_string(),
-    )?;
+    let contents = launch_record(args, fixture)?;
     let index = args.iter().position(|s| s == "--trace").ok_or("missing trace")?;
     let path = args.get(index + 1).ok_or("missing trace path")?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
@@ -33,6 +29,9 @@ pub(super) fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::e
     authenticated(&socket)?;
     present(&mut socket, fixture)?;
     if fixture["screen_fault"] != "auth" {
+        if fixture["spoof_probe"] == true {
+            spoof::probe(&contents, fixture)?;
+        }
         fs::write(path, bytes)?;
         writeln!(
             io::stdout(),
@@ -47,6 +46,17 @@ pub(super) fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::e
         writeln!(file, "{}", json!({"event":"bridge.error","elapsed_ms":5}))?;
     }
     Ok(0)
+}
+
+fn launch_record(args: &[String], fixture: &Value) -> Result<String, Box<dyn std::error::Error>> {
+    let index = args.iter().position(|s| s == "--config").ok_or("missing config")?;
+    let config_path = args.get(index + 1).ok_or("missing config path")?;
+    let contents = fs::read_to_string(config_path)?;
+    fs::write(
+        fixture["launch_record"].as_str().ok_or("missing launch record")?,
+        json!({"args":args,"cwd":std::env::current_dir()?,"config":contents}).to_string(),
+    )?;
+    Ok(contents)
 }
 
 fn present(socket: &mut std::net::TcpStream, fixture: &Value) -> io::Result<()> {

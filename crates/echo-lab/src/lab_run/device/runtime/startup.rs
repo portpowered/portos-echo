@@ -17,6 +17,7 @@ impl Runtime {
         self.started = true;
         self.began = Some(std::time::Instant::now());
         self.trace_path = root.join("bridge.private.jsonl");
+        self.start_spoof().await?;
         self.real_config = real.map(|(path, overlay)| {
             if overlay {
                 root.join("configured.private/bridge.toml")

@@ -4,6 +4,7 @@ use std::{
 };
 
 mod screen;
+mod setup;
 mod startup;
 
 use echo_live::fake::FakeLive;
@@ -20,6 +21,8 @@ pub struct Runtime {
     pub(super) clip: Option<Value>,
     pub(super) bridge: Option<Process>,
     live: Option<FakeLive>,
+    pub(super) spoof_port: Option<u16>,
+    spoof: Option<echo_spoof_mcp::Spoof>,
     real_config: Option<PathBuf>,
     pub(super) screen: Option<Screen>,
     pub(super) trace: Trace,
@@ -230,6 +233,7 @@ impl Runtime {
             failures.extend(self.collect(artifacts).err());
         }
         failures.extend(self.summary(artifacts).err());
+        failures.extend(self.close_spoof(artifacts).await.err());
         if let Some(live) = self.live.take() {
             live.shutdown().await;
         }

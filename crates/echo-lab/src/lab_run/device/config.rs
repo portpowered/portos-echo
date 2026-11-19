@@ -3,6 +3,7 @@ use std::{io::Write, path::Path};
 use super::super::{run_command, run_options::Options};
 mod real;
 pub mod scenario;
+pub mod setup;
 pub mod voice;
 
 pub fn load(options: &Options) -> Result<Option<String>, String> {
@@ -20,6 +21,9 @@ pub fn load(options: &Options) -> Result<Option<String>, String> {
     })?;
     if config.echo.host != "127.0.0.1" {
         return Err("device: echo.host must be 127.0.0.1; forward the Echo's Wyoming port with adb forward".into());
+    }
+    if setup::requested(options)? {
+        setup::port(&config)?;
     }
     let settings = voice::collect(options)?;
     if options.live_real() {

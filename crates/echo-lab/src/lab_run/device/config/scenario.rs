@@ -12,14 +12,7 @@ pub fn admits(scenario: &Value) -> Result<bool, String> {
     {
         return Err("device: scenario does not admit T5".into());
     }
-    if let Some(name) = scenario["setup"]
-        .as_object()
-        .ok_or("device: missing setup")?
-        .keys()
-        .next()
-    {
-        return Err(format!("device: unsupported setup {name}"));
-    }
+    super::setup::validate(scenario)?;
     if let Some(name) = scenario["budgets"]
         .as_object()
         .ok_or("device: missing budgets")?
