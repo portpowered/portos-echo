@@ -148,6 +148,62 @@ fn pack_install_rejects_clip_size_expanded_size_count_duplicates_and_types() {
 }
 
 #[test]
+fn pack_install_accepts_exact_file_and_clip_caps_and_rejects_padding_bomb() {
+    let root = tempfile::tempdir().unwrap();
+    let mut files = valid_files();
+    files[2].1 = vec![0; usize::try_from(CLIP_LIMIT).unwrap()];
+    let extras: Vec<_> = (0..61).map(|n| (format!("extra-{n}.png"), vec![])).collect();
+    files.extend(extras.iter().map(|(name, bytes)| (name.as_str(), bytes.clone())));
+    assert_eq!(files.len(), FILE_LIMIT);
+    let prepared = prepare(root.path(), &archive(&files), None).unwrap();
+    assert_eq!(prepared.identity(), "template@0.1.0");
+    drop(prepared);
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    refused(
+        &gzip(&vec![0; usize::try_from(EXPANDED_LIMIT + MIB + 1).unwrap()]),
+        Error::Size,
+    );
+}
+
+fn layout() -> serde_json::Value {
+    serde_json::json!({
+        "safe_area":{"x":0,"y":0,"width":100,"height":100},
+        "slots":{"clock":{"x":10,"y":15,"color":"#ffffff","font_scale":1}},
+        "stage":{"anchor":{"x":50,"y":50},"scale":1,"background":"#000000"},
+        "css":"style.css"
+    })
+}
+
+#[test]
+fn pack_manifest_accepts_layout_only_and_validates_geometry_unknown_states_and_nulls() {
+    let mut files: BTreeMap<_, _> = valid_files().into_iter().map(|(p, b)| (p.to_owned(), b)).collect();
+    files.insert("style.css".into(), b".pack-clock {color:#ffffff}".to_vec());
+    let pack = serde_json::json!({"format":1,"name":"template","version":"0.1.0","layout":layout()});
+    files.insert("pack.json".into(), serde_json::to_vec(&pack).unwrap());
+    assert_eq!(manifest::parse(&files).unwrap().name, "template");
+    for (field, bad) in [
+        ("safe_area", serde_json::json!({"x":90,"y":0,"width":20,"height":100})),
+        (
+            "stage",
+            serde_json::json!({"anchor":{"x":50,"y":50},"scale":0,"background":"#000000"}),
+        ),
+        ("slots", serde_json::json!({"clock":{"x":101,"y":0}})),
+        ("slots", serde_json::json!({"clock":{"x":0,"y":0,"font_scale":3}})),
+        ("slots", serde_json::json!({"clock":null})),
+    ] {
+        let mut bad_pack = pack.clone();
+        bad_pack["layout"][field] = bad;
+        files.insert("pack.json".into(), serde_json::to_vec(&bad_pack).unwrap());
+        assert_eq!(manifest::parse(&files).err(), Some(Error::Manifest));
+    }
+    let unknown = String::from_utf8(PACK.to_vec())
+        .unwrap()
+        .replace("\"idle\"", "\"unmapped\"");
+    files.insert("pack.json".into(), unknown.into_bytes());
+    assert_eq!(manifest::parse(&files).err(), Some(Error::Manifest));
+}
+
+#[test]
 fn pack_manifest_rejects_bad_schema_roles_references_and_geometry() {
     for pack in [
         serde_json::json!({"format":2,"name":"template","version":"0.1.0","character":{"rest":"rest.png"}}),

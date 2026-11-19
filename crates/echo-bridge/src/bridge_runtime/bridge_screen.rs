@@ -1,6 +1,6 @@
 //! The bridge owns screen lifetime and publishes bounded activity updates.
 use crate::bridge_mcp::bridge_presentation::Presentation;
-use crate::{Error, bridge_input::loopback};
+use crate::{Error, bridge_input::loopback, bridge_trace::Trace};
 use echo_config::ScreenConfig;
 use echo_contracts::secret::Secret;
 use echo_screen_contract::UiState;
