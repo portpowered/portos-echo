@@ -9,6 +9,11 @@ status: active; documentation index
 
 [Documentation index](README.md)
 
+## Run Echo
+
+- [Quickstart](quickstart.md)
+- [Configuration and voice agent access](configuration.md)
+
 ## Program
 
 - [Program plan](program/plan.md)
