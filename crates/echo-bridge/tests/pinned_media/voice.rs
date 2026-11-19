@@ -3,6 +3,7 @@ use super::*;
 use std::io::Write as _;
 mod first_wake;
 pub(super) mod lifecycle;
+mod unanswered;
 use echo_contracts::wyoming::{Event as WireEvent, Header, encode};
 use lifecycle::Ending;
 #[derive(Debug, PartialEq)]
@@ -154,10 +155,10 @@ async fn settle(
     input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     clock: &mut mpsc::Receiver<()>,
-    run: usize,
+    (reply, run): (usize, usize),
 ) {
-    assert_eq!(count(root, "reply.played"), run - 1);
-    assert_eq!(count(root, "bridge.run_completed"), run - 1);
+    assert_eq!(count(root, "reply.played"), reply - 1);
+    assert_eq!(count(root, "bridge.run_completed"), reply - 1);
     send(satellite, "played", json!({}), vec![]).await;
     let mut pending = false;
     let mut completed = false;
@@ -185,7 +186,7 @@ async fn settle(
         json!({"type":"hassmic-end","data":null,"data_length":0,"payload_length":0})
     );
     assert_eq!(payload, [] as [u8; 0]);
-    assert_eq!(count(root, "reply.played"), run);
+    assert_eq!(count(root, "reply.played"), reply);
 }
 
 /// A remote media step, or a short wall interval once no media paces it.
