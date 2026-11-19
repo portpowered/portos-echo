@@ -72,6 +72,9 @@ fn agent_tools_notes_and_prompts_work_below_search_only_ancestors() {
     assert_eq!(fs::read_dir(home.join("prompts/.history")).unwrap().count(), 1);
     assert_eq!(fs::read(home.join("notes/a/b.md")).unwrap(), b"body");
     for path in ["notes", "notes/a", "prompts", "prompts/.history"] {
-        assert_eq!(fs::metadata(home.join(path)).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            fs::metadata(home.join(path)).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 }

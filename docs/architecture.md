@@ -389,6 +389,8 @@ files; retained calls keep their original snapshot and text. Edits require no br
 Configure `[home] dir` with an absolute path (no tilde or environment expansion). On the Echo use
 `/data/local/echo-bridge/home`, separate from `/data/local/echo-bridge/private`, which still holds secrets.
 The bridge creates missing home/prompts directories with mode 0700 and preserves existing modes.
+The bridge user needs only search permission on the home's ancestors, as a non-root user has under `/data`;
+it owns and reads only the `prompts/` and `notes/` directories.
 Copy `examples/prompts/voice.md` and `runner.md` into the home's `prompts/` directory, then edit them.
 Omitting `[home]` intentionally selects built-ins without file access. A missing configured prompt uses
 its built-in default and emits one payload-free `prompt.defaulted` per kind per runtime lifetime.
