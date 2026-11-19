@@ -8,7 +8,10 @@ use serde_json::{Value, json};
 
 pub use echo_lab::lab_mcp::LinkCounts;
 
+pub(super) mod talkback;
+
 pub struct Artifacts {
+    pub step_attempts: Vec<talkback::Attempt>,
     pub device_limits: Vec<String>,
     pub sim: bool,
     pub m1: Option<Value>,
@@ -30,6 +33,7 @@ impl Artifacts {
         fs::create_dir(&root).map_err(|_| "run output: cannot create fresh directory")?;
         let events = File::create(root.join("events.jsonl")).map_err(|_| "run output: cannot create events")?;
         Ok(Self {
+            step_attempts: Vec::new(),
             device_limits: Vec::new(),
             sim: false,
             m1: None,
@@ -145,6 +149,7 @@ impl Artifacts {
         if let Some(counts) = self.link_counts {
             report["link_counts"] = serde_json::to_value(counts).map_err(|_| "run report: cannot encode counts")?;
         }
+        talkback::publish(&mut report, &self.step_attempts)?;
         validate(&report)?;
         let text = serde_json::to_vec_pretty(&report).map_err(|_| "run output: cannot encode report")?;
         fs::write(self.root.join("report.pending"), text).map_err(|_| "run output: cannot write report")?;
@@ -184,6 +189,7 @@ fn validate(report: &Value) -> Result<(), String> {
     if !validator.is_valid(report) {
         return Err("run report: schema validation failed".into());
     }
+    talkback::validate(report)?;
     if let Some(m6) = report.get("m6") {
         super::sim::m4::emotion::validate_measurement(m6)?;
     }

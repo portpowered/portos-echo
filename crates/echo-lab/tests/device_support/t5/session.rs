@@ -126,6 +126,18 @@ fn t3_device_t5_listen_sessions_execute_authored_speech_with_one_wire_run() {
         );
         assert_eq!(session.report()["result"], "pass");
         assert_eq!(session.report()["checks"]["device_session"], true);
+        let report = session.report();
+        let attempts = report["step_attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), usize::try_from(replies).unwrap());
+        assert_eq!(attempts[0]["first_try_woke"], true);
+        for row in &attempts[1..] {
+            assert_eq!(row["attempts"], 1);
+            assert_eq!(row["first_try_woke"], Value::Null);
+        }
+        assert_eq!(
+            report["talkback"],
+            json!({"eligible_steps":1,"first_try_wakes":1,"first_try_wake_rate":1.0,"replay_count":0})
+        );
         assert_eq!(fs::read(session.0.join("bridge.toml")).unwrap(), original);
         let rows = observations(&session);
         let timing = rows.iter().find(|row| row["event"] == "device.session_timing").unwrap();

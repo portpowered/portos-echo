@@ -35,6 +35,17 @@ def main():
     operation, *args = sys.argv[1:]
     if operation == "wait_until":
         return wait_until(args[0])
+    if operation == "wake_wait":
+        # Use the playback timestamp on the host wall-clock boundary only.
+        # A ten-second capture may already have consumed the whole wake window.
+        end = instant(args[0]) + datetime.timedelta(seconds=6)
+        return wait_until(end.isoformat())
+    if operation == "wake_remaining":
+        end = instant(args[0]) + datetime.timedelta(seconds=6)
+        remaining = (end - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+        # Round up so the inclusive decision never shortens the window.
+        import math
+        return {"remaining_ms": max(0, math.ceil(remaining * 1000))}
     if operation == "pixels":
         return compare_pixels(*args)
     if operation == "wav":
