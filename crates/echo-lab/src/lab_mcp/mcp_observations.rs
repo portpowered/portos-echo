@@ -227,6 +227,191 @@ fn operation(value: &Value) -> Result<u64, &'static str> {
     value["operation_id"].as_u64().filter(|id| *id > 0).ok_or(INVALID)
 }
 
+/// Device measurement uses completed Port OS receipts, never fake model or
+/// resource histories. The trace reader supplies its actual process generation.
+pub struct PortosObservations {
+    lifecycle: Observations,
+    server: String,
+    names: BTreeSet<String>,
+    generation: u64,
+    elapsed: u64,
+    catalog: bool,
+    attempts: Vec<(String, bool)>,
+    identities: BTreeSet<(String, String, String)>,
+}
+
+impl PortosObservations {
+    /// Record one externally observed `invalid_grant` after the rotated-token replay.
+    /// # Errors
+    /// Repeated replay or replay before a complete restart/use is invalid.
+    pub fn replay_rejected(&mut self) -> Result<(), &'static str> {
+        let counts = self.lifecycle.counts;
+        let result = if counts.link == 1
+            && counts.forced_refresh == 2
+            && counts.tool_call == 1
+            && counts.restart_grant_kept == 1
+            && counts.replay_rejected == 0
+            && self.settled()
+        {
+            self.lifecycle.counts.replay_rejected = 1;
+            Ok(())
+        } else {
+            Err(INVALID)
+        };
+        self.finish(result)
+    }
+
+    /// # Errors
+    /// Requires one configured server and an unambiguous permitted tool set.
+    pub fn new(server: &str, names: &[String]) -> Result<Self, &'static str> {
+        let unique: BTreeSet<_> = names.iter().cloned().collect();
+        if !safe_name(server) || unique.is_empty() || unique.len() != names.len() || !names.iter().all(|n| safe_name(n))
+        {
+            return Err(INVALID);
+        }
+        Ok(Self {
+            lifecycle: Observations::default(),
+            server: server.into(),
+            names: unique,
+            generation: 0,
+            elapsed: 0,
+            catalog: false,
+            attempts: Vec::new(),
+            identities: BTreeSet::new(),
+        })
+    }
+
+    /// Advance only after the previous bridge has stopped and its trace drained.
+    /// # Errors
+    /// Skipped/repeated generations or unresolved cancelled calls invalidate proof.
+    pub fn restarted(&mut self, generation: u64) -> Result<(), &'static str> {
+        let result = if self.generation.checked_add(1) == Some(generation) && self.settled() {
+            self.lifecycle.restarted();
+            self.generation = generation;
+            self.elapsed = 0;
+            self.catalog = false;
+            self.attempts.clear();
+            self.identities.clear();
+            Ok(())
+        } else {
+            Err(INVALID)
+        };
+        self.finish(result)
+    }
+
+    /// Consume each record once, tagged by the reader that owns that process.
+    /// # Errors
+    /// Stale, duplicate, unmatched or conflicting observations fail permanently.
+    pub fn trace(&mut self, generation: u64, value: &Value) -> Result<(), &'static str> {
+        let result = self.trace_inner(generation, value);
+        self.finish(result)
+    }
+
+    fn trace_inner(&mut self, generation: u64, value: &Value) -> Result<(), &'static str> {
+        let elapsed = value["elapsed_ms"].as_u64().ok_or(INVALID)?;
+        if generation != self.generation || elapsed < self.elapsed {
+            return Err(INVALID);
+        }
+        self.elapsed = elapsed;
+        match value["event"].as_str().ok_or(INVALID)? {
+            "tools/call" if value["name"].as_str().is_some_and(|name| self.names.contains(name)) => {
+                let id = |key| {
+                    value[key]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned)
+                        .ok_or(INVALID)
+                };
+                if !self
+                    .identities
+                    .insert((id("thread_id")?, id("turn_id")?, id("call_id")?))
+                {
+                    return Err(INVALID);
+                }
+                self.attempts
+                    .push((value["name"].as_str().ok_or(INVALID)?.into(), false));
+            }
+            "mcp.tools_list.completed" => {
+                self.envelope(value, &["server", "outcome", "count"])?;
+                if self.catalog || value["outcome"] != "success" || value["count"].as_u64().is_none() {
+                    return Err(INVALID);
+                }
+                self.catalog = true;
+                self.lifecycle.counts.tools_list += 1;
+            }
+            "mcp.tool.completed" => self.completed(value)?,
+            _ => self.lifecycle.trace(value)?,
+        }
+        Ok(())
+    }
+
+    fn envelope(&self, value: &Value, fields: &[&str]) -> Result<(), &'static str> {
+        let object = value.as_object().ok_or(INVALID)?;
+        if value["server"] != self.server
+            || !matches!(value["provider_auth_mode"].as_str(), Some("api_key" | "chatgpt"))
+            || object.len() != fields.len() + 3
+            || !object.keys().all(|key| {
+                fields.contains(&key.as_str()) || ["event", "elapsed_ms", "provider_auth_mode"].contains(&key.as_str())
+            })
+        {
+            return Err(INVALID);
+        }
+        Ok(())
+    }
+
+    fn completed(&mut self, value: &Value) -> Result<(), &'static str> {
+        self.envelope(value, &["server", "name", "outcome", "attempt_count"])?;
+        let ordinal = value["attempt_count"].as_u64().filter(|n| *n > 0).ok_or(INVALID)?;
+        let index = usize::try_from(ordinal - 1).map_err(|_| INVALID)?;
+        let attempt = self.attempts.get_mut(index).ok_or(INVALID)?;
+        if attempt.1 || value["name"] != attempt.0 || !matches!(value["outcome"].as_str(), Some("success" | "error")) {
+            return Err(INVALID);
+        }
+        attempt.1 = true;
+        if value["outcome"] == "success" {
+            self.lifecycle.counts.tool_call += 1;
+            self.lifecycle.reload = match self.lifecycle.reload {
+                Reload::Restarted => Reload::Used,
+                Reload::Reloaded => {
+                    self.lifecycle.counts.restart_grant_kept += 1;
+                    Reload::Proved
+                }
+                other => other,
+            };
+        }
+        Ok(())
+    }
+
+    /// Repeated screen deliveries do not count as new transitions.
+    pub fn screen(&mut self, state: &UiState) {
+        self.lifecycle.screen(state);
+    }
+
+    /// Final reconciliation must run after cleanup drains the last trace.
+    /// # Errors
+    /// Invalid evidence or an attempt without a returned outcome cannot pass.
+    pub fn measure(&self) -> Result<LinkCounts, &'static str> {
+        self.lifecycle.valid()?;
+        if !self.settled() {
+            return Err(INVALID);
+        }
+        Ok(self.lifecycle.counts)
+    }
+
+    fn settled(&self) -> bool {
+        self.attempts.iter().all(|(_, completed)| *completed)
+    }
+
+    fn finish(&mut self, result: Result<(), &'static str>) -> Result<(), &'static str> {
+        self.lifecycle.invalid |= result.is_err();
+        self.lifecycle.valid().and(result)
+    }
+}
+
+fn safe_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 256 && name.bytes().all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+}
+
 #[cfg(test)]
 #[path = "mcp_observation_tests.rs"]
 mod tests;

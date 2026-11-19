@@ -162,11 +162,7 @@ impl runtime::Runtime {
         self.bridge.take();
         self.collect(artifacts)?;
         std::fs::remove_file(&self.trace_path).map_err(|_| "device: cannot rotate private trace")?;
-        self.trace = super::super::sim::trace::Trace::default();
-        self.offset = 0;
-        self.expectations.clear();
-        self.run = None;
-        self.generation += 1;
+        self.rotate_trace()?;
         self.startup = Some(super::runtime::Startup::new("bridge_spawn"));
         self.launch(bridge, &artifacts.root).await
     }

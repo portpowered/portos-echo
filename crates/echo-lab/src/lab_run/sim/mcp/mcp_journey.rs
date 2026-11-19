@@ -4,25 +4,8 @@ use super::mcp_session::Session;
 
 impl Session {
     pub fn expect_screen(&self, expected: &Value) -> Result<(), String> {
-        let mut expected = expected.clone();
-        let mut bound = false;
-        for field in ["verification_uri", "expires_at_unix"] {
-            if expected[field].is_object() {
-                if expected[field] != json!({"mcp_field":field}) {
-                    return Err("M5: invalid screen binding".into());
-                }
-                let fixture = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?;
-                expected[field] = super::mcp_wire::link_code(super::mcp_session::EPOCH, fixture.base())[field].clone();
-                bound = true;
-            }
-        }
-        if bound && expected != self.screen {
-            return Err("M5: bound screen mismatch".into());
-        }
-        super::super::observers::screen(
-            &serde_json::to_vec(&self.screen).map_err(|_| "M5: screen encoding")?,
-            &expected,
-        )
+        let base = self.fixture.as_ref().map(echo_lab::lab_mcp::Fixture::base);
+        expect_screen(expected, &self.screen, base)
     }
 
     pub fn admit_call(&self) -> Result<(), String> {
@@ -200,6 +183,75 @@ impl Session {
                     .map_err(|_| "M5: fixture clock failed")?;
             }
             tokio::task::yield_now().await;
+        }
+    }
+}
+
+// Bind to the independently known authorization fixture, never to the observed
+// screen itself. Every bound state is compared in full before the typed oracle.
+fn expect_screen(expected: &Value, screen: &Value, base: Option<&str>) -> Result<(), String> {
+    let mut expected = expected.clone();
+    let mut bound = false;
+    for field in ["user_code", "verification_uri", "expires_at_unix"] {
+        if expected[field].is_object() {
+            if expected[field] != json!({"mcp_field":field}) {
+                return Err("M5: invalid screen binding".into());
+            }
+            let base = base.ok_or("M5: missing authorization fixture")?;
+            expected[field] = super::mcp_wire::link_code(super::mcp_session::EPOCH, base)[field].clone();
+            bound = true;
+        }
+    }
+    if bound && expected != *screen {
+        return Err("M5: bound screen mismatch".into());
+    }
+    super::super::observers::screen(
+        &serde_json::to_vec(screen).map_err(|_| "M5: screen encoding")?,
+        &expected,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_screen_bindings_require_exact_independent_code_uri_expiry_and_full_state() {
+        let base = "http://127.0.0.1:18080";
+        let screen = super::super::mcp_wire::link_code(super::super::mcp_session::EPOCH, base);
+        let expected = json!({"state":"link_code","user_code":{"mcp_field":"user_code"},
+            "verification_uri":{"mcp_field":"verification_uri"},
+            "expires_at_unix":{"mcp_field":"expires_at_unix"}});
+        assert_eq!(screen["user_code"], "TEST-CODE");
+        assert_eq!(expect_screen(&expected, &screen, Some(base)), Ok(()));
+        for (field, value) in [
+            ("user_code", json!("OTHER-CODE")),
+            ("verification_uri", json!("http://127.0.0.1:18081/verify")),
+            ("expires_at_unix", json!(0)),
+            ("state", json!("ready")),
+            ("extra", json!(true)),
+        ] {
+            let mut changed = screen.clone();
+            changed[field] = value;
+            assert_eq!(
+                expect_screen(&expected, &changed, Some(base)),
+                Err("M5: bound screen mismatch".into())
+            );
+        }
+        assert_eq!(
+            expect_screen(&expected, &screen, None),
+            Err("M5: missing authorization fixture".into())
+        );
+        for binding in [
+            json!({"mcp_field":"verification_uri"}),
+            json!({"mcp_field":"user_code","extra":true}),
+        ] {
+            let mut changed = expected.clone();
+            changed["user_code"] = binding;
+            assert_eq!(
+                expect_screen(&changed, &screen, Some(base)),
+                Err("M5: invalid screen binding".into())
+            );
         }
     }
 }

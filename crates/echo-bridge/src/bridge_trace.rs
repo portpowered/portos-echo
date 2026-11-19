@@ -25,7 +25,7 @@ use std::{
 };
 use tokio::time::Instant;
 mod tool_receipts;
-pub(crate) use tool_receipts::ToolTrace;
+pub(crate) use tool_receipts::{PortosReceipts, ToolTrace};
 
 #[derive(Clone)]
 pub struct Trace {

@@ -1,5 +1,105 @@
 use super::super::run_report::Artifacts;
+use super::runtime::Runtime;
 use std::io::Write;
+
+impl Runtime {
+    pub(super) fn configure_portos_options(
+        &mut self,
+        options: &super::super::run_options::Options,
+        config: &str,
+    ) -> Result<(), String> {
+        for path in &options.scenarios {
+            if crate::lab_validate::load(path)?["id"] == "m5-port-os-link" {
+                if options.on_device.is_none() || !options.live_real() || options.wake_clip.is_none() {
+                    return Err(
+                        "device: M5 requires --device-bridge, --live real and --wake-clip naming only Echo test light"
+                            .into(),
+                    );
+                }
+                self.configure_portos(config)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn configure_portos(&mut self, config: &str) -> Result<(), String> {
+        let config =
+            echo_config::BridgeConfig::from_toml_str(config).map_err(|_| "device: invalid Port OS configuration")?;
+        let servers = &config.mcp.server;
+        if servers.len() != 1 || servers[0].auth != echo_config::McpAuth::PortosDeviceCode {
+            return Err("device: M5 requires one Port OS device-code server".into());
+        }
+        let server = &servers[0];
+        self.portos = Some(echo_lab::lab_mcp::PortosObservations::new(
+            &server.name,
+            &server.allow_tools,
+        )?);
+        Ok(())
+    }
+
+    pub fn observe(&mut self) -> Result<(), String> {
+        let result = self.observe_inner();
+        self.invalid |= result.is_err();
+        result
+    }
+
+    fn observe_inner(&mut self) -> Result<(), String> {
+        if self.invalid {
+            return Err("device: previously invalid observations".into());
+        }
+        let bytes = match &self.remote {
+            Some(remote) => remote.trace()?,
+            None => super::super::sim::observers::bytes(&self.trace_path, 1024 * 1024, "trace")?,
+        };
+        if bytes.len() < self.offset {
+            return Err("trace: bridge truncated its trace".into());
+        }
+        let first = self.trace.records.len();
+        self.trace.append(&bytes[self.offset..])?;
+        self.offset = bytes.len();
+        if let Some(observer) = &mut self.portos {
+            let generation = self
+                .generation
+                .checked_sub(1)
+                .ok_or("device: missing trace generation")?;
+            for record in &self.trace.records[first..] {
+                observer.trace(generation, record)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Only rotate after stopping and collecting the prior process completely.
+    pub(super) fn rotate_trace(&mut self) -> Result<(), String> {
+        let result = self.trace.finish().and_then(|()| {
+            if let Some(observer) = &mut self.portos {
+                observer.restarted(self.generation)?;
+            }
+            Ok(())
+        });
+        self.invalid |= result.is_err();
+        result?;
+        if self.invalid {
+            return Err("device: previously invalid observations".into());
+        }
+        self.trace = super::super::sim::trace::Trace::default();
+        self.offset = 0;
+        self.expectations.clear();
+        self.run = None;
+        self.generation += 1;
+        Ok(())
+    }
+
+    pub(super) fn link_counts(&self, artifacts: &mut Artifacts) -> Result<(), String> {
+        let Some(observer) = &self.portos else { return Ok(()) };
+        artifacts.link_counts = None;
+        if self.invalid {
+            return Err("device: invalid M5 observations".into());
+        }
+        artifacts.link_counts = Some(observer.measure()?);
+        Ok(())
+    }
+}
 
 pub fn append(artifacts: &mut Artifacts, value: &serde_json::Value) -> Result<(), String> {
     let mut file = std::fs::OpenOptions::new()
