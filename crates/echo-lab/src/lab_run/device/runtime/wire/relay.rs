@@ -60,6 +60,10 @@ impl Relay {
         self.receipts.borrow().session.observation()
     }
 
+    pub fn check_session(&self, expected: &super::session::Expected) -> Result<serde_json::Value, String> {
+        expected.check(&self.receipts.borrow())
+    }
+
     pub async fn wait_reply(&mut self, run: usize, replies: usize) -> Result<(), String> {
         loop {
             {

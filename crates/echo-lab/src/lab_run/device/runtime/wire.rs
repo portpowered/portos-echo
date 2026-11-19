@@ -2,6 +2,7 @@
 mod ledger;
 mod playback;
 mod relay;
+mod session;
 #[cfg(test)]
 mod tests;
 
@@ -13,6 +14,7 @@ pub(in crate::lab_run::device) struct Observer {
     adb: PathBuf,
     forward: u16,
     relay: relay::Relay,
+    session: Option<session::Expected>,
 }
 
 pub(in crate::lab_run::device) fn endpoint(options: &Options, config: &str) -> Result<Option<SocketAddr>, String> {
@@ -54,6 +56,7 @@ impl Observer {
     }
 
     pub(in crate::lab_run::device) fn start(options: &Options, address: SocketAddr) -> Result<Self, String> {
+        let session = session::Expected::load(options)?;
         // Reserve the nominated endpoint before creating a forward. An occupied
         // endpoint is never stolen, and configuration is never rewritten.
         let listener = std::net::TcpListener::bind(address)
@@ -79,6 +82,7 @@ impl Observer {
             adb: options.adb.clone(),
             forward,
             relay: relay::Relay::new(listener),
+            session,
         })
     }
 
@@ -98,6 +102,14 @@ impl Observer {
         let mut failures = Vec::new();
         failures.extend(result.err());
         failures.extend(release.err());
+        if let Some(expected) = &self.session {
+            let measured = self.relay.check_session(expected);
+            artifacts.checks.insert("device_session".into(), measured.is_ok());
+            match measured {
+                Ok(value) => failures.extend(super::super::observations::append(artifacts, &value).err()),
+                Err(error) => failures.push(error),
+            }
+        }
         for receipt in self.relay.receipts() {
             failures.extend(
                 super::super::observations::append(

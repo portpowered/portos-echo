@@ -103,6 +103,32 @@ impl Session {
         Ok(played == replies && self.runs == [run])
     }
 
+    pub fn settled(&self, replies: usize) -> Result<Vec<(usize, u128)>, String> {
+        if self.runs != [1] || self.ended != [1] || self.unmatched_played != 0 {
+            return Err("device: unmet prerequisite: one complete wire session identity".into());
+        }
+        let completed = self
+            .streams
+            .iter()
+            .filter(|stream| stream.run == Some(1) && stream.reply())
+            .map(|stream| {
+                let stopped = stream.stopped.ok_or("device: unmet prerequisite: reply audio-stop")?;
+                let played = stream.played.ok_or("device: unmet prerequisite: reply Played")?;
+                if stream.ending != Some("audio-stop") || played < stopped {
+                    return Err("device: unmet prerequisite: ordered settled reply".into());
+                }
+                Ok((stream.id, played))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if completed.len() != replies {
+            return Err(format!(
+                "device: unmet prerequisite: settled reply count; expected {replies}, observed {}",
+                completed.len()
+            ));
+        }
+        Ok(completed)
+    }
+
     pub fn observation(&self) -> Value {
         let streams = self
             .streams

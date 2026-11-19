@@ -310,3 +310,74 @@ async fn t3_device_wire_reply_barrier_reports_observer_failure_and_still_release
         2
     );
 }
+
+async fn idle_session(root: &std::path::Path, delay_ms: u64) -> (Observer, Artifacts) {
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let mut options = fake_adb(root, upstream.local_addr().unwrap().port());
+    options.scenarios = vec![
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/scenarios/session-idle-timeout.yaml")
+            .to_str()
+            .unwrap()
+            .into(),
+    ];
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut observer = Observer::start(&options, address).unwrap();
+    observer.launch().unwrap();
+    let mut bridge = TcpStream::connect(address).await.unwrap();
+    let (mut host, _) = upstream.accept().await.unwrap();
+    for (capture, bytes) in [
+        (true, frame("run-pipeline", &[])),
+        (
+            false,
+            [
+                frame("audio-start", &[]),
+                frame("audio-chunk", &[128, 0]),
+                frame("audio-stop", &[]),
+            ]
+            .concat(),
+        ),
+        (true, frame("played", &[])),
+    ] {
+        let (input, output) = if capture {
+            (&mut host, &mut bridge)
+        } else {
+            (&mut bridge, &mut host)
+        };
+        input.write_all(&bytes).await.unwrap();
+        output.read_exact(&mut vec![0; bytes.len()]).await.unwrap();
+    }
+    observer.relay.wait_for_receipts(5).await.unwrap();
+    tokio::time::advance(std::time::Duration::from_millis(delay_ms)).await;
+    let end = frame("hassmic-end", &[]);
+    bridge.write_all(&end).await.unwrap();
+    host.read_exact(&mut vec![0; end.len()]).await.unwrap();
+    observer.relay.wait_for_receipts(6).await.unwrap();
+    // Closing these owned socket peers cannot replace an absent explicit end.
+    (observer, Artifacts::create(options.out).unwrap())
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_device_wire_final_idle_verdict_uses_receipt_clock_and_cleanup_on_failure() {
+    for (delay, pass) in [(2900, true), (3100, true), (2899, false), (3101, false)] {
+        let root = tempfile::tempdir().unwrap();
+        let (mut observer, mut artifacts) = idle_session(root.path(), delay).await;
+        let result = observer.close(&mut artifacts).await;
+        assert_eq!(artifacts.checks.get("device_session"), Some(&pass));
+        if pass {
+            result.unwrap();
+            let records = fs::read_to_string(artifacts.root.join("device-steps.jsonl")).unwrap();
+            let measured: Value = serde_json::from_str(records.lines().next().unwrap()).unwrap();
+            assert_eq!(measured["idle_after_played_us"], delay * 1000);
+            assert_eq!(measured["session_listen_seconds"], 3);
+        } else {
+            let failure = result.unwrap_err();
+            assert!(failure.contains(&format!("observed {} us", delay * 1000)), "{failure}");
+        }
+        let commands = fs::read_to_string(root.path().join("ledger")).unwrap();
+        assert_eq!(commands.lines().count(), 2);
+        assert!(commands.lines().last().unwrap().contains("--remove"));
+    }
+}
