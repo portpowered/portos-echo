@@ -1,4 +1,5 @@
-//! T1: reply generations retired by a truncated done or a user barge.
+//! T1: reply generations retired by a truncated done or a user barge, and
+//! a reply whose audio stalls in mid-speech.
 use super::{cases::Stalled, *};
 
 /// T1: a late barge must not leave its replacement on the retired deadline.
@@ -324,4 +325,70 @@ async fn assert_retired_and_replacement(source: &mut Source, port: &mut Port) {
 }
 fn same_text_done() -> MediaEvent {
     MediaEvent::Control(Event::ReplyDone { text: "Yes.".into() })
+}
+
+fn pcm(frame: &[u8]) -> Vec<i16> {
+    let (samples, _) = frame.as_chunks::<2>();
+    samples.iter().map(|sample| i16::from_le_bytes(*sample)).collect()
+}
+
+/// T1: the call stops delivering in mid-speech. The Echo gets a fade-out
+/// before it runs dry and a fade-in when the audio is back, not a cut.
+#[tokio::test(start_paused = true)]
+async fn voice_reply_stalled_mid_speech_fades_out_and_back_in() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        options(),
+        std::future::pending(),
+        |_| Ok(()),
+    ));
+    send(&tx, [said("It's")]).await;
+    send(&tx, audible(12)).await;
+    pending(work.as_mut()).await;
+    tick(work.as_mut(), 1).await;
+    // Eleven frames are out (the resampler holds a tail): 220 ms of audio.
+    assert_eq!(frames(&observer).len(), 11);
+    tick(work.as_mut(), 8).await;
+    assert_eq!(frames(&observer).len(), 11);
+    // 20 ms before the Echo is dry it gets the last frame, mirrored and faded.
+    tick(work.as_mut(), 1).await;
+    let heard = frames(&observer);
+    assert_eq!(heard.len(), 12);
+    let (last, faded) = (pcm(&heard[10]), pcm(&heard[11]));
+    assert_eq!((last[479], faded.len()), (123, 480));
+    assert_eq!((faded[0], faded[240], faded[479]), (123, 61, 0));
+    // Dry for 80 ms, then the rest arrives: the first frame fades in.
+    tick(work.as_mut(), 6).await;
+    assert_eq!(frames(&observer).len(), 12);
+    send(&tx, audible(12)).await;
+    send(&tx, [done()]).await;
+    pending(work.as_mut()).await;
+    tick(work.as_mut(), 4).await;
+    let heard = frames(&observer);
+    assert_eq!(heard.len(), 25);
+    let resumed = pcm(&heard[12]);
+    assert_eq!((resumed[0], resumed[240], resumed[479]), (0, 61, 122));
+    assert_eq!(pcm(&heard[13])[240], 123);
+    observer.finish(Ok(()));
+    let stats = work.await.unwrap();
+    assert_eq!((stats.reply_received, stats.reply_sent), (24, 25));
+    let quality = stats.quality;
+    assert_eq!((quality.underruns, quality.underrun_max_ms), (1, 80));
+    assert_eq!((quality.reprimes, quality.concealment_ms, quality.fade_ins), (1, 20, 1));
+    // The second burst came 320 ms after the first, which had come all at
+    // once: late enough to ask for the most cushion there is.
+    assert_eq!(
+        (quality.target_min_ms, quality.target_max_ms, quality.target_final_ms),
+        (100, 320, 320)
+    );
+    assert_eq!(quality.drained_frames, 0);
 }

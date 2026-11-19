@@ -196,7 +196,7 @@ pub async fn run<L: EchoLink>(
     source.stats.received_chunks = microphone.stats().received;
     source.stats.dropped_chunks = microphone.stats().dropped;
     source.stats.reply_dropped += source.reply.dropped_frames();
-    source.stats.quality = source.meter.settle(port.rtp_lost());
+    source.stats.quality = source.settle(port.rtp_lost());
     Ok(source.stats)
 }
 
@@ -363,7 +363,7 @@ async fn step<E: LinkEvents>(
             Ok(())
         },
         event = port.next() => media(event?, port, source, observe).await,
-        frame = source.reply.next_frame(), if pending.is_none() && source.reply.has_frames() => {
+        frame = source.reply.next_or_fade(), if pending.is_none() && source.playable() => {
             *pending = frame;
             Ok(())
         },

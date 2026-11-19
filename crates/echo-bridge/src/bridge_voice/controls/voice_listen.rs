@@ -52,7 +52,7 @@ pub(super) async fn replies<L: EchoLink>(
         stats.reply_received -= previous.reply_received;
         stats.reply_sent -= previous.reply_sent;
         stats.reply_dropped -= previous.reply_dropped;
-        stats.quality = source.meter.settle(port.rtp_lost());
+        stats.quality = source.settle(port.rtp_lost());
         previous = totals;
         observe(Notice::ReplySettled(stats))?;
         observe(Notice::ReplyPlayed)?;

@@ -219,7 +219,11 @@ impl<'a> View<'a> {
                 "depth_min_ms":quality.depth_min_ms, "depth_max_ms":quality.depth_max_ms,
                 "discarded":{"after_reply":quality.discarded_after_reply, "idle":quality.discarded_idle,
                     "cut":quality.discarded_cut, "audible":quality.discarded_audible},
-                "rtp_lost":quality.rtp_lost
+                "rtp_lost":quality.rtp_lost,
+                "target_ms":{"min":quality.target_min_ms, "max":quality.target_max_ms,
+                    "final":quality.target_final_ms},
+                "reprimes":quality.reprimes, "concealment_ms":quality.concealment_ms,
+                "fade_ins":quality.fade_ins, "drained_frames":quality.drained_frames
             }),
         )?;
         let Some(first) = quality.first_audio else {

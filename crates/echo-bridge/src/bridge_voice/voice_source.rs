@@ -1,13 +1,11 @@
 use super::{Error, Stats, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
-use crate::bridge_runtime::bridge_pacing::{Discard, ReplyMeter};
+use crate::bridge_runtime::bridge_pacing::{Discard, QUIET, ReplyMeter, ReplyQuality};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
 use tokio::time::{Duration, Instant};
 
-/// Samples at or below this level are WebRTC silence, not speech.
-const QUIET: u16 = 64;
 /// Thirty seconds of 20 ms frames: above the setup capture's own bound.
 const UPLINK_BACKLOG: usize = 1500;
 
@@ -32,8 +30,7 @@ pub(super) struct Source {
 impl Source {
     pub fn resume_reply(&mut self) -> Result<(), Error> {
         self.controller.resume()?;
-        self.stats.reply_dropped += self.reply.dropped_frames();
-        self.reply = ReplyAudio::new(self.lead_ms)?;
+        self.fresh_reply()?;
         self.delegation = self.delegation.carried();
         self.mouth = Mouth::default();
         Ok(())
@@ -50,6 +47,27 @@ impl Source {
             self.thinking = wanted;
             wanted
         })
+    }
+
+    /// Replace the reply queue and its pacer, keeping what they counted.
+    fn fresh_reply(&mut self) -> Result<(), Error> {
+        self.stats.reply_dropped += self.reply.dropped_frames();
+        self.meter.paced(self.reply.take_playout());
+        self.reply = ReplyAudio::new(self.lead_ms)?;
+        Ok(())
+    }
+
+    /// The reply has a frame to pace out, or has stalled mid-speech and is
+    /// owed a fade-out. A filler that is done has ended, not stalled.
+    #[must_use]
+    pub fn playable(&self) -> bool {
+        self.reply.has_frames() || (self.reply.stalled() && !self.delegation.held())
+    }
+
+    /// Close the reply's quality window. `lost` is the call's cumulative RTP loss.
+    pub fn settle(&mut self, lost: u64) -> ReplyQuality {
+        self.meter.paced(self.reply.take_playout());
+        self.meter.settle(lost)
     }
 
     /// A dispatch that finished while listening gives its answer a fresh
@@ -96,8 +114,7 @@ impl Source {
             return Ok(());
         }
         port.retire_audio();
-        self.stats.reply_dropped += self.reply.dropped_frames();
-        self.reply = ReplyAudio::new(self.lead_ms)?;
+        self.fresh_reply()?;
         self.delegation = Delegation::default();
         self.mouth = Mouth::default();
         self.controller.cut();
@@ -183,7 +200,8 @@ impl Source {
         } else {
             // PCM has no utterance identity. Only ordered assistant control
             // opens Speaking; the initial user transcript can lag audible RTP.
-            self.meter.arrived(Instant::now());
+            let wanted = self.meter.arrived(Instant::now());
+            self.meter.targeted(self.reply.retarget(wanted));
             return self.reply.push(frame);
         };
         let audible = frame.iter().any(|sample| sample.unsigned_abs() > QUIET);

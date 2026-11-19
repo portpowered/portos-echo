@@ -192,8 +192,10 @@ has already sent and not yet played.
 Measured on the Echo with an instrumented armv7 `echo-bridge` at 34cbe231 and hassmic aaf1ca0 in `-D` mode,
 `chatgpt` realtime call over Wi-Fi. Every reply now records these values in a `reply.quality` trace record
 (`arrival_gap_max_ms`, `late_arrivals`, `underruns`, `underrun_max_ms`, `depth_min_ms`, `depth_max_ms`,
-`discarded.{after_reply,idle,cut,audible}`, `rtp_lost`). Depth and underruns are the bridge's model of the
-device queue (20 ms of playout per frame written); hassmic logs no underrun of its own.
+`discarded.{after_reply,idle,cut,audible}`, `rtp_lost`; since the adaptive playout also
+`target_ms.{min,max,final}`, `reprimes`, `concealment_ms`, `fade_ins`, `drained_frames`). Depth and underruns
+are the bridge's model of the device queue (20 ms of playout per frame written); hassmic logs no underrun of
+its own.
 
 | Fact | Value |
 | --- | --- |

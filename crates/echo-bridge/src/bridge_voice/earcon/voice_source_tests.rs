@@ -182,6 +182,13 @@ async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
         after_endpoint_ms: 730,
         endpoint: Endpoint::UserTranscript,
     });
+    stats.quality.target_min_ms = 100;
+    stats.quality.target_max_ms = 300;
+    stats.quality.target_final_ms = 280;
+    stats.quality.reprimes = 1;
+    stats.quality.concealment_ms = 20;
+    stats.quality.fade_ins = 2;
+    stats.quality.drained_frames = 3;
     view.observe(ServeNotice::Session(SessionNotice::ReplyCompleted(stats)))
         .unwrap();
     let rows: Vec<serde_json::Value> = std::fs::read_to_string(&path)
@@ -192,6 +199,20 @@ async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
     let events: Vec<_> = rows.iter().skip(2).map(|row| row["event"].as_str().unwrap()).collect();
     let reply = ["reply.played", "reply.quality"];
     assert_eq!(events, [reply.as_slice(), reply.as_slice(), &["timing"]].concat());
+    // The adaptive playout's facts ride on `reply.quality`.
+    let playout = |row: &serde_json::Value| {
+        let fields = ["target_ms", "reprimes", "concealment_ms", "fade_ins", "drained_frames"];
+        fields.map(|field| row[field].clone())
+    };
+    let target = |min: u32, max: u32, last: u32| serde_json::json!({"min":min, "max":max, "final":last});
+    assert_eq!(
+        playout(&rows[3]),
+        [target(0, 0, 0), 0.into(), 0.into(), 0.into(), 0.into()]
+    );
+    assert_eq!(
+        playout(&rows[5]),
+        [target(100, 300, 280), 1.into(), 20.into(), 2.into(), 3.into()]
+    );
     assert_eq!(
         rows[6],
         serde_json::json!({"event":"timing", "elapsed_ms":0, "provider_auth_mode":"chatgpt", "run_id":"run-1",
