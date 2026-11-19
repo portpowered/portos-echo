@@ -288,6 +288,7 @@ def interruption_case():
 
 
 def package_cases():
+    path_diagnostic_cases()
     for value in ("0.1.0", "0.0.0-dev.abc123"):
         require(PACK.version(value) == value, "version changed")
     for value in ("v0.1.0", "../escape", "0.1.0\n", "0.1.0;true"):
@@ -340,6 +341,40 @@ def package_cases():
                 require(result.stderr == "release-kit: private path or key in licenses/extra.txt\n",
                         "privacy diagnostic must identify the public member without its content or host path")
     print("U-PACK I-BUNDLE: PASS")
+
+
+def path_diagnostic_cases():
+    paths = (b'/home/example/.cargo/registry/src/index/public-1.0/src/lib.rs',
+             b'/Users/example/.rustup/toolchains/stable/lib/source.rs',
+             b'C:\\Users\\example\\private\\file')
+    counts = PACK.private_path_counts(b'\x00' + b'\x00'.join(paths) + b'\x00' + paths[0])
+    require(counts == {"registry": 2, "toolchain": 1, "checkout": 0, "other": 1,
+                       "current_home": 0, "current_cargo": 0, "current_rustup": 0, "external": 4},
+            "sanitized path category counts differ")
+    require(all(count == 0 for count in PACK.private_path_counts(b'/data/local/echo/home/prompts').values()),
+            "device home classified as a host path")
+    with tempfile.TemporaryDirectory() as temporary:
+        assets = Path(temporary)
+        codex = assets / "codex"
+        codex.mkdir()
+        for name in ("codex-app-server", "cacert.pem", "LICENSE", "NOTICE"):
+            (codex / name).write_bytes(b"synthetic public input")
+        (codex / "codex-app-server").write_bytes(b'\x00'.join(paths))
+        try:
+            PACK.assemble(assets, "0.1.0", "a" * 40, "b" * 40, codex,
+                          codex / "LICENSE", codex / "NOTICE",
+                          {"licenses/ca/MPL-2.0.txt": b"license", "licenses/ca/NOTICE": b"notice"})
+            raise AssertionError("private binary accepted")
+        except PACK.BundleError:
+            pass
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/package-dist.py"), "verify",
+                                 str(assets / "echo-0.1.0-armv7.tar.gz"), "--checksums",
+                                 str(assets / "SHA256SUMS")], capture_output=True, text=True)
+        require(result.returncode == 1 and result.stdout == "", "private binary CLI status differs")
+        expected = dict(counts, registry=1, external=3)
+        require(result.stderr == "release-kit: rejected path categories " + json.dumps(expected, sort_keys=True)
+                + "\nrelease-kit: private path or key in bin/codex-app-server\n", "diagnostic leaked or counts differ")
+    print("U-PACK sanitized path diagnostics: PASS")
 
 
 def main():

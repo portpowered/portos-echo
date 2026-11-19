@@ -36,6 +36,32 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def private_path_counts(data):
+    """Describe rejected paths using fixed categories, never matched bytes."""
+    counts = {key: 0 for key in ("registry", "toolchain", "checkout", "other",
+                                "current_home", "current_cargo", "current_rustup", "external")}
+    origins = (("current_cargo", Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))),
+               ("current_rustup", Path(os.environ.get("RUSTUP_HOME", Path.home() / ".rustup"))),
+               ("current_home", Path.home()))
+    for match in PERSONAL.finditer(data):
+        start = match.start() + len(match[0]) - len(match[0].lstrip(b" \t\r\n\x00\"'="))
+        path = re.split(rb'''[\x00\s"'<>]''', data[start:start + 4096], maxsplit=1)[0]
+        normalized = path.replace(b"\\", b"/")
+        if b"/registry/src/" in normalized or b"/registry/cache/" in normalized:
+            category = "registry"
+        elif b"/toolchains/" in normalized or b"/.rustup/" in normalized:
+            category = "toolchain"
+        elif normalized.startswith(str(ROOT).encode().replace(b"\\", b"/") + b"/"):
+            category = "checkout"
+        else:
+            category = "other"
+        counts[category] += 1
+        origin = next((label for label, prefix in origins
+                       if normalized.startswith(str(prefix).encode().replace(b"\\", b"/") + b"/")), "external")
+        counts[origin] += 1
+    return counts
+
+
 def version(value):
     if not re.fullmatch(VERSION, value):
         raise BundleError("invalid version")
@@ -142,6 +168,8 @@ def verify(archive, checksums):
         binary = name in ("bin/echo-bridge", "bin/codex-app-server", "apk/echo-screen.apk")
         # Crypto executables contain PEM parser delimiters, not embedded key material.
         if (PERSONAL if binary else PRIVATE).search(data):
+            if binary:
+                print("release-kit: rejected path categories " + json.dumps(private_path_counts(data), sort_keys=True), file=sys.stderr)
             raise BundleError("private path or key in " + name)
         if not binary:
             if re.search(rb'(?:Bearer\s+[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,})', data):
