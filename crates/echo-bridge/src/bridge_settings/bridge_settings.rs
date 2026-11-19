@@ -143,4 +143,4 @@ fn same_values(first: &BridgeConfig, second: &BridgeConfig) -> bool {
 mod settings_tests;
 
 #[cfg(test)]
-mod settings_http_tests;
+pub(crate) mod settings_http_tests;

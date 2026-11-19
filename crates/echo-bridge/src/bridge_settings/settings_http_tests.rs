@@ -11,7 +11,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 const TOKEN: &str = "synthetic-settings-pair";
 const BASE: &str = "[echo]\nhost='127.0.0.1'\n[live]\nvoice='alloy'\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n";
 
-struct Fixture {
+pub(crate) struct Fixture {
     root: tempfile::TempDir,
     server: ScreenServer,
     _states: mpsc::Sender<echo_screen_contract::UiState>,
@@ -20,7 +20,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn open() -> Self {
+    pub(crate) async fn open() -> Self {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("bridge.toml"), BASE).unwrap();
         let mut base = BridgeConfig::from_toml_str(BASE).unwrap();
@@ -67,15 +67,15 @@ impl Fixture {
         }
     }
 
-    fn url(&self, route: &str) -> String {
+    pub(crate) fn url(&self, route: &str) -> String {
         format!("http://{}{route}?token={TOKEN}", self.server.bound_addr)
     }
 
-    fn path(&self, file: &str) -> PathBuf {
+    pub(crate) fn path(&self, file: &str) -> PathBuf {
         self.root.path().join("home").join(file)
     }
 
-    async fn snapshot(&self) -> SettingsSnapshotV1 {
+    pub(crate) async fn snapshot(&self) -> SettingsSnapshotV1 {
         let response = self.client.get(self.url("/settings/v1")).send().await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         response.json().await.unwrap()
@@ -92,7 +92,7 @@ impl Fixture {
         (response.status(), response.json().await.unwrap())
     }
 
-    async fn close(mut self) {
+    pub(crate) async fn close(mut self) {
         self.server.shutdown().await.unwrap();
         self.host.await.unwrap();
     }
