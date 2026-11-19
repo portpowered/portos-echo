@@ -16,6 +16,9 @@ pub(super) struct Receipt {
 #[derive(Clone, Default)]
 pub(super) struct Ledger {
     pub receipts: Vec<Receipt>,
+    pub session: super::playback::Session,
+    pub failure: Option<String>,
+    pub closed: bool,
     runs: usize,
     streams: usize,
     run: Option<usize>,
@@ -51,6 +54,8 @@ impl Ledger {
             self.playing
         };
         self.push(direction, kind, event.payload.len(), elapsed_us, identity);
+        self.session
+            .observe(self.receipts.last().ok_or("device: missing wire receipt")?, event)?;
         if direction == "playback"
             && matches!(kind, "audio-stop" | "hassmic-flush")
             && let Some(identity) = self.playing.take()

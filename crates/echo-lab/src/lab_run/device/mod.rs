@@ -21,6 +21,7 @@ pub struct Configured<'a> {
     iteration: u64,
     wire_endpoint: Option<std::net::SocketAddr>,
     wire: Option<wire::Observer>,
+    wire_replies: usize,
 }
 
 impl<'a> Configured<'a> {
@@ -48,6 +49,7 @@ impl<'a> Configured<'a> {
             config,
             wire_endpoint,
             wire: None,
+            wire_replies: 0,
         })
     }
 

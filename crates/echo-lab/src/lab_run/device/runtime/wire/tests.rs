@@ -98,7 +98,9 @@ fn check_receipts(root: &std::path::Path, port: u16) {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(rows.len(), 5);
+    assert_eq!(rows.len(), 6);
+    assert_eq!(rows[5]["event"], "device.wire_session");
+    assert_eq!(rows[5]["streams"][0]["ending"], "hassmic-flush");
     assert_eq!(
         (
             rows[1]["direction"].as_str(),
@@ -111,7 +113,7 @@ fn check_receipts(root: &std::path::Path, port: u16) {
     assert_eq!(rows[4]["kind"], "played");
     assert_eq!(rows[4]["wire_run"], 1);
     assert_eq!(rows[4]["playback_stream"], 1);
-    check_receipt_order(&rows);
+    check_receipt_order(&rows[..5]);
     assert_eq!(rows[0].as_object().unwrap().len(), 8);
     assert_eq!(rows[0]["sequence"], 1);
     assert_eq!(rows[1]["sequence"], 2);
@@ -225,5 +227,82 @@ async fn t3_device_wire_cancel_before_launch_releases_forward_without_cancellati
     assert_eq!(
         serde_json::from_str::<Value>(ledger.lines().nth(1).unwrap()).unwrap(),
         json!(["forward", "--remove", "tcp:23456"]) // lint-rules: allow-literal inert fake adb cleanup assertion, no socket
+    );
+}
+
+#[tokio::test]
+async fn t3_device_wire_reply_barrier_awaits_receipt_without_ending_capture() {
+    use std::{future::Future, task::Poll};
+    let root = tempfile::tempdir().unwrap();
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let options = fake_adb(root.path(), upstream.local_addr().unwrap().port());
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut observer = Observer::start(&options, address).unwrap();
+    observer.launch().unwrap();
+    let mut bridge = TcpStream::connect(address).await.unwrap();
+    let (mut host, _) = upstream.accept().await.unwrap();
+    let wake = frame("run-pipeline", &[]);
+    host.write_all(&wake).await.unwrap();
+    bridge.read_exact(&mut vec![0; wake.len()]).await.unwrap();
+    let reply = [
+        frame("audio-start", &[]),
+        frame("audio-chunk", &[128, 0]),
+        frame("audio-stop", &[]),
+    ]
+    .concat();
+    bridge.write_all(&reply).await.unwrap();
+    host.read_exact(&mut vec![0; reply.len()]).await.unwrap();
+    observer.relay.wait_for_receipts(4).await.unwrap();
+    {
+        let mut waiting = Box::pin(observer.wait_reply(1, 1));
+        std::future::poll_fn(|cx| {
+            assert!(waiting.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let played = frame("played", &[]);
+        host.write_all(&played).await.unwrap();
+        bridge.read_exact(&mut vec![0; played.len()]).await.unwrap();
+        waiting.await.unwrap();
+    }
+    let tail = frame("audio-chunk", &[128, 0]);
+    host.write_all(&tail).await.unwrap();
+    bridge.read_exact(&mut vec![0; tail.len()]).await.unwrap();
+    observer.relay.wait_for_receipts(6).await.unwrap();
+    assert_eq!(observer.relay.session()["capture_chunks_after_reply"], 1);
+    assert_eq!(observer.relay.session()["ended_runs"], json!([]));
+    let mut artifacts = Artifacts::create(options.out).unwrap();
+    observer.close(&mut artifacts).await.unwrap();
+    assert!(TcpStream::connect(address).await.is_err());
+}
+
+#[tokio::test]
+async fn t3_device_wire_reply_barrier_reports_observer_failure_and_still_releases_forward() {
+    let root = tempfile::tempdir().unwrap();
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let options = fake_adb(root.path(), upstream.local_addr().unwrap().port());
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut observer = Observer::start(&options, address).unwrap();
+    observer.launch().unwrap();
+    let mut bridge = TcpStream::connect(address).await.unwrap();
+    let (_host, _) = upstream.accept().await.unwrap();
+    bridge.write_all(b"not-json\n").await.unwrap();
+    assert_eq!(
+        observer.wait_reply(1, 1).await,
+        Err("device: malformed wire header".into())
+    );
+    let mut artifacts = Artifacts::create(options.out).unwrap();
+    assert_eq!(
+        observer.close(&mut artifacts).await,
+        Err("device: malformed wire header".into())
+    );
+    assert!(TcpStream::connect(address).await.is_err());
+    assert_eq!(
+        fs::read_to_string(root.path().join("ledger")).unwrap().lines().count(),
+        2
     );
 }

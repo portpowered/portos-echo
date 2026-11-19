@@ -1,5 +1,6 @@
 //! Run-owned forwarding for measured device journeys. Never retain room PCM.
 mod ledger;
+mod playback;
 mod relay;
 #[cfg(test)]
 mod tests;
@@ -48,6 +49,10 @@ fn adb(adb: &std::path::Path, args: &[String], cancel: Option<&std::path::Path>)
 }
 
 impl Observer {
+    pub(in crate::lab_run::device) async fn wait_reply(&mut self, run: usize, replies: usize) -> Result<(), String> {
+        self.relay.wait_reply(run, replies).await
+    }
+
     pub(in crate::lab_run::device) fn start(options: &Options, address: SocketAddr) -> Result<Self, String> {
         // Reserve the nominated endpoint before creating a forward. An occupied
         // endpoint is never stolen, and configuration is never rewritten.
@@ -108,6 +113,7 @@ impl Observer {
                 .err(),
             );
         }
+        failures.extend(super::super::observations::append(artifacts, &self.relay.session()).err());
         if failures.is_empty() {
             Ok(())
         } else {

@@ -38,17 +38,47 @@ impl Relay {
         let (stop, stopped) = oneshot::channel();
         self.stop = Some(stop);
         self.task = Some(tokio::spawn(async move {
-            tokio::select! {
+            let result = tokio::select! {
                 biased;
-                result = serve(listener, upstream, observed) => result,
+                result = serve(listener, upstream, observed.clone()) => result,
                 _ = stopped => Ok(()),
+            };
+            if let Err(error) = &result {
+                observed.send_modify(|ledger| ledger.failure = Some(error.clone()));
             }
+            observed.send_modify(|ledger| ledger.closed = true);
+            result
         }));
         Ok(())
     }
 
     pub fn receipts(&self) -> Vec<Receipt> {
         self.receipts.borrow().receipts.clone()
+    }
+
+    pub fn session(&self) -> serde_json::Value {
+        self.receipts.borrow().session.observation()
+    }
+
+    pub async fn wait_reply(&mut self, run: usize, replies: usize) -> Result<(), String> {
+        loop {
+            {
+                let ledger = self.receipts.borrow_and_update();
+                if let Some(error) = &ledger.failure {
+                    return Err(error.clone());
+                }
+                if ledger.session.checkpoint(run, replies)? {
+                    return Ok(());
+                }
+                if ledger.closed {
+                    return Err("device: unmet prerequisite: Played before wire close".into());
+                }
+            }
+            self.receipts
+                .changed()
+                .await
+                .map_err(|_| "device: wire closed before reply barrier")?;
+        }
     }
 
     #[cfg(test)]

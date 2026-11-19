@@ -135,6 +135,13 @@ impl super::Configured<'_> {
                 .push(serde_json::json!({"step":index,"iteration":self.iteration,"source":clip.source()}));
         }
         if !self.state.muted() {
+            if let Some(wire) = self.wire.as_mut() {
+                self.executor.block_on(super::runtime::controlled(
+                    wire.wait_reply(1, self.wire_replies + 1),
+                    self.options.cancel.as_deref(),
+                ))?;
+                self.wire_replies += 1;
+            }
             self.executor.block_on(super::runtime::controlled(
                 self.state.complete(index),
                 self.options.cancel.as_deref(),
