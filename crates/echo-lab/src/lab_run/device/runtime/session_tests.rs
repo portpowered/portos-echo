@@ -44,7 +44,7 @@ async fn t3_device_t5_session_replies_do_not_consume_completion_or_rearm_trace_w
     // The child cannot publish run_completed until the explicit send below.
     state.session_reply(1).await.unwrap();
     assert_eq!(state.run.as_deref(), Some("run-1"));
-    assert!(state.wakes.is_empty());
+    assert_eq!(state.wakes, Vec::<Value>::new());
     append(
         &state.trace_path,
         &[json!({"event":"reply.played","run_id":"run-1","elapsed_ms":3,"outcome":"played"})],
@@ -87,7 +87,7 @@ async fn t3_device_t5_session_replies_do_not_consume_completion_or_rearm_trace_w
     let mut artifacts = Artifacts::create(root.path().join("out")).unwrap();
     let error = state.collect(&mut artifacts).unwrap_err();
     assert!(error.contains("expected 2 occurrences, observed 3"), "{error}");
-    assert_eq!(artifacts.checks["step_2"], false);
+    assert!(!artifacts.checks["step_2"]);
 }
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn t3_device_t5_session_completion_requires_same_run_and_final_mic_measure
             .await
             .unwrap();
         assert_eq!(state.finish_session(1).await, Err(error.into()));
-        assert!(state.wakes.is_empty());
+        assert_eq!(state.wakes, Vec::<Value>::new());
         state.bridge.as_mut().unwrap().close().await.unwrap();
     }
 }
