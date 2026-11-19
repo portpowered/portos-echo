@@ -191,10 +191,16 @@ mod tests {
         assert_eq!(device.launch, CodexLaunch::Standalone);
         assert_eq!(device.ca_file, Some(PathBuf::from("/absent/ca.pem")));
         for (codex, expected) in [
-            ("launch = 'standalone'", "codex.launch: standalone requires codex.binary"),
+            (
+                "launch = 'standalone'",
+                "codex.launch: standalone requires codex.binary",
+            ),
             ("launch = 'wrapper'", "codex.launch: invalid type or value"),
             ("launch = true", "codex.launch: invalid type or value"),
-            ("ca_file = 'relative/ca.pem'", "codex.ca_file: expected nonempty absolute path"),
+            (
+                "ca_file = 'relative/ca.pem'",
+                "codex.ca_file: expected nonempty absolute path",
+            ),
             ("ca_file = ''", "codex.ca_file: expected nonempty absolute path"),
             ("ca_file = 7", "codex.ca_file: invalid type or value"),
         ] {
@@ -205,7 +211,10 @@ mod tests {
     #[test]
     fn echo_example_is_a_loopback_only_standalone_install() {
         let config = BridgeConfig::from_toml_str(include_str!("../../../examples/bridge.echo.toml")).unwrap();
-        assert_eq!((config.echo.host.as_str(), config.echo.wyoming_port), ("127.0.0.1", 16700));
+        assert_eq!(
+            (config.echo.host.as_str(), config.echo.wyoming_port),
+            ("127.0.0.1", 16700)
+        );
         assert_eq!(config.screen.listen, "127.0.0.1:16900".parse().unwrap());
         assert!(config.mcp.server.is_empty());
         assert_eq!(config.live.mode, crate::LiveMode::Chatgpt);

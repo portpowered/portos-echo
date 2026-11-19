@@ -281,7 +281,10 @@ mod codex_restart_tests {
         let parent = std::env::temp_dir().join(format!("echo-launch-{}-{nonce}", std::process::id()));
         std::fs::DirBuilder::new().mode(0o700).create(&parent)?;
         for (launch, expected) in [
-            (Launch::Subcommand, &["app-server", "--listen", "stdio://", "-c", "a=1"][..]),
+            (
+                Launch::Subcommand,
+                &["app-server", "--listen", "stdio://", "-c", "a=1"][..],
+            ),
             (Launch::Standalone, &["--listen", "stdio://", "-c", "a=1"][..]),
         ] {
             let mut config = SupervisorConfig::new(std::env::current_exe()?, parent.join(format!("{launch:?}")));
