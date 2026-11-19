@@ -2,7 +2,7 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 19
-status: in progress; configuration contract implemented, installer and renderer pending
+status: in progress; configured installer implemented, selection API and renderer pending
 ---
 
 # Screen packs
@@ -27,13 +27,55 @@ packs = []
 
 A release pack will use a URL ending in `<name>-<version>.screenpack.tar.gz`.
 Its digest pins the archive bytes. A placeholder digest never bypasses verification.
-Keep the list empty until the deployed bridge includes the installer. Parsing this
-configuration performs no downloads and does not open credential files or create a home.
+Parsing this configuration performs no downloads and does not open credential
+files or create a home. Running the bridge installs configured archives serially
+in the background. Each completion records `screen.pack_download` with a safe
+installed identity or fixed failure reason in the bridge trace. Settings-page
+download status and interactive installation are still pending in this lane.
 
-The installer must use only the configured `codex.ca_file` bundle, disable proxy use,
-verify the digest before extracting anything, and reject unsafe archives. Installation,
-catalog routes, previews, download status and reload events remain implementation work.
-No runtime installation or media playback is claimed by the configuration support alone.
+The installer requires `codex.ca_file` and trusts only those PEM roots. It disables
+proxy use, retries and HTTP downgrade, permits at most three HTTPS redirects and
+bounds each operation to 60 seconds. Missing or unreadable roots fail the download
+without stopping the bridge. A sha256 mismatch is refused before archive parsing
+or extracted writes. The compressed download is a temporary file, removed after use.
+
+Installation refuses absolute paths, empty/dot/dotdot components, backslashes,
+links, devices, FIFOs, GNU/PAX extensions, sparse entries and duplicate names.
+Limits are 65 MiB compressed, 64 MiB expanded regular-file payload, 64 files
+including `pack.json`, and 8 MiB per WebM/MP4 clip. Tar headers and padding have
+their own bounded decoding budget. Only json/css/png/webp/webm/mp4 files are
+accepted. Validation stages files under `screens` before an atomic directory
+rename to `<home>/screens/<name>@<version>/`; an existing conflicting identity is
+retained. Catalog routes, previews, interactive status and reload events remain
+implementation work. Installed data does not yet activate a renderer.
+
+## Pack data validation
+
+`pack.json` requires `format: 1`, `name`, `version`, and at least one of `layout`
+and `character`. Unknown fields are refused. A character requires a PNG/WebP
+`rest` file; states contain `clip` and optional `enter`/`exit` clips, each with
+`mode` (`loop` or `once`) and at least one role-matching `webm`/`mp4` file.
+All references must resolve to normalized relative files in the same pack.
+Future `wake`, `dnd`, `timer` and `call` states validate but have no contract state
+yet. Emote names have 1–128 characters. Playback is pending.
+
+Layouts require a percent viewport `safe_area` (`x`, `y`, `width`, `height`),
+`slots` (optional `clock`, `date`, `status`, `link_code`, `approval`, `error`) and
+`stage` (`anchor: {x,y}`, positive `scale` up to 2, `background: #RRGGBB`).
+Areas must fit the viewport. Slots have percent `x`/`y`, optional `color` and
+`font_scale` from 0.5 to 2. An optional `css` references an in-pack stylesheet.
+
+The CSS grammar accepts only `.pack-clock`, `.pack-date`, `.pack-status`,
+`.pack-link-code`, `.pack-approval`, `.pack-error` and `.pack-stage`, including
+comma-separated lists. Allowed declarations are six-digit hex `color`,
+`background-color`, `border-color`; `background-image: url(local.png)` (or WebP);
+`font-weight` (normal, bold, 400–700 in hundreds); `text-align` (left/center/right);
+`opacity` (0–1); and `font-size`, `border-radius`, `border-width`, `padding`, `gap`
+(one nonnegative value up to 100 with px/rem/em/%). Unsupported properties,
+selectors, comments, escapes, at-rules, expressions and remote/data URLs fail
+closed. All CSS files are checked, including unreferenced ones. Serving will
+scope selectors and rewrite validated URLs with pairing admission; raw pack CSS
+is never part of the built-in page.
 
 ## Sparse selection settings
 

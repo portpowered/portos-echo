@@ -17,6 +17,7 @@ pub(crate) struct Screen {
     settings_warning: Option<String>,
     server: Option<Arc<ScreenServer>>,
     actions: Option<tokio::task::JoinHandle<()>>,
+    pack_results: Option<tokio::task::JoinHandle<()>>,
     pub(crate) presentation: Presentation,
     pub(crate) approvals: approval::Approvals,
 }
@@ -48,6 +49,7 @@ impl Screen {
                 settings_warning: None,
                 server: None,
                 actions: None,
+                pack_results: None,
                 presentation: Presentation::new(None),
                 approvals: approval::Approvals::default(),
             });
@@ -77,9 +79,38 @@ impl Screen {
             server: Some(Arc::new(server)),
             presentation: Presentation::new(Some(states.clone())),
             actions: None,
+            pack_results: None,
             approvals: approval::Approvals::default(),
         };
         Ok(screen)
+    }
+
+    pub(crate) fn download_packs(&mut self, config: Option<&echo_config::BridgeConfig>, trace: &Trace) {
+        let Some(config) = config.filter(|c| !c.screen.packs.is_empty()) else {
+            return;
+        };
+        let Some(home) = &config.home else {
+            return;
+        };
+        let Some(server) = self.server.as_mut().and_then(Arc::get_mut) else {
+            return;
+        };
+        let pins = config
+            .screen
+            .packs
+            .iter()
+            .map(|p| (p.url.clone(), p.sha256.clone()))
+            .collect();
+        let mut results = server.install_configured_packs(home.dir.clone(), config.codex.ca_file.clone(), pins);
+        let mut trace = trace.clone();
+        self.pack_results = Some(tokio::spawn(async move {
+            while let Some(result) = results.recv().await {
+                let fields = serde_json::json!({"installed": result.installed, "reason": result.reason});
+                if trace.record("screen.pack_download", None, fields).is_err() {
+                    break;
+                }
+            }
+        }));
     }
 
     pub fn publish(&self, state: UiState) -> Result<(), Error> {
@@ -236,6 +267,10 @@ impl Screen {
     }
 
     async fn close_with_mode(&mut self, graceful: bool) -> Result<usize, Error> {
+        if let Some(task) = self.pack_results.take() {
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(task) = self.actions.take() {
             task.abort();
             let _ = task.await;
@@ -254,6 +289,9 @@ impl Screen {
 
 impl Drop for Screen {
     fn drop(&mut self) {
+        if let Some(task) = &self.pack_results {
+            task.abort();
+        }
         if let Some(task) = &self.actions {
             task.abort();
         }
@@ -284,6 +322,7 @@ mod tests {
             settings_warning: None,
             server: None,
             actions: None,
+            pack_results: None,
             presentation: Presentation::new(Some(send)),
             approvals: approval::Approvals::default(),
         };

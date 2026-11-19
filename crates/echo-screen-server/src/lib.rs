@@ -1,4 +1,5 @@
 //! Authenticated, bounded loopback screen transport. LAN exposure requires W3 TLS.
+mod packs;
 mod screen_assets;
 mod screen_core;
 mod screen_http;
@@ -46,7 +47,33 @@ pub struct ScreenServer {
     tasks: Vec<JoinHandle<()>>,
 }
 
+/// Safe completion for one configured background download. No input URL or path.
+pub struct PackInstallResult {
+    pub installed: Option<String>,
+    pub reason: Option<String>,
+}
+
 impl ScreenServer {
+    /// Install configured pins serially outside the voice path. Listener lifetime
+    /// owns cancellation and joins synchronous validation before shutdown returns.
+    /// Failures retain existing installed directories and never stop the server.
+    pub fn install_configured_packs(
+        &mut self,
+        home: std::path::PathBuf,
+        ca: Option<std::path::PathBuf>,
+        pins: Vec<(String, String)>,
+    ) -> mpsc::Receiver<PackInstallResult> {
+        let (send, receive) = mpsc::channel(4);
+        self.tasks.push(tokio::spawn(packs::start(
+            packs::Downloads { home, ca, pins },
+            self.core.clone(),
+            self.stop.subscribe(),
+            self.drain.subscribe(),
+            send,
+        )));
+        receive
+    }
+
     /// Acknowledge states admitted before this call through the existing pump.
     /// Success commits the current snapshot, not delivery to existing clients.
     ///
