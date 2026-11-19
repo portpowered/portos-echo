@@ -38,10 +38,13 @@ pub fn execute_process(settings: Settings) -> Result<(), Error> {
         match settings_process::replacement_gate(Some(&kill))? {
             ReplacementGate::Shutdown => return Ok(()),
             ReplacementGate::Killed => (),
-            ReplacementGate::Ready => match image.replace() {
-                Ok(never) => match never {},
-                Err(_) => configured.replacement_failed(&mut host)?,
-            },
+            ReplacementGate::Ready => {
+                configured.replacement_attempt()?;
+                match image.replace() {
+                    Ok(never) => match never {},
+                    Err(_) => configured.replacement_failed(&mut host)?,
+                }
+            }
         }
         retained = Some(host);
     }

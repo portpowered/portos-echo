@@ -27,9 +27,9 @@ async fn t3_settings_configured_recovery_keeps_pending_edits_and_old_active_conf
     for (event, count) in [
         ("bridge.ready", 2),
         ("settings.restart_prepared", 1),
-        ("settings.restart_failed", 1),
+        ("settings.reexec_failed", 1),
         ("settings.restart_recovered", 1),
-        ("settings.overlay_ignored", 0),
+        ("settings.ignored", 0),
     ] {
         assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), count);
     }
@@ -299,7 +299,7 @@ fn binary_retry_trace(fixture: &Fixture) {
     for (event, count) in [
         ("bridge.ready", 3),
         ("settings.restart_prepared", 2),
-        ("settings.restart_failed", 1),
+        ("settings.reexec_failed", 1),
         ("settings.restart_recovered", 1),
     ] {
         assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), count);
@@ -378,7 +378,7 @@ fn binary_failed_trace(fixture: &Fixture) {
     for (event, count) in [
         ("bridge.ready", 2),
         ("settings.restart_prepared", 1),
-        ("settings.restart_failed", 1),
+        ("settings.reexec_failed", 1),
         ("settings.restart_recovered", 1),
     ] {
         assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), count);

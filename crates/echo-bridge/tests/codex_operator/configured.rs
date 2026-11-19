@@ -484,12 +484,10 @@ async fn t3_settings_overlay_invalid_startup_reports_and_ignores_entire_file() {
         assert_eq!(process.stderr().await, "");
         super::host::released(&fixture).await;
         let rows = trace(&fixture.directory.path().join("trace"));
-        let warnings: Vec<_> = rows
-            .iter()
-            .filter(|row| row["event"] == "settings.overlay_ignored")
-            .collect();
+        let warnings: Vec<_> = rows.iter().filter(|row| row["event"] == "settings.ignored").collect();
         assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].as_object().unwrap().len(), 3);
+        assert_eq!(warnings[0]["reason"], "invalid_config");
+        assert_eq!(warnings[0].as_object().unwrap().len(), 4);
         assert!(
             !serde_json::to_string(&rows)
                 .unwrap()

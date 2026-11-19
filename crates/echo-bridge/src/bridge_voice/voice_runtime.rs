@@ -173,6 +173,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
         }
     };
     screen.supervise_actions(health.state.subscribe());
+    let settings_trace = trace.clone();
     let mut view = View::new(&screen, &health, &mut trace);
     let requested = Cell::new(false);
     let link = SettingsLink::new(options.delegation);
@@ -180,7 +181,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
         options, connector, &mut peer, cancelled, &mut view, &requested, &link,
     ));
     let (result, settings) = if let Some(service) = service {
-        let (result, completion) = Box::pin(service.scope(work, || link.status())).await;
+        let (result, completion) = Box::pin(service.with_trace(settings_trace).scope(work, || link.status())).await;
         (result, Some(completion))
     } else {
         (work.await, None)

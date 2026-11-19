@@ -139,9 +139,14 @@ impl Screen {
             let event = if warning == Some(crate::bridge_settings::RESTART_FAILED) {
                 "settings.restart_recovered"
             } else {
-                "settings.overlay_ignored"
+                "settings.ignored"
             };
-            trace.record(event, None, serde_json::json!({}))?;
+            let fields = if event == "settings.ignored" {
+                serde_json::json!({"reason":"invalid_config"})
+            } else {
+                serde_json::json!({})
+            };
+            trace.record(event, None, fields)?;
         }
         Ok(())
     }

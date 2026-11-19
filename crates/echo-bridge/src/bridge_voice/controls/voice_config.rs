@@ -188,7 +188,22 @@ impl Configured {
             LiveMode::ApiKey => "api_key",
         };
         crate::bridge_trace::Trace::open(&self.trace, mode)?.record(
-            "settings.restart_failed",
+            "settings.reexec_failed",
+            None,
+            serde_json::json!({"reason":"exec"}),
+        )
+    }
+
+    /// Record an actual replacement admission after the final EOF/kill gate.
+    /// # Errors
+    /// Refuses replacement when its trace receipt cannot be written.
+    pub(super) fn replacement_attempt(&self) -> Result<(), Error> {
+        let mode = match self.config.live.mode {
+            LiveMode::Chatgpt => "chatgpt",
+            LiveMode::ApiKey => "api_key",
+        };
+        crate::bridge_trace::Trace::open(&self.trace, mode)?.record(
+            "settings.reexec_attempt",
             None,
             serde_json::json!({}),
         )

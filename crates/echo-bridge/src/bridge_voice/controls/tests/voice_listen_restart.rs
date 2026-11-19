@@ -79,3 +79,86 @@ async fn before_played(
     assert_eq!(observer.commands().last(), Some(&Command::Stop));
     assert!(!observer.commands().contains(&Command::EndRun));
 }
+
+// Off plus pending replacement must still consume admitted work and its answer.
+#[tokio::test(start_paused = true)]
+async fn settings_restart_followup_off_waits_for_delegation_and_owed_playback() {
+    let restart = Restart::default();
+    restart.scope(disabled_dispatch(&restart)).await;
+}
+
+async fn disabled_dispatch(restart: &Restart) {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    observer.wake("Computer", vec![]);
+    let Some(LinkEvent::Wake(microphone)) = events.recv().await.unwrap() else {
+        unreachable!()
+    };
+    let (tx, rx) = mpsc::channel(64);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let receipts = Cell::new(0);
+    let mut options = options();
+    options.listen_timeout = None;
+    let mut work = Box::pin(super::super::super::run(
+        &client,
+        &mut events,
+        microphone,
+        &mut port,
+        options,
+        std::future::pending(),
+        |notice| {
+            if matches!(notice, Notice::ReplyPlayed) {
+                receipts.set(receipts.get() + 1);
+            }
+            Ok(())
+        },
+    ));
+    tx.send(dispatch(true)).await.unwrap();
+    reply(&tx, 5000).await;
+    reply(&tx, 5000).await;
+    restart.request();
+    settle(&mut work, &observer, &receipts, 1).await;
+    assert_eq!(receipts.get(), 1);
+    assert!(!observer.commands().contains(&Command::EndRun));
+    tokio::time::advance(Duration::from_secs(2)).await;
+    poll(work.as_mut()).await;
+    tx.send(dispatch(false)).await.unwrap();
+    poll(work.as_mut()).await;
+    assert!(!observer.commands().contains(&Command::EndRun));
+    reply(&tx, -5000).await;
+    for _ in 0..50 {
+        poll(work.as_mut()).await;
+        if observer.commands().iter().filter(|cmd| **cmd == Command::Stop).count() == 2 {
+            break;
+        }
+        tokio::time::advance(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        observer.commands().iter().filter(|cmd| **cmd == Command::Stop).count(),
+        2
+    );
+    assert_eq!(receipts.get(), 1);
+    let now = Instant::now();
+    observer.finish(Ok(()));
+    let stats = work.await.unwrap();
+    assert_eq!((stats.reply_sent, receipts.get()), (36, 2));
+    assert!(now.elapsed() < Duration::from_secs(1));
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|cmd| **cmd == Command::EndRun)
+            .count(),
+        1
+    );
+}
+
+fn dispatch(started: bool) -> MediaEvent {
+    let (thread, turn) = ("fixture-thread".into(), "fixture-turn".into());
+    MediaEvent::Control(if started {
+        Event::TurnStarted { thread, turn }
+    } else {
+        Event::TurnCompleted { thread, turn }
+    })
+}

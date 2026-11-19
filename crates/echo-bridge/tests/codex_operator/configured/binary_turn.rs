@@ -23,7 +23,8 @@ const STARTED: &str = "bridge.started";
 const READY: &str = "bridge.ready";
 const KILL: &str = "kill.enabled";
 const PREPARED: &str = "settings.restart_prepared";
-const LIFECYCLE: [&str; 8] = [
+const ATTEMPT: &str = "settings.reexec_attempt";
+const LIFECYCLE: [&str; 9] = [
     IMAGE,
     STARTED,
     READY,
@@ -31,31 +32,44 @@ const LIFECYCLE: [&str; 8] = [
     "bridge.run_completed",
     KILL,
     PREPARED,
-    "settings.restart_failed",
+    ATTEMPT,
+    "settings.reexec_failed",
 ];
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt Linux echo-bridge and local Python"]
 async fn t3_settings_binary_active_saves_exec_once_after_played_and_cleanup() {
-    exercise(Finish::Replace).await;
+    exercise(Finish::Replace, false).await;
 }
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt Linux echo-bridge and local Python"]
 async fn t3_settings_binary_eof_during_cleanup_prevents_exec() {
-    exercise(Finish::Eof).await;
+    exercise(Finish::Eof, false).await;
 }
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt Linux echo-bridge and local Python"]
 async fn t3_settings_binary_kill_during_cleanup_prevents_exec() {
-    exercise(Finish::Kill).await;
+    exercise(Finish::Kill, false).await;
 }
 
-async fn exercise(finish: Finish) {
+#[tokio::test]
+#[ignore = "T3 requires prebuilt Linux echo-bridge and local Python"]
+async fn t3_settings_binary_followup_off_settles_delegation_before_one_exec() {
+    exercise(Finish::Replace, true).await;
+}
+
+async fn exercise(finish: Finish, delegated: bool) {
     let fixture = Fixture::new("chatgpt");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     configure(&fixture, listener.local_addr().unwrap().port());
+    if delegated {
+        let base = fixture.directory.path().join("bridge.toml");
+        let text = std::fs::read_to_string(&base).unwrap();
+        std::fs::write(base, format!("{text}\n[voice]\nsession_listen_enabled=false\n")).unwrap();
+        std::fs::write(fixture.home.join("delegated"), "").unwrap();
+    }
     let mut command = super::super::voice_entry::command(&fixture);
     command.args([
         "--live-loopback",
@@ -73,6 +87,9 @@ async fn exercise(finish: Finish) {
     let media = remote(&mut signal).await;
     held_playback(&fixture, &mut satellite, &mut signal).await;
     bridge_short::send(&mut satellite, "played", json!({})).await;
+    if delegated {
+        owed_answer(&fixture, &mut satellite, &mut signal).await;
+    }
     closing(&mut signal).await;
     assert_eq!(
         process.line().await,
@@ -84,6 +101,25 @@ async fn exercise(finish: Finish) {
     media.abort();
     finish_generation(&fixture, &listener, &mut process, finish, (pid, identity)).await;
     settled(&fixture, &mut process, finish).await;
+}
+
+async fn owed_answer(fixture: &Fixture, satellite: &mut TcpStream, signal: &mut BufReader<TcpStream>) {
+    let snapshot = binary_snapshot(fixture).await;
+    assert_eq!(snapshot["restart_pending"], true);
+    let rows = trace(&fixture.directory.path().join("trace"));
+    for event in [PREPARED, ATTEMPT, "bridge.run_completed"] {
+        assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), 0);
+    }
+    signal.get_mut().write_all(b"settle\n").await.unwrap();
+    // Even an empty owed answer has its own device playback receipt.
+    assert_eq!(bridge_short::read_reply(satellite).await.0["type"], "audio-stop");
+    assert_eq!(binary_snapshot(fixture).await["restart_pending"], true);
+    assert!(
+        !trace(&fixture.directory.path().join("trace"))
+            .iter()
+            .any(|row| row["event"] == ATTEMPT)
+    );
+    bridge_short::send(satellite, "played", json!({})).await;
 }
 
 async fn settled(fixture: &Fixture, process: &mut Process, finish: Finish) {
@@ -298,7 +334,15 @@ fn completed(fixture: &Fixture, finish: Finish, output: &[String]) {
     } else {
         assert_eq!(count("settings.restart_prepared"), 1);
     }
-    assert_eq!(count("settings.restart_failed"), 0);
+    assert_eq!(count("settings.reexec_failed"), 0);
+    assert_eq!(count(ATTEMPT), usize::from(finish == Finish::Replace));
+    assert_eq!(count("settings.saved"), 2);
+    assert_eq!(count("settings.reexec_pending"), 1);
+    assert!(
+        rows.iter()
+            .filter(|row| row["event"] == "settings.saved")
+            .all(|row| row["restart_pending"] == true)
+    );
     generations(&rows, finish);
     // Each readiness row has exactly one stdout line: three were consumed
     // around a replacement, one before an EOF.
@@ -330,7 +374,7 @@ fn generations(rows: &[Value], finish: Finish) {
     let after = &lifecycle[turn.len()..];
     match finish {
         // One real exec: a second image starts the only other generation.
-        Finish::Replace => assert_eq!(after, [READY, PREPARED, IMAGE, IMAGE, STARTED, READY]),
+        Finish::Replace => assert_eq!(after, [READY, PREPARED, ATTEMPT, IMAGE, IMAGE, STARTED, READY]),
         // No exec: the same image starts the next generation, still killed.
         Finish::Kill => assert_eq!(after, [KILL, READY, PREPARED, STARTED, KILL, READY]),
         // No second image or generation. EOF may win during the held cleanup,

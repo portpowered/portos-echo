@@ -332,8 +332,9 @@ fn settings_replacement_failure_preserves_active_policy_and_pending_snapshot() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["event"], "settings.restart_failed");
-    assert_eq!(rows[0].as_object().unwrap().len(), 3);
+    assert_eq!(rows[0]["event"], "settings.reexec_failed");
+    assert_eq!(rows[0]["reason"], "exec");
+    assert_eq!(rows[0].as_object().unwrap().len(), 4);
     assert_eq!(std::fs::read_dir(directory.path().join("home")).unwrap().count(), 0);
 }
 

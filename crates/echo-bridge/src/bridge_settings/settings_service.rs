@@ -13,6 +13,7 @@ pub struct SettingsService {
     host: Box<SettingsHost>,
     inbox: mpsc::Receiver<SettingsRequest>,
     restart: Restart,
+    trace: Option<crate::bridge_trace::Trace>,
 }
 
 /// Accepted state survives resource cleanup without reopening the home. A
@@ -49,9 +50,15 @@ impl SettingsService {
                 host,
                 inbox,
                 restart: Restart::default(),
+                trace: None,
             },
             send,
         )
+    }
+
+    pub(crate) fn with_trace(mut self, trace: crate::bridge_trace::Trace) -> Self {
+        self.trace = Some(trace);
+        self
     }
 
     /// Drive the bounded inbox only while this service generation is alive.
@@ -67,28 +74,24 @@ impl SettingsService {
             mut host,
             mut inbox,
             restart,
+            mut trace,
         } = self;
-        let result = restart.scope(async {
-            tokio::pin!(work);
-            loop {
-                tokio::select! {
-                    biased;
-                    result = &mut work => return result,
-                    Some(request) = inbox.recv() => {
-                        let mut changed = false;
-                        request.commit(|operation| {
-                            let save = matches!(operation, SettingsOperation::Save(_));
-                            let reply = host.transaction(operation, link_status());
-                            changed = save && matches!(&reply, SettingsReply::Saved(result) if result.restart_pending);
-                            reply
-                        }).await;
-                        // Commit has handed the HTTP response to its receipt.
-                        // The caller must still drain HTTP before replacement.
-                        if changed && !restart.pending() { restart.request(); }
+        let result = restart
+            .scope(async {
+                tokio::pin!(work);
+                loop {
+                    tokio::select! {
+                        biased;
+                        result = &mut work => return result,
+                        Some(request) = inbox.recv() => {
+                            request.commit(|operation| {
+                                commit(&mut host, &restart, trace.as_mut(), operation, link_status())
+                            }).await;
+                        }
                     }
                 }
-            }
-        }).await;
+            })
+            .await;
         // Dropping the inbox closes queued receipts. No detached mutation task
         // remains to outlive this generation, including on future cancellation.
         (
@@ -99,6 +102,54 @@ impl SettingsService {
             },
         )
     }
+}
+
+// Record only committed success, with selectors fixed before consuming input.
+fn commit(
+    host: &mut SettingsHost,
+    restart: &Restart,
+    trace: Option<&mut crate::bridge_trace::Trace>,
+    operation: SettingsOperation,
+    link: LinkStatusV1,
+) -> SettingsReply {
+    let prompt = match &operation {
+        SettingsOperation::Prompt(echo_screen_server::PromptKind::Voice, _) => Some("voice"),
+        SettingsOperation::Prompt(echo_screen_server::PromptKind::Runner, _) => Some("runner"),
+        _ => None,
+    };
+    let reply = host.transaction(operation, link);
+    let SettingsReply::Saved(saved) = &reply else {
+        return reply;
+    };
+    let pending = prompt.is_none() && saved.restart_pending && !restart.pending();
+    let recorded = trace.map_or(Ok(()), |trace| {
+        let (event, fields) = prompt.map_or_else(
+            || {
+                (
+                    "settings.saved",
+                    serde_json::json!({"restart_pending":saved.restart_pending}),
+                )
+            },
+            |prompt| ("prompt.saved", serde_json::json!({"prompt":prompt})),
+        );
+        trace.record(event, None, fields)?;
+        if pending {
+            trace.record("settings.reexec_pending", None, serde_json::json!({}))?;
+        }
+        Ok::<(), crate::Error>(())
+    });
+    // Persistence has committed even if diagnostics fail. Keep ownership of the
+    // pending restart, and refuse to claim a fully successful receipt.
+    if pending {
+        restart.request();
+    }
+    if recorded.is_err() {
+        return SettingsReply::Persistence(echo_screen_contract::settings_v1::SettingsErrorV1 {
+            version: echo_screen_contract::settings_v1::SettingsVersionV1,
+            message: "settings: trace unavailable after commit".into(),
+        });
+    }
+    reply
 }
 
 #[cfg(test)]

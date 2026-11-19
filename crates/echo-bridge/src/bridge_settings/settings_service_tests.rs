@@ -117,6 +117,8 @@ impl Fixture {
 #[tokio::test]
 async fn t3_settings_service_signals_after_durable_save_and_serves_during_cleanup() {
     let (mut fixture, owner, send) = Fixture::open("[agent]\nmax_tool_calls=4\n").await;
+    let trace_path = fixture.root.path().join("trace");
+    let owner = owner.with_trace(crate::bridge_trace::Trace::open(&trace_path, "chatgpt").unwrap());
     let base_path = fixture.root.path().join("bridge.toml");
     let base = fs::read(&base_path).unwrap();
     let (release, cleanup) = tokio::sync::oneshot::channel();
@@ -146,6 +148,14 @@ async fn t3_settings_service_signals_after_durable_save_and_serves_during_cleanu
     };
     let (result, ()) = tokio::join!(owner.scope(work, || LinkStatusV1::Linked), edits);
     assert_eq!(result.0, 17);
+    assert_eq!(
+        operational_events(&trace_path),
+        [
+            json!({"event":"settings.saved","restart_pending":true}),
+            json!({"event":"settings.reexec_pending"}),
+            json!({"event":"settings.saved","restart_pending":true}),
+        ]
+    );
     assert!(result.1.restart_requested);
     assert!(send.is_closed());
     assert_eq!(
@@ -159,6 +169,8 @@ async fn t3_settings_service_signals_after_durable_save_and_serves_during_cleanu
 #[tokio::test]
 async fn t3_settings_service_samples_link_and_prompt_noop_validation_never_restart() {
     let (mut fixture, owner, _) = Fixture::open("invalid = 'ignored'").await;
+    let trace_path = fixture.root.path().join("trace");
+    let owner = owner.with_trace(crate::bridge_trace::Trace::open(&trace_path, "chatgpt").unwrap());
     let linked = Cell::new(LinkStatusV1::LinkRequired);
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let edits = async {
@@ -206,6 +218,13 @@ async fn t3_settings_service_samples_link_and_prompt_noop_validation_never_resta
     let (result, ()) = tokio::join!(owner.scope(stopped, || linked.get()), edits);
     assert_eq!(result.0, Ok(()));
     assert!(!result.1.restart_requested);
+    assert_eq!(
+        operational_events(&trace_path),
+        [
+            json!({"event":"prompt.saved","prompt":"voice"}),
+            json!({"event":"settings.saved","restart_pending":false}),
+        ]
+    );
     fixture.server.shutdown().await.unwrap();
 }
 
@@ -319,4 +338,18 @@ async fn recovery_save(fixture: &mut Fixture, host: Box<SettingsHost>) {
     let ((result, completion), ()) = tokio::join!(owner.scope(stopped, || LinkStatusV1::Linked), inspect);
     assert_eq!(result, Ok(()));
     assert!(!completion.restart_requested);
+}
+
+fn operational_events(path: &std::path::Path) -> Vec<Value> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut row: Value = serde_json::from_str(line).unwrap();
+            let object = row.as_object_mut().unwrap();
+            assert_eq!(object.remove("provider_auth_mode"), Some(json!("chatgpt")));
+            assert!(object.remove("elapsed_ms").unwrap().is_u64());
+            row
+        })
+        .collect()
 }
