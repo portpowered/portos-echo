@@ -99,6 +99,27 @@ impl<'a> Configured<'a> {
         }
         Ok(())
     }
+
+    fn press_mute(&mut self, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+        self.state.arm_mute()?;
+        let elapsed = confirmation::wait(
+            self.options.operator_confirm.as_deref(),
+            self.options.cancel.as_deref(),
+            self.errors,
+        )?;
+        self.presses += 1;
+        self.state.confirmed(index, self.presses, elapsed, artifacts)?;
+        let expected = if self.presses % 2 == 1 {
+            serde_json::json!({"state":"muted"})
+        } else {
+            serde_json::json!({"state":"ready","message":"Echo Live ready"})
+        };
+        self.executor.block_on(runtime::observed(
+            self.state.ui(&expected, index, artifacts),
+            self.options.cancel.as_deref(),
+            self.window,
+        ))
+    }
 }
 
 impl Driver for Configured<'_> {
@@ -111,27 +132,13 @@ impl Driver for Configured<'_> {
     ) -> Result<(), String> {
         self.start(artifacts)?;
         match step {
+            Step::Mcp(action) => self.executor.block_on(runtime::observed(
+                self.state.mcp_operator(action, &self.config),
+                self.options.cancel.as_deref(),
+                self.window,
+            )),
             Step::Restart { process, count, say } => self.restart(process, *count, say, index, artifacts),
-            Step::Press(key) if key == "mute" => {
-                self.state.arm_mute()?;
-                let elapsed = confirmation::wait(
-                    self.options.operator_confirm.as_deref(),
-                    self.options.cancel.as_deref(),
-                    self.errors,
-                )?;
-                self.presses += 1;
-                self.state.confirmed(index, self.presses, elapsed, artifacts)?;
-                let expected = if self.presses % 2 == 1 {
-                    serde_json::json!({"state":"muted"})
-                } else {
-                    serde_json::json!({"state":"ready","message":"Echo Live ready"})
-                };
-                self.executor.block_on(runtime::observed(
-                    self.state.ui(&expected, index, artifacts),
-                    self.options.cancel.as_deref(),
-                    self.window,
-                ))
-            }
+            Step::Press(key) if key == "mute" => self.press_mute(index, artifacts),
             Step::Ui(value) => self.executor.block_on(runtime::observed(
                 self.state.ui(value, index, artifacts),
                 self.options.cancel.as_deref(),

@@ -3,6 +3,7 @@
 mod budget;
 mod launch;
 mod link;
+pub(super) mod operator;
 #[cfg(test)]
 mod tests;
 

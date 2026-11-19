@@ -48,6 +48,7 @@ pub struct Runtime {
     pub(super) remote: Option<super::onboard::Remote>,
     pub(super) excused: usize,
     pub(super) portos: Option<echo_lab::lab_mcp::PortosObservations>,
+    pub(super) pending_mcp: Option<super::onboard::operator::Pending>,
 }
 
 pub(super) struct Startup {
@@ -192,6 +193,8 @@ impl Runtime {
     }
 
     pub async fn close(&mut self, root: &Path, artifacts: &mut Artifacts) -> Result<(), String> {
+        // Dropping the control socket cancels a pending device-code operation.
+        self.pending_mcp.take();
         self.screen.take();
         let mut failures = Vec::new();
         if let Some(mut child) = self.bridge.take() {

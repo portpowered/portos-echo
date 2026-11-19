@@ -73,6 +73,7 @@ impl Shell for Fake {
         world.calls.push(args.to_vec());
         let command = args.last().cloned().unwrap_or_default();
         let output = match args[0].as_str() {
+            "exec-out" if command.contains("head -c 16385") => "synthetic-local-screen\n".into(),
             "push" => {
                 let contents = std::fs::read_to_string(&args[1]).map_err(|_| "push: unreadable")?;
                 world.pushed.push((args[1].clone(), args[2].clone(), contents));
