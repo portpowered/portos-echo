@@ -191,6 +191,7 @@ async fn voice_listen_due_expiry_wins_over_ready_activity_without_consuming_it()
             (&mut input.events, &mut input.microphone),
             &mut port,
             (&mut source, &mut None),
+            true,
             std::future::pending(),
             &mut |_| Ok(()),
         )
@@ -224,6 +225,7 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
             (&mut events, &mut microphone),
             &mut port,
             (&mut source, &mut None),
+            true,
             std::future::pending(),
             &mut |_| Ok(()),
         )
