@@ -16,12 +16,14 @@ const ALLOWED: &[&str] = &[
     "--operator-confirm",
     "--wake-clip",
     "--allow-quiet-hours",
+    "--live",
 ];
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct Options {
+    pub live_real: bool,
     pub wake_clip: Option<super::device::pcm::Clip>,
     pub sim: bool,
     pub bridge: Option<PathBuf>,
@@ -88,6 +90,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     if flags.keys().any(|key| !ALLOWED.contains(&key.as_str())) || scenarios.is_empty() {
         return Err("run: unknown option or missing scenario".into());
     }
+    let live_real = live_selection(&flags)?;
     if flags.contains_key("--wake-clip") && required(&flags, "--driver")? == "sim" {
         return Err("run: --wake-clip is only supported with --driver device".into());
     }
@@ -123,13 +126,14 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         PathBuf::from,
     );
     Ok(Options {
+        live_real,
         sim: false,
         wake_clip: wake_clip(&flags)?,
         operator_confirm: flags.get("--operator-confirm").map(PathBuf::from),
         bridge: device_bridge(&flags)?,
         bridge_config: flags
             .get("--bridge-config")
-            .map(|v| configuration_path(v))
+            .map(|v| configuration_path(v, live_real))
             .transpose()?,
         scenarios,
         port: explicit(required(&flags, "--port")?)?,
@@ -190,6 +194,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
         PathBuf::from,
     );
     Ok(Options {
+        live_real: false,
         sim: true,
         wake_clip: None,
         operator_confirm: None,
@@ -219,10 +224,30 @@ fn device_bridge(flags: &BTreeMap<String, String>) -> Result<Option<PathBuf>, St
     }
 }
 
-fn configuration_path(value: &str) -> Result<PathBuf, String> {
+fn live_selection(flags: &BTreeMap<String, String>) -> Result<bool, String> {
+    let Some(value) = flags.get("--live") else {
+        return Ok(false);
+    };
+    if value != "real" {
+        return Err("device: --live accepts only real".into());
+    }
+    if flags.get("--driver").map(String::as_str) != Some("device")
+        || flags.get("--bench").map(String::as_str) != Some("ring")
+        || !flags.contains_key("--bridge")
+        || !flags.contains_key("--bridge-config")
+    {
+        return Err("device: --live real requires device/ring with --bridge and --bridge-config".into());
+    }
+    Ok(true)
+}
+
+fn configuration_path(value: &str, live_real: bool) -> Result<PathBuf, String> {
     let path = Path::new(value);
     if !path.is_file() {
         return Err("device: --bridge-config requires a readable TOML file".into());
+    }
+    if live_real {
+        return Ok(path.to_owned());
     }
     path.canonicalize()
         .map_err(|_| "device: cannot resolve --bridge-config".into())
@@ -314,6 +339,32 @@ fn selected_bridge(flags: &BTreeMap<String, String>, scenario: &serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_selection_requires_explicit_real_and_configured_device_ring() {
+        let flags = BTreeMap::from([
+            ("--driver".into(), "device".into()),
+            ("--bench".into(), "ring".into()),
+            ("--bridge".into(), "nominated".into()),
+            ("--bridge-config".into(), "nominated.toml".into()),
+            ("--live".into(), "real".into()),
+        ]);
+        assert_eq!(live_selection(&flags), Ok(true));
+        for name in ["--driver", "--bench", "--bridge", "--bridge-config"] {
+            let mut missing = flags.clone();
+            missing.remove(name);
+            assert_eq!(
+                live_selection(&missing),
+                Err("device: --live real requires device/ring with --bridge and --bridge-config".into())
+            );
+        }
+        for driver in ["sim", "cloud"] {
+            let mut wrong = flags.clone();
+            wrong.insert("--driver".into(), driver.into());
+            assert!(live_selection(&wrong).is_err());
+        }
+        assert_eq!(live_selection(&BTreeMap::new()), Ok(false));
+    }
 
     #[test]
     fn device_bridge_pair_is_required_before_tool_paths() {

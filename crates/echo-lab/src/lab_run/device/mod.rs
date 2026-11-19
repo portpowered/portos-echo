@@ -48,6 +48,10 @@ impl<'a> Configured<'a> {
                     self.options.bridge.as_deref().ok_or("device: missing bridge")?,
                     &self.config,
                     &artifacts.root,
+                    self.options
+                        .live_real
+                        .then_some(self.options.bridge_config.as_deref())
+                        .flatten(),
                 ),
                 self.options.cancel.as_deref(),
             ));
@@ -106,6 +110,9 @@ impl Driver for Configured<'_> {
 }
 
 pub fn step(value: &serde_json::Value, scenario: &str, options: &Options) -> Result<Step, String> {
+    if value["expect_screen"]["sequence"].is_array() {
+        return Ok(Step::Ui(value["expect_screen"].clone()));
+    }
     if options.wake_clip.is_some() && value.get("restart").is_some() {
         let restart = &value["restart"];
         let process = restart["process"].as_str().ok_or("device: unsupported restart")?;

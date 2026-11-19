@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 pub use echo_lab::lab_mcp::LinkCounts;
 
 pub struct Artifacts {
+    pub device_limits: Vec<String>,
     pub sim: bool,
     pub m1: Option<Value>,
     pub m6: Option<Value>,
@@ -29,6 +30,7 @@ impl Artifacts {
         fs::create_dir(&root).map_err(|_| "run output: cannot create fresh directory")?;
         let events = File::create(root.join("events.jsonl")).map_err(|_| "run output: cannot create events")?;
         Ok(Self {
+            device_limits: Vec::new(),
             sim: false,
             m1: None,
             m6: None,
@@ -130,7 +132,7 @@ impl Artifacts {
             "milestone":milestone, "result":self.outcome(error),
             "placement":"bridge_pc", "build_commit":build_commit(), "device":null,
             "evidence":self.evidence, "checks":self.checks, "observations":self.observations,
-            "limitations":error.into_iter().chain(self.blocked.values().map(String::as_str)).chain(if self.sim { vec!["pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)", "T3 simulation does not prove a physical milestone or real-provider compatibility."] } else { vec!["Device edges require independent operator verification; no physical milestone is proved."] }).collect::<Vec<_>>(),
+            "limitations":error.into_iter().chain(self.blocked.values().map(String::as_str)).chain(self.device_limits.iter().map(String::as_str)).chain(if self.sim { vec!["pinned hassmic-host binds wildcard listeners (upstream; no bind-address option)", "T3 simulation does not prove a physical milestone or real-provider compatibility."] } else { vec!["Device edges require independent operator verification; no physical milestone is proved."] }).collect::<Vec<_>>(),
             "tier":tier, "driver":if self.sim { "sim" } else { "device" }, "scenario_digest":digest,
             "hassmic_commit":if self.sim { include_str!("../../../../hassmic.pin").lines().find_map(|l| l.strip_prefix("commit=")) } else { None }, "bench_session_ids":self.sessions
         });

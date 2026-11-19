@@ -1,15 +1,28 @@
 use std::{io::Write, path::Path};
 
 use super::super::{run_command, run_options::Options};
+mod real;
+pub mod scenario;
 
 pub fn load(options: &Options) -> Result<Option<String>, String> {
     let Some(path) = &options.bridge_config else {
         return Ok(None);
     };
-    let config = echo_config::BridgeConfig::load(path)
-        .map_err(|_| "device: invalid or unsafe nominated bridge configuration")?;
+    let contents =
+        std::fs::read_to_string(path).map_err(|_| "device: invalid or unsafe nominated bridge configuration")?;
+    let config = echo_config::BridgeConfig::from_toml_str(&contents).map_err(|error| {
+        if options.live_real && error.to_string().contains("secrets go in files, not config") {
+            "device: inline secret in bridge configuration"
+        } else {
+            "device: invalid or unsafe nominated bridge configuration"
+        }
+    })?;
     if config.echo.host != "127.0.0.1" {
         return Err("device: echo.host must be 127.0.0.1; forward the Echo's Wyoming port with adb forward".into());
+    }
+    if options.live_real {
+        real::separate(&config, path, &options.out)?;
+        return Ok(Some(contents));
     }
     let bytes = run_command::controlled(
         Path::new(&options.python),
@@ -121,6 +134,7 @@ mod tests {
 
     fn options(path: &Path) -> Options {
         Options {
+            live_real: false,
             bridge_config: Some(path.to_owned()),
             python: "python3".into(),
             wake_clip: None,

@@ -9,6 +9,8 @@ mod lease;
 mod oracles;
 #[cfg(test)]
 mod run_support;
+#[path = "device_support/t5/mod.rs"]
+mod t5;
 #[cfg(test)]
 mod tests {
     use crate::run_support::{FAKE, Session, failed};

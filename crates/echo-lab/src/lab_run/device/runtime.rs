@@ -3,7 +3,10 @@ use std::{
     time::Duration,
 };
 
-use echo_live::fake::{FakeLive, FakeResponse, FakeScript};
+mod screen;
+mod startup;
+
+use echo_live::fake::FakeLive;
 use serde_json::{Value, json};
 
 use super::super::{
@@ -17,6 +20,7 @@ pub struct Runtime {
     pub(super) clip: Option<Value>,
     pub(super) bridge: Option<Process>,
     live: Option<FakeLive>,
+    real_config: Option<PathBuf>,
     pub(super) screen: Option<Screen>,
     pub(super) trace: Trace,
     pub(super) trace_path: PathBuf,
@@ -101,78 +105,6 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn start(&mut self, bridge: &Path, config: &str, root: &Path) -> Result<(), String> {
-        self.startup = Some(Startup::new("config_stage"));
-        self.started = true;
-        self.began = Some(std::time::Instant::now());
-        self.trace_path = root.join("bridge.private.jsonl");
-        super::config::stage(root, config)?;
-        self.phase("fake_live_bind")?;
-        self.live = Some(
-            FakeLive::bind(FakeScript {
-                events: vec![json!({"type":"response.audio.done"}).to_string()],
-                response: FakeResponse::Answer,
-            })
-            .await
-            .map_err(|_| "device: fake Live startup failed")?,
-        );
-        self.generation = 1;
-        self.phase("bridge_spawn")?;
-        self.launch(bridge, root).await
-    }
-
-    pub(super) async fn launch(&mut self, bridge: &Path, root: &Path) -> Result<(), String> {
-        let origin = self.live.as_ref().ok_or("device: missing fake Live")?.base_url();
-        let mut command = tokio::process::Command::new(bridge);
-        for name in [
-            "ECHO_LAB_WYOMING_ADDR",
-            "ECHO_LAB_LIVE_URL",
-            "ECHO_LAB_TRACE_PATH",
-            "ECHO_LAB_SESSION_IDLE_SECONDS",
-            "ECHO_LAB_UI_STATE_PATH",
-            "ECHO_LAB_MCP_URL",
-        ] {
-            command.env_remove(name);
-        }
-        command
-            .current_dir(root.join("configured.private"))
-            .args([
-                "--config",
-                "bridge.toml",
-                "--health-listen",
-                "127.0.0.1:0",
-                "--live-loopback",
-                origin.trim_end_matches('/'),
-                "--model-loopback",
-                origin.trim_end_matches('/'),
-            ])
-            .arg("--trace")
-            .arg(&self.trace_path);
-        self.bridge = Some(Process::start(&mut command)?);
-        self.phase("bridge_ready")?;
-        self.child()?.expect("bridge.ready").await?;
-        self.phase("wyoming_connect")?;
-        self.observe()?;
-        if !self.trace.records.iter().any(|r| r["event"] == "wyoming.connected") {
-            return Err("device: ready without fresh Wyoming connection".into());
-        }
-        self.phase("screen_endpoint")?;
-        let address = self
-            .trace
-            .records
-            .iter()
-            .find(|r| r["event"] == "screen.listening")
-            .and_then(|r| r["address"].as_str())
-            .ok_or("device: missing screen endpoint")?
-            .parse::<std::net::SocketAddr>()
-            .map_err(|_| "device: invalid screen endpoint")?;
-        if address.ip() != std::net::Ipv4Addr::LOCALHOST || address.port() == 0 {
-            return Err("device: screen endpoint must be loopback".into());
-        }
-        self.screen = Some(Screen::connect(address, true).await?);
-        self.startup.as_ref().ok_or("device: missing startup")?.check()
-    }
-
     fn child(&mut self) -> Result<&mut Process, String> {
         self.bridge.as_mut().ok_or_else(|| "device: bridge not started".into())
     }
@@ -220,7 +152,13 @@ impl Runtime {
     pub fn expect_trace(&mut self, values: &[Value], index: usize) -> Result<(), String> {
         self.observe()?;
         let parsed = selectors::parse(values)?;
-        let offset = if values
+        let global = values
+            .iter()
+            .all(|value| value.as_str().is_some_and(|s| s.starts_with("live.closed")));
+        let run = if global { None } else { self.run.clone() };
+        let offset = if global {
+            0
+        } else if values
             .iter()
             .any(|v| v.as_str().is_some_and(|s| s.starts_with("mic.mute_window")))
         {
@@ -228,12 +166,15 @@ impl Runtime {
         } else {
             self.wake_offset
         };
-        selectors::check(&self.trace.records[offset..], &parsed, self.run.as_deref())?;
-        self.expectations.push((index, parsed, self.run.clone(), offset));
+        selectors::check(&self.trace.records[offset..], &parsed, run.as_deref())?;
+        self.expectations.push((index, parsed, run, offset));
         Ok(())
     }
 
     pub async fn ui(&mut self, expected: &Value, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+        if let Some(sequence) = expected["sequence"].as_array() {
+            return self.ui_sequence(sequence, index, artifacts).await;
+        }
         let screen = self.screen.as_mut().ok_or("device: screen not connected")?;
         screen.expect(expected).await?;
         // expect uses the shared typed UiState oracle. Project only the matched

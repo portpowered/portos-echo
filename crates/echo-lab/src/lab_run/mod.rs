@@ -140,6 +140,7 @@ fn load(options: &Options) -> Result<(String, String, Vec<Step>), String> {
             }
         }
         if !options.sim
+            && !(options.bridge_config.is_some() && device::config::scenario::admits(&scenario)?)
             && (scenario["setup"].as_object().is_none_or(|v| !v.is_empty())
                 || scenario["budgets"].as_object().is_none_or(|v| !v.is_empty())
                 || scenario["negative"].as_array().is_none_or(|v| !v.is_empty()))
@@ -292,6 +293,7 @@ fn execute_with_errors(args: &[String], output: &mut impl Write, errors: &mut im
         .ok_or("scenario: invalid SHA-256 digest")?;
     let mut artifacts = Artifacts::create(root)?;
     artifacts.sim = options.sim;
+    device::config::scenario::record(&options, &mut artifacts)?;
     let mut driver = driver(&options, configuration, errors)?;
     let result = dispatch(driver.as_mut(), &steps, &mut artifacts);
     let cleanup = driver.close(&mut artifacts);
