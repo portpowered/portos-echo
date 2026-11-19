@@ -14,6 +14,120 @@ import lint_docs as lint
 HEADER = "---\nauthor: Team\nowner: Team\nlast modified: today\nstatus: active\n---\n"
 
 
+def config_fixture(root):
+    directory = root / "crates/echo-config/src"
+    directory.mkdir(parents=True)
+    (directory / "lib.rs").write_text("mod config_decode;\nmod config_settings;\n", encoding="utf-8")
+    source = '''fn decode(value: Value) {
+    let mut f = Fields::new(value, "voice")?;
+    let seconds = f.optional("session_listen_seconds")?;
+    f.finish()?;
+}'''
+    (directory / "config_decode.rs").write_text(source, encoding="utf-8")
+    (directory / "config_settings.rs").write_text(
+        'let mut f = Fields::new(value, "voice")?; f.finish()?;', encoding="utf-8")
+    rows = "| `voice` | Section |\n| `voice.session_listen_seconds` | Seconds |\n"
+    (root / "docs/configuration.md").write_text(rows, encoding="utf-8")
+    return directory
+
+
+class ConfigCoverageTests(unittest.TestCase):
+    def test_omission_fails_main_then_restoration_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            config_fixture(root)
+            (root / "docs/README.md").write_text(HEADER + "\n[Self](README.md)\n", encoding="utf-8")
+            page = root / "docs/configuration.md"
+            complete = page.read_text(encoding="utf-8")
+            page.write_text("| `voice` | Section |\n", encoding="utf-8")
+            diagnostic = "docs/configuration.md: undocumented config keys: voice.session_listen_seconds"
+            from contextlib import redirect_stderr
+            errors = io.StringIO()
+            with patch.object(lint.sys, "argv", ["lint_docs.py"]), \
+                    patch.object(lint.Path, "cwd", return_value=root), \
+                    patch.object(lint, "manifest", return_value=["docs/README.md"]), \
+                    patch.object(lint, "run"), \
+                    redirect_stderr(errors):
+                self.assertEqual(lint.main(), 1)
+                self.assertEqual(errors.getvalue(), "lint-docs: " + diagnostic + "\n")
+                print(errors.getvalue().strip())
+                page.write_text(complete, encoding="utf-8")
+                self.assertEqual(lint.main(), 0)
+
+    def test_mentions_and_other_sections_do_not_cover_missing_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            config_fixture(root)
+            (root / "docs/configuration.md").write_text(
+                "| `voice` | Section |\nvoice.session_listen_seconds\n"
+                "<!--\n| `voice.session_listen_seconds` | Comment |\n-->\n"
+                "~~~md\n| `voice.session_listen_seconds` | Example |\n~~~\n"
+                "| `live.session_listen_seconds` | Other |\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "keys: voice.session_listen_seconds$"):
+                lint.config_coverage(root)
+
+    def test_production_paths_and_new_synthetic_key(self):
+        root = Path(__file__).resolve().parent.parent
+        keys = lint.accepted_config_keys(root)
+        self.assertTrue({"wake_earcon", "home.agent_tools", "codex.delegate_effort",
+                         "mcp.server[]", "mcp.server[].allow_tools"} <= keys)
+        self.assertFalse({"codex.instructions", "codex.live_instructions"} & keys)
+        source = 'let mut f = Fields::new(value, "voice")?; f.optional("future")?; f.finish()?;'
+        self.assertEqual(lint.decoder_keys(source, "synthetic"), {"voice", "voice.future"})
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            (temp / "docs").mkdir()
+            inputs = config_fixture(temp)
+            (inputs / "config_decode.rs").write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "keys: voice.future$"):
+                lint.config_coverage(temp)
+            with (temp / "docs/configuration.md").open("a", encoding="utf-8") as page:
+                page.write("| `voice.future` | Future |\n")
+            lint.config_coverage(temp)
+
+    def test_unsupported_or_missing_inputs_fail_closed(self):
+        for source in ["fn decode(value: Value) {}", 'let mut f = Fields::new(value, path)?;',
+                       'let mut f = Fields::new(value, "voice")?; f.optional(KEY)?; f.finish()?;',
+                       'let mut f = Fields::new(value, "voice")?; f.optional::<bool>("new")?; f.finish()?;',
+                       'let mut f = Fields::new(value, "voice")?; let x = f.section("new")?; f.finish()?;',
+                       'let mut f = Fields::new(value, "voice")?; f.new_method("key")?; f.finish()?;']:
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, "config coverage:"):
+                lint.decoder_keys(source, "synthetic")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(OSError):
+                lint.accepted_config_keys(Path(directory))
+            root = Path(directory)
+            (root / "docs").mkdir()
+            inputs = config_fixture(root)
+            (inputs / "config_settings.rs").write_text("", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "empty or unsupported decoder"):
+                lint.accepted_config_keys(root)
+            (inputs / "config_decode.rs").unlink()
+            with self.assertRaises(OSError):
+                lint.accepted_config_keys(root)
+
+    def test_overlay_and_sorted_diagnostics(self):
+        source = '''let mut fields = Fields::new(value, "config")?;
+        if let Some(mut agent) = fields.section("agent")? {
+            agent.optional("max_tool_calls")?; agent.finish()?;
+        } fields.finish()?;'''
+        self.assertEqual(lint.decoder_keys(source, "overlay"), {"agent", "agent.max_tool_calls"})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            inputs = config_fixture(root)
+            page = root / "docs/configuration.md"
+            page.write_text("", encoding="utf-8")
+            for names in [("z", "a"), ("a", "z")]:
+                body = 'let mut f = Fields::new(value, "voice")?;'
+                body += ''.join(f'f.optional("{key}")?;' for key in names) + 'f.finish()?;'
+                (inputs / "config_decode.rs").write_text(body, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "keys: voice, voice.a, voice.z$"):
+                    lint.config_coverage(root)
+
+
 class MetadataTests(unittest.TestCase):
     def test_required_scalars(self):
         lint.frontmatter("docs/a.md", HEADER)
@@ -119,6 +233,7 @@ class AdrDirectoryTests(unittest.TestCase):
                 (adr / name).write_text(text, encoding="utf-8")
             (root / "docs/README.md").write_text(
                 HEADER + "\n[Self](README.md)\n", encoding="utf-8")
+            config_fixture(root)
             output = io.StringIO()
             with patch.object(lint, "manifest", return_value=["docs/README.md"]), \
                     patch.object(lint, "run") as launch, redirect_stdout(output):
@@ -200,6 +315,7 @@ class LauncherTests(unittest.TestCase):
             root = Path(directory)
             (root / "docs").mkdir()
             (root / "docs/README.md").write_text(HEADER + "\n# Docs\n\n[Self](README.md)\n", encoding="utf-8")
+            config_fixture(root)
             launches = []
             def record(args, **kwargs):
                 launches.append(args)
@@ -233,6 +349,7 @@ class LauncherTests(unittest.TestCase):
                 "# Vendor\n\n[Broken](absent.md)\n", encoding="utf-8")
             (root / "lychee.toml").write_text('include_fragments = "full"\n', encoding="utf-8")
             paths = ["docs/README.md", "NOTES with spaces.md", "factory/vendor.md"]
+            config_fixture(root)
             launch = lint.run
             results = []
             def local_run(args, **kwargs):
@@ -266,6 +383,7 @@ class LauncherTests(unittest.TestCase):
             root = Path(directory)
             (root / "docs").mkdir()
             (root / "docs/README.md").write_text(HEADER + "\n[Self](README.md)\n", encoding="utf-8")
+            config_fixture(root)
             with patch.object(lint, "manifest", return_value=["docs/README.md"]), \
                     patch.object(lint, "run"), \
                     patch.object(lint.tempfile, "TemporaryDirectory", side_effect=OSError("temp unavailable")):

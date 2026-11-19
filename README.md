@@ -1,24 +1,20 @@
 # Port OS Echo
 
-Port OS Echo replaces the assistant on a rooted Amazon Echo Show 8 (2nd gen, codename `athena`) with ChatGPT's
-live voice model. You say "Alexa", the Show listens, a GPT-Live session answers in real time, and a delegated agent
-reaches your devices through the Port OS MCP server and other MCP tools.
+Port OS Echo turns a rooted Amazon Echo Show 8 (2nd gen, `athena`) into a voice assistant.
+Say "Computer": hassmic captures audio and plays replies; `echo-bridge` and its pinned Codex app-server child
+connect to ChatGPT Live and execute permitted delegated tools through Port OS MCP.
 
-Status: planning. No product code yet. The first work is Phase F, the repository harness: lint, shape and
-layering checks and CI, all of which must exist before any crate does (`docs/program/plan.md`, section 6).
+The repository contains the bridge, screen client, configuration and simulated test harness.
+Device milestones and provider compatibility remain subject to the independent gates in the
+[program plan](docs/program/plan.md).
 
-## How it fits together
+## Run it on your Echo
 
-```text
-Echo Show (Rust + C shim)                   Gateway (small trusted service)      OpenAI
-  wake word (Pryon "Alexa")                   relays the SDP offer               GPT-Live session
-  audio capture/playback, screen, keys  --->  creates the session with the  ---> delegated agent model calls
-  WebRTC peer to GPT-Live                     operator's credential
-  MCP client: executes every tool call  ---------------------------------------> Port OS MCP, other MCP servers
-```
-
-The Echo executes every MCP call itself. The gateway only handles the models. Section 3 of the plan explains why
-a gateway is needed in every topology.
+Use the [quickstart](docs/quickstart.md) for Linux prerequisites, paired release assets or source builds,
+installation, ChatGPT sign-in, Port OS linking and lifecycle commands.
+The [configuration guide](docs/configuration.md) covers file locations, every accepted key, access and permissions.
+The bridge and Codex run on the Echo beside hassmic; the PC is the Linux build/install and bench host.
+The screen is an Android WebView of the bridge's loopback page. Credentials stay in private on-device files.
 
 ## M3 simulated full-duplex voice
 
@@ -50,7 +46,7 @@ real-provider compatibility. Physical M3 remains an operator-run T5 gate.
 | `docs/design/echo-live-execution-plan.md` | The original multi-agent execution plan (draft; `plan.md` wins) |
 | `AGENTS.md` | Instructions for the coordinator and any agent working here |
 
-The crate layout, `Makefile` and CI arrive with Phase F.
+The Rust workspace and build/test targets are declared in `lanes.toml` and `Makefile`.
 
 ## Building
 
@@ -64,25 +60,22 @@ Node/npm and the documentation checkers. The pinned
 versions and setup commands are in `.github/actions/setup/action.yml`; the build does not install them.
 `make coverage` is no longer a gate; run by hand, it also needs cargo-llvm-cov and the pinned nightly toolchain.
 
-From the repository root, run:
-
-```sh
-make ci
-```
+Hosted CI is the quality gate. Run focused targets for changed paths; do not run a full local `make ci`.
+The required jobs are defined in [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
 | Target | What it runs |
 | --- | --- |
-| `fmt-check` | `cargo fmt --all --check` |
-| `lint` | `fmt-check`; later Phase F lanes add their gates |
-| `test-unit` | `cargo test --workspace --all-targets` |
-| `test-contract` | Prints `no contract tests yet` and succeeds; W0 adds the suite |
-| `test-sim` | Prints `no scenarios yet` and succeeds; el-f9 adds the harness |
-| `build-host` | `cargo build --workspace --locked` |
-| `ci` | Runs `lint`, `test-unit`, `test-contract`, `test-sim`, then `build-host`, stopping on failure |
+| `fmt-check` | Formatting checks |
+| `lint-docs` | Metadata, index, style, links, Mermaid and accepted config-key coverage |
+| `test-unit` | Workspace tests through nextest with zero retries |
+| `test-contract` | Contract test selector |
+| `test-sim` | Simulated suites and host scenarios with local fake providers |
+| `build-host` | Locked workspace host build |
+| `build-echo` | Android ARMv7 bridge build with provisioned NDK |
+| `build-codex-armv7` | Pinned standalone Codex app-server and CA bundle |
+| `build-echo-screen` | Android screen APK with provisioned SDK |
 
-The workspace currently contains only the unpublished `xtask` tool. `cargo xtask` prints usage and exits 2:
-no subcommands exist yet. A crate joins `lanes.toml` in the change that creates it.
-Deploying to a device is operator-run only (`docs/program/rules.md`).
+Device operations are operator-run only ([standing rules](docs/program/rules.md)).
 
 ## Related projects
 

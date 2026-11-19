@@ -162,6 +162,101 @@ def compile_mermaid(blocks, temp):
     print(f"Mermaid: compiled {len(blocks)} blocks", flush=True)
 
 
+def decoder_keys(source, name):
+    """Read the deliberately narrow Fields grammar; reject unsupported accesses.
+
+    This is a static lint, not a Rust evaluator. A decoder refactor must teach
+    this reader its new grammar before it can certify documentation coverage.
+    """
+    source = source.split("#[cfg(test)]", 1)[0]
+    source = re.sub(r"//[^\n]*", "", source)
+    starts = list(re.finditer(r'let mut (\w+) = Fields::new\(value,\s*'
+                             r'(?:"([\w.]+)"|&format!\("([\w.]+)\[\{index\}\]"\))\)\?;', source))
+    if len(starts) != source.count("Fields::new("):
+        raise ValueError(f"config coverage: unsupported Fields constructor in {name}")
+    if "fn decode(" in source and not starts:
+        raise ValueError(f"config coverage: missing Fields decoder in {name}")
+    keys = set()
+    for start in starts:
+        receiver, literal, array = start.groups()
+        prefix = "" if literal == "config" else (literal or array + "[]")
+        end = re.search(rf'\b{receiver}\.finish\(\)\?', source[start.end():])
+        if not end:
+            raise ValueError(f"config coverage: missing finish in {name}")
+        body = source[start.end():start.end() + end.start()]
+        aliases = {receiver: prefix}
+        for alias, parent, key in re.findall(
+                r'if let Some\(mut (\w+)\) = (\w+)\.section\("(\w+)"\)\?', body):
+            if parent not in aliases:
+                raise ValueError(f"config coverage: unsupported section parent in {name}")
+            aliases[alias] = ".".join(filter(None, [aliases[parent], key]))
+        if len(re.findall(r'\.section\s*\(', body)) != len(aliases) - 1:
+            raise ValueError(f"config coverage: unsupported section binding in {name}")
+        for alias, path in aliases.items():
+            # Consume every access, not just known string calls: a dynamic key
+            # or a new Fields operation must fail rather than disappear.
+            access = rf'\b{alias}\s*\.\s*(?:table\s*\.\s*)?(\w+)\s*\('
+            if re.search(rf'\b{alias}\s*\.\s*\w+\s*::', body):
+                raise ValueError(f"config coverage: unsupported generic access in {name}")
+            for call in re.finditer(access, body):
+                method = call[1]
+                if method == "finish":
+                    continue
+                argument = re.match(r'"(\w+)"', body[call.end():])
+                if method not in {"required", "optional", "node", "remove", "section", "reject"} or not argument:
+                    raise ValueError(f"config coverage: unsupported key access in {name}")
+                if method != "reject":
+                    key = ".".join(filter(None, [path, argument[1]]))
+                    keys.add(key)
+        if prefix:
+            keys.add(prefix)
+    return keys
+
+
+def accepted_config_keys(root):
+    directory = root / "crates/echo-config/src"
+    lib = (directory / "lib.rs").read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
+    modules = set(re.findall(r'^mod (config_\w+);$', lib, re.MULTILINE))
+    if not {"config_decode", "config_settings"} <= modules:
+        raise ValueError("config coverage: required decoder modules missing")
+    keys = set()
+    for module in sorted(modules):
+        path = directory / (module + ".rs")
+        source = path.read_text(encoding="utf-8")
+        extracted = decoder_keys(source, path.name)
+        if module != "config_validate" and not extracted:
+            raise ValueError(f"config coverage: empty or unsupported decoder in {path.name}")
+        keys.update(extracted)
+    if not keys:
+        raise ValueError("config coverage: empty accepted key inventory")
+    return keys
+
+
+def config_coverage(root):
+    keys = accepted_config_keys(root)
+    text = (root / "docs/configuration.md").read_text(encoding="utf-8")
+    # Only the first cell of an actual reference row counts. Prose, fenced
+    # examples and HTML comments cannot accidentally satisfy coverage.
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+    rows, active = set(), None
+    for line in text.splitlines():
+        fence = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line)
+        if fence:
+            if active is None:
+                active = fence[1]
+            elif fence[1][0] == active[0] and len(fence[1]) >= len(active) and not fence[2].strip():
+                active = None
+            continue
+        if not active:
+            row = re.match(r'^\| `([\w.]+(?:\[\])?(?:\.[\w]+)*)` \|', line)
+            if row:
+                rows.add(row[1])
+    missing = keys - rows
+    if missing:
+        raise ValueError("docs/configuration.md: undocumented config keys: " + ", ".join(sorted(missing)))
+    print(f"Config coverage: {len(keys)} accepted paths documented", flush=True)
+
+
 def check(root, online=False):
     print(f"lint-docs: vendored exclusion VENDORED_PREFIX={VENDORED_PREFIX}", flush=True)
     paths = manifest(root)
@@ -176,6 +271,7 @@ def check(root, online=False):
     print(f"Frontmatter: {len(docs)} documents", flush=True)
     check_index(root, docs)
     print("Index: all tracked docs listed", flush=True)
+    config_coverage(root)
     adr_directory = root / "docs/adr"
     try:
         adr_files = list(adr_directory.iterdir())
