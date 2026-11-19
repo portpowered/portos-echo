@@ -147,6 +147,104 @@ fn t3_uninstall_dispatches_only_authored_shell_and_does_not_report_failed_remova
     Ok(())
 }
 
+#[test]
+fn t3_doctor_reports_each_failure_with_fixed_fixes_and_no_external_data() -> Result {
+    let names = [
+        "adb",
+        "device",
+        "hassmic",
+        "egress",
+        "clock",
+        "disk_free",
+        "process_user",
+    ];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let healthy = format!("hassmic=ok\negress=ok\nclock={now}\ndisk_free=262144\nprocess_user=9999\n");
+    for newline in ["\n", "\r\n"] {
+        for failed in 2..=7 {
+            let fixture = Fixture::new()?;
+            let mut raw = healthy.clone();
+            if failed < 7 {
+                let line = raw.lines().nth(failed - 2).ok_or("missing probe")?;
+                raw = raw.replace(line, &format!("{}=SYNTHETIC-TOKEN", names[failed]));
+            }
+            fs::write(fixture.0.join("doctor"), raw.replace('\n', newline))?;
+            let output = fixture.run("doctor", &[])?;
+            assert_eq!(output.status.code(), Some(i32::from(failed != 7)));
+            let result = event(&output)?;
+            let checks = result["checks"].as_array().ok_or("missing checks")?;
+            assert_eq!(checks.len(), 7);
+            for (index, check) in checks.iter().enumerate() {
+                assert_eq!(check["name"], names[index]);
+                assert_eq!(check["ok"], index != failed);
+                assert_eq!(check["fix"].is_null(), index != failed);
+            }
+            assert_eq!(
+                fs::read(fixture.0.join("adapter-input"))?,
+                include_bytes!("../../../scripts/echo-install.sh")
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn t3_doctor_prerequisite_and_malformed_frames_never_report_success() -> Result {
+    for failure in ["adb", "device", "transport", "malformed", "duplicate"] {
+        let fixture = Fixture::new()?;
+        let missing = fixture.0.join("missing-adb");
+        if failure == "device" {
+            fs::write(fixture.0.join("devices"), "")?;
+        } else if failure == "transport" {
+            fs::write(fixture.0.join("operation-failed"), "")?;
+        } else {
+            let raw = if failure == "duplicate" {
+                "egress=ok\negress=ok\n"
+            } else {
+                "SYNTHETIC-TOKEN"
+            };
+            fs::write(fixture.0.join("doctor"), raw)?;
+        }
+        let output = if failure == "adb" {
+            Command::new(env!("CARGO_BIN_EXE_echo-setup"))
+                .args(["doctor", "--json", "--adb"])
+                .arg(missing)
+                .output()?
+        } else {
+            fixture.run("doctor", &[])?
+        };
+        assert_eq!(output.status.code(), Some(1));
+        let result = event(&output)?;
+        assert_eq!(result["ok"], false);
+        for (index, check) in result["checks"].as_array().ok_or("missing checks")?.iter().enumerate() {
+            let ok = index == 0 && failure != "adb" || index == 1 && !["adb", "device"].contains(&failure);
+            assert_eq!(check["ok"], ok);
+            assert_eq!(check["fix"].is_null(), ok);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn t3_doctor_text_prints_safe_fix_for_each_failed_check() -> Result {
+    let fixture = Fixture::new()?;
+    fs::write(fixture.0.join("doctor"), "SYNTHETIC-TOKEN SYNTHETIC-PRIVATE-PATH")?;
+    let output = Command::new(env!("CARGO_BIN_EXE_echo-setup"))
+        .env("ECHO_SETUP_TEST_ROOT", &fixture.0)
+        .args(["doctor", "--adb", env!("CARGO_BIN_EXE_echo-setup-test-adb")])
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stderr, [] as [u8; 0]);
+    let text = String::from_utf8(output.stdout)?;
+    assert_eq!(text.lines().count(), 7);
+    assert!(!text.contains("SYNTHETIC"));
+    assert!(text.contains("hassmic: FAIL Install hassmic separately"));
+    assert!(text.contains("disk_free: FAIL Free at least 256 MiB"));
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn t3_native_lifecycle_executes_real_authored_shell() -> Result {

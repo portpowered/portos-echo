@@ -53,6 +53,10 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
             }
             return Ok(());
         }
+        if command == "sh -s -- --device doctor" {
+            io::stdout().write_all(&fs::read(root.join("doctor"))?)?;
+            return Ok(());
+        }
         fs::write(root.join("last-operation"), command)?;
     }
     if command.contains("--device start") {

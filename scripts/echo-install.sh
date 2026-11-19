@@ -70,6 +70,7 @@ Usage: sh scripts/echo-install.sh --help
        sh scripts/echo-install.sh start
        sh scripts/echo-install.sh stop
        sh scripts/echo-install.sh status
+       sh scripts/echo-install.sh doctor
        sh scripts/echo-install.sh uninstall [--purge]
 
 Linux only; requires adb on PATH and exactly one ready device with hassmic.
@@ -100,6 +101,7 @@ private/ and home/: owner 9999:9999, directories 0700, data files 0600.
 bin/: owner 0:0, directory and binaries 0755; cacert.pem 0644.
 install and start migrate retained root-owned state.
 status shows process, process user, uptime seconds, sanitized hassmic link and five bridge.log lines.
+doctor emits read-only hassmic/egress/clock/disk_free/process_user probes for echo-setup.
 Status fields: process=running|stopped; process_user=USER|unavailable;
 uptime_seconds=INTEGER|unavailable;
 hassmic_link=SANITIZED_LINE|unavailable
@@ -129,7 +131,7 @@ if [ "$1" = --help ]; then
 fi
 command_name=$1
 shift
-case $command_name in install | start | stop | status | uninstall) ;; *) usage ;; esac
+case $command_name in install | start | stop | status | uninstall | doctor) ;; *) usage ;; esac
 config='' bridge='' codex='' ca='' force=false purge=false seen=' '
 while [ "$#" -gt 0 ]; do
   flag=$1
@@ -227,6 +229,28 @@ run_adb devices
 selection=$(awk 'NR > 1 && NF { count++; if ($2 == "device") ready++ }
   END { print (count == 1 && ready == 1) ? "ready" : "refuse" }' "$log")
 [ "$selection" = ready ] || fail 'exactly one ready adb device is required'
+if [ "$command_name" = doctor ]; then
+  # Read-only, bounded probes. Only fixed labels and numeric observations escape.
+  run_adb shell "
+if test -x /data/local/hassmic/runas; then
+  printf 'hassmic=ok\\n'
+  if /data/local/hassmic/runas nobody 3990,inet nc -z -w 5 chatgpt.com 443 >/dev/null 2>&1; then
+    printf 'egress=ok\\n'
+  else printf 'egress=failed\\n'; fi
+else printf 'hassmic=failed\\negress=failed\\n'; fi
+epoch=\$(date +%s 2>/dev/null) || epoch=unavailable
+case \$epoch in '' | *[!0-9]*) epoch=unavailable ;; esac
+printf 'clock=%s\\n' \"\$epoch\"
+free=\$(df -k /data/local 2>/dev/null | awk 'NR > 1 { value=\$4 } END { print value }') || free=unavailable
+case \$free in '' | *[!0-9]*) free=unavailable ;; esac
+printf 'disk_free=%s\\n' \"\$free\"
+users=\$(ps -A -o PID,USER,NAME 2>/dev/null) || users=''
+user=\$(printf '%s\\n' \"\$users\" | awk '\$3 == \"echo-bridge\" { count++; user=\$2 } END { if (count == 1) print user }')
+case \$user in nobody | 9999 | root | 0) ;; *) user=unavailable ;; esac
+printf 'process_user=%s\\n' \"\$user\""
+  cat "$log"
+  exit 0
+fi
 run_adb shell "test -x /data/local/hassmic/runas"
 process_state() {
   run_adb shell "ps -A -o PID,NAME"

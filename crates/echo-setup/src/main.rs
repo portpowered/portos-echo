@@ -24,6 +24,7 @@ async fn run() -> i32 {
             serde_json::json!({"type":"result", "command":"install", "ok":true, "version":version, "setup":"pending"})
         }),
         "status" | "uninstall" => echo_setup::lifecycle::execute(&options).await,
+        "doctor" => Ok(echo_setup::doctor::execute(&options).await),
         _ => Err(Failure("command_not_implemented")),
     };
     let event = match &result {
@@ -50,6 +51,16 @@ fn render(options: &cli::Options, event: &serde_json::Value) {
             }
             "status" if event.get("process").is_some() => {
                 let _ = writeln!(io::stdout(), "{event}");
+            }
+            "doctor" => {
+                if let Some(checks) = event["checks"].as_array() {
+                    for check in checks {
+                        let name = check["name"].as_str().unwrap_or("unavailable");
+                        let state = if check["ok"] == true { "OK" } else { "FAIL" };
+                        let fix = check["fix"].as_str().unwrap_or("");
+                        let _ = writeln!(io::stdout(), "{name}: {state} {fix}");
+                    }
+                }
             }
             "uninstall" if event["ok"] == true => {
                 let state = if options.purge { "purged" } else { "state retained" };

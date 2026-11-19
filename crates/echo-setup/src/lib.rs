@@ -1,6 +1,7 @@
 //! Native host orchestration. Device lifecycle policy belongs to echo-install.sh.
 mod adb;
 pub mod cli;
+pub mod doctor;
 pub mod install;
 pub mod integrity;
 pub mod lifecycle;

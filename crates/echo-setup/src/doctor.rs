@@ -1,0 +1,100 @@
+//! Read-only diagnostic checks; external observations never become diagnostics.
+use crate::{adb::Adb, cli::Options};
+use serde_json::{Value, json};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+const CHECKS: [(&str, &str); 7] = [
+    ("adb", "Install Android platform-tools or select --adb PATH."),
+    (
+        "device",
+        "Connect and authorize one device or select a ready device with --serial.",
+    ),
+    ("hassmic", "Install hassmic separately and check its runas helper."),
+    (
+        "egress",
+        "Check device DNS, TCP port 443 and the hassmic 3990,inet egress groups; nc is required.",
+    ),
+    ("clock", "Set the device clock within five minutes of the host clock."),
+    ("disk_free", "Free at least 256 MiB on the device data partition."),
+    (
+        "process_user",
+        "Start the installed bridge as nobody; stop and reinstall any unsafe process.",
+    ),
+];
+
+/// Observe seven checks with a bounded transport; never repair device state.
+pub async fn execute(options: &Options) -> Value {
+    let mut passed = [false; 7];
+    let ceiling = Duration::from_secs(options.timeout_seconds.min(15));
+    let _ = tokio::time::timeout(ceiling, observe(options, &mut passed)).await;
+    let checks: Vec<_> = CHECKS
+        .iter()
+        .zip(passed)
+        .map(|((name, fix), ok)| json!({"name":name, "ok":ok, "fix":if ok {None} else {Some(fix)}}))
+        .collect();
+    json!({"type":"result", "command":"doctor", "ok":passed.iter().all(|ok| *ok), "checks":checks})
+}
+
+async fn observe(options: &Options, passed: &mut [bool; 7]) -> crate::Result<()> {
+    let mut adb = Adb::discover(options.adb.as_deref())?;
+    passed[0] = true;
+    adb.select_ready(options.serial.as_deref()).await?;
+    passed[1] = true;
+    let (success, output) = adb.script("doctor").await?;
+    if success {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|time| time.as_secs());
+        if let Some(probes) = probes(&output, now) {
+            passed[2..].copy_from_slice(&probes);
+        }
+    }
+    Ok(())
+}
+
+fn probes(output: &str, now: Option<u64>) -> Option<[bool; 5]> {
+    let mut values = std::collections::BTreeMap::new();
+    for line in output.lines() {
+        let (key, value) = line.split_once('=')?;
+        if !["hassmic", "egress", "clock", "disk_free", "process_user"].contains(&key)
+            || values.insert(key, value).is_some()
+        {
+            return None;
+        }
+    }
+    if values.len() != 5 {
+        return None;
+    }
+    Some([
+        values["hassmic"] == "ok",
+        values["egress"] == "ok",
+        values["clock"]
+            .parse::<u64>()
+            .ok()
+            .zip(now)
+            .is_some_and(|(device, host)| device.abs_diff(host) <= 300),
+        values["disk_free"].parse::<u64>().is_ok_and(|kb| kb >= 256 * 1024),
+        matches!(values["process_user"], "nobody" | "9999"),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thresholds_and_untrusted_probe_frames_fail_closed() {
+        let healthy = "hassmic=ok\negress=ok\nclock=1000\ndisk_free=262144\nprocess_user=9999\n";
+        assert_eq!(probes(healthy, Some(1300)), Some([true; 5]));
+        assert_eq!(probes(healthy, Some(1301)), Some([true, true, false, true, true]));
+        assert_eq!(probes(healthy, None), Some([true, true, false, true, true]));
+        assert_eq!(
+            probes(&healthy.replace("262144", "262143"), Some(1000)),
+            Some([true, true, true, false, true])
+        );
+        for invalid in ["", &format!("{healthy}egress=ok\n"), &format!("{healthy}unknown=ok\n")] {
+            assert_eq!(probes(invalid, Some(1000)), None);
+        }
+    }
+}

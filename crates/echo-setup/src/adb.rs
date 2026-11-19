@@ -27,11 +27,16 @@ impl Adb {
     }
 
     pub async fn select(&mut self, requested: Option<&OsStr>) -> Result<()> {
-        let devices = self.call(&[OsString::from("devices")]).await?;
-        self.serial = Some(select_device(&devices, requested)?);
+        self.select_ready(requested).await?;
         self.shell("test -x /data/local/hassmic/runas")
             .await
             .map_err(|_| Failure("hassmic_required"))?;
+        Ok(())
+    }
+
+    pub async fn select_ready(&mut self, requested: Option<&OsStr>) -> Result<()> {
+        let devices = self.call(&[OsString::from("devices")]).await?;
+        self.serial = Some(select_device(&devices, requested)?);
         Ok(())
     }
 

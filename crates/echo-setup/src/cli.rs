@@ -14,6 +14,8 @@ Default release matches this executable; never latest. Versions omit leading v.
 Downloads require HTTPS; explicit http://127.0.0.1:PORT mirrors are for local tests.
 Exit 0: completed; 1: prerequisite/integrity/device failure; 2: usage; 3: setup timeout.
 Device identifiers, credentials and dependency logs are never printed.
+Doctor: read-only checks, at most 15 seconds; clock within 300 seconds of host,
+256 MiB free on data, TCP 443 egress as nobody (device nc required).
 ";
 
 pub struct Options {

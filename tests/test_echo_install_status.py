@@ -4,6 +4,7 @@ import os
 import selectors
 import json
 import subprocess
+import time
 
 from test_echo_install import Sandbox, prepare_lifecycle, require
 
@@ -199,6 +200,56 @@ def status_cases():
     status_privacy()
     uninstall_failures()
     full_journey()
+    doctor_cases()
+
+
+def doctor_tools(box):
+    """Closed external probes: never resolve or connect to a real endpoint."""
+    epoch = int(time.time())
+    for name, body in {
+        "nc": "printf '%s\\n' \"$*\" > \"$FAKE_ROOT/nc-args\"\nexit 0\n",
+        "date": f"printf '{epoch}\\n'\n",
+        "df": "printf 'Filesystem 1K-blocks Used Available Use%% Mounted\\nfixture 524288 262144 262144 50%% /data\\n'\n",
+    }.items():
+        tool = box.root / "remote-tools" / name
+        tool.write_text("#!/bin/sh\n" + body)
+        tool.chmod(0o755)
+    return epoch
+
+
+def doctor_cases():
+    with Sandbox() as box:
+        box.install()
+        epoch = doctor_tools(box)
+        (box.root / "running").touch()
+        before = snapshot(box)
+        expected = (f"hassmic=ok\negress=ok\nclock={epoch}\ndisk_free=262144\n"
+                    "process_user=nobody\n")
+        require(box.run(["doctor"]).stdout == expected, "healthy doctor probes differ")
+        require((box.root / "nc-args").read_text() == "-z -w 5 chatgpt.com 443\n",
+                "egress probe is not bounded")
+        for user in ("root", "0", "unknown"):
+            (box.root / "process-user").write_text(user)
+            value = user if user != "unknown" else "unavailable"
+            require(box.run(["doctor"]).stdout == expected.replace("process_user=nobody", "process_user=" + value),
+                    "unsafe doctor identity differs")
+        (box.root / "process-user").unlink()
+        for tool, body, field in (
+                ("nc", "exit 1\n", "egress=failed"),
+                ("date", "printf 'invalid\\n'\n", "clock=unavailable"),
+                ("df", "printf 'invalid\\n'\n", "disk_free=unavailable")):
+            doctor_tools(box)
+            path = box.root / "remote-tools" / tool
+            path.write_text("#!/bin/sh\n" + body)
+            require(field in box.run(["doctor"]).stdout, "failed doctor probe invented success")
+        (box.root / "remote/hassmic/runas").unlink()
+        (box.root / "nc-args").unlink()
+        require("hassmic=failed\negress=failed\n" in box.run(["doctor"]).stdout,
+                "missing hassmic did not fail its checks")
+        require(not (box.root / "nc-args").exists(), "egress ran without hassmic")
+        require(snapshot(box) == before, "doctor modified installed state")
+        require(not (box.root / "remote/echo-bridge.lock").exists(), "doctor took mutation lock")
+    print("echo-install doctor: probes=PASS identity=PASS readonly=PASS")
 
 
 def native_lifecycle_cases(binary):
@@ -225,6 +276,12 @@ def native_lifecycle_cases(binary):
             require(result["versions"] == {"current": None, "previous": None}, "invented versions")
             require(snapshot(box) == before, "native status mutated state")
             (box.root / "running").touch()
+            doctor_tools(box)
+            checks = native("doctor")["checks"]
+            require([check["name"] for check in checks] == [
+                "adb", "device", "hassmic", "egress", "clock", "disk_free", "process_user"],
+                "native doctor checks differ")
+            require(all(check["ok"] and check["fix"] is None for check in checks), "native healthy doctor failed")
             result = native("status")
             require(result["process_user"] == "nobody" and result["ok"], "native identity differs")
             (box.root / "process-user").write_text("root")
