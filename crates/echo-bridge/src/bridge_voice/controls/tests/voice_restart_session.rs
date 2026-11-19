@@ -11,11 +11,11 @@ impl VoicePort for Port {
     fn send(&self, _: echo_media::PcmFrame) -> Result<(), Error> {
         unreachable!("idle restart sent audio")
     }
-    async fn next(&mut self) -> Result<MediaEvent, Error> {
-        unreachable!("idle restart consumed control")
+    fn next(&mut self) -> impl Future<Output = Result<MediaEvent, Error>> {
+        std::future::poll_fn(|_| unreachable!("idle restart consumed control"))
     }
-    async fn ready_audio(&mut self) -> Result<Option<echo_media::PcmFrame>, Error> {
-        unreachable!("idle restart admitted another wake")
+    fn ready_audio(&mut self) -> impl Future<Output = Result<Option<echo_media::PcmFrame>, Error>> {
+        std::future::poll_fn(|_| unreachable!("idle restart admitted another wake"))
     }
 }
 

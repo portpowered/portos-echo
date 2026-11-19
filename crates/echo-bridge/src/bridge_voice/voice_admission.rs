@@ -91,10 +91,7 @@ where
     P: MediaPeer,
 {
     let (mut tools, trace, wake_earcon, termination) = context;
-    super::voice_session::validate(&options.session)?;
-    if options.connect_timeout.is_zero() || Instant::now().checked_add(options.connect_timeout).is_none() {
-        return Err(Error::Input);
-    }
+    validate_service(&options)?;
     let mut events = client.events()?;
     // Heap-own the service to keep scoped supervision within the Windows stack.
     let work = Box::pin(async {
@@ -154,6 +151,14 @@ where
         }
     });
     super::earcon::scope(client, wake_earcon, work).await
+}
+
+fn validate_service(options: &ServeOptions<'_>) -> Result<(), Error> {
+    super::voice_session::validate(&options.session)?;
+    if options.connect_timeout.is_zero() || Instant::now().checked_add(options.connect_timeout).is_none() {
+        return Err(Error::Input);
+    }
+    Ok(())
 }
 
 /// Only that run failed, and its call is already closed. End the device's run

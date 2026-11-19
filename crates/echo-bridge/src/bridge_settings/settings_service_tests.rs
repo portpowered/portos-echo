@@ -211,6 +211,16 @@ async fn queued_save(cancel: bool) {
         response = &mut sending => unreachable!("responded before commit: {response:?}"),
     };
     assert!(send.send(request).await.is_ok());
+    finish_owner(owner, cancel).await;
+    assert!(send.is_closed());
+    let response = sending.await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.bytes().await.unwrap().len(), 0);
+    assert_eq!(fixture.overlay(), "");
+    fixture.server.shutdown().await.unwrap();
+}
+
+async fn finish_owner(owner: SettingsService, cancel: bool) {
     if cancel {
         drop(owner.scope(std::future::pending::<()>(), || LinkStatusV1::Linked));
     } else {
@@ -219,10 +229,4 @@ async fn queued_save(cancel: bool) {
             (23, false)
         );
     }
-    assert!(send.is_closed());
-    let response = sending.await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(response.bytes().await.unwrap().len(), 0);
-    assert_eq!(fixture.overlay(), "");
-    fixture.server.shutdown().await.unwrap();
 }

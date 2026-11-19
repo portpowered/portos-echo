@@ -27,7 +27,7 @@ fn settings_process_reader_survives_runtime_replacement_and_latches_result() {
     for result in [Ok(0), Ok(1), Err(std::io::ErrorKind::BrokenPipe.into())] {
         let clean = matches!(result, Ok(0));
         let reads = Arc::new(AtomicUsize::new(0));
-        let (entered, ready) = mpsc::channel();
+        let (entered, started) = mpsc::channel();
         let (release, receive) = mpsc::channel();
         let input = Input::open(Reader {
             reads: reads.clone(),
@@ -35,7 +35,7 @@ fn settings_process_reader_survives_runtime_replacement_and_latches_result() {
             release: receive,
         })
         .unwrap();
-        ready.recv().unwrap();
+        started.recv().unwrap();
         let first = runtime();
         first.block_on(async {
             drop(input.subscribe());
@@ -68,7 +68,7 @@ fn settings_process_final_gate_observes_cleanup_control_and_durable_kill() {
     for result in [Ok(0), Ok(1), Err(std::io::ErrorKind::BrokenPipe.into())] {
         let clean = matches!(result, Ok(0));
         let reads = Arc::new(AtomicUsize::new(0));
-        let (entered, ready) = mpsc::channel();
+        let (entered, started) = mpsc::channel();
         let (release, receive) = mpsc::channel();
         let input = Input::open(Reader {
             reads: reads.clone(),
@@ -76,7 +76,7 @@ fn settings_process_final_gate_observes_cleanup_control_and_durable_kill() {
             release: receive,
         })
         .unwrap();
-        ready.recv().unwrap();
+        started.recv().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let kill = directory.path().join("bridge-kill");
         assert_eq!(input.replacement_gate(Some(&kill)), Ok(ReplacementGate::Ready));
@@ -154,7 +154,7 @@ async fn exec_child(path: &std::path::Path) {
         std::fs::write(path, b"exec requested").unwrap();
         emit(&value);
         let result = ProcessImage::capture().replace();
-        panic!("exec unexpectedly returned: {result:?}");
+        unreachable!("exec unexpectedly returned: {result:?}");
     }
     emit(&value);
     emit(&serde_json::json!({"eof": shutdown.await.unwrap()}));
@@ -186,7 +186,7 @@ fn witness(output: &mut impl std::io::BufRead) -> serde_json::Value {
 async fn t3_settings_process_exec_failure_preserves_control() {
     use std::os::unix::process::CommandExt;
     let reads = Arc::new(AtomicUsize::new(0));
-    let (entered, ready) = mpsc::channel();
+    let (entered, started) = mpsc::channel();
     let (release, receive) = mpsc::channel();
     let input = Input::open(Reader {
         reads: reads.clone(),
@@ -194,7 +194,7 @@ async fn t3_settings_process_exec_failure_preserves_control() {
         release: receive,
     })
     .unwrap();
-    ready.recv().unwrap();
+    started.recv().unwrap();
     let old = input.subscribe();
     let directory = tempfile::tempdir().unwrap();
     let error = ProcessImage::capture()

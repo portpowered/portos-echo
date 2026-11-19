@@ -55,7 +55,7 @@ impl SettingsHost {
                 })
             }
         };
-        result.unwrap_or_else(error_reply)
+        result.unwrap_or_else(|error| error_reply(&error))
     }
 
     fn save(&mut self, fields: SettingsFieldsV1) -> Result<bool, SettingsError> {
@@ -116,7 +116,7 @@ fn saved(restart_pending: bool) -> SettingsReply {
     })
 }
 
-fn error_reply(error: SettingsError) -> SettingsReply {
+fn error_reply(error: &SettingsError) -> SettingsReply {
     let persistence = matches!(
         error,
         SettingsError::Persistence | SettingsError::Durability | SettingsError::Unavailable
