@@ -4,6 +4,8 @@ use echo_config::{BridgeConfig, ConfigError, SettingsOverlay};
 use std::path::PathBuf;
 
 mod settings_atomic;
+mod settings_host;
+pub use settings_host::SettingsHost;
 
 /// Safe diagnostics: no submitted prompt, setting value or filesystem path.
 #[derive(Debug, thiserror::Error)]
@@ -138,3 +140,6 @@ fn same_values(first: &BridgeConfig, second: &BridgeConfig) -> bool {
 
 #[cfg(test)]
 mod settings_tests;
+
+#[cfg(test)]
+mod settings_http_tests;

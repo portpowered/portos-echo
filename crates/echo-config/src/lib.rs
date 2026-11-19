@@ -9,7 +9,7 @@ mod config_settings;
 mod config_validate;
 mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
-pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS};
+pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS, realtime_voices};
 pub use config_muse::{AgentBackend, MuseConfig};
 pub use config_settings::{EffectiveConfig, SettingsOverlay};
 pub use config_voice::VoiceConfig;

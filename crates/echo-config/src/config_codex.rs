@@ -48,6 +48,12 @@ const REALTIME_VOICES: [&str; 19] = [
     "marin", "sage", "shimmer", "sol", "spruce", "vale", "verse",
 ];
 
+/// Canonical pinned choices; `default` omits the outgoing voice field.
+#[must_use]
+pub fn realtime_voices() -> impl Iterator<Item = &'static str> {
+    std::iter::once("default").chain(REALTIME_VOICES)
+}
+
 impl BridgeConfig {
     /// Omit the voice when neither setting is supplied, or the chosen one is
     /// `default`, using the pinned server default.

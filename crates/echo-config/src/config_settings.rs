@@ -25,6 +25,25 @@ pub struct EffectiveConfig {
 }
 
 impl SettingsOverlay {
+    /// Construct a sparse patch from typed leaves, without applying base defaults.
+    /// The caller must use `apply_to` before accepting or persisting the candidate.
+    #[must_use]
+    pub fn from_leaves(
+        listen_enabled: Option<bool>,
+        listen_seconds: Option<u32>,
+        voice: Option<String>,
+        daily_cap: Option<u64>,
+        tool_cap: Option<u32>,
+    ) -> Self {
+        Self {
+            listen_enabled,
+            listen_seconds,
+            voice,
+            daily_cap,
+            tool_cap,
+        }
+    }
+
     /// Decode only the five editable keys. Validation against the base is separate.
     ///
     /// # Errors
