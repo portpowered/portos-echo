@@ -16,7 +16,7 @@ struct Peer {
     archive: Vec<u8>,
 }
 
-const PEER: &str = r#"
+const PEER: &str = r"
 import http.server, pathlib, ssl, sys
 root = pathlib.Path(sys.argv[1])
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -51,7 +51,7 @@ context.load_cert_chain(root / 'ca.pem', root / 'key.pem')
 server.socket = context.wrap_socket(server.socket, server_side=True)
 print(server.server_port, flush=True)
 server.serve_forever()
-"#;
+";
 
 async fn certificate(root: &Path, name: &str) -> Result {
     let output = Command::new("openssl")
