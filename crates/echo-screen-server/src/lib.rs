@@ -45,6 +45,7 @@ pub struct ScreenServer {
     drain: watch::Sender<Option<tokio::time::Instant>>,
     listener: Option<JoinHandle<usize>>,
     tasks: Vec<JoinHandle<()>>,
+    downloads_started: bool,
 }
 
 /// Safe completion for one configured background download. No input URL or path.
@@ -64,6 +65,10 @@ impl ScreenServer {
         pins: Vec<(String, String)>,
     ) -> mpsc::Receiver<PackInstallResult> {
         let (send, receive) = mpsc::channel(4);
+        if self.downloads_started {
+            return receive;
+        }
+        self.downloads_started = true;
         self.tasks.push(tokio::spawn(packs::start(
             packs::Downloads { home, ca, pins },
             self.core.clone(),
@@ -212,6 +217,7 @@ pub async fn serve_with_settings(
         drain,
         listener: Some(listener_task),
         tasks: vec![state_task],
+        downloads_started: false,
     })
 }
 
@@ -243,6 +249,7 @@ mod tests {
                 drain: watch::channel(None).0,
                 listener: None,
                 tasks: vec![],
+                downloads_started: false,
             },
             requests,
         )

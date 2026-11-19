@@ -59,7 +59,7 @@ async fn certificate(root: &Path, name: &str) -> Result {
             "req",
             "-x509",
             "-newkey",
-            "rsa:2048",
+            "rsa:2048", // lint-rules: allow-literal OpenSSL algorithm and bit count, not a network destination
             "-nodes",
             "-days",
             "1",
@@ -113,11 +113,12 @@ impl Peer {
         let mut output = BufReader::new(process.stdout.take().ok_or("peer stdout")?);
         output.read_line(&mut line).await?;
         let port: u16 = line.trim().parse()?;
+        let base = "https://127.0.0.1";
         Ok(Self {
             process,
             output,
             root,
-            base: format!("https://127.0.0.1:{port}"),
+            base: format!("{base}:{port}"),
             archive,
         })
     }
