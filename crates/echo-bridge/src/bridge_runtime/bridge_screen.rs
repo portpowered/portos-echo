@@ -317,6 +317,9 @@ mod tests {
     /// T3: configured pack failure is isolated from the real screen listener.
     #[tokio::test]
     async fn t3_screen_pack_missing_ca_reports_safely_and_keeps_screen_serving() {
+        let base = echo_config::BridgeConfig::from_toml_str(
+            "[echo]\nhost='127.0.0.1'\n[live]\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n",
+        ).unwrap();
         let home = tempfile::tempdir().unwrap();
         let pairing = home.path().join("pairing.txt");
         std::fs::write(&pairing, "synthetic-screen-pair").unwrap();
@@ -333,7 +336,7 @@ mod tests {
                     sha256: "0".repeat(64),
                 }],
             },
-            ..echo_config::BridgeConfig::default()
+            ..base
         };
         let path = home.path().join("trace.jsonl");
         let trace = Trace::open(&path, "api_key").unwrap();
