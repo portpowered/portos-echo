@@ -306,3 +306,179 @@ fn mcp_codex_model_rejects_legacy_or_extra_content_and_unrecognized_plaintext() 
         assert_eq!(Observations::default().codex_model("thread-1", &request), Err(INVALID));
     }
 }
+
+fn portos() -> PortosObservations {
+    PortosObservations::new("portos", &["endpoint_query".into(), "endpoint_list".into()]).unwrap()
+}
+
+fn receipt(event: &str, fields: Value) -> Value {
+    let mut row = json!({"event":event,"elapsed_ms":0,"provider_auth_mode":"api_key"});
+    row.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+    row
+}
+
+fn attempt(name: &str, call: &str) -> Value {
+    receipt(
+        "tools/call",
+        json!({"name":name,"thread_id":"t","turn_id":"u","call_id":call}),
+    )
+}
+
+fn completion(name: &str, ordinal: u64, outcome: &str) -> Value {
+    receipt(
+        "mcp.tool.completed",
+        json!({"server":"portos","name":name,"attempt_count":ordinal,"outcome":outcome}),
+    )
+}
+
+#[test]
+fn mcp_portos_observer_counts_physical_returns_in_reverse_order_without_sim_histories() {
+    let mut observer = portos();
+    observer
+        .trace(
+            0,
+            &receipt(
+                "mcp.tools_list.completed",
+                json!({"server":"portos","outcome":"success","count":2}),
+            ),
+        )
+        .unwrap();
+    observer.trace(0, &attempt("endpoint_query", "a")).unwrap();
+    observer.trace(0, &attempt("endpoint_list", "b")).unwrap();
+    observer.trace(0, &attempt("end_session", "builtin")).unwrap();
+    assert_eq!(observer.measure(), Err(INVALID));
+    observer.trace(0, &completion("endpoint_list", 2, "error")).unwrap();
+    assert_eq!(observer.measure(), Err(INVALID));
+    observer.trace(0, &completion("endpoint_query", 1, "success")).unwrap();
+    assert_eq!(
+        observer.measure(),
+        Ok(LinkCounts {
+            tools_list: 1,
+            tool_call: 1,
+            ..LinkCounts::default()
+        })
+    );
+    let error = UiState::Error {
+        message: RELINK.into(),
+        relink: true,
+    };
+    observer.screen(&error);
+    observer.screen(&error);
+    assert_eq!(observer.measure().unwrap().relink_error, 1);
+}
+
+#[test]
+fn mcp_portos_observer_refuses_duplicate_unmatched_conflicting_and_private_receipts() {
+    let good = completion("endpoint_query", 1, "success");
+    let mut cases = vec![
+        ("ordinal", json!(0)),
+        ("ordinal", json!(2)),
+        ("ordinal", json!(null)),
+        ("name", json!("endpoint_list")),
+        ("name", json!("unknown")),
+        ("outcome", json!("pending")),
+        ("server", json!("other")),
+        ("result", json!("private-marker")),
+        ("provider_auth_mode", json!("unknown")),
+    ];
+    cases.push(("attempt_count", json!(-1)));
+    for (field, value) in cases {
+        let mut observer = portos();
+        observer.trace(0, &attempt("endpoint_query", "a")).unwrap();
+        let mut changed = good.clone();
+        changed[if field == "ordinal" { "attempt_count" } else { field }] = value;
+        assert_eq!(observer.trace(0, &changed), Err(INVALID), "{field}");
+        assert_eq!(observer.trace(0, &good), Err(INVALID));
+        assert_eq!(observer.measure(), Err(INVALID));
+    }
+    let mut observer = portos();
+    assert_eq!(observer.trace(0, &good), Err(INVALID));
+    let mut observer = portos();
+    observer.trace(0, &attempt("endpoint_query", "a")).unwrap();
+    observer.trace(0, &good).unwrap();
+    assert_eq!(observer.trace(0, &good), Err(INVALID));
+    assert_eq!(observer.measure(), Err(INVALID));
+    let mut observer = portos();
+    let row = attempt("endpoint_query", "a");
+    observer.trace(0, &row).unwrap();
+    assert_eq!(observer.trace(0, &row), Err(INVALID));
+}
+
+#[test]
+fn mcp_portos_observer_rejects_duplicate_catalog_and_unreturned_cancelled_attempts() {
+    let catalog = receipt(
+        "mcp.tools_list.completed",
+        json!({"server":"portos","outcome":"success","count":2}),
+    );
+    for field in ["count", "outcome", "server", "result"] {
+        let mut observer = portos();
+        let mut bad = catalog.clone();
+        bad[field] = json!(null);
+        assert_eq!(observer.trace(0, &bad), Err(INVALID));
+    }
+    let mut observer = portos();
+    observer.trace(0, &catalog).unwrap();
+    assert_eq!(observer.trace(0, &catalog), Err(INVALID));
+    let mut observer = portos();
+    observer.trace(0, &attempt("endpoint_query", "a")).unwrap();
+    assert_eq!(observer.measure(), Err(INVALID));
+    assert_eq!(observer.restarted(1), Err(INVALID));
+    assert_eq!(observer.measure(), Err(INVALID));
+    let mut observer = portos();
+    observer.trace(0, &attempt("endpoint_query", "a")).unwrap();
+    observer.trace(0, &completion("endpoint_query", 1, "error")).unwrap();
+    assert_eq!(observer.measure(), Ok(LinkCounts::default()));
+}
+
+#[test]
+fn mcp_portos_observer_restart_resets_ordinals_once_and_requires_reload_and_actual_use() {
+    for reload_first in [true, false] {
+        let mut observer = portos();
+        observer.trace(0, &attempt("endpoint_query", "a")).unwrap();
+        observer.trace(0, &completion("endpoint_query", 1, "error")).unwrap();
+        observer.restarted(1).unwrap();
+        let reload = receipt("mcp.grant.reloaded", json!({}));
+        if reload_first {
+            observer.trace(1, &reload).unwrap();
+        }
+        assert_eq!(observer.measure().unwrap().restart_grant_kept, 0);
+        observer.trace(1, &attempt("endpoint_query", "a")).unwrap();
+        observer.trace(1, &completion("endpoint_query", 1, "success")).unwrap();
+        if !reload_first {
+            observer.trace(1, &reload).unwrap();
+        }
+        assert_eq!(observer.measure().unwrap().restart_grant_kept, 1);
+        assert_eq!(observer.measure().unwrap().tool_call, 1);
+        assert_eq!(observer.trace(1, &reload), Err(INVALID));
+    }
+    for generation in [0, 2] {
+        let mut observer = portos();
+        assert_eq!(observer.restarted(generation), Err(INVALID));
+        assert_eq!(observer.measure(), Err(INVALID));
+    }
+    let mut observer = portos();
+    observer.restarted(1).unwrap();
+    assert_eq!(observer.trace(0, &attempt("endpoint_query", "a")), Err(INVALID));
+    assert_eq!(observer.restarted(2), Err(INVALID));
+}
+
+#[test]
+fn mcp_portos_observer_refuses_regressed_time_and_ambiguous_configuration() {
+    let mut observer = portos();
+    let mut row = attempt("endpoint_query", "a");
+    row["elapsed_ms"] = json!(2);
+    observer.trace(0, &row).unwrap();
+    assert_eq!(
+        observer.trace(0, &completion("endpoint_query", 1, "success")),
+        Err(INVALID)
+    );
+    for names in [
+        vec![],
+        vec!["".into()],
+        vec!["query".into(), "query".into()],
+        vec!["private\nvalue".into()],
+    ] {
+        assert!(matches!(PortosObservations::new("portos", &names), Err(INVALID)));
+    }
+    assert!(matches!(PortosObservations::new("", &["query".into()]), Err(INVALID)));
+}
