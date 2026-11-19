@@ -99,6 +99,17 @@ pub trait MediaPeer: Sized {
     /// # Errors
     /// Returns `NotConnected` before readiness, the fixed failure category, or Closed.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
+    /// Queue one frame unless the bounded sender is full. False leaves the frame
+    /// with the caller, which retries after `send_ready`; nothing is evicted.
+    /// # Errors
+    /// The same categories as `send`.
+    fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        self.send(frame).map(|()| true)
+    }
+    /// Resolve once `try_send` can accept a frame, or the peer ended.
+    fn send_ready(&self) -> impl Future<Output = ()> + Send + use<Self> {
+        std::future::ready(())
+    }
     fn recv(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, Error>> + Send;
     /// Retire queued ingress/PCM and codec history without reopening the call.
     /// Cancellation retains the pending acknowledgement for the next invocation.

@@ -210,6 +210,22 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         self.peer.send(frame).map_err(media_error)
     }
 
+    /// Like `send`, but a full bounded sender refuses the frame instead of
+    /// evicting its oldest one. False leaves the frame with the caller.
+    /// # Errors
+    /// Rejects nonactive sessions or the peer's fixed failure category.
+    pub fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        if !self.active {
+            return Err(Error::Unavailable);
+        }
+        self.peer.try_send(frame).map_err(media_error)
+    }
+
+    /// Resolve once `try_send` can accept a frame, or the peer ended.
+    pub fn send_ready(&self) -> impl Future<Output = ()> + Send + use<R, W, P> {
+        self.peer.send_ready()
+    }
+
     /// Cancellation-safe, fair polling of PCM and app-server events, also while idle.
     /// # Errors
     /// Transport/media failure closes the generation; EOF is never reply completion.
@@ -357,3 +373,26 @@ fn media_error(error: echo_media::Error) -> Error {
 #[cfg(test)]
 #[path = "call_media_tests/call_media_tests.rs"]
 mod tests;
+
+impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> crate::bridge_voice::VoicePort
+    for MediaCall<'a, R, W, P>
+{
+    fn send(&self, frame: PcmFrame) -> Result<(), Error> {
+        Self::send(self, frame)
+    }
+    fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        Self::try_send(self, frame)
+    }
+    fn uplink_ready(&self) -> impl Future<Output = ()> + use<'a, R, W, P> {
+        self.send_ready()
+    }
+    async fn next(&mut self) -> Result<MediaEvent, Error> {
+        Self::next(self).await
+    }
+    async fn ready_audio(&mut self) -> Result<Option<PcmFrame>, Error> {
+        Self::ready_audio(self).await
+    }
+    fn retire_audio(&mut self) {
+        Self::retire_audio(self);
+    }
+}

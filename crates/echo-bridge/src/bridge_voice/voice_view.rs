@@ -169,7 +169,16 @@ impl<'a> View<'a> {
                 "count":stats.microphone_frames, "received_chunks":stats.received_chunks,
                 "dropped_chunks":stats.dropped_chunks, "tail_samples":stats.microphone_tail
             }),
-        )
+        )?;
+        if stats.uplink_dropped > 0 {
+            // Speech that never reached the call is a named loss, never silent.
+            self.trace.record(
+                "mic.uplink_dropped",
+                Some(id),
+                json!({"count":stats.uplink_dropped, "reason":"backlog_full"}),
+            )?;
+        }
+        Ok(())
     }
 
     fn completed(&mut self) -> Result<(), Error> {
