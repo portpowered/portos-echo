@@ -6,6 +6,7 @@ use std::{
 mod screen;
 mod setup;
 mod startup;
+pub(super) mod wire;
 
 use echo_live::fake::FakeLive;
 use serde_json::{Value, json};

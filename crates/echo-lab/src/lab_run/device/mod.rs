@@ -6,6 +6,7 @@ mod observations;
 pub mod pcm;
 mod recovery;
 mod runtime;
+use runtime::wire;
 
 use super::{Driver, Step, run_device::Device, run_options::Options, run_report::Artifacts};
 
@@ -18,10 +19,13 @@ pub struct Configured<'a> {
     state: runtime::Runtime,
     config: String,
     iteration: u64,
+    wire_endpoint: Option<std::net::SocketAddr>,
+    wire: Option<wire::Observer>,
 }
 
 impl<'a> Configured<'a> {
     pub fn new(options: &'a Options, config: String, errors: &'a mut dyn std::io::Write) -> Result<Self, String> {
+        let wire_endpoint = wire::endpoint(options, &config)?;
         let mut state = runtime::Runtime::default();
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
         if config::setup::requested(options)? {
@@ -42,12 +46,19 @@ impl<'a> Configured<'a> {
                 .map_err(|_| "device: cannot start runtime")?,
             state,
             config,
+            wire_endpoint,
+            wire: None,
         })
     }
 
     fn start(&mut self, artifacts: &Artifacts) -> Result<(), String> {
         self.bench.firmware()?;
         if !self.state.started {
+            if let Some(address) = self.wire_endpoint {
+                self.wire = Some(wire::Observer::start(self.options, address)?);
+                let _entered = self.executor.enter();
+                self.wire.as_mut().ok_or("device: missing wire owner")?.launch()?;
+            }
             let result = self.executor.block_on(runtime::controlled(
                 self.state.start(
                     self.options.bridge.as_deref().ok_or("device: missing bridge")?,
@@ -115,7 +126,12 @@ impl Driver for Configured<'_> {
         let bench = self.bench.close(artifacts);
         let root = artifacts.root.clone();
         let owned = self.executor.block_on(self.state.close(&root, artifacts));
-        super::combine(bench, owned)
+        let wire = match self.wire.as_mut() {
+            Some(wire) => self.executor.block_on(wire.close(artifacts)),
+            None => Ok(()),
+        };
+        self.wire.take();
+        super::combine(super::combine(bench, owned), wire)
     }
 }
 
