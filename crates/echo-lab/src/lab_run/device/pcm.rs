@@ -218,9 +218,10 @@ impl super::Configured<'_> {
 
     pub(super) fn wait_played(&mut self, index: usize) -> Result<(), String> {
         if let Some(wire) = self.wire.as_mut() {
-            self.executor.block_on(super::runtime::controlled(
+            self.executor.block_on(super::runtime::observed(
                 wire.wait_reply(1, self.wire_replies + 1),
                 self.options.cancel.as_deref(),
+                self.window,
             ))?;
             self.wire_replies += 1;
         }
@@ -228,7 +229,7 @@ impl super::Configured<'_> {
     }
 
     fn reply_observed(&mut self, index: usize) -> Result<(), String> {
-        self.executor.block_on(super::runtime::controlled(
+        self.executor.block_on(super::runtime::observed(
             async {
                 if self.session {
                     self.state.session_reply(self.wire_replies).await
@@ -237,6 +238,7 @@ impl super::Configured<'_> {
                 }
             },
             self.options.cancel.as_deref(),
+            self.window,
         ))
     }
 }

@@ -727,6 +727,11 @@ the hassmic log must still show the link. A wake that hassmic answers with
 `wake word: no Home Assistant link, nothing started` fails with
 `device: wake without a hassmic link`. The wake clip still plays through the Ring.
 
+Under `--live real` each reply, screen and trace observation waits 20 s plus twice
+the effective `voice.session_listen_seconds` (at most `voice.session_max_seconds`),
+50 s by default, because the bridge keeps the run open for a follow-up after its
+reply; fake Live keeps 20 s, and so does bridge startup.
+
 The launcher is a JSON file kept outside the repository. Every device path comes
 from it; the driver holds none.
 
