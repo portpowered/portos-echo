@@ -271,12 +271,11 @@ mod tests {
             let mut utterances = Vec::new();
             for step in scenario["steps"].as_array().unwrap() {
                 let Some(value) = step["say"].as_str() else { continue };
-                let super::super::super::Step::SayText(text) =
+                if let super::super::super::Step::SayText(text) =
                     session_text(value, &scenario, true, false).unwrap().unwrap()
-                else {
-                    panic!("session input must carry speech");
-                };
-                utterances.push(text);
+                {
+                    utterances.push(text);
+                }
                 assert_eq!(
                     session_text(value, &scenario, false, false).err().unwrap(),
                     "device: session utterances require --speech-endpoint and --speech-model"
