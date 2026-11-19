@@ -14,7 +14,7 @@ pub enum CodexLaunch {
 
 /// Offline settings for the app server. Runtime admission requires `home`;
 /// parsing never resolves the binary, expands paths or reads credentials.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CodexConfig {
     pub home: Option<PathBuf>,
     pub binary: Option<PathBuf>,
@@ -40,22 +40,6 @@ snapshot; UTC does not establish the user's local time zone.";
 
 /// Built-in delegated runner instructions, unchanged by the file migration.
 pub const RUNNER_INSTRUCTIONS: &str = "Client audio bridge";
-
-impl Default for CodexConfig {
-    fn default() -> Self {
-        Self {
-            home: None,
-            binary: None,
-            launch: CodexLaunch::default(),
-            ca_file: None,
-            voice: None,
-            model: None,
-            delegate_model: None,
-            delegate_effort: None,
-            time_zone: None,
-        }
-    }
-}
 
 /// The app server's `RealtimeVoice` values at the pinned rust-v0.160.0 schema.
 /// `default` is ours: it omits the field so the app server picks its voice.

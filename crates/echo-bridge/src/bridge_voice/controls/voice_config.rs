@@ -296,6 +296,10 @@ pub(super) mod tests {
         fn states(&self) -> tokio::sync::watch::Receiver<echo_media::PeerState> {
             tokio::sync::watch::channel(echo_media::PeerState::Connected).1
         }
+        fn observe_setup(&self, observer: echo_media::SetupObserver) -> Result<(), echo_media::Error> {
+            observer(echo_media::SetupStage::IceConnected)?;
+            observer(echo_media::SetupStage::DataChannelOpen)
+        }
         fn send(&self, _: echo_media::PcmFrame) -> Result<(), echo_media::Error> {
             Ok(())
         }

@@ -72,8 +72,11 @@ async fn admissions(
                 index,
                 home,
             );
-            let (result, ()) = tokio::join!(work, remote);
-            assert_eq!(result, Ok(()));
+            let result = tokio::try_join!(work, async {
+                remote.await;
+                Ok::<_, Error>(())
+            });
+            assert_eq!(result, Ok(((), ())));
             drop(observe);
             assert_eq!(completed, 2);
         }
