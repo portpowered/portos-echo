@@ -32,9 +32,8 @@ impl Trace {
     /// # Errors
     /// Returns a safe I/O category; paths never enter diagnostics.
     pub fn open(path: &Path, mode: &'static str) -> Result<Self, Error> {
-        let writer = OpenOptions::new()
-            .create(true)
-            .append(true)
+        let mut options = OpenOptions::new();
+        let writer = crate::bridge_private::file(options.create(true).append(true))
             .open(path)
             .map_err(|_| Error::Trace)?;
         Ok(Self {

@@ -9,6 +9,7 @@ pub mod bridge_mcp;
 #[path = "bridge_muse/bridge_muse.rs"]
 pub mod bridge_muse;
 pub mod bridge_operator;
+mod bridge_private;
 pub mod bridge_runtime;
 pub mod bridge_trace;
 #[path = "bridge_voice/bridge_voice.rs"]
@@ -25,6 +26,8 @@ pub enum Error {
     CodexHome,
     #[error("codex.binary: unavailable")]
     CodexBinary,
+    #[error("codex.ca_file: unavailable")]
+    CodexCaFile,
     #[error("use signin with the configured Codex home")]
     CodexImport,
     #[error("authorization")]

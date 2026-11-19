@@ -5,7 +5,7 @@ use crate::{
     codex_protocol::initialize_params,
     codex_rpc::{RpcError, RpcState},
 };
-pub use codex_config::SupervisorConfig;
+pub use codex_config::{Launch, SupervisorConfig};
 use std::{collections::VecDeque, fmt, fs::File, process::Stdio};
 use tokio::{
     process::{Child, ChildStdin, ChildStdout, Command},
@@ -151,7 +151,10 @@ impl Supervisor {
 
     fn command(&self) -> Command {
         let mut command = Command::new(&self.config.binary);
-        command.args(["app-server", "--listen", "stdio://"]);
+        if self.config.launch == Launch::Subcommand {
+            command.arg("app-server");
+        }
+        command.args(["--listen", "stdio://"]);
         for (key, value) in &self.config.config_overrides {
             command.arg("-c").arg(format!("{key}={value}"));
         }
@@ -264,6 +267,43 @@ mod codex_restart_tests {
         retained.try_lock()?;
         retained.unlock()?;
         drop(retained);
+        std::fs::remove_dir_all(parent)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_form_selects_argv_and_the_work_directory_is_owner_only() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let parent = std::env::temp_dir().join(format!("echo-launch-{}-{nonce}", std::process::id()));
+        std::fs::DirBuilder::new().mode(0o700).create(&parent)?;
+        for (launch, expected) in [
+            (
+                Launch::Subcommand,
+                &["app-server", "--listen", "stdio://", "-c", "a=1"][..],
+            ),
+            (Launch::Standalone, &["--listen", "stdio://", "-c", "a=1"][..]),
+        ] {
+            let mut config = SupervisorConfig::new(std::env::current_exe()?, parent.join(format!("{launch:?}")));
+            assert_eq!(config.launch, Launch::Subcommand);
+            config.launch = launch;
+            config.config_overrides.push(("a".into(), "1".into()));
+            let mut owner = Supervisor::new(config)?;
+            owner.set_environment("SSL_CERT_FILE", "/synthetic/ca.pem".into())?;
+            let command = owner.command();
+            let command = command.as_std();
+            assert_eq!(command.get_args().collect::<Vec<_>>(), expected);
+            let certificate = command.get_envs().find(|(key, _)| *key == "SSL_CERT_FILE");
+            assert_eq!(
+                certificate.and_then(|(_, value)| value),
+                Some(std::ffi::OsStr::new("/synthetic/ca.pem"))
+            );
+            let work = std::fs::metadata(owner.config.cwd())?;
+            assert_eq!(work.permissions().mode() & 0o777, 0o700);
+        }
         std::fs::remove_dir_all(parent)?;
         Ok(())
     }

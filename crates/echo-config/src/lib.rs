@@ -8,7 +8,7 @@ mod config_muse;
 mod config_validate;
 mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
-pub use config_codex::CodexConfig;
+pub use config_codex::{CodexConfig, CodexLaunch};
 pub use config_muse::{AgentBackend, MuseConfig};
 pub use config_voice::VoiceConfig;
 
