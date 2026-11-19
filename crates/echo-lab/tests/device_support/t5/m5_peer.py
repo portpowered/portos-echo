@@ -175,6 +175,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send(200, dict(issuer=world.origin, token_endpoint=world.origin + "/token"))
             return
         assert self.path == "/events?token=synthetic-local-screen"
+        self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()

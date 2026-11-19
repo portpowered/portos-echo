@@ -191,32 +191,64 @@ fn t3_on_device_m5_common_scenario_dispatches_all_actions_and_measures_after_cle
     peer.cleanup(true);
 }
 
-#[test]
-fn t3_on_device_m5_failed_results_unreturned_calls_and_cancel_revoke_counts() {
-    for mode in ["tool", "unreturned", "cancel"] {
-        let peer = Peer::new(mode);
-        let output = peer.run();
-        assert_eq!(output.status.code(), Some(1), "mode={mode}");
-        let report = peer.session.report();
-        assert_eq!(report["result"], "fail");
+fn failed_journey(mode: &str) {
+    let peer = Peer::new(mode);
+    let output = peer.run();
+    assert_eq!(output.status.code(), Some(1), "mode={mode}");
+    let report = peer.session.report();
+    assert_eq!(report["result"], "fail");
+    if mode == "late" {
+        assert_eq!(report["checks"]["step_13"], false);
+    } else {
         assert_eq!(report["link_counts"], Value::Null);
-        assert!(!peer.session.0.join("replay.json").exists());
-        peer.cleanup(true);
     }
+    if matches!(mode, "tool" | "unreturned" | "cancel" | "launch") {
+        assert!(!peer.session.0.join("replay.json").exists());
+    }
+    if mode == "cancel" {
+        // The command can queue audio before acknowledging its end timestamp.
+        // That uncertain playback must block subsequent held commands, including
+        // release, and name coordinator recovery rather than claiming cleanup.
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("playback completion unknown; coordinator recovery required")
+        );
+        assert_eq!(report["checks"]["session_released"], false);
+    }
+    peer.cleanup(!matches!(mode, "launch" | "cancel"));
 }
 
 #[test]
-fn t3_on_device_m5_launch_release_cleanup_and_late_receipts_cannot_pass() {
-    for mode in ["launch", "release", "cleanup", "late"] {
-        let peer = Peer::new(mode);
-        let output = peer.run();
-        assert_eq!(output.status.code(), Some(1), "mode={mode}");
-        assert_eq!(peer.session.report()["result"], "fail");
-        if mode != "late" {
-            assert_eq!(peer.session.report()["link_counts"], Value::Null);
-        } else {
-            assert_eq!(peer.session.report()["checks"]["step_13"], false);
-        }
-        peer.cleanup(mode != "launch");
-    }
+fn t3_on_device_m5_failed_result_revokes_counts() {
+    failed_journey("tool");
+}
+
+#[test]
+fn t3_on_device_m5_unreturned_call_revokes_counts() {
+    failed_journey("unreturned");
+}
+
+#[test]
+fn t3_on_device_m5_cancel_before_playback_ack_retains_hold_and_requires_recovery() {
+    failed_journey("cancel");
+}
+
+#[test]
+fn t3_on_device_m5_failed_launch_revokes_counts() {
+    failed_journey("launch");
+}
+
+#[test]
+fn t3_on_device_m5_failed_release_revokes_counts() {
+    failed_journey("release");
+}
+
+#[test]
+fn t3_on_device_m5_failed_cleanup_revokes_counts() {
+    failed_journey("cleanup");
+}
+
+#[test]
+fn t3_on_device_m5_late_receipt_rechecks_exact_counts() {
+    failed_journey("late");
 }
