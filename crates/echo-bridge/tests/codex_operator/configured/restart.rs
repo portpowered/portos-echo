@@ -202,11 +202,13 @@ fn owner_only(path: &Path) {
 }
 
 pub(super) async fn binary_ready(listener: &tokio::net::TcpListener, process: &mut Process) -> tokio::net::TcpStream {
-    let mut satellite = tokio::time::timeout(OBSERVATION_TIMEOUT, listener.accept())
-        .await
-        .unwrap()
-        .unwrap()
-        .0;
+    let accepted = tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        tokio::select! {
+            accepted = listener.accept() => accepted.map(|(stream, _)| stream).map_err(|error| error.to_string()),
+            status = process.child.wait() => Err(format!("bridge exited before device admission: {status:?}; {}", process.stderr().await)),
+        }
+    }).await.unwrap();
+    let mut satellite = accepted.unwrap();
     assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
     assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
     bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;

@@ -100,11 +100,9 @@ fn configure(fixture: &Fixture, port: u16) {
     binary_home(fixture, port);
     let path = fixture.directory.path().join("bridge.toml");
     let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(
-        path,
-        format!("{text}\n[home.agent_tools]\nnotes=false\nprompts=false\n"),
-    )
-    .unwrap();
+    // The public TOML selector is a bool or group list, not the decoded
+    // AgentTools struct used by component fixtures.
+    std::fs::write(path, format!("{text}\nagent_tools=false\n")).unwrap();
     std::fs::write(fixture.home.join("mode"), "tool-binary-reply").unwrap();
 }
 
