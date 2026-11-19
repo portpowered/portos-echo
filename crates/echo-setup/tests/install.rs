@@ -93,7 +93,7 @@ fn private_output(output: &Output) -> Result<serde_json::Value> {
 
 fn server(sums: String, bytes: Vec<u8>, count: usize) -> Result<(String, thread::JoinHandle<io::Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
-    let base = format!("http://{}", listener.local_addr()?);
+    let base = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
     let handle = thread::spawn(move || {
         for _ in 0..count {
             let (mut stream, _) = listener.accept()?;
