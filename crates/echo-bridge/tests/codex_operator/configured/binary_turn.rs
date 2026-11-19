@@ -55,6 +55,7 @@ async fn exercise(finish: Finish) {
     held_playback(&fixture, &mut satellite, &mut signal).await;
     bridge_short::send(&mut satellite, "played", json!({})).await;
     closing(&mut signal).await;
+    assert_eq!(process.line().await, r#"{"event":"bridge.run_completed","run_id":"run-1"}"#);
     cleanup_control(&fixture, &mut process, finish);
     signal.get_mut().write_all(b"close\n").await.unwrap();
     drop(signal);
