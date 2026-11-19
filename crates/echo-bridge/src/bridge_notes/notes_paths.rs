@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+#[derive(Clone, Copy)]
 pub(super) enum Request<'a> {
     List(Option<&'a str>),
     Read(&'a str),
@@ -25,7 +26,7 @@ impl<'a> Request<'a> {
                 let path = object["path"].as_str().ok_or("invalid_arguments")?;
                 let content = object["content"].as_str().ok_or("invalid_arguments")?;
                 validate(path, true)?;
-                if content.len() > super::NOTE_BYTES as usize {
+                if content.len() as u64 > super::NOTE_BYTES {
                     return Err("note_too_large");
                 }
                 Ok(Self::Write(path, content))
@@ -39,7 +40,7 @@ pub(super) fn validate(path: &str, file: bool) -> Result<(), &'static str> {
     let parts: Vec<_> = path.split('/').collect();
     if parts.len() > if file { 4 } else { 3 }
         || parts.iter().any(|part| !segment(part))
-        || (file && !path.ends_with(".md"))
+        || (file && path.rsplit_once('.').is_none_or(|(_, extension)| extension != "md"))
     {
         return Err("invalid_path");
     }

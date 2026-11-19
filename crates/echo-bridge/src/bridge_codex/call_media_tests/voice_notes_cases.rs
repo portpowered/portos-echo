@@ -10,6 +10,7 @@ use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::{AgentConfig, AgentTools, HomeConfig};
 use echo_delegation::codex_dispatch::Catalog;
 use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Clone)]
 struct NoMcp;
@@ -68,7 +69,7 @@ async fn tool(server: &mut Server, thread: &str, id: &str, name: &str, args: Val
     response["result"].clone()
 }
 
-fn result(content: Value) -> Value {
+fn result(content: &Value) -> Value {
     json!({"success":true,"contentItems":[{"type":"inputText","text":content.to_string()}]})
 }
 
@@ -148,7 +149,7 @@ async fn writing(server: &mut Server, notes: &Notes, home: &HomeConfig) {
             json!({"path":"house/preferences.md","content":"remember"})
         )
         .await,
-        result(json!({"path":"house/preferences.md","bytes":8}))
+        result(&json!({"path":"house/preferences.md","bytes":8}))
     );
     assert_eq!(
         tool(
@@ -179,11 +180,11 @@ async fn reading(server: &mut Server, notes: &Notes) {
             json!({"path":"house/preferences.md"})
         )
         .await,
-        result(json!({"path":"house/preferences.md","bytes":8,"content":"remember"}))
+        result(&json!({"path":"house/preferences.md","bytes":8,"content":"remember"}))
     );
     assert_eq!(
         tool(server, "thread-b", "list", "notes_list", json!({})).await,
-        result(json!({"files":[{"path":"house/preferences.md","bytes":8,"modified_unix_ms":1000}]}))
+        result(&json!({"files":[{"path":"house/preferences.md","bytes":8,"modified_unix_ms":1000}]}))
     );
     closed(server, "thread-b").await;
 }

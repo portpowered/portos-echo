@@ -98,7 +98,7 @@ pub(super) fn read(fd: &impl AsFd, name: &str) -> Result<String> {
         .take(super::NOTE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "io")?;
-    if bytes.len() > super::NOTE_BYTES as usize {
+    if bytes.len() as u64 > super::NOTE_BYTES {
         return Err("note_too_large");
     }
     String::from_utf8(bytes).map_err(|_| "io")
