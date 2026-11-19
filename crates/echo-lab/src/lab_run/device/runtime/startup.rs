@@ -6,15 +6,30 @@ use serde_json::json;
 use std::path::Path;
 
 impl Runtime {
-    pub async fn start(&mut self, bridge: &Path, config: &str, root: &Path, real: Option<&Path>) -> Result<(), String> {
+    pub async fn start(
+        &mut self,
+        bridge: &Path,
+        config: &str,
+        root: &Path,
+        real: Option<(&Path, bool)>,
+    ) -> Result<(), String> {
         self.startup = Some(Startup::new("config_stage"));
         self.started = true;
         self.began = Some(std::time::Instant::now());
         self.trace_path = root.join("bridge.private.jsonl");
-        self.real_config = real.map(Path::to_owned);
+        self.real_config = real.map(|(path, overlay)| {
+            if overlay {
+                root.join("configured.private/bridge.toml")
+            } else {
+                path.to_owned()
+            }
+        });
         if self.real_config.is_some() {
             std::fs::create_dir(root.join("configured.private"))
                 .map_err(|_| "device: cannot create private configuration")?;
+            if real.is_some_and(|(_, overlay)| overlay) {
+                super::super::config::write_private(&root.join("configured.private/bridge.toml"), config)?;
+            }
         } else {
             self.start_fake(config, root).await?;
         }

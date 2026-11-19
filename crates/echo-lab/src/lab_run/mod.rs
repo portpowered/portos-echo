@@ -293,6 +293,9 @@ fn execute_with_errors(args: &[String], output: &mut impl Write, errors: &mut im
     let mut artifacts = Artifacts::create(root)?;
     artifacts.sim = options.sim;
     device::config::scenario::record(&options, &mut artifacts)?;
+    if let Some(config) = &configuration {
+        device::config::voice::record(&options, config, &mut artifacts)?;
+    }
     let mut driver = driver(&options, configuration, errors)?;
     let result = dispatch(driver.as_mut(), &steps, &mut artifacts);
     let cleanup = driver.close(&mut artifacts);

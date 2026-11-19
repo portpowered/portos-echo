@@ -51,7 +51,9 @@ impl<'a> Configured<'a> {
                     self.options
                         .bridge_config
                         .as_deref()
-                        .filter(|_| self.options.live_real()),
+                        .filter(|_| self.options.live_real())
+                        .map(|path| config::voice::collect(self.options).map(|settings| (path, !settings.is_empty())))
+                        .transpose()?,
                 ),
                 self.options.cancel.as_deref(),
             ));
@@ -95,7 +97,10 @@ impl Driver for Configured<'_> {
                 self.state.ui(value, index, artifacts),
                 self.options.cancel.as_deref(),
             )),
-            Step::Trace(values) => self.state.expect_trace(values, index),
+            Step::Trace(values) => self.executor.block_on(runtime::controlled(
+                self.state.trace_step(values, index),
+                self.options.cancel.as_deref(),
+            )),
             Step::SayFile(path) => self.play(path, index, next, artifacts),
             _ => self.bench.execute(step, index, next, artifacts),
         }

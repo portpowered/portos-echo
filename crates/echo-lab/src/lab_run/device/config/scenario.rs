@@ -24,10 +24,11 @@ pub fn admits(scenario: &Value) -> Result<bool, String> {
         .as_object()
         .ok_or("device: missing budgets")?
         .keys()
-        .next()
+        .find(|name| !super::voice::is_setting(name))
     {
         return Err(format!("device: unsupported budget {name}"));
     }
+    super::voice::settings(scenario)?;
     Ok(true)
 }
 
