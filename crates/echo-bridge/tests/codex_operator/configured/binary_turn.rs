@@ -13,6 +13,7 @@ enum Finish {
     Eof,
     Kill,
 }
+type ImageIdentity = (PathBuf, Vec<u8>, PathBuf);
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt Linux echo-bridge and local Python"]
@@ -56,30 +57,43 @@ async fn exercise(finish: Finish) {
     let mut line = String::new();
     assert_ne!(signal.read_line(&mut line).await.unwrap(), 0);
     assert_eq!(line, "closing\n");
-    // The child has received realtime/stop, but its reply and all later runtime
-    // cleanup remain held. These controls must survive runtime destruction.
-    let kill = fixture.directory.path().join("logs/audit/bridge-kill");
-    match finish {
-        Finish::Eof => drop(process.input.take()),
-        Finish::Kill => std::fs::write(&kill, b"").unwrap(),
-        Finish::Replace => (),
-    }
+    cleanup_control(&fixture, &mut process, finish);
     signal.get_mut().write_all(b"close\n").await.unwrap();
     drop(signal);
     media.abort();
+    finish_generation(&fixture, &listener, &mut process, finish, (pid, identity)).await;
+    assert_eq!(process.stderr().await, "");
+    super::super::host::released(&fixture).await;
+    completed(&fixture, finish);
+}
+
+fn cleanup_control(fixture: &Fixture, process: &mut Process, finish: Finish) {
+    // The child has received realtime/stop, but its reply and all later runtime
+    // cleanup remain held. These controls must survive runtime destruction.
+    match finish {
+        Finish::Eof => drop(process.input.take()),
+        Finish::Kill => std::fs::write(fixture.directory.path().join("logs/audit/bridge-kill"), b"").unwrap(),
+        Finish::Replace => (),
+    }
+}
+
+async fn finish_generation(
+    fixture: &Fixture,
+    listener: &TcpListener,
+    process: &mut Process,
+    finish: Finish,
+    (pid, identity): (u32, ImageIdentity),
+) {
     if finish == Finish::Eof {
         process.collect(0).await;
     } else {
-        let replacement = binary_ready(&listener, &mut process).await;
+        let replacement = binary_ready(listener, process).await;
         assert_eq!(process_identity(pid), identity);
-        after_cleanup(&fixture, finish).await;
+        after_cleanup(fixture, finish).await;
         drop(process.input.take());
         process.collect(0).await;
         drop(replacement);
     }
-    assert_eq!(process.stderr().await, "");
-    super::super::host::released(&fixture).await;
-    completed(&fixture, finish);
 }
 
 fn configure(fixture: &Fixture, port: u16) {
@@ -193,11 +207,15 @@ async fn receive_playback(satellite: &mut TcpStream) {
     let mut bytes = 0;
     loop {
         let (header, payload) = bridge_short::read_reply(satellite).await;
-        match header["type"].as_str().unwrap() {
-            "audio-chunk" => bytes += payload.len(),
-            "audio-stop" => break,
-            value => panic!("unexpected playback {value}"),
+        let kind = header["type"].as_str().unwrap();
+        assert!(
+            matches!(kind, "audio-chunk" | "audio-stop"),
+            "unexpected playback {kind}"
+        );
+        if kind == "audio-stop" {
+            break;
         }
+        bytes += payload.len();
     }
     assert!(bytes >= 320 * 2, "at least one decoded PCM frame must play");
 }

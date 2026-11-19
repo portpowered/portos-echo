@@ -8,7 +8,6 @@ mod restart;
 mod turn;
 use echo_bridge::{Error, bridge_voice::Configured};
 use echo_link::fake::{Command, FakeConnector, Observer};
-
 /// Refuses the first connection, then behaves like the fake device.
 #[derive(Clone, Default)]
 struct RefusedDevice {
@@ -211,7 +210,6 @@ pub(super) fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Ur
     url.set_query(Some("token=synthetic-screen-pair"));
     url
 }
-
 async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) -> serde_json::Value {
     let response = reqwest::Client::new()
         .post(settings_runtime_url(fixture, "/settings/v1"))
