@@ -338,6 +338,9 @@ back to the bridge and its correlated result continues that turn. Our
 the model service itself is not implemented here. `codex.model`, falling back to `agent.model`, selects
 the delegated model; omission uses the app-server default. The local-answer change supplies a single UTC
 call-start date/time snapshot to both thread instructions and Live prompt, retained unchanged on reuse.
+The two texts are separate keys: `codex.instructions` is the delegated turn's base instructions and
+`codex.live_instructions` is the Live prompt, whose default makes conversation the rule and a hand-off the
+exception.
 
 #### Language — Codex / Responses model service
 

@@ -127,6 +127,7 @@ async fn round_trip() {
         let options = Options {
             voice: Some("alloy"),
             instructions: "Client audio bridge",
+            prompt: "Client audio bridge",
             model: None,
             effort: None,
             time_zone: None,

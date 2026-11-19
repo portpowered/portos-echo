@@ -198,7 +198,7 @@ fn codex_defaults_and_override_precedence_are_offline() {
     assert_eq!(legacy.codex_voice(), Some("cedar"));
     assert_eq!(legacy.codex_model(), Some("legacy-model"));
     let input = format!(
-        "{input}\n[codex]\nhome='{}'\nbinary='{}'\nvoice='marin'\nmodel='thread-model'\ninstructions='Local instructions'\n",
+        "{input}\n[codex]\nhome='{}'\nbinary='{}'\nvoice='marin'\nmodel='thread-model'\ninstructions='Local instructions'\nlive_instructions='Local prompt'\n",
         home.display(),
         binary.display()
     );
@@ -209,7 +209,11 @@ fn codex_defaults_and_override_precedence_are_offline() {
     assert_eq!(config.codex.binary, Some(binary.clone()));
     assert_eq!(config.codex_voice(), Some("marin"));
     assert_eq!(config.codex_model(), Some("thread-model"));
-    assert_eq!(config.codex.instructions, "Local instructions");
+    let texts = (
+        config.codex.instructions.as_str(),
+        config.codex.live_instructions.as_str(),
+    );
+    assert_eq!(texts, ("Local instructions", "Local prompt"));
     assert!(!home.exists());
     assert!(!binary.exists());
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
@@ -277,7 +281,7 @@ fn codex_rejects_bad_paths_blank_fields_types_and_inline_secrets_safely() {
             );
         }
     }
-    for field in ["voice", "model", "instructions"] {
+    for field in ["voice", "model", "instructions", "live_instructions"] {
         for value in ["''", "'   '", "false"] {
             let input = format!("{MINIMAL}\n[codex]\n{field}={value}");
             let error = BridgeConfig::from_toml_str(&input).unwrap_err();

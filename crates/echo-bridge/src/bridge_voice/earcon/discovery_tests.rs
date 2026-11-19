@@ -75,7 +75,8 @@ async fn exercise(mute: bool) {
     let acknowledged = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let work = async {
         start().unwrap();
-        let options = admission_options().conversation("discovery", Instant::now() + Duration::from_secs(15));
+        let options =
+            admission_options().conversation(("discovery", "discovery"), Instant::now() + Duration::from_secs(15));
         let result = crate::bridge_voice::voice_tools::conversation(
             (&client, &mut events, run),
             &mut io,

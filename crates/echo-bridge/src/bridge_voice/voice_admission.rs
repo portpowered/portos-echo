@@ -181,13 +181,18 @@ where
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
         result = super::earcon::negotiating(device.1, super::earcon::capture_during(&mut device.2, async {
-            let instructions = super::voice_config::call_instructions(options.call.instructions, clock(), options.call.time_zone)?;
+            // One clock sample: the delegated turn and the Live prompt carry the same snapshot.
+            let (now, zone) = (clock(), options.call.time_zone);
+            let instructions = (
+                super::voice_config::call_instructions(options.call.instructions, now, zone)?,
+                super::voice_config::call_instructions(options.call.prompt, now, zone)?,
+            );
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
             Ok::<_, Error>((media, instructions))
         }), &mut setup_observer) => result?,
     };
     super::voice_session::peer_created(&mut media, &mut trace).await?;
-    let options_call = options.conversation(&instructions, deadline);
+    let options_call = options.conversation((&instructions.0, &instructions.1), deadline);
     let mut observer = |notice| {
         if let SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))) = &notice {
             options.session.muted = *value;

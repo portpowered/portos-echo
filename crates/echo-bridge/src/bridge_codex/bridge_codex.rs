@@ -46,7 +46,10 @@ pub enum Event {
 /// Call media and thread profile; admission consumes the zone as instruction text.
 pub struct Options<'a> {
     pub voice: Option<&'a str>,
+    /// The delegated thread's base instructions; never sent as the Live prompt.
     pub instructions: &'a str,
+    /// The GPT-Live prompt; never sent as the delegated base instructions.
+    pub prompt: &'a str,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub time_zone: Option<&'a str>,
@@ -173,7 +176,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if let Some(voice) = options.voice {
             params["voice"] = voice.into();
         }
-        params["prompt"] = options.instructions.into();
+        params["prompt"] = options.prompt.into();
         let request = self
             .io
             .begin_request("thread/realtime/start", &params)
