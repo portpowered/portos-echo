@@ -64,7 +64,9 @@ impl CutOrder {
         if observations != ["provider.model_started", "provider.sent"] {
             return Err("M3 delegation: expected exactly one pending model and sideband receipt".into());
         }
-        Ok(())
+        // The dispatch completes under the first reply. No user speech may
+        // interrupt it, and the barge-in that follows still cuts the speaker.
+        self.release(process).await
     }
 
     async fn release(self, process: &mut super::process::Process) -> Result<(), String> {
@@ -75,24 +77,6 @@ impl CutOrder {
         Ok(())
     }
 
-    async fn release_if_ready(
-        self,
-        process: &mut super::process::Process,
-        acknowledgements: usize,
-        phase: &mut u8,
-    ) -> Result<bool, String> {
-        if !self.delegated() || *phase != 3 {
-            return Ok(true);
-        }
-        match acknowledgements {
-            0 => return Ok(false),
-            1 => self.release(process).await?,
-            _ => return Err("M3 delegation: duplicate turn/interrupt acknowledgement".into()),
-        }
-        *phase = 8;
-        Ok(true)
-    }
-
     async fn verify(self, process: &mut super::process::Process) -> Result<(), String> {
         if self.delegated() {
             process.send(&serde_json::json!({"snapshot":true})).await?;
@@ -100,14 +84,13 @@ impl CutOrder {
             if snapshot["models"] != 1
                 || snapshot["released"] != 1
                 || snapshot["external"] != 0
-                || snapshot["appends"].as_array().is_none_or(|items| {
-                    items
-                        .iter()
-                        .any(|item| item.to_string().contains("stale delegated answer"))
-                })
+                || snapshot["appends"]
+                    .as_array()
+                    .is_none_or(|items| !items.iter().any(|item| item.to_string().contains("delegated answer")))
             {
                 return Err(
-                    "M3 delegation: late completion leaked or model boundary was not exercised exactly once".into(),
+                    "M3 delegation: the answer was not delivered or the model boundary was not exercised exactly once"
+                        .into(),
                 );
             }
         }

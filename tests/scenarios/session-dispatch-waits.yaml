@@ -1,0 +1,16 @@
+id: session-dispatch-waits
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - expect_trace:
+      - run.started
+      - "reply.played {outcome: played}"
+      - wyoming.run_ended
+# The user is heard again while the delegated turn is still running. The
+# bridge requests no turn/interrupt, the dispatch completes, its answer is
+# Played and the run then stays open for exactly the listen window.
+budgets:
+  session_listen_seconds: 3
+negative: []

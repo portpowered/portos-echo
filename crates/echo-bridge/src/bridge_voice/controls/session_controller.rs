@@ -110,10 +110,6 @@ impl Controller {
         self.state == State::Retired
     }
 
-    pub fn interruptible(&self, delegated: bool) -> bool {
-        self.speaking() || (self.state == State::Listening && delegated)
-    }
-
     pub fn accepts_audio(&self) -> bool {
         self.idle_deadline.is_none()
             && !matches!(
@@ -268,7 +264,7 @@ mod tests {
 
     fn assert_close_rejects_activity(source: &mut Source) {
         assert!(!source.controller.accepts_audio());
-        assert!(!source.controller.interruptible(true));
+        assert!(!source.controller.speaking());
         assert_eq!(source.resume_reply(), Err(Error::Control));
         assert_eq!(
             source.controller.listen_after_reply(Duration::from_secs(3)),
@@ -462,18 +458,17 @@ mod tests {
     }
 
     #[test]
-    fn session_controller_interrupts_only_reply_or_initial_delegated_wait() {
+    fn session_controller_speaks_only_between_reply_start_and_cut() {
         let mut controller = Controller::default();
         assert!(controller.accepts_audio());
-        assert!(!controller.interruptible(false));
-        assert!(controller.interruptible(true));
+        assert!(!controller.speaking());
         controller.reply_started();
-        assert!(controller.interruptible(false));
+        assert!(controller.speaking());
         controller.cut();
-        assert!(!controller.interruptible(true));
+        assert!(!controller.speaking());
         controller.cut_settled();
-        assert!(!controller.interruptible(true));
+        assert!(!controller.speaking());
         controller.reply_started();
-        assert!(controller.interruptible(false));
+        assert!(controller.speaking());
     }
 }

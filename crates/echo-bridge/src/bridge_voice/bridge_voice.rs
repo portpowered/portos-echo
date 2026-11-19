@@ -68,12 +68,6 @@ pub trait VoicePort {
     fn ready_audio(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, Error>>;
     /// Mark the interrupted media generation for retirement at replacement.
     fn retire_audio(&mut self) {}
-    /// Cancel the owned delegated turn once; ports without turns do nothing.
-    /// # Errors
-    /// Reports the existing bounded interrupt admission failure.
-    fn interrupt_turn(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
 }
 
 /// No payload-bearing observation implements Debug or Display.

@@ -17,14 +17,16 @@ pub(super) enum Journey {
     Extend,
     LongWait,
     End,
+    Dispatch,
 }
 
-const JOURNEYS: [(&str, Journey); 5] = [
+const JOURNEYS: [(&str, Journey); 6] = [
     ("session-two-turns", Journey::Turns),
     ("session-idle-timeout", Journey::Idle),
     ("session-extend-capped", Journey::Extend),
     ("session-extend-reconnected", Journey::LongWait),
     ("session-end-after-reply", Journey::End),
+    ("session-dispatch-waits", Journey::Dispatch),
 ];
 
 fn journey(id: &str) -> Option<Journey> {
@@ -51,6 +53,8 @@ impl Journey {
         match self {
             Self::Turns => json!([[{"say":"It is noon."}], [{"say":"It is Tuesday."}]]),
             Self::Idle => json!([[{"say":"It is noon."}]]),
+            // The user is heard again while the delegated model request is pending.
+            Self::Dispatch => json!([[{"say":"It is noon.","heard":"What day is it?"}]]),
             Self::Extend | Self::LongWait => json!([[
                 {"call":"extend_session","arguments":{"seconds":100}},
                 {"call":"extend_session","arguments":{"seconds":100}},

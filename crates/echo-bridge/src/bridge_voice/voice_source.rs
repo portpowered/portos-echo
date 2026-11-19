@@ -30,9 +30,25 @@ impl Source {
         self.controller.resume()?;
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.reply = ReplyAudio::new(self.lead_ms)?;
-        self.delegation = Delegation::default();
+        self.delegation = self.delegation.carried();
         self.mouth = Mouth::default();
         Ok(())
+    }
+
+    /// A dispatch that finished while listening gives its answer a fresh
+    /// listen window, since the hold on idle ends with it.
+    pub fn dispatch_completed(&mut self) {
+        let waited = self.delegation.in_flight();
+        self.delegation.completed();
+        if waited
+            && !self.delegation.in_flight()
+            && let Some(deadline) = self
+                .session
+                .listen()
+                .and_then(|listen| Instant::now().checked_add(listen))
+        {
+            self.controller.extend_idle(deadline);
+        }
     }
 
     pub fn new(lead_ms: u16, muted: bool) -> Result<Self, Error> {
@@ -53,14 +69,14 @@ impl Source {
 
     /// Retire all old playback state together; never flush an abandoned tail.
     /// Stream order identifies the replacement at its next assistant delta.
+    /// A dispatch in flight is thinking, not a reply to talk over: user speech
+    /// neither cancels the delegated turn nor cuts the speaker until it
+    /// completes. The Live session still hears that speech.
     pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
-        port.interrupt_turn()?;
-        if !self.controller.interruptible(self.delegation.turns > 0) {
+        if self.delegation.in_flight() || !self.controller.speaking() {
             return Ok(());
         }
-        if self.controller.speaking() {
-            port.retire_audio();
-        }
+        port.retire_audio();
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.reply = ReplyAudio::new(self.lead_ms)?;
         self.delegation = Delegation::default();
@@ -258,6 +274,21 @@ impl Delegation {
             if self.utterance == Utterance::Filler {
                 self.utterance = Utterance::Settled;
             }
+        }
+    }
+
+    /// A delegated turn has started and not yet completed.
+    #[must_use]
+    pub fn in_flight(&self) -> bool {
+        self.turns > 0
+    }
+
+    /// The next reply starts clean but still owes each running turn its
+    /// completion; an utterance after the reset is an answer, not a filler.
+    fn carried(&self) -> Self {
+        Self {
+            turns: self.turns,
+            ..Self::default()
         }
     }
 
