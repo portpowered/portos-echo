@@ -125,8 +125,14 @@ impl super::Configured<'_> {
             || adapt(path, &artifacts.root, index),
             |clip| clip.stage(&artifacts.root),
         )?;
-        self.state.arm_wake()?;
-        self.bench.execute(&Step::SayFile(path), index, next, artifacts)?;
+        if !self.session || self.wire_replies == 0 {
+            self.state.arm_wake()?;
+        }
+        if self.session {
+            self.bench.session_input(&Step::SayFile(path), index, artifacts)?;
+        } else {
+            self.bench.execute(&Step::SayFile(path), index, next, artifacts)?;
+        }
         let play_index = self.state.plays.len();
         if let Some(clip) = clip {
             self.state.clip = Some(clip.metadata.clone());
@@ -142,17 +148,27 @@ impl super::Configured<'_> {
                 ))?;
                 self.wire_replies += 1;
             }
-            self.executor.block_on(super::runtime::controlled(
-                self.state.complete(index),
-                self.options.cancel.as_deref(),
-            ))?;
-            if let Some(clip) = clip {
+            self.reply_observed(index)?;
+            if let Some(clip) = clip.filter(|_| !self.session) {
                 let wake = self.state.wakes.last_mut().ok_or("device: missing wake")?;
                 wake["source"] = clip.source();
                 wake["play_index"] = play_index.into();
             }
         }
         Ok(())
+    }
+
+    fn reply_observed(&mut self, index: usize) -> Result<(), String> {
+        self.executor.block_on(super::runtime::controlled(
+            async {
+                if self.session {
+                    self.state.session_reply(self.wire_replies).await
+                } else {
+                    self.state.complete(index).await
+                }
+            },
+            self.options.cancel.as_deref(),
+        ))
     }
 }
 

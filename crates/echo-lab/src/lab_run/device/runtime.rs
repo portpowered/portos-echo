@@ -4,6 +4,7 @@ use std::{
 };
 
 mod screen;
+pub(super) mod session;
 mod setup;
 mod startup;
 pub(super) mod wire;
@@ -120,36 +121,6 @@ impl Runtime {
         }
         self.trace.append(&bytes[self.offset..])?;
         self.offset = bytes.len();
-        Ok(())
-    }
-
-    pub async fn complete(&mut self, index: usize) -> Result<(), String> {
-        let value = self.child()?.expect("bridge.run_completed").await?;
-        let id = value["run_id"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or("device: missing completed run")?;
-        if self.run.as_deref() == Some(id) {
-            return Err("device: stale completed run".into());
-        }
-        self.run = Some(id.into());
-        self.expect_trace(
-            &[
-                json!("wyoming.run_started"),
-                json!("wyoming.mic_frames {count_gte: 10}"),
-                json!("wyoming.run_ended"),
-            ],
-            index,
-        )?;
-        let frames = self
-            .trace
-            .records
-            .iter()
-            .find(|r| r["event"] == "wyoming.mic_frames" && r["run_id"] == id)
-            .and_then(|r| r["count"].as_u64())
-            .ok_or("device: missing frame measurement")?;
-        self.wakes
-            .push(json!({"bridge_generation":self.generation,"run_id":id,"mic_frames":frames}));
         Ok(())
     }
 

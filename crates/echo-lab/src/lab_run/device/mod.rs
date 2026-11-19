@@ -22,11 +22,13 @@ pub struct Configured<'a> {
     wire_endpoint: Option<std::net::SocketAddr>,
     wire: Option<wire::Observer>,
     wire_replies: usize,
+    session: bool,
 }
 
 impl<'a> Configured<'a> {
     pub fn new(options: &'a Options, config: String, errors: &'a mut dyn std::io::Write) -> Result<Self, String> {
         let wire_endpoint = wire::endpoint(options, &config)?;
+        let session = runtime::session::selected(options)?;
         let mut state = runtime::Runtime::default();
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
         if config::setup::requested(options)? {
@@ -50,6 +52,7 @@ impl<'a> Configured<'a> {
             wire_endpoint,
             wire: None,
             wire_replies: 0,
+            session,
         })
     }
 
@@ -116,7 +119,16 @@ impl Driver for Configured<'_> {
                 self.options.cancel.as_deref(),
             )),
             Step::Trace(values) => self.executor.block_on(runtime::controlled(
-                self.state.trace_step(values, index),
+                async {
+                    if self.session
+                        && values
+                            .iter()
+                            .any(|v| v.as_str().is_some_and(|v| v == "wyoming.run_ended"))
+                    {
+                        self.state.finish_session(index).await?;
+                    }
+                    self.state.trace_step(values, index).await
+                },
                 self.options.cancel.as_deref(),
             )),
             Step::SayFile(path) => self.play(path, index, next, artifacts),

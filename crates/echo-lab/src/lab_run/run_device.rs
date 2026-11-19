@@ -245,6 +245,16 @@ impl<'a> Device<'a> {
 }
 
 impl Device<'_> {
+    // Persistent sessions cannot wait for a ten-second acoustic capture after
+    // every input. The configured owner waits on independent wire Played instead.
+    pub(super) fn session_input(&mut self, step: &Step, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+        self.capture_window = true;
+        let result = self.attempt(step, index, artifacts);
+        self.deferred_reply = false;
+        self.reply = None;
+        result
+    }
+
     fn play_then_record(&mut self, operation: &str, values: &[(&str, &str)], path: &Path) -> Result<(), String> {
         let result = self
             .port(&format!("{operation}_only"), values, false)
