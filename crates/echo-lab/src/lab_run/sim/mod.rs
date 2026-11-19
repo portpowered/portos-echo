@@ -183,14 +183,22 @@ async fn controlled<T>(
     cancel: Option<&std::path::Path>,
     deadline: tokio::time::Instant,
 ) -> Result<T, String> {
-    let cancellation = async {
+    // The cancel file is checked before every poll of the work, so a stage
+    // makes no further progress once the file exists. The 10 ms timer only
+    // wakes a stage that is otherwise idle; it is not the cancellation latency.
+    let mut tick = std::pin::pin!(tokio::time::sleep(Duration::from_millis(10)));
+    let cancellation = std::future::poll_fn(|context| {
         loop {
             if cancel.is_some_and(std::path::Path::exists) {
-                return;
+                return std::task::Poll::Ready(());
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            if cancel.is_none() || std::future::Future::poll(tick.as_mut(), context).is_pending() {
+                return std::task::Poll::Pending;
+            }
+            tick.as_mut()
+                .reset(tokio::time::Instant::now() + Duration::from_millis(10));
         }
-    };
+    });
     tokio::select! {
         biased;
         () = cancellation => Err("sim: cancelled".into()),

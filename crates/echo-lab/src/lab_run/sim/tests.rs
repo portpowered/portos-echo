@@ -369,11 +369,21 @@ async fn pending_work_times_out_on_injected_clock_and_cancellation_wins() {
     tokio::time::advance(std::time::Duration::from_secs(121)).await;
     assert_eq!(task.await.unwrap(), Err("sim: stage timed out".into()));
     let path = std::env::temp_dir().join(format!("lab-cancel-{}", std::process::id()));
-    std::fs::write(&path, b"cancel").unwrap();
-    assert_eq!(
-        super::controlled(async { Ok(()) }, Some(&path), deadline).await,
-        Err("sim: cancelled".into())
-    );
+    // The work would finish on its second poll. Cancellation requested during
+    // the first poll must land before that, not up to one timer tick later.
+    let mut polls = 0;
+    let work = std::future::poll_fn(|context| {
+        polls += 1;
+        if polls > 1 {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::fs::write(&path, b"cancel").unwrap();
+        context.waker().wake_by_ref();
+        std::task::Poll::Pending
+    });
+    let later = deadline + std::time::Duration::from_secs(120);
+    let result = super::controlled(work, Some(&path), later).await;
+    assert_eq!((result, polls), (Err("sim: cancelled".into()), 1));
     std::fs::remove_file(path).unwrap();
 }
 
