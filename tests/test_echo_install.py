@@ -12,7 +12,6 @@ import tempfile
 import errno
 import stat
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE = "/data/local/echo-bridge"
@@ -321,6 +320,7 @@ def set_owner(base, path, value):
 
 
 def ownership_lifetime_case():
+    from unittest.mock import patch
     with tempfile.TemporaryDirectory(prefix="echo-owner-") as directory:
         base = Path(directory)
         path = base / "stage"
