@@ -2,7 +2,10 @@ use super::*;
 use echo_config::SettingsOverlay;
 
 fn overlay(input: &str) -> SettingsOverlay {
-    SettingsOverlay::from_toml_str(input).unwrap()
+    let Ok(overlay) = SettingsOverlay::from_toml_str(input) else {
+        unreachable!("invalid settings fixture")
+    };
+    overlay
 }
 
 #[test]
@@ -53,10 +56,10 @@ fn screen_settings_sparse_merge_preserves_base_and_only_explicit_keys() {
     assert_eq!(applied.voice.session_max_seconds, 600);
     assert_eq!(applied.agent.daily_request_cap, 500);
     assert_eq!(applied.agent.task_deadline_seconds, 60);
-    assert_eq!(applied.codex, base.codex);
-    assert_eq!(applied.live, base.live);
-    assert_eq!(applied.mcp, base.mcp);
-    assert_eq!(applied.screen, base.screen);
+    assert_eq!(
+        (&applied.codex, &applied.live, &applied.mcp, &applied.screen),
+        (&base.codex, &base.live, &base.mcp, &base.screen)
+    );
     assert_eq!(base.agent.max_tool_calls, 8);
     assert!(base.voice.session_listen_enabled);
     assert_eq!(overlay(&third.to_toml_string().unwrap()), third);
@@ -193,7 +196,10 @@ fn screen_settings_unknown_keys_tables_and_types_have_payload_free_errors() {
 
 fn home_config(directory: &Directory) -> (PathBuf, String) {
     let input = format!("{MINIMAL}\n[home]\ndir='{}'", directory.0.display());
-    (directory.write(&input).unwrap(), input)
+    let Ok(path) = directory.write(&input) else {
+        unreachable!("could not write settings fixture")
+    };
+    (path, input)
 }
 
 #[test]
