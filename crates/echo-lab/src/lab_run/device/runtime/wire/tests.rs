@@ -311,6 +311,46 @@ async fn t3_device_wire_reply_barrier_reports_observer_failure_and_still_release
     );
 }
 
+#[tokio::test]
+async fn t3_device_wire_late_old_pcm_fails_waiter_and_releases_owned_forward() {
+    for ending in ["audio-stop", "hassmic-flush"] {
+        let root = tempfile::tempdir().unwrap();
+        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let options = fake_adb(root.path(), upstream.local_addr().unwrap().port());
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let mut observer = Observer::start(&options, address).unwrap();
+        observer.launch().unwrap();
+        let mut bridge = TcpStream::connect(address).await.unwrap();
+        let (mut host, _) = upstream.accept().await.unwrap();
+        let wake = frame("run-pipeline", &[]);
+        host.write_all(&wake).await.unwrap();
+        bridge.read_exact(&mut vec![0; wake.len()]).await.unwrap();
+        let playback = [
+            frame("audio-start", &[]),
+            frame("audio-chunk", &[128, 0]),
+            frame(ending, &[]),
+            frame("audio-chunk", &[0, 1]),
+        ]
+        .concat();
+        bridge.write_all(&playback).await.unwrap();
+        let mut received = vec![0; playback.len()];
+        host.read_exact(&mut received).await.unwrap();
+        assert_eq!(received, playback);
+        let failure = "device: old reply PCM after audio-stop or hassmic-flush";
+        assert_eq!(observer.wait_reply(1, 1).await, Err(failure.into()));
+        let receipt = observer.relay.receipts().last().unwrap().clone();
+        assert_eq!((receipt.wire_run, receipt.playback_stream), (Some(1), Some(1)));
+        let mut artifacts = Artifacts::create(options.out).unwrap();
+        assert_eq!(observer.close(&mut artifacts).await, Err(failure.into()));
+        assert!(TcpStream::connect(address).await.is_err());
+        let commands = fs::read_to_string(root.path().join("ledger")).unwrap();
+        assert_eq!(commands.lines().count(), 2);
+        assert!(commands.lines().last().unwrap().contains("--remove"));
+    }
+}
+
 async fn idle_session(root: &std::path::Path, delay_ms: u64) -> (Observer, Artifacts) {
     let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let mut options = fake_adb(root, upstream.local_addr().unwrap().port());

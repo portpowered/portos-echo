@@ -24,6 +24,7 @@ pub(super) struct Ledger {
     streams: usize,
     run: Option<usize>,
     playing: Option<(usize, usize)>,
+    queued: bool,
     pending: VecDeque<(usize, usize)>,
 }
 
@@ -55,6 +56,7 @@ impl Ledger {
         if direction == "playback" && kind == "audio-start" {
             self.streams += 1;
             self.playing = self.run.map(|run| (run, self.streams));
+            self.queued = false;
         }
         let identity = if direction == "capture" && kind == "played" {
             self.pending.pop_front()
@@ -69,12 +71,15 @@ impl Ledger {
         }
         if direction == "playback"
             && matches!(kind, "audio-stop" | "hassmic-flush")
-            && let Some(identity) = self.playing.take()
+            && !self.queued
+            && let Some(identity) = self.playing
         {
             self.pending.push_back(identity);
+            self.queued = true;
         }
         if direction == "playback" && kind == "hassmic-end" {
             self.run = None;
+            self.playing = None;
         }
         Ok(())
     }

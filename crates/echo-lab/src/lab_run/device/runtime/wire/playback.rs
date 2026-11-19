@@ -75,16 +75,26 @@ impl Session {
             .iter_mut()
             .find(|stream| Some(stream.id) == receipt.playback_stream && stream.run == receipt.wire_run)
         else {
+            if receipt.direction == "playback" && receipt.kind == "audio-chunk" {
+                return Err("device: unmet prerequisite: current playback PCM identity".into());
+            }
             return Ok(());
         };
         match (receipt.direction, receipt.kind) {
             ("playback", "audio-chunk") => {
+                if stream.stopped.is_some() {
+                    return Err("device: old reply PCM after audio-stop or hassmic-flush".into());
+                }
                 stream.first_pcm.get_or_insert(receipt.elapsed_us);
                 stream.pcm(event)?;
             }
             ("playback", "audio-stop" | "hassmic-flush") => {
-                stream.stopped = Some(receipt.elapsed_us);
-                stream.ending = Some(receipt.kind);
+                // A drained reply may be flushed before Played. Keep the
+                // cut identity even when a redundant audio-stop follows it.
+                if stream.ending != Some("hassmic-flush") {
+                    stream.stopped = Some(receipt.elapsed_us);
+                    stream.ending = Some(receipt.kind);
+                }
             }
             ("capture", "played") => stream.played = Some(receipt.elapsed_us),
             _ => (),

@@ -90,6 +90,68 @@ fn device_wire_session_silence_and_cut_are_not_completed_replies() {
 }
 
 #[test]
+fn device_wire_cut_after_stop_retains_identity_and_never_becomes_a_completed_reply() {
+    for endings in [["audio-stop", "hassmic-flush"], ["hassmic-flush", "audio-stop"]] {
+        let mut ledger = Ledger::default();
+        event(&mut ledger, "capture", "run-pipeline");
+        event(&mut ledger, "playback", "audio-start");
+        receive(&mut ledger, "playback", "audio-chunk", &[128, 0]).unwrap();
+        for ending in endings {
+            event(&mut ledger, "playback", ending);
+            let receipt = ledger.receipts.last().unwrap();
+            assert_eq!((receipt.wire_run, receipt.playback_stream), (Some(1), Some(1)));
+        }
+        event(&mut ledger, "capture", "played");
+        assert_eq!(ledger.receipts.last().unwrap().playback_stream, Some(1));
+        assert_eq!(ledger.session.checkpoint(1, 1), Ok(false));
+        assert_eq!(ledger.session.observation()["streams"][0]["ending"], "hassmic-flush");
+        reply(&mut ledger, &[0, 1], "audio-stop");
+        assert_eq!(ledger.receipts.last().unwrap().playback_stream, Some(2));
+        assert_eq!(ledger.session.checkpoint(1, 1), Ok(true));
+        assert_eq!(ledger.session.observation()["unmatched_played"], 0);
+    }
+}
+
+#[test]
+fn device_wire_late_old_pcm_keeps_identity_and_fails_after_stop_flush_or_played() {
+    for ending in ["audio-stop", "hassmic-flush"] {
+        for played in [false, true] {
+            let mut ledger = Ledger::default();
+            event(&mut ledger, "capture", "run-pipeline");
+            event(&mut ledger, "playback", "audio-start");
+            receive(&mut ledger, "playback", "audio-chunk", &[128, 0]).unwrap();
+            event(&mut ledger, "playback", ending);
+            if played {
+                event(&mut ledger, "capture", "played");
+            }
+            assert_eq!(
+                receive(&mut ledger, "playback", "audio-chunk", &[0, 1]),
+                Err("device: old reply PCM after audio-stop or hassmic-flush".into())
+            );
+            let receipt = ledger.receipts.last().unwrap();
+            assert_eq!((receipt.wire_run, receipt.playback_stream), (Some(1), Some(1)));
+            assert_eq!(ledger.session.observation()["streams"][0]["pcm_bytes"], 2);
+        }
+    }
+}
+
+#[test]
+fn device_wire_orphaned_pcm_is_a_named_missing_source_instead_of_silent_evidence() {
+    let mut ledger = Ledger::default();
+    assert_eq!(
+        receive(&mut ledger, "playback", "audio-chunk", &[128, 0]),
+        Err("device: unmet prerequisite: current playback PCM identity".into())
+    );
+    event(&mut ledger, "capture", "run-pipeline");
+    reply(&mut ledger, &[128, 0], "audio-stop");
+    event(&mut ledger, "playback", "hassmic-end");
+    assert_eq!(
+        receive(&mut ledger, "playback", "audio-chunk", &[128, 0]),
+        Err("device: unmet prerequisite: current playback PCM identity".into())
+    );
+}
+
+#[test]
 fn device_wire_session_early_end_extra_reply_and_wrong_run_fail_barrier() {
     let mut ledger = Ledger::default();
     event(&mut ledger, "capture", "run-pipeline");
