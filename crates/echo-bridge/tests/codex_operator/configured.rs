@@ -1,5 +1,7 @@
 //! T3: config through authenticated service; controlled process and device ports.
 use super::*;
+#[path = "configured/binary_turn.rs"]
+mod binary_turn;
 #[path = "configured/restart.rs"]
 mod restart;
 #[path = "configured/turn.rs"]

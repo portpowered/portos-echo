@@ -184,7 +184,7 @@ async fn binary_finished(fixture: &Fixture, process: &mut Process) {
     );
 }
 
-fn process_identity(pid: u32) -> (PathBuf, Vec<u8>, PathBuf) {
+pub(super) fn process_identity(pid: u32) -> (PathBuf, Vec<u8>, PathBuf) {
     let root = PathBuf::from(format!("/proc/{pid}"));
     (
         std::fs::read_link(root.join("exe")).unwrap(),
@@ -201,7 +201,7 @@ fn owner_only(path: &Path) {
     }
 }
 
-async fn binary_ready(listener: &tokio::net::TcpListener, process: &mut Process) -> tokio::net::TcpStream {
+pub(super) async fn binary_ready(listener: &tokio::net::TcpListener, process: &mut Process) -> tokio::net::TcpStream {
     let mut satellite = tokio::time::timeout(OBSERVATION_TIMEOUT, listener.accept())
         .await
         .unwrap()
@@ -214,7 +214,7 @@ async fn binary_ready(listener: &tokio::net::TcpListener, process: &mut Process)
     satellite
 }
 
-async fn binary_snapshot(fixture: &Fixture) -> Value {
+pub(super) async fn binary_snapshot(fixture: &Fixture) -> Value {
     reqwest::Client::new()
         .get(settings_runtime_url(fixture, "/settings/v1"))
         .send()
@@ -325,7 +325,7 @@ fn private_image(fixture: &Fixture, path: &Path) -> tokio::process::Command {
     command
 }
 
-fn binary_home(fixture: &Fixture, port: u16) {
+pub(super) fn binary_home(fixture: &Fixture, port: u16) {
     super::super::voice_entry::configure(fixture, port);
     let base = fixture.directory.path().join("bridge.toml");
     let home = fixture.directory.path().join("agent-home");
