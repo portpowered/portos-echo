@@ -23,10 +23,7 @@ use echo_live::{
     call::{LiveAuthMode, LiveCall, LiveCallFactory, SessionOptions},
 };
 use serde_json::json;
-use std::{
-    io::{Read, Write},
-    time::Duration,
-};
+use std::{io::Write, time::Duration};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -41,7 +38,7 @@ pub struct Control {
 pub async fn execute<C: LinkConnector>(settings: Settings, connector: C) -> Result<(), Error> {
     let control = Control {
         utc_day: std::sync::Arc::new(utc_day),
-        shutdown: control()?,
+        shutdown: crate::bridge_settings::settings_process::shutdown()?,
     };
     execute_with_control(settings, control, connector).await
 }
@@ -416,19 +413,6 @@ async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &s
         .create(peer, options, (Instant::now() + Duration::from_secs(5)).into_std())
         .await
         .map_err(Error::from)
-}
-
-fn control() -> Result<oneshot::Receiver<bool>, Error> {
-    let (send, receive) = oneshot::channel();
-    // Tokio's blocking stdin cannot be cancelled on an operational failure.
-    // An OS thread owns no async resource and cannot delay process exit.
-    std::thread::Builder::new()
-        .name("bridge-control".into())
-        .spawn(move || {
-            let _ = send.send(matches!(std::io::stdin().read(&mut [0]), Ok(0)));
-        })
-        .map_err(|_| Error::Control)?;
-    Ok(receive)
 }
 
 pub(crate) fn publish(event: &str, run: Option<&str>) -> Result<(), Error> {

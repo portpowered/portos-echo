@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 mod settings_atomic;
 mod settings_host;
+pub mod settings_process;
 pub use settings_host::SettingsHost;
 
 /// Safe diagnostics: no submitted prompt, setting value or filesystem path.
