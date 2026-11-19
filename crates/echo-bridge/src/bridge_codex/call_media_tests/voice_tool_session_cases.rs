@@ -55,8 +55,8 @@ async fn device() -> (
     (link, events, run, observer)
 }
 
-async fn echo(server: &mut Server, id: &str, call: &str) {
-    tool(server, json!(id), "turn-1", call).await;
+async fn echo(server: &mut Server, id: &str, call: &str, turn_id: &str) {
+    tool(server, json!(id), turn_id, call).await;
     assert_eq!(
         read(server).await,
         json!({"id":id,"result":{
@@ -74,15 +74,18 @@ async fn two_replies(
     start(server).await;
     starts.recv().await.unwrap();
     turn(server, "turn/started", "turn-1").await;
-    echo(server, "run-request", "call-1").await;
+    echo(server, "run-request", "call-1", "turn-1").await;
     done(server).await;
+    // An off run retains admitted delegated work until its turn settles.
+    turn(server, "turn/completed", "turn-1").await;
     completion.recv().await.unwrap();
-    echo(server, "idle-request", "call-2").await;
+    turn(server, "turn/started", "turn-2").await;
+    echo(server, "idle-request", "call-2", "turn-2").await;
+    turn(server, "turn/completed", "turn-2").await;
     wake(observer);
     starts.recv().await.unwrap();
     done(server).await;
     completion.recv().await.unwrap();
-    turn(server, "turn/completed", "turn-1").await;
     stop(server).await;
 }
 
@@ -98,7 +101,7 @@ fn assert_calls(host: &HostState) {
             (
                 "test.echo".into(),
                 json!({"text":"echo"}),
-                "8:thread-16:turn-16:call-2".into()
+                "8:thread-16:turn-26:call-2".into()
             ),
         ]
     );
