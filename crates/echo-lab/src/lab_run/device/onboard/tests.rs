@@ -177,6 +177,7 @@ fn t2_on_device_mode_loads_m1_and_m4_with_no_host_bridge_or_wire_relay() {
         let mut errors = Vec::new();
         let configured = Configured::new(&options, derived, &mut errors).ok().unwrap();
         assert!(configured.state.remote.is_some() && configured.wire_endpoint.is_none());
+        assert_eq!(configured.window, std::time::Duration::from_secs(50));
         assert_eq!(configured.state.spoof_port, spoof);
     }
 }

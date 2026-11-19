@@ -236,11 +236,41 @@ impl Runtime {
     }
 }
 
+/// One fake-Live run ends with its single reply. Startup phases keep this too.
+pub(super) const OBSERVATION: Duration = Duration::from_secs(20);
+
+/// How long one reply, screen or trace observation may wait for its run.
+///
+/// Real Live is conversational: after a reply the bridge keeps the Wyoming run
+/// open for `voice.session_listen_seconds`, and a follow-up reply opens that
+/// window once more, never past `voice.session_max_seconds`. Measured on the
+/// Echo on 2026-11-18 at the default 15 s: `wyoming.run_started` at 15.2 s and
+/// `wyoming.run_ended` at 43.2 s, a 28 s run that the fixed 20 s missed.
+pub(super) fn observation(real: bool, config: &str) -> Result<Duration, String> {
+    if !real {
+        return Ok(OBSERVATION);
+    }
+    let voice = echo_config::BridgeConfig::from_toml_str(config)
+        .map_err(|_| "device: invalid effective configuration")?
+        .voice;
+    let listen = u64::from(voice.session_listen_seconds);
+    let follow = listen.saturating_mul(2).min(u64::from(voice.session_max_seconds));
+    Ok(OBSERVATION + Duration::from_secs(follow))
+}
+
 pub async fn controlled<T>(
     work: impl std::future::Future<Output = Result<T, String>>,
     cancel: Option<&Path>,
 ) -> Result<T, String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    observed(work, cancel, OBSERVATION).await
+}
+
+pub async fn observed<T>(
+    work: impl std::future::Future<Output = Result<T, String>>,
+    cancel: Option<&Path>,
+    window: Duration,
+) -> Result<T, String> {
+    let deadline = tokio::time::Instant::now() + window;
     let cancellation = async {
         loop {
             if cancel.is_some_and(Path::exists) {
@@ -382,6 +412,46 @@ mod tests {
             };
             assert_eq!(result, Err(error.into()));
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn device_observation_window_is_20s_for_fake_live_and_follows_the_voice_config_for_real_live() {
+        let base = include_str!("../../../../../examples/bridge.example.toml");
+        let voice = |listen: u32, max: u32| {
+            base.replace(
+                "session_listen_seconds = 15",
+                &format!("session_listen_seconds = {listen}"),
+            )
+            .replace("session_max_seconds = 600", &format!("session_max_seconds = {max}"))
+        };
+        assert_eq!(observation(false, base), Ok(Duration::from_secs(20)));
+        assert_eq!(observation(false, "not toml"), Ok(Duration::from_secs(20)));
+        assert_eq!(observation(true, base), Ok(Duration::from_secs(50)));
+        assert_eq!(observation(true, &voice(3, 30)), Ok(Duration::from_secs(26)));
+        assert_eq!(observation(true, &voice(300, 400)), Ok(Duration::from_secs(420)));
+        assert_eq!(
+            observation(true, "not toml"),
+            Err("device: invalid effective configuration".into())
+        );
+        // The measured real run: 28 s from the wake to wyoming.run_ended.
+        for (real, expected) in [(true, Ok(28_000)), (false, Err("device: observation timed out".into()))] {
+            let began = tokio::time::Instant::now();
+            let result = observed(
+                async {
+                    tokio::time::sleep(Duration::from_secs(28)).await;
+                    Ok(began.elapsed().as_millis())
+                },
+                None,
+                observation(real, base).unwrap(),
+            )
+            .await;
+            assert_eq!(result, expected);
+        }
+        let began = tokio::time::Instant::now();
+        let window = observation(true, base).unwrap();
+        let silent = observed(std::future::pending::<Result<(), String>>(), None, window).await;
+        assert_eq!(silent, Err("device: observation timed out".into()));
+        assert_eq!(began.elapsed(), Duration::from_secs(50));
     }
 
     #[test]

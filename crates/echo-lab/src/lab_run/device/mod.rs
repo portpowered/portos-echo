@@ -24,6 +24,8 @@ pub struct Configured<'a> {
     wire: Option<wire::Observer>,
     wire_replies: usize,
     session: bool,
+    /// How long one reply, screen or trace observation may wait.
+    window: std::time::Duration,
 }
 
 impl<'a> Configured<'a> {
@@ -38,6 +40,7 @@ impl<'a> Configured<'a> {
             wire::endpoint(options, &config)?
         };
         let session = runtime::session::selected(options)?;
+        let window = runtime::observation(options.live_real(), &config)?;
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
         if config::setup::requested(options)? {
             let parsed =
@@ -61,6 +64,7 @@ impl<'a> Configured<'a> {
             wire: None,
             wire_replies: 0,
             session,
+            window,
         })
     }
 
@@ -117,16 +121,18 @@ impl Driver for Configured<'_> {
                 } else {
                     serde_json::json!({"state":"ready","message":"Echo Live ready"})
                 };
-                self.executor.block_on(runtime::controlled(
+                self.executor.block_on(runtime::observed(
                     self.state.ui(&expected, index, artifacts),
                     self.options.cancel.as_deref(),
+                    self.window,
                 ))
             }
-            Step::Ui(value) => self.executor.block_on(runtime::controlled(
+            Step::Ui(value) => self.executor.block_on(runtime::observed(
                 self.state.ui(value, index, artifacts),
                 self.options.cancel.as_deref(),
+                self.window,
             )),
-            Step::Trace(values) => self.executor.block_on(runtime::controlled(
+            Step::Trace(values) => self.executor.block_on(runtime::observed(
                 async {
                     if self.session
                         && values
@@ -138,6 +144,7 @@ impl Driver for Configured<'_> {
                     self.state.trace_step(values, index).await
                 },
                 self.options.cancel.as_deref(),
+                self.window,
             )),
             Step::SayFile(path) => self.play(path, index, next, artifacts),
             Step::SayText(text) => self.play_text(text, index, next, artifacts),
