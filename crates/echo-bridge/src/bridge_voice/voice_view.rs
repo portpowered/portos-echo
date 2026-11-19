@@ -60,6 +60,7 @@ impl<'a> View<'a> {
             ServeNotice::Kill(enabled) => self.kill(enabled),
             ServeNotice::Ready => {
                 self.closed("idle")?;
+                self.relinked()?;
                 self.health.state.send_modify(|state| state.wyoming = "connected");
                 self.screen.ready()?;
                 self.trace.record("bridge.ready", None, json!({}))?;
@@ -249,6 +250,48 @@ impl<'a> View<'a> {
             .state
             .send_modify(|state| state.live = if state.kill_switch { "error" } else { "idle" });
         Ok(())
+    }
+
+    /// A recovered generation withdraws a relink instruction it no longer needs.
+    fn relinked(&mut self) -> Result<(), Error> {
+        // Health is the one record of a relink this view asked for.
+        if self.health.state.borrow().relink_required {
+            self.health.state.send_modify(|state| state.relink_required = false);
+            if !self.health.state.borrow().kill_switch {
+                self.screen.presentation.overlay(None)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A failure that will be retried. Health and screen show what a terminal
+    /// failure shows; the trace names the retry instead of `bridge.error`.
+    pub fn recovering(&mut self, error: &Error, retry: (u32, std::time::Duration), linked: bool) -> Result<(), Error> {
+        let run = self.run.take();
+        self.mouth_paused = false;
+        self.closed("failed")?;
+        let relink = *error == Error::Authorization;
+        if !relink {
+            self.relinked()?;
+        }
+        self.health.state.send_modify(|state| {
+            state.live = "error";
+            state.relink_required = relink;
+            if !linked {
+                state.wyoming = "connecting";
+            }
+        });
+        let state = crate::bridge_runtime::bridge_screen::failure_state(relink);
+        if relink {
+            self.screen.presentation.overlay(Some(state))?;
+        } else {
+            self.screen.publish(state)?;
+        }
+        self.trace.record(
+            "bridge.recovering",
+            run.as_deref(),
+            json!({"reason":error.to_string(), "attempt":retry.0, "delay_ms":retry.1.as_millis()}),
+        )
     }
 
     pub async fn failed(&mut self, error: &Error) -> Result<(), Error> {

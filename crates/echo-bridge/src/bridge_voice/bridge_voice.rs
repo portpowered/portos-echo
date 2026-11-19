@@ -3,6 +3,8 @@
 mod earcon;
 #[path = "controls/prompts/prompts.rs"]
 mod prompts;
+#[path = "recovery/retained_link.rs"]
+mod retained_link;
 #[path = "controls/session_controller.rs"]
 mod session_controller;
 #[path = "controls/session_tools.rs"]
@@ -21,6 +23,8 @@ mod voice_host;
 mod voice_kill;
 #[path = "controls/voice_listen.rs"]
 mod voice_listen;
+#[path = "recovery/voice_recovery.rs"]
+mod voice_recovery;
 mod voice_runtime;
 mod voice_session;
 mod voice_source;

@@ -3,63 +3,90 @@ use super::*;
 use echo_bridge::{Error, bridge_voice::Configured};
 use echo_link::fake::{Command, FakeConnector, Observer};
 
+/// Refuses the first connection, then behaves like the fake device.
 #[derive(Clone, Default)]
 struct RefusedDevice {
     entered: std::sync::Arc<tokio::sync::Notify>,
     release: std::sync::Arc<tokio::sync::Notify>,
+    refused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    observer: Observer,
 }
 
 impl echo_link::LinkConnector for RefusedDevice {
     type Link = echo_link::fake::FakeLink;
 
     async fn connect(&self) -> Result<Self::Link, echo_link::Error> {
+        if self.refused.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return FakeConnector::new(self.observer.clone()).connect().await;
+        }
         self.entered.notify_one();
         self.release.notified().await;
         Err(echo_link::Error::Transport)
     }
 }
 
+// A device that cannot be reached at startup is not a reason to exit: the
+// error is shown and traced, and the bridge retries until it is ready.
 #[tokio::test]
 #[ignore = "T3 controlled process and paired loopback screen"]
-async fn codex_configured_uncancelled_error_delivers_terminal_state_before_release() {
+async fn codex_configured_refused_device_shows_error_then_retries_to_ready() {
     let fixture = Fixture::new("chatgpt");
     let config = config(&fixture);
     let path = fixture.directory.path().join("trace");
     let connector = RefusedDevice::default();
     let prepared = Configured::new(config, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
     let work = prepared.execute(
         connector.clone(),
         async || -> Result<echo_media::Peer, Error> { unreachable!() },
         vec![],
-        std::future::pending(),
+        async {
+            stopping.await.unwrap();
+        },
     );
     let inspect = async {
         let _control = fixture.control().await;
         connector.entered.notified().await;
         let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
         connector.release.notify_one();
-        assert_eq!(
-            bridge_wire_screen::state(&mut screen).await,
-            json!({
-                "state":"error", "message":"Conversation unavailable. Try another wake.", "relink":false
-            })
-        );
-        while let Some(line) = screen.next_line().await.unwrap() {
-            assert!(!line.starts_with("data:"));
+        let mut shown = false;
+        loop {
+            let state = bridge_wire_screen::state(&mut screen).await;
+            if state["state"] == "error" {
+                assert_eq!(
+                    state,
+                    json!({"state":"error", "message":"Conversation unavailable. Try another wake.", "relink":false})
+                );
+                shown = true;
+            } else if shown && state["message"] == "Echo Live ready" {
+                break;
+            }
         }
+        stop.send(()).unwrap();
     };
     let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::join!(work, inspect)
     }))
     .await
     .unwrap();
-    assert_eq!(result, Err(Error::Wyoming));
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        connector.observer.commands(),
+        [Command::Connect, Command::Capture, Command::Probe, Command::Close]
+    );
     super::host::released(&fixture).await;
     presentation_released(&path, "chatgpt", true);
+    let rows = trace(&path);
+    let count = |event: &str| rows.iter().filter(|row| row["event"] == event).count();
+    assert_eq!((count("bridge.error"), count("bridge.ready")), (0, 1));
+    let retries: Vec<_> = rows.iter().filter(|row| row["event"] == "bridge.recovering").collect();
+    assert_eq!(retries.len(), 1);
     assert_eq!(
-        trace(&path).iter().filter(|row| row["event"] == "bridge.error").count(),
-        1
+        (&retries[0]["reason"], &retries[0]["attempt"], &retries[0]["delay_ms"]),
+        (&json!("wyoming"), &json!(1), &json!(1000))
     );
+    let launches = std::fs::read_to_string(fixture.home.join("launches")).unwrap();
+    assert_eq!(launches.lines().count(), 2);
 }
 
 fn config(fixture: &Fixture) -> echo_config::BridgeConfig {
