@@ -114,9 +114,28 @@ safe_paths=false
 starting=false
 device=/data/local/echo-bridge
 lock=/data/local/echo-bridge.lock
+# Claim the unconsumed launch gate, or ask the owning session to close stdin.
+# A late launcher cannot pass a gate removed by cancellation.
+close_stdin="
+if test -d '$device/private/run'; then
+  if rmdir '$device/private/run/control' 2>/dev/null; then
+    touch '$device/private/run/finished'
+  else
+    touch '$device/private/run/stop'
+  fi
+  end=\$((\$(date +%s) + 20))
+  while ! test -f '$device/private/run/finished'; do
+    test \"\$(date +%s)\" -lt \"\$end\" || exit 1
+    sleep 1
+  done
+fi"
 cleanup() {
   if [ "$starting" = true ]; then
-    adb shell "test ! -L '$device/private/run/stop' && touch '$device/private/run/stop'" >/dev/null 2>&1 || :
+    adb shell "set -e
+$close_stdin
+observed=\$(ps -A -o PID,NAME)
+printf '%s\\n' \"\$observed\" | awk '\$2 == \"echo-bridge\" { found=1 } END { exit found+0 }'
+rm -rf '$device/private/run'" >/dev/null 2>&1 || :
   fi
   if [ "$locked" = true ]; then
     if [ "$safe_paths" = true ]; then
@@ -157,18 +176,10 @@ run_adb shell "for p in '$device' '$device/bin' '$device/private' '$device/home'
 done
 for p in launch.sh bridge.log bridge.toml bridge.trace; do test ! -L '$device/private/'\$p || exit 1; done
 if test -d '$device/private/run'; then
-  for p in stdin control stop finished log-inode log-prefix; do test ! -L '$device/private/run/'\$p || exit 1; done
+  for p in stdin control stop finished deadline log-inode log-prefix; do test ! -L '$device/private/run/'\$p || exit 1; done
 fi"
 stop_bridge() {
-  run_adb shell "
-if test -d '$device/private/run'; then
-  touch '$device/private/run/stop'
-  end=\$((\$(date +%s) + 20))
-  while ! test -f '$device/private/run/finished'; do
-    test \"\$(date +%s)\" -lt \"\$end\" || exit 1
-    sleep 1
-  done
-fi"
+  run_adb shell "$close_stdin"
   process_state
   [ "$running" = 0 ] || fail 'bridge did not stop; no process was signalled'
   run_adb shell "rm -rf '$device/private/run'"
@@ -179,11 +190,15 @@ if [ "$command_name" = stop ]; then
   exit 0
 fi
 if [ "$command_name" = start ]; then
+  # Recover only owned state after proving no bridge is currently running.
+  stop_bridge
   run_adb shell "test -x '$device/private/launch.sh' && test -f '$device/private/bridge.toml'
 test ! -e '$device/private/run'
 umask 077
 mkdir '$device/private/run'
 trap \"rm -rf '$device/private/run'\" 0
+mkdir '$device/private/run/control'
+printf '%s\\n' \$((\$(date +%s) + 20)) > '$device/private/run/deadline'
 mkfifo '$device/private/run/stdin'
 # Record identity and the complete old prefix, never its contents.
 stat -c %i /data/local/hassmic/boot.log > '$device/private/run/log-inode'
@@ -192,7 +207,7 @@ trap - 0"
   starting=true
   run_adb shell "setsid /system/bin/sh '$device/private/launch.sh' </dev/null >> '$device/private/bridge.log' 2>&1 &"
   run_adb shell "
-end=\$((\$(date +%s) + 20))
+read -r end < '$device/private/run/deadline'
 read -r checksum bytes < '$device/private/run/log-prefix'
 read -r inode < '$device/private/run/log-inode'
 while test \"\$(date +%s)\" -lt \"\$end\"; do
@@ -209,7 +224,7 @@ while test \"\$(date +%s)\" -lt \"\$end\"; do
 done
 exit 1"
   starting=false
-  printf '%s\n' 'echo-install: started'
+  printf '%s\n' 'echo-install: started (hassmic connected)'
   exit 0
 fi
 # Fixed destinations only. Refuse links before chmod, redirects, push or rename.
@@ -257,6 +272,9 @@ cat > '$device/private/.install-stage' <<'LAUNCH'
 #!/system/bin/sh
 umask 077
 state=/data/local/echo-bridge/private/run
+# Atomic admission: cancellation may have consumed this gate first.
+rmdir \"\$state/control\" 2>/dev/null || exit 1
+if test -f \"\$state/stop\"; then touch \"\$state/finished\"; exit 1; fi
 # Only this session holds the write end. The bridge must not inherit it.
 exec 3<> \"\$state/stdin\"
 /data/local/hassmic/runas root 3990,inet /data/local/echo-bridge/bin/echo-bridge --config /data/local/echo-bridge/private/bridge.toml --trace /data/local/echo-bridge/private/bridge.trace < \"\$state/stdin\" 3>&- &

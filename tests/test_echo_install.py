@@ -45,6 +45,13 @@ def fake_adb():
         command = args[1]
         command = command.replace("/system/bin/sh", "/bin/sh")
         command = command.replace("/data/local", str(base / "remote"))
+        pause = base / "pause"
+        if pause.exists() and pause.read_text() in command:
+            pause.unlink()
+            with (base / "paused").open("w") as ready:
+                ready.write("paused")
+            with (base / "release").open("r") as release:
+                release.read()
         result = subprocess.run(["/bin/sh", "-c", command],
                                 env=dict(os.environ, PATH=str(base / "remote-tools") + ":/usr/bin:/bin"),
                                 capture_output=True, timeout=5)
@@ -310,7 +317,7 @@ base = Path(os.environ['FAKE_ROOT'])
 (base / 'child-session').write_text(str(os.getsid(0)))
 mode = (base / 'mode').read_text()
 log = base / 'remote/hassmic/boot.log'
-if mode in ('ready', 'hidden', 'deadline'):
+if mode in ('ready', 'hidden', 'deadline', 'stubborn'):
     with log.open('a') as output: output.write('client connected / satellite: running\\n')
 elif mode == 'rotate':
     log.rename(log.with_suffix('.old'))
@@ -333,64 +340,15 @@ if mode != 'exit':
     box.install()
 
 
-def lifecycle_cases():
-    with Sandbox() as box:
-        prepare_lifecycle(box)
-        result = box.run(["start"])
-        require(result.stdout == "echo-install: started\n", "start output differs")
-        require(not (box.root / "eof").exists(), "stdin closed before stop")
-        require((box.root / "child-session").read_text() == (box.root / "holder-pid").read_text(),
-                "launcher did not detach its session")
-        args = json.loads((box.root / "child-args").read_text())
-        require(args == ["--config", str(box.device / "private/bridge.toml"),
-                         "--trace", str(box.device / "private/bridge.trace")], "launch arguments differ")
-        before = len(box.calls())
-        box.run(["start"], 1)
-        box.install(code=1)
-        require(not any(call[0] == "push" or "setsid" in " ".join(call)
-                        for call in box.calls()[before:]), "duplicate launch/replacement")
-        box.run(["stop"])
-        require((box.root / "eof").read_text() == "EOF", "bridge did not observe EOF")
-        require(not (box.device / "private/run").exists(), "owned resources remained")
-        box.run(["stop"])
-    for mode in ("stale", "rotate", "truncate", "exit", "hidden", "deadline"):
-        with Sandbox() as box:
-            prepare_lifecycle(box, mode)
-            result = box.run(["start"], 1)
-            require(not result.stdout, "false start success")
-            box.run(["stop"])
-            require(not (box.device / "private/run").exists(), "failed start resource leak")
-    with Sandbox() as box:
-        prepare_lifecycle(box)
-        (box.root / "running").touch()
-        before = len(box.calls())
-        box.run(["stop"], 1)
-        require(not any("kill " in " ".join(call) for call in box.calls()[before:]),
-                "unknown process signalled")
-        require((box.device / "bin/echo-bridge").exists(), "failed stop removed binary")
-    with Sandbox() as box:
-        prepare_lifecycle(box)
-        lock = box.root / "remote/echo-bridge.lock"
-        lock.mkdir()
-        box.run(["start"], 1)
-        require(not (box.root / "child-pid").exists(), "busy operation launched")
-    with Sandbox() as box:
-        prepare_lifecycle(box)
-        box.run(["start"])
-        (box.root / "fault").write_text("ps -A")
-        box.run(["stop"], 1)
-        require((box.device / "bin/echo-bridge").exists(), "failed verification removed binary")
-        box.run(["stop"])
-    print("F09 F10 F11 F12 F14 F16: PASS; F13 F15 F17 incomplete")
-
 
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))
+    from test_echo_install_lifecycle import lifecycle_cases
     lifecycle_cases()
-    print("echo-install tests: install=PASS lifecycle=PARTIAL retention=PASS privacy=PASS; status pending")
+    print("echo-install tests: install=PASS lifecycle=PASS retention=PASS privacy=PASS; status pending")
 
 
 if __name__ == "__main__":
