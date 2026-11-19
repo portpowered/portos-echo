@@ -196,23 +196,7 @@ async fn t3_settings_configured_saved_prompts_reach_next_call_without_restart() 
 
 async fn saved_prompt_call(fixture: &Fixture, observer: &Observer, path: &Path) {
     let (_control, _screen) = ready(fixture).await;
-    for (kind, text) in [("voice", "saved voice\n語 \n"), ("runner", "saved runner\n")] {
-        let response = reqwest::Client::new()
-            .post(settings_runtime_url(fixture, &format!("/settings/v1/prompts/{kind}")))
-            .json(&json!({"version":1,"text":text}))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::OK);
-        assert_eq!(
-            response.json::<Value>().await.unwrap(),
-            json!({"version":1,"restart_pending":false})
-        );
-        assert_eq!(
-            std::fs::read_to_string(fixture.directory.path().join(format!("agent-home/prompts/{kind}.md"))).unwrap(),
-            text
-        );
-    }
+    save_prompts(fixture).await;
     observer.wake("saved prompt fixture", vec![]);
     while !observer.commands().contains(&Command::Stop) {
         assert!(trace(path).iter().all(|row| row["event"] != "bridge.recovering"));
@@ -232,5 +216,25 @@ async fn saved_prompt_call(fixture: &Fixture, observer: &Observer, path: &Path) 
     observer.finish(Ok(()));
     while trace(path).iter().all(|row| row["event"] != "bridge.run_completed") {
         tokio::task::yield_now().await;
+    }
+}
+
+async fn save_prompts(fixture: &Fixture) {
+    for (kind, text) in [("voice", "saved voice\n語 \n"), ("runner", "saved runner\n")] {
+        let response = reqwest::Client::new()
+            .post(settings_runtime_url(fixture, &format!("/settings/v1/prompts/{kind}")))
+            .json(&json!({"version":1,"text":text}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"version":1,"restart_pending":false})
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.directory.path().join(format!("agent-home/prompts/{kind}.md"))).unwrap(),
+            text
+        );
     }
 }
