@@ -1,4 +1,5 @@
 //! T3 configured CLI journeys; all tools are synthetic and sockets loopback.
+mod m4;
 mod session;
 mod setup;
 mod voice;

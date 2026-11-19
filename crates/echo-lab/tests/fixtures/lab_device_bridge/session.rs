@@ -6,6 +6,8 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 type Error = Box<dyn std::error::Error>;
+#[path = "m4.rs"]
+mod m4;
 
 pub(super) fn run(args: &[String], fixture: &Value, contents: &str) -> Result<u8, Error> {
     let config = echo_config::BridgeConfig::from_toml_str(contents)?;
@@ -40,13 +42,17 @@ pub(super) fn run(args: &[String], fixture: &Value, contents: &str) -> Result<u8
         "data: {}\n",
         json!({"seq":1,"state":{"state":"ready","message":"Echo Live ready"}})
     )?;
-    turns(&mut wire, &mut trace, fixture)?;
-    finish(
-        &mut wire,
-        &mut trace,
-        fixture,
-        u64::from(config.voice.session_listen_seconds),
-    )?;
+    if fixture["m4"] == true {
+        m4::turn(&mut wire, &mut trace, &mut screen, fixture, contents)?;
+    } else {
+        turns(&mut wire, &mut trace, fixture)?;
+    }
+    let listen = if fixture["m4"] == true {
+        0
+    } else {
+        u64::from(config.voice.session_listen_seconds)
+    };
+    finish(&mut wire, &mut trace, fixture, listen)?;
     Ok(0)
 }
 
@@ -68,6 +74,13 @@ fn finish(wire: &mut BufReader<TcpStream>, trace: &mut fs::File, fixture: &Value
     io::stdin().read_to_end(&mut Vec::new())?;
     if fixture["late_error"] == true {
         record(trace, "bridge.error", 101)?;
+    }
+    if fixture["late_tool"] == true {
+        writeln!(
+            trace,
+            "{}",
+            json!({"event":"tools/call","name":"test.echo","run_id":"run-1","elapsed_ms":101})
+        )?;
     }
     Ok(())
 }
@@ -106,7 +119,7 @@ pub(super) fn send(socket: &mut TcpStream, kind: &str, payload: &[u8]) -> io::Re
     socket.write_all(&encode(&Event {
         header: Header {
             r#type: kind.into(),
-            data: Some(json!({"rate":16000,"width":2,"channels":1})),
+            data: Some(json!({"rate":24000,"width":2,"channels":1})),
             data_length: 0,
             payload_length: payload.len(),
         },

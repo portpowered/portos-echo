@@ -153,7 +153,7 @@ impl Runtime {
         let screen = self.screen.as_mut().ok_or("device: screen not connected")?;
         screen.expect(expected).await?;
         // expect uses the shared typed UiState oracle. Project only the matched
-        // Ready/Muted values, never credentials or arbitrary provider content.
+        // Ready/Muted/Speaking values, never credentials or arbitrary provider content.
         if self.wakes.is_empty() && expected["state"] == "ready" {
             self.ready += 1;
         }
@@ -162,6 +162,7 @@ impl Runtime {
                 json!({"state":"ready","message":"Echo Live ready"})
             }
             Some("muted") => json!({"state":"muted"}),
+            Some("speaking") => json!({"state":"speaking"}),
             _ => return Err("device: unsupported UI projection".into()),
         };
         let value = json!({"event":"device.ui","step":index,"bridge_generation":self.generation,

@@ -18,6 +18,12 @@ pub fn persistent_input(
         return Ok(None);
     }
     let scenario = crate::lab_validate::load(scenario)?;
+    if scenario["id"] == "m4-spoof-tool" && options.wake_clip.is_none() {
+        if options.speech.is_none() || value.trim().is_empty() {
+            return Err("device: M4 utterance requires --wake-clip or --speech-endpoint and --speech-model".into());
+        }
+        return Ok(Some(super::super::Step::SayText(value.to_owned())));
+    }
     session_text(value, &scenario, options.speech.is_some(), options.wake_clip.is_some())
 }
 
@@ -192,13 +198,19 @@ impl super::Configured<'_> {
         &mut self,
         text: &str,
         index: usize,
+        next: Option<&super::super::Step>,
         artifacts: &mut super::super::run_report::Artifacts,
     ) -> Result<(), String> {
         if self.wire_replies == 0 {
             self.state.arm_wake()?;
         }
-        self.bench
-            .session_input(&super::super::Step::SayText(text.to_owned()), index, artifacts)?;
+        let step = super::super::Step::SayText(text.to_owned());
+        if self.session {
+            self.bench.session_input(&step, index, artifacts)?;
+        } else {
+            use super::super::Driver;
+            self.bench.execute(&step, index, next, artifacts)?;
+        }
         self.wait_played(index)
     }
 

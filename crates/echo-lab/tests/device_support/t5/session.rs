@@ -26,16 +26,7 @@ fn prepare_session(replies: u64, extra: Value) -> (Session, std::thread::JoinHan
 }
 
 fn host(listener: &TcpListener, root: &Path, replies: u64) {
-    listener.set_nonblocking(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut wire = loop {
-        if let Ok((socket, _)) = listener.accept() {
-            break BufReader::new(socket);
-        }
-        assert!(Instant::now() < deadline, "synthetic wire never connected");
-        std::thread::yield_now();
-    };
-    wire.get_mut().set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut wire = accept(listener);
     for turn in 1..=replies {
         wait_play(root, turn);
         if turn == 1 {
@@ -49,7 +40,21 @@ fn host(listener: &TcpListener, root: &Path, replies: u64) {
     while !receive(&mut wire).is_empty() {}
 }
 
-fn wait_play(root: &Path, count: u64) {
+pub(super) fn accept(listener: &TcpListener) -> BufReader<TcpStream> {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut wire = loop {
+        if let Ok((socket, _)) = listener.accept() {
+            break BufReader::new(socket);
+        }
+        assert!(Instant::now() < deadline, "synthetic wire never connected");
+        std::thread::yield_now();
+    };
+    wire.get_mut().set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    wire
+}
+
+pub(super) fn wait_play(root: &Path, count: u64) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let played = fs::read_to_string(root.join("ledger.jsonl"))
@@ -69,7 +74,7 @@ fn wait_play(root: &Path, count: u64) {
     }
 }
 
-fn send(socket: &mut TcpStream, kind: &str) {
+pub(super) fn send(socket: &mut TcpStream, kind: &str) {
     use echo_contracts::wyoming::{Event, Header, encode};
     let payload = if kind == "audio-chunk" { vec![0, 4] } else { vec![] };
     socket
@@ -86,7 +91,7 @@ fn send(socket: &mut TcpStream, kind: &str) {
         .unwrap();
 }
 
-fn receive(socket: &mut BufReader<TcpStream>) -> String {
+pub(super) fn receive(socket: &mut BufReader<TcpStream>) -> String {
     let mut header = String::new();
     if socket.read_line(&mut header).unwrap() == 0 {
         return String::new();

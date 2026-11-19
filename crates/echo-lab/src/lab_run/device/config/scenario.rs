@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 pub fn admits(scenario: &Value) -> Result<bool, String> {
     if !matches!(
         scenario["id"].as_str(),
-        Some("m2-live-connect" | "session-two-turns" | "session-idle-timeout")
+        Some("m2-live-connect" | "m4-spoof-tool" | "session-two-turns" | "session-idle-timeout")
     ) {
         return Ok(false);
     }
@@ -20,11 +20,21 @@ pub fn admits(scenario: &Value) -> Result<bool, String> {
         .as_object()
         .ok_or("device: missing budgets")?
         .keys()
-        .find(|name| !super::voice::is_setting(name))
+        .find(|name| {
+            !(super::voice::is_setting(name)
+                || scenario["id"] == "m4-spoof-tool" && name.as_str() == "first_audio_after_endpoint_ms_p95")
+        })
     {
         return Err(format!("device: unsupported budget {name}"));
     }
     super::voice::settings(scenario)?;
+    if scenario["id"] == "m4-spoof-tool"
+        && scenario["budgets"]["first_audio_after_endpoint_ms_p95"]
+            .as_f64()
+            .is_none_or(|value| !value.is_finite() || value < 0.0)
+    {
+        return Err("device: invalid M4 latency ceiling".into());
+    }
     Ok(true)
 }
 

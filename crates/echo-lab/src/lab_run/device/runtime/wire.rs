@@ -54,7 +54,9 @@ fn adb(adb: &std::path::Path, args: &[String], cancel: Option<&std::path::Path>)
 
 impl Observer {
     pub(in crate::lab_run::device) async fn wait_reply(&mut self, run: usize, replies: usize) -> Result<(), String> {
-        self.relay.wait_reply(run, replies).await
+        self.relay
+            .wait_reply(run, replies, self.latency.is_some() && self.session.is_none())
+            .await
     }
 
     pub(in crate::lab_run::device) fn start(options: &Options, address: SocketAddr) -> Result<Self, String> {

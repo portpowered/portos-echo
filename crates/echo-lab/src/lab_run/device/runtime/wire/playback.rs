@@ -92,6 +92,16 @@ impl Session {
         Ok(())
     }
 
+    pub fn reply_barrier(&self, run: usize, replies: usize, final_reply: bool) -> Result<bool, String> {
+        // A one-reply milestone may end immediately after Played, before its
+        // waiter is scheduled. Persistent next-turn barriers still require an
+        // open run. Both paths require the independent settled reply identity.
+        if final_reply && run == 1 && !self.ended.is_empty() {
+            return self.settled(replies).map(|_| true);
+        }
+        self.checkpoint(run, replies)
+    }
+
     pub fn checkpoint(&self, run: usize, replies: usize) -> Result<bool, String> {
         if self.unmatched_played != 0 || self.runs.iter().any(|id| *id != run) {
             return Err("device: unmet prerequisite: current-run Played identity".into());

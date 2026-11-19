@@ -68,7 +68,7 @@ impl Relay {
         super::latency::check(&self.receipts.borrow(), ceiling)
     }
 
-    pub async fn wait_reply(&mut self, run: usize, replies: usize) -> Result<(), String> {
+    pub async fn wait_reply(&mut self, run: usize, replies: usize, final_reply: bool) -> Result<(), String> {
         loop {
             {
                 let ledger = self.receipts.borrow_and_update();
@@ -78,7 +78,7 @@ impl Relay {
                 if ledger.closed {
                     return Err("device: unmet prerequisite: Played before wire close".into());
                 }
-                if ledger.session.checkpoint(run, replies)? {
+                if ledger.session.reply_barrier(run, replies, final_reply)? {
                     return Ok(());
                 }
             }

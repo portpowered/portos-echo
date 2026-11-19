@@ -53,6 +53,31 @@ fn device_wire_session_reply_barrier_requires_played_and_keeps_capture_open() {
 }
 
 #[test]
+fn device_wire_m4_final_reply_accepts_immediate_end_without_relaxing_session_barrier() {
+    let mut ledger = Ledger::default();
+    event(&mut ledger, "capture", "run-pipeline");
+    reply(&mut ledger, &[128, 0], "audio-stop");
+    event(&mut ledger, "playback", "hassmic-end");
+    assert_eq!(ledger.session.reply_barrier(1, 1, true), Ok(true));
+    assert_eq!(
+        ledger.session.reply_barrier(1, 1, false),
+        Err("device: session advanced beyond reply barrier".into())
+    );
+    assert!(
+        ledger
+            .session
+            .reply_barrier(1, 2, true)
+            .unwrap_err()
+            .contains("expected 2, observed 1")
+    );
+    event(&mut ledger, "capture", "run-pipeline");
+    assert_eq!(
+        ledger.session.reply_barrier(1, 1, true),
+        Err("device: unmet prerequisite: one complete wire session identity".into())
+    );
+}
+
+#[test]
 fn device_wire_session_silence_and_cut_are_not_completed_replies() {
     let mut ledger = Ledger::default();
     event(&mut ledger, "capture", "run-pipeline");
