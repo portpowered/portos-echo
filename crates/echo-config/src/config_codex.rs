@@ -184,13 +184,8 @@ mod tests {
     }
 
     #[test]
-    fn echo_example_is_a_standalone_install_with_loopback_listeners_and_portos_mcp() {
+    fn echo_example_enables_portos_device_code_with_private_state() {
         let config = BridgeConfig::from_toml_str(include_str!("../../../examples/bridge.echo.toml")).unwrap();
-        assert_eq!(
-            (config.echo.host.as_str(), config.echo.wyoming_port),
-            ("127.0.0.1", 16700)
-        );
-        assert_eq!(config.screen.listen, "127.0.0.1:16900".parse().unwrap());
         assert_eq!(config.mcp.operator_listen, "127.0.0.1:16902".parse().unwrap());
         assert_eq!(config.mcp.server.len(), 1);
         let server = &config.mcp.server[0];
@@ -200,10 +195,23 @@ mod tests {
         assert_eq!(server.bearer_file, None);
         assert_eq!(server.allow_tools, ["endpoint_list", "endpoint_query", "control"]);
         assert_eq!(config.mcp.scopes, ["endpoint:read"]);
+        assert_eq!(
+            config.mcp.state_dir,
+            Some(PathBuf::from("/data/local/echo-bridge/private/portos"))
+        );
+    }
+
+    #[test]
+    fn echo_example_is_a_private_standalone_install_with_loopback_listeners() {
+        let config = BridgeConfig::from_toml_str(include_str!("../../../examples/bridge.echo.toml")).unwrap();
+        assert_eq!(
+            (config.echo.host.as_str(), config.echo.wyoming_port),
+            ("127.0.0.1", 16700)
+        );
+        assert_eq!(config.screen.listen, "127.0.0.1:16900".parse().unwrap());
         assert_eq!(config.live.mode, crate::LiveMode::Chatgpt);
         assert_eq!(config.codex.launch, CodexLaunch::Standalone);
         let private = std::path::Path::new("/data/local/echo-bridge/private");
-        assert_eq!(config.mcp.state_dir, Some(private.join("portos")));
         for path in [
             config.codex.home.as_deref(),
             Some(config.live.credential_file.as_path()),

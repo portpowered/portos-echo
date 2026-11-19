@@ -151,7 +151,12 @@ fn device_screen_faults_fail_closed_without_playback_and_collect_resources() {
         assert_eq!(session.report()["result"], "fail");
         assert_eq!(session.report()["checks"]["step_0"], false);
         assert!(session.report()["checks"]["step_1"].is_null());
-        assert_eq!(session.report()["checks"]["session_released"], true);
+        assert_eq!(
+            session.report()["checks"]["session_released"],
+            true,
+            "fault={fault}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(session.operations().iter().filter(|op| *op == "play").count(), 0);
         assert!(!session.0.join("artifacts/configured.private").exists());
         assert!(!session.0.join("artifacts/bridge.private.jsonl").exists());

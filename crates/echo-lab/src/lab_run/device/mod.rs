@@ -91,7 +91,9 @@ impl<'a> Configured<'a> {
                 ),
                 self.options.cancel.as_deref(),
             ));
-            self.state.invalid |= result.is_err();
+            // M5 must never publish partial link counts after failed startup.
+            // Other journeys still collect their trace after a screen fault.
+            self.state.invalid |= result.is_err() && self.state.portos.is_some();
             self.state.startup_result(result)?;
         }
         Ok(())
