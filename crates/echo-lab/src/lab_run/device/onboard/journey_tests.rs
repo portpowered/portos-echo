@@ -3,7 +3,7 @@
 use super::{PRIVATE, UNLINKED, World, remote, world};
 use crate::lab_run::{device::runtime::Runtime, run_report::Artifacts};
 use serde_json::{Value, json};
-use std::{cell::RefCell, net::Ipv4Addr, rc::Rc};
+use std::{cell::RefCell, fmt::Write, net::Ipv4Addr, rc::Rc};
 use tokio::io::AsyncWriteExt;
 
 const DERIVED: &str = "# derived for this run\n";
@@ -260,7 +260,7 @@ async fn t3_on_device_mcp_reader_rotates_only_after_draining_the_actual_generati
     assert_eq!((state.generation, state.bridge_id()), (2, Ok(Some(2))));
     receipts(&world, "success");
     let reload = json!({"event":"mcp.grant.reloaded","elapsed_ms":5});
-    world.borrow_mut().trace.push_str(&format!("{reload}\n"));
+    writeln!(world.borrow_mut().trace, "{reload}").unwrap();
     state.observe().unwrap();
     state.observe().unwrap();
     state.close(root.path(), &mut artifacts).await.unwrap();
@@ -283,7 +283,7 @@ async fn t3_on_device_mcp_reader_late_duplicate_revokes_measurement_and_still_re
     state.link_counts(&mut artifacts).unwrap();
     assert_eq!(artifacts.link_counts.unwrap().tool_call, 1);
     let duplicate = world.borrow().trace.lines().last().unwrap().to_owned();
-    world.borrow_mut().trace.push_str(&format!("{duplicate}\n"));
+    writeln!(world.borrow_mut().trace, "{duplicate}").unwrap();
     assert!(state.close(root.path(), &mut artifacts).await.is_err());
     assert!(artifacts.link_counts.is_none());
     assert!(state.invalid);

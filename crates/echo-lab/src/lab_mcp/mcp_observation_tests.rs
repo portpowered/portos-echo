@@ -313,10 +313,9 @@ fn portos() -> PortosObservations {
 
 fn receipt(event: &str, fields: Value) -> Value {
     let mut row = json!({"event":event,"elapsed_ms":0,"provider_auth_mode":"api_key"});
+    assert!(fields.is_object(), "receipt fields must be an object");
     if let Value::Object(fields) = fields {
         row.as_object_mut().unwrap().extend(fields);
-    } else {
-        panic!("receipt fields must be an object");
     }
     row
 }
