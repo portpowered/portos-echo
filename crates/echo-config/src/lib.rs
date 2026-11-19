@@ -8,7 +8,7 @@ mod config_muse;
 mod config_validate;
 mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
-pub use config_codex::{CodexConfig, CodexLaunch};
+pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS};
 pub use config_muse::{AgentBackend, MuseConfig};
 pub use config_voice::VoiceConfig;
 
@@ -69,6 +69,7 @@ impl BridgeConfig {
 /// A fully validated result from a loader. Public fields may subsequently be mutated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeConfig {
+    pub home: Option<HomeConfig>,
     pub wake_earcon: bool,
     pub chatgpt_auth: ChatGptAuthConfig,
     pub codex: CodexConfig,
@@ -82,6 +83,12 @@ pub struct BridgeConfig {
     pub mcp: McpConfig,
     pub screen: ScreenConfig,
     pub audit: AuditConfig,
+}
+
+/// Operator-owned non-secret agent home; settings.toml is reserved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HomeConfig {
+    pub dir: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

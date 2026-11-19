@@ -388,3 +388,31 @@ async fn wire_journey_commentary(live: &mut bridge_peer::Live) {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn t3_agent_home_removed_inline_keys_name_replacement_before_effects() {
+    let root = tempfile::tempdir().unwrap();
+    for (key, kind) in [("instructions", "runner"), ("live_instructions", "voice")] {
+        let config = root.path().join("bridge.toml");
+        let trace = root.path().join("trace");
+        let input = include_str!("../../../examples/bridge.example.toml").replace("echo.example.invalid", "127.0.0.1");
+        std::fs::write(&config, format!("{input}\n[codex]\n{key}='discarded prompt'\n")).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_echo-bridge"))
+            .args(["--config", config.to_str().unwrap(), "--trace", trace.to_str().unwrap()])
+            .env_remove("ECHO_LAB_WYOMING_ADDR")
+            .env_remove("ECHO_LAB_LIVE_URL")
+            .env_remove("ECHO_LAB_TRACE_PATH")
+            .env_remove("ECHO_LAB_SESSION_IDLE_SECONDS")
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.stdout, b"");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            format!("echo-bridge: codex.{key}: removed; use <home>/prompts/{kind}.md\n")
+        );
+        assert!(!trace.exists());
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+}

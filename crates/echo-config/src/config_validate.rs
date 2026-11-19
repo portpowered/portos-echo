@@ -49,6 +49,7 @@ pub(super) fn reject_secrets(value: &toml::de::DeValue<'_>, path: &str) -> Resul
 fn schema_field(path: &str, key: &str) -> bool {
     let fields: &[&str] = match path {
         "" => &[
+            "home",
             "echo",
             "live",
             "voice",
@@ -61,6 +62,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "chatgpt_auth",
             "codex",
         ],
+        "home" => &["dir"],
         "audio" => &["reply_lead_ms"],
         "voice" => &["session_listen_seconds", "session_max_seconds"],
         "codex" => &["home", "binary", "launch", "ca_file", "voice", "instructions", "model"],

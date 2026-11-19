@@ -196,10 +196,11 @@ where
         () = cancelled.as_mut() => return Err(Error::Control),
         result = super::earcon::negotiating(device.1, super::earcon::capture_during(&mut device.2, async {
             // One clock sample: the delegated turn and the Live prompt carry the same snapshot.
+            let (runner, voice) = super::prompts::snapshot(options.call.instructions, options.call.prompt, &mut trace)?;
             let (now, zone) = (clock(), options.call.time_zone);
             let instructions = (
-                super::voice_config::call_instructions(options.call.instructions, now, zone)?,
-                super::voice_config::call_instructions(options.call.prompt, now, zone)?,
+                super::voice_config::call_instructions(&runner, now, zone)?,
+                super::voice_config::call_instructions(&voice, now, zone)?,
             );
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
             Ok::<_, Error>((media, instructions))
@@ -310,3 +311,7 @@ async fn probe(client: &impl EchoLink) -> Result<(), Error> {
 #[cfg(test)]
 #[path = "earcon/voice_admission_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "controls/prompts/admission_tests.rs"]
+mod prompt_tests;

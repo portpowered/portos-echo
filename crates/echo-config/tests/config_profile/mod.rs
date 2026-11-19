@@ -91,7 +91,7 @@ fn invalid_profile_values_are_sanitized_offline() {
 fn documented_profile_can_be_enabled_without_changing_defaults() {
     let input = EXAMPLE
         .replace(
-            "# Optional Codex instructions (add a table named codex to customize):",
+            "# Optional Codex settings (add a table named codex to customize):",
             "[codex]",
         )
         .replace("# delegate_model =", "delegate_model =")

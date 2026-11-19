@@ -1,6 +1,8 @@
 //! One run joins Codex control/media, device capture, paced reply and played receipt.
 #[path = "earcon/earcon.rs"]
 mod earcon;
+#[path = "controls/prompts/prompts.rs"]
+mod prompts;
 #[path = "controls/session_controller.rs"]
 mod session_controller;
 #[path = "controls/session_tools.rs"]

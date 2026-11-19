@@ -73,7 +73,9 @@ fn outcome(result: Result<(), Error>) -> ExitCode {
         Err(error) => {
             let _ = writeln!(std::io::stderr(), "echo-bridge: {error}");
             match error {
-                Error::Input
+                Error::Prompt(_)
+                | Error::PromptConfig(_)
+                | Error::Input
                 | Error::CodexHomeRequired
                 | Error::CodexHome
                 | Error::CodexBinary
