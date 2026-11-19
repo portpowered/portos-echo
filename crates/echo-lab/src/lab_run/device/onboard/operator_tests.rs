@@ -366,6 +366,31 @@ async fn t3_on_device_mcp_operator_denial_clears_pending_without_approval() {
 }
 
 #[tokio::test]
+async fn t3_on_device_mcp_restart_refuses_pending_link_without_touching_private_store_or_process() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let world = world();
+    world.borrow_mut().forward = listener.local_addr().unwrap().port();
+    let (mut state, config) = configured(&world);
+    let peer = tokio::spawn(async move {
+        let mut socket = request(listener.accept().await.unwrap().0, "link").await;
+        let mut byte = [0];
+        assert_eq!(socket.read(&mut byte).await.unwrap(), 0);
+    });
+    state.mcp_operator(&McpAction::Link, &config).await.unwrap();
+    let mut artifacts = Artifacts::create(root.path().join("out")).unwrap();
+    assert_eq!(
+        state.mcp_restart(&config, &mut artifacts).await,
+        Err("device: MCP link already pending".into())
+    );
+    assert!(state.pending_mcp.is_some());
+    assert!(!world.borrow().ran("head -c 65537"));
+    assert!(!world.borrow().ran("kill $(cat"));
+    state.close(root.path(), &mut artifacts).await.unwrap();
+    peer.await.unwrap();
+}
+
+#[tokio::test]
 async fn t3_on_device_mcp_operator_rejects_missing_ambiguous_or_nonlocal_listener_before_forward() {
     for records in [
         Vec::new(),

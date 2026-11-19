@@ -122,6 +122,42 @@ fn headers(header: &str) -> Result<(&str, Option<usize>, Option<&str>), String> 
 }
 
 impl Remote {
+    pub(super) fn mcp_grant(&self, config: &str) -> Result<Secret<Vec<u8>>, String> {
+        let error = "device: invalid private MCP grant";
+        let config = echo_config::BridgeConfig::from_toml_str(config).map_err(|_| error)?;
+        let directory = config
+            .mcp
+            .state_dir
+            .as_deref()
+            .and_then(std::path::Path::to_str)
+            .ok_or(error)?;
+        if !device_path(directory)
+            || !directory
+                .strip_prefix(&self.launcher.private_dir)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+        {
+            return Err(error.into());
+        }
+        let path = format!("{directory}/grant.json");
+        if self.shell(&format!("stat -c %a {directory}"))?.trim() != "700"
+            || self.shell(&format!("stat -c %a {path}"))?.trim() != "600"
+        {
+            return Err(error.into());
+        }
+        let bytes = Secret::new(self.read(&format!("head -c 65537 {path}")).map_err(|_| error)?);
+        if bytes.expose().len() > 65536 {
+            return Err(error.into());
+        }
+        let value: Secret<Value> = Secret::new(serde_json::from_slice(bytes.expose()).map_err(|_| error)?);
+        if value.expose()["version"] != 1
+            || !value.expose()["private_key_jwk"].is_object()
+            || !value.expose()["grant"].is_object()
+        {
+            return Err(error.into());
+        }
+        Ok(bytes)
+    }
+
     fn pairing(&self, path: &std::path::Path) -> Result<Secret<String>, String> {
         let path = path.to_str().filter(|path| device_path(path)).ok_or(PAIRING)?;
         let bytes = self.read(&format!("head -c 16385 {path}")).map_err(|_| PAIRING)?;

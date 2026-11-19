@@ -329,3 +329,124 @@ async fn t3_on_device_mcp_reader_truncated_or_incomplete_final_trace_never_passe
         assert!(!root.path().join("configured.private").exists());
     }
 }
+
+fn stored_grant() -> Vec<u8> {
+    // Opaque synthetic store bytes; the driver must retain them, never sign in
+    // or construct an AuthClient to rewrite the bridge's record.
+    serde_json::to_vec(&json!({"version":1,"private_key_jwk":{"marker":"PRIVATE-KEY-MARKER"},
+        "grant":{"access_token":"PRIVATE-GRANT-MARKER","refresh_token":"PRIVATE-REFRESH-MARKER"}}))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_restart_preserves_private_store_and_waits_for_use_to_count() {
+    let (root, world, mut state) = portos_started().await;
+    world.borrow_mut().grant = stored_grant();
+    let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+    state.mcp_restart(PORTOS, &mut artifacts).await.unwrap();
+    assert_eq!((state.generation, state.bridge_id()), (2, Ok(Some(2))));
+    assert_eq!(world.borrow().grant, stored_grant());
+    state.link_counts(&mut artifacts).unwrap();
+    assert_eq!(artifacts.link_counts.unwrap().restart_grant_kept, 0);
+    receipts(&world, "success");
+    writeln!(
+        world.borrow_mut().trace,
+        "{}",
+        json!({"event":"mcp.grant.reloaded","elapsed_ms":5})
+    )
+    .unwrap();
+    state.close(root.path(), &mut artifacts).await.unwrap();
+    assert_eq!(artifacts.link_counts.unwrap().restart_grant_kept, 1);
+    let world = world.borrow();
+    assert_eq!(world.pushed.len(), 1);
+    assert_eq!(
+        world
+            .calls
+            .iter()
+            .filter(|args| args.join(" ").contains("setsid"))
+            .count(),
+        2
+    );
+    assert!(!world.ran("rm -f /data/local/echo-bridge/private/portos"));
+    assert!(!world.ran("chmod 600 /data/local/echo-bridge/private/portos/grant.json"));
+    let report = std::fs::read_to_string(artifacts.root.join("device-steps.jsonl")).unwrap();
+    assert!(!report.contains("PRIVATE-"));
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_restart_rejects_missing_malformed_oversized_or_unsafe_store_before_stop() {
+    for grant in [Vec::new(), b"bad".to_vec(), b"{}".to_vec(), vec![b'x'; 65537]] {
+        let (root, world, mut state) = portos_started().await;
+        world.borrow_mut().grant = grant;
+        let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+        assert_eq!(
+            state.mcp_restart(PORTOS, &mut artifacts).await,
+            Err("device: invalid private MCP grant".into())
+        );
+        assert_eq!((state.generation, state.bridge_id()), (1, Ok(Some(1))));
+        assert!(!world.borrow().ran("kill $(cat"));
+        state.close(root.path(), &mut artifacts).await.unwrap();
+    }
+    for directory in [
+        "/outside/portos",
+        "/data/local/echo-bridge/private/../portos",
+        "/private;command",
+    ] {
+        let (root, world, mut state) = portos_started().await;
+        let config = PORTOS.replace("/data/local/echo-bridge/private/portos", directory);
+        let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+        assert!(state.mcp_restart(&config, &mut artifacts).await.is_err());
+        assert!(!world.borrow().ran("head -c 65537"));
+        assert!(!world.borrow().ran("kill $(cat"));
+        state.close(root.path(), &mut artifacts).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_restart_changed_store_revokes_counts_and_cleanup_still_runs() {
+    let (root, world, mut state) = portos_started().await;
+    world.borrow_mut().grant = stored_grant();
+    world.borrow_mut().replacement_grant = Some(
+        String::from_utf8(stored_grant())
+            .unwrap()
+            .replace("PRIVATE-KEY-MARKER", "CHANGED-KEY")
+            .into_bytes(),
+    );
+    let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+    state.link_counts(&mut artifacts).unwrap();
+    assert_eq!(
+        state.mcp_restart(PORTOS, &mut artifacts).await,
+        Err("device: MCP restart changed the stored grant".into())
+    );
+    assert!(state.invalid && artifacts.link_counts.is_none());
+    assert!(state.close(root.path(), &mut artifacts).await.is_err());
+    assert!(artifacts.link_counts.is_none());
+    assert!(!world.borrow().alive);
+    assert!(world.borrow().ran("forward --remove"));
+    assert!(!root.path().join("configured.private").exists());
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_restart_refuses_public_store_and_failed_relaunch_cannot_publish_counts() {
+    let (root, world, mut state) = portos_started().await;
+    world.borrow_mut().grant = stored_grant();
+    world.borrow_mut().mode = "644".into();
+    let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+    assert_eq!(
+        state.mcp_restart(PORTOS, &mut artifacts).await,
+        Err("device: invalid private MCP grant".into())
+    );
+    assert!(!world.borrow().ran("head -c 65537"));
+    assert!(!world.borrow().ran("kill $(cat"));
+    world.borrow_mut().mode = "600".into();
+    // A new process without a screen endpoint fails after stop/trace rotation.
+    world.borrow_mut().boot = format!("{}\n", json!({"event":"bridge.ready","elapsed_ms":1}));
+    state.link_counts(&mut artifacts).unwrap();
+    assert!(state.mcp_restart(PORTOS, &mut artifacts).await.is_err());
+    assert!(state.invalid && artifacts.link_counts.is_none());
+    assert_eq!(state.generation, 2);
+    assert!(state.close(root.path(), &mut artifacts).await.is_err());
+    assert!(artifacts.link_counts.is_none());
+    assert!(!world.borrow().alive);
+    assert!(world.borrow().ran("forward --remove"));
+}

@@ -11,6 +11,31 @@ use crate::lab_run::{
 use serde_json::{Value, json};
 use std::path::Path;
 
+impl crate::lab_run::device::Configured<'_> {
+    pub(in crate::lab_run::device) fn mcp(
+        &mut self,
+        action: &crate::lab_run::McpAction,
+        artifacts: &mut Artifacts,
+    ) -> Result<(), String> {
+        let result = self.executor.block_on(crate::lab_run::device::runtime::observed(
+            async {
+                if matches!(action, crate::lab_run::McpAction::Restart) {
+                    self.state.mcp_restart(&self.config, artifacts).await
+                } else {
+                    self.state.mcp_operator(action, &self.config).await
+                }
+            },
+            self.options.cancel.as_deref(),
+            self.window,
+        ));
+        self.state.invalid |= result.is_err();
+        if result.is_err() {
+            artifacts.link_counts = None;
+        }
+        result
+    }
+}
+
 impl Runtime {
     fn remote(&mut self) -> Result<&mut Remote, String> {
         self.remote
@@ -92,6 +117,35 @@ impl Runtime {
         self.rotate_trace()?;
         self.startup = Some(Startup::new("bridge_spawn"));
         self.launch_remote().await
+    }
+
+    /// Retain the sole grant owner's exact persisted record across a real stop
+    /// and launch. Reload counts still require later successful runtime use.
+    pub(in crate::lab_run::device) async fn mcp_restart(
+        &mut self,
+        config: &str,
+        artifacts: &mut Artifacts,
+    ) -> Result<(), String> {
+        if self.portos.is_none() {
+            return Err("device: M5 Port OS observer not configured".into());
+        }
+        if self.pending_mcp.is_some() {
+            return Err("device: MCP link already pending".into());
+        }
+        let stored = self.remote()?.mcp_grant(config)?;
+        let result = async {
+            self.restart_remote(artifacts).await?;
+            if self.remote()?.mcp_grant(config)?.expose() != stored.expose() {
+                return Err("device: MCP restart changed the stored grant".into());
+            }
+            Ok(())
+        }
+        .await;
+        self.invalid |= result.is_err();
+        if result.is_err() {
+            artifacts.link_counts = None;
+        }
+        result
     }
 
     /// Call before killing hassmic: only later trace and log lines belong to the recovery.
