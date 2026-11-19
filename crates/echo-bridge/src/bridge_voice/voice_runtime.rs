@@ -11,6 +11,7 @@ pub struct RuntimeOptions<'a> {
     pub host: HostOptions<'a>,
     pub voice: ServeOptions<'a>,
     pub screen: Option<&'a ScreenConfig>,
+    pub settings_warning: Option<&'a str>,
     pub health: SocketAddr,
     pub trace: &'a Path,
     pub delegation: Option<&'a echo_config::BridgeConfig>,
@@ -58,6 +59,7 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     )?;
     super::prompts::publish(&mut trace)?;
     let mut screen = Screen::bind(options.screen).await?;
+    screen.settings_warning(options.settings_warning, &mut trace)?;
     let health = match Health::bind(options.health).await {
         Ok(health) => health,
         Err(error) => {

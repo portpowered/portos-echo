@@ -110,6 +110,7 @@ pub async fn execute_controlled<C: LinkConnector>(
         },
     )?;
     let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
+    screen.settings_warning(settings.settings_warning.as_deref(), &mut trace)?;
     let health = Health::bind(settings.health).await?;
     screen.supervise_actions(health.state.subscribe());
     trace.record(

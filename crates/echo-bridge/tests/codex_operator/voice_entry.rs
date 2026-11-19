@@ -2,7 +2,7 @@
 use super::*;
 use tokio::net::TcpListener;
 
-fn configure(fixture: &Fixture, port: u16) {
+pub(super) fn configure(fixture: &Fixture, port: u16) {
     let path = fixture.directory.path().join("bridge.toml");
     let text = std::fs::read_to_string(&path).unwrap();
     let start = text.find("[[mcp.server]]").unwrap();
@@ -12,7 +12,7 @@ fn configure(fixture: &Fixture, port: u16) {
     std::fs::write(path, text).unwrap();
 }
 
-fn command(fixture: &Fixture) -> Command {
+pub(super) fn command(fixture: &Fixture) -> Command {
     bridge_wire_auth::command(
         fixture.directory.path(),
         &[

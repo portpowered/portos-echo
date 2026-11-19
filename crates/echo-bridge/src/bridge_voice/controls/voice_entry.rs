@@ -18,7 +18,9 @@ pub(crate) async fn execute<C: LinkConnector>(
     }
     let config = settings.config.take().ok_or(Error::Input)?;
     let media = media_config(settings.model_url.is_some());
-    let configured = Configured::new(config, settings.trace, settings.health)?.with_clock(control.utc_day);
+    let configured = Configured::new(config, settings.trace, settings.health)?
+        .with_clock(control.utc_day)
+        .with_settings_warning(settings.settings_warning);
     let configured = match settings.model_url {
         Some(model) => configured
             .with_routes(crate::bridge_operator::LocalRoutes::new(&settings.live_url, &model)?)

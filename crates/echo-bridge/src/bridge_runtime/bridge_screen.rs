@@ -14,6 +14,7 @@ mod mute;
 
 pub(crate) struct Screen {
     mute: Arc<Mutex<mute::Mute>>,
+    settings_warning: Option<String>,
     server: Option<Arc<ScreenServer>>,
     actions: Option<tokio::task::JoinHandle<()>>,
     pub(crate) presentation: Presentation,
@@ -37,6 +38,7 @@ impl Screen {
         let Some(config) = config else {
             return Ok(Self {
                 mute: Arc::default(),
+                settings_warning: None,
                 server: None,
                 actions: None,
                 presentation: Presentation::new(None),
@@ -64,6 +66,7 @@ impl Screen {
             .map_err(|_| Error::Screen)?;
         let screen = Self {
             mute: Arc::default(),
+            settings_warning: None,
             server: Some(Arc::new(server)),
             presentation: Presentation::new(Some(states.clone())),
             actions: None,
@@ -119,10 +122,28 @@ impl Screen {
         self.muted()
     }
 
+    pub(crate) fn settings_warning(
+        &mut self,
+        warning: Option<&str>,
+        trace: &mut crate::bridge_trace::Trace,
+    ) -> Result<(), Error> {
+        self.settings_warning = warning.map(String::from);
+        if warning.is_some() {
+            trace.record("settings.overlay_ignored", None, serde_json::json!({}))?;
+        }
+        Ok(())
+    }
+
     pub fn ready(&self) -> Result<(), Error> {
-        self.publish(UiState::Ready {
-            message: "Echo Live ready".into(),
-        })
+        self.publish(self.settings_warning.as_ref().map_or_else(
+            || UiState::Ready {
+                message: "Echo Live ready".into(),
+            },
+            |message| UiState::Error {
+                message: message.clone(),
+                relink: false,
+            },
+        ))
     }
 
     pub fn supervise_actions(&mut self, health: tokio::sync::watch::Receiver<crate::bridge_health::Links>) {
@@ -243,6 +264,7 @@ mod tests {
         let (send, mut receive) = mpsc::channel(1);
         let screen = Screen {
             mute: Arc::default(),
+            settings_warning: None,
             server: None,
             actions: None,
             presentation: Presentation::new(Some(send)),

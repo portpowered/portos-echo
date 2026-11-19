@@ -42,6 +42,7 @@ fn runtime_options<'a>(
             connect_timeout: OBSERVATION_TIMEOUT,
         },
         screen,
+        settings_warning: None,
         health: ([127, 0, 0, 1], 0).into(),
         trace,
         delegation: None,

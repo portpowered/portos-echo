@@ -19,6 +19,7 @@ pub struct Configured {
     routes: Option<crate::bridge_operator::LocalRoutes>,
     utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
     mcp_epoch: Option<u64>,
+    settings_warning: Option<String>,
 }
 
 impl Configured {
@@ -39,6 +40,7 @@ impl Configured {
             health,
             routes: None,
             mcp_epoch: None,
+            settings_warning: None,
             utc_day: std::sync::Arc::new(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -57,6 +59,13 @@ impl Configured {
     #[must_use]
     pub fn with_clock(mut self, utc_day: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         self.utc_day = utc_day;
+        self
+    }
+
+    /// Retain the effective loader's safe overlay diagnostic for idle presentation.
+    #[must_use]
+    pub fn with_settings_warning(mut self, warning: Option<String>) -> Self {
+        self.settings_warning = warning;
         self
     }
 
@@ -146,6 +155,7 @@ impl Configured {
                 connect_timeout: Duration::from_secs(15),
             },
             screen: Some(&self.config.screen),
+            settings_warning: self.settings_warning.as_deref(),
             health: self.health,
             trace: &self.trace,
             delegation: Some(&self.config),
@@ -468,32 +478,5 @@ pub(super) mod tests {
         assert!(prepared.api_key().unwrap().is_none());
         assert!(!directory.path().join("uncreated-home").exists());
         assert!(!directory.path().join("uncreated-trace").exists());
-    }
-
-    #[test]
-    fn api_key_reads_only_nominated_file_and_rejects_invalid_content() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut prepared = configured();
-        prepared.config.live.mode = LiveMode::ApiKey;
-        prepared.config.live.credential_file = directory.path().join("key");
-        assert!(matches!(prepared.api_key(), Err(Error::Authorization)));
-        for invalid in [
-            vec![],
-            b" \n".to_vec(),
-            b"synthetic\nextra".to_vec(),
-            vec![255],
-            vec![b'a'; 16_385],
-        ] {
-            std::fs::write(&prepared.config.live.credential_file, invalid).unwrap();
-            assert!(matches!(prepared.api_key(), Err(Error::Authorization)));
-        }
-        for suffix in ["", "\n", "\r\n"] {
-            std::fs::write(
-                &prepared.config.live.credential_file,
-                format!("synthetic-nominated-key{suffix}"),
-            )
-            .unwrap();
-            assert_eq!(prepared.api_key().unwrap().unwrap().expose(), "synthetic-nominated-key");
-        }
     }
 }

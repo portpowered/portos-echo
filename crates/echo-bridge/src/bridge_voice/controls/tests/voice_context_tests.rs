@@ -122,3 +122,30 @@ fn screen_settings_followup_off_uses_existing_answered_turn_completion_policy() 
         assert_eq!(options.voice.session.idle, Duration::from_secs(120));
     }
 }
+
+#[test]
+fn api_key_reads_only_nominated_file_and_rejects_invalid_content() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut prepared = configured();
+    prepared.config.live.mode = LiveMode::ApiKey;
+    prepared.config.live.credential_file = directory.path().join("key");
+    assert!(matches!(prepared.api_key(), Err(Error::Authorization)));
+    for invalid in [
+        vec![],
+        b" \n".to_vec(),
+        b"synthetic\nextra".to_vec(),
+        vec![255],
+        vec![b'a'; 16_385],
+    ] {
+        std::fs::write(&prepared.config.live.credential_file, invalid).unwrap();
+        assert!(matches!(prepared.api_key(), Err(Error::Authorization)));
+    }
+    for suffix in ["", "\n", "\r\n"] {
+        std::fs::write(
+            &prepared.config.live.credential_file,
+            format!("synthetic-nominated-key{suffix}"),
+        )
+        .unwrap();
+        assert_eq!(prepared.api_key().unwrap().unwrap().expose(), "synthetic-nominated-key");
+    }
+}
