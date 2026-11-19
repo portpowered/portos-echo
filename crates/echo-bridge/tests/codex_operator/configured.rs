@@ -220,6 +220,13 @@ async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) 
 }
 
 async fn settings_runtime_requests(fixture: &Fixture, home: &Path) {
+    settings_runtime_snapshot(fixture).await;
+    let client = reqwest::Client::new();
+    let url = settings_runtime_url(fixture, "/settings/v1");
+    settings_runtime_saves(fixture, home, &client, &url).await;
+}
+
+async fn settings_runtime_snapshot(fixture: &Fixture) {
     let client = reqwest::Client::new();
     let mut url = settings_runtime_url(fixture, "/settings/v1");
     url.set_query(None);
@@ -237,6 +244,9 @@ async fn settings_runtime_requests(fixture: &Fixture, home: &Path) {
         );
         assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 8);
     }
+}
+
+async fn settings_runtime_saves(fixture: &Fixture, home: &Path, client: &reqwest::Client, url: &reqwest::Url) {
     assert_eq!(
         settings_runtime_patch(fixture, json!({"agent":{"max_tool_calls":8}})).await,
         json!({"version":1,"restart_pending":false})
