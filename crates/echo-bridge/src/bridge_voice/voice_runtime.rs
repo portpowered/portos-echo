@@ -53,9 +53,9 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
 ) -> Result<(), Error> {
-    execute_owned(options, connector, &mut peer, cancelled, None, || {
+    Box::pin(execute_owned(options, connector, &mut peer, cancelled, None, || {
         LinkStatusV1::Unconfigured
-    })
+    }))
     .await
     .map(|_| ())
 }
@@ -76,7 +76,15 @@ pub async fn execute_with_settings<C: LinkConnector, P: MediaPeer>(
     settings: (SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>),
     link_status: impl Fn() -> LinkStatusV1,
 ) -> Result<bool, Error> {
-    execute_owned(options, connector, &mut peer, cancelled, Some(settings), link_status).await
+    Box::pin(execute_owned(
+        options,
+        connector,
+        &mut peer,
+        cancelled,
+        Some(settings),
+        link_status,
+    ))
+    .await
 }
 
 async fn execute_owned<C: LinkConnector, P: MediaPeer>(
@@ -108,9 +116,9 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     screen.supervise_actions(health.state.subscribe());
     let mut view = View::new(&screen, &health, &mut trace);
     let requested = Cell::new(false);
-    let work = work(options, connector, &mut peer, cancelled, &mut view, &requested);
+    let work = Box::pin(work(options, connector, &mut peer, cancelled, &mut view, &requested));
     let (result, pending) = if let Some(service) = service {
-        service.scope(work, link_status).await
+        Box::pin(service.scope(work, link_status)).await
     } else {
         (work.await, false)
     };
