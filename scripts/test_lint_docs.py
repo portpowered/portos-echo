@@ -127,6 +127,52 @@ class ConfigCoverageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "keys: voice, voice.a, voice.z$"):
                     lint.config_coverage(root)
 
+    def test_receiver_escapes_fail_main_then_restoration_passes(self):
+        from contextlib import redirect_stderr
+        helper = '''
+fn read_extra(fields: &mut Fields<'_>) -> Result<(), ConfigError> {
+    let _future: Option<bool> = fields.optional("future")?;
+    Ok(())
+}'''
+        cases = [
+            ('read_extra(&mut f)?;', 'f'),
+            ('read_extra(&f)?;', 'f'),
+            ('read_extra(f)?;', 'f'),
+            ('let other = &mut f; read_extra(other)?;', 'f'),
+            ('let read = || read_extra(&mut f);', 'f'),
+            ('read_table(&mut f.table)?;', 'f'),
+            ('if let Some(mut child) = f.section("child")? { '
+             'read_extra(&mut child)?; child.finish()?; }', 'child'),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            inputs = config_fixture(root)
+            decoder = inputs / "config_decode.rs"
+            original = decoder.read_text(encoding="utf-8")
+            with patch.object(lint.sys, "argv", ["lint_docs.py"]), \
+                    patch.object(lint.Path, "cwd", return_value=root), \
+                    patch.object(lint, "manifest", return_value=[]), \
+                    patch.object(lint, "check_index"), patch.object(lint, "run"):
+                for escape, receiver in cases:
+                    with self.subTest(escape=escape):
+                        decoder.write_text(original.replace('f.finish()?;', escape + ' f.finish()?;')
+                                           + helper, encoding="utf-8")
+                        errors, output = io.StringIO(), io.StringIO()
+                        with redirect_stderr(errors), redirect_stdout(output):
+                            self.assertEqual(lint.main(), 1)
+                        self.assertEqual(errors.getvalue(),
+                                         f"lint-docs: config coverage: unsupported Fields receiver use ({receiver}) "
+                                         "in config_decode.rs; helper calls, aliases and captures "
+                                         "require decoder reader support\n")
+                        self.assertNotIn("Config coverage:", output.getvalue())
+                        self.assertNotIn("lint-docs: passed", output.getvalue())
+                decoder.write_text(original, encoding="utf-8")
+                with redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(lint.main(), 0)
+                self.assertIn("Config coverage: 2 accepted paths documented", output.getvalue())
+                self.assertIn("lint-docs: passed", output.getvalue())
+
 
 class MetadataTests(unittest.TestCase):
     def test_required_scalars(self):

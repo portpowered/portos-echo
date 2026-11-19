@@ -162,6 +162,23 @@ def compile_mermaid(blocks, temp):
     print(f"Mermaid: compiled {len(blocks)} blocks", flush=True)
 
 
+def check_receiver_uses(body, alias, accesses, name):
+    """Reject passing, aliasing or capturing Fields outside the known grammar."""
+    allowed = {call.start() for call in accesses}
+    for binding in re.finditer(r'if let Some\(mut (\w+)\) = \w+\.section\("\w+"\)\?', body):
+        if binding[1] == alias:
+            allowed.add(binding.start(1))
+    # Preserve offsets while ignoring string contents and member names such as
+    # result.voice. Every other receiver occurrence must be a checked access.
+    code = re.sub(r'"(?:\\.|[^"\\])*"', lambda match: ' ' * len(match[0]), body)
+    for use in re.finditer(rf'\b{alias}\b', code):
+        if code[:use.start()].rstrip().endswith('.'):
+            continue
+        if use.start() not in allowed:
+            raise ValueError(f"config coverage: unsupported Fields receiver use ({alias}) in {name}; "
+                             "helper calls, aliases and captures require decoder reader support")
+
+
 def decoder_keys(source, name):
     """Read the deliberately narrow Fields grammar; reject unsupported accesses.
 
@@ -198,7 +215,8 @@ def decoder_keys(source, name):
             access = rf'\b{alias}\s*\.\s*(?:table\s*\.\s*)?(\w+)\s*\('
             if re.search(rf'\b{alias}\s*\.\s*\w+\s*::', body):
                 raise ValueError(f"config coverage: unsupported generic access in {name}")
-            for call in re.finditer(access, body):
+            accesses = list(re.finditer(access, body))
+            for call in accesses:
                 method = call[1]
                 if method == "finish":
                     continue
@@ -208,6 +226,7 @@ def decoder_keys(source, name):
                 if method != "reject":
                     key = ".".join(filter(None, [path, argument[1]]))
                     keys.add(key)
+            check_receiver_uses(body, alias, accesses, name)
         if prefix:
             keys.add(prefix)
     return keys
