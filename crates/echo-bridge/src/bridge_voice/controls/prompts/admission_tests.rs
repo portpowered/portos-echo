@@ -253,7 +253,10 @@ async fn configured_refusal(kind: &str, bytes: &[u8], message: &str) {
     let mut config =
         echo_config::BridgeConfig::from_toml_str(include_str!("../../../../../../examples/bridge.example.toml"))
             .unwrap();
-    config.home = Some(echo_config::HomeConfig { dir: home });
+    config.home = Some(echo_config::HomeConfig {
+        dir: home,
+        agent_tools: echo_config::AgentTools::default(),
+    });
     config.codex.home = Some(root.path().join("codex"));
     config.live.mode = echo_config::LiveMode::ApiKey;
     config.live.credential_file = root.path().join("absent-key");
