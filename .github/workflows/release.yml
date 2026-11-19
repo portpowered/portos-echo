@@ -40,6 +40,7 @@ jobs:
       - name: Cheap release checks
         run: |
           actionlint .github/workflows/release.yml .github/workflows/targeted.yml
+          python3 tests/test_release_kit.py --configure-native
       - name: Build and verify
         shell: sh
         env:

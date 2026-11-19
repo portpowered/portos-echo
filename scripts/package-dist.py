@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -189,13 +188,13 @@ def verify(archive, checksums):
     return manifest
 
 
-def license_inputs(codex_work):
+def license_inputs(codex_work, env):
     """Collect attribution from resolved packages, never copy their build trees."""
     result = {}
     expressions = set()
     for label, root in (("echo", ROOT), ("codex", codex_work / "source/codex-rs")):
         command = ["cargo", "+1.100.0", "metadata", "--locked", "--format-version", "1", "--filter-platform", "armv7-linux-androideabi"]
-        metadata = json.loads(subprocess.check_output(command, cwd=root))
+        metadata = json.loads(subprocess.check_output(command, cwd=root, env=env))
         for package in metadata["packages"]:
             identity = package["name"] + "-" + package["version"]
             prefix = f'licenses/{label}/' + digest(identity.encode())[:16]
@@ -223,14 +222,20 @@ def license_inputs(codex_work):
     return result
 
 
-def native_remaps(env, work):
-    # OpenSSL embeds CFLAGS in its version metadata. Keep private prefixes in
-    # an invocation-owned response file while compilers still apply every map.
-    response = work / "native-remap.rsp"
-    response.write_text(shlex.join("-ffile-prefix-map=" + str(path) + "=" + replacement
-                                  for path, replacement in ((Path.home(), "/build/user"), (ROOT, "/build/echo"))))
-    for key in ("CFLAGS", "CXXFLAGS"):
-        env[key] = (env.get(key, "") + " " + shlex.quote("@" + str(response))).strip()
+def build_environment(work):
+    # Native dependencies embed source paths and literal compiler flags.
+    # Keep their sources outside user directories; OpenSSL Configure rejects
+    # bare response-file arguments before the compiler can expand them.
+    cargo_home = work / "cargo-home"
+    cargo_home.mkdir(mode=0o700)
+    env = dict(os.environ, CARGO_HOME=str(cargo_home),
+               CODEX_ARMV7_WORK_DIR=str(work / "codex-work"),
+               CODEX_ARMV7_OUTPUT_DIR=str(work / "codex-out"))
+    flags = [flag for flag in env.get("CARGO_ENCODED_RUSTFLAGS", "").split("\x1f") if flag]
+    flags += ["--remap-path-prefix=" + str(Path.home()) + "=/build/user",
+              "--remap-path-prefix=" + str(ROOT) + "=/build/echo"]
+    env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
+    return env
 
 
 def build(args):
@@ -241,19 +246,10 @@ def build(args):
         raise BundleError("output directory must not exist; preserve or remove prior assets explicitly")
     out.parent.mkdir(parents=True, exist_ok=True)
     # One owned stage makes publication atomic; build failures expose no new dist assets.
-    # Response-file arguments can themselves be embedded: never place this
-    # build workspace beneath a user's TMPDIR/home directory.
+    # Native source and build paths must stay outside a user's TMPDIR/home.
     with tempfile.TemporaryDirectory(prefix="echo-release-", dir="/tmp") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
         work = Path(work)
-        env = dict(os.environ, CODEX_ARMV7_WORK_DIR=str(work / "codex-work"), CODEX_ARMV7_OUTPUT_DIR=str(work / "codex-out"))
-        flags = env.get("CARGO_ENCODED_RUSTFLAGS", "").split("\x1f")
-        flags = [flag for flag in flags if flag]
-        flags += ["--remap-path-prefix=" + str(Path.home()) + "=/build/user",
-                  "--remap-path-prefix=" + str(ROOT) + "=/build/echo"]
-        env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
-        # Native dependency assertions can embed __FILE__ even in stripped ELF.
-        # Rust's remap flag does not reach their C/C++ compilers.
-        native_remaps(env, work)
+        env = build_environment(work)
         subprocess.run(["make", "build-echo", "ECHO_PACKAGES=echo-bridge"], cwd=ROOT, env=env, check=True)
         result = subprocess.run(["make", "--no-print-directory", "-s", "build-codex-armv7"], cwd=ROOT, env=env, check=True, stdout=subprocess.PIPE, text=True)
         identity = re.findall(r"(?m)^source_commit=([0-9a-f]{40})$", result.stdout)
@@ -264,7 +260,7 @@ def build(args):
         source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
         print("release-kit: collecting license texts", flush=True)
-        licenses = license_inputs(work / "codex-work")
+        licenses = license_inputs(work / "codex-work", env)
         print("release-kit: assembling and verifying bundle", flush=True)
         assemble(Path(stage), args.version, source, identity[0], work / "codex-out",
                  target / "armv7-linux-androideabi/release/echo-bridge", ROOT / "target/echo-screen/echo-screen.apk",

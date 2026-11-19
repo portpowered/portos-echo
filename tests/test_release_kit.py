@@ -389,47 +389,89 @@ def path_diagnostic_cases():
 
 
 def native_metadata_case(work):
-    env = {"CFLAGS": "-DRELEASE_MARKER=7", "CXXFLAGS": "-DRELEASE_MARKER=8"}
-    PACK.native_remaps(env, work)
-    for key, marker in (("CFLAGS", "7"), ("CXXFLAGS", "8")):
-        arguments = shlex.split(env[key])
-        require(arguments[0] == "-DRELEASE_MARKER=" + marker and len(arguments) == 2,
-                "native caller flags changed")
-        require(arguments[1].startswith("@"), "native response argument missing")
-        response = Path(arguments[1][1:])
-        require(response.parent == work, "response file escaped invocation workspace")
-        require(shlex.split(response.read_text()) == [
-            "-ffile-prefix-map=" + str(Path.home()) + "=/build/user",
-            "-ffile-prefix-map=" + str(ROOT) + "=/build/echo"], "native source maps changed")
-        # Mirrors OpenSSL's published build-info boundary: record literal flags.
+    caller = {"CFLAGS": "-DRELEASE_MARKER=7", "CXXFLAGS": "-DRELEASE_MARKER=8",
+              "CARGO_ENCODED_RUSTFLAGS": "-Copt-level=2"}
+    with patch.dict(os.environ, caller):
+        env = PACK.build_environment(work)
+    require(Path(env["CARGO_HOME"]) == work / "cargo-home", "Cargo home escaped workspace")
+    require(Path(env["CARGO_HOME"]).is_dir(), "private Cargo home missing")
+    for key in ("CFLAGS", "CXXFLAGS"):
+        require(env[key] == caller[key], "native caller flags changed or response argument injected")
         require(PACK.PRIVATE.search(("compiler: cc " + env[key]).encode()) is None,
                 "native build metadata exposes a private path")
+    require(env["CARGO_ENCODED_RUSTFLAGS"].split("\x1f") == ["-Copt-level=2",
+            "--remap-path-prefix=" + str(Path.home()) + "=/build/user",
+            "--remap-path-prefix=" + str(ROOT) + "=/build/echo"], "Rust maps or caller flags lost")
+    require(not (work / "native-remap.rsp").exists(), "native response file still generated")
     return env
 
 
 def native_flags_cases():
     with tempfile.TemporaryDirectory(prefix="release-native-", dir="/tmp") as temporary:
-        env = native_metadata_case(Path(temporary))
-        # Preprocess only; never build or execute an additional application.
-        with tempfile.TemporaryDirectory(prefix=".release-native-", dir=ROOT) as source:
-            probe = Path(source) / "probe.c"
-            probe.write_text("RELEASE_MARKER\n__FILE__\n")
-            expected = "/build/echo/" + probe.relative_to(ROOT).as_posix()
-            for tool, key, marker in (("cc", "CFLAGS", "7"), ("c++", "CXXFLAGS", "8")):
-                result = subprocess.run([tool, *shlex.split(env[key]), "-E", "-P", str(probe)],
-                                        capture_output=True, text=True, timeout=20)
-                require(result.returncode == 0, "native remap preprocessing failed")
-                require(result.stdout.splitlines() == [marker, json.dumps(expected)],
-                        "native response changed macro value or failed to remap source path")
-    print("U-PACK native remap and metadata: PASS")
+        work = Path(temporary)
+        env = native_metadata_case(work)
+        require(Path(env["CARGO_HOME"]).stat().st_mode & 0o777 == 0o700, "Cargo home not private")
+        probe = Path(env["CARGO_HOME"]) / "probe.c"
+        probe.write_text("RELEASE_MARKER\n__FILE__\n")
+        for tool, key, marker in (("cc", "CFLAGS", "7"), ("c++", "CXXFLAGS", "8")):
+            result = subprocess.run([tool, *shlex.split(env[key]), "-E", "-P", str(probe)],
+                                    capture_output=True, text=True, timeout=20)
+            require(result.returncode == 0, "native preprocessing failed")
+            require(result.stdout.splitlines() == [marker, json.dumps(str(probe))],
+                    "native macro value or dependency source location differs")
+            require(PACK.PRIVATE.search(result.stdout.encode()) is None, "native source path is private")
+    print("U-PACK private Cargo sources and native metadata: PASS")
+
+
+def configure_native():
+    """Explicit network provisioning, then configure only; never compiles Codex."""
+    import tomllib
+    import urllib.request
+    helper = (ROOT / "scripts/build-codex-armv7.sh").read_text()
+    pin, = re.findall(r"(?m)^  commit=([0-9a-f]{40})$", helper)
+    lock_url = "https://raw.githubusercontent.com/openai/codex/" + pin + "/codex-rs/Cargo.lock"
+    with urllib.request.urlopen(lock_url, timeout=60) as response:
+        lock = tomllib.loads(response.read().decode())
+    package, = (p for p in lock["package"] if p["name"] == "openssl-src")
+    name = "openssl-src-" + package["version"]
+    with urllib.request.urlopen("https://static.crates.io/crates/openssl-src/" + name + ".crate", timeout=60) as response:
+        data = response.read()
+    require(sha(data) == package["checksum"], "OpenSSL source checksum differs from pinned lock")
+    with tempfile.TemporaryDirectory(prefix="release-configure-", dir="/tmp") as temporary:
+        work = Path(temporary)
+        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+            archive.extractall(work, filter="data")
+        env = PACK.build_environment(work)
+        tools = Path(env["ANDROID_NDK_HOME"]) / "toolchains/llvm/prebuilt/linux-x86_64/bin"
+        env.update(CC=str(tools / "armv7a-linux-androideabi24-clang"), AR=str(tools / "llvm-ar"),
+                   RANLIB=str(tools / "llvm-ranlib"))
+        env.pop("CROSS_COMPILE", None)
+        command = ["perl", "./Configure", "--prefix=" + str(work / "install"),
+                   "--openssldir=/usr/local/ssl", "no-shared", "no-module", "no-tests", "no-comp",
+                   "no-zlib", "no-zlib-dynamic", "--libdir=lib", "no-ssl3", "no-md2", "no-rc5",
+                   "no-weak-ssl-ciphers", "no-camellia", "no-idea", "no-seed", "no-stdio", "linux-armv4",
+                   "-O2", "-DANDROID", "-ffunction-sections", "-fdata-sections", "-fPIC", "-g",
+                   "-gdwarf-2", "-fno-omit-frame-pointer", "-w", *shlex.split(env.get("CFLAGS", ""))]
+        source = work / name / "openssl"
+        failed = subprocess.run([*command, "@" + str(work / "native-remap.rsp")], cwd=source,
+                                env=env, capture_output=True, text=True, timeout=60)
+        require(failed.returncode != 0 and "target already defined" in failed.stderr,
+                "previous OpenSSL Configure failure not reproduced")
+        passed = subprocess.run(command, cwd=source, env=env, capture_output=True, timeout=60)
+        require(passed.returncode == 0, "corrected OpenSSL Configure failed")
+    print("OpenSSL Configure: previous_response=REJECTED private_cargo_no_response=PASS")
 
 
 def main():
     global ASSETS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path)
+    parser.add_argument("--configure-native", action="store_true")
     args = parser.parse_args()
     require(sys.platform == "linux", "Linux is required for this runtime witness")
+    if args.configure_native:
+        configure_native()
+        return
     ASSETS = args.assets.resolve() if args.assets else None
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(), (package_cases, happy_cases, integrity_cases, failure_cases, retention_cases, interruption_case)))
