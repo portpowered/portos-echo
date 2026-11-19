@@ -191,6 +191,24 @@ impl TlsPeer {
         assert!(self.child.wait().await.unwrap().success());
         serde_json::from_str(&line).unwrap()
     }
+
+    pub async fn pending(&mut self) {
+        use tokio::io::AsyncBufReadExt;
+        let mut line = String::new();
+        self.output.read_line(&mut line).await.unwrap();
+        assert_eq!(line.trim(), "pending");
+    }
+
+    pub async fn release(&mut self) {
+        use tokio::io::AsyncWriteExt;
+        self.child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"release\n")
+            .await
+            .unwrap();
+    }
 }
 
 fn certificate(root: &std::path::Path, wrong_hostname: bool) {
@@ -233,6 +251,7 @@ const TLS_PEER: &str = r"
 import base64, http.server, json, ssl, sys, threading, urllib.parse
 counts = dict(link=0, token=0, catalog=0, query=0)
 key = None
+release = threading.Event()
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_): pass
     def respond(self, status, value):
@@ -241,7 +260,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        try: self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError): pass
     def do_GET(self):
         if self.path == '/.well-known/oauth-protected-resource':
             self.respond(200, dict(resource=base+'/mcp', authorization_servers=[base]))
@@ -293,9 +313,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             assert method == 'tools/call' and request['params']['name'] == 'endpoint_query'
             counts['query'] += 1
-            result = dict(content=[dict(type='text', text='synthetic-query-result')], isError=False)
+            mode = request['params']['arguments'].get('mode')
+            if mode == 'pending':
+                print('pending', flush=True)
+                release.wait()
+            if mode == 'http':
+                self.respond(503, {})
+                return
+            result = dict(content=[dict(type='text', text='synthetic-query-result')], isError=mode == 'error')
         self.respond(200, dict(jsonrpc='2.0', id=request['id'], result=result))
-server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain('ca.pem', 'key.pem')
 server.socket = context.wrap_socket(server.socket, server_side=True)
@@ -303,7 +330,10 @@ base = 'https://127.0.0.1:' + str(server.server_address[1])
 worker = threading.Thread(target=server.serve_forever)
 worker.start()
 print(server.server_address[1], flush=True)
-sys.stdin.readline()
+for command in sys.stdin:
+    if command.strip() != 'release': break
+    release.set()
+release.set()
 server.shutdown()
 worker.join()
 server.server_close()
@@ -318,4 +348,102 @@ pub(crate) async fn approve(owner: &Runtime) {
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(1)).await;
     task.await.unwrap().unwrap();
+}
+
+#[cfg(unix)]
+pub(crate) fn assert_private(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}
+
+pub(crate) async fn assert_mcp_trust_refused(owner: &Runtime, config: &echo_config::BridgeConfig) {
+    let unrelated = TlsPeer::start(false).await;
+    let wrong_host = TlsPeer::start(true).await;
+    let roots = std::fs::read(unrelated.config.codex.ca_file.as_ref().unwrap()).unwrap();
+    let grant = owner.grant.clone();
+    let server = config.mcp.server[0].clone();
+    for pem in [None, Some(roots.as_slice())] {
+        let host = McpClient::with_ca(
+            server.clone(),
+            Token::new(server.clone(), Some(grant.clone())),
+            Duration::from_secs(5),
+            pem,
+        )
+        .unwrap();
+        assert_eq!(host.list().await.err(), Some(McpError::Transport));
+    }
+    for pem in [
+        b"".as_slice(),
+        b"not PEM",
+        b"-----BEGIN CERTIFICATE-----\nbad\n-----END CERTIFICATE-----",
+    ] {
+        let host = McpClient::with_ca(
+            server.clone(),
+            Token::new(server.clone(), Some(grant.clone())),
+            Duration::from_secs(5),
+            Some(pem),
+        );
+        assert_eq!(host.err(), Some(McpError::InvalidConfiguration));
+    }
+    let server = wrong_host.config.mcp.server[0].clone();
+    let pem = std::fs::read(wrong_host.config.codex.ca_file.as_ref().unwrap()).unwrap();
+    let host = McpClient::with_ca(
+        server.clone(),
+        Token::new(server, Some(grant)),
+        Duration::from_secs(5),
+        Some(&pem),
+    )
+    .unwrap();
+    assert_eq!(host.list().await.err(), Some(McpError::Transport));
+    let zero = json!({"link":0,"token":0,"catalog":0,"query":0});
+    assert_eq!(unrelated.finish().await, zero);
+    assert_eq!(wrong_host.finish().await, zero);
+}
+
+pub(crate) fn assert_tool_receipts(path: &std::path::Path, attempts: &[&str], completed: &[(u64, &str)]) {
+    use serde_json::{Value, json};
+    let raw = std::fs::read_to_string(path).unwrap();
+    assert_eq!(raw.matches("synthetic-query-result").count(), 0);
+    let rows: Vec<Value> = raw.lines().map(|row| serde_json::from_str(row).unwrap()).collect();
+    let mut receipts: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "mcp.tool.completed")
+        .cloned()
+        .collect();
+    for receipt in &mut receipts {
+        receipt["elapsed_ms"] = json!(0);
+    }
+    assert_eq!(
+        receipts,
+        completed
+            .iter()
+            .map(|(ordinal, outcome)| json!({
+                "event":"mcp.tool.completed","server":"portos","name":"endpoint_query",
+                "attempt_count":ordinal,"outcome":outcome,"elapsed_ms":0,"provider_auth_mode":"api_key"
+            }))
+            .collect::<Vec<_>>()
+    );
+    let calls: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "tools/call")
+        .map(|row| row["call_id"].clone())
+        .collect();
+    assert_eq!(calls, attempts.iter().map(|id| json!(id)).collect::<Vec<_>>());
+    let mut catalogs: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "mcp.tools_list.completed")
+        .cloned()
+        .collect();
+    for catalog in &mut catalogs {
+        catalog["elapsed_ms"] = json!(0);
+    }
+    assert_eq!(
+        catalogs,
+        vec![json!({"event":"mcp.tools_list.completed","server":"portos",
+        "outcome":"success","count":1,"elapsed_ms":0,"provider_auth_mode":"api_key"})]
+    );
 }

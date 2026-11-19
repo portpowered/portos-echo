@@ -6,7 +6,7 @@ use crate::{
     bridge_codex::{SessionCommand, SessionRequest, ToolBudget},
     bridge_mcp::{self, Token},
     bridge_runtime::bridge_screen::Screen,
-    bridge_trace::Trace,
+    bridge_trace::{PortosReceipts, Trace},
 };
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::{AgentConfig, BridgeConfig};
@@ -19,21 +19,54 @@ use tokio::sync::{mpsc, oneshot};
 pub(super) struct Mcp {
     client: Option<McpClient<Token>>,
     trace: Trace,
+    receipts: Option<PortosReceipts>,
 }
+
+impl Mcp {
+    fn new(client: Option<McpClient<Token>>, trace: Trace, server: Option<&echo_config::McpServer>) -> Self {
+        let receipts = server
+            .filter(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
+            .map(|server| PortosReceipts::new(trace.clone(), server.name.clone()));
+        Self {
+            client,
+            trace,
+            receipts,
+        }
+    }
+}
+
 impl ToolHost for Mcp {
     async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
         match &self.client {
-            Some(host) => host.list_tools().await,
+            Some(host) => {
+                let tools = host.list_tools().await?;
+                if let Some(receipts) = &self.receipts {
+                    receipts.catalog(tools.len()).map_err(|_| ToolError::Transport)?;
+                }
+                Ok(tools)
+            }
             None => Ok(vec![]),
         }
     }
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
         let client = self.client.as_ref().ok_or(ToolError::Denied)?;
-        self.trace
-            .clone()
-            .tool_attempt(name, key)
-            .map_err(|_| ToolError::Transport)?;
-        client.call_tool(name, args, key).await
+        let ordinal = match &self.receipts {
+            Some(receipts) => receipts.attempt(name, key).map_err(|_| ToolError::Transport)?,
+            None => {
+                self.trace
+                    .clone()
+                    .tool_attempt(name, key)
+                    .map_err(|_| ToolError::Transport)?;
+                0
+            }
+        };
+        let result = client.call_tool(name, args, key).await;
+        if let Some(receipts) = &self.receipts {
+            receipts
+                .complete(name, ordinal, result.as_ref().is_ok_and(|result| !result.is_error))
+                .map_err(|_| ToolError::Transport)?;
+        }
+        result
     }
 }
 
@@ -168,10 +201,7 @@ impl Tools {
             })
             .transpose()?;
         let host = Policy::new(
-            Mcp {
-                client,
-                trace: trace.clone(),
-            },
+            Mcp::new(client, trace.clone(), config.mcp.server.first()),
             &self.allowed,
             &config.audit.log_dir,
             screen.approvals.clone(),
@@ -294,8 +324,9 @@ where
 #[cfg(test)]
 mod mcp_trust_tests {
     use super::*;
-    use crate::bridge_mcp::bridge_component::{TlsPeer, approve, drive};
-    use echo_mcp_client::McpError;
+    use crate::bridge_mcp::bridge_component::{
+        TlsPeer, approve, assert_mcp_trust_refused, assert_private, assert_tool_receipts, drive,
+    };
 
     #[tokio::test(start_paused = true)]
     async fn t3_mcp_configured_https_link_catalog_query_and_reload() {
@@ -318,7 +349,7 @@ mod mcp_trust_tests {
             let result = host.call_tool("endpoint_query", json!({}), "1:t1:u1:c").await.unwrap();
             assert!(!result.is_error);
             assert_eq!(result.content, json!([{"type":"text","text":"synthetic-query-result"}]));
-            assert_mcp_trust_refused(&tools, config).await;
+            assert_mcp_trust_refused(tools.runtime.as_ref().unwrap(), config).await;
             tools.close().await;
             tools.open(config, &screen, &mut trace, None).await.unwrap();
             assert_eq!(
@@ -332,58 +363,91 @@ mod mcp_trust_tests {
         .await;
     }
 
-    #[cfg(unix)]
-    fn assert_private(path: &std::path::Path) {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(
-            std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
+    #[tokio::test(start_paused = true)]
+    async fn t3_mcp_receipts_count_returns_exclude_payloads_and_never_replay() {
+        drive(async {
+            let mut peer = TlsPeer::start(false).await;
+            let screen = Screen::bind(None).await.unwrap();
+            let path = peer.directory.path().join("trace");
+            let mut trace = Trace::open(&path, "api_key").unwrap();
+            let mut tools = Tools::new(&peer.config, Arc::new(|| 0));
+            tools.open(&peer.config, &screen, &mut trace, None).await.unwrap();
+            approve(tools.runtime.as_ref().unwrap()).await;
+            tools.catalog().await.unwrap();
+            tools.catalog().await.unwrap(); // The process catalog is cached.
+            let host = tools.host.as_ref().unwrap();
+            let key = "1:t1:u1:c";
+            let result = host.call_tool("endpoint_query", json!({}), key).await.unwrap();
+            assert_eq!(result.content, json!([{"type":"text","text":"synthetic-query-result"}]));
+            assert!(!result.is_error);
+            assert_eq!(
+                host.call_tool("endpoint_query", json!({}), key).await,
+                Err(ToolError::Denied)
+            );
+            assert!(
+                host.call_tool("endpoint_query", json!({"mode":"error"}), "1:t1:u1:e")
+                    .await
+                    .unwrap()
+                    .is_error
+            );
+            assert_eq!(
+                host.call_tool("endpoint_query", json!({"mode":"http"}), "1:t1:u1:h")
+                    .await,
+                Err(ToolError::Transport)
+            );
+            {
+                let pending = host.call_tool("endpoint_query", json!({"mode":"pending"}), "1:t1:u1:p");
+                tokio::pin!(pending);
+                tokio::select! {
+                    () = peer.pending() => (),
+                    result = &mut pending => panic!("pending tool returned: {result:?}"),
+                }
+            } // Cancellation drops the actual in-flight HTTP future.
+            tools.close().await;
+            assert_tool_receipts(
+                &path,
+                &["c", "e", "h", "p"],
+                &[(1, "success"), (2, "error"), (3, "error")],
+            );
+            assert_eq!(peer.finish().await, json!({"link":1,"token":1,"catalog":1,"query":4}));
+        })
+        .await;
     }
 
-    async fn assert_mcp_trust_refused(tools: &Tools, config: &BridgeConfig) {
-        let unrelated = TlsPeer::start(false).await;
-        let wrong_host = TlsPeer::start(true).await;
-        let roots = std::fs::read(unrelated.config.codex.ca_file.as_ref().unwrap()).unwrap();
-        let grant = tools.runtime.as_ref().unwrap().grant.clone();
-        let server = config.mcp.server[0].clone();
-        for pem in [None, Some(roots.as_slice())] {
-            let host = McpClient::with_ca(
-                server.clone(),
-                Token::new(server.clone(), Some(grant.clone())),
-                Duration::from_secs(5),
-                pem,
-            )
-            .unwrap();
-            assert_eq!(host.list().await.err(), Some(McpError::Transport));
-        }
-        for pem in [
-            b"".as_slice(),
-            b"not PEM",
-            b"-----BEGIN CERTIFICATE-----\nbad\n-----END CERTIFICATE-----",
-        ] {
-            let host = McpClient::with_ca(
-                server.clone(),
-                Token::new(server.clone(), Some(grant.clone())),
-                Duration::from_secs(5),
-                Some(pem),
-            );
-            assert_eq!(host.err(), Some(McpError::InvalidConfiguration));
-        }
-        let server = wrong_host.config.mcp.server[0].clone();
-        let pem = std::fs::read(wrong_host.config.codex.ca_file.as_ref().unwrap()).unwrap();
-        let host = McpClient::with_ca(
-            server.clone(),
-            Token::new(server, Some(grant)),
-            Duration::from_secs(5),
-            Some(&pem),
-        )
-        .unwrap();
-        assert_eq!(host.list().await.err(), Some(McpError::Transport));
-        let zero = json!({"link":0,"token":0,"catalog":0,"query":0});
-        assert_eq!(unrelated.finish().await, zero);
-        assert_eq!(wrong_host.finish().await, zero);
+    #[tokio::test(start_paused = true)]
+    async fn t3_mcp_receipts_correlate_overlapping_calls_completed_out_of_order() {
+        drive(async {
+            let mut peer = TlsPeer::start(false).await;
+            let screen = Screen::bind(None).await.unwrap();
+            let path = peer.directory.path().join("trace");
+            let mut trace = Trace::open(&path, "api_key").unwrap();
+            let mut tools = Tools::new(&peer.config, Arc::new(|| 0));
+            tools.open(&peer.config, &screen, &mut trace, None).await.unwrap();
+            approve(tools.runtime.as_ref().unwrap()).await;
+            tools.catalog().await.unwrap();
+            let host = tools.host.as_ref().unwrap();
+            {
+                let first = host.call_tool("endpoint_query", json!({"mode":"pending"}), "1:t1:u1:a");
+                tokio::pin!(first);
+                tokio::select! {
+                    () = peer.pending() => (),
+                    result = &mut first => panic!("pending tool returned: {result:?}"),
+                }
+                assert!(
+                    !host
+                        .call_tool("endpoint_query", json!({}), "1:t1:u1:b")
+                        .await
+                        .unwrap()
+                        .is_error
+                );
+                peer.release().await;
+                assert!(!first.await.unwrap().is_error);
+            }
+            tools.close().await;
+            assert_tool_receipts(&path, &["a", "b"], &[(2, "success"), (1, "success")]);
+            assert_eq!(peer.finish().await, json!({"link":1,"token":1,"catalog":1,"query":2}));
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
