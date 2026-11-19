@@ -49,7 +49,6 @@ const REALTIME_VOICES: [&str; 19] = [
 ];
 
 /// Canonical pinned choices; `default` omits the outgoing voice field.
-#[must_use]
 pub fn realtime_voices() -> impl Iterator<Item = &'static str> {
     std::iter::once("default").chain(REALTIME_VOICES)
 }

@@ -67,7 +67,10 @@ impl Fixture {
     }
 
     fn url(&self, route: &str) -> String {
-        format!("http://{}{route}?token={TOKEN}", self.server.bound_addr)
+        format!(
+            "http://127.0.0.1:{}{route}?token={TOKEN}",
+            self.server.bound_addr.port()
+        )
     }
 
     async fn snapshot(&self) -> SettingsSnapshotV1 {

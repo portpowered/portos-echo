@@ -185,8 +185,8 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
 async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) -> serde_json::Value {
     let response = reqwest::Client::new()
         .post(format!(
-            "http://{}/settings/v1?token=synthetic-screen-pair",
-            fixture.screen
+            "http://127.0.0.1:{}/settings/v1?token=synthetic-screen-pair",
+            fixture.screen.port()
         ))
         .json(&json!({"version":1,"settings":settings}))
         .send()
@@ -198,7 +198,7 @@ async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) 
 
 async fn settings_runtime_requests(fixture: &Fixture, linked: &std::cell::Cell<bool>, home: &Path) {
     let client = reqwest::Client::new();
-    let url = format!("http://{}/settings/v1", fixture.screen);
+    let url = format!("http://127.0.0.1:{}/settings/v1", fixture.screen.port());
     assert_eq!(
         client.get(&url).send().await.unwrap().status(),
         reqwest::StatusCode::UNAUTHORIZED
@@ -229,8 +229,8 @@ async fn settings_runtime_requests(fixture: &Fixture, linked: &std::cell::Cell<b
     assert_eq!(std::fs::read(home.join("settings.toml")).unwrap(), previous);
     let prompt = client
         .post(format!(
-            "http://{}/settings/v1/prompts/voice?token=synthetic-screen-pair",
-            fixture.screen
+            "http://127.0.0.1:{}/settings/v1/prompts/voice?token=synthetic-screen-pair",
+            fixture.screen.port()
         ))
         .json(&json!({"version":1,"text":"saved voice\n"}))
         .send()

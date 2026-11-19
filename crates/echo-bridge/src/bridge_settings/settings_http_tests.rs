@@ -159,7 +159,7 @@ fn owner_only(path: &std::path::Path) {
 #[tokio::test]
 async fn t3_settings_host_http_guards_do_not_write_and_invalid_values_do_not_leak() {
     let fixture = Fixture::open().await;
-    let url = format!("http://{}/settings/v1", fixture.server.bound_addr);
+    let url = format!("http://127.0.0.1:{}/settings/v1", fixture.server.bound_addr.port());
     for (url, origin, expected) in [
         (url, None, StatusCode::UNAUTHORIZED),
         (

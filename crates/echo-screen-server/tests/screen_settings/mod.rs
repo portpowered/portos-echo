@@ -103,7 +103,7 @@ async fn t3_settings_typed_transaction_and_prompt_encoded_limit() -> Result {
         assert!(matches!(inbox.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
     });
     let path = format!("/settings/v1?token={TOKEN}");
-    let headers = format!("{JSON}Origin: http://{addr}\r\n");
+    let headers = format!("{JSON}Origin: http://127.0.0.1:{}\r\n", addr.port());
     assert_eq!(
         request(addr, "POST", &path, PATCH, &headers).await?,
         (200, r#"{"version":1,"restart_pending":false}"#.into())
