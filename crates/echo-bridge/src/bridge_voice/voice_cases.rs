@@ -123,7 +123,6 @@ fn preemption_notice(notice: &Notice) -> &'static str {
         Notice::Transcript { .. } => "transcript",
         Notice::Device(_) => "device",
         Notice::SessionTool(_) => "session_tool",
-        Notice::Thinking(_) => "thinking",
     }
 }
 

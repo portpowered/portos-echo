@@ -13,23 +13,6 @@ pub(super) struct View<'a> {
     connected: bool,
     pending_connected: bool,
     mouth_paused: bool,
-    face: Face,
-    /// A delegated turn is in flight.
-    dispatch: Dispatch,
-}
-
-/// What the voice path last put on the screen for the reply in progress.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Face {
-    Quiet,
-    Speaking,
-    Thinking,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Dispatch {
-    Idle,
-    Running,
 }
 
 impl<'a> View<'a> {
@@ -69,8 +52,6 @@ impl<'a> View<'a> {
             connected: false,
             pending_connected: false,
             mouth_paused: false,
-            face: Face::Quiet,
-            dispatch: Dispatch::Idle,
         }
     }
 
@@ -114,14 +95,8 @@ impl<'a> View<'a> {
             .record(if enabled { "kill.enabled" } else { "kill.cleared" }, None, json!({}))
     }
 
-    fn ponder(&mut self) -> Result<(), Error> {
-        self.face = Face::Thinking;
-        self.screen.publish(UiState::Thinking)
-    }
-
     fn begin(&mut self) -> Result<(), Error> {
         self.mouth_paused = false;
-        (self.face, self.dispatch) = (Face::Quiet, Dispatch::Idle);
         self.sequence = self.sequence.checked_add(1).ok_or(Error::Unavailable)?;
         self.run = Some(format!("run-{}", self.sequence));
         self.trace.tool_run(self.run.as_deref())?;
@@ -166,8 +141,13 @@ impl<'a> View<'a> {
                 }
                 Ok(())
             }
-            SessionNotice::Run(notice @ (Notice::ReplyStarted | Notice::ReplyPaused | Notice::Thinking(_))) => {
-                self.reply_face(&notice)
+            SessionNotice::Run(Notice::ReplyStarted) => {
+                self.mouth_paused = false;
+                self.screen.publish(UiState::Speaking)
+            }
+            SessionNotice::Run(Notice::ReplyPaused) => {
+                self.mouth_paused = true;
+                self.screen.ready()
             }
             SessionNotice::Run(Notice::SessionTool(receipt)) => {
                 let mut fields = json!({"tool":receipt.tool,"outcome":receipt.outcome});
@@ -181,36 +161,6 @@ impl<'a> View<'a> {
             SessionNotice::MicrophoneCompleted(stats) => self.microphone_completed(&stats),
             SessionNotice::ReplyCompleted(stats) => self.reply_completed(&stats),
             SessionNotice::Completed(_) => self.completed(),
-        }
-    }
-
-    /// Speaking follows the mouth. Thinking shows while a dispatch runs in
-    /// silence and stays until its answer starts speaking or the run ends.
-    fn reply_face(&mut self, notice: &Notice) -> Result<(), Error> {
-        match notice {
-            Notice::ReplyStarted => {
-                self.mouth_paused = false;
-                self.face = Face::Speaking;
-                self.screen.publish(UiState::Speaking)
-            }
-            Notice::ReplyPaused => {
-                self.mouth_paused = true;
-                self.face = Face::Quiet;
-                if self.dispatch == Dispatch::Running {
-                    self.ponder()
-                } else {
-                    self.screen.ready()
-                }
-            }
-            Notice::Thinking(on) => {
-                self.dispatch = if *on { Dispatch::Running } else { Dispatch::Idle };
-                if *on && self.face != Face::Speaking {
-                    self.ponder()
-                } else {
-                    Ok(())
-                }
-            }
-            _ => Ok(()),
         }
     }
 
@@ -241,10 +191,9 @@ impl<'a> View<'a> {
         let id = self.run.as_deref().ok_or(Error::Unavailable)?;
         self.trace.record("wyoming.run_ended", Some(id), json!({}))?;
         self.health.state.send_modify(|state| state.live = "idle");
-        if !self.mouth_paused || self.face == Face::Thinking {
+        if !self.mouth_paused {
             self.screen.ready()?;
         }
-        self.face = Face::Quiet;
         self.trace.record("bridge.run_completed", Some(id), json!({}))?;
         crate::bridge_runtime::publish("bridge.run_completed", Some(id))?;
         self.run = None;
@@ -301,7 +250,3 @@ impl<'a> View<'a> {
 #[cfg(test)]
 #[path = "earcon/voice_view_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "earcon/voice_view_thinking.rs"]
-mod thinking_tests;

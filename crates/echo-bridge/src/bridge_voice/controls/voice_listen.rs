@@ -142,12 +142,7 @@ async fn listening_step<E: LinkEvents>(
                     super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
-                MediaEvent::Control(Event::TurnCompleted { .. }) => {
-                    source.dispatch_completed();
-                    if !source.delegation.in_flight() {
-                        observe(Notice::Thinking(false))?;
-                    }
-                }
+                MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),
                 // Continuous RTP and stale done frames cannot renew listening.
                 MediaEvent::Control(_) | MediaEvent::Audio(_) => (),
             }

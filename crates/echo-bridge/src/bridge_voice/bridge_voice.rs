@@ -87,8 +87,6 @@ pub enum Notice {
     /// Per-reply counters while a persistent run retains capture.
     ReplySettled(Stats),
     SessionTool(session_tools::Receipt),
-    /// A delegated turn began (true) or the last one in flight completed.
-    Thinking(bool),
 }
 
 #[derive(Clone, Copy)]
@@ -463,21 +461,12 @@ async fn media(
             observe(Notice::Transcript { role, text, done })
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
-            let waiting = source.delegation.in_flight();
             source.delegation.started();
-            if waiting {
-                Ok(())
-            } else {
-                observe(Notice::Thinking(true))
-            }
+            Ok(())
         }
         MediaEvent::Control(Event::TurnCompleted { .. }) => {
             source.delegation.completed();
-            if source.delegation.in_flight() {
-                Ok(())
-            } else {
-                observe(Notice::Thinking(false))
-            }
+            Ok(())
         }
         MediaEvent::Control(Event::SpeechStarted) => source.interrupt(port),
         MediaEvent::Control(Event::Session(request)) => {
