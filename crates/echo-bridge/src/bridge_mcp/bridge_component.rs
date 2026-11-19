@@ -215,6 +215,10 @@ fn certificate(root: &std::path::Path, wrong_hostname: bool) {
             "/CN=synthetic",
             "-addext",
             &format!("subjectAltName={san}"),
+            "-addext",
+            "basicConstraints=critical,CA:FALSE",
+            "-addext",
+            "extendedKeyUsage=serverAuth",
             "-keyout",
             "key.pem",
             "-out",
@@ -225,7 +229,7 @@ fn certificate(root: &std::path::Path, wrong_hostname: bool) {
     assert!(cert.status.success(), "{}", String::from_utf8_lossy(&cert.stderr));
 }
 
-const TLS_PEER: &str = r#"
+const TLS_PEER: &str = r"
 import base64, http.server, json, ssl, sys, threading, urllib.parse
 counts = dict(link=0, token=0, catalog=0, query=0)
 key = None
@@ -304,7 +308,7 @@ server.shutdown()
 worker.join()
 server.server_close()
 print(json.dumps(counts), flush=True)
-"#;
+";
 
 pub(crate) async fn approve(owner: &Runtime) {
     let link = owner.grant.client.begin_link().await.unwrap();
