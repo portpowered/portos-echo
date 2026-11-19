@@ -4,6 +4,7 @@ import os
 import selectors
 import signal
 import subprocess
+from unittest.mock import patch
 
 from test_echo_install import Sandbox, prepare_lifecycle, require, owner, set_owner
 
@@ -43,6 +44,17 @@ def recovery_case(box, fault):
     require(not (box.device / "private/.install-stage").exists(), "stage leaked")
     require(not (box.root / "remote/echo-bridge.lock").exists(), "failed operation leaked lock")
     require(not any("setsid" in " ".join(call) for call in box.calls()[before:]), "failure launched")
+    # Model an allocator recycling a deleted object's inode for fresh retained
+    # data. Only the deleted object's synthetic identity is controlled; the CLI
+    # and subsequent metadata observations use the real new file's identity.
+    recycled = box.device / "home/recreated"
+    recycled.write_text("new root-owned data")
+    deleted = box.root / "deleted-stage"
+    deleted.touch()
+    with patch.object(type(deleted), "stat", return_value=recycled.stat()):
+        set_owner(box.root, deleted, "9999:3990")
+    deleted.unlink()
+    values["home/recreated"] = "new root-owned data"
     box.install(force=True)
     require((box.device / "private/bridge.toml").read_text() == "replacement config", "recovery force ineffective")
     box.files["config"].write_text("unused config")
