@@ -216,7 +216,7 @@ mod tests {
             ("127.0.0.1", 16700)
         );
         assert_eq!(config.screen.listen, "127.0.0.1:16900".parse().unwrap());
-        assert!(config.mcp.server.is_empty());
+        assert_eq!(config.mcp.server, Vec::new());
         assert_eq!(config.live.mode, crate::LiveMode::Chatgpt);
         assert_eq!(config.codex.launch, CodexLaunch::Standalone);
         let private = std::path::Path::new("/data/local/echo-bridge/private");
