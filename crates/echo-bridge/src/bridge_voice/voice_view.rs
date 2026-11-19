@@ -1,5 +1,5 @@
 //! Project only service facts, never transcript bodies or provider payloads.
-use super::{Notice, ServeNotice, SessionNotice, Stats};
+use super::{BargeTrigger, Notice, ServeNotice, SessionNotice, Stats};
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_screen_contract::UiState;
 use serde_json::json;
@@ -224,7 +224,8 @@ impl<'a> View<'a> {
                 "target_ms":{"min":quality.target_min_ms, "max":quality.target_max_ms,
                     "final":quality.target_final_ms},
                 "reprimes":quality.reprimes, "concealment_ms":quality.concealment_ms,
-                "fade_ins":quality.fade_ins, "drained_frames":quality.drained_frames
+                "fade_ins":quality.fade_ins, "drained_frames":quality.drained_frames,
+                "cuts":{"count":quality.cuts, "trigger":quality.cut_trigger.map(BargeTrigger::name)}
             }),
         )?;
         let Some(first) = quality.first_audio else {

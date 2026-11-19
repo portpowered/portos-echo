@@ -1,6 +1,10 @@
 //! T1: reply generations retired by a truncated done or a user barge, and
 //! a reply whose audio stalls in mid-speech.
 use super::{cases::Stalled, *};
+use crate::bridge_runtime::bridge_pacing::BARGE_QUIET;
+
+#[path = "controls/tests/voice_barge_yield.rs"]
+mod yield_cases;
 
 /// T1: a late barge must not leave its replacement on the retired deadline.
 #[tokio::test(start_paused = true)]
@@ -26,6 +30,9 @@ async fn voice_barge_replacement_gets_a_fresh_response_window_after_settled_cut(
     tokio::time::advance(Duration::from_secs(9)).await;
     send(&tx, [MediaEvent::Control(Event::SpeechStarted)]).await;
     pending(work.as_mut()).await;
+    assert_eq!(command_count(&observer, false), 0);
+    tokio::time::advance(BARGE_QUIET).await;
+    pending(work.as_mut()).await;
     assert_eq!(command_count(&observer, false), 1);
     observer.finish(Ok(()));
     pending(work.as_mut()).await;
@@ -47,7 +54,7 @@ async fn voice_barge_replacement_gets_a_fresh_response_window_after_settled_cut(
     assert_eq!(stats.microphone_frames, 2);
     assert_eq!(command_count(&observer, false), 1);
     assert_eq!(observer.commands().last(), Some(&Command::EndRun));
-    assert_eq!(start.elapsed(), Duration::from_millis(12_400));
+    assert_eq!(start.elapsed(), Duration::from_millis(12_400) + BARGE_QUIET);
 }
 
 #[tokio::test(start_paused = true)]
@@ -106,17 +113,12 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
             pending(work.as_mut()).await;
         }
         assert_drained_reply(&observer, old_frames);
-        let signal = if signal == 0 {
-            Event::SpeechStarted
-        } else {
-            Event::Transcript {
-                role: "user".into(),
-                text: "new question".into(),
-                done: signal == 2,
-            }
-        };
-        send(&tx, [MediaEvent::Control(signal)]).await;
+        send(&tx, [heard(signal)]).await;
+        // A reply that is done is cut at once. One the model left open plays
+        // out through the quiet stretch first.
         pending(work.as_mut()).await;
+        tick(work.as_mut(), usize::from(!done_first) * 25).await;
+        let old_sent = if done_first { old_frames.min(10) } else { old_frames };
         assert_eq!(command_count(&observer, false), 1);
         assert_eq!(command_count(&observer, true), 1);
         observer.finish(Ok(()));
@@ -126,17 +128,17 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
         send(&tx, audible(2)).await;
         send(&tx, [MediaEvent::Audio(Box::new([0; 320]))]).await;
         pending(work.as_mut()).await;
-        assert_eq!(frames(&observer).len(), old_frames.min(10));
+        assert_eq!(frames(&observer).len(), old_sent);
         send(&tx, [said("Yes")]).await;
         send(&tx, audible(3)).await;
         send(&tx, [same_text_done()]).await;
         pending(work.as_mut()).await;
-        assert_eq!(frames(&observer).len(), old_frames.min(10) + 3);
+        assert_eq!(frames(&observer).len(), old_sent + 3);
         assert_eq!(observer.commands().last(), Some(&Command::Stop));
         observer.finish(Ok(()));
         let stats = work.await.unwrap();
         assert_eq!(stats.reply_received, (old_frames + 6) as u64);
-        assert_eq!(stats.reply_sent, (old_frames.min(10) + 3) as u64);
+        assert_eq!(stats.reply_sent, (old_sent + 3) as u64);
         assert_eq!((stats.microphone_frames, command_count(&observer, false)), (2, 1));
     }
 }
@@ -225,6 +227,19 @@ async fn voice_barge_without_cut_receipt_never_opens_replacement_playback() {
     assert_eq!(frames(&observer).len(), 0);
 }
 
+/// A sign of user speech: the speech-start item, or a transcript fragment.
+fn heard(signal: usize) -> MediaEvent {
+    MediaEvent::Control(if signal == 0 {
+        Event::SpeechStarted
+    } else {
+        Event::Transcript {
+            role: "user".into(),
+            text: "new question".into(),
+            done: signal == 2,
+        }
+    })
+}
+
 fn command_count(observer: &Observer, starts: bool) -> usize {
     observer
         .commands()
@@ -240,6 +255,31 @@ fn command_count(observer: &Observer, starts: bool) -> usize {
 }
 
 #[tokio::test(start_paused = true)]
+async fn voice_barge_is_not_armed_while_a_dispatch_is_in_flight() {
+    let (mut port, _tx) = port();
+    let mut source = Source::new(200, false).unwrap();
+    // A dispatch in flight is thinking: user speech arms nothing, before or
+    // during its filler. Barge-in returns once it completes.
+    for event in [turn(true), said("One sec")] {
+        media(event, &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
+        source.heard_user(BargeTrigger::SpeechStarted);
+        assert!(source.delegation.in_flight() && source.barge_due().is_none());
+    }
+    assert!(source.controller.speaking());
+    assert_eq!(port.retired, 0);
+    media(turn(false), &mut port, &mut source, &mut |_| Ok(()))
+        .await
+        .unwrap();
+    source.heard_user(BargeTrigger::SpeechStarted);
+    source.interrupt(&mut port).unwrap();
+    assert!(source.controller.speaking());
+    tokio::time::advance(BARGE_QUIET).await;
+    source.interrupt(&mut port).unwrap();
+    assert!(source.controller.cutting());
+    assert_eq!(port.retired, 1);
+}
+
+#[tokio::test(start_paused = true)]
 async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame() {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
@@ -248,22 +288,6 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     let mut mic = microphone(&mut events).await;
     let (mut port, tx) = port();
     let mut source = Source::new(200, false).unwrap();
-    // A dispatch in flight is thinking: user speech neither cuts nor retires
-    // anything, before or during its filler. Barge-in returns once it completes.
-    for event in [turn(true), said("One sec")] {
-        media(event, &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
-        source.interrupt(&mut port).unwrap();
-        assert!(source.delegation.in_flight() && !source.controller.cutting());
-    }
-    assert!(source.controller.speaking());
-    assert_eq!(port.retired, 0);
-    media(turn(false), &mut port, &mut source, &mut |_| Ok(()))
-        .await
-        .unwrap();
-    source.interrupt(&mut port).unwrap();
-    assert!(source.controller.cutting());
-    assert_eq!(std::mem::take(&mut port.retired), 1);
-    source = Source::new(200, false).unwrap();
     source.controller.microphone_ended();
     media(said("old"), &mut port, &mut source, &mut |_| Ok(()))
         .await
@@ -272,19 +296,21 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     assert!(!source.reply.has_frames());
     let mut pending_frame = Some(vec![77; 960]);
     tx.send(Ok(MediaEvent::Control(Event::SpeechStarted))).await.unwrap();
-    step(
+    // This step only arms the barge-in; the quiet stretch fires it below.
+    let (sink, observe) = (Some(&Stalled), &mut |_| Ok(()));
+    let step = step(
         &mut events,
         &mut mic,
         &mut port,
-        Some(&Stalled),
+        sink,
         &mut source,
         &mut pending_frame,
-        &mut |_| Ok(()),
-    )
-    .await
-    .unwrap();
-    assert!(source.controller.cutting());
-    assert_eq!(port.retired, 1);
+        observe,
+    );
+    step.await.unwrap();
+    assert!(!source.controller.cutting());
+    assert_eq!(port.retired, 0);
+    tokio::time::advance(BARGE_QUIET).await;
     let mut sink = Some(Stalled);
     assert_eq!(
         drive(
@@ -298,6 +324,8 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
         .await,
         Err(Error::Control)
     );
+    assert!(source.controller.cutting());
+    assert_eq!(port.retired, 1);
     assert!(sink.is_some());
     assert!(!source.reply.finished());
     assert!(!source.reply.has_frames());
