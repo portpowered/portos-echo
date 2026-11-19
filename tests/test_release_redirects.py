@@ -16,10 +16,11 @@ from test_echo_install import require
 def route_wget():
     """Only replace the fixed release origin; all redirect handling stays real."""
     args = sys.argv[2:]
-    origin = "https://github.com/portpowered/portos-echo/releases/download/"
+    origin = "https://github.com/"
     require(args[-1].startswith("https://"), "non-HTTPS request reached wget")
     if args[-1].startswith(origin):
         args[-1] = os.environ["REDIRECT_ORIGIN"] + "/" + args[-1][len(origin):]
+    require(args[-1].startswith(os.environ["REDIRECT_ORIGIN"] + "/"), "non-loopback wget target")
     os.execv(os.environ["REAL_WGET"], ["wget", "--no-proxy",
              "--ca-certificate=" + os.environ["REDIRECT_CERT"], *args])
 
