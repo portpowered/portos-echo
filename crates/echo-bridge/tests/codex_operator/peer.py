@@ -110,6 +110,7 @@ for line in sys.stdin:
     elif method == "thread/realtime/start":
         assert request["params"]["transport"] == {"type": "webrtc", "sdp": "fixture-offer"}
         assert request["params"]["version"] == "v3"
+        home.joinpath("realtime-config").write_text(json.dumps(request["params"]))
         emit({"method": "thread/realtime/sdp", "params": {"threadId": "fixture-thread", "sdp": "fixture-answer"}})
         emit({"id": request["id"], "result": {}})
         if home.joinpath("mode").read_text() == "tool-reply":

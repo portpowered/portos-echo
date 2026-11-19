@@ -133,3 +133,104 @@ fn assert_coalesced(fixture: &Fixture, path: &Path, host: &mut echo_bridge::brid
         "started\n"
     );
 }
+
+#[tokio::test]
+#[ignore = "T3 requires local Python and loopback MCP/settings"]
+async fn t3_settings_configured_saved_prompts_reach_next_call_without_restart() {
+    let fixture = Fixture::new("chatgpt");
+    std::fs::write(fixture.home.join("mode"), "tool-reply").unwrap();
+    let spoof = echo_spoof_mcp::Spoof::start(echo_spoof_mcp::Options::default())
+        .await
+        .unwrap();
+    let mut startup = settings_startup(&fixture);
+    startup.base.home.as_mut().unwrap().agent_tools = echo_config::AgentTools {
+        notes: false,
+        prompts: false,
+    };
+    startup.base.mcp = super::super::tools::config(&fixture, spoof.url()).mcp;
+    startup.config = startup.overlay.apply_to(&startup.base).unwrap();
+    let path = fixture.directory.path().join("prompt-settings-trace");
+    let owner = Configured::from_effective(startup, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
+    let observer = Observer::default();
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let work = owner.execute_with_settings(
+        FakeConnector::new(observer.clone()),
+        async || {
+            Ok(Media {
+                state: watch::channel(PeerState::New).0,
+                closed: closed.clone(),
+                setup: OnceLock::new(),
+                lost: Arc::default(),
+            })
+        },
+        vec![],
+        async { stopping.await.unwrap() },
+    );
+    let inspect = async {
+        saved_prompt_call(&fixture, &observer, &path).await;
+        stop.send(()).unwrap();
+    };
+    let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        tokio::join!(work, inspect)
+    }))
+    .await
+    .unwrap();
+    assert!(!result.unwrap().restart_requested);
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
+    assert_eq!(observer.commands().last(), Some(&Command::Close));
+    assert_eq!(
+        trace(&path)
+            .iter()
+            .filter(|row| row["event"] == "settings.restart_prepared")
+            .count(),
+        0
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.home.join("launches")).unwrap(),
+        "started\n"
+    );
+    super::super::host::released(&fixture).await;
+    spoof.shutdown().await.unwrap();
+}
+
+async fn saved_prompt_call(fixture: &Fixture, observer: &Observer, path: &Path) {
+    let (_control, _screen) = ready(fixture).await;
+    for (kind, text) in [("voice", "saved voice\n語 \n"), ("runner", "saved runner\n")] {
+        let response = reqwest::Client::new()
+            .post(settings_runtime_url(fixture, &format!("/settings/v1/prompts/{kind}")))
+            .json(&json!({"version":1,"text":text}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"version":1,"restart_pending":false})
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.directory.path().join(format!("agent-home/prompts/{kind}.md"))).unwrap(),
+            text
+        );
+    }
+    observer.wake("saved prompt fixture", vec![]);
+    while !observer.commands().contains(&Command::Stop) {
+        assert!(trace(path).iter().all(|row| row["event"] != "bridge.recovering"));
+        tokio::task::yield_now().await;
+    }
+    let read = |name| -> Value { serde_json::from_slice(&std::fs::read(fixture.home.join(name)).unwrap()).unwrap() };
+    let runner = read("thread-config");
+    let voice = read("realtime-config");
+    let suffix = runner["baseInstructions"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("saved runner\n")
+        .unwrap();
+    assert!(suffix.starts_with("\n[Call-start context: "));
+    assert_eq!(suffix.matches("[Call-start context:").count(), 1);
+    assert_eq!(voice["prompt"], format!("saved voice\n語 \n{suffix}"));
+    observer.finish(Ok(()));
+    while trace(path).iter().all(|row| row["event"] != "bridge.run_completed") {
+        tokio::task::yield_now().await;
+    }
+}
