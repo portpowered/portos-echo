@@ -1,4 +1,4 @@
-//! T3: actual trace reader, fake Shell, and loopback presentation. No accounts or hardware.
+//! Device adapter component tests with a fake Shell/trace; no accounts, hardware or network.
 use super::*;
 use crate::lab_run::device::onboard::tests::{World, remote, world};
 use serde_json::{Value, json};
@@ -17,20 +17,20 @@ fn runtime() -> (Rc<RefCell<World>>, Runtime) {
     (world, state)
 }
 
-fn append(world: &Rc<RefCell<World>>, record: Value) {
+fn append(world: &Rc<RefCell<World>>, record: &Value) {
     writeln!(world.borrow_mut().trace, "{record}").unwrap();
 }
 
 fn returned(world: &Rc<RefCell<World>>, name: &str, run: &str, outcome: Option<&str>, ordinal: u64) {
     append(
         world,
-        json!({"event":"tools/call","elapsed_ms":10,"run_id":run,
+        &json!({"event":"tools/call","elapsed_ms":10,"run_id":run,
         "thread_id":"thread","turn_id":"turn","call_id":format!("call-{ordinal}"),"name":name}),
     );
     if let Some(outcome) = outcome {
         append(
             world,
-            json!({"event":"mcp.tool.completed","elapsed_ms":11,
+            &json!({"event":"mcp.tool.completed","elapsed_ms":11,
             "provider_auth_mode":"chatgpt","server":"portos","name":name,
             "attempt_count":ordinal,"outcome":outcome}),
         );
@@ -46,7 +46,7 @@ async fn completed(world: &Rc<RefCell<World>>, state: &mut Runtime, run: &str) {
     ] {
         append(
             world,
-            json!({"event":event,"elapsed_ms":elapsed,"run_id":run,"count":12}),
+            &json!({"event":event,"elapsed_ms":elapsed,"run_id":run,"count":12}),
         );
     }
     state.complete(7).await.unwrap();
@@ -168,7 +168,7 @@ fn mcp_device_query_refuses_inactive_host_or_wrong_action_before_playback() {
             McpAction::Call
         };
         assert!(state.begin_mcp_query(action).is_err());
-        assert!(state.wakes.is_empty());
+        assert_eq!(state.wakes, Vec::<Value>::new());
     }
 }
 
@@ -190,7 +190,7 @@ fn mcp_device_query_dispatch_requires_nominated_speech_and_revokes_prior_counts(
         );
         assert!(driver.state.invalid);
         assert!(artifacts.link_counts.is_none());
-        assert!(world.borrow().calls.is_empty());
-        assert!(driver.state.plays.is_empty());
+        assert_eq!(world.borrow().calls, Vec::<Vec<String>>::new());
+        assert_eq!(driver.state.plays, Vec::<Value>::new());
     }
 }
