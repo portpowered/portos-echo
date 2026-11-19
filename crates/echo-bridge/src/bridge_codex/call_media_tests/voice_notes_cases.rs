@@ -12,6 +12,9 @@ use echo_delegation::codex_dispatch::Catalog;
 use serde_json::Value;
 use std::time::Duration;
 
+#[path = "voice_notes_matrix.rs"]
+mod matrix;
+
 #[derive(Clone)]
 struct NoMcp;
 impl ToolHost for NoMcp {
@@ -136,6 +139,46 @@ async fn two_calls(io: &mut Io, home: &HomeConfig, trace: &Trace) {
         drop(session);
         call.close(deadline()).await.unwrap();
     }
+}
+
+async fn scripted(home: Option<&HomeConfig>, trace: &Trace, steps: Vec<(&str, Value, Value)>) {
+    let notes = Notes::new(home, trace.clone());
+    let (mut io, mut server) = fixture();
+    let client = drive(&mut io, &notes, trace);
+    let remote = async {
+        opened(&mut server, "thread", &catalog(&notes)).await;
+        for (index, (name, args, expected)) in steps.into_iter().enumerate() {
+            assert_eq!(
+                tool(&mut server, "thread", &format!("call-{index}"), name, args).await,
+                expected
+            );
+        }
+        closed(&mut server, "thread").await;
+    };
+    tokio::join!(client, remote);
+}
+
+async fn drive(io: &mut Io, notes: &Notes, trace: &Trace) {
+    let (peer, _, _audio) = peer(true, None);
+    let mut call = MediaCall::new(io, peer);
+    call.trace_tools(trace.clone(), &catalog(notes));
+    call.start(&options(), catalog(notes).tools().to_vec(), deadline())
+        .await
+        .unwrap();
+    let mut session = ToolSession::new(
+        &mut call,
+        Local {
+            host: NoMcp,
+            notes: notes.clone(),
+        },
+        catalog(notes),
+        config(),
+        ToolBudget::new(100, || Ok(0)),
+    )
+    .unwrap();
+    settled(&mut session).await;
+    drop(session);
+    call.close(deadline()).await.unwrap();
 }
 
 async fn writing(server: &mut Server, notes: &Notes, home: &HomeConfig) {
