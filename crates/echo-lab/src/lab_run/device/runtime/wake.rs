@@ -129,7 +129,7 @@ mod tests {
                 )
                 .unwrap();
             };
-            let (_, observed) = tokio::join!(biased; writer, state.wake_until(began + Duration::from_secs(6), None));
+            let ((), observed) = tokio::join!(biased; writer, state.wake_until(began + Duration::from_secs(6), None));
             assert_eq!(observed, Ok(true));
             assert_eq!(began.elapsed(), Duration::from_millis(delay));
         }

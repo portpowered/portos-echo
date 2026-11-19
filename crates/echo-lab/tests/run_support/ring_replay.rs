@@ -1,6 +1,7 @@
 //! T3: real delivered CLI, synthetic Port/bridge processes and isolated reports.
 use super::{Session, failed};
 use serde_json::{Value, json};
+use std::io::Write;
 
 fn session(extra: &Value) -> Session {
     let mut fixture = json!({"real_config":true,"device_bridge_fault":"ring_replay"});
@@ -38,10 +39,12 @@ fn assert_attempt(session: &Session, count: u8, first: Option<bool>) {
     assert_eq!(plays(session), usize::from(count));
     assert_eq!(report["talkback"]["replay_count"], count - 1);
     assert_eq!(report["checks"]["session_released"], true);
-    eprintln!(
+    writeln!(
+        std::io::stderr(),
         "ring_replay: attempts={count} first_try_woke={first:?} talkback={}",
         report["talkback"]
-    );
+    )
+    .unwrap();
 }
 
 #[test]
@@ -117,7 +120,7 @@ fn ring_replay_positive_first_wake_prevents_reply_or_speech_failure_replay() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_attempt(&session, 1, Some(true));
-        assert!(events(&session).is_empty());
+        assert_eq!(events(&session), Vec::<Value>::new());
     }
 }
 
@@ -145,7 +148,7 @@ fn ring_replay_mixed_says_publish_exact_half_first_try_rate() {
         report["talkback"],
         json!({"eligible_steps":2,"first_try_wakes":1,"first_try_wake_rate":0.5,"replay_count":1})
     );
-    eprintln!("ring_replay mixed: plays=3 {}", report["talkback"]);
+    writeln!(std::io::stderr(), "ring_replay mixed: plays=3 {}", report["talkback"]).unwrap();
 }
 
 #[test]
@@ -227,7 +230,7 @@ fn ring_replay_first_text_wake_is_never_replayed() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_attempt(&session, 1, Some(true));
-    assert!(events(&session).is_empty());
+    assert_eq!(events(&session), Vec::<Value>::new());
 }
 
 #[test]
@@ -272,7 +275,7 @@ fn ring_replay_broken_trace_or_reply_measurement_never_becomes_loss() {
             .unwrap();
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(plays(&session), 1);
-        assert!(events(&session).is_empty());
+        assert_eq!(events(&session), Vec::<Value>::new());
     }
 }
 

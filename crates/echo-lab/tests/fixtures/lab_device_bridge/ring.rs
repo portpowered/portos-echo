@@ -131,7 +131,28 @@ pub fn host(op: &str, fixture: &Value) -> io::Result<Option<Value>> {
     }
     Ok(match op {
         "wake_wait" => Some(json!({"reached":true})),
-        "wake_remaining" => Some(json!({"remaining_ms":0})),
+        "wake_remaining" => Some(json!({"remaining_ms":wake_remaining(fixture)?})),
         _ => None,
     })
+}
+
+fn wake_remaining(fixture: &Value) -> io::Result<u64> {
+    // Only explicit synthetic misses advance the virtual observation deadline.
+    // Native host/wire success cases retain the window and stop on readiness.
+    if fixture["device_bridge_fault"] == "ring_replay" {
+        return Ok(0);
+    }
+    let ledger = std::env::var("ECHO_LAB_RUN_LEDGER").map_err(io::Error::other)?;
+    let plays = fs::read_to_string(ledger)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["operation"] == "play")
+        .count();
+    Ok(
+        if fixture["ring_wakes"].get(plays.saturating_sub(1)) == Some(&json!(false)) {
+            0
+        } else {
+            6000
+        },
+    )
 }
