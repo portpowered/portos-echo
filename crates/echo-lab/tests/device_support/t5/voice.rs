@@ -27,7 +27,8 @@ fn t3_device_t5_voice_budget_copy_preserves_real_paths_and_operator_file() {
         let path = session.0.join("bridge.toml");
         let mut contents = fs::read_to_string(&path).unwrap();
         if real {
-            contents.push_str("\n[codex]\nhome = 'protected/home'\n");
+            let home = serde_json::to_string(&session.0.join("protected/home").to_string_lossy()).unwrap();
+            contents.push_str(&format!("\n[codex]\nhome = {home}\n"));
         }
         fs::write(&path, &contents).unwrap();
         let scenario = with_budgets(&session, json!({"session_listen_seconds":3,"session_max_seconds":30}));

@@ -97,7 +97,8 @@ fn t3_device_t5_real_config_passthrough() {
     let session = prepare(&json!({}));
     let path = session.0.join("bridge.toml");
     let original = fs::read_to_string(&path).unwrap();
-    let contents = format!("{original}\n[codex]\nhome = 'protected/home'\n");
+    let home = serde_json::to_string(&session.0.join("protected/home").to_string_lossy()).unwrap();
+    let contents = format!("{original}\n[codex]\nhome = {home}\n");
     fs::write(&path, &contents).unwrap();
     let output = command(&session, true).output().unwrap();
     assert_eq!(
