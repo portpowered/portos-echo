@@ -185,6 +185,7 @@ def verify(archive, checksums):
         raise BundleError("asset checksum mismatch")
     if PRIVATE.search((checksums.parent / "install.sh").read_bytes()):
         raise BundleError("private path in installer")
+    print("release-kit: verified binary paths checkout=0 current_home=0", flush=True)
     return manifest
 
 
@@ -238,6 +239,41 @@ def build_environment(work):
     return env
 
 
+def screen_bundle(env):
+    directory = ROOT / "web/screen"
+    subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=directory, env=env, check=True)
+    subprocess.run(["npm", "run", "build"], cwd=directory, env=env, check=True)
+    env["ECHO_SCREEN_BUNDLE"] = str(directory / "dist/screen.js")
+
+
+def screen_proof():
+    """Compile once, then exercise prebuilt HTTP witnesses outside the checkout."""
+    env = dict(os.environ)
+    # Keep the ordinary developer path covered before compiling the embedded form.
+    env.pop("ECHO_SCREEN_BUNDLE", None)
+    subprocess.run(["cargo", "test", "--offline", "--locked", "-p", "echo-screen-server"],
+                   cwd=ROOT, env=env, check=True)
+    screen_bundle(env)
+    result = subprocess.run(["cargo", "test", "--offline", "--locked", "-p", "echo-screen-server",
+                             "--no-run", "--message-format=json"],
+                            cwd=ROOT, env=env, check=True, stdout=subprocess.PIPE, text=True)
+    artifacts = [json.loads(line) for line in result.stdout.splitlines()]
+    binaries = [(item["target"]["name"], Path(item["executable"]).resolve()) for item in artifacts
+                if item.get("reason") == "compiler-artifact" and item.get("executable")
+                and item["profile"]["test"]]
+    if not any(name == "screen_t3" for name, _ in binaries):
+        raise BundleError("missing prebuilt screen witnesses")
+    with tempfile.TemporaryDirectory(prefix="echo-screen-proof-", dir="/tmp") as temporary:
+        env["ECHO_SCREEN_TEST_CWD"] = temporary
+        for name, binary in binaries:
+            observed = subprocess.run([str(binary)], cwd=temporary, env=env, check=True,
+                                      timeout=60, stdout=subprocess.PIPE, text=True)
+            print(observed.stdout, end="", flush=True)
+            if name == "screen_t3" and "test t3_embedded_javascript_is_served_outside_the_checkout ... ok" not in observed.stdout:
+                raise BundleError("embedded screen HTTP witness did not execute")
+    print("release-kit: developer_screen=PASS embedded_screen_http_outside_checkout=PASS", flush=True)
+
+
 def build(args):
     if sys.platform != "linux":
         raise BundleError("Linux is required")
@@ -250,6 +286,7 @@ def build(args):
     with tempfile.TemporaryDirectory(prefix="echo-release-", dir="/tmp") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
         work = Path(work)
         env = build_environment(work)
+        screen_bundle(env)
         # build-echo deliberately builds offline. Provision this fresh cache,
         # rather than relying on CI setup's separate default Cargo home.
         subprocess.run(["cargo", "+1.100.0", "fetch", "--locked"], cwd=ROOT, env=env, check=True)
@@ -281,6 +318,7 @@ def main():
     verifier = commands.add_parser("verify")
     verifier.add_argument("archive", type=Path)
     verifier.add_argument("--checksums", required=True, type=Path)
+    commands.add_parser("screen-proof")
     args = parser.parse_args()
     if args.command == "build":
         try:
@@ -290,15 +328,18 @@ def main():
     try:
         if args.command == "build":
             build(args)
-        else:
+        elif args.command == "verify":
             verify(args.archive, args.checksums)
+        else:
+            screen_proof()
     except BundleError as error:
         print("release-kit: " + str(error), file=sys.stderr)
         return 1
     except (OSError, ValueError, KeyError, tarfile.TarError, subprocess.SubprocessError):
         print("release-kit: build, input, integrity or privacy check failed", file=sys.stderr)
         return 1
-    print("release-kit: bundle=PASS manifest=PASS privacy=PASS")
+    if args.command != "screen-proof":
+        print("release-kit: bundle=PASS manifest=PASS privacy=PASS")
     return 0
 
 

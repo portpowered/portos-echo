@@ -163,6 +163,9 @@ build-codex-armv7:
 
 DIST_VERSION ?= 0.0.0-dev.$(shell git rev-parse --short=12 HEAD)
 
-.PHONY: dist
-dist:
+.PHONY: dist test-release-screen
+test-release-screen:
+	python3 scripts/package-dist.py screen-proof
+
+dist: test-release-screen
 	python3 scripts/package-dist.py build --version "$(DIST_VERSION)"

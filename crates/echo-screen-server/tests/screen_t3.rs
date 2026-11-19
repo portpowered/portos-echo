@@ -4,6 +4,22 @@ use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use support::{Result, TOKEN, events, frame, post, report, request, server};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 
+#[cfg(echo_screen_embedded)]
+#[tokio::test]
+async fn t3_embedded_javascript_is_served_outside_the_checkout() -> Result {
+    let expected = std::fs::read_to_string(std::env::var("ECHO_SCREEN_BUNDLE")?)?;
+    let outside = std::env::var("ECHO_SCREEN_TEST_CWD")?;
+    assert_eq!(std::env::current_dir()?, std::path::PathBuf::from(outside));
+    let (mut server, tx) = server().await?;
+    assert_eq!(
+        request(server.bound_addr, "GET", "/screen.js", "", "").await?,
+        (200, expected)
+    );
+    drop(tx);
+    server.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn t3_interrupted_graceful_shutdown_keeps_original_deadline() -> Result {
     use std::{future::Future, task::Poll, time::Duration};

@@ -27,11 +27,18 @@ pub(crate) fn bundle(bytes: Option<Vec<u8>>) -> Response {
 }
 
 pub(crate) async fn js() -> Response {
-    bundle(
-        tokio::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/screen/dist/screen.js"))
-            .await
-            .ok(),
-    )
+    #[cfg(echo_screen_embedded)]
+    {
+        bundle(Some(include_bytes!(concat!(env!("OUT_DIR"), "/screen.js")).to_vec()))
+    }
+    #[cfg(not(echo_screen_embedded))]
+    {
+        bundle(
+            tokio::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/screen/dist/screen.js"))
+                .await
+                .ok(),
+        )
+    }
 }
 
 #[cfg(test)]
