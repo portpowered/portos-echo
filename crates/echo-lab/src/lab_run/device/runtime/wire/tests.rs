@@ -111,13 +111,7 @@ fn check_receipts(root: &std::path::Path, port: u16) {
     assert_eq!(rows[4]["kind"], "played");
     assert_eq!(rows[4]["wire_run"], 1);
     assert_eq!(rows[4]["playback_stream"], 1);
-    for pair in rows.windows(2) {
-        assert!(pair[1]["elapsed_us"].as_u64().unwrap() >= pair[0]["elapsed_us"].as_u64().unwrap());
-        assert_eq!(
-            pair[1]["sequence"].as_u64().unwrap(),
-            pair[0]["sequence"].as_u64().unwrap() + 1
-        );
-    }
+    check_receipt_order(&rows);
     assert_eq!(rows[0].as_object().unwrap().len(), 8);
     assert_eq!(rows[0]["sequence"], 1);
     assert_eq!(rows[1]["sequence"], 2);
@@ -131,10 +125,20 @@ fn check_receipts(root: &std::path::Path, port: u16) {
     assert_eq!(
         ledger,
         vec![
-            json!(["forward", "tcp:0", "tcp:16700"]),
+            json!(["forward", "tcp:0", "tcp:16700"]), // lint-rules: allow-literal synthetic adb argument assertion, no connection
             json!(["forward", "--remove", format!("tcp:{port}")]) // lint-rules: allow-literal synthetic adb removal argv assertion
         ]
     );
+}
+
+fn check_receipt_order(rows: &[Value]) {
+    for pair in rows.windows(2) {
+        assert!(pair[1]["elapsed_us"].as_u64().unwrap() >= pair[0]["elapsed_us"].as_u64().unwrap());
+        assert_eq!(
+            pair[1]["sequence"].as_u64().unwrap(),
+            pair[0]["sequence"].as_u64().unwrap() + 1
+        );
+    }
 }
 
 #[tokio::test]
@@ -189,7 +193,7 @@ async fn t3_device_wire_failure_joins_observer_and_removes_only_owned_forward() 
         observer.close(&mut artifacts).await,
         Err("device: malformed wire header".into())
     );
-    assert!(observer.relay.receipts().is_empty());
+    assert_eq!(observer.relay.receipts(), vec![]);
     assert!(TcpStream::connect(address).await.is_err());
     let ledger = fs::read_to_string(root.path().join("ledger")).unwrap();
     assert_eq!(ledger.lines().count(), 2);

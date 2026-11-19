@@ -51,10 +51,11 @@ impl Ledger {
             self.playing
         };
         self.push(direction, kind, event.payload.len(), elapsed_us, identity);
-        if direction == "playback" && matches!(kind, "audio-stop" | "hassmic-flush") {
-            if let Some(identity) = self.playing.take() {
-                self.pending.push_back(identity);
-            }
+        if direction == "playback"
+            && matches!(kind, "audio-stop" | "hassmic-flush")
+            && let Some(identity) = self.playing.take()
+        {
+            self.pending.push_back(identity);
         }
         if direction == "playback" && kind == "hassmic-end" {
             self.run = None;
