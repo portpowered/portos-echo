@@ -89,6 +89,23 @@ pub struct BridgeConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HomeConfig {
     pub dir: PathBuf,
+    pub agent_tools: AgentTools,
+}
+
+/// Independently selected bridge-local tool groups. A missing home remains inert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentTools {
+    pub notes: bool,
+    pub prompts: bool,
+}
+
+impl Default for AgentTools {
+    fn default() -> Self {
+        Self {
+            notes: true,
+            prompts: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

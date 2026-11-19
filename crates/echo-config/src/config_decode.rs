@@ -238,9 +238,48 @@ fn audit(value: Value<'_>) -> Result<AuditConfig, ConfigError> {
 fn home(value: Value<'_>) -> Result<crate::HomeConfig, ConfigError> {
     let mut fields = Fields::new(value, "home")?;
     let dir: std::path::PathBuf = fields.required("dir")?;
+    let agent_tools = agent_tools(fields.optional("agent_tools")?)?;
     fields.finish()?;
     if !dir.is_absolute() {
         return Err(ConfigError::new("home.dir", "expected nonempty absolute path"));
     }
-    Ok(crate::HomeConfig { dir })
+    Ok(crate::HomeConfig { dir, agent_tools })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum AgentToolsSelection {
+    Enabled(bool),
+    Groups(Vec<AgentToolGroup>),
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AgentToolGroup {
+    Notes,
+    Prompts,
+}
+
+fn agent_tools(selection: Option<AgentToolsSelection>) -> Result<crate::AgentTools, ConfigError> {
+    let mut result = crate::AgentTools {
+        notes: false,
+        prompts: false,
+    };
+    match selection {
+        None | Some(AgentToolsSelection::Enabled(true)) => return Ok(crate::AgentTools::default()),
+        Some(AgentToolsSelection::Enabled(false)) => {}
+        Some(AgentToolsSelection::Groups(groups)) => {
+            for group in groups {
+                let enabled = match group {
+                    AgentToolGroup::Notes => &mut result.notes,
+                    AgentToolGroup::Prompts => &mut result.prompts,
+                };
+                if *enabled {
+                    return Err(ConfigError::new("home.agent_tools", "duplicate group"));
+                }
+                *enabled = true;
+            }
+        }
+    }
+    Ok(result)
 }

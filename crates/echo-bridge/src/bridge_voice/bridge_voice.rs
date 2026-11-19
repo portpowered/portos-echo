@@ -2,7 +2,7 @@
 #[path = "earcon/earcon.rs"]
 mod earcon;
 #[path = "controls/prompts/prompts.rs"]
-mod prompts;
+pub(crate) mod prompts;
 #[path = "recovery/retained_link.rs"]
 mod retained_link;
 #[path = "controls/session_controller.rs"]

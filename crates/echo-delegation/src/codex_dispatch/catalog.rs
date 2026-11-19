@@ -11,6 +11,41 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// Append bridge-local tools with exact names, reserving their names and
+    /// aliases even when disabled. Discovery never grants local authority.
+    /// # Errors
+    /// A discovered MCP name or alias shadows a reserved local tool.
+    pub fn with_local(
+        mut specs: Vec<ToolSpec>,
+        allowed: &[String],
+        local: Vec<ToolSpec>,
+        reserved: &[&str],
+    ) -> Result<Self, DispatchError> {
+        let discovered: Vec<_> = specs.iter().map(|spec| spec.name.clone()).collect();
+        let mapped = aliases(&discovered);
+        let local_names: Vec<_> = local.iter().map(|spec| spec.name.clone()).collect();
+        if specs.iter().any(|spec| {
+            reserved.contains(&spec.name.as_str())
+                || local_names.contains(&spec.name)
+                || reserved.contains(&base(&spec.name).as_str())
+                || (allowed.contains(&spec.name) && local_names.contains(&base(&spec.name)))
+        }) || mapped.values().any(|name| reserved.contains(&name.as_str()))
+        {
+            return Err(DispatchError::Catalog);
+        }
+        let mut allowed = allowed.to_vec();
+        allowed.extend(local_names.iter().cloned());
+        specs.extend(local);
+        let catalog = Self::new(specs, &allowed)?;
+        if local_names
+            .iter()
+            .any(|name| catalog.resolve(name) != Some(name.as_str()))
+        {
+            return Err(DispatchError::Catalog);
+        }
+        Ok(catalog)
+    }
+
     /// # Errors
     /// Oversized/ambiguous catalogs and malformed advertised tool definitions.
     pub fn new(specs: Vec<ToolSpec>, allowed: &[String]) -> Result<Self, DispatchError> {
@@ -135,4 +170,58 @@ fn reserved(name: &str) -> bool {
             | "clock__curr_time"
             | "clock__sleep"
     )
+}
+
+#[cfg(test)]
+mod local_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn spec(name: &str) -> ToolSpec {
+        ToolSpec {
+            name: name.into(),
+            description: "fixture".into(),
+            input_schema: json!({"type":"object"}),
+        }
+    }
+
+    #[test]
+    fn agent_tools_catalog_reserves_disabled_local_names_and_aliases() {
+        let reserved = ["notes_write", "notes_read", "notes_list", "prompt_read", "prompt_write"];
+        for name in [
+            "notes_write",
+            "notes.write",
+            "notes-read",
+            "notes/list",
+            "prompt.read",
+            "prompt_write",
+        ] {
+            for enabled in [false, true] {
+                let local = if enabled { vec![spec("notes_write")] } else { vec![] };
+                assert_eq!(
+                    Catalog::with_local(vec![spec(name)], &[], local, &reserved).err(),
+                    Some(DispatchError::Catalog)
+                );
+            }
+        }
+        let catalog = Catalog::with_local(
+            vec![spec("test.echo")],
+            &["test.echo".into()],
+            vec![spec("notes_write")],
+            &reserved,
+        )
+        .unwrap();
+        assert_eq!(
+            catalog
+                .tools()
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["test_echo", "notes_write"]
+        );
+        assert_eq!(catalog.resolve("test_echo"), Some("test.echo"));
+        assert_eq!(catalog.resolve("notes_write"), Some("notes_write"));
+        assert_eq!(catalog.resolve("prompt_write"), None);
+        assert_eq!(catalog.tools()[1].input_schema, json!({"type":"object"}));
+    }
 }
