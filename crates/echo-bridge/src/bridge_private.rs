@@ -21,7 +21,8 @@ pub(crate) fn file(options: &mut OpenOptions) -> &mut OpenOptions {
     options
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use crate::{bridge_runtime::bridge_kill, bridge_trace::Trace};
     use std::os::unix::fs::PermissionsExt;
