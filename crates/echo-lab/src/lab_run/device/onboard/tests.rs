@@ -12,6 +12,8 @@ use crate::lab_run::{
 use serde_json::json;
 use std::{cell::RefCell, rc::Rc};
 
+const OWNER: &str = "9999:9999"; // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
+const CHOWN: &str = "chown 9999:9999 "; // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
 const PRIVATE: &str = "/data/local/echo-bridge/private";
 const UNLINKED: &str = "device: unmet prerequisite: hassmic link to the bridge on the Echo; its log shows no \
 \"client connected\" or \"satellite: running\" after the last \"client disconnected\"";
@@ -77,14 +79,14 @@ impl Shell for Fake {
         if !world.fail.is_empty() && command.contains(&world.fail) {
             return Err("synthetic staging failure".into());
         }
-        if command.starts_with(IDENTITY) && command.contains("bridge.toml") && world.owner != "9999:9999" {
+        if command.starts_with(IDENTITY) && command.contains("bridge.toml") && world.owner != OWNER {
             return Err("synthetic nobody access denied".into());
         }
         let output = match args[0].as_str() {
             "push" => {
                 let contents = std::fs::read_to_string(&args[1]).map_err(|_| "push: unreadable")?;
                 world.pushed.push((args[1].clone(), args[2].clone(), contents));
-                world.owner = "0:0".into();
+                world.owner = "0:0".into(); // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
                 String::new()
             }
             "forward" if args[1] == "tcp:0" => format!("{}\n", world.forward), // lint-rules: allow-literal synthetic adb argument comparison, no connection
@@ -97,8 +99,8 @@ impl Shell for Fake {
                 let from: usize = from.and_then(|from| from.parse().ok()).ok_or("tail: no offset")?;
                 world.log[from - 1..].to_owned()
             }
-            "shell" if command.starts_with("chown 9999:9999 ") => {
-                world.owner = "9999:9999".into();
+            "shell" if command.starts_with(CHOWN) => {
+                world.owner = OWNER.into();
                 String::new()
             }
             "shell" => world.shell(args, &command),
@@ -118,7 +120,7 @@ pub(super) fn world() -> Rc<RefCell<World>> {
         .concat(),
         links: true,
         mode: "600".into(),
-        owner: "9999:9999".into(),
+        owner: OWNER.into(),
         ..World::default()
     }))
 }
@@ -360,6 +362,6 @@ fn t2_nobody_cannot_chmod_a_root_staged_file_until_ownership_transfer() {
         "synthetic nobody access denied"
     );
     remote.stage(&local).unwrap();
-    assert_eq!(world.borrow().owner, "9999:9999");
+    assert_eq!(world.borrow().owner, OWNER);
     assert_eq!(world.borrow().mode, "600");
 }

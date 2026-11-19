@@ -182,7 +182,7 @@ def nonroot_cases():
             require(not any(line.startswith(str(box.device / tree) + "=") for tree in ("private", "home")
                             for line in delta), "repeated migration corrected a directory")
     for trigger in ("install", "start"):
-        for failure in ("chown", "symlink", "fifo"):
+        for failure in ("chown", "symlink", "hardlink", "fifo"):
             with Sandbox() as box:
                 prepare_lifecycle(box)
                 path = box.device / "private/retained"
@@ -194,6 +194,8 @@ def nonroot_cases():
                     (box.root / "fault").write_text("chown")
                 elif failure == "symlink":
                     (box.device / "home/nested-link").symlink_to(outside)
+                elif failure == "hardlink":
+                    os.link(outside, box.device / "private/.install-stage")
                 else:
                     os.mkfifo(box.device / "home/unsupported")
                 index = len(box.calls())

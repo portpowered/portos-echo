@@ -73,7 +73,7 @@ async fn t3_on_device_launch_pushes_the_derived_config_and_starts_in_its_own_ses
         assert_eq!(std::fs::metadata(&staged).unwrap().permissions().mode() & 0o777, 0o600);
     }
     for expected in [
-        format!("shell chown 9999:9999 {PRIVATE}/bridge.toml"),
+        format!("shell chown 9999:9999 {PRIVATE}/bridge.toml"), // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
         format!("/data/local/hassmic/runas nobody 3990,inet chmod 600 {PRIVATE}/bridge.toml"),
         format!("/data/local/hassmic/runas nobody 3990,inet stat -c %u:%g:%a {PRIVATE}/bridge.toml"),
         format!("/data/local/hassmic/runas nobody 3990,inet sh -c 'umask 077; cd {PRIVATE} || exit 1;"),
@@ -134,7 +134,7 @@ async fn t3_on_device_pushed_config_must_read_back_owner_only() {
     let mut state = runtime(&world);
     assert_eq!(
         state.start(None, DERIVED, root.path(), None).await.unwrap_err(),
-        "device: unmet prerequisite: pushed bridge configuration with owner 9999:9999 and mode 0600 on the Echo"
+        "device: unmet prerequisite: pushed bridge configuration with owner 9999:9999 and mode 0600 on the Echo" // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
     );
     assert!(!world.borrow().ran("setsid"));
 }

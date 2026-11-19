@@ -267,6 +267,8 @@ migrate_state() {
   if test -d \"\$root\"; then
     bad=\$(find \"\$root\" ! -type d ! -type f -print)
     test -z \"\$bad\" || exit 1
+    find \"\$root\" -type f -exec sh -c '
+      for p do test \"\$(stat -c %h \"\$p\")\" = 1 || exit 1; done' sh {} + || exit 1
   fi
 done
 for root in '$device/private' '$device/home'; do

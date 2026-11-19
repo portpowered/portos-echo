@@ -149,7 +149,7 @@ impl Launcher {
         }
     }
 
-    fn prefix(&self) -> String {
+    fn prefix() -> String {
         format!("{IDENTITY} ")
     }
 
@@ -164,7 +164,7 @@ impl Launcher {
         let payload = nominated.map_or(default, |args| args[1].as_str());
         vec![
             "shell".into(),
-            format!("{}sh -c '{}'", self.prefix(), self.fill(payload)),
+            format!("{}sh -c '{}'", Self::prefix(), self.fill(payload)),
         ]
     }
 }
@@ -195,7 +195,7 @@ impl Remote {
     fn shell(&self, command: &str) -> Result<String, String> {
         let output = self
             .shell
-            .adb(&["shell".into(), format!("{}{command}", self.launcher.prefix())])?;
+            .adb(&["shell".into(), format!("{}{command}", Launcher::prefix())])?;
         Ok(String::from_utf8_lossy(&output).into_owned())
     }
 
@@ -203,7 +203,7 @@ impl Remote {
     fn read(&self, command: &str) -> Result<Vec<u8>, String> {
         self.shell.adb(&[
             "exec-out".into(),
-            format!("{}{command} 2>/dev/null", self.launcher.prefix()),
+            format!("{}{command} 2>/dev/null", Launcher::prefix()),
         ])
     }
 

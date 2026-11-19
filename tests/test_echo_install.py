@@ -312,11 +312,14 @@ def metadata_tool(base, name, args):
         require(owner(base, path).split(":")[0] == "9999", "nobody access denied")
     if name == "chown":
         require(os.environ.get("FAKE_UID", "0") == "0", "nonroot chown")
-        value = args[-2].strip("'")
-        for target in [path, *path.rglob("*")] if "-R" in args else [path]:
-            set_owner(base, target, value)
-        with (base / "ownership-ledger").open("a") as output:
-            output.write(str(path) + "=" + value + "\n")
+        operands = [arg for arg in args if not arg.startswith("-")]
+        value = operands[0]
+        for name in operands[1:]:
+            target = Path(name)
+            for entry in [target, *target.rglob("*")] if "-R" in args else [target]:
+                set_owner(base, entry, value)
+            with (base / "ownership-ledger").open("a") as output:
+                output.write(str(target) + "=" + value + "\n")
         return 0
     if name == "stat" and args[1] in ("%u", "%u:%g:%a"):
         value = owner(base, path)
