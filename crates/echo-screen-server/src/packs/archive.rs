@@ -98,6 +98,9 @@ fn contents(reader: &mut impl Read, cancelled: &AtomicBool) -> Result<BTreeMap<S
     for entry in archive.entries().map_err(|_| Error::Archive)?.raw(true) {
         check_cancel(cancelled)?;
         let mut entry = entry.map_err(|_| Error::Archive)?;
+        if entry.header().entry_type().is_symlink() || entry.header().entry_type().is_hard_link() {
+            return Err(Error::Link);
+        }
         if !entry.header().entry_type().is_file() {
             return Err(Error::Entry);
         }
@@ -142,7 +145,7 @@ impl Prepared {
         let destination = root.join(&id);
         let marker = root.join(format!(".{id}.sha256"));
         if destination.exists() {
-            return if std::fs::read_to_string(marker).ok().as_deref() == Some(&self.digest) {
+            return if same_pin(&marker, &self.digest) {
                 Ok(id)
             } else {
                 Err(Error::Conflict)
@@ -156,6 +159,20 @@ impl Prepared {
         std::fs::rename(self.stage.path(), destination).map_err(|_| Error::Storage)?;
         Ok(id)
     }
+}
+
+fn same_pin(marker: &Path, digest: &str) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(marker) else {
+        return false;
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() != 64 {
+        return false;
+    }
+    let mut bytes = String::new();
+    std::fs::File::open(marker)
+        .and_then(|file| file.take(65).read_to_string(&mut bytes))
+        .is_ok()
+        && bytes == digest
 }
 
 fn check_cancel(cancelled: &AtomicBool) -> Result<(), Error> {

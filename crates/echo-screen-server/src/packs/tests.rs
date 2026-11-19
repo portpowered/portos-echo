@@ -128,7 +128,10 @@ fn pack_install_rejects_absolute_dotdot_and_noncanonical_paths() {
 
 #[test]
 fn pack_install_rejects_links_devices_fifo_and_parser_extensions() {
-    for kind in [b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'g', b'x', b'L', b'K', b'S'] {
+    for kind in [b'1', b'2'] {
+        refused(&hostile(b"rest.png", kind, 0), Error::Link);
+    }
+    for kind in [b'3', b'4', b'5', b'6', b'7', b'g', b'x', b'L', b'K', b'S'] {
         refused(&hostile(b"rest.png", kind, 0), Error::Entry);
     }
 }

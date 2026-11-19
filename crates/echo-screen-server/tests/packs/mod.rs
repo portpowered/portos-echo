@@ -47,39 +47,97 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain(root / 'ca.pem', root / 'key.pem')
+context.load_cert_chain(root / 'server.pem', root / 'key.pem')
 server.socket = context.wrap_socket(server.socket, server_side=True)
 print(server.server_port, flush=True)
 server.serve_forever()
 ";
 
 async fn certificate(root: &Path, name: &str) -> Result {
-    let output = Command::new("openssl")
-        .args([
+    root_certificate(root, name).await?;
+    leaf_request(root).await?;
+    std::fs::write(
+        root.join("leaf.cnf"),
+        "basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature\n",
+    )?;
+    openssl(
+        root,
+        &[
+            "x509",
+            "-req",
+            "-in",
+            "server.csr",
+            "-CA",
+            name,
+            "-CAkey",
+            "ca-key.pem",
+            "-CAcreateserial",
+            "-days",
+            "1",
+            "-extfile",
+            "leaf.cnf",
+            "-out",
+            "server.pem",
+        ],
+    )
+    .await
+}
+
+async fn root_certificate(root: &Path, name: &str) -> Result {
+    openssl(
+        root,
+        &[
             "req",
             "-x509",
             "-newkey",
-            "rsa:2048", // lint-rules: allow-literal OpenSSL algorithm and bit count, not a network destination
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
             "-nodes",
             "-days",
             "1",
             "-subj",
-            "/CN=synthetic-pack-peer",
+            "/CN=synthetic-pack-root",
             "-addext",
-            "subjectAltName=IP:127.0.0.1",
+            "basicConstraints=critical,CA:TRUE",
+            "-keyout",
+            "ca-key.pem",
+            "-out",
+            name,
+        ],
+    )
+    .await
+}
+
+async fn leaf_request(root: &Path) -> Result {
+    openssl(
+        root,
+        &[
+            "req",
+            "-new",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-nodes",
+            "-subj",
+            "/CN=synthetic-pack-peer",
             "-keyout",
             "key.pem",
             "-out",
-            name,
-        ])
-        .current_dir(root)
-        .output()
-        .await?;
+            "server.csr",
+        ],
+    )
+    .await
+}
+
+async fn openssl(root: &Path, args: &[&str]) -> Result {
+    let output = Command::new("openssl").args(args).current_dir(root).output().await?;
     assert!(output.status.success(), "synthetic certificate generation failed");
     Ok(())
 }
 
-fn archive() -> Vec<u8> {
+fn archive() -> Result<Vec<u8>> {
     let mut builder = tar::Builder::new(Vec::new());
     let manifest = br#"{"format":1,"name":"template","version":"0.1.0","character":{"rest":"rest.png"}}"#;
     for (name, bytes) in [
@@ -90,18 +148,18 @@ fn archive() -> Vec<u8> {
         header.set_mode(0o644);
         header.set_size(bytes.len() as u64);
         header.set_cksum();
-        builder.append_data(&mut header, name, bytes).unwrap();
+        builder.append_data(&mut header, name, bytes)?;
     }
     let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    gzip.write_all(&builder.into_inner().unwrap()).unwrap();
-    gzip.finish().unwrap()
+    gzip.write_all(&builder.into_inner()?)?;
+    Ok(gzip.finish()?)
 }
 
 impl Peer {
     async fn start() -> Result<Self> {
         let root = tempfile::tempdir()?;
         certificate(root.path(), "ca.pem").await?;
-        let archive = archive();
+        let archive = archive()?;
         std::fs::write(root.path().join("pack.tar.gz"), &archive)?;
         let mut process = Command::new("python3")
             .args(["-u", "-c", PEER])
@@ -139,9 +197,15 @@ impl Peer {
         Ok(())
     }
 
-    async fn stalled(&mut self) -> Result {
+    async fn stalled(
+        &mut self,
+        jobs: &mut tokio::sync::mpsc::Receiver<echo_screen_server::PackInstallResult>,
+    ) -> Result {
         let mut line = String::new();
-        self.output.read_line(&mut line).await?;
+        tokio::select! {
+            line = self.output.read_line(&mut line) => { line?; },
+            result = jobs.recv() => return Err(result.and_then(|r| r.reason).unwrap_or_else(|| "job ended before stall barrier".into()).into()),
+        }
         assert_eq!(line.trim(), "stalled");
         Ok(())
     }
@@ -163,8 +227,10 @@ async fn t3_screen_pack_trusted_https_installs_bad_digest_retains_server_and_pri
         ],
     );
     let good = jobs.recv().await.ok_or("missing install result")?;
-    assert_eq!(good.installed.as_deref(), Some("template@0.1.0"));
-    assert_eq!(good.reason, None);
+    assert_eq!(
+        (good.installed.as_deref(), good.reason.as_deref()),
+        (Some("template@0.1.0"), None)
+    );
     let bad = jobs.recv().await.ok_or("missing digest result")?;
     assert_eq!(bad.installed, None);
     assert_eq!(bad.reason.as_deref(), Some("sha256 mismatch or invalid digest"));
@@ -229,7 +295,7 @@ async fn t3_screen_pack_shutdown_cancels_stalled_transfer_and_removes_temporary_
         Some(peer.ca()),
         vec![(format!("{}/stall", peer.base), peer.digest())],
     );
-    peer.stalled().await?;
+    peer.stalled(&mut jobs).await?;
     server.shutdown().await?;
     assert!(jobs.recv().await.is_none());
     assert_eq!(std::fs::read_dir(home.path().join("screens"))?.count(), 0);
@@ -247,7 +313,7 @@ async fn t3_screen_pack_fake_clock_deadline_retains_serving_process() -> Result 
         Some(peer.ca()),
         vec![(format!("{}/stall", peer.base), peer.digest())],
     );
-    peer.stalled().await?;
+    peer.stalled(&mut jobs).await?;
     tokio::time::pause();
     tokio::time::advance(std::time::Duration::from_secs(60)).await;
     assert_eq!(

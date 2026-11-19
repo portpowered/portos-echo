@@ -34,7 +34,9 @@ enum Error {
     Archive,
     #[error("archive path must be normalized and relative")]
     Path,
-    #[error("archive entry must be a regular file")]
+    #[error("archive links are forbidden")]
+    Link,
+    #[error("archive special entries are forbidden")]
     Entry,
     #[error("duplicate archive path")]
     Duplicate,
