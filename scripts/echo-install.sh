@@ -38,7 +38,7 @@ all secrets and codex.home stay in private/.
 Supply config compatible with the bridge build; TOML is not validated or rewritten.
 Prompt defaults: examples/prompts/*.md; seed missing home/prompts files only.
 Absent defaults are skipped with a note.
-Launch: setsid, /data/local/hassmic/runas nobody 3990,inet, held stdin; no boot integration.
+Launch: setsid, /data/local/hassmic/runas nobody 3990,inet, held stdin; the hassmic fork repeats it at boot.
 start requires exact echo-bridge NAME from ps -A -o PID,NAME and a new
 hassmic boot.log client connected line within 20 seconds.
 stop closes held stdin and verifies absence; never kills an unknown process.

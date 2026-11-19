@@ -210,6 +210,15 @@ set `codex.binary` and `codex.ca_file` under `bin/` as its help requires.
 7. **Name the standalone app server in the configuration**: `codex.launch = "standalone"` with `codex.binary`,
    because the armv7 build takes no `app-server` subcommand, and `codex.ca_file`, because the child starts with a
    cleared environment and finds no certificate bundle on the device. No wrapper script is needed for either.
+8. **After a reboot the hassmic fork's satellite service starts the installed bridge** (owner decision 2026-11-19,
+   [decisions](program/decisions.md)). The fork's `scripts/device/bridge.sh`, started by its `main.sh satellite`,
+   uses this same launch: `private/launch.sh` as nobody with groups 3990 and `inet`, in its own session, with the
+   installer's `private/run/` gate, FIFO and `stop`/`finished` markers. It starts only where the installer left
+   `private/launch.sh` and `private/bridge.toml`, and refuses links and wrong owners as the installer does. It
+   starts the bridge again after an exit nobody asked for, waiting 3 s and doubling to 5 min while the bridge keeps
+   exiting within a minute. A bridge stopped with installer `stop` stays stopped until installer `start`, the
+   fork's `bridge.sh start` or a reboot; `uninstall` removes the launcher and with it the boot start. No init
+   service, `.rc`, partition, SELinux or firewall change: the supervisor rides hassmic's existing service.
 
 #### Why we need it — echo-bridge
 
