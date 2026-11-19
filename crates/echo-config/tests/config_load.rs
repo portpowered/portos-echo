@@ -209,7 +209,10 @@ fn codex_defaults_and_override_precedence_are_offline() {
     assert_eq!(config.codex.binary, Some(binary.clone()));
     assert_eq!(config.codex_voice(), Some("marin"));
     assert_eq!(config.codex_model(), Some("thread-model"));
-    let texts = (config.codex.instructions.as_str(), config.codex.live_instructions.as_str());
+    let texts = (
+        config.codex.instructions.as_str(),
+        config.codex.live_instructions.as_str(),
+    );
     assert_eq!(texts, ("Local instructions", "Local prompt"));
     assert!(!home.exists());
     assert!(!binary.exists());
