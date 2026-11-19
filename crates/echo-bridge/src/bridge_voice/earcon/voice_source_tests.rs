@@ -133,3 +133,68 @@ async fn mouth_preserves_quiet_gaps_even_when_all_audio_is_written_ahead() {
     }
     assert_eq!(mouth.due(), None);
 }
+
+#[tokio::test(start_paused = true)]
+async fn first_audio_is_timed_from_the_user_transcript_or_the_delegated_turn() {
+    use crate::bridge_codex::{Event, MediaEvent};
+    use crate::bridge_runtime::bridge_pacing::{Endpoint, FirstAudio};
+    let user = Event::Transcript {
+        role: "user".into(),
+        text: "fixture".into(),
+        done: true,
+    };
+    let turn = Event::TurnStarted {
+        thread: "thread-1".into(),
+        turn: "turn-1".into(),
+    };
+    for (event, endpoint) in [(user, Endpoint::UserTranscript), (turn, Endpoint::DelegatedTurn)] {
+        let mut source = Source::new(200, false).unwrap();
+        let mut port = Narrow::default();
+        super::super::media(MediaEvent::Control(event), &mut port, &mut source, &mut |_| Ok(()))
+            .await
+            .unwrap();
+        tokio::time::advance(Duration::from_millis(730)).await;
+        source.meter.wrote(Instant::now());
+        let sample = FirstAudio {
+            after_endpoint_ms: 730,
+            endpoint,
+        };
+        assert_eq!(source.meter.settle(0).first_audio, Some(sample));
+    }
+}
+
+/// The view writes one `timing` record per settled reply that has a sample.
+#[tokio::test(start_paused = true)]
+async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
+    use crate::bridge_runtime::bridge_pacing::{Endpoint, FirstAudio};
+    use crate::bridge_voice::{ServeNotice, SessionNotice, voice_view::View};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    let mut trace = crate::bridge_trace::Trace::open(&path, "chatgpt").unwrap();
+    let health = crate::bridge_health::Health::offline();
+    let screen = crate::bridge_runtime::bridge_screen::Screen::bind(None).await.unwrap();
+    let mut view = View::new(&screen, &health, &mut trace);
+    view.observe(ServeNotice::Listening).unwrap();
+    let mut stats = Stats::default();
+    view.observe(ServeNotice::Session(SessionNotice::ReplyCompleted(stats.clone())))
+        .unwrap();
+    stats.quality.first_audio = Some(FirstAudio {
+        after_endpoint_ms: 730,
+        endpoint: Endpoint::UserTranscript,
+    });
+    view.observe(ServeNotice::Session(SessionNotice::ReplyCompleted(stats)))
+        .unwrap();
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let events: Vec<_> = rows.iter().skip(2).map(|row| row["event"].as_str().unwrap()).collect();
+    let reply = ["reply.played", "reply.quality"];
+    assert_eq!(events, [reply.as_slice(), reply.as_slice(), &["timing"]].concat());
+    assert_eq!(
+        rows[6],
+        serde_json::json!({"event":"timing", "elapsed_ms":0, "provider_auth_mode":"chatgpt", "run_id":"run-1",
+            "name":"first_audio_after_endpoint_ms", "duration_ms":730, "endpoint":"user_transcript"})
+    );
+}

@@ -22,7 +22,7 @@ fn journey() -> Vec<Value> {
         json!({"event":"session.delegation.created","elapsed_ms":2,"run_id":"r-a","delegation_id":"d-a"}),
         json!({"event":"tools/call","elapsed_ms":3,"run_id":"r-a","delegation_id":"d-a","call_id":"c-a","name":"test.echo","count":1}),
         json!({"event":"session.commentary.append","elapsed_ms":4,"run_id":"r-a","delegation_id":"d-a"}),
-        json!({"event":"timing","elapsed_ms":5,"run_id":"r-a","duration_ms":1499,"name":"first_audio_after_endpoint_ms"}),
+        json!({"event":"wake.earcon_played","elapsed_ms":5,"run_id":"r-a","duration_ms":1499}),
     ]
 }
 
@@ -98,10 +98,12 @@ fn normalizes_only_incidental_values_and_keeps_measurements_and_relationships() 
 }
 
 #[test]
-fn reply_quality_measurements_are_not_golden_steps() {
+fn reply_quality_and_timing_measurements_are_not_golden_steps() {
     let mut records = journey();
     let expected = recorded(&records);
     records.push(json!({"event":"reply.quality","elapsed_ms":9,"run_id":"r-a","underruns":3}));
+    records.push(json!({"event":"timing","elapsed_ms":9,"run_id":"r-a",
+        "name":"first_audio_after_endpoint_ms","duration_ms":40,"endpoint":"delegated_turn"}));
     assert_eq!(compare(&trace(&records), &expected), Ok(()));
 }
 

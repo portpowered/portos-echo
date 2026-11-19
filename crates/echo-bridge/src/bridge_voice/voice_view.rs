@@ -221,6 +221,16 @@ impl<'a> View<'a> {
                     "cut":quality.discarded_cut, "audible":quality.discarded_audible},
                 "rtp_lost":quality.rtp_lost
             }),
+        )?;
+        let Some(first) = quality.first_audio else {
+            return Ok(());
+        };
+        // The latency budget's sample: endpoint to the first reply frame written.
+        self.trace.record(
+            "timing",
+            Some(id),
+            json!({"name":"first_audio_after_endpoint_ms",
+                "duration_ms":first.after_endpoint_ms, "endpoint":first.endpoint.name()}),
         )
     }
 

@@ -133,6 +133,35 @@ pub struct ReplyQuality {
     pub discarded_audible: u32,
     /// RTP packets missing from the receive sequence during this reply.
     pub rtp_lost: u64,
+    /// The `timing` sample; none when no endpoint preceded the reply's audio.
+    pub first_audio: Option<FirstAudio>,
+}
+
+/// How the bridge learned the user's turn had ended. The pinned V3 session
+/// forwards no speech-stopped event, so these are the two signs it has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Endpoint {
+    /// A user-role transcript event from the Live session.
+    UserTranscript,
+    /// The Live session started a delegated turn for the request.
+    DelegatedTurn,
+}
+
+impl Endpoint {
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::UserTranscript => "user_transcript",
+            Self::DelegatedTurn => "delegated_turn",
+        }
+    }
+}
+
+/// From the endpoint to the first reply frame handed to the Echo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirstAudio {
+    pub after_endpoint_ms: u32,
+    pub endpoint: Endpoint,
 }
 
 /// Why accepted call audio never reached the reply queue.
@@ -150,6 +179,7 @@ pub(crate) struct ReplyMeter {
     playout: Option<Instant>,
     measured: bool,
     lost: u64,
+    endpoint: Option<(Instant, Endpoint)>,
 }
 
 fn millis(duration: Duration) -> u32 {
@@ -167,10 +197,23 @@ impl ReplyMeter {
         }
     }
 
+    /// The Live session showed at `now` that the user's turn is over. The
+    /// first sign before this reply's audio is its endpoint. One that comes
+    /// once the reply is playing belongs to no reply and is not kept.
+    pub(crate) fn endpoint(&mut self, now: Instant, endpoint: Endpoint) {
+        if self.playout.is_none() && self.endpoint.is_none() {
+            self.endpoint = Some((now, endpoint));
+        }
+    }
+
     /// One 20 ms frame was handed to the Echo at `now`.
     pub(crate) fn wrote(&mut self, now: Instant) {
         let Some(end) = self.playout else {
             self.playout = Some(now + PERIOD);
+            self.quality.first_audio = self.endpoint.take().map(|(at, endpoint)| FirstAudio {
+                after_endpoint_ms: millis(now.saturating_duration_since(at)),
+                endpoint,
+            });
             return;
         };
         let depth = millis(end.saturating_duration_since(now));
@@ -322,6 +365,39 @@ mod bridge_pacing_tests {
         let start = Instant::now();
         assert_eq!(pacer.next_frame(&mut queue, false).await, Some(0));
         assert_eq!(Instant::now(), start);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reply_meter_measures_first_audio_from_the_first_endpoint_before_it() {
+        let mut meter = ReplyMeter::default();
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        // No endpoint before the audio: the reply has no sample.
+        meter.wrote(at(5));
+        meter.endpoint(at(10), Endpoint::UserTranscript);
+        meter.wrote(at(25));
+        assert_eq!(meter.settle(0).first_audio, None);
+        // That late endpoint was not kept, and the first of two signs counts.
+        meter.wrote(at(40));
+        assert_eq!(meter.settle(0).first_audio, None);
+        meter.endpoint(at(100), Endpoint::DelegatedTurn);
+        meter.endpoint(at(400), Endpoint::UserTranscript);
+        meter.wrote(at(1337));
+        meter.wrote(at(1357));
+        let sample = FirstAudio {
+            after_endpoint_ms: 1237,
+            endpoint: Endpoint::DelegatedTurn,
+        };
+        assert_eq!(meter.settle(0).first_audio, Some(sample));
+        assert_eq!(
+            (Endpoint::UserTranscript.name(), Endpoint::DelegatedTurn.name()),
+            ("user_transcript", "delegated_turn")
+        );
+        // A frame written at the endpoint's own instant is a zero sample.
+        meter.endpoint(at(2000), Endpoint::UserTranscript);
+        meter.wrote(at(2000));
+        let first = meter.settle(0).first_audio.map(|first| first.after_endpoint_ms);
+        assert_eq!(first, Some(0));
     }
 
     #[test]

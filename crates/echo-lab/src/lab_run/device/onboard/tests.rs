@@ -255,9 +255,10 @@ fn t2_liveness_is_the_named_process_never_the_launching_shell() {
 
 #[test]
 fn t2_m4_budget_passes_in_budget_and_fails_with_the_measured_number() {
+    // The row echo-bridge writes after a settled reply, field for field.
     let timing = |run: &str, duration: u64| {
-        json!({"event":"timing","name":"first_audio_after_endpoint_ms","run_id":run,
-            "elapsed_ms":5,"duration_ms":duration})
+        json!({"event":"timing","elapsed_ms":5,"provider_auth_mode":"chatgpt","run_id":run,
+            "name":"first_audio_after_endpoint_ms","duration_ms":duration,"endpoint":"user_transcript"})
     };
     let measured = budget::check(&[timing("run-1", 1200), timing("run-0", 9000)], Some("run-1"), 1500.0).unwrap();
     assert_eq!(

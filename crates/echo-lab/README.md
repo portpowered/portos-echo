@@ -604,6 +604,13 @@ matcher and explicit `regex:` opt-in. Its text never enters reports.
 nonnegative `duration_ms`. Equality at the budget passes; missing/invalid samples
 and unsupported metrics fail. W1's bridge produces neither speech, UI nor timing;
 scripted T3 bridges test those observations without claiming W2 integration.
+The production voice bridge writes that `timing` record after a settled reply's
+`reply.quality`: `duration_ms` runs on the bridge clock from the endpoint to the
+first reply frame handed to the Echo. The endpoint is the Live session's first
+sign that the user's turn is over, named in `endpoint`: `user_transcript`, or
+`delegated_turn` when the delegated turn starts first. A reply whose audio starts
+before either sign has no sample. The M4 golden comparison skips `timing`, as it
+skips `reply.quality`: the value follows the run's pace.
 
 `make test-sim` runs two halves, which CI runs as parallel jobs. Both build the
 lab binaries once. `make test-sim-suites` validates scenarios, runs the
@@ -780,7 +787,9 @@ Differences from the host-bridge mode:
 - `first_audio_after_endpoint_ms_p95` is measured from the trace's `timing`
   records, with the host mode's percentile rule and verdict text. A trace with
   no such record stops at `device: unmet prerequisite: first_audio_after_endpoint_ms
-  timing sample in the bridge trace from the Echo`.
+  timing sample in the bridge trace from the Echo`. The bridge's endpoint is a
+  Live session event, later than the end of speech the host mode matches on the
+  wire, so the two modes' numbers are not interchangeable.
 - `restart: {process: hassmic-host}` ends the link, and a bridge on the Echo ends
   with it. The driver starts it again and does not count that exit's
   `bridge.error` records against the run.

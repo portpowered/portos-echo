@@ -35,7 +35,7 @@ pub use voice_session::{
 #[cfg(test)]
 mod voice_tests;
 
-pub use crate::bridge_runtime::bridge_pacing::ReplyQuality;
+pub use crate::bridge_runtime::bridge_pacing::{Endpoint, FirstAudio, ReplyQuality};
 use crate::{
     Error,
     bridge_codex::{Event, MediaEvent},
@@ -462,6 +462,7 @@ async fn media(
         }
         MediaEvent::Control(Event::Transcript { role, text, done }) => {
             if role == "user" {
+                source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
                 source.interrupt(port)?;
             } else if role == "assistant" && !done {
                 source.controller.reply_started();
@@ -470,6 +471,7 @@ async fn media(
             observe(Notice::Transcript { role, text, done })
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
+            source.meter.endpoint(Instant::now(), Endpoint::DelegatedTurn);
             source.delegation.started();
             Ok(())
         }

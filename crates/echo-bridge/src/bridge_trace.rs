@@ -8,6 +8,11 @@
 //! fixed frame capacity. Final eviction totals remain in `reply.cut`.
 //! Release events acknowledge acquired listener owners after shutdown is joined.
 //! Voice runtime `screen.released` also counts clients dropped at the drain bound.
+//! `timing` follows a settled reply's `reply.quality` when that reply has a
+//! sample: `name` is `first_audio_after_endpoint_ms`, `duration_ms` is whole
+//! milliseconds on the bridge clock from the endpoint to the first reply frame
+//! handed to the Echo, and `endpoint` is `user_transcript` or `delegated_turn`,
+//! the Live session's first sign that the user's turn was over.
 use crate::Error;
 use serde_json::{Map, Value};
 use std::{

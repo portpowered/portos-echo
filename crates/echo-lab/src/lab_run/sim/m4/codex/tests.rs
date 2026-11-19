@@ -369,6 +369,24 @@ fn stages(trace: &Trace) {
     );
 }
 
+/// The production bridge's own budget sample, one per reply. This provider
+/// sends the user transcript after the reply, so the delegated turn's start
+/// is the endpoint; the scenario's 1500 ms budget bounds a plausible value.
+fn first_audio(trace: &Trace) {
+    let samples: Vec<_> = trace.records.iter().filter(|r| r["event"] == "timing").collect();
+    assert_eq!(samples.len(), 1, "{samples:?}");
+    assert_eq!(
+        (&samples[0]["name"], &samples[0]["run_id"], &samples[0]["endpoint"]),
+        (
+            &json!("first_audio_after_endpoint_ms"),
+            &json!("run-1"),
+            &json!("delegated_turn")
+        )
+    );
+    let duration = samples[0]["duration_ms"].as_u64();
+    assert!(duration.is_some_and(|ms| ms <= 1500), "{}", samples[0]);
+}
+
 async fn capture(socket: &mut TcpStream) {
     let format = json!({"rate":16000,"width":2,"channels":1});
     send(socket, "audio-start", format.clone(), vec![]).await;
@@ -411,6 +429,7 @@ fn assert_results(case: &Case, timing: &Timing, negative: bool, emotion: bool) {
     };
     assert_eq!(case.transcript.as_deref(), Some(expected));
     stages(&case.trace);
+    first_audio(&case.trace);
     super::super::tests::assert_recorded_comparison(
         &case
             .trace
