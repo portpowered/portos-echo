@@ -85,25 +85,7 @@ mod tests {
             specs[0].input_schema,
             json!({"type":"object","properties":{"which":{"type":"string","enum":["voice","runner"]}},"required":["which"],"additionalProperties":false})
         );
-        for args in [
-            json!({}),
-            json!({"which":"other"}),
-            json!({"which":1}),
-            json!({"which":"voice","extra":true}),
-        ] {
-            let result = notes.call("prompt_read", &args, "1:t1:u1:c").unwrap();
-            assert_eq!(result.content["error"], "invalid_arguments");
-            assert!(result.is_error);
-        }
-        for args in [
-            json!({"which":"voice"}),
-            json!({"which":"voice","content":1}),
-            json!({"which":"voice","content":"x","extra":true}),
-        ] {
-            let result = notes.call("prompt_write", &args, "1:t1:u1:c").unwrap();
-            assert_eq!(result.content["error"], "invalid_arguments");
-            assert!(result.is_error);
-        }
+        invalid_arguments(&notes);
         for (which, text) in [
             ("voice", echo_config::LIVE_INSTRUCTIONS),
             ("runner", echo_config::RUNNER_INSTRUCTIONS),
@@ -123,6 +105,28 @@ mod tests {
         assert!(!result.is_error);
         assert!(!home.join("prompts/.history").exists());
         assert_eq!(prompts::read_base(&home, "voice"), Ok("new".into()));
+    }
+
+    fn invalid_arguments(notes: &Notes) {
+        for args in [
+            json!({}),
+            json!({"which":"other"}),
+            json!({"which":1}),
+            json!({"which":"voice","extra":true}),
+        ] {
+            let result = notes.call("prompt_read", &args, "1:t1:u1:c").unwrap();
+            assert_eq!(result.content["error"], "invalid_arguments");
+            assert!(result.is_error);
+        }
+        for args in [
+            json!({"which":"voice"}),
+            json!({"which":"voice","content":1}),
+            json!({"which":"voice","content":"x","extra":true}),
+        ] {
+            let result = notes.call("prompt_write", &args, "1:t1:u1:c").unwrap();
+            assert_eq!(result.content["error"], "invalid_arguments");
+            assert!(result.is_error);
+        }
     }
 
     #[test]

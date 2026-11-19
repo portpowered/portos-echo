@@ -46,25 +46,29 @@ fn agent_tools_prompt_defaults_validation_exact_utf8_and_unchanged_refusals() {
     );
     assert!(!home.exists());
     assert_eq!(super::super::write_base(&home, "other", "x"), Err("invalid_arguments"));
-    for text in ["".into(), " \n\t".into(), "x".repeat(32_769)] {
+    for text in [String::new(), " \n\t".into(), "x".repeat(32_769)] {
         assert_eq!(write(&home, Kind::Voice, &text), Err("invalid_prompt"));
     }
     assert!(!home.exists());
     for text in ["a".into(), "語".repeat(10_922) + "ab"] {
         write(&home, Kind::Voice, &text).unwrap();
         assert_eq!(read(&home, Kind::Voice), Ok(Some(text.clone())));
-        let before = history(&home);
-        for bad in ["".into(), " \n\t".into(), "語".repeat(10_923)] {
-            assert_eq!(write(&home, Kind::Voice, &bad), Err("invalid_prompt"));
-            assert_eq!(history(&home), before);
-            assert_eq!(read(&home, Kind::Voice), Ok(Some(text.clone())));
-        }
+        refused_replacements(&home, &text);
     }
     assert_eq!(
         history(&home).iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>(),
         ["a"]
     );
     assert_eq!(read(&home, Kind::Runner), Ok(None));
+}
+
+fn refused_replacements(home: &Path, text: &str) {
+    let before = history(home);
+    for bad in [String::new(), " \n\t".into(), "語".repeat(10_923)] {
+        assert_eq!(write(home, Kind::Voice, &bad), Err("invalid_prompt"));
+        assert_eq!(history(home), before);
+        assert_eq!(read(home, Kind::Voice), Ok(Some(text.into())));
+    }
 }
 
 #[test]
@@ -90,6 +94,16 @@ fn agent_tools_prompt_shared_newest_twenty_equal_clock_restart_and_modes() {
     assert_eq!(entries.last().unwrap().0, "voice-1000000022.md");
     assert_eq!(read(home, Kind::Voice), Ok(Some("version-22".into())));
     assert_eq!(read(home, Kind::Runner), Ok(Some("version-21".into())));
+    private_modes(home);
+    // A reopened writer with an older clock must still choose a unique name.
+    commit(home, Kind::Runner, "reopened", UNIX_EPOCH, Fault::None).unwrap();
+    assert_eq!(
+        history(home).last().unwrap(),
+        &("runner-1000000023.md".into(), "version-21".into())
+    );
+}
+
+fn private_modes(home: &Path) {
     for dir in [home.join("prompts"), home.join("prompts/.history")] {
         assert_eq!(fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
         for entry in fs::read_dir(dir).unwrap() {
@@ -99,12 +113,6 @@ fn agent_tools_prompt_shared_newest_twenty_equal_clock_restart_and_modes() {
             }
         }
     }
-    // A reopened writer with an older clock must still choose a unique name.
-    commit(home, Kind::Runner, "reopened", UNIX_EPOCH, Fault::None).unwrap();
-    assert_eq!(
-        history(home).last().unwrap(),
-        &("runner-1000000023.md".into(), "version-21".into())
-    );
 }
 
 #[test]
@@ -207,4 +215,22 @@ fn agent_tools_prompt_concurrent_callers_keep_serial_versions_and_archives() {
     let mut expected = vec!["initial".to_string()];
     expected.extend((0..8).map(|index| format!("writer-{index}")));
     assert_eq!(texts, expected);
+}
+
+#[test]
+fn agent_tools_prompt_repeated_publish_failures_keep_history_bounded() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), Kind::Voice, "old").unwrap();
+    for _ in 0..25 {
+        assert_eq!(
+            commit(root.path(), Kind::Voice, "new", UNIX_EPOCH, Fault::Publish),
+            Err("io")
+        );
+        assert_eq!(read(root.path(), Kind::Voice), Ok(Some("old".into())));
+    }
+    let entries = history(root.path());
+    assert_eq!(entries.len(), 20);
+    assert_eq!(entries.first().unwrap().0, "voice-6.md");
+    assert_eq!(entries.last().unwrap().0, "voice-25.md");
+    assert!(entries.iter().all(|(_, text)| text == "old"));
 }

@@ -1,6 +1,7 @@
 //! T3 production admission, catalog, dispatcher, shared writer and next-call RPC.
 use super::*;
 use crate::{bridge_runtime::bridge_screen::Screen, bridge_voice::voice_tools::Tools};
+use echo_agent_api::ToolHost;
 use echo_config::{AgentTools, BridgeConfig, HomeConfig};
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
@@ -112,28 +113,32 @@ async fn remote(
         let result = prompt_result(server, &request, method, &thread, expected).await;
         send(server, &json!({"id":request["id"],"result":result})).await;
         if method == "thread/realtime/start" {
-            send(
-                server,
-                &json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":"turn"}}}),
-            )
-            .await;
-            if index == 0 {
-                changes(server, &thread).await;
-            } else if index == 1 {
-                refusals(server, &thread).await;
-            } else {
-                notes(server, &thread, home).await;
-            }
-            send(
-                server,
-                &json!({"method":"turn/completed","params":{"threadId":thread,"turn":{"id":"turn"}}}),
-            )
-            .await;
+            turn(server, &thread, index, home).await;
             // Two replies on this retained call must produce no new start or
             // instruction RPC. The next loop iteration checks both exact texts.
             replies(server, run.0, run.1, &thread).await;
         }
     }
+}
+
+async fn turn(server: &mut BufReader<tokio::io::DuplexStream>, thread: &str, index: usize, home: &Path) {
+    send(
+        server,
+        &json!({"method":"turn/started","params":{"threadId":thread,"turn":{"id":"turn"}}}),
+    )
+    .await;
+    if index == 0 {
+        changes(server, thread).await;
+    } else if index == 1 {
+        refusals(server, thread).await;
+    } else {
+        notes(server, thread, home).await;
+    }
+    send(
+        server,
+        &json!({"method":"turn/completed","params":{"threadId":thread,"turn":{"id":"turn"}}}),
+    )
+    .await;
 }
 
 async fn tool(
@@ -215,7 +220,10 @@ async fn changes(server: &mut BufReader<tokio::io::DuplexStream>, thread: &str) 
 }
 
 async fn refusals(server: &mut BufReader<tokio::io::DuplexStream>, thread: &str) {
-    for (index, text) in ["".into(), " \n\t".into(), "x".repeat(32_769)].into_iter().enumerate() {
+    for (index, text) in [String::new(), " \n\t".into(), "x".repeat(32_769)]
+        .into_iter()
+        .enumerate()
+    {
         assert_eq!(
             tool(
                 server,
@@ -333,7 +341,6 @@ async fn t3_agent_tools_independent_groups_catalog_and_disabled_calls_are_inert(
             expected.extend(["prompt_read", "prompt_write"]);
         }
         assert_eq!(names, expected);
-        use echo_agent_api::ToolHost;
         for name in crate::bridge_notes::NAMES {
             if !names.contains(&name) {
                 let result = tools

@@ -98,6 +98,8 @@ fn commit(home: &Path, kind: Kind, content: &str, now: SystemTime, fault: Fault)
         if let Some(old) = old {
             archive(history, kind, &old, now, &entries, fault)?;
         }
+        // Bound recovery storage even when publishing the current file fails.
+        prune(history)?;
     }
     let fail = publish_fault(fault);
     files::replace(&dir, kind.file(), content.as_bytes(), fail)?;
