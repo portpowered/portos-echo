@@ -224,3 +224,120 @@ async fn binary_snapshot(fixture: &Fixture) -> Value {
         .await
         .unwrap()
 }
+
+// Remove execute permission only from this case's private copy, after the OS
+// has admitted it. /proc/self/exe then reaches the real failing exec syscall.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "T3 requires prebuilt Linux echo-bridge and local Python"]
+async fn t3_settings_binary_failed_exec_remounts_pending_surface_without_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new("chatgpt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    binary_home(&fixture, listener.local_addr().unwrap().port());
+    let executable = fixture.directory.path().join("echo-bridge");
+    let mut command = private_image(&fixture, &executable);
+    let mut process = Process::spawn(&mut command);
+    let pid = process.child.id().unwrap();
+    let original = process_identity(pid);
+    let satellite = binary_ready(&listener, &mut process).await;
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        settings_runtime_patch(&fixture, json!({"voice":{"session_listen_seconds":4}})).await,
+        json!({"version":1,"restart_pending":true})
+    );
+    let recovery = binary_ready(&listener, &mut process).await;
+    assert_eq!(process_identity(pid), original);
+    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"error","relink":false,
+            "message":"Could not restart bridge; saved settings remain pending"})
+    );
+    binary_pending_surface(&fixture).await;
+    drop(process.input.take());
+    process.collect(0).await;
+    assert_eq!(process.stderr().await, "");
+    super::super::host::released(&fixture).await;
+    binary_failed_trace(&fixture);
+    drop((satellite, recovery));
+}
+
+#[cfg(unix)]
+fn private_image(fixture: &Fixture, path: &Path) -> Command {
+    let template = super::super::voice_entry::command(fixture);
+    let template = template.as_std();
+    std::fs::copy(template.get_program(), path).unwrap();
+    let mut command = Command::new(path);
+    command.args(template.get_args()).current_dir(fixture.directory.path());
+    for (key, value) in template.get_envs() {
+        if let Some(value) = value {
+            command.env(key, value);
+        } else {
+            command.env_remove(key);
+        }
+    }
+    command
+}
+
+fn binary_home(fixture: &Fixture, port: u16) {
+    super::super::voice_entry::configure(fixture, port);
+    let base = fixture.directory.path().join("bridge.toml");
+    let home = fixture.directory.path().join("agent-home");
+    let text = format!(
+        "{}\n[home]\ndir='{}'\n",
+        std::fs::read_to_string(&base).unwrap(),
+        home.display()
+    );
+    std::fs::write(base, text).unwrap();
+}
+
+async fn binary_pending_surface(fixture: &Fixture) {
+    for _ in 0..2 {
+        let snapshot = binary_snapshot(fixture).await;
+        assert_eq!(snapshot["restart_pending"], true);
+        assert_eq!(snapshot["settings"]["voice"]["session_listen_seconds"], 4);
+        assert_eq!(
+            snapshot["warnings"],
+            json!(["Could not restart bridge; saved settings remain pending"])
+        );
+    }
+    let saved = reqwest::Client::new()
+        .post(settings_runtime_url(fixture, "/settings/v1/prompts/voice"))
+        .json(&json!({"version":1,"text":"accepted after failed exec\n"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        saved.json::<Value>().await.unwrap(),
+        json!({"version":1,"restart_pending":false})
+    );
+    let home = fixture.directory.path().join("agent-home");
+    assert_eq!(
+        std::fs::read_to_string(home.join("prompts/voice.md")).unwrap(),
+        "accepted after failed exec\n"
+    );
+    let path = home.join("settings.toml");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "[voice]\nsession_listen_seconds = 4\n"
+    );
+    owner_only(&path);
+}
+
+fn binary_failed_trace(fixture: &Fixture) {
+    let rows = trace(&fixture.directory.path().join("trace"));
+    for (event, count) in [
+        ("bridge.ready", 2),
+        ("settings.restart_prepared", 1),
+        ("settings.restart_failed", 1),
+        ("settings.restart_recovered", 1),
+    ] {
+        assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), count);
+    }
+    assert_eq!(
+        std::fs::read_to_string(fixture.home.join("launches")).unwrap(),
+        "started\nstarted\n"
+    );
+}
