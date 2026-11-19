@@ -250,6 +250,9 @@ def build(args):
     with tempfile.TemporaryDirectory(prefix="echo-release-", dir="/tmp") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
         work = Path(work)
         env = build_environment(work)
+        # build-echo deliberately builds offline. Provision this fresh cache,
+        # rather than relying on CI setup's separate default Cargo home.
+        subprocess.run(["cargo", "+1.100.0", "fetch", "--locked"], cwd=ROOT, env=env, check=True)
         subprocess.run(["make", "build-echo", "ECHO_PACKAGES=echo-bridge"], cwd=ROOT, env=env, check=True)
         result = subprocess.run(["make", "--no-print-directory", "-s", "build-codex-armv7"], cwd=ROOT, env=env, check=True, stdout=subprocess.PIPE, text=True)
         identity = re.findall(r"(?m)^source_commit=([0-9a-f]{40})$", result.stdout)
