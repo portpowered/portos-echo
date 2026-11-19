@@ -315,7 +315,7 @@ mod mcp_trust_tests {
             assert_eq!(specs.len(), 1);
             assert_eq!(specs[0].name, "endpoint_query");
             assert_eq!(specs[0].input_schema, json!({"type":"object","properties":{}}));
-            let result = host.call_tool("endpoint_query", json!({}), "query-1").await.unwrap();
+            let result = host.call_tool("endpoint_query", json!({}), "1:t1:u1:c").await.unwrap();
             assert!(!result.is_error);
             assert_eq!(result.content, json!([{"type":"text","text":"synthetic-query-result"}]));
             assert_mcp_trust_refused(&tools, config).await;
