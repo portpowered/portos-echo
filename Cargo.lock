@@ -795,6 +795,7 @@ dependencies = [
  "echo-wyoming",
  "p256",
  "reqwest",
+ "rustix",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
