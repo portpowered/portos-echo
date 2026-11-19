@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import errno
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -293,9 +294,19 @@ def failure_cases():
 
 
 
+def ownership_attribute(path):
+    info = path.stat()
+    if stat.S_ISFIFO(info.st_mode):
+        # Linux forbids user xattrs on FIFOs. Keep their generation-specific
+        # metadata on the parent directory, which supports user xattrs.
+        return path.parent, f"user.echo_fifo_{info.st_ino}_{info.st_ctime_ns}"
+    return path, "user.echo_install_owner"
+
+
 def owner(base, path):
+    target, attribute = ownership_attribute(path)
     try:
-        return os.getxattr(path, "user.echo_install_owner").decode("ascii")
+        return os.getxattr(target, attribute).decode("ascii")
     except OSError as error:
         if error.errno != errno.ENODATA:
             raise
@@ -305,7 +316,8 @@ def owner(base, path):
 def set_owner(base, path, value):
     # Follow the filesystem object's lifetime: rename/hardlink retain ownership,
     # deletion destroys it, and inode reuse cannot inherit a deleted owner.
-    os.setxattr(path, "user.echo_install_owner", value.encode("ascii"))
+    target, attribute = ownership_attribute(path)
+    os.setxattr(target, attribute, value.encode("ascii"))
 
 
 def ownership_lifetime_case():
@@ -328,6 +340,13 @@ def ownership_lifetime_case():
                 "publication or hardlink lost ownership")
         published.write_text("retained bytes")
         require(owner(base, path) == "9999:3990", "writing retained data reset ownership")
+        fifo = base / "stdin"
+        os.mkfifo(fifo, 0o600)
+        set_owner(base, fifo, "9999:3990")
+        require(owner(base, fifo) == "9999:3990", "FIFO ownership transfer lost")
+        fifo.unlink()
+        os.mkfifo(fifo, 0o600)
+        require(owner(base, fifo) == "0:0", "recreated FIFO inherited deleted ownership")
     print("NR ownership-lifetime=PASS")
 
 
