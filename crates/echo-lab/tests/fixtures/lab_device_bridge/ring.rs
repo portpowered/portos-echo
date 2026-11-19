@@ -129,6 +129,14 @@ pub fn host(op: &str, fixture: &Value) -> io::Result<Option<Value>> {
     if op == "release" && fixture["cancel_on_release"] == true {
         fs::write("cancel.signal", b"cancel")?;
     }
+    if op == "release" && fixture["ring_wake_on_release"] == true {
+        let path = fs::read_to_string("ring-trace-path")?;
+        writeln!(
+            fs::OpenOptions::new().append(true).open(path)?,
+            "{}",
+            json!({"event":"wyoming.run_started","run_id":"late-first","elapsed_ms":9})
+        )?;
+    }
     Ok(match op {
         "wake_wait" => Some(json!({"reached":true})),
         "wake_remaining" => Some(json!({"remaining_ms":wake_remaining(fixture)?})),

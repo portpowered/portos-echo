@@ -29,10 +29,11 @@ impl Wake for Observer<'_> {
             self.state.before_wake(),
             self.options.cancel.as_deref(),
         ))?;
-        if self.armed && self.poll()? {
-            return Err("device: wake observed before replay; replay refused".into());
+        if self.armed {
+            self.state.rearm_wake(&mut self.positive)?;
+        } else {
+            self.state.arm_wake()?;
         }
-        self.state.arm_wake()?;
         self.state.trace.finish()?;
         self.positive = false;
         self.armed = true;
@@ -60,6 +61,18 @@ impl Wake for Observer<'_> {
 }
 
 impl Runtime {
+    fn rearm_wake(&mut self, positive: &mut bool) -> Result<(), String> {
+        // fresh_wake collects exactly one snapshot. Check the old attempt before
+        // advancing its offset; another observe here could discard a late wake.
+        *positive |= self.fresh_wake()?;
+        self.trace.finish()?;
+        if *positive {
+            return Err("device: wake observed before replay; replay refused".into());
+        }
+        self.wake_offset = self.trace.records.len();
+        Ok(())
+    }
+
     async fn wake_until(
         &mut self,
         deadline: tokio::time::Instant,
@@ -189,6 +202,40 @@ mod tests {
         assert!(state.fresh_wake().unwrap());
         state.arm_wake().unwrap();
         assert!(!state.fresh_wake().unwrap());
+    }
+
+    #[test]
+    fn ring_replay_rearming_retains_wake_after_the_previous_miss_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("trace");
+        std::fs::write(&path, "").unwrap();
+        let mut state = Runtime {
+            trace_path: path.clone(),
+            ..Runtime::default()
+        };
+        state.arm_wake().unwrap();
+        // The original guard snapshot saw no wake. The bridge writes one before
+        // replay rearming collects its snapshot, without a thread or timing race.
+        assert!(!state.fresh_wake().unwrap());
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"event":"wyoming.run_started","run_id":"late-first","elapsed_ms":1})
+            ),
+        )
+        .unwrap();
+        let offset = state.wake_offset;
+        let mut positive = false;
+        for _ in 0..2 {
+            assert_eq!(
+                state.rearm_wake(&mut positive),
+                Err("device: wake observed before replay; replay refused".into())
+            );
+            assert!(positive);
+            assert_eq!(state.wake_offset, offset);
+            assert!(state.fresh_wake().unwrap());
+        }
     }
 
     #[test]

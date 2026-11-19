@@ -230,6 +230,32 @@ fn ring_replay_cancellation_after_confirmed_release_refuses_second_play() {
 }
 
 #[test]
+fn ring_replay_late_wake_during_release_refuses_second_play_for_either_retry_reason() {
+    for preemptions in [0, 1] {
+        let session = session(&json!({
+            "ring_wakes":[false,true], "ring_wake_on_release":true, "preemptions":preemptions
+        }));
+        let output = crate::device::configured(&session, &json!([{"say":"utterance.wav"}]))
+            .output()
+            .unwrap();
+        failed(&output, "wake observed before replay; replay refused");
+        assert_attempt(&session, 1, (preemptions == 0).then_some(false));
+        assert_eq!(session.report()["checks"]["step_0"], false);
+        let rows = events(&session);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0]["event"],
+            if preemptions == 0 {
+                "talkback_lost_suspected"
+            } else {
+                "preempted"
+            }
+        );
+        assert_eq!(rows[1]["event"], "retry_started");
+    }
+}
+
+#[test]
 fn ring_replay_first_text_wake_is_never_replayed() {
     let session = session(&json!({}));
     let output = crate::device::configured(&session, &json!([{"say":"text:synthetic request"}]))
