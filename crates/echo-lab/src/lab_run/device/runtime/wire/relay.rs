@@ -9,25 +9,19 @@ use tokio::{
     time::Instant,
 };
 
-#[derive(Clone)]
-pub(super) struct Receipt {
-    pub direction: &'static str,
-    pub kind: &'static str,
-    pub elapsed_us: u128,
-    pub pcm_bytes: usize,
-}
+use super::ledger::{Ledger, Receipt};
 
 pub(super) struct Relay {
     listener: Option<std::net::TcpListener>,
     task: Option<JoinHandle<Result<(), String>>>,
     stop: Option<oneshot::Sender<()>>,
-    receipts: watch::Receiver<Vec<Receipt>>,
-    observed: watch::Sender<Vec<Receipt>>,
+    receipts: watch::Receiver<Ledger>,
+    observed: watch::Sender<Ledger>,
 }
 
 impl Relay {
     pub fn new(listener: std::net::TcpListener) -> Self {
-        let (observed, receipts) = watch::channel(Vec::new());
+        let (observed, receipts) = watch::channel(Ledger::default());
         Self {
             listener: Some(listener),
             task: None,
@@ -54,12 +48,12 @@ impl Relay {
     }
 
     pub fn receipts(&self) -> Vec<Receipt> {
-        self.receipts.borrow().clone()
+        self.receipts.borrow().receipts.clone()
     }
 
     #[cfg(test)]
     pub async fn wait_for_receipts(&mut self, count: usize) -> Result<(), String> {
-        while self.receipts.borrow_and_update().len() < count {
+        while self.receipts.borrow_and_update().receipts.len() < count {
             self.receipts
                 .changed()
                 .await
@@ -88,11 +82,7 @@ impl Drop for Relay {
     }
 }
 
-async fn serve(
-    listener: TcpListener,
-    upstream: SocketAddr,
-    observed: watch::Sender<Vec<Receipt>>,
-) -> Result<(), String> {
+async fn serve(listener: TcpListener, upstream: SocketAddr, observed: watch::Sender<Ledger>) -> Result<(), String> {
     let (bridge, _) = listener.accept().await.map_err(|_| "device: wire accept failed")?;
     let host = TcpStream::connect(upstream)
         .await
@@ -110,7 +100,7 @@ async fn serve(
 async fn forward(
     input: &mut (impl AsyncRead + Unpin),
     output: &mut (impl AsyncWrite + Unpin),
-    observed: &watch::Sender<Vec<Receipt>>,
+    observed: &watch::Sender<Ledger>,
     direction: &'static str,
     epoch: Instant,
 ) -> Result<(), String> {
@@ -119,28 +109,13 @@ async fn forward(
             .write_all(&bytes)
             .await
             .map_err(|_| "device: wire forward write failed")?;
-        let elapsed_us = epoch.elapsed().as_micros();
-        let kind = match event.header.r#type.as_str() {
-            "run-pipeline" => "run-pipeline",
-            "audio-start" => "audio-start",
-            "audio-chunk" => "audio-chunk",
-            "audio-stop" => "audio-stop",
-            "played" => "played",
-            "hassmic-continue" => "hassmic-continue",
-            "hassmic-flush" => "hassmic-flush",
-            _ => continue,
-        };
-        if observed.borrow().len() >= 16384 {
-            return Err("device: wire receipt limit exceeded".into());
-        }
-        observed.send_modify(|receipts| {
-            receipts.push(Receipt {
-                direction,
-                kind,
-                elapsed_us,
-                pcm_bytes: if kind == "audio-chunk" { event.payload.len() } else { 0 },
-            });
+        let mut result = Ok(());
+        // Sample under the same lock that orders both directions. Sampling
+        // before the lock could publish backwards timestamps under contention.
+        observed.send_modify(|ledger| {
+            result = ledger.observe(direction, &event, epoch.elapsed().as_micros());
         });
+        result?;
     }
     output
         .shutdown()

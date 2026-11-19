@@ -70,17 +70,22 @@ async fn t3_device_wire_transparent_bidirectional_postwrite_receipts_and_cleanup
     observer.launch().unwrap();
     let mut bridge = TcpStream::connect(address).await.unwrap();
     let (mut host, _) = upstream.accept().await.unwrap();
-    let capture = frame("audio-chunk", &[1, 2, 3, 4]);
+    let capture = [frame("run-pipeline", &[]), frame("audio-chunk", &[1, 2, 3, 4])].concat();
     host.write_all(&capture).await.unwrap();
     let mut received = vec![0; capture.len()];
     bridge.read_exact(&mut received).await.unwrap();
     assert_eq!(received, capture);
-    let playback = frame("hassmic-flush", &[]);
+    let playback = [frame("audio-start", &[]), frame("hassmic-flush", &[])].concat();
     bridge.write_all(&playback).await.unwrap();
     received.resize(playback.len(), 0);
     host.read_exact(&mut received).await.unwrap();
     assert_eq!(received, playback);
-    observer.relay.wait_for_receipts(2).await.unwrap();
+    let played = frame("played", &[]);
+    host.write_all(&played).await.unwrap();
+    received.resize(played.len(), 0);
+    bridge.read_exact(&mut received).await.unwrap();
+    assert_eq!(received, played);
+    observer.relay.wait_for_receipts(5).await.unwrap();
     let mut artifacts = Artifacts::create(options.out.clone()).unwrap();
     observer.close(&mut artifacts).await.unwrap();
     assert!(TcpStream::connect(address).await.is_err());
@@ -93,18 +98,31 @@ fn check_receipts(root: &std::path::Path, port: u16) {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 5);
     assert_eq!(
         (
-            rows[0]["direction"].as_str(),
-            rows[0]["kind"].as_str(),
-            rows[0]["pcm_bytes"].as_u64()
+            rows[1]["direction"].as_str(),
+            rows[1]["kind"].as_str(),
+            rows[1]["pcm_bytes"].as_u64()
         ),
         (Some("capture"), Some("audio-chunk"), Some(4))
     );
-    assert_eq!(rows[1]["kind"], "hassmic-flush");
-    assert!(rows[1]["elapsed_us"].as_u64().unwrap() >= rows[0]["elapsed_us"].as_u64().unwrap());
-    assert_eq!(rows[0].as_object().unwrap().len(), 5);
+    assert_eq!(rows[3]["kind"], "hassmic-flush");
+    assert_eq!(rows[4]["kind"], "played");
+    assert_eq!(rows[4]["wire_run"], 1);
+    assert_eq!(rows[4]["playback_stream"], 1);
+    for pair in rows.windows(2) {
+        assert!(pair[1]["elapsed_us"].as_u64().unwrap() >= pair[0]["elapsed_us"].as_u64().unwrap());
+        assert_eq!(
+            pair[1]["sequence"].as_u64().unwrap(),
+            pair[0]["sequence"].as_u64().unwrap() + 1
+        );
+    }
+    assert_eq!(rows[0].as_object().unwrap().len(), 8);
+    assert_eq!(rows[0]["sequence"], 1);
+    assert_eq!(rows[1]["sequence"], 2);
+    assert_eq!(rows[0]["wire_run"], 1);
+    assert_eq!(rows[0]["playback_stream"], Value::Null);
     let ledger: Vec<Value> = fs::read_to_string(root.join("ledger"))
         .unwrap()
         .lines()

@@ -1,4 +1,5 @@
 //! Run-owned forwarding for measured device journeys. Never retain room PCM.
+mod ledger;
 mod relay;
 #[cfg(test)]
 mod tests;
@@ -99,7 +100,9 @@ impl Observer {
                     &json!({
                         "event":"device.wire", "direction":receipt.direction,
                         "kind":receipt.kind,"elapsed_us":receipt.elapsed_us,
-                        "pcm_bytes":receipt.pcm_bytes
+                        "pcm_bytes":receipt.pcm_bytes,
+                        "sequence":receipt.sequence,"wire_run":receipt.wire_run,
+                        "playback_stream":receipt.playback_stream
                     }),
                 )
                 .err(),
