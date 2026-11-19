@@ -241,7 +241,8 @@ def build_environment(work):
 
 def screen_bundle(env):
     directory = ROOT / "web/screen"
-    subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=directory, env=env, check=True)
+    # Provision locked packages explicitly; the project's normal npm mode is offline.
+    subprocess.run(["npm", "ci", "--ignore-scripts", "--offline=false"], cwd=directory, env=env, check=True)
     subprocess.run(["npm", "run", "build"], cwd=directory, env=env, check=True)
     env["ECHO_SCREEN_BUNDLE"] = str(directory / "dist/screen.js")
 
