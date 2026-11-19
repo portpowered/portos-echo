@@ -45,6 +45,8 @@ pub struct Runtime {
     pub(super) window: Option<Value>,
     pub(super) began: Option<std::time::Instant>,
     pub(super) startup: Option<Startup>,
+    pub(super) remote: Option<super::onboard::Remote>,
+    pub(super) excused: usize,
 }
 
 pub(super) struct Startup {
@@ -67,7 +69,7 @@ impl Startup {
         }
     }
 
-    fn check(&self) -> Result<(), String> {
+    pub(super) fn check(&self) -> Result<(), String> {
         if tokio::time::Instant::now() >= self.deadline {
             return Err("device: observation timed out".into());
         }
@@ -102,7 +104,7 @@ impl Runtime {
         })
     }
 
-    fn phase(&mut self, phase: &'static str) -> Result<(), String> {
+    pub(super) fn phase(&mut self, phase: &'static str) -> Result<(), String> {
         if let Some(state) = &mut self.startup {
             state.check()?;
             state.next(phase);
@@ -110,12 +112,15 @@ impl Runtime {
         Ok(())
     }
 
-    fn child(&mut self) -> Result<&mut Process, String> {
+    pub(super) fn child(&mut self) -> Result<&mut Process, String> {
         self.bridge.as_mut().ok_or_else(|| "device: bridge not started".into())
     }
 
     pub fn observe(&mut self) -> Result<(), String> {
-        let bytes = super::super::sim::observers::bytes(&self.trace_path, 1024 * 1024, "trace")?;
+        let bytes = match &self.remote {
+            Some(remote) => remote.trace()?,
+            None => super::super::sim::observers::bytes(&self.trace_path, 1024 * 1024, "trace")?,
+        };
         if bytes.len() < self.offset {
             return Err("trace: bridge truncated its trace".into());
         }
@@ -205,6 +210,7 @@ impl Runtime {
             failures.extend(child.close().await.err());
             failures.extend(self.collect(artifacts).err());
         }
+        failures.extend(self.close_remote(artifacts).await);
         failures.extend(self.summary(artifacts).err());
         failures.extend(self.close_spoof(artifacts).await.err());
         if let Some(live) = self.live.take() {

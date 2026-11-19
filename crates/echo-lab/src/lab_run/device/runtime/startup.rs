@@ -8,7 +8,7 @@ use std::path::Path;
 impl Runtime {
     pub async fn start(
         &mut self,
-        bridge: &Path,
+        bridge: Option<&Path>,
         config: &str,
         root: &Path,
         real: Option<(&Path, bool)>,
@@ -18,6 +18,12 @@ impl Runtime {
         self.began = Some(std::time::Instant::now());
         self.trace_path = root.join("bridge.private.jsonl");
         self.start_spoof().await?;
+        if self.remote.is_some() {
+            self.stage_remote(config, root)?;
+            self.generation = 1;
+            self.phase("bridge_spawn")?;
+            return self.launch_remote().await;
+        }
         self.real_config = real.map(|(path, overlay)| {
             if overlay {
                 root.join("configured.private/bridge.toml")
@@ -36,7 +42,7 @@ impl Runtime {
         }
         self.generation = 1;
         self.phase("bridge_spawn")?;
-        self.launch(bridge, root).await
+        self.launch(bridge.ok_or("device: missing bridge")?, root).await
     }
 
     async fn start_fake(&mut self, config: &str, root: &Path) -> Result<(), String> {
@@ -64,6 +70,12 @@ impl Runtime {
             return Err("device: ready without fresh Wyoming connection".into());
         }
         self.phase("screen_endpoint")?;
+        let address = self.screen_address()?;
+        self.screen = Some(Screen::connect(address, true).await?);
+        self.startup.as_ref().ok_or("device: missing startup")?.check()
+    }
+
+    pub(in crate::lab_run::device) fn screen_address(&self) -> Result<std::net::SocketAddr, String> {
         let address = self
             .trace
             .records
@@ -76,9 +88,9 @@ impl Runtime {
         if address.ip() != std::net::Ipv4Addr::LOCALHOST || address.port() == 0 {
             return Err("device: screen endpoint must be loopback".into());
         }
-        self.screen = Some(Screen::connect(address, true).await?);
-        self.startup.as_ref().ok_or("device: missing startup")?.check()
+        Ok(address)
     }
+
     fn command(&self, bridge: &Path, root: &Path) -> Result<tokio::process::Command, String> {
         let mut command = tokio::process::Command::new(bridge);
         for name in [

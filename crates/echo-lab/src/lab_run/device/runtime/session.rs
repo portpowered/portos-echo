@@ -19,7 +19,7 @@ pub(in crate::lab_run::device) fn selected(options: &crate::lab_run::run_options
 
 impl Runtime {
     pub async fn complete(&mut self, index: usize) -> Result<(), String> {
-        let value = self.child()?.expect("bridge.run_completed").await?;
+        let value = self.bridge_event("bridge.run_completed").await?;
         self.completed(&value, index, None)
     }
 
@@ -87,7 +87,7 @@ impl Runtime {
                     return Ok(());
                 }
             }
-            if self.child()?.exited()? {
+            if self.bridge_exited()? {
                 return Err("device: unmet prerequisite: session reply before bridge exit".into());
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -99,7 +99,7 @@ impl Runtime {
             .run
             .clone()
             .ok_or("device: unmet prerequisite: session reply run identity")?;
-        let value = self.child()?.expect("bridge.run_completed").await?;
+        let value = self.bridge_event("bridge.run_completed").await?;
         self.completed(&value, index, Some(&expected))
     }
 }

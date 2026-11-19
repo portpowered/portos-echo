@@ -698,6 +698,95 @@ original report shape. Sim mode rejects the option. T3 evidence proves source
 routing only; the coordinator's post-merge T5 must prove acoustic wake, physical
 mute and recovery before M1 can be declared complete.
 
+### Bridge on the Echo (coordinator only)
+
+W4 runs the bridge on the Echo, beside `hassmic`, with no PC in the voice path.
+`--device-bridge <launcher.json>` replaces `--bridge`: the driver starts no host
+bridge and no wire relay. It needs `--bridge-config` and `--live real`. For each
+run and each `restart: {process: bridge}` step the driver:
+
+1. derives the scenario's effective configuration, writes it to the run's
+   private directory, pushes that file (never the operator's) to the launcher's
+   `config` path, sets mode 0600 and reads the mode back;
+2. stops any bridge the launcher started, removes the old trace and starts the
+   bridge through the launcher;
+3. waits for `bridge.ready` in the trace, read back with `adb exec-out`;
+4. waits until the hassmic log written since the start shows `client connected`
+   or `satellite: running` with no later `client disconnected`;
+5. reaches the screen stream through its own `adb forward tcp:0`, removed at close.
+
+Liveness is the process name in `adb shell ps -A -o PID,NAME`. Before each wake
+the hassmic log must still show the link. A wake that hassmic answers with
+`wake word: no Home Assistant link, nothing started` fails with
+`device: wake without a hassmic link`. The wake clip still plays through the Ring.
+
+The launcher is a JSON file kept outside the repository. Every device path comes
+from it; the driver holds none.
+
+```json
+{
+  "private_dir": "/data/local/echo-bridge/private",
+  "config": "/data/local/echo-bridge/private/bridge.toml",
+  "trace": "/data/local/echo-bridge/private/trace.jsonl",
+  "hassmic_log": "/data/local/hassmic/boot.log",
+  "binary": "/data/local/echo-bridge/echo-bridge",
+  "run_as": "runas root 3990,inet"
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `private_dir` | The bridge's one 0700 directory. `config` and `trace` must be inside it. |
+| `hassmic_log` | The log `hassmic` writes its link and wake lines to. |
+| `binary` | The armv7 `echo-bridge`. Selects the built-in start and stop commands. |
+| `run_as` | Optional prefix for every device command, giving the bridge its uid and groups. |
+| `process` | Optional process name to look for. Default `echo-bridge`. |
+| `start`, `stop` | Instead of `binary`: adb argument lists, for a site with its own launch script. |
+
+The built-in start follows the launch contract in `docs/architecture.md`: it
+runs under `setsid`, with stdin held open by a FIFO writer, and the built-in
+stop ends that writer so the bridge sees end of input. `start` and `stop`
+templates may use `{private_dir}`, `{config}` and `{trace}`. Paths accept only
+letters, digits, `_`, `.`, `-` and `/`; anything else is refused with
+`device: invalid on-device launcher`.
+
+The nominated configuration is the one the Echo runs: `echo.host = "127.0.0.1"`,
+device paths, and a screen pairing file holding the lab's synthetic pairing
+value. Stop any bridge started by another script first; two bridges fail the run.
+
+```sh
+target/debug/echo-lab run tests/scenarios/m1-hassmic-bridge.yaml \
+  --driver device --bench ring --live real --port /path/to/port --adb /path/to/adb \
+  --stt /path/to/stt --ring "$RING_ENDPOINT" \
+  --device-bridge /outside/repository/launcher.json \
+  --bridge-config /outside/repository/bridge.echo.toml \
+  --wake-clip /outside/repository/computer.wav \
+  --operator-confirm /outside/repository/mute-confirm \
+  --out /outside/repository/fresh-m1-on-device
+
+target/debug/echo-lab run tests/scenarios/m4-spoof-tool.yaml \
+  --driver device --bench ring --live real --port /path/to/port --adb /path/to/adb \
+  --stt /path/to/stt --ring "$RING_ENDPOINT" \
+  --device-bridge /outside/repository/launcher.json \
+  --bridge-config /outside/repository/bridge.echo.toml \
+  --wake-clip /outside/repository/computer-test-tool.wav \
+  --out /outside/repository/fresh-m4-on-device
+```
+
+Differences from the host-bridge mode:
+
+- M4's spoof MCP still listens on the bench host; the driver adds
+  `adb reverse tcp:<port> tcp:<port>` for the configured port and removes it at close.
+- `first_audio_after_endpoint_ms_p95` is measured from the trace's `timing`
+  records, with the host mode's percentile rule and verdict text. A trace with
+  no such record stops at `device: unmet prerequisite: first_audio_after_endpoint_ms
+  timing sample in the bridge trace from the Echo`.
+- `restart: {process: hassmic-host}` ends the link, and a bridge on the Echo ends
+  with it. The driver starts it again and does not count that exit's
+  `bridge.error` records against the run.
+- `m3-full-duplex` and the `session-*` scenarios are judged on host wire
+  receipts and are refused by name.
+
 M6 extends the M4 production world with the spoof `ui.show_emotion` tool:
 
 ```sh

@@ -169,6 +169,7 @@ impl super::Configured<'_> {
             |clip| clip.stage(&artifacts.root),
         )?;
         if !self.session || self.wire_replies == 0 {
+            self.before_wake()?;
             self.state.arm_wake()?;
         }
         if self.session {
@@ -184,7 +185,7 @@ impl super::Configured<'_> {
                 .push(serde_json::json!({"step":index,"iteration":self.iteration,"source":clip.source()}));
         }
         if !self.state.muted() {
-            self.wait_played(index)?;
+            self.wait_wake(index)?;
             if let Some(clip) = clip.filter(|_| !self.session) {
                 let wake = self.state.wakes.last_mut().ok_or("device: missing wake")?;
                 wake["source"] = clip.source();
@@ -202,6 +203,7 @@ impl super::Configured<'_> {
         artifacts: &mut super::super::run_report::Artifacts,
     ) -> Result<(), String> {
         if self.wire_replies == 0 {
+            self.before_wake()?;
             self.state.arm_wake()?;
         }
         let step = super::super::Step::SayText(text.to_owned());
@@ -211,10 +213,10 @@ impl super::Configured<'_> {
             use super::super::Driver;
             self.bench.execute(&step, index, next, artifacts)?;
         }
-        self.wait_played(index)
+        self.wait_wake(index)
     }
 
-    fn wait_played(&mut self, index: usize) -> Result<(), String> {
+    pub(super) fn wait_played(&mut self, index: usize) -> Result<(), String> {
         if let Some(wire) = self.wire.as_mut() {
             self.executor.block_on(super::runtime::controlled(
                 wire.wait_reply(1, self.wire_replies + 1),

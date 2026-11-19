@@ -14,6 +14,7 @@ fn options(root: &std::path::Path) -> Options {
         wake_clip: None,
         sim: false,
         bridge: None,
+        on_device: None,
         bridge_config: None,
         scenarios: vec![],
         port: PathBuf::new(),

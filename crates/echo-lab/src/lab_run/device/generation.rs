@@ -28,12 +28,14 @@ impl Runtime {
                         "forwarded_frames":record["forwarded_frames"]}));
                 }
             }
-            self.errors += self
+            let errors = self
                 .trace
                 .records
                 .iter()
                 .filter(|r| r["event"] == "bridge.error")
                 .count();
+            // Only a bridge on the Echo is ever excused: its exit on a killed link is the contract.
+            self.errors += errors.saturating_sub(std::mem::take(&mut self.excused));
             artifacts.checks.insert("bridge_errors_absent".into(), self.errors == 0);
             if self.errors != 0 {
                 failures.push("device: bridge errors observed".into());
