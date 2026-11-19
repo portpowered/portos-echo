@@ -160,7 +160,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
             microphone_tail: 0,
             reply_received: 32,
             reply_sent: 32,
-            reply_dropped: 0
+            ..Stats::default()
         }
     );
     // Silence never opens the mouth.

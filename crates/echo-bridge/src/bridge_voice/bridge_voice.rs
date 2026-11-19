@@ -37,15 +37,12 @@ mod voice_tests;
 
 use crate::{
     Error,
-    bridge_codex::{Event, MediaCall, MediaEvent},
+    bridge_codex::{Event, MediaEvent},
 };
 use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PlayOutcome, ReplySink};
-use echo_media::{MediaPeer, PcmFrame};
+use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    time::{Instant, timeout, timeout_at},
-};
+use tokio::time::{Instant, timeout, timeout_at};
 use voice_source::Source;
 
 /// The same run owner accepts production media and memory-only component ports.
@@ -55,6 +52,17 @@ pub trait VoicePort {
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
+    /// Queue one frame unless the bounded media sender is full; false leaves it
+    /// with the caller. Ports without a bounded sender always accept.
+    /// # Errors
+    /// The same categories as `send`.
+    fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        self.send(frame).map(|()| true)
+    }
+    /// Resolve once `try_send` can accept a frame. Never borrows the port.
+    fn uplink_ready(&self) -> impl Future<Output = ()> + use<Self> {
+        std::future::ready(())
+    }
     fn next(&mut self) -> impl Future<Output = Result<MediaEvent, Error>>;
     /// Never wait for future audio. EOF/error must be an error, not an empty queue.
     fn ready_audio(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, Error>>;
@@ -65,21 +73,6 @@ pub trait VoicePort {
     /// Reports the existing bounded interrupt admission failure.
     fn interrupt_turn(&mut self) -> Result<(), Error> {
         Ok(())
-    }
-}
-
-impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> VoicePort for MediaCall<'_, R, W, P> {
-    fn send(&self, frame: PcmFrame) -> Result<(), Error> {
-        Self::send(self, frame)
-    }
-    async fn next(&mut self) -> Result<MediaEvent, Error> {
-        Self::next(self).await
-    }
-    async fn ready_audio(&mut self) -> Result<Option<PcmFrame>, Error> {
-        Self::ready_audio(self).await
-    }
-    fn retire_audio(&mut self) {
-        Self::retire_audio(self);
     }
 }
 
@@ -120,6 +113,8 @@ pub struct Stats {
     pub microphone_chunks: u64,
     pub microphone_frames: u64,
     pub microphone_tail: usize,
+    /// Speech evicted because the media sender stalled past the backlog bound.
+    pub uplink_dropped: u64,
     pub reply_received: u64,
     pub reply_sent: u64,
     pub reply_dropped: u64,
@@ -344,7 +339,10 @@ async fn step<E: LinkEvents>(
     pending: &mut Option<Vec<u8>>,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    let uplink = port.uplink_ready();
     tokio::select! {
+        // Setup-time speech arrives as one burst; send what the peer refused.
+        () = uplink, if source.uplink_pending() => source.flush_uplink(port),
         event = events.recv() => match event {
             Ok(Some(event)) => device(&event, sink.is_none(), source, observe),
             Ok(None) => { source.failure = "events_eof"; Err(Error::Wyoming) },
@@ -409,7 +407,7 @@ fn device<R>(
         LinkEvent::Mute(muted) => {
             // Repeated snapshots must not erase partial PCM or filter history.
             if source.muted != *muted {
-                source.microphone = None;
+                source.mute_uplink();
             }
             source.muted = *muted;
             observe(Notice::Device(LinkEvent::Mute(*muted)))?;

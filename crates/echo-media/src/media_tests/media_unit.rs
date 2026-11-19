@@ -134,6 +134,42 @@ fn setup_close_waits_for_inflight_observer_and_discards_late_notifications() {
 }
 
 #[tokio::test]
+async fn queue_try_push_refuses_when_full_and_vacancy_follows_pop_or_close() {
+    let queue = Queue::new(2);
+    assert!(queue.try_push(0));
+    assert!(queue.try_push(1));
+    // A refused frame stays with the caller; nothing queued is evicted.
+    assert!(!queue.try_push(2));
+    assert_eq!(queue.drops(), 0);
+    let vacant = queue.vacant();
+    tokio::pin!(vacant);
+    assert!(
+        tokio::time::timeout(std::time::Duration::ZERO, &mut vacant)
+            .await
+            .is_err()
+    );
+    assert_eq!(queue.pop().await, Some(0));
+    vacant.await;
+    assert!(queue.try_push(2));
+    assert_eq!(queue.pop().await, Some(1));
+    assert_eq!(queue.pop().await, Some(2));
+    assert!(queue.try_push(3));
+    assert!(queue.try_push(4));
+    let vacant = queue.vacant();
+    tokio::pin!(vacant);
+    assert!(
+        tokio::time::timeout(std::time::Duration::ZERO, &mut vacant)
+            .await
+            .is_err()
+    );
+    queue.close();
+    vacant.await;
+    assert!(queue.try_push(5));
+    assert_eq!(queue.pop().await, None);
+    assert_eq!(queue.drops(), 0);
+}
+
+#[tokio::test]
 async fn queue_oldest_order_exact_count_and_close() {
     let queue = Queue::new(3);
     for marker in 0..3 {

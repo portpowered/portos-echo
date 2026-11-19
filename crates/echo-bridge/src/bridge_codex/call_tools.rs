@@ -319,11 +319,17 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     }
 }
 
-impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static> VoicePort
-    for ToolSession<'_, '_, R, W, P, H>
+impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static> VoicePort
+    for ToolSession<'p, 'a, R, W, P, H>
 {
     fn send(&self, frame: PcmFrame) -> Result<(), Error> {
         self.port.send(frame)
+    }
+    fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        self.port.try_send(frame)
+    }
+    fn uplink_ready(&self) -> impl Future<Output = ()> + use<'p, 'a, R, W, P, H> {
+        self.port.send_ready()
     }
     async fn next(&mut self) -> Result<MediaEvent, Error> {
         Box::pin(Self::next(self)).await
