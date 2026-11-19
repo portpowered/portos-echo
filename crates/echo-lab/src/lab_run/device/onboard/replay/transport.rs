@@ -3,7 +3,7 @@ use super::{ERROR, Secret, Value, https, json};
 use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const SCRIPT: &str = r#"
+const SCRIPT: &str = r"
 import http.client, json, ssl, sys, urllib.parse
 try:
     value = json.load(sys.stdin)
@@ -22,7 +22,7 @@ try:
     print(json.dumps({'status': response.status, 'body': json.loads(body)}))
 except Exception:
     sys.exit(1)
-"#;
+";
 
 pub(super) async fn request(
     python: &str,

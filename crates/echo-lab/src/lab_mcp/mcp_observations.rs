@@ -241,7 +241,7 @@ pub struct PortosObservations {
 }
 
 impl PortosObservations {
-    /// Record one externally observed invalid_grant after the rotated-token replay.
+    /// Record one externally observed `invalid_grant` after the rotated-token replay.
     /// # Errors
     /// Repeated replay or replay before a complete restart/use is invalid.
     pub fn replay_rejected(&mut self) -> Result<(), &'static str> {

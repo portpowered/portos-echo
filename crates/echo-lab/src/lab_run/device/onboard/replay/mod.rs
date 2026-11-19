@@ -34,7 +34,7 @@ impl Runtime {
     }
 
     async fn replay_inner(&mut self, config: &str, python: &str) -> Result<(), String> {
-        if self.pending_mcp.is_some() || self.replay.attempted {
+        if self.pending_mcp.is_some() || self.replay.attempted || self.replay.initial.is_none() {
             return Err(ERROR.into());
         }
         self.observe()?;
@@ -144,11 +144,11 @@ fn proof(record: &Value, endpoint: &str) -> Result<Secret<String>, String> {
     let jwk = &record["private_key_jwk"];
     let private = Secret::new(B64.decode(jwk["d"].as_str().ok_or(ERROR)?).map_err(|_| ERROR)?);
     let key = SigningKey::from_slice(private.expose()).map_err(|_| ERROR)?;
-    let public = key.verifying_key().to_encoded_point(false);
+    let public = key.verifying_key().to_sec1_point(false);
     if jwk["kty"] != "EC"
         || jwk["crv"] != "P-256"
-        || jwk["x"] != B64.encode(public.x().ok_or(ERROR)?)
-        || jwk["y"] != B64.encode(public.y().ok_or(ERROR)?)
+        || jwk["x"] != B64.encode(&public.as_bytes()[1..33])
+        || jwk["y"] != B64.encode(&public.as_bytes()[33..65])
     {
         return Err(ERROR.into());
     }

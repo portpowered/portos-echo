@@ -7,11 +7,11 @@ const CONFIG: &str = include_str!("../../../../../../../examples/bridge.echo.tom
 
 fn record() -> Value {
     let key = SigningKey::from_slice(&[7; 32]).unwrap();
-    let public = key.verifying_key().to_encoded_point(false);
+    let public = key.verifying_key().to_sec1_point(false);
     let config = echo_config::BridgeConfig::from_toml_str(CONFIG).unwrap();
     json!({"version":1,"issuer":"https://127.0.0.1:1","resource":config.mcp.server[0].url,
         "client_id":config.mcp.client_id,"private_key_jwk":{"kty":"EC","crv":"P-256",
-        "x":B64.encode(public.x().unwrap()),"y":B64.encode(public.y().unwrap()),"d":B64.encode([7;32])},
+        "x":B64.encode(&public.as_bytes()[1..33]),"y":B64.encode(&public.as_bytes()[33..65]),"d":B64.encode([7;32])},
         "grant":{"refresh_token":"synthetic-consumed","access_token":"synthetic-access"}})
 }
 
