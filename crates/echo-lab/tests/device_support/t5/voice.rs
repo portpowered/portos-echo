@@ -14,7 +14,7 @@ fn with_budgets(session: &Session, budgets: Value) -> PathBuf {
 
 fn budget_command(session: &Session, real: bool, path: &Path) -> Command {
     let original = command(session, real);
-    let args: Vec<_> = original.get_args().map(|arg| arg.to_owned()).collect();
+    let args: Vec<_> = original.get_args().map(std::borrow::ToOwned::to_owned).collect();
     let mut command = session.command();
     command.arg("run").arg(path).args(&args[2..]);
     command

@@ -101,6 +101,6 @@ mod tests {
         let mut artifacts = Artifacts::create(root.path().join("out")).unwrap();
         let error = runtime.collect(&mut artifacts).unwrap_err();
         assert!(error.contains("expected 1 occurrences, observed 2"), "{error}");
-        assert_eq!(artifacts.checks["step_2"], false);
+        assert!(!artifacts.checks["step_2"]);
     }
 }

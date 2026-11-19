@@ -32,9 +32,12 @@ pub fn admits(scenario: &Value) -> Result<bool, String> {
     Ok(true)
 }
 
-pub fn record(options: &Options, artifacts: &mut Artifacts) -> Result<(), String> {
+pub fn record(options: &Options, config: Option<&str>, artifacts: &mut Artifacts) -> Result<(), String> {
     if options.sim || options.bridge_config.is_none() {
         return Ok(());
+    }
+    if let Some(config) = config {
+        super::voice::record(options, config, artifacts)?;
     }
     for path in &options.scenarios {
         let scenario = crate::lab_validate::load(path)?;

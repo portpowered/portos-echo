@@ -12,7 +12,7 @@ pub fn settings(scenario: &Value) -> Result<Map<String, Value>, String> {
         if is_setting(name) {
             let number = value
                 .as_u64()
-                .filter(|number| *number <= u64::from(u32::MAX))
+                .filter(|number| u32::try_from(*number).is_ok())
                 .ok_or_else(|| format!("device: invalid voice budget {name}: expected integer seconds"))?;
             result.insert(name.clone(), number.into());
         }
