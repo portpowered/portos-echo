@@ -239,6 +239,34 @@ fn t3_text_failures_have_fixed_guidance_and_no_external_data() -> Result {
 }
 
 #[test]
+fn t3_adb_discovery_uses_closed_path_then_sdk_without_real_adb() -> Result {
+    for sdk in [false, true] {
+        let fixture = Fixture::new()?;
+        let bundle = fixture.bundle()?;
+        let directory = fixture.0.join(if sdk { "sdk/platform-tools" } else { "tools" });
+        fs::create_dir_all(&directory)?;
+        let executable = directory.join(if cfg!(windows) { "adb.exe" } else { "adb" });
+        fs::copy(env!("CARGO_BIN_EXE_echo-setup-test-adb"), executable)?;
+        let mut command = fixture.command();
+        command
+            .current_dir(&fixture.0)
+            .args(["install", "--json"])
+            .arg("--from-dir")
+            .arg(bundle)
+            .env("PATH", if sdk { fixture.0.join("empty") } else { directory })
+            .env("ANDROID_HOME", fixture.0.join("sdk"))
+            .env_remove("ANDROID_SDK_ROOT")
+            .env("HOME", fixture.0.join("empty"))
+            .env("LOCALAPPDATA", fixture.0.join("empty"));
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(private_output(&output)?["ok"], true);
+        assert_eq!(fixture.ledger()?[0], ["devices"]);
+    }
+    Ok(())
+}
+
+#[test]
 fn t3_offline_install_preserves_native_paths_and_exact_device_selection() -> Result {
     let fixture = Fixture::new()?;
     let bundle = fixture.bundle()?;
