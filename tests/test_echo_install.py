@@ -29,6 +29,8 @@ def fake_adb():
     base = Path(os.environ["FAKE_ROOT"])
     with (base / "ledger").open("a", encoding="utf-8") as output:
         output.write(json.dumps(args) + "\n")
+    if args[:1] == ["-s"]:
+        args = args[2:]
     print(SENTINEL, file=sys.stderr)
     fault = base / "fault"
     if fault.exists() and fault.read_text() in " ".join(args):
@@ -46,6 +48,11 @@ def fake_adb():
         return 0
     if args[0] == "shell" and len(args) == 2:
         command = args[1]
+        script = sys.stdin.read() if command.startswith("sh -s -- --device ") else None
+        if script is not None:
+            script = script.replace("/system/bin/sh", "/bin/sh")
+            script = script.replace("/data/local", str(base / "remote"))
+            script = script.replace("/proc/", str(base / "proc") + "/")
         command = command.replace("/system/bin/sh", "/bin/sh")
         command = command.replace("/data/local", str(base / "remote"))
         command = command.replace("/proc/", str(base / "proc") + "/")
@@ -58,6 +65,7 @@ def fake_adb():
                 release.read()
         result = subprocess.run(["/bin/sh", "-c", command],
                                 env=dict(os.environ, PATH=str(base / "remote-tools") + ":/usr/bin:/bin"),
+                                input=script.encode() if script is not None else None,
                                 capture_output=True, timeout=5)
         if result.returncode:
             # Fixed labels only: never expose remote commands or private stderr.
@@ -461,6 +469,10 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--native-lifecycle":
+        from test_echo_install_status import native_lifecycle_cases
+        native_lifecycle_cases(sys.argv[2])
+        sys.exit(0)
     if sys.argv[1:] == ["--device-transport"]:
         from test_echo_install_lifecycle import device_transport_cases
         device_transport_cases()

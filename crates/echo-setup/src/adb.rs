@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 pub struct Adb {
@@ -50,40 +50,72 @@ impl Adb {
     }
 
     async fn call(&self, arguments: &[OsString]) -> Result<String> {
+        let (success, output) = self.execute(arguments, None).await?;
+        if !success {
+            return Err(Failure("adb_failed"));
+        }
+        Ok(output)
+    }
+
+    // Streaming avoids host command-line limits and never places a host path on Android.
+    pub async fn script(&self, operation: &str) -> Result<(bool, String)> {
+        self.execute(
+            &[
+                OsString::from("shell"),
+                OsString::from(format!("sh -s -- --device {operation}")),
+            ],
+            Some(include_bytes!("../../../scripts/echo-install.sh")),
+        )
+        .await
+    }
+
+    async fn execute(&self, arguments: &[OsString], input: Option<&[u8]>) -> Result<(bool, String)> {
         let mut command = Command::new(&self.executable);
         if let Some(serial) = &self.serial {
             command.arg("-s").arg(serial);
         }
         let mut child = command
             .args(arguments)
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()
             .map_err(|_| Failure("adb_failed"))?;
         let stdout = child.stdout.take().ok_or(Failure("adb_failed"))?;
+        let stdin = child.stdin.take();
         let operation = async {
-            let mut bytes = Vec::new();
-            stdout
-                .take(1024 * 1024 + 1)
-                .read_to_end(&mut bytes)
-                .await
-                .map_err(|_| Failure("adb_failed"))?;
-            if bytes.len() > 1024 * 1024 {
-                return Err(Failure("adb_output_limit"));
-            }
-            if !child.wait().await.map_err(|_| Failure("adb_failed"))?.success() {
-                return Err(Failure("adb_failed"));
-            }
-            String::from_utf8(bytes)
-                .map(|text| text.replace("\r\n", "\n"))
-                .map_err(|_| Failure("adb_failed"))
+            let ((), output) = tokio::try_join!(write_input(stdin, input), read_output(stdout))?;
+            let success = child.wait().await.map_err(|_| Failure("adb_failed"))?.success();
+            Ok((success, output))
         };
         tokio::time::timeout(Duration::from_secs(600), operation)
             .await
             .map_err(|_| Failure("adb_timeout"))?
     }
+}
+
+async fn write_input(stdin: Option<tokio::process::ChildStdin>, input: Option<&[u8]>) -> Result<()> {
+    if let (Some(mut stdin), Some(input)) = (stdin, input) {
+        stdin.write_all(input).await.map_err(|_| Failure("adb_failed"))?;
+        stdin.shutdown().await.map_err(|_| Failure("adb_failed"))?;
+    }
+    Ok(())
+}
+
+async fn read_output(stdout: tokio::process::ChildStdout) -> Result<String> {
+    let mut bytes = Vec::new();
+    stdout
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|_| Failure("adb_failed"))?;
+    if bytes.len() > 1024 * 1024 {
+        return Err(Failure("adb_output_limit"));
+    }
+    String::from_utf8(bytes)
+        .map(|text| text.replace("\r\n", "\n"))
+        .map_err(|_| Failure("adb_failed"))
 }
 
 fn candidates() -> Vec<PathBuf> {

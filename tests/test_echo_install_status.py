@@ -2,6 +2,8 @@
 import shutil
 import os
 import selectors
+import json
+import subprocess
 
 from test_echo_install import Sandbox, prepare_lifecycle, require
 
@@ -197,3 +199,46 @@ def status_cases():
     status_privacy()
     uninstall_failures()
     full_journey()
+
+
+def native_lifecycle_cases(binary):
+    """Consume Cargo's prebuilt installer, execute its real streamed device shell."""
+    for purge in (False, True):
+        with Sandbox() as box:
+            box.install()
+            values = owner_state(box)
+            hassmic = (box.root / "remote/hassmic/runas").read_bytes()
+            before = snapshot(box)
+
+            def native(command, *extra, code=0):
+                result = subprocess.run(
+                    [binary, command, "--json", "--adb", str(box.tools / "adb"), *extra],
+                    env=box.env, capture_output=True, text=True, timeout=10)
+                require(result.returncode == code, "native lifecycle exit differs: " + command)
+                for marker in ("synthetic-private-content-do-not-print", str(box.root)):
+                    require(marker not in result.stdout + result.stderr, "native output leaked private data")
+                return json.loads(result.stdout)
+
+            result = native("status")
+            require(result["process"] == "stopped" and result["process_user"] == "unavailable",
+                    "native stopped observation differs")
+            require(result["versions"] == {"current": None, "previous": None}, "invented versions")
+            require(snapshot(box) == before, "native status mutated state")
+            (box.root / "running").touch()
+            result = native("status")
+            require(result["process_user"] == "nobody" and result["ok"], "native identity differs")
+            (box.root / "process-user").write_text("root")
+            result = native("status", code=1)
+            require(result["last_error"] == "unsafe_process_user", "native root refusal differs")
+            (box.root / "running").unlink()
+            (box.root / "process-user").unlink()
+            result = native("uninstall", *(["--purge"] if purge else []))
+            require(result["ok"] and result["purged"] == purge, "native uninstall result differs")
+            require(not (box.device / "bin").exists(), "native uninstall retained binaries")
+            if purge:
+                require(not any((box.device / name).exists() for name in ("private", "home")),
+                        "native purge retained state")
+            else:
+                retained(box, values)
+            require((box.root / "remote/hassmic/runas").read_bytes() == hassmic, "native changed hassmic")
+    print("echo-setup native shell: status=PASS identity=PASS uninstall=PASS retention=PASS privacy=PASS")

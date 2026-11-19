@@ -3,6 +3,7 @@ mod adb;
 pub mod cli;
 pub mod install;
 pub mod integrity;
+pub mod lifecycle;
 mod release;
 mod version;
 
