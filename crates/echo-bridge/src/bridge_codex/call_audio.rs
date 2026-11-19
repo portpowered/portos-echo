@@ -1,5 +1,8 @@
 //! PCM boundaries for the run owner; media owns Opus and the 48 kHz track.
-use crate::{Error, bridge_runtime::bridge_pacing::ClockPacer};
+use crate::{
+    Error,
+    bridge_runtime::bridge_pacing::{ClockPacer, Playout},
+};
 use echo_audio::{FrameQueue, PcmResampler};
 use echo_link::PcmFormat;
 use echo_media::PcmFrame;
@@ -125,7 +128,7 @@ pub struct ReplyAudio {
     converter: Converter,
     queue: FrameQueue<Vec<u8>>,
     partial: Vec<u8>,
-    pacer: ClockPacer,
+    pacer: ClockPacer<Vec<u8>>,
     finished: bool,
 }
 
@@ -177,6 +180,35 @@ impl ReplyAudio {
     #[must_use]
     pub fn has_frames(&self) -> bool {
         !self.queue.is_empty()
+    }
+
+    /// The unfinished reply has nothing queued and its last frame sent was
+    /// mid-speech: if nothing more comes, the device is owed a fade-out.
+    #[must_use]
+    pub fn stalled(&self) -> bool {
+        self.queue.is_empty() && self.pacer.conceals(self.finished)
+    }
+
+    /// The next queued frame as `next_frame` paces it or, when stalled, one
+    /// frame that fades the reply to silence just before the device runs dry.
+    /// Cancellation while waiting changes nothing.
+    pub async fn next_or_fade(&mut self) -> Option<Vec<u8>> {
+        if self.queue.is_empty() {
+            self.pacer.fade_out(self.finished).await
+        } else {
+            self.next_frame().await
+        }
+    }
+
+    /// Hold this much reply audio ahead of playout from the next dry start;
+    /// returns the cushion in force.
+    pub(crate) fn retarget(&mut self, wanted: std::time::Duration) -> std::time::Duration {
+        self.pacer.retarget(wanted)
+    }
+
+    /// What the pacer did since this was last asked.
+    pub(crate) fn take_playout(&mut self) -> Playout {
+        self.pacer.take_playout()
     }
 
     /// The reply was flushed; later peer media is not part of it.

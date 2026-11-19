@@ -655,9 +655,13 @@ the reply's “PCM24” here means 24 kHz, still signed 16-bit samples.
 
 The reply pacer uses a monotonic audio clock and `audio.reply_lead_ms` to limit how far sent PCM leads
 playout. Draining local queues or finishing a transcript does not prove that the speaker finished: the
-bridge still awaits `played`. A dry device first gets 100 ms of audio at once (at most the lead), so
-arrival jitter from the call does not underrun the player; each reply's `reply.quality` trace record carries
-the arrival gaps, modelled device depth, underruns, discards and RTP loss.
+bridge still awaits `played`. A dry device first gets a cushion of audio at once (the lead's worth on the
+device, the rest held in the bridge), so arrival jitter from the call does not underrun the player. The
+cushion is 100 ms on a smooth call and follows the call's measured arrival lateness up to 320 ms. A reply
+that stalls in mid-speech fades out before the device runs dry and fades in when it resumes; delay above the
+target is given back by leaving silent frames out of pauses. Each reply's `reply.quality` trace record
+carries the arrival gaps, modelled device depth, underruns, discards, RTP loss, the target, restarts, fades
+and frames left out.
 
 #### Why — Audio formats and resampling
 
@@ -669,7 +673,8 @@ duration errors; pacing bounds queued speaker audio so a future interruption nee
 [call_audio.rs](../crates/echo-bridge/src/bridge_codex/call_audio.rs) uses
 [echo-audio](../crates/echo-audio/src/audio_pcm.rs) for PCM conversion;
 [media_audio.rs](../crates/echo-media/src/media_audio.rs) owns Rubato/Opus and
-[ClockPacer](../crates/echo-bridge/src/bridge_runtime/bridge_pacing.rs) schedules reply chunks.
+[ClockPacer](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_playout.rs) schedules reply chunks
+towards the target of the [jitter estimate](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_jitter.rs).
 
 #### Limits and plans — Audio formats and resampling
 
