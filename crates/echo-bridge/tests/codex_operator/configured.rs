@@ -2,6 +2,8 @@
 use super::*;
 #[path = "configured/restart.rs"]
 mod restart;
+#[path = "configured/turn.rs"]
+mod turn;
 use echo_bridge::{Error, bridge_voice::Configured};
 use echo_link::fake::{Command, FakeConnector, Observer};
 
