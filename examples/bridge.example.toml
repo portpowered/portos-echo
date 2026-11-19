@@ -35,6 +35,9 @@ session_idle_seconds = 120
 # Unknown syntax-valid names are accepted, including single-component UTC.
 # It adds the zone name and an answer-in-that-zone instruction to the UTC snapshot.
 # Unset time_zone keeps UTC wording; the bridge does not compute local time or DST.
+# launch = "standalone" starts codex.binary without the `app-server` subcommand (the armv7 app-server
+# build); it requires binary. Unset is "subcommand". ca_file = "/absolute/ca.pem" reaches the app
+# server as SSL_CERT_FILE; unset passes nothing. See examples/bridge.echo.toml for both in use.
 # Remove these new keys before rolling back to a binary that predates them.
 
 [agent]

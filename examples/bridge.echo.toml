@@ -1,0 +1,46 @@
+# echo-bridge running ON the Echo, beside hassmic (W4). No PC is in the path.
+# Every path is a placeholder. All credential values are paths; loading this file opens none of them.
+# The launch contract the fork's service script must meet is in docs/architecture.md
+# ("Launch contract on the Echo"). /data/local/echo-bridge/private is a mode-0700 directory
+# owned by the bridge's user: the script creates it; the bridge creates what is inside it.
+wake_earcon = true
+
+# hassmic listens for Wyoming on loopback on the same device.
+[echo]
+host = "127.0.0.1"
+wyoming_port = 16700
+
+[live]
+mode = "chatgpt"
+credential_file = "/data/local/echo-bridge/private/live.json"
+voice = "default"
+session_idle_seconds = 120
+
+[codex]
+# The bridge creates this home with mode 0700 and refuses one whose mode differs.
+home = "/data/local/echo-bridge/private/codex-home"
+# `make build-codex-armv7` produces a standalone app server, not the `codex` multi-tool:
+# it takes no `app-server` subcommand. Omitted, launch is "subcommand".
+binary = "/data/local/echo-bridge/codex-app-server"
+launch = "standalone"
+# The child starts with a cleared environment and the Echo has no system bundle it can find.
+# This PEM file reaches the child as SSL_CERT_FILE. Omitted, no certificate variable is set.
+ca_file = "/data/local/echo-bridge/cacert.pem"
+
+[agent]
+max_tool_calls = 8
+task_deadline_seconds = 60
+daily_request_cap = 500
+
+# No MCP server: conversation only, until the Port OS grant lives on the device.
+[mcp]
+server = []
+
+# The screen app on the same device loads the page from loopback; nothing on the LAN reaches it.
+[screen]
+listen = "127.0.0.1:16900"
+pairing_token_file = "/data/local/echo-bridge/private/screen-pairing.txt"
+
+# Created by the bridge with mode 0700, and the files in it with mode 0600, whatever the umask.
+[audit]
+log_dir = "/data/local/echo-bridge/private/audit"

@@ -373,13 +373,17 @@ Coordinator device runs use Linux pe-ci with the existing T5 safeguards.
 - **Where it moves: the Echo (W4).** The owner decided (2026-11-16) that credentials may live on the device, so the
   bridge's target host is the Echo itself: `armv7-linux-androideabi`, built with the Android NDK like the fork's
   hassmic. There it runs as its own user, started by the fork's service scripts, and reaches hassmic on loopback.
+  What those scripts must do is the launch contract in `docs/architecture.md`; `examples/bridge.echo.toml` is the
+  configuration that goes with it.
   Nothing changes on `/system`, partitions or firmware. The PC stays the development and bench host. A Raspberry Pi
   stays possible for the Muse bridge.
 - **It talks to Port OS directly.** The bridge is the Port OS OAuth client and the only MCP client. Section 9 says
   what it can use today and what waits for portos-backend.
 - **The app server beside it.** On the PC the bridge starts the pinned `codex app-server` as a child process
   (section 3.3). On the Echo (W4) it starts our armv7 build of the same commit the same way, with `CODEX_HOME` in the
-  bridge user's mode-0700 directory, so the credential rule above holds for `auth.json` too.
+  bridge user's mode-0700 directory, so the credential rule above holds for `auth.json` too. That build is a
+  standalone app server, so the configuration names it with `codex.launch = "standalone"` and gives it a
+  certificate bundle with `codex.ca_file`.
 - **Crates** (declared in `lanes.toml`, section 10). W2d adds `echo-codex` (the app server's client and supervisor)
   and `echo-media` (the WebRTC/Opus media peer) and retires `echo-agent-loop` and `echo-live`'s call path. Today:
   `echo-contracts`, `echo-config`, `echo-wyoming`, `echo-audio`,

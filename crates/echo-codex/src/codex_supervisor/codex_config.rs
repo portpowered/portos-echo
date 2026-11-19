@@ -6,10 +6,20 @@ use std::{
     time::Duration,
 };
 
+/// How the executable is asked to serve stdio. The pinned multi-tool takes the
+/// `app-server` subcommand; a standalone app-server build takes only its flags.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Launch {
+    #[default]
+    Subcommand,
+    Standalone,
+}
+
 /// Explicit executable and dedicated home. Overrides are TOML values passed as
 /// individual argv entries; no shell evaluation or inherited provider environment.
 pub struct SupervisorConfig {
     pub binary: PathBuf,
+    pub launch: Launch,
     pub codex_home: PathBuf,
     pub config_overrides: Vec<(String, String)>,
     pub request_timeout: Duration,
@@ -26,6 +36,7 @@ impl SupervisorConfig {
         let limits = Limits::default();
         Self {
             binary,
+            launch: Launch::default(),
             codex_home,
             config_overrides: Vec::new(),
             request_timeout: limits.request_timeout,
@@ -77,7 +88,7 @@ impl SupervisorConfig {
             .map_err(|_| ProcessError::PrivateHome)?;
         lease.try_lock().map_err(|_| ProcessError::PrivateHome)?;
         if fresh {
-            fs::create_dir(self.cwd()).map_err(|_| ProcessError::PrivateHome)?;
+            create_home(&self.cwd())?;
         }
         if !plain_metadata(&self.cwd())?.is_dir() {
             return Err(ProcessError::PrivateHome);

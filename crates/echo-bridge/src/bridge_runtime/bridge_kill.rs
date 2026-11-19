@@ -21,8 +21,9 @@ pub(crate) fn inspect(path: &Path) -> Result<bool, Error> {
 pub(crate) fn mutate(path: &Path, enabled: bool) -> Result<(), Error> {
     let present = inspect(path)?;
     if enabled && !present {
-        std::fs::create_dir_all(path.parent().ok_or(Error::Control)?).map_err(|_| Error::Control)?;
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        crate::bridge_private::directory(path.parent().ok_or(Error::Control)?).map_err(|_| Error::Control)?;
+        let mut options = std::fs::OpenOptions::new();
+        match crate::bridge_private::file(options.write(true).create_new(true)).open(path) {
             Ok(file) => file.sync_all().map_err(|_| Error::Control)?,
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
                 inspect(path)?;

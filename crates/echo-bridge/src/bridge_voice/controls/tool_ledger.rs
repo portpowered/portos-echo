@@ -15,15 +15,13 @@ pub(super) struct Ledger {
 
 impl Ledger {
     pub fn open(directory: &Path) -> Result<Self, ToolError> {
-        std::fs::create_dir_all(directory).map_err(|_| ToolError::Transport)?;
+        crate::bridge_private::directory(directory).map_err(|_| ToolError::Transport)?;
         let path = directory.join("codex-tool-ledger.jsonl");
         if path.symlink_metadata().is_ok_and(|meta| !meta.file_type().is_file()) {
             return Err(ToolError::Transport);
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
+        let mut options = OpenOptions::new();
+        let file = crate::bridge_private::file(options.create(true).read(true).append(true))
             .open(path)
             .map_err(|_| ToolError::Transport)?;
         file.try_lock().map_err(|_| ToolError::Transport)?;

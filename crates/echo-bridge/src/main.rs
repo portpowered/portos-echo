@@ -77,6 +77,7 @@ fn outcome(result: Result<(), Error>) -> ExitCode {
                 | Error::CodexHomeRequired
                 | Error::CodexHome
                 | Error::CodexBinary
+                | Error::CodexCaFile
                 | Error::CodexImport => ExitCode::from(2),
                 _ => ExitCode::FAILURE,
             }

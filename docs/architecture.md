@@ -169,6 +169,32 @@ One Linux PC process today; pe-ci is the supported local Linux test host. W4 tar
 Echo under its own user, with private credential storage and a child app server beside it. This move is
 planned; it is not established by the current PC journeys.
 
+#### Launch contract on the Echo — echo-bridge
+
+On the Echo the fork's service script starts the bridge. That script lives in the hassmic fork, not here; this is
+what it must do, each point measured on the device on 2026-11-18 ([baselines](program/baselines.md)).
+[examples/bridge.echo.toml](../examples/bridge.echo.toml) is the matching configuration.
+
+1. **Run with gid 3990 and `inet`**, for example `runas root 3990,inet`. hassmic's firewall chain lets only its
+   egress group, gid 3990, leave the device. A bridge started as plain root reaches Wyoming on loopback and then
+   gets a network deadline on its first call. No firewall rule changes.
+2. **Start the bridge in its own session** (`setsid`). A bridge left in an adb session's process group received
+   SIGTERM about 17 s after launch.
+3. **Hold the bridge's stdin open, and restart the bridge when it exits.** End of input on stdin is the bridge's
+   clean-stop request ([bridge_runtime.rs](../crates/echo-bridge/src/bridge_runtime.rs)), so `</dev/null` stops it
+   at once. Give it the read end of a FIFO whose write end the script keeps open; closing that write end is the
+   clean stop. Any other exit is a failure the script restarts from: the bridge never restarts itself.
+4. **Give it one private directory**, mode 0700, owned by the bridge's user. `codex.home`, `audit.log_dir`, the
+   trace, `live.credential_file` and `screen.pairing_token_file` sit inside it; `codex.binary` and `codex.ca_file`
+   may sit outside. The bridge creates its audit directory, kill marker, tool ledger and trace with modes 0700 and
+   0600 whatever the umask (`adb shell` runs with umask 000), and creates the Codex home with mode 0700 and refuses
+   one whose mode differs. It does not change the mode of anything that already exists, and it does not create the
+   files the script redirects its output to, so the script still sets `umask 077`.
+5. **Pass `--config` and `--trace`**, both inside the private directory. Health stays on `127.0.0.1:16901`.
+6. **Name the standalone app server in the configuration**: `codex.launch = "standalone"` with `codex.binary`,
+   because the armv7 build takes no `app-server` subcommand, and `codex.ca_file`, because the child starts with a
+   cleared environment and finds no certificate bundle on the device. No wrapper script is needed for either.
+
 #### Why we need it — echo-bridge
 
 It keeps device playback, local policy and MCP effects under one owner. The app server already understands
@@ -184,7 +210,8 @@ delegated agent turns. It is distinct from both our `echo-codex` client library 
 #### How it works — Codex app server
 
 [echo-codex's supervisor](../crates/echo-codex/src/codex_supervisor/mod.rs) starts
-`codex app-server --listen stdio://` with an exclusively leased external `CODEX_HOME` and empty working
+`codex app-server --listen stdio://` (or, with `codex.launch = "standalone"`, the named binary with
+`--listen stdio://` alone) with an exclusively leased external `CODEX_HOME` and empty working
 directory. It exchanges newline-delimited JSON-RPC without a `jsonrpc` field: `initialize` enables the
 experimental API, then `initialized` completes the handshake. Account commands use `account/read` and
 `account/login/start`. A voice call starts an ephemeral `thread/start` with the bridge's `dynamicTools`,
