@@ -42,6 +42,7 @@ impl<'a> Configured<'a> {
         let session = runtime::session::selected(options)?;
         let window = runtime::observation(options.live_real(), &config)?;
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
+        state.configure_portos_options(options, &config)?;
         if config::setup::requested(options)? {
             let parsed =
                 echo_config::BridgeConfig::from_toml_str(&config).map_err(|_| "device: invalid setup configuration")?;
@@ -90,9 +91,33 @@ impl<'a> Configured<'a> {
                 ),
                 self.options.cancel.as_deref(),
             ));
+            // M5 must never publish partial link counts after failed startup.
+            // Other journeys still collect their trace after a screen fault.
+            self.state.invalid |= result.is_err() && self.state.portos.is_some();
             self.state.startup_result(result)?;
         }
         Ok(())
+    }
+
+    fn press_mute(&mut self, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+        self.state.arm_mute()?;
+        let elapsed = confirmation::wait(
+            self.options.operator_confirm.as_deref(),
+            self.options.cancel.as_deref(),
+            self.errors,
+        )?;
+        self.presses += 1;
+        self.state.confirmed(index, self.presses, elapsed, artifacts)?;
+        let expected = if self.presses % 2 == 1 {
+            serde_json::json!({"state":"muted"})
+        } else {
+            serde_json::json!({"state":"ready","message":"Echo Live ready"})
+        };
+        self.executor.block_on(runtime::observed(
+            self.state.ui(&expected, index, artifacts),
+            self.options.cancel.as_deref(),
+            self.window,
+        ))
     }
 }
 
@@ -106,27 +131,9 @@ impl Driver for Configured<'_> {
     ) -> Result<(), String> {
         self.start(artifacts)?;
         match step {
+            Step::Mcp(action) => self.mcp(*action, index, artifacts),
             Step::Restart { process, count, say } => self.restart(process, *count, say, index, artifacts),
-            Step::Press(key) if key == "mute" => {
-                self.state.arm_mute()?;
-                let elapsed = confirmation::wait(
-                    self.options.operator_confirm.as_deref(),
-                    self.options.cancel.as_deref(),
-                    self.errors,
-                )?;
-                self.presses += 1;
-                self.state.confirmed(index, self.presses, elapsed, artifacts)?;
-                let expected = if self.presses % 2 == 1 {
-                    serde_json::json!({"state":"muted"})
-                } else {
-                    serde_json::json!({"state":"ready","message":"Echo Live ready"})
-                };
-                self.executor.block_on(runtime::observed(
-                    self.state.ui(&expected, index, artifacts),
-                    self.options.cancel.as_deref(),
-                    self.window,
-                ))
-            }
+            Step::Press(key) if key == "mute" => self.press_mute(index, artifacts),
             Step::Ui(value) => self.executor.block_on(runtime::observed(
                 self.state.ui(value, index, artifacts),
                 self.options.cancel.as_deref(),
@@ -161,7 +168,12 @@ impl Driver for Configured<'_> {
             None => Ok(()),
         };
         self.wire.take();
-        super::combine(super::combine(bench, owned), wire)
+        let result = super::combine(super::combine(bench, owned), wire);
+        if result.is_err() {
+            self.state.invalid = true;
+            artifacts.link_counts = None;
+        }
+        result
     }
 }
 

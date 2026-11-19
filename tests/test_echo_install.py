@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import errno
+import stat
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +59,13 @@ def fake_adb():
         result = subprocess.run(["/bin/sh", "-c", command],
                                 env=dict(os.environ, PATH=str(base / "remote-tools") + ":/usr/bin:/bin"),
                                 capture_output=True, timeout=5)
+        if result.returncode:
+            # Fixed labels only: never expose remote commands or private stderr.
+            stage = next((label for text, label in (
+                ("find ", "migration"), ("mv -f", "publication"),
+                ("mkdir", "directory"), ("ps -A", "process"),
+                ("chmod", "mode")) if text in command), "other")
+            (base / "failed-stage").write_text(stage)
         if "setsid " in command and result.returncode == 0:
             # Readiness comes from the real child, not a scheduling sleep.
             fd = os.open(base / "ready", os.O_RDWR | os.O_NONBLOCK)
@@ -140,7 +149,9 @@ class Sandbox:
     def run(self, args, code=0):
         result = subprocess.run(["/bin/sh", str(self.script), *args], cwd=self.root,
                                 env=self.env, capture_output=True, text=True, timeout=15)
-        require(result.returncode == code, "CLI exit differs: " + result.stderr)
+        stage = self.root / "failed-stage"
+        require(result.returncode == code, "CLI exit differs (stage="
+                + (stage.read_text() if stage.exists() else "unavailable") + "): " + result.stderr)
         require(SENTINEL not in result.stdout + result.stderr, "private bytes leaked")
         require(not (self.root / "escaped").exists(), "local input executed")
         if code:
@@ -258,17 +269,15 @@ def retention_cases():
 
 
 def failure_cases():
-    for fault in ("push", "chmod '600'", "mv -f", "ps -A"):
+    from test_echo_install_lifecycle import recovery_case
+    for label, fault in (("push", "push"), ("chmod", "chmod '600'"),
+                         ("rename", "mv -f"), ("observation", "ps -A")):
         with Sandbox() as box:
-            box.install()
-            original = (box.device / "private/bridge.toml").read_bytes()
-            box.files["config"].write_text("new config")
-            (box.root / "fault").write_text(fault)
-            box.install(force=True, code=1)
-            require((box.device / "private/bridge.toml").read_bytes() == original, "failed stage lost config")
-            require(not (box.device / "private/.install-stage").exists(), "stage leaked")
-            require(not (box.root / "remote/echo-bridge.lock").exists(), "failed operation leaked lock")
-            box.install(force=True)
+            try:
+                recovery_case(box, fault)
+            except AssertionError as error:
+                raise AssertionError("F08 recovery case=" + label + ": " + str(error)) from error
+        print("F08 recovery=" + label + ": PASS", flush=True)
     with Sandbox() as box:
         outside = box.root / "outside"
         outside.mkdir()
@@ -284,19 +293,61 @@ def failure_cases():
 
 
 
-def owners(base):
-    path = base / "owners.json"
-    return json.loads(path.read_text()) if path.exists() else {}
+def ownership_attribute(path):
+    info = path.stat()
+    if stat.S_ISFIFO(info.st_mode):
+        # Linux forbids user xattrs on FIFOs. Keep their generation-specific
+        # metadata on the parent directory, which supports user xattrs.
+        return path.parent, f"user.echo_fifo_{info.st_ino}_{info.st_ctime_ns}"
+    return path, "user.echo_install_owner"
 
 
 def owner(base, path):
-    return owners(base).get(str(Path(path).stat().st_ino), "0:0")
+    target, attribute = ownership_attribute(path)
+    try:
+        return os.getxattr(target, attribute).decode("ascii")
+    except OSError as error:
+        if error.errno != errno.ENODATA:
+            raise
+        return "0:0"
 
 
 def set_owner(base, path, value):
-    values = owners(base)
-    values[str(Path(path).stat().st_ino)] = value
-    (base / "owners.json").write_text(json.dumps(values))
+    # Follow the filesystem object's lifetime: rename/hardlink retain ownership,
+    # deletion destroys it, and inode reuse cannot inherit a deleted owner.
+    target, attribute = ownership_attribute(path)
+    os.setxattr(target, attribute, value.encode("ascii"))
+
+
+def ownership_lifetime_case():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="echo-owner-") as directory:
+        base = Path(directory)
+        path = base / "stage"
+        path.touch()
+        set_owner(base, path, "9999:9999")
+        deleted = path.stat()
+        path.unlink()
+        path.touch()
+        # Deterministically model inode recycling; never wait for an allocator.
+        with patch.object(Path, "stat", return_value=deleted):
+            require(owner(base, path) == "0:0", "recycled inode inherited deleted ownership")
+        set_owner(base, path, "9999:3990")
+        published = base / "published"
+        path.rename(published)
+        os.link(published, path)
+        require(owner(base, published) == owner(base, path) == "9999:3990",
+                "publication or hardlink lost ownership")
+        published.write_text("retained bytes")
+        require(owner(base, path) == "9999:3990", "writing retained data reset ownership")
+        fifo = base / "stdin"
+        os.mkfifo(fifo, 0o600)
+        set_owner(base, fifo, "9999:3990")
+        require(owner(base, fifo) == "9999:3990", "FIFO ownership transfer lost")
+        fifo.unlink()
+        os.mkfifo(fifo, 0o600)
+        require(owner(base, fifo) == "0:0", "recreated FIFO inherited deleted ownership")
+    print("NR ownership-lifetime=PASS")
 
 
 def metadata_tool(base, name, args):
@@ -397,6 +448,7 @@ if mode != 'exit':
 
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
+    ownership_lifetime_case()
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))

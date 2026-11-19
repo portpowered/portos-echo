@@ -10,6 +10,8 @@
 //! fixed frame capacity. Final eviction totals remain in `reply.cut`.
 //! Release events acknowledge acquired listener owners after shutdown is joined.
 //! Voice runtime `screen.released` also counts clients dropped at the drain bound.
+//! `reply.quality` counts in `cuts` the barge-ins that cut the reply, with the
+//! `trigger` of the last: `user_transcript`, `speech_started` or null.
 //! `timing` follows a settled reply's `reply.quality` when that reply has a
 //! sample: `name` is `first_audio_after_endpoint_ms`, `duration_ms` is whole
 //! milliseconds on the bridge clock from the endpoint to the first reply frame
@@ -25,7 +27,7 @@ use std::{
 };
 use tokio::time::Instant;
 mod tool_receipts;
-pub(crate) use tool_receipts::ToolTrace;
+pub(crate) use tool_receipts::{PortosReceipts, ToolTrace};
 
 #[derive(Clone)]
 pub struct Trace {

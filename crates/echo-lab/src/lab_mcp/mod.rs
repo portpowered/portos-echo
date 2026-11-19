@@ -4,7 +4,7 @@ mod mcp_observations;
 mod mcp_proof;
 mod mcp_routes;
 mod mcp_tokens;
-pub use mcp_observations::{LinkCounts, Observations};
+pub use mcp_observations::{LinkCounts, Observations, PortosObservations};
 
 use echo_contracts::secret::Secret;
 use echo_spoof_mcp::BearerValidator;

@@ -33,6 +33,9 @@ pub(super) struct World {
     pub fail: String,
     pub forward: u16,
     pub pushed: Vec<(String, String, String)>,
+    pub grant: Vec<u8>,
+    pub replacement_grant: Option<Vec<u8>>,
+    pub pem: Vec<u8>,
 }
 
 impl World {
@@ -49,6 +52,9 @@ impl World {
             self.alive = true;
             self.pid += 1;
             self.trace = self.boot.clone();
+            if let Some(grant) = self.replacement_grant.take() {
+                self.grant = grant;
+            }
             if self.links {
                 self.log.push_str("hassmic: client connected\n");
             }
@@ -58,6 +64,10 @@ impl World {
             self.trace.clear();
         } else if command.contains("wc -c") {
             return format!("{} log\n", self.log.len());
+        } else if command.contains("stat -c %a") && command.ends_with("/portos") {
+            return "700\n".into();
+        } else if command.contains("stat -c %a") {
+            return format!("{}\n", self.mode);
         } else if command.contains("stat -c") {
             return format!("{}:{}\n", self.owner, self.mode);
         }
@@ -76,6 +86,12 @@ impl Shell for Fake {
         let mut world = self.0.borrow_mut();
         world.calls.push(args.to_vec());
         let command = args.last().cloned().unwrap_or_default();
+        if args[0] == "exec-out" && command.contains("head -c 65537") {
+            return Ok(world.grant.clone());
+        }
+        if args[0] == "exec-out" && command.contains("head -c 1048577") {
+            return Ok(world.pem.clone());
+        }
         if !world.fail.is_empty() && command.contains(&world.fail) {
             return Err("synthetic staging failure".into());
         }
@@ -83,6 +99,7 @@ impl Shell for Fake {
             return Err("synthetic nobody access denied".into());
         }
         let output = match args[0].as_str() {
+            "exec-out" if command.contains("head -c 16385") => "synthetic-local-screen\n".into(),
             "push" => {
                 let contents = std::fs::read_to_string(&args[1]).map_err(|_| "push: unreadable")?;
                 world.pushed.push((args[1].clone(), args[2].clone(), contents));

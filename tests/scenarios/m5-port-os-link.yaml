@@ -2,13 +2,13 @@ id: m5-port-os-link
 milestone: M5
 tiers: [T3, T4, T5]
 setup:
-  mcp: spoof
+  mcp: portos-pilot
   backend: client
 steps:
   - mcp: {action: link}
   - expect_screen:
       state: link_code
-      user_code: TEST-CODE
+      user_code: {mcp_field: user_code}
       verification_uri: {mcp_field: verification_uri}
       expires_at_unix: {mcp_field: expires_at_unix}
   - mcp: {action: approve}

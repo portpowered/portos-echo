@@ -2,9 +2,14 @@ use echo_audio::{FrameQueue, Pacer};
 use std::time::Duration;
 use tokio::time::Instant;
 
+mod reply_barge;
 mod reply_jitter;
 mod reply_playout;
 
+pub(crate) use reply_barge::Barge;
+pub use reply_barge::BargeTrigger;
+#[cfg(test)]
+pub(crate) use reply_barge::{BARGE_QUIET, BARGE_WINDOW};
 pub(crate) use reply_playout::{ClockPacer, PERIOD, Playout, QUIET};
 
 /// Initial playback credit followed by the existing no-catch-up 20 ms pacer.
@@ -78,6 +83,9 @@ pub struct ReplyQuality {
     pub fade_ins: u32,
     /// Silent frames left out to bring the delay back to the target.
     pub drained_frames: u32,
+    /// Barge-ins that cut this reply, and what armed the last of them.
+    pub cuts: u32,
+    pub cut_trigger: Option<BargeTrigger>,
     /// The `timing` sample; none when no endpoint preceded the reply's audio.
     pub first_audio: Option<FirstAudio>,
 }
@@ -125,6 +133,8 @@ pub(crate) struct ReplyMeter {
     measured: bool,
     lost: u64,
     endpoint: Option<(Instant, Endpoint)>,
+    /// A cut flushed the device: the next write starts its clock again.
+    restarted: bool,
     /// The call's arrival lateness; it outlives each reply's window.
     jitter: reply_jitter::Jitter,
     targeted: bool,
@@ -190,6 +200,10 @@ impl ReplyMeter {
             });
             return;
         };
+        if std::mem::take(&mut self.restarted) {
+            self.playout = Some(now + PERIOD);
+            return;
+        }
         let depth = millis(end.saturating_duration_since(now));
         if depth == 0 {
             self.quality.underruns += 1;
@@ -218,6 +232,16 @@ impl ReplyMeter {
         self.quality.discarded_audible += u32::from(audible);
         // The audio clock does not run through frames that were never queued.
         self.jitter.rest();
+    }
+
+    /// A barge-in cut the reply: the device was flushed and plays again from
+    /// the replacement's first frame. The retired stretch between the two is
+    /// neither an arrival gap nor an underrun; `cuts` and the discards say it.
+    pub(crate) fn cut(&mut self, trigger: BargeTrigger) {
+        self.quality.cuts += 1;
+        self.quality.cut_trigger = Some(trigger);
+        self.arrived = None;
+        self.restarted = self.playout.is_some();
     }
 
     /// Close this reply's window. `lost` is the call's cumulative RTP loss.

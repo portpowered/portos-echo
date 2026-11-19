@@ -6,6 +6,7 @@ use std::{net::SocketAddr, path::Path, time::Duration};
 
 pub struct Settings {
     pub options: AuthOptions,
+    pub ca_pem: Option<Vec<u8>>,
     pub listen: SocketAddr,
     pub pairing_file: std::path::PathBuf,
 }
@@ -27,6 +28,7 @@ impl Settings {
             return Err(Error::Input);
         }
         Ok(Some(Self {
+            ca_pem: Self::ca_pem(config)?,
             options: AuthOptions {
                 resource_url: server.url.clone(),
                 client_id: mcp.client_id.clone(),
@@ -37,6 +39,15 @@ impl Settings {
             listen: loopback(&mcp.operator_listen.to_string(), true)?,
             pairing_file: config.screen.pairing_token_file.clone(),
         }))
+    }
+
+    pub(crate) fn ca_pem(config: &BridgeConfig) -> Result<Option<Vec<u8>>, Error> {
+        config
+            .codex
+            .ca_file
+            .as_ref()
+            .map(|path| std::fs::read(path).map_err(|_| Error::Input))
+            .transpose()
     }
 }
 
@@ -57,6 +68,23 @@ fn outside_repository(path: &Path) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_echo_example_validates_private_portos_projection() {
+        let config =
+            BridgeConfig::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bridge.echo.toml")).unwrap();
+        assert_eq!(config.mcp.server.len(), 1);
+        let server = &config.mcp.server[0];
+        assert_eq!(server.name, "portos");
+        assert_eq!(server.auth, McpAuth::PortosDeviceCode);
+        assert_eq!(server.url, "https://api.portoperatingsystem.com/mcp"); // lint-rules: allow-literal offline example projection, never contacted
+        assert_eq!(server.allow_tools, ["endpoint_list", "endpoint_query", "control"]);
+        assert_eq!(config.mcp.scopes, ["endpoint:read"]);
+        let private = Path::new("/data/local/echo-bridge/private");
+        assert_eq!(config.mcp.state_dir, Some(private.join("portos")));
+        assert_eq!(config.screen.pairing_token_file, private.join("screen-pairing.txt"));
+        assert_eq!(config.codex.home, Some(private.join("codex-home")));
+    }
 
     #[test]
     fn mcp_link_store_rejects_checkout_and_traversal_without_creating_files() {

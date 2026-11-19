@@ -7,7 +7,7 @@ use crate::{
     bridge_mcp::{self, Token},
     bridge_notes::{Local, NAMES, Notes},
     bridge_runtime::bridge_screen::Screen,
-    bridge_trace::Trace,
+    bridge_trace::{PortosReceipts, Trace},
 };
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::{AgentConfig, BridgeConfig};
@@ -20,21 +20,53 @@ use tokio::sync::{mpsc, oneshot};
 pub(super) struct Mcp {
     client: Option<McpClient<Token>>,
     trace: Trace,
+    receipts: Option<PortosReceipts>,
 }
+
+impl Mcp {
+    fn new(client: Option<McpClient<Token>>, trace: Trace, server: Option<&echo_config::McpServer>) -> Self {
+        let receipts = server
+            .filter(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
+            .map(|server| PortosReceipts::new(trace.clone(), server.name.clone()));
+        Self {
+            client,
+            trace,
+            receipts,
+        }
+    }
+}
+
 impl ToolHost for Mcp {
     async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
         match &self.client {
-            Some(host) => host.list_tools().await,
+            Some(host) => {
+                let tools = host.list_tools().await?;
+                if let Some(receipts) = &self.receipts {
+                    receipts.catalog(tools.len()).map_err(|_| ToolError::Transport)?;
+                }
+                Ok(tools)
+            }
             None => Ok(vec![]),
         }
     }
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
         let client = self.client.as_ref().ok_or(ToolError::Denied)?;
-        self.trace
-            .clone()
-            .tool_attempt(name, key)
-            .map_err(|_| ToolError::Transport)?;
-        client.call_tool(name, args, key).await
+        let ordinal = if let Some(receipts) = &self.receipts {
+            receipts.attempt(name, key).map_err(|_| ToolError::Transport)?
+        } else {
+            self.trace
+                .clone()
+                .tool_attempt(name, key)
+                .map_err(|_| ToolError::Transport)?;
+            0
+        };
+        let result = client.call_tool(name, args, key).await;
+        if let Some(receipts) = &self.receipts {
+            receipts
+                .complete(name, ordinal, result.as_ref().is_ok_and(|result| !result.is_error))
+                .map_err(|_| ToolError::Transport)?;
+        }
+        result
     }
 }
 
@@ -154,19 +186,22 @@ impl Tools {
             .server
             .first()
             .map(|server| {
-                McpClient::new(
+                let ca_pem = if server.auth == echo_config::McpAuth::PortosDeviceCode {
+                    bridge_mcp::Settings::ca_pem(config)?
+                } else {
+                    None
+                };
+                McpClient::with_ca(
                     server.clone(),
                     Token::new(server.clone(), self.runtime.as_ref().map(|r| r.grant.clone())),
                     Duration::from_secs(config.agent.task_deadline_seconds),
+                    ca_pem.as_deref(),
                 )
                 .map_err(|_| Error::Input)
             })
             .transpose()?;
         let host = Policy::new(
-            Mcp {
-                client,
-                trace: trace.clone(),
-            },
+            Mcp::new(client, trace.clone(), config.mcp.server.first()),
             &self.allowed,
             &config.audit.log_dir,
             screen.approvals.clone(),
@@ -296,3 +331,7 @@ where
         result.and_then(|completed| cleanup.map(|()| completed))
     }
 }
+
+#[cfg(test)]
+#[path = "voice_tools/mcp_trust_tests.rs"]
+mod mcp_trust_tests;

@@ -48,6 +48,9 @@ pub struct Runtime {
     pub(super) startup: Option<Startup>,
     pub(super) remote: Option<super::onboard::Remote>,
     pub(super) excused: usize,
+    pub(super) portos: Option<echo_lab::lab_mcp::PortosObservations>,
+    pub(super) pending_mcp: Option<super::onboard::operator::Pending>,
+    pub(super) replay: super::onboard::replay::Replay,
 }
 
 pub(super) struct Startup {
@@ -117,19 +120,6 @@ impl Runtime {
         self.bridge.as_mut().ok_or_else(|| "device: bridge not started".into())
     }
 
-    pub fn observe(&mut self) -> Result<(), String> {
-        let bytes = match &self.remote {
-            Some(remote) => remote.trace()?,
-            None => super::super::sim::observers::bytes(&self.trace_path, 1024 * 1024, "trace")?,
-        };
-        if bytes.len() < self.offset {
-            return Err("trace: bridge truncated its trace".into());
-        }
-        self.trace.append(&bytes[self.offset..])?;
-        self.offset = bytes.len();
-        Ok(())
-    }
-
     pub fn expect_trace(&mut self, values: &[Value], index: usize) -> Result<(), String> {
         self.observe()?;
         let parsed = selectors::parse(values)?;
@@ -153,6 +143,9 @@ impl Runtime {
     }
 
     pub async fn ui(&mut self, expected: &Value, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+        if self.portos.is_some() {
+            return self.ui_portos(expected, index, artifacts).await;
+        }
         if let Some(sequence) = expected["sequence"].as_array() {
             return self.ui_sequence(sequence, index, artifacts).await;
         }
@@ -205,6 +198,8 @@ impl Runtime {
     }
 
     pub async fn close(&mut self, root: &Path, artifacts: &mut Artifacts) -> Result<(), String> {
+        // Dropping the control socket cancels a pending device-code operation.
+        self.pending_mcp.take();
         self.screen.take();
         let mut failures = Vec::new();
         if let Some(mut child) = self.bridge.take() {
@@ -230,8 +225,10 @@ impl Runtime {
             }
         }
         if failures.is_empty() {
-            Ok(())
+            self.link_counts(artifacts)
         } else {
+            self.invalid = true;
+            artifacts.link_counts = None;
             Err(failures.join("; "))
         }
     }

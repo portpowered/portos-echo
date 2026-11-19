@@ -5,10 +5,11 @@ use serde_json::Value;
 
 pub fn validate(scenario: &Value) -> Result<(), String> {
     for (name, value) in scenario["setup"].as_object().ok_or("device: missing setup")? {
-        if !matches!(
+        if !(matches!(
             (name.as_str(), value.as_str()),
             ("mcp", Some("spoof")) | ("backend", Some("client"))
-        ) {
+        ) || scenario["id"] == "m5-port-os-link" && name == "mcp" && value == "portos-pilot")
+        {
             return Err(format!("device: unsupported setup {name}"));
         }
     }

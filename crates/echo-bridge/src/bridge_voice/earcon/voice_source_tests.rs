@@ -189,6 +189,7 @@ async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
     stats.quality.concealment_ms = 20;
     stats.quality.fade_ins = 2;
     stats.quality.drained_frames = 3;
+    (stats.quality.cuts, stats.quality.cut_trigger) = (2, Some(crate::bridge_voice::BargeTrigger::UserTranscript));
     view.observe(ServeNotice::Session(SessionNotice::ReplyCompleted(stats)))
         .unwrap();
     let rows: Vec<serde_json::Value> = std::fs::read_to_string(&path)
@@ -213,6 +214,9 @@ async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
         playout(&rows[5]),
         [target(100, 300, 280), 1.into(), 20.into(), 2.into(), 3.into()]
     );
+    let cuts = [&rows[3], &rows[5]].map(|row| row["cuts"].clone());
+    let cut = |count: u32, trigger: Option<&str>| serde_json::json!({"count":count, "trigger":trigger});
+    assert_eq!(cuts, [cut(0, None), cut(2, Some("user_transcript"))]);
     assert_eq!(
         rows[6],
         serde_json::json!({"event":"timing", "elapsed_ms":0, "provider_auth_mode":"chatgpt", "run_id":"run-1",
