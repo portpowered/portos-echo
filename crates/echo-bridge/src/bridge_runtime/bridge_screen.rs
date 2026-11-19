@@ -86,7 +86,7 @@ impl Screen {
     }
 
     pub(crate) fn download_packs(&mut self, config: Option<&echo_config::BridgeConfig>, trace: &Trace) {
-        let Some(config) = config.filter(|c| !c.screen.packs.is_empty()) else {
+        let Some(config) = config else {
             return;
         };
         let Some(home) = &config.home else {
@@ -314,16 +314,13 @@ pub(crate) fn failure_state(relink: bool) -> UiState {
 mod tests {
     use super::*;
 
-    /// T3: configured pack failure is isolated from the real screen listener.
-    #[tokio::test]
-    async fn t3_screen_pack_missing_ca_reports_safely_and_keeps_screen_serving() {
+    fn pack_config(home: &tempfile::TempDir, packs: Vec<echo_config::ScreenPackDownload>) -> echo_config::BridgeConfig {
         let base = echo_config::BridgeConfig::from_toml_str(
             "[echo]\nhost='127.0.0.1'\n[live]\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n",
         ).unwrap();
-        let home = tempfile::tempdir().unwrap();
         let pairing = home.path().join("pairing.txt");
         std::fs::write(&pairing, "synthetic-screen-pair").unwrap();
-        let config = echo_config::BridgeConfig {
+        echo_config::BridgeConfig {
             home: Some(echo_config::HomeConfig {
                 dir: home.path().into(),
                 agent_tools: echo_config::AgentTools::default(),
@@ -331,13 +328,23 @@ mod tests {
             screen: ScreenConfig {
                 listen: ([127, 0, 0, 1], 0).into(),
                 pairing_token_file: pairing,
-                packs: vec![echo_config::ScreenPackDownload {
-                    url: "https://127.0.0.1/pack".into(),
-                    sha256: "0".repeat(64),
-                }],
+                packs,
             },
             ..base
-        };
+        }
+    }
+
+    /// T3: configured pack failure is isolated from the real screen listener.
+    #[tokio::test]
+    async fn t3_screen_pack_missing_ca_reports_safely_and_keeps_screen_serving() {
+        let home = tempfile::tempdir().unwrap();
+        let config = pack_config(
+            &home,
+            vec![echo_config::ScreenPackDownload {
+                url: "https://127.0.0.1/pack".into(),
+                sha256: "0".repeat(64),
+            }],
+        );
         let path = home.path().join("trace.jsonl");
         let trace = Trace::open(&path, "api_key").unwrap();
         let mut screen = Screen::bind(Some(&config.screen)).await.unwrap();
@@ -361,6 +368,44 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         screen.close().await.unwrap();
         assert!(!home.path().join("screens").exists());
+    }
+
+    /// T3: locally installed data is available without configuring a download.
+    #[tokio::test]
+    async fn t3_screen_pack_empty_pins_mount_local_files_without_downloads() {
+        let home = tempfile::tempdir().unwrap();
+        let config = pack_config(&home, vec![]);
+        let pack = home.path().join("screens/local");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            pack.join("pack.json"),
+            br#"{"format":1,"name":"local","version":"0.1.0","character":{"rest":"rest.png"}}"#,
+        )
+        .unwrap();
+        std::fs::write(pack.join("rest.png"), "synthetic-local-rest").unwrap();
+        let path = home.path().join("trace.jsonl");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        let mut screen = Screen::bind(Some(&config.screen)).await.unwrap();
+        screen.download_packs(Some(&config), &trace);
+        screen.pack_results.take().unwrap().await.unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"");
+        let base = "http://127.0.0.1";
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!(
+                "{base}:{}/screen-packs/v1/local/rest.png?token=synthetic-screen-pair",
+                screen.address().unwrap().port()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), "synthetic-local-rest");
+        screen.ready().unwrap();
+        screen.flush().await.unwrap();
+        screen.close().await.unwrap();
     }
 
     #[tokio::test]
