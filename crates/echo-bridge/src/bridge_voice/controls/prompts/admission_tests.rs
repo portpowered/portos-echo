@@ -55,7 +55,7 @@ async fn admissions(
             let mut completed = 0;
             let mut observe = retained_observer(&observer, &started, &mut completed);
             let mut peer = async || Ok(MemoryPeer);
-            let work = admitted(
+            let work = Box::pin(admitted(
                 (&client, &mut events, run),
                 &mut io,
                 &mut options,
@@ -63,7 +63,7 @@ async fn admissions(
                 std::future::pending(),
                 &mut observe,
                 (None, || std::time::UNIX_EPOCH, Some(trace.clone())),
-            );
+            ));
             let remote = prompt_remote(
                 &mut server,
                 &observer,
@@ -165,15 +165,19 @@ async fn prompt_remote(
         let response = serde_json::json!({"id":request["id"],"result":result});
         send(server, &response).await;
         if method == "thread/realtime/start" {
-            if index == 0
-                && let Some(home) = home
-                && home.join("prompts/edit-during-retained").exists()
-            {
-                for kind in ["voice", "runner"] {
-                    std::fs::write(home.join(format!("prompts/{kind}.md")), "edited during retained call").unwrap();
-                }
-            }
+            edit_retained(home, index);
             replies(server, observer, started, &thread).await;
+        }
+    }
+}
+
+fn edit_retained(home: Option<&std::path::Path>, index: usize) {
+    if index == 0
+        && let Some(home) = home
+        && home.join("prompts/edit-during-retained").exists()
+    {
+        for kind in ["voice", "runner"] {
+            std::fs::write(home.join(format!("prompts/{kind}.md")), "edited during retained call").unwrap();
         }
     }
 }
@@ -245,14 +249,13 @@ async fn configured_refusal(kind: &str, bytes: &[u8], message: &str) {
     let trace = root.path().join("trace");
     let observer = Observer::default();
     let prepared = super::super::Configured::new(config, trace.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
-    let result = prepared
-        .execute(
-            FakeConnector::new(observer.clone()),
-            async || -> Result<MemoryPeer, Error> { unreachable!() },
-            vec![],
-            std::future::pending(),
-        )
-        .await;
+    let result = Box::pin(prepared.execute(
+        FakeConnector::new(observer.clone()),
+        async || -> Result<MemoryPeer, Error> { unreachable!() },
+        vec![],
+        std::future::pending(),
+    ))
+    .await;
     let field = if kind == "home" {
         "home.dir".into()
     } else {

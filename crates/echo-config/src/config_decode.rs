@@ -78,7 +78,7 @@ impl<'a> Fields<'a> {
 pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
     let mut root = Fields::new(value, "config")?;
     let home = root.table.remove("home").map(|v| home(v.into_inner())).transpose()?;
-    let (agent, agent_backend) = agent(root.node("agent")?)?;
+    let agent_backend;
     let result = BridgeConfig {
         home,
         wake_earcon: root.optional("wake_earcon")?.unwrap_or(true),
@@ -108,7 +108,11 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .map(|v| audio(v.into_inner()))
             .transpose()?
             .unwrap_or_default(),
-        agent,
+        agent: {
+            let (agent, backend) = agent(root.node("agent")?)?;
+            agent_backend = backend;
+            agent
+        },
         agent_backend,
         muse: root
             .table
