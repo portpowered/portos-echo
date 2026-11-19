@@ -107,7 +107,7 @@ where
         loop {
             gate.sync(&mut observe)?;
             observe(ServeNotice::Ready)?;
-            let microphone = wait(
+            let Some(microphone) = wait(
                 client,
                 &mut events,
                 io,
@@ -115,7 +115,10 @@ where
                 cancelled.as_mut(),
                 &mut observe,
             )
-            .await?;
+            .await?
+            else {
+                return Ok(());
+            };
             let killed = std::cell::Cell::new(false);
             let result = Box::pin(admitted(
                 (&*client, &mut events, microphone),
@@ -245,7 +248,7 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     policy: (&mut bool, &mut Gate<'_>),
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
-) -> Result<<L::Events as LinkEvents>::Run, Error> {
+) -> Result<Option<<L::Events as LinkEvents>::Run>, Error> {
     let (muted, gate) = policy;
     tokio::pin!(cancelled);
     let mut poll = tokio::time::interval(Duration::from_millis(20));
@@ -258,6 +261,7 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
+            () = crate::bridge_settings::settings_restart::requested() => return Ok(None),
             result = async {
                 tokio::select! {
                     _ = poll.tick() => { gate.sync(observe)?; },
@@ -282,7 +286,7 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                     },
                 }
                 Ok::<_, Error>(None)
-            } => if let Some(run) = result? { return Ok(run); },
+            } => if let Some(run) = result? { return Ok(Some(run)); },
         }
         tokio::task::yield_now().await;
     }

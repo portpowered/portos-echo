@@ -151,7 +151,7 @@ async fn idle_polls_control_refuses_unsolicited_tools_and_probes_before_wake() {
         observer.wake("unmuted fixture", vec![]);
     };
     let (result, ()) = tokio::join!(work, remote);
-    assert_eq!(result.unwrap().wake_phrase(), "unmuted fixture");
+    assert_eq!(result.unwrap().unwrap().wake_phrase(), "unmuted fixture");
     assert!(!muted);
     assert_eq!(probes, 1);
     assert_eq!(
@@ -192,7 +192,7 @@ async fn idle_mute_blocks_wake_and_observes_drops_until_unmuted() {
     )
     .await
     .unwrap();
-    assert_eq!(run.wake_phrase(), "admit");
+    assert_eq!(run.unwrap().wake_phrase(), "admit");
     assert!(!muted);
     assert_eq!(notices, ["muted", "dropped", "unmuted"]);
     assert_eq!(observer.commands(), [Command::Connect]);
@@ -225,6 +225,41 @@ async fn idle_eof_and_ready_cancellation_fail_without_admitting_queued_wake() {
         .await;
         assert!(matches!(result, Err(error) if error == if cancelled { Error::Control } else { Error::Unavailable }));
         assert_eq!(observer.commands(), [Command::Connect]);
+    }
+}
+
+// T1: no RPC/peer/device admission when an idle settings restart wins.
+#[tokio::test(start_paused = true)]
+async fn settings_restart_idle_stops_before_queued_wake_and_shutdown_has_priority() {
+    for cancelled in [false, true] {
+        let restart = crate::bridge_settings::settings_restart::Restart::default();
+        restart.request();
+        let (stream, _server) = tokio::io::duplex(4096);
+        let (read, write) = tokio::io::split(stream);
+        let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+        let observer = Observer::default();
+        let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+        observer.wake("must remain queued", vec![]);
+        let result = restart
+            .scope(serve(
+                &mut client,
+                &mut io,
+                options(),
+                async || -> Result<MemoryPeer, Error> { unreachable!("restart admitted a peer") },
+                async {
+                    if !cancelled {
+                        std::future::pending::<()>().await;
+                    }
+                },
+                |notice| {
+                    assert!(matches!(notice, ServeNotice::Ready));
+                    Ok(())
+                },
+            ))
+            .await;
+        assert_eq!(result, if cancelled { Err(Error::Control) } else { Ok(()) });
+        assert_eq!(observer.commands(), [Command::Connect]);
+        assert!(restart.pending());
     }
 }
 

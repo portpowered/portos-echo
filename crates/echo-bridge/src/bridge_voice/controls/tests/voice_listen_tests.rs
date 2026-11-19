@@ -316,6 +316,9 @@ mod barge;
 #[path = "voice_listen_safety.rs"]
 mod safety;
 
+#[path = "voice_listen_restart.rs"]
+mod restart;
+
 #[tokio::test(start_paused = true)]
 async fn voice_listen_empty_reply_requires_receipt_then_waits_without_audible_frames() {
     let observer = Observer::default();
