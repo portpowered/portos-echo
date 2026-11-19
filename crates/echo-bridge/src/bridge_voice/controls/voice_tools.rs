@@ -389,11 +389,15 @@ mod mcp_trust_tests {
                     .unwrap()
                     .is_error
             );
-            assert_eq!(
-                host.call_tool("endpoint_query", json!({"mode":"http"}), "1:t1:u1:h")
-                    .await,
-                Err(ToolError::Transport)
-            );
+            for (mode, key, error) in [
+                ("http", "1:t1:u1:h", ToolError::Server("http_status:503".into())),
+                ("malformed", "1:t1:u1:m", ToolError::Transport),
+            ] {
+                assert_eq!(
+                    host.call_tool("endpoint_query", json!({"mode":mode}), key).await,
+                    Err(error)
+                );
+            }
             {
                 let pending = host.call_tool("endpoint_query", json!({"mode":"pending"}), "1:t1:u1:p");
                 tokio::pin!(pending);
@@ -405,10 +409,10 @@ mod mcp_trust_tests {
             tools.close().await;
             assert_tool_receipts(
                 &path,
-                &["c", "e", "h", "p"],
-                &[(1, "success"), (2, "error"), (3, "error")],
+                &["c", "e", "h", "m", "p"],
+                &[(1, "success"), (2, "error"), (3, "error"), (4, "error")],
             );
-            assert_eq!(peer.finish().await, json!({"link":1,"token":1,"catalog":1,"query":4}));
+            assert_eq!(peer.finish().await, json!({"link":1,"token":1,"catalog":1,"query":5}));
         })
         .await;
     }

@@ -320,6 +320,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if mode == 'http':
                 self.respond(503, {})
                 return
+            if mode == 'malformed':
+                self.respond(200, {})
+                return
             result = dict(content=[dict(type='text', text='synthetic-query-result')], isError=mode == 'error')
         self.respond(200, dict(jsonrpc='2.0', id=request['id'], result=result))
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
