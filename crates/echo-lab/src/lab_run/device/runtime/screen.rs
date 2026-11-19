@@ -173,7 +173,7 @@ mod tests {
 
     fn link() -> Value {
         json!({"state":"link_code","user_code":"SYNTHETIC-CODE",
-            "verification_uri":"https://issuer.invalid/activate","expires_at_unix":101})
+            "verification_uri":"https://issuer.invalid/activate","expires_at_unix":101}) // lint-rules: allow-literal inert presentation, never connected
     }
 
     #[test]
@@ -213,8 +213,8 @@ mod tests {
         for uri in [
             "not-a-uri",
             "file:///private",
-            "http://issuer.invalid/activate",
-            "https://user@issuer.invalid",
+            "http://issuer.invalid/activate", // lint-rules: allow-literal refused URI, never connected
+            "https://user@issuer.invalid",    // lint-rules: allow-literal refused URI, never connected
         ] {
             let mut bad = link();
             bad["verification_uri"] = json!(uri);

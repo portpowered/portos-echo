@@ -121,7 +121,7 @@ fn link_expectation() -> Value {
 
 fn link_state(expiry: u64) -> Value {
     json!({"state":"link_code","user_code":"PRIVATE-CODE-MARKER",
-        "verification_uri":"https://issuer.invalid/PRIVATE-URI-MARKER","expires_at_unix":expiry})
+        "verification_uri":"https://issuer.invalid/PRIVATE-URI-MARKER","expires_at_unix":expiry}) // lint-rules: allow-literal inert presentation, never connected
 }
 
 async fn presentation(socket: &mut TcpStream, seq: u64, state: Value) {
