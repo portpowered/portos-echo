@@ -273,10 +273,10 @@ async fn held_playback(fixture: &Fixture, satellite: &mut TcpStream, signal: &mu
 }
 
 async fn receive_playback(satellite: &mut TcpStream, signal: &mut BufReader<TcpStream>) {
-    assert_eq!(bridge_short::read_reply(satellite).await.0["type"], "audio-start");
+    assert_eq!(playback_frame(satellite).await.0["type"], "audio-start");
     let mut bytes = 0;
     loop {
-        let (header, payload) = bridge_short::read_reply(satellite).await;
+        let (header, payload) = playback_frame(satellite).await;
         let kind = header["type"].as_str().unwrap();
         assert!(
             matches!(kind, "audio-chunk" | "audio-stop"),
@@ -293,6 +293,19 @@ async fn receive_playback(satellite: &mut TcpStream, signal: &mut BufReader<TcpS
         bytes += payload.len();
     }
     assert!(bytes >= 320 * 2, "at least one decoded PCM frame must play");
+}
+
+async fn playback_frame(satellite: &mut TcpStream) -> (Value, Vec<u8>) {
+    loop {
+        let (header, payload) = bridge_short::read_reply(satellite).await;
+        if header["type"] != "hassmic-thinking" {
+            return (header, payload);
+        }
+        // Delegation may update the display during playback. Consume only the
+        // exact public display envelope; all other control frames still fail.
+        assert!(header["data"] == json!({"thinking":true}) || header["data"] == json!({"thinking":false}));
+        assert_eq!(payload, Vec::<u8>::new());
+    }
 }
 
 async fn after_cleanup(fixture: &Fixture, finish: Finish) {
