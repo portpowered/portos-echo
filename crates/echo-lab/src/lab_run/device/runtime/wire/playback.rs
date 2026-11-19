@@ -22,6 +22,7 @@ struct Stream {
     stopped: Option<u128>,
     ending: Option<&'static str>,
     played: Option<u128>,
+    first_pcm: Option<u128>,
 }
 
 impl Stream {
@@ -77,7 +78,10 @@ impl Session {
             return Ok(());
         };
         match (receipt.direction, receipt.kind) {
-            ("playback", "audio-chunk") => stream.pcm(event)?,
+            ("playback", "audio-chunk") => {
+                stream.first_pcm.get_or_insert(receipt.elapsed_us);
+                stream.pcm(event)?;
+            }
             ("playback", "audio-stop" | "hassmic-flush") => {
                 stream.stopped = Some(receipt.elapsed_us);
                 stream.ending = Some(receipt.kind);
@@ -145,6 +149,13 @@ impl Session {
             "capture_chunks_after_reply":self.capture_after_reply,
             "unmatched_played":self.unmatched_played,"streams":streams})
     }
+
+    pub fn first_reply_pcm(&self, run: usize) -> Option<u128> {
+        self.streams
+            .iter()
+            .find(|stream| stream.run == Some(run) && stream.reply())
+            .and_then(|stream| stream.first_pcm)
+    }
 }
 
 // Independent reference for the existing 160 ms, two-note 24 kHz wake chime.
@@ -167,4 +178,4 @@ fn chime(bytes: &[u8], offset: usize) -> bool {
 
 #[cfg(test)]
 #[path = "playback_tests.rs"]
-mod tests;
+pub(super) mod tests;

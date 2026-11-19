@@ -20,8 +20,8 @@ pub(super) struct Relay {
 }
 
 impl Relay {
-    pub fn new(listener: std::net::TcpListener) -> Self {
-        let (observed, receipts) = watch::channel(Ledger::default());
+    pub fn new(listener: std::net::TcpListener, latency: bool) -> Self {
+        let (observed, receipts) = watch::channel(Ledger::with_latency(latency));
         Self {
             listener: Some(listener),
             task: None,
@@ -62,6 +62,10 @@ impl Relay {
 
     pub fn check_session(&self, expected: &super::session::Expected) -> Result<serde_json::Value, String> {
         expected.check(&self.receipts.borrow())
+    }
+
+    pub fn check_latency(&self, ceiling: f64) -> Result<serde_json::Value, String> {
+        super::latency::check(&self.receipts.borrow(), ceiling)
     }
 
     pub async fn wait_reply(&mut self, run: usize, replies: usize) -> Result<(), String> {

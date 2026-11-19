@@ -30,7 +30,7 @@ fn options(root: &std::path::Path) -> Options {
     }
 }
 
-fn fake_adb(root: &std::path::Path, port: u16) -> Options {
+pub(super) fn fake_adb(root: &std::path::Path, port: u16) -> Options {
     use std::os::unix::fs::PermissionsExt;
     let options = options(root);
     let ledger = root.join("ledger");

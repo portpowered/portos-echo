@@ -99,7 +99,7 @@ fn device_wire_session_unmatched_played_cannot_supply_a_current_reply() {
     );
 }
 
-fn waveform() -> Vec<u8> {
+pub(in crate::lab_run::device::runtime::wire) fn waveform() -> Vec<u8> {
     (0..3840_u32)
         .flat_map(|index| {
             let position = index % 1920;

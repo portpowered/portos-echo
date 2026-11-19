@@ -19,6 +19,7 @@ pub(super) struct Ledger {
     pub session: super::playback::Session,
     pub failure: Option<String>,
     pub closed: bool,
+    pub(super) latency: Option<super::latency::Latency>,
     runs: usize,
     streams: usize,
     run: Option<usize>,
@@ -27,6 +28,13 @@ pub(super) struct Ledger {
 }
 
 impl Ledger {
+    pub fn with_latency(enabled: bool) -> Self {
+        Self {
+            latency: enabled.then(super::latency::Latency::default),
+            ..Self::default()
+        }
+    }
+
     pub fn observe(&mut self, direction: &'static str, event: &Event, elapsed_us: u128) -> Result<(), String> {
         let kind = match event.header.r#type.as_str() {
             "run-pipeline" => "run-pipeline",
@@ -56,6 +64,9 @@ impl Ledger {
         self.push(direction, kind, event.payload.len(), elapsed_us, identity);
         self.session
             .observe(self.receipts.last().ok_or("device: missing wire receipt")?, event)?;
+        if let Some(latency) = &mut self.latency {
+            latency.observe(self.receipts.last().ok_or("device: missing wire receipt")?, event)?;
+        }
         if direction == "playback"
             && matches!(kind, "audio-stop" | "hassmic-flush")
             && let Some(identity) = self.playing.take()
