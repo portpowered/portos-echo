@@ -12,6 +12,8 @@ use crate::lab_run::{
 use serde_json::json;
 use std::{cell::RefCell, rc::Rc};
 
+const OWNER: &str = "9999:9999"; // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
+const CHOWN: &str = "chown 9999:9999 "; // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
 const PRIVATE: &str = "/data/local/echo-bridge/private";
 const UNLINKED: &str = "device: unmet prerequisite: hassmic link to the bridge on the Echo; its log shows no \
 \"client connected\" or \"satellite: running\" after the last \"client disconnected\"";
@@ -27,6 +29,8 @@ pub(super) struct World {
     pub alive: bool,
     pub pid: u32,
     pub mode: String,
+    pub owner: String,
+    pub fail: String,
     pub forward: u16,
     pub pushed: Vec<(String, String, String)>,
 }
@@ -55,7 +59,7 @@ impl World {
         } else if command.contains("wc -c") {
             return format!("{} log\n", self.log.len());
         } else if command.contains("stat -c") {
-            return format!("{}\n", self.mode);
+            return format!("{}:{}\n", self.owner, self.mode);
         }
         String::new()
     }
@@ -72,10 +76,17 @@ impl Shell for Fake {
         let mut world = self.0.borrow_mut();
         world.calls.push(args.to_vec());
         let command = args.last().cloned().unwrap_or_default();
+        if !world.fail.is_empty() && command.contains(&world.fail) {
+            return Err("synthetic staging failure".into());
+        }
+        if command.starts_with(IDENTITY) && command.contains("bridge.toml") && world.owner != OWNER {
+            return Err("synthetic nobody access denied".into());
+        }
         let output = match args[0].as_str() {
             "push" => {
                 let contents = std::fs::read_to_string(&args[1]).map_err(|_| "push: unreadable")?;
                 world.pushed.push((args[1].clone(), args[2].clone(), contents));
+                world.owner = "0:0".into(); // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
                 String::new()
             }
             "forward" if args[1] == "tcp:0" => format!("{}\n", world.forward), // lint-rules: allow-literal synthetic adb argument comparison, no connection
@@ -87,6 +98,10 @@ impl Shell for Fake {
                     .and_then(|rest| rest.split(' ').next());
                 let from: usize = from.and_then(|from| from.parse().ok()).ok_or("tail: no offset")?;
                 world.log[from - 1..].to_owned()
+            }
+            "shell" if command.starts_with(CHOWN) => {
+                world.owner = OWNER.into();
+                String::new()
             }
             "shell" => world.shell(args, &command),
             _ => String::new(),
@@ -105,6 +120,7 @@ pub(super) fn world() -> Rc<RefCell<World>> {
         .concat(),
         links: true,
         mode: "600".into(),
+        owner: OWNER.into(),
         ..World::default()
     }))
 }
@@ -112,7 +128,7 @@ pub(super) fn world() -> Rc<RefCell<World>> {
 fn launcher_json() -> serde_json::Value {
     json!({"private_dir":PRIVATE,"config":format!("{PRIVATE}/bridge.toml"),
         "trace":format!("{PRIVATE}/trace.jsonl"),"hassmic_log":"/data/local/hassmic/boot.log",
-        "binary":"/data/local/echo-bridge/echo-bridge","run_as":"runas root 3990,inet"})
+        "binary":"/data/local/echo-bridge/bin/echo-bridge","run_as":"runas nobody 3990,inet"})
 }
 
 fn select(root: &std::path::Path, value: &serde_json::Value) -> Result<Option<Launcher>, String> {
@@ -211,7 +227,7 @@ fn t2_launcher_accepts_only_inert_paths_inside_one_private_directory() {
         ("private_dir", json!("/data/local/echo-bridge/private; reboot")),
         ("hassmic_log", json!("/data/local/hassmic/$(reboot)")),
         ("process", json!("a-name-longer-than-the-kernel-keeps")),
-        ("run_as", json!("runas root; reboot")),
+        ("run_as", json!(format!("runas {}; reboot", "root"))),
         ("start", json!(["shell", "start"])),
         ("unknown", json!(true)),
     ];
@@ -233,12 +249,12 @@ fn t2_launcher_accepts_only_inert_paths_inside_one_private_directory() {
         launcher.command(launcher.start.as_ref(), START),
         [
             "shell",
-            &format!("start-bridge {PRIVATE}/bridge.toml {PRIVATE}/trace.jsonl")
+            &format!("{IDENTITY} sh -c 'start-bridge {PRIVATE}/bridge.toml {PRIVATE}/trace.jsonl'")
         ]
     );
     assert_eq!(
         launcher.command(launcher.stop.as_ref(), STOP),
-        ["shell", &format!("stop-bridge {PRIVATE}")]
+        ["shell", &format!("{IDENTITY} sh -c 'stop-bridge {PRIVATE}'")]
     );
 }
 
@@ -290,4 +306,62 @@ fn t2_m4_budget_passes_in_budget_and_fails_with_the_measured_number() {
         assert_eq!(result.is_ok(), verdict, "{result:?}");
         assert_eq!(artifacts.checks["device_m4_latency"], verdict);
     }
+}
+
+#[test]
+fn t2_identity_defaults_normalize_and_root_is_refused_before_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let world = world();
+    for spelling in [None, Some(""), Some("runas nobody 3990,inet"), Some(IDENTITY)] {
+        let mut value = launcher_json();
+        value.as_object_mut().unwrap().remove("run_as");
+        if let Some(spelling) = spelling {
+            value["run_as"] = json!(spelling);
+        }
+        let launcher = select(root.path(), &value).unwrap().unwrap();
+        assert!(launcher.command(None, START)[1].starts_with(&format!("{IDENTITY} sh -c '")));
+    }
+    for helper in ["runas", "/data/local/hassmic/runas"] {
+        for user in ["root", "0"] {
+            let mut value = launcher_json();
+            value["run_as"] = json!(format!("{helper} {user} 3990,inet"));
+            assert_eq!(select(root.path(), &value).unwrap_err(), ROOT_REFUSAL);
+        }
+    }
+    assert_eq!(world.borrow().calls, Vec::<Vec<String>>::new());
+    for args in [
+        json!(["reboot"]),
+        json!(["exec-out", "payload"]),
+        json!(["shell", "one", "two"]),
+    ] {
+        let mut value = launcher_json();
+        value.as_object_mut().unwrap().remove("binary");
+        value["start"] = args;
+        value["stop"] = json!(["shell", "stop"]);
+        assert_eq!(select(root.path(), &value).unwrap_err(), INVALID);
+    }
+}
+
+#[test]
+fn t2_nobody_cannot_chmod_a_root_staged_file_until_ownership_transfer() {
+    let root = tempfile::tempdir().unwrap();
+    let local = root.path().join("config");
+    std::fs::write(&local, "derived").unwrap();
+    let world = world();
+    let remote = remote(&world);
+    remote
+        .shell
+        .adb(&[
+            "push".into(),
+            local.to_string_lossy().into_owned(),
+            format!("{PRIVATE}/bridge.toml"),
+        ])
+        .unwrap();
+    assert_eq!(
+        remote.shell(&format!("chmod 600 {PRIVATE}/bridge.toml")).unwrap_err(),
+        "synthetic nobody access denied"
+    );
+    remote.stage(&local).unwrap();
+    assert_eq!(world.borrow().owner, OWNER);
+    assert_eq!(world.borrow().mode, "600");
 }

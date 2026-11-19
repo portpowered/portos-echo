@@ -56,7 +56,7 @@ def status_observation():
         before = snapshot(box)
         index = len(box.calls())
         result = box.run(["status"])
-        require(result.stdout == "process=running\nuptime_seconds=42\n"
+        require(result.stdout == "process=running\nprocess_user=nobody\nuptime_seconds=42\n"
                 "hassmic_link=client connected / satellite: running\nbridge.log (last 5):\n"
                 "line 1\nline 2\nline 3\nline 4\nline 5\n", "status observation differs")
         require(before == snapshot(box), "status mutated owner files")
@@ -68,11 +68,24 @@ def status_observation():
         require("uptime_seconds=unavailable\n" in box.run(["status"]).stdout, "missing uptime invented")
     with Sandbox() as box:
         result = box.run(["status"])
-        require(result.stdout == "process=stopped\nuptime_seconds=unavailable\nhassmic_link=unavailable\n"
+        require(result.stdout == "process=stopped\nprocess_user=unavailable\nuptime_seconds=unavailable\nhassmic_link=unavailable\n"
                 "bridge.log (last 5):\nunavailable\n", "missing status differs")
         require(not box.device.exists(), "status created device state")
         (box.root / "fault").write_text("ps -A")
         box.run(["status"], 1)
+    with Sandbox() as box:
+        box.install()
+        (box.root / "running").touch()
+        before = snapshot(box)
+        for user in ("root", "0", "unknown"):
+            (box.root / "process-user").write_text(user)
+            result = box.run(["status"], 1)
+            observed = user if user != "unknown" else "unavailable"
+            require("process_user=" + observed + "\n" in result.stdout, "observed identity missing")
+            expected = ("echo-bridge is running as root; stop and reinstall before starting"
+                        if user != "unknown" else "cannot verify echo-bridge process user")
+            require(result.stderr == "echo-install: " + expected + "\n", "identity refusal differs")
+            require(snapshot(box) == before, "identity refusal mutated files")
     print("F18 F20: PASS")
 
 
