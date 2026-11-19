@@ -20,8 +20,12 @@ def route_wget():
     require(args[-1].startswith("https://"), "non-HTTPS request reached wget")
     if args[-1].startswith(origin):
         args[-1] = os.environ["REDIRECT_ORIGIN"] + "/" + args[-1][len(origin):]
-    os.execv(os.environ["REAL_WGET"], ["wget", "--no-proxy",
-             "--ca-certificate=" + os.environ["REDIRECT_CERT"], *args])
+    result = subprocess.run([os.environ["REAL_WGET"], "--no-proxy",
+             "--ca-certificate=" + os.environ["REDIRECT_CERT"], *args], capture_output=True)
+    with (Path(os.environ["FAKE_ROOT"]) / "wget-debug").open("ab") as log:
+        log.write(result.stderr)
+    sys.stderr.buffer.write(result.stderr)
+    sys.exit(result.returncode)
 
 
 def redirect_cases(box_class=None):
@@ -101,7 +105,12 @@ def redirect_cases(box_class=None):
                                    + " --wget-route")
                         executable(box.tools / "wget", command)
                         box.env.update(REAL_WGET=real_wget, REDIRECT_ORIGIN=origin, REDIRECT_CERT=str(cert))
-                        result = box.invoke(code=0 if mode == "good" else 1)
+                        try:
+                            result = box.invoke(code=0 if mode == "good" else 1)
+                        except AssertionError:
+                            print(state["requests"])
+                            print((box.root / "wget-debug").read_text())
+                            raise
                         require(state["http"] == [], "HTTP downgrade was contacted")
                         if mode == "good":
                             require(len(state["requests"]) == 10, "HTTPS redirect chain differed")
