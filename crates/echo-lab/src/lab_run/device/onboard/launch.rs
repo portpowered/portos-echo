@@ -14,7 +14,7 @@ use std::path::Path;
 impl crate::lab_run::device::Configured<'_> {
     pub(in crate::lab_run::device) fn mcp(
         &mut self,
-        action: &crate::lab_run::McpAction,
+        action: crate::lab_run::McpAction,
         artifacts: &mut Artifacts,
     ) -> Result<(), String> {
         let result = self.executor.block_on(crate::lab_run::device::runtime::observed(
@@ -22,7 +22,7 @@ impl crate::lab_run::device::Configured<'_> {
                 if matches!(action, crate::lab_run::McpAction::Restart) {
                     self.state.mcp_restart(&self.config, artifacts).await
                 } else {
-                    self.state.mcp_operator(action, &self.config).await
+                    self.state.mcp_operator(&action, &self.config).await
                 }
             },
             self.options.cancel.as_deref(),

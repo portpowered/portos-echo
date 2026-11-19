@@ -132,7 +132,7 @@ impl Driver for Configured<'_> {
     ) -> Result<(), String> {
         self.start(artifacts)?;
         match step {
-            Step::Mcp(action) => self.mcp(action, artifacts),
+            Step::Mcp(action) => self.mcp(*action, artifacts),
             Step::Restart { process, count, say } => self.restart(process, *count, say, index, artifacts),
             Step::Press(key) if key == "mute" => self.press_mute(index, artifacts),
             Step::Ui(value) => self.executor.block_on(runtime::observed(

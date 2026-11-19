@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn mcp_device_screen_rejects_bad_codes_uris_and_unrelated_relink_messages() {
-        for code in ["".into(), " ".into(), "private\ncode".into(), "x".repeat(129)] {
+        for code in [String::new(), " ".into(), "private\ncode".into(), "x".repeat(129)] {
             let mut bad = link();
             bad["user_code"] = json!(code);
             assert_eq!(mcp_state(&bindings(), &bad, 100), Err(MCP_SCREEN.into()));
