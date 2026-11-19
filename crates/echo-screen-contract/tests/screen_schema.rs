@@ -1,4 +1,7 @@
 //! T0: generated schemas are the published contract, compared without writes.
+use echo_screen_contract::settings_v1::{
+    PromptSaveV1, SaveResultV1, SettingsErrorV1, SettingsPatchV1, SettingsSnapshotV1,
+};
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use schemars::{JsonSchema, schema_for};
 use std::{env, error::Error, fs, path::Path};
@@ -29,6 +32,15 @@ fn schema_snapshots() -> Result<(), Box<dyn Error>> {
     snapshot::<UiState>("ui_state")?;
     snapshot::<UiAction>("ui_action")?;
     snapshot::<ScreenFrame>("screen_frame")
+}
+
+#[test]
+fn settings_schema_snapshots() -> Result<(), Box<dyn Error>> {
+    snapshot::<SettingsSnapshotV1>("settings_snapshot_v1")?;
+    snapshot::<SettingsPatchV1>("settings_patch_v1")?;
+    snapshot::<PromptSaveV1>("prompt_save_v1")?;
+    snapshot::<SaveResultV1>("save_result_v1")?;
+    snapshot::<SettingsErrorV1>("settings_error_v1")
 }
 
 #[test]
