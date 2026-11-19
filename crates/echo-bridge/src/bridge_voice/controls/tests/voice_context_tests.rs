@@ -103,3 +103,22 @@ async fn configured_options_preserve_overrides_budgets_tools_and_default_voice()
     let prepared = prepared.with_mcp_epoch(Some(1_800_000_000));
     assert_eq!(prepared.options(None, vec![]).mcp_epoch, Some(1_800_000_000));
 }
+
+#[test]
+fn screen_settings_followup_off_uses_existing_answered_turn_completion_policy() {
+    let mut prepared = configured();
+    for seconds in [3, 15, 300] {
+        prepared.config.voice.session_listen_seconds = seconds;
+        prepared.config.voice.session_listen_enabled = true;
+        let options = prepared.options(None, vec![]);
+        assert_eq!(
+            options.voice.session.listen_timeout,
+            Some(Duration::from_secs(u64::from(seconds)))
+        );
+        prepared.config.voice.session_listen_enabled = false;
+        let options = prepared.options(None, vec![]);
+        assert_eq!(options.voice.session.listen_timeout, None);
+        assert_eq!(options.voice.session.session_max, Duration::from_secs(600));
+        assert_eq!(options.voice.session.idle, Duration::from_secs(120));
+    }
+}

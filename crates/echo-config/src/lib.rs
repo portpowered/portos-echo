@@ -1,15 +1,17 @@
-//! Synchronous bridge configuration. Loaders read only the nominated TOML file;
+//! Synchronous bridge configuration. Base loaders read only the nominated TOML file;
 //! credential paths remain literal and are never opened or expanded.
 
 mod config_auth;
 mod config_codex;
 mod config_decode;
 mod config_muse;
+mod config_settings;
 mod config_validate;
 mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
 pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS};
 pub use config_muse::{AgentBackend, MuseConfig};
+pub use config_settings::{EffectiveConfig, SettingsOverlay};
 pub use config_voice::VoiceConfig;
 
 #[cfg(test)]

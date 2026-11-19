@@ -125,6 +125,7 @@ fn voice_listen_defaults_and_overrides_match_both_offline_loaders() {
         assert_eq!(
             parsed.voice,
             VoiceConfig {
+                session_listen_enabled: true,
                 session_listen_seconds: listen,
                 session_max_seconds: max
             }
@@ -494,3 +495,4 @@ fn nested_secret_diagnostics_use_only_trusted_schema_context() {
 }
 
 mod config_profile;
+mod config_settings;

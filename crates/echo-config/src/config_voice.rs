@@ -5,6 +5,7 @@ use crate::{ConfigError, config_decode::Fields};
 /// Active speech and playback are never interrupted by the extension limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VoiceConfig {
+    pub session_listen_enabled: bool,
     pub session_listen_seconds: u32,
     pub session_max_seconds: u32,
 }
@@ -12,6 +13,7 @@ pub struct VoiceConfig {
 impl Default for VoiceConfig {
     fn default() -> Self {
         Self {
+            session_listen_enabled: true,
             session_listen_seconds: 15,
             session_max_seconds: 600,
         }
@@ -46,6 +48,9 @@ pub(super) fn decode(value: toml::de::DeValue<'_>) -> Result<VoiceConfig, Config
     let mut f = Fields::new(value, "voice")?;
     let defaults = VoiceConfig::default();
     let result = VoiceConfig {
+        session_listen_enabled: f
+            .optional("session_listen_enabled")?
+            .unwrap_or(defaults.session_listen_enabled),
         session_listen_seconds: f
             .optional("session_listen_seconds")?
             .unwrap_or(defaults.session_listen_seconds),

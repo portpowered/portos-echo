@@ -131,7 +131,11 @@ impl Configured {
                 session: SessionOptions {
                     // Duplex runs stay open after a reply until this listen
                     // deadline; live.session_idle_seconds is between-wakes reuse.
-                    listen_timeout: Some(Duration::from_secs(u64::from(self.config.voice.session_listen_seconds))),
+                    listen_timeout: self
+                        .config
+                        .voice
+                        .session_listen_enabled
+                        .then(|| Duration::from_secs(u64::from(self.config.voice.session_listen_seconds))),
                     session_max: Duration::from_secs(u64::from(self.config.voice.session_max_seconds)),
                     idle: Duration::from_secs(self.config.live.session_idle_seconds),
                     response_timeout: Duration::from_secs(self.config.agent.task_deadline_seconds),
