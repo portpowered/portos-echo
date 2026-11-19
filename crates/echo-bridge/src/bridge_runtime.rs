@@ -51,17 +51,22 @@ pub async fn execute_with_control<C: LinkConnector>(
     control: Control,
     connector: C,
 ) -> Result<(), Error> {
-    if settings.config.is_some()
+    if configured(&settings) {
+        return Box::pin(crate::bridge_voice::voice_entry::execute(settings, control, connector)).await;
+    }
+    Box::pin(execute_controlled(settings, control, connector)).await
+}
+
+/// Whether these inputs select the configured Codex owner.
+#[must_use]
+pub fn configured(settings: &Settings) -> bool {
+    settings.config.is_some()
         && settings.muse.is_none()
         && (settings.model_url.is_none()
             || settings
                 .config
                 .as_ref()
                 .is_some_and(|config| config.codex.home.is_some()))
-    {
-        return Box::pin(crate::bridge_voice::voice_entry::execute(settings, control, connector)).await;
-    }
-    Box::pin(execute_controlled(settings, control, connector)).await
 }
 
 fn utc_day() -> u64 {

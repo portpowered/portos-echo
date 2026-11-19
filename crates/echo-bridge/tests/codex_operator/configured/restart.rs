@@ -1,4 +1,4 @@
-//! T3: recovery remounts production HTTP/child/device owners, without OS exec.
+//! T3: configured recovery and delivered CLI replacement through paired HTTP.
 use super::*;
 use echo_bridge::bridge_voice::RuntimeCompletion;
 
@@ -109,4 +109,118 @@ async fn recovered_surface(fixture: &Fixture) {
         value["warnings"],
         json!(["Could not restart bridge; saved settings remain pending"])
     );
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt Linux echo-bridge and local Python"]
+async fn t3_settings_binary_idle_save_execs_same_image_argv_and_held_stdin_once() {
+    let fixture = Fixture::new("chatgpt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    super::super::voice_entry::configure(&fixture, listener.local_addr().unwrap().port());
+    let base = fixture.directory.path().join("bridge.toml");
+    let home = fixture.directory.path().join("agent-home");
+    let text = format!(
+        "{}\n[home]\ndir='{}'\n",
+        std::fs::read_to_string(&base).unwrap(),
+        home.display()
+    );
+    std::fs::write(&base, &text).unwrap();
+    let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
+    let pid = process.child.id().unwrap();
+    let original = process_identity(pid);
+    let mut satellite = binary_ready(&listener, &mut process).await;
+    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await["message"],
+        "Echo Live ready"
+    );
+    assert_eq!(binary_snapshot(&fixture).await["restart_pending"], false);
+    assert_eq!(
+        settings_runtime_patch(&fixture, json!({"voice":{"session_listen_seconds":4}})).await,
+        json!({"version":1,"restart_pending":true})
+    );
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await["message"],
+        "Restarting bridge..."
+    );
+    let replacement = binary_ready(&listener, &mut process).await;
+    assert_eq!(process.child.id(), Some(pid));
+    assert_eq!(process_identity(pid), original);
+    let mut remainder = vec![];
+    tokio::time::timeout(OBSERVATION_TIMEOUT, satellite.read_to_end(&mut remainder))
+        .await
+        .unwrap()
+        .unwrap();
+    let value = binary_snapshot(&fixture).await;
+    assert_eq!(value["restart_pending"], false);
+    assert_eq!(value["settings"]["voice"]["session_listen_seconds"], 4);
+    assert_eq!(std::fs::read_to_string(&base).unwrap(), text);
+    let saved = home.join("settings.toml");
+    assert_eq!(
+        std::fs::read_to_string(&saved).unwrap(),
+        "[voice]\nsession_listen_seconds = 4\n"
+    );
+    owner_only(&saved);
+    binary_finished(&fixture, &mut process).await;
+    drop(replacement);
+}
+
+async fn binary_finished(fixture: &Fixture, process: &mut Process) {
+    drop(process.input.take());
+    process.collect(0).await;
+    assert_eq!(process.stderr().await, "");
+    super::super::host::released(fixture).await;
+    let rows = trace(&fixture.directory.path().join("trace"));
+    assert_eq!(rows.iter().filter(|row| row["event"] == "bridge.ready").count(), 2);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "settings.restart_prepared")
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.home.join("launches")).unwrap(),
+        "started\nstarted\n"
+    );
+}
+
+fn process_identity(pid: u32) -> (PathBuf, Vec<u8>, PathBuf) {
+    let root = PathBuf::from(format!("/proc/{pid}"));
+    (
+        std::fs::read_link(root.join("exe")).unwrap(),
+        std::fs::read(root.join("cmdline")).unwrap(),
+        std::fs::read_link(root.join("fd/0")).unwrap(),
+    )
+}
+
+fn owner_only(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+}
+
+async fn binary_ready(listener: &tokio::net::TcpListener, process: &mut Process) -> tokio::net::TcpStream {
+    let mut satellite = tokio::time::timeout(OBSERVATION_TIMEOUT, listener.accept())
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
+    assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
+    bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
+    assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+    satellite
+}
+
+async fn binary_snapshot(fixture: &Fixture) -> Value {
+    reqwest::Client::new()
+        .get(settings_runtime_url(fixture, "/settings/v1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
 }

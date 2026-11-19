@@ -33,6 +33,7 @@ mod voice_tools;
 mod voice_view;
 pub use voice_admission::{ServeNotice, ServeOptions, serve};
 pub use voice_config::Configured;
+pub use voice_entry::execute_process;
 pub use voice_host::{HostOptions, with_device};
 pub use voice_runtime::{RuntimeCompletion, RuntimeOptions, execute, execute_with_settings};
 pub use voice_session::{
