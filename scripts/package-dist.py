@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -27,13 +28,17 @@ PERSONAL = re.compile(rb'''(?:^|[\s\x00"'=])(?:/home/[^/\s]+/|/Users/[^/\s]+/|[A
 PRIVATE = re.compile(PERSONAL.pattern + rb"|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.I)
 
 
+class BundleError(ValueError):
+    """Only fixed diagnostics and validated public member names reach the CLI."""
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
 def version(value):
     if not re.fullmatch(VERSION, value):
-        raise ValueError("invalid version")
+        raise BundleError("invalid version")
     return value
 
 
@@ -54,11 +59,11 @@ def config_projection(data):
         # Match only this key inside its authored table; never change other defaults.
         table = re.search(r"(?ms)^\[codex\]\n.*?(?=^\[|\Z)", text)
         if table is None:
-            raise ValueError("missing codex config")
+            raise BundleError("missing codex config")
         changed, count = re.subn(r"(?m)^" + key + r'\s*=\s*"' + re.escape(old) + r'"',
                                  key + " = " + json.dumps(new), table[0])
         if count != 1:
-            raise ValueError("ambiguous config projection")
+            raise BundleError("ambiguous config projection")
         text = text[:table.start()] + changed + text[table.end():]
     return text.encode()
 
@@ -109,49 +114,49 @@ def verify(archive, checksums):
         members = source.getmembers()
         names = [member.name for member in members]
         if len(set(names)) != len(names) or any(not safe_name(m.name) or not m.isfile() or m.mode not in (0o644, 0o755) for m in members):
-            raise ValueError("unsafe archive member")
+            raise BundleError("unsafe archive member")
         payload = {m.name: source.extractfile(m).read() for m in members}
     encoded = payload.pop("MANIFEST")
     if PRIVATE.search(encoded):
-        raise ValueError("private manifest data")
+        raise BundleError("private manifest data")
     manifest = json.loads(encoded)
     if set(manifest) != {"format", "version", "source_commit", "components", "files"} or manifest["format"] != 1:
-        raise ValueError("invalid manifest format")
+        raise BundleError("invalid manifest format")
     release = version(manifest["version"])
     if archive.name != f"echo-{release}-armv7.tar.gz" or not re.fullmatch(r"[0-9a-f]{40}", manifest["source_commit"]):
-        raise ValueError("invalid bundle identity")
+        raise BundleError("invalid bundle identity")
     if not REQUIRED <= payload.keys() or manifest["files"] != {name: digest(data) for name, data in payload.items()}:
-        raise ValueError("manifest membership or digest mismatch")
+        raise BundleError("manifest membership or digest mismatch")
     components = manifest["components"]
     if set(components) != {"echo_bridge", "codex", "echo_screen", "ca_bundle"}:
-        raise ValueError("invalid component provenance")
+        raise BundleError("invalid component provenance")
     if components["echo_bridge"]["source_commit"] != manifest["source_commit"] or not re.fullmatch(r"[0-9a-f]{40}", components["codex"]["source_commit"]):
-        raise ValueError("invalid source provenance")
+        raise BundleError("invalid source provenance")
     if set(components["echo_bridge"]) != {"version", "source_commit"} or set(components["codex"]) != {"source_commit"} or set(components["echo_screen"]) != {"version"}:
-        raise ValueError("invalid component fields")
+        raise BundleError("invalid component fields")
     if not all(isinstance(components[key]["version"], str) and components[key]["version"] for key in ("echo_bridge", "echo_screen")):
-        raise ValueError("missing component version")
+        raise BundleError("missing component version")
     if components["ca_bundle"] != {"sha256": digest(payload["bin/cacert.pem"])}:
-        raise ValueError("invalid CA provenance")
+        raise BundleError("invalid CA provenance")
     for name, data in payload.items():
         binary = name in ("bin/echo-bridge", "bin/codex-app-server", "apk/echo-screen.apk")
         # Crypto executables contain PEM parser delimiters, not embedded key material.
         if (PERSONAL if binary else PRIVATE).search(data):
-            raise ValueError("private path or key in bundle")
+            raise BundleError("private path or key in " + name)
         if not binary:
             if re.search(rb'(?:Bearer\s+[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,})', data):
-                raise ValueError("credential-shaped payload")
+                raise BundleError("credential-shaped payload")
     expected = {archive.name: digest(archive.read_bytes()), "install.sh": digest((checksums.parent / "install.sh").read_bytes())}
     actual = {}
     for line in checksums.read_text().splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
         if not match or match[2] in actual:
-            raise ValueError("invalid checksums")
+            raise BundleError("invalid checksums")
         actual[match[2]] = match[1]
     if actual != expected:
-        raise ValueError("asset checksum mismatch")
+        raise BundleError("asset checksum mismatch")
     if PRIVATE.search((checksums.parent / "install.sh").read_bytes()):
-        raise ValueError("private path in installer")
+        raise BundleError("private path in installer")
     return manifest
 
 
@@ -178,8 +183,11 @@ def license_inputs(codex_work):
     # Standard license texts cover declarations even where registry packages omit a file.
     for identifier in sorted(expressions - {"AND", "OR", "WITH"}):
         url = f"https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/{identifier}.txt"
-        with urllib.request.urlopen(url, timeout=60) as response:
-            result[f"licenses/spdx/{identifier}.txt"] = response.read()
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                result[f"licenses/spdx/{identifier}.txt"] = response.read()
+        except OSError:
+            raise BundleError("license text download failed for " + identifier) from None
     with urllib.request.urlopen("https://www.mozilla.org/media/MPL/2.0/index.txt", timeout=60) as response:
         result["licenses/ca/MPL-2.0.txt"] = response.read()
     result["licenses/ca/NOTICE"] = b"Mozilla CA certificate store, distributed by curl.se. Mozilla Public License 2.0.\nSee cacert.pem for its generated date and upstream attribution.\n"
@@ -188,10 +196,10 @@ def license_inputs(codex_work):
 
 def build(args):
     if sys.platform != "linux":
-        raise ValueError("Linux is required")
+        raise BundleError("Linux is required")
     out = args.out.resolve()
     if out.exists():
-        raise ValueError("output directory must not exist; preserve or remove prior assets explicitly")
+        raise BundleError("output directory must not exist; preserve or remove prior assets explicitly")
     out.parent.mkdir(parents=True, exist_ok=True)
     # One owned stage makes publication atomic; build failures expose no new dist assets.
     with tempfile.TemporaryDirectory(prefix="echo-release-") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
@@ -202,18 +210,27 @@ def build(args):
         flags += ["--remap-path-prefix=" + str(Path.home()) + "=/build/user",
                   "--remap-path-prefix=" + str(ROOT) + "=/build/echo"]
         env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
+        # Native dependency assertions can embed __FILE__ even in stripped ELF.
+        # Rust's remap flag does not reach their C/C++ compilers.
+        for key in ("CFLAGS", "CXXFLAGS"):
+            remaps = shlex.join("-ffile-prefix-map=" + str(path) + "=" + replacement
+                                for path, replacement in ((Path.home(), "/build/user"), (ROOT, "/build/echo")))
+            env[key] = (env.get(key, "") + " " + remaps).strip()
         subprocess.run(["make", "build-echo", "ECHO_PACKAGES=echo-bridge"], cwd=ROOT, env=env, check=True)
         result = subprocess.run(["make", "--no-print-directory", "-s", "build-codex-armv7"], cwd=ROOT, env=env, check=True, stdout=subprocess.PIPE, text=True)
         identity = re.findall(r"(?m)^source_commit=([0-9a-f]{40})$", result.stdout)
         if len(identity) != 1:
-            raise ValueError("missing Codex build identity")
+            raise BundleError("missing Codex build identity")
         subprocess.run(["make", "build-echo-screen"], cwd=ROOT, env=env, check=True)
         subprocess.run([sys.executable, "tests/verify_echo_screen_apk.py"], cwd=ROOT, env=env, check=True)
         source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
+        print("release-kit: collecting license texts", flush=True)
+        licenses = license_inputs(work / "codex-work")
+        print("release-kit: assembling and verifying bundle", flush=True)
         assemble(Path(stage), args.version, source, identity[0], work / "codex-out",
                  target / "armv7-linux-androideabi/release/echo-bridge", ROOT / "target/echo-screen/echo-screen.apk",
-                 license_inputs(work / "codex-work"))
+                 licenses)
         os.rename(stage, out)
         # TemporaryDirectory tolerates the moved stage on exit.
 
@@ -238,6 +255,9 @@ def main():
             build(args)
         else:
             verify(args.archive, args.checksums)
+    except BundleError as error:
+        print("release-kit: " + str(error), file=sys.stderr)
+        return 1
     except (OSError, ValueError, KeyError, tarfile.TarError, subprocess.SubprocessError):
         print("release-kit: build, input, integrity or privacy check failed", file=sys.stderr)
         return 1

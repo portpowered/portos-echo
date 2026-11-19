@@ -332,6 +332,13 @@ def package_cases():
                 raise AssertionError("seeded integrity/privacy violation accepted")
             except ValueError:
                 pass
+            if name == "licenses/extra.txt":
+                result = subprocess.run([sys.executable, str(ROOT / "scripts/package-dist.py"),
+                                         "verify", str(box.archive), "--checksums",
+                                         str(box.assets / "SHA256SUMS")], capture_output=True, text=True)
+                require(result.returncode == 1 and result.stdout == "", "privacy CLI status differs")
+                require(result.stderr == "release-kit: private path or key in licenses/extra.txt\n",
+                        "privacy diagnostic must identify the public member without its content or host path")
     print("U-PACK I-BUNDLE: PASS")
 
 
