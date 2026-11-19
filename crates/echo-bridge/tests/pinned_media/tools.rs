@@ -99,28 +99,35 @@ search_case!(t3_pinned_tools_web_search_disabled_conventional, "gpt-5.4", Disabl
 search_case!(t3_pinned_tools_web_search_cached_native, "gpt-6.1-sol", Cached);
 search_case!(t3_pinned_tools_web_search_disabled_native, "gpt-6.1-sol", Disabled);
 
-#[tokio::test]
-async fn t3_pinned_tools_web_search_concurrent_homes_keep_distinct_modes() {
-    tokio::time::timeout(Duration::from_secs(25), async {
-        tokio::join!(
-            Box::pin(exercise_search(
-                false,
-                false,
-                ToolBudget::new(1, || Ok(7)),
-                "gpt-5.4",
-                echo_config::WebSearch::Live
-            )),
-            Box::pin(exercise_search(
-                false,
-                false,
-                ToolBudget::new(1, || Ok(7)),
-                "gpt-5.4",
-                echo_config::WebSearch::Disabled
-            ))
-        );
-    })
-    .await
-    .unwrap();
+#[test]
+fn t3_pinned_tools_web_search_concurrent_homes_keep_distinct_modes() {
+    // Each media witness owns a paused Tokio clock. Independent runtimes keep
+    // concurrent homes isolated without pausing the same clock twice.
+    let runs = [echo_config::WebSearch::Live, echo_config::WebSearch::Disabled].map(|mode| {
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(25),
+                    Box::pin(exercise_search(
+                        false,
+                        false,
+                        ToolBudget::new(1, || Ok(7)),
+                        "gpt-5.4",
+                        mode,
+                    )),
+                )
+                .await
+                .unwrap();
+            });
+        })
+    });
+    for run in runs {
+        run.join().unwrap();
+    }
 }
 
 async fn exercise(negative: bool) {
