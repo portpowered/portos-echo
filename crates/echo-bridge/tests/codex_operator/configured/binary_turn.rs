@@ -82,9 +82,7 @@ async fn exercise(finish: Finish, delegated: bool) {
     let media = remote(&mut signal).await;
     held_playback(&fixture, &mut satellite, &mut signal).await;
     bridge_short::send(&mut satellite, "played", json!({})).await;
-    if delegated {
-        owed_answer(&fixture, &mut satellite, &mut signal).await;
-    }
+    complete_delegation(&fixture, &mut signal, delegated).await;
     closing(&mut signal).await;
     assert_eq!(
         process.line().await,
@@ -98,7 +96,10 @@ async fn exercise(finish: Finish, delegated: bool) {
     settled(&fixture, &mut process, finish).await;
 }
 
-async fn owed_answer(fixture: &Fixture, satellite: &mut TcpStream, signal: &mut BufReader<TcpStream>) {
+async fn complete_delegation(fixture: &Fixture, signal: &mut BufReader<TcpStream>, delegated: bool) {
+    if !delegated {
+        return;
+    }
     let snapshot = binary_snapshot(fixture).await;
     assert_eq!(snapshot["restart_pending"], true);
     let rows = trace(&fixture.directory.path().join("trace"));

@@ -299,6 +299,8 @@ fn binary_retry_trace(fixture: &Fixture) {
     for (event, count) in [
         ("bridge.ready", 3),
         ("settings.restart_prepared", 2),
+        ("settings.reexec_attempt", 2),
+        ("settings.reexec_pending", 2),
         ("settings.reexec_failed", 1),
         ("settings.restart_recovered", 1),
     ] {
@@ -378,6 +380,8 @@ fn binary_failed_trace(fixture: &Fixture) {
     for (event, count) in [
         ("bridge.ready", 2),
         ("settings.restart_prepared", 1),
+        ("settings.reexec_attempt", 1),
+        ("settings.reexec_pending", 1),
         ("settings.reexec_failed", 1),
         ("settings.restart_recovered", 1),
     ] {

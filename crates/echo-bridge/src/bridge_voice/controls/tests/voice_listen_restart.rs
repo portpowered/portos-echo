@@ -126,22 +126,11 @@ async fn disabled_drive(
     (restart, completed_first): (&Restart, bool),
 ) {
     tx.send(dispatch(true)).await.unwrap();
-    reply(&tx, 5000).await;
-    reply(&tx, 5000).await;
+    reply(tx, 5000).await;
+    reply(tx, 5000).await;
     restart.request();
     before_played(work, observer).await;
-    if completed_first {
-        tx.send(dispatch(false)).await.unwrap();
-        poll(work.as_mut()).await;
-        observer.finish(Ok(()));
-    } else {
-        observer.finish(Ok(()));
-        poll(work.as_mut()).await;
-        assert!(!observer.commands().contains(&Command::EndRun));
-        tokio::time::advance(Duration::from_secs(2)).await;
-        poll(work.as_mut()).await;
-        tx.send(dispatch(false)).await.unwrap();
-    }
+    release_disabled(work, tx, observer, completed_first).await;
     assert_eq!(receipts.get(), 0);
     let now = Instant::now();
     let stats = work.as_mut().await.unwrap();
@@ -155,6 +144,49 @@ async fn disabled_drive(
             .count(),
         1
     );
+}
+
+async fn release_disabled(
+    work: &mut Pin<Box<impl Future<Output = Result<super::super::super::Stats, Error>>>>,
+    tx: &mpsc::Sender<MediaEvent>,
+    observer: &Observer,
+    completed_first: bool,
+) {
+    if completed_first {
+        tx.send(dispatch(false)).await.unwrap();
+        poll(work.as_mut()).await;
+        observer.finish(Ok(()));
+    } else {
+        observer.finish(Ok(()));
+        settle_disabled_reply(work, observer).await;
+        assert!(!observer.commands().contains(&Command::EndRun));
+        tokio::time::advance(Duration::from_secs(2)).await;
+        poll(work.as_mut()).await;
+        tx.send(dispatch(false)).await.unwrap();
+    }
+}
+
+async fn settle_disabled_reply(
+    work: &mut Pin<Box<impl Future<Output = Result<super::super::super::Stats, Error>>>>,
+    observer: &Observer,
+) {
+    // The second thinking indication follows Played and mouth drain. Advance
+    // through those timers rather than skipping over the playback deadline.
+    let thinking = || {
+        observer
+            .commands()
+            .iter()
+            .filter(|cmd| **cmd == Command::Thinking(true))
+            .count()
+    };
+    for _ in 0..50 {
+        poll(work.as_mut()).await;
+        if thinking() == 2 {
+            break;
+        }
+        tokio::time::advance(Duration::from_millis(20)).await;
+    }
+    assert_eq!(thinking(), 2);
 }
 
 fn dispatch(started: bool) -> MediaEvent {
