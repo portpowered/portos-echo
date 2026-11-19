@@ -22,10 +22,16 @@ on:
         type: boolean
         required: false
         default: true
+      release_bundle:
+        description: Build and verify the distributable release bundle
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 jobs:
   targeted:
+    if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -103,3 +109,46 @@ jobs:
           path: ${{ steps.selections.outputs.report_root }}
           if-no-files-found: ignore
           retention-days: 3
+  release-bundle:
+    if: ${{ inputs.release_bundle }}
+    runs-on: ubuntu-24.04
+    # Existing standalone Codex job allows 180 minutes for a cold build.
+    timeout-minutes: 240
+    env:
+      CARGO_BUILD_JOBS: '4'
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Focused wrapper and packaging tests
+        run: python3 tests/test_release_kit.py
+      - uses: ./.github/actions/setup
+        with:
+          target: build-echo
+      - name: Provision release tools
+        shell: sh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3
+          sdkmanager "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
+          rustup target add --toolchain 1.100.0 armv7-linux-androideabi
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Cheap release checks
+        run: |
+          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
+      - name: Build and verify release bundle
+        run: |
+          make dist
+          python3 tests/test_release_kit.py --assets dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: targeted-release-${{ github.sha }}
+          path: |
+            dist/echo-*-armv7.tar.gz
+            dist/install.sh
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7

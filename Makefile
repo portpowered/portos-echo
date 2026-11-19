@@ -160,3 +160,9 @@ ci: fmt-check lint-rust lint-shape lint-deps lint-rules lint-scripts-web lint-do
 .PHONY: build-codex-armv7
 build-codex-armv7:
 	nice -n 10 sh scripts/build-codex-armv7.sh
+
+DIST_VERSION ?= 0.0.0-dev.$(shell git rev-parse --short=12 HEAD)
+
+.PHONY: dist
+dist:
+	python3 scripts/package-dist.py build --version "$(DIST_VERSION)"

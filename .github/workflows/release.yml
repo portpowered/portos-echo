@@ -1,0 +1,95 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  # Temporary artifact-only registration; removed before implementation handoff.
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/install.sh'
+      - 'scripts/package-dist.py'
+      - 'tests/test_release_kit.py'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Bundle version without v
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    # Existing standalone Codex job allows 180 minutes for a cold build.
+    timeout-minutes: 240
+    env:
+      CARGO_BUILD_JOBS: '4'
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Focused wrapper and packaging tests
+        run: python3 tests/test_release_kit.py
+      - uses: ./.github/actions/setup
+        with:
+          target: build-echo
+      - name: Provision release tools
+        shell: sh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3
+          sdkmanager "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
+          rustup target add --toolchain 1.100.0 armv7-linux-androideabi
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Cheap release checks
+        run: |
+          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
+      - name: Build and verify
+        shell: sh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+          RELEASE_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$RELEASE_EVENT" = push ]; then
+            RELEASE_VERSION=${RELEASE_REF_NAME#v}
+          elif [ "$RELEASE_EVENT" = pull_request ]; then
+            RELEASE_VERSION=0.0.0-pr.$(git rev-parse --short=12 HEAD)
+          fi
+          python3 -c 'import re,sys; sys.exit(not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?", sys.argv[1]))' "$RELEASE_VERSION"
+          make dist DIST_VERSION="$RELEASE_VERSION"
+          python3 tests/test_release_kit.py --assets dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: echo-release-${{ github.sha }}
+          path: |
+            dist/echo-*-armv7.tar.gz
+            dist/install.sh
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: echo-release-${{ github.sha }}
+          path: dist
+      - name: Tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$RELEASE_TAG" dist/echo-*-armv7.tar.gz dist/install.sh dist/SHA256SUMS --verify-tag --notes-from-tag
