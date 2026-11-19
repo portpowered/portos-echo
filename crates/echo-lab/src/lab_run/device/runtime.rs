@@ -141,6 +141,9 @@ impl Runtime {
     }
 
     pub async fn ui(&mut self, expected: &Value, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+        if self.portos.is_some() {
+            return self.ui_portos(expected, index, artifacts).await;
+        }
         if let Some(sequence) = expected["sequence"].as_array() {
             return self.ui_sequence(sequence, index, artifacts).await;
         }

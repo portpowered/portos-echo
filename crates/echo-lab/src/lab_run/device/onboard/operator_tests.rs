@@ -113,6 +113,156 @@ fn configured(world: &std::rc::Rc<std::cell::RefCell<super::super::tests::World>
     (state, config)
 }
 
+fn link_expectation() -> Value {
+    json!({"state":"link_code","user_code":{"mcp_field":"user_code"},
+        "verification_uri":{"mcp_field":"verification_uri"},
+        "expires_at_unix":{"mcp_field":"expires_at_unix"}})
+}
+
+fn link_state(expiry: u64) -> Value {
+    json!({"state":"link_code","user_code":"PRIVATE-CODE-MARKER",
+        "verification_uri":"https://issuer.invalid/PRIVATE-URI-MARKER","expires_at_unix":expiry})
+}
+
+async fn presentation(socket: &mut TcpStream, seq: u64, state: Value) {
+    let frame = json!({"seq":seq,"state":state});
+    socket.write_all(format!("data: {frame}\n").as_bytes()).await.unwrap();
+}
+
+async fn screen_request(socket: TcpStream) -> TcpStream {
+    let mut reader = BufReader::new(socket);
+    loop {
+        let mut line = String::new();
+        assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
+        if line == "\r\n" {
+            return reader.into_inner();
+        }
+    }
+}
+
+async fn linked_screen(seq: u64, code: Value) -> (Runtime, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let world = world();
+    world.borrow_mut().forward = address.port();
+    let (mut state, config) = configured(&world);
+    let peer = tokio::spawn(async move {
+        let mut screen = screen_request(listener.accept().await.unwrap().0).await;
+        screen.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+        presentation(&mut screen, 1, json!({"state":"ready","message":"Echo Live ready"})).await;
+        let mut control = request(listener.accept().await.unwrap().0, "link").await;
+        presentation(&mut screen, seq, code).await;
+        control
+            .write_all(wire("200 OK", r#"{"outcome":"linked"}"#).as_bytes())
+            .await
+            .unwrap();
+        presentation(
+            &mut screen,
+            seq + 1,
+            json!({"state":"ready","message":"Echo Live ready"}),
+        )
+        .await;
+        presentation(
+            &mut screen,
+            seq + 2,
+            json!({"state":"error","relink":true,
+            "message":"Run echo-bridge link with your config to relink Port OS MCP."}),
+        )
+        .await;
+    });
+    state.screen = Some(
+        crate::lab_run::sim::production::Screen::connect(address, true)
+            .await
+            .unwrap(),
+    );
+    state.mcp_operator(&McpAction::Link, &config).await.unwrap();
+    (state, peer)
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_screen_binds_pending_code_and_reports_only_safe_projection() {
+    let root = tempfile::tempdir().unwrap();
+    let mut artifacts = Artifacts::create(root.path().join("out")).unwrap();
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let (mut state, peer) = linked_screen(2, link_state(expiry)).await;
+    state.ui(&link_expectation(), 1, &mut artifacts).await.unwrap();
+    assert_eq!(state.portos.as_ref().unwrap().measure().unwrap().link, 0);
+    let config = include_str!("../../../../../../examples/bridge.echo.toml");
+    state.mcp_operator(&McpAction::Approve, config).await.unwrap();
+    assert!(state.pending_mcp.is_none());
+    state
+        .ui(&json!({"state":"ready","message":"Echo Live ready"}), 3, &mut artifacts)
+        .await
+        .unwrap();
+    let relink = json!({"state":"error","relink":true,
+        "message":"Run echo-bridge link with your config to relink Port OS MCP."});
+    state.ui(&relink, 10, &mut artifacts).await.unwrap();
+    state.ui(&relink, 12, &mut artifacts).await.unwrap();
+    assert_eq!(state.portos.as_ref().unwrap().measure().unwrap().relink_error, 1);
+    let report = std::fs::read_to_string(artifacts.root.join("device-steps.jsonl")).unwrap();
+    for private in [
+        "PRIVATE-CODE-MARKER",
+        "PRIVATE-URI-MARKER",
+        "verification_uri",
+        "expires_at_unix",
+    ] {
+        assert_eq!(report.matches(private).count(), 0);
+    }
+    let records = report
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records[0],
+        json!({"event":"device.ui","step":1,"seq":2,
+        "bridge_generation":1,"state":{"state":"link_code"}})
+    );
+    assert_eq!(records.len(), 4);
+    peer.await.unwrap();
+    state.remote.as_mut().unwrap().release().unwrap();
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_screen_refuses_stale_missing_pending_generation_and_expired_code() {
+    let root = tempfile::tempdir().unwrap();
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let mut artifacts = Artifacts::create(root.path().join("out")).unwrap();
+    for (seq, expiry, mutation) in [
+        (1, expiry, 0),
+        (3, expiry, 0),
+        (2, 1, 0),
+        (2, expiry, 1),
+        (2, expiry, 2),
+    ] {
+        let (mut state, peer) = linked_screen(seq, link_state(expiry)).await;
+        peer.await.unwrap();
+        if mutation == 1 {
+            state.pending_mcp.take();
+        }
+        if mutation == 2 {
+            state.generation += 1;
+        }
+        assert_eq!(
+            state.ui(&link_expectation(), 1, &mut artifacts).await,
+            Err("device: invalid M5 screen observation".into())
+        );
+        assert_eq!(
+            state.portos.as_ref().unwrap().measure().unwrap(),
+            echo_lab::lab_mcp::LinkCounts::default()
+        );
+        state.remote.as_mut().unwrap().release().unwrap();
+    }
+    assert!(!artifacts.root.join("device-steps.jsonl").exists());
+}
+
 #[tokio::test]
 async fn t3_on_device_mcp_operator_uses_owned_forward_pairing_and_exact_completions() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();

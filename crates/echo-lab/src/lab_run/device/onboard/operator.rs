@@ -17,6 +17,7 @@ const PAIRING: &str = "device: invalid MCP operator pairing";
 pub(in crate::lab_run::device) struct Pending {
     socket: TcpStream,
     outcome: &'static str,
+    pub(in crate::lab_run::device) screen_after: Option<(u64, u64)>,
 }
 
 impl Pending {
@@ -42,7 +43,11 @@ impl Pending {
             .write_all(request.expose().as_bytes())
             .await
             .map_err(|_| CONTROL)?;
-        Ok(Self { socket, outcome })
+        Ok(Self {
+            socket,
+            outcome,
+            screen_after: None,
+        })
     }
 
     async fn complete(&mut self) -> Result<(), String> {
@@ -166,6 +171,7 @@ impl Runtime {
         let (address, token) = self.mcp_control(config)?;
         let mut pending = Pending::begin(address, &token, operation).await?;
         if matches!(action, McpAction::Link) {
+            pending.screen_after = self.screen.as_ref().map(|screen| (self.generation, screen.sequence()));
             self.pending_mcp = Some(pending);
             Ok(())
         } else {
