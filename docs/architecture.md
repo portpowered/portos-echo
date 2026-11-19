@@ -338,6 +338,9 @@ back to the bridge and its correlated result continues that turn. Our
 the model service itself is not implemented here. `codex.model`, falling back to `agent.model`, selects
 the delegated model; omission uses the app-server default. The local-answer change supplies a single UTC
 call-start date/time snapshot to both thread instructions and Live prompt, retained unchanged on reuse.
+The two texts are separate keys: `codex.instructions` is the delegated turn's base instructions and
+`codex.live_instructions` is the Live prompt, whose default makes conversation the rule and a hand-off the
+exception.
 
 #### Language — Codex / Responses model service
 
@@ -795,7 +798,12 @@ Live sends native `delegation.created` on the sideband. The app server runs a Co
 `dynamicTools`, requests effects from the bridge and returns text via native `delegation.context.append`.
 The bridge sees `turn/started`, tool RPCs and `turn/completed`. Live can speak filler while work runs;
 the bridge holds the reply open across that filler. Budget/deadline enforcement uses `turn/interrupt`
-for the matching turn. A response timeout can abandon a late answer and finish the filler.
+for the matching turn; nothing else does. While a delegated turn is in flight, user speech, barge-in and a
+wake neither cancel it nor cut the speaker, and the run is held open past idle until the turn completes or
+its deadline ends it. Barge-in applies again once the turn has completed. While the turn runs in silence
+hassmic is sent a display-only `hassmic-thinking` for its face; speaking wins while audio plays. The
+bridge's screen page does not show it yet. A response timeout can abandon a
+late answer and finish the filler.
 
 #### Why — Delegation
 

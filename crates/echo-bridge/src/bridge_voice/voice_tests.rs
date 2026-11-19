@@ -160,7 +160,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
             microphone_tail: 0,
             reply_received: 32,
             reply_sent: 32,
-            reply_dropped: 0
+            ..Stats::default()
         }
     );
     // Silence never opens the mouth.
@@ -246,7 +246,7 @@ async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
         |_| Ok(()),
     )
     .await;
-    assert_eq!(result, Err(Error::Deadline));
+    assert_eq!(result, Err(Error::NoResponse));
     assert_eq!(port.retired, 0);
     assert_eq!(Instant::now(), end);
     assert!(observer.commands().contains(&Command::Cut(0)));

@@ -141,6 +141,9 @@ impl<L: EchoLink> EchoLink for RunLink<'_, L> {
     async fn pause(&self) -> Result<(), echo_link::Error> {
         self.client.pause().await
     }
+    async fn thinking(&self, on: bool) -> Result<(), echo_link::Error> {
+        self.client.thinking(on).await
+    }
     async fn close(&self) -> Result<(), echo_link::Error> {
         self.client.close().await
     }

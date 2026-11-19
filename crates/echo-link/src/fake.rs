@@ -29,6 +29,7 @@ pub enum Command {
     EndRun,
     FailRun(RunFailure),
     Pause,
+    Thinking(bool),
     Close,
 }
 #[derive(Default)]
@@ -443,6 +444,12 @@ impl EchoLink for FakeLink {
     fn pause(&self) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         std::future::ready({
             lock(&self.observer.0).commands.push(Command::Pause);
+            Ok(())
+        })
+    }
+    fn thinking(&self, on: bool) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::ready({
+            lock(&self.observer.0).commands.push(Command::Thinking(on));
             Ok(())
         })
     }

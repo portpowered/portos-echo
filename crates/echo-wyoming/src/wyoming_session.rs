@@ -28,6 +28,7 @@ pub(crate) enum Command {
     EndRun(Reply<()>),
     Error(String, String, Reply<()>),
     Pause(Reply<()>),
+    Thinking(bool, Reply<()>),
     Close(Reply<()>),
 }
 
@@ -255,6 +256,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 self.pause_capture().await?;
                 let _ = reply.send(Ok(()));
             }
+            Some(Command::Thinking(on, reply)) => self.thinking(on, reply).await?,
             Some(Command::EndRun(reply)) => self.end_run(reply).await?,
             Some(Command::Error(code, text, reply)) => {
                 self.fail_run(code, text, reply).await?;
@@ -279,6 +281,15 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         self.registration = data;
         self.registered = true;
         self.paused = false;
+        Ok(())
+    }
+
+    /// Display only: hassmic shows its thinking face until told otherwise.
+    async fn thinking(&mut self, on: bool, reply: Reply<()>) -> Result<(), Error> {
+        let data = serde_json::json!({"thinking":on});
+        self.send(WyomingEvent::Other("hassmic-thinking".into(), data), vec![])
+            .await?;
+        let _ = reply.send(Ok(()));
         Ok(())
     }
 

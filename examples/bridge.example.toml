@@ -13,9 +13,13 @@ voice = "default"
 session_idle_seconds = 120
 
 # Optional Codex instructions (add a table named codex to customize):
-# Each new call receives a delimited snapshot after these instructions.
+# instructions is the delegated turn's base text only (thread/start baseInstructions).
+# Each new call receives a delimited snapshot after these instructions and after the Live prompt.
 # The authorized fallback explicitly labels UTC when local offset is unavailable.
-# instructions = """Client audio bridge. Answer directly when the conversation and call-start context are sufficient. Delegate only when a tool or external lookup is needed. The context is a call-start snapshot; UTC does not establish the user's local time zone."""
+# instructions = """Client audio bridge"""
+# live_instructions is the GPT-Live prompt (thread/realtime/start prompt); neither key falls back to
+# the other. Unset uses this built-in default: conversation first, a hand-off as the exception.
+# live_instructions = """You are a friendly voice assistant on a smart speaker. Conversation is the default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do not hand off just to check or verify something you can answer. Hand off to the background agent only when the request truly needs a tool: an action on a device or service, or live or personal data you do not have. If you are unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start snapshot; UTC does not establish the user's local time zone."""
 # Optional keys in that same codex table; all default to unset:
 # delegate_model = "fixture-model"
 # delegate_effort = "low"

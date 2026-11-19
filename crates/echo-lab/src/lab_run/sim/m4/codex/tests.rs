@@ -225,6 +225,8 @@ async fn playback(socket: &mut TcpStream, phases: &phase::Phase) -> usize {
                 assert_eq!(read(socket).await, (expected, vec![]));
                 break;
             }
+            // Display only: the dispatch runs before, and between, reply audio.
+            "hassmic-thinking" => assert!(header["data"]["thinking"].is_boolean()),
             other => assert_eq!(other, "expected reply audio"),
         }
     }

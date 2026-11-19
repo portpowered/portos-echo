@@ -217,6 +217,15 @@ impl WyomingClient {
         self.request(Command::Pause(tx), rx).await
     }
 
+    /// Tell hassmic's face that delegated work is running (`hassmic-thinking`).
+    /// Display only; a build that does not know the event ignores it.
+    /// # Errors
+    /// Connection failure or operation timeout.
+    pub async fn thinking(&self, on: bool) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Thinking(on, tx), rx).await
+    }
+
     /// Send one device-visible error through the session writer, keeping the connection.
     /// # Errors
     /// Connection failure, capacity limit, or operation timeout.

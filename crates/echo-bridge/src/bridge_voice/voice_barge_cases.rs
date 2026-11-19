@@ -247,12 +247,21 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     let mut mic = microphone(&mut events).await;
     let (mut port, tx) = port();
     let mut source = Source::new(200, false).unwrap();
-    media(turn(true), &mut port, &mut source, &mut |_| Ok(()))
+    // A dispatch in flight is thinking: user speech neither cuts nor retires
+    // anything, before or during its filler. Barge-in returns once it completes.
+    for event in [turn(true), said("One sec")] {
+        media(event, &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
+        source.interrupt(&mut port).unwrap();
+        assert!(source.delegation.in_flight() && !source.controller.cutting());
+    }
+    assert!(source.controller.speaking());
+    assert_eq!(port.retired, 0);
+    media(turn(false), &mut port, &mut source, &mut |_| Ok(()))
         .await
         .unwrap();
     source.interrupt(&mut port).unwrap();
-    assert_eq!(port.retired, 0);
     assert!(source.controller.cutting());
+    assert_eq!(std::mem::take(&mut port.retired), 1);
     source = Source::new(200, false).unwrap();
     source.controller.microphone_ended();
     media(said("old"), &mut port, &mut source, &mut |_| Ok(()))
@@ -278,8 +287,7 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     let mut sink = Some(Stalled);
     assert_eq!(
         drive(
-            &mut events,
-            &mut mic,
+            (&client, &mut events, &mut mic),
             &mut port,
             &mut sink,
             (&mut source, &mut None),

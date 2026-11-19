@@ -142,7 +142,7 @@ fn t3_m3_transcript_before_done_plays_replacement_and_closes_on_idle() {
 
 #[test]
 #[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host and Codex"]
-fn t3_m3_delegated_barge_interrupts_once_and_rejects_late_completion() {
+fn t3_m3_delegated_dispatch_is_never_interrupted_and_a_later_barge_still_cuts() {
     native_case(super::super::CutOrder::Delegated, "delegated");
 }
 
@@ -223,21 +223,18 @@ fn native_failure_trace(root: &Path, name: &str) {
 
 fn native_observations(order: super::super::CutOrder, name: &str, rows: &[Value], trace: &[Value]) {
     if order.delegated() {
-        let interrupts: Vec<_> = trace.iter().filter(|row| row["event"] == "turn/interrupt").collect();
-        let receipts: Vec<_> = trace
+        // User speech never cancels a dispatch: its answer is delivered
+        // (checked at the provider) and no interrupt is requested or recorded.
+        let interrupts = trace
             .iter()
-            .filter(|row| row["event"] == "turn.interrupt_acknowledged")
-            .collect();
-        assert_eq!(interrupts.len(), 1);
-        assert_eq!(receipts.len(), 1);
-        let completed: Vec<_> = trace.iter().filter(|row| row["event"] == "turn.interrupted").collect();
-        assert_eq!(completed.len(), 1);
-        assert!(interrupts[0]["thread_id"].as_str().is_some_and(|id| !id.is_empty()));
-        assert!(interrupts[0]["turn_id"].as_str().is_some_and(|id| !id.is_empty()));
-        assert_eq!(receipts[0]["thread_id"], interrupts[0]["thread_id"]);
-        assert_eq!(receipts[0]["turn_id"], interrupts[0]["turn_id"]);
-        assert_eq!(completed[0]["thread_id"], interrupts[0]["thread_id"]);
-        assert_eq!(completed[0]["turn_id"], interrupts[0]["turn_id"]);
+            .filter(|row| {
+                matches!(
+                    row["event"].as_str(),
+                    Some("turn/interrupt" | "turn.interrupt_acknowledged" | "turn.interrupted")
+                )
+            })
+            .count();
+        assert_eq!(interrupts, 0);
     }
     // Public scenario events deliberately omit private turn receipts. Assert and
     // print the actual bridge records retained by the production driver.
@@ -327,9 +324,11 @@ async fn t3_m3_model_boundary_holds_completion_until_explicit_release() {
     assert_eq!(completed[2]["type"], "response.completed");
     assert_eq!(
         completed[2]["response"]["output"][0]["content"][0]["text"],
-        "stale delegated answer"
+        "delegated answer"
     );
-    super::super::CutOrder::Delegated.verify(&mut provider).await.unwrap();
+    provider.send(&json!({"snapshot":true})).await.unwrap();
+    let released = provider.expect("provider.snapshot").await.unwrap();
+    assert_eq!((&released["models"], &released["released"]), (&json!(1), &json!(1)));
     assert_eq!(provider.close().await, Ok(()));
 }
 

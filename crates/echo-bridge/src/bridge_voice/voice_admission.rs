@@ -24,6 +24,8 @@ pub enum ServeNotice {
     Kill(bool),
     Listening,
     Probe,
+    /// The run ended without a reply; the device was told and service continues.
+    Unanswered,
     Device(LinkEvent<()>),
     Session(SessionNotice),
 }
@@ -139,12 +141,24 @@ where
                     .map_err(bridge_codex::rpc_error)?;
                 client.fail_run(echo_link::RunFailure::KillSwitch).await?;
                 gate.tripped(&mut observe)?;
+            } else if result == Err(Error::NoResponse) {
+                unanswered(&*client, &mut observe).await?;
             } else {
                 result?;
             }
         }
     });
     super::earcon::scope(client, wake_earcon, work).await
+}
+
+/// Only that run failed, and its call is already closed. End the device's run
+/// and stay connected for the next wake.
+async fn unanswered<L: EchoLink>(
+    client: &L,
+    observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    client.fail_run(echo_link::RunFailure::Unavailable).await?;
+    observe(ServeNotice::Unanswered)
 }
 
 async fn admitted<L, R, W, P>(
@@ -181,13 +195,18 @@ where
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
         result = super::earcon::negotiating(device.1, super::earcon::capture_during(&mut device.2, async {
-            let instructions = super::voice_config::call_instructions(options.call.instructions, clock(), options.call.time_zone)?;
+            // One clock sample: the delegated turn and the Live prompt carry the same snapshot.
+            let (now, zone) = (clock(), options.call.time_zone);
+            let instructions = (
+                super::voice_config::call_instructions(options.call.instructions, now, zone)?,
+                super::voice_config::call_instructions(options.call.prompt, now, zone)?,
+            );
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
             Ok::<_, Error>((media, instructions))
         }), &mut setup_observer) => result?,
     };
     super::voice_session::peer_created(&mut media, &mut trace).await?;
-    let options_call = options.conversation(&instructions, deadline);
+    let options_call = options.conversation((&instructions.0, &instructions.1), deadline);
     let mut observer = |notice| {
         if let SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))) = &notice {
             options.session.muted = *value;

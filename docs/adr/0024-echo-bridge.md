@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 16
+last modified: 2026, november, 19
 status: accepted
 ---
 
@@ -63,6 +63,20 @@ means legacy first activity, not a final total. The completed count equals
 compatible. `reply.started` follows the first forwarded PCM payload, so arming
 an empty reply no longer claims audible activity. A Played acknowledgment is
 still required for terminal playback evidence.
+
+Capture reaches the call through bounded backpressure. The media sender refuses
+a frame when its queue is full instead of evicting the oldest; the run owner
+keeps refused frames in order and hands them over as the sender makes room.
+Speech buffered during call setup therefore arrives whole, as one burst. The
+backlog holds 30 s; an eviction there is `mic.uplink_dropped {count, reason:
+backlog_full}`. Mute discards the backlog.
+
+A response window that passes with no finished reply ends that run, not the
+process. The run owner returns `NoResponse`; the service closes the call, fails
+the device run (`hassmic-end`, then an `echo-unavailable` error), records
+`run.ended {reason: no_response}` and `live.closed {reason: no_response}`, and
+publishes `bridge.ready`. The next wake opens a new call. A missing Played
+acknowledgment remains a fatal `deadline`.
 
 One multi-thread Tokio runtime drives one Live call owner. Conversion uses
 fixed scratch and complete 20 ms Opus frames. Reply buffering is bounded and

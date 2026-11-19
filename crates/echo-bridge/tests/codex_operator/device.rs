@@ -24,6 +24,7 @@ fn runtime_options<'a>(
             call: bridge_codex::Options {
                 voice: Some("alloy"),
                 instructions: "synthetic fixture",
+                prompt: "synthetic fixture",
                 model: None,
                 effort: None,
                 time_zone: None,

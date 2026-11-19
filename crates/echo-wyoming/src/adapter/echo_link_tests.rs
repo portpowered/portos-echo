@@ -457,3 +457,16 @@ async fn played_keeps_capture_through_two_replies_until_explicit_end() {
     EchoLink::close(&client).await.unwrap();
     assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
 }
+
+#[tokio::test(start_paused = true)]
+async fn echo_link_thinking_sends_the_display_event_and_nothing_else() {
+    let (io, mut peer) = duplex(4096);
+    let client = WyomingClient::from_io(io, ClientOptions::default());
+    for on in [true, false] {
+        EchoLink::thinking(&client, on).await.unwrap();
+        let event = receive(&mut peer).await;
+        assert_eq!(event.header.r#type, "hassmic-thinking");
+        assert_eq!(event.header.data, Some(json!({"thinking":on})));
+        assert_eq!(event.payload, Vec::<u8>::new());
+    }
+}

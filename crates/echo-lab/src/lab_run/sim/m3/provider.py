@@ -64,9 +64,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             assert observed['models'] == 1, 'unexpected model retry'
             emit({'event': 'provider.model_started'})
             assert release_model.wait(20), 'late model release deadline'
-            item = {'type': 'message', 'id': 'stale-message', 'role': 'assistant', 'status': 'completed',
-                    'content': [{'type': 'output_text', 'text': 'stale delegated answer', 'annotations': []}]}
-            response = {'id': 'stale-response', 'status': 'completed', 'output': [item]}
+            item = {'type': 'message', 'id': 'delegated-message', 'role': 'assistant', 'status': 'completed',
+                    'content': [{'type': 'output_text', 'text': 'delegated answer', 'annotations': []}]}
+            response = {'id': 'delegated-response', 'status': 'completed', 'output': [item]}
             values = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
                       {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
                       {'type': 'response.completed', 'response': response}]

@@ -7,7 +7,7 @@ use echo_config::AgentConfig;
 use echo_delegation::codex_dispatch::{Catalog, DailyBudget, Dispatcher, Outcome};
 use echo_media::{MediaPeer, PcmFrame};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -94,7 +94,6 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     request: Option<RequestId>,
     cancel: Option<oneshot::Sender<()>>,
     active: Option<(String, String)>,
-    retired: HashSet<(String, String)>,
     deferred: VecDeque<Event>,
     budget: ToolBudget,
     session: Option<mpsc::Receiver<SessionRequest>>,
@@ -123,7 +122,6 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             request: None,
             cancel: None,
             active: None,
-            retired: HashSet::new(),
             deferred: VecDeque::new(),
             budget,
             session: None,
@@ -181,12 +179,6 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     }
 
     fn observed_control(&mut self, event: Event) -> Result<MediaEvent, Error> {
-        let retired = match &event {
-            Event::TurnStarted { thread, turn } | Event::TurnCompleted { thread, turn } => {
-                self.retired.contains(&(thread.clone(), turn.clone()))
-            }
-            _ => false,
-        };
         // Publish lifecycle only after the dispatcher has consumed it. Deferred
         // completion must still cancel pending effects before the caller sees it.
         let observed = match &event {
@@ -202,7 +194,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         };
         let deferred = self.work.is_some();
         self.control(event)?;
-        Ok(if deferred || retired {
+        Ok(if deferred {
             other()
         } else {
             MediaEvent::Control(observed)
@@ -267,9 +259,6 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     }
 
     fn start_turn(&mut self, thread: &str, turn: &str) -> Result<(), Error> {
-        if self.retired.contains(&(thread.into(), turn.into())) {
-            return Ok(());
-        }
         // A first tool request may precede the matching lifecycle notification.
         if self
             .active
@@ -293,11 +282,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         Ok(())
     }
 
-    fn settle(&mut self, (mut dispatcher, mut outcome): (Dispatcher<H>, Option<Outcome>)) -> Result<(), Error> {
-        if self.active.as_ref().is_some_and(|active| self.retired.contains(active)) {
-            dispatcher.refuse_budget();
-            outcome = None;
-        }
+    fn settle(&mut self, (dispatcher, outcome): (Dispatcher<H>, Option<Outcome>)) -> Result<(), Error> {
         self.work = None;
         self.cancel = None;
         self.dispatcher = Some(dispatcher);
@@ -319,11 +304,17 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     }
 }
 
-impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static> VoicePort
-    for ToolSession<'_, '_, R, W, P, H>
+impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static> VoicePort
+    for ToolSession<'p, 'a, R, W, P, H>
 {
     fn send(&self, frame: PcmFrame) -> Result<(), Error> {
         self.port.send(frame)
+    }
+    fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        self.port.try_send(frame)
+    }
+    fn uplink_ready(&self) -> impl Future<Output = ()> + use<'p, 'a, R, W, P, H> {
+        self.port.send_ready()
     }
     async fn next(&mut self) -> Result<MediaEvent, Error> {
         Box::pin(Self::next(self)).await
@@ -338,33 +329,6 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 's
         if let Some(owner) = &self.run {
             owner.send_replace(run);
         }
-    }
-    fn interrupt_turn(&mut self) -> Result<(), Error> {
-        let Some(active) = self.active.clone() else {
-            return Ok(());
-        };
-        if self.retired.contains(&active) {
-            return Ok(());
-        }
-        // Match the dispatcher's existing maximum number of owned turns.
-        if self.retired.len() == 1024 {
-            return Err(Error::Unavailable);
-        }
-        let params = match self.dispatcher.as_mut() {
-            Some(dispatcher) => dispatcher.refuse_budget(),
-            None => Some(echo_codex::codex_protocol::TurnInterrupt {
-                thread_id: active.0.clone(),
-                turn_id: active.1.clone(),
-            }),
-        };
-        if let Some(params) = params {
-            self.port.interrupt(&params, Instant::now() + Duration::from_secs(2))?;
-        }
-        self.retired.insert(active);
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
-        }
-        Ok(())
     }
 }
 

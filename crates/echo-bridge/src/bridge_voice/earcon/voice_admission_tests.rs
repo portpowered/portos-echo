@@ -49,12 +49,16 @@ async fn admission_samples_fresh_context_in_both_fields_without_accumulation() {
         );
         let remote = check_context(
             (server, &observer, &started),
-            super::super::voice_config::call_instructions("configured\n\u{8a9e} \n", now, zone).unwrap(),
+            (
+                super::super::voice_config::call_instructions("configured\n\u{8a9e} \n", now, zone).unwrap(),
+                super::super::voice_config::call_instructions("live\n\u{8a9e} \n", now, zone).unwrap(),
+            ),
         );
         let (result, ()) = tokio::join!(work, remote);
         drop(observe);
         assert_eq!((result, completed), (Ok(()), 2));
         assert_eq!(options.call.instructions, "configured\n\u{8a9e} \n");
+        assert_eq!(options.call.prompt, "live\n\u{8a9e} \n");
     }
     assert_eq!(samples.get(), 4);
 }

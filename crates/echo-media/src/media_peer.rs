@@ -237,6 +237,17 @@ impl MediaPeer for Peer {
         self.shared.send.push(frame);
         Ok(())
     }
+    fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        self.shared.check()?;
+        if *self.shared.state.borrow() != PeerState::Connected {
+            return Err(Error::NotConnected);
+        }
+        Ok(self.shared.send.try_push(frame))
+    }
+    fn send_ready(&self) -> impl Future<Output = ()> + Send + use<> {
+        let shared = self.shared.clone();
+        async move { shared.send.vacant().await }
+    }
     async fn recv(&mut self) -> Result<Option<PcmFrame>, Error> {
         let frame = self.shared.recv.pop().await;
         if *self.shared.state.borrow() == PeerState::Closed {

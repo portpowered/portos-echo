@@ -21,6 +21,7 @@ from tools_provider import function_tools, read_frame
 
 answers = queue.Queue()
 commands = queue.Queue()
+heard = threading.Event()
 wake_read, wake_write = socket.socketpair()
 output_lock = threading.Lock()
 observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'models': [], 'delegations': [], 'appends': []}
@@ -39,7 +40,9 @@ def frame(connection, value):
 
 
 class Script:
-    """Turn i answers with turns[i]: [{'call': name, 'arguments': {...}}..., {'say': text}]."""
+    """Turn i answers with turns[i]: [{'call': name, 'arguments': {...}}..., {'say': text}].
+
+    A step may carry 'heard': user speech delivered while its model request is pending."""
 
     def __init__(self, turns):
         self.turns = turns
@@ -68,6 +71,11 @@ class Script:
             item = {'type': 'message', 'id': f'msg-{turn}', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': step['say'], 'annotations': []}]}
         self.step += 1
+        if 'heard' in step:
+            # The turn is in flight: this model request is still unanswered.
+            commands.put({'heard': step['heard']})
+            wake_write.sendall(b'e')
+            assert heard.wait(20), 'sideband did not deliver the overlapping speech'
         observed['models'].append({'turn': turn, 'tools': [tool['name'] for tool in body['tools']]})
         emit({'event': 'provider.model', 'turn': turn, 'outputs': [item['output'] for item in mine]})
         response = {'id': f'response-{turn}-{self.step}', 'status': 'completed', 'output': [item]}
@@ -176,6 +184,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         value = script.begin(command['delegate'])
                         frame(self.connection, value)
                         emit({'event': 'provider.delegation', 'delegation_id': value['item']['id']})
+                    elif 'heard' in command:
+                        frame(self.connection, {'type': 'input_transcript.added', 'item': {'text': command['heard']}})
+                        frame(self.connection, {'type': 'turn.done',
+                                                'turn': {'role': 'user', 'transcript': command['heard']}})
+                        heard.set()
+                        emit({'event': 'provider.heard'})
                     else:
                         for value in script.transcripts(command['transcripts']):
                             frame(self.connection, value)

@@ -197,6 +197,7 @@ async fn client(
                 &Options {
                     voice: None,
                     instructions: "Client audio bridge",
+                    prompt: "Client audio bridge",
                     model: Some(model),
                     effort: None,
                     time_zone: None,

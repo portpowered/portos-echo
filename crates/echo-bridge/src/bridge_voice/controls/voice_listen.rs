@@ -59,6 +59,8 @@ pub(super) async fn replies<L: EchoLink>(
         if source.session.ending() {
             return Ok(());
         }
+        // A dispatch that outlives its spoken acknowledgement shows as thinking.
+        super::voice_source::think(client, source).await;
         if !listen((events, microphone), port, (source, drain), cancelled.as_mut(), observe).await? {
             return Ok(());
         }
@@ -79,9 +81,16 @@ async fn listen<E: LinkEvents>(
     let (events, microphone) = input;
     let (source, drain) = context;
     tokio::pin!(cancelled);
+    // A dispatch still in flight holds the run open past idle. It started
+    // before this wait, so its own task deadline ends it inside this window.
+    let hold = source.controller.replacement_deadline().ok();
     loop {
         // A granted extension moves the deadline; a requested end closes now.
-        let deadline = source.controller.idle_deadline().ok_or(Error::Input)?;
+        let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
+        let deadline = match hold {
+            Some(hold) if source.delegation.in_flight() => idle.max(hold),
+            _ => idle,
+        };
         if source.session.ending() {
             return Ok(false);
         }
@@ -133,6 +142,7 @@ async fn listening_step<E: LinkEvents>(
                     super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
+                MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),
                 // Continuous RTP and stale done frames cannot renew listening.
                 MediaEvent::Control(_) | MediaEvent::Audio(_) => (),
             }

@@ -47,6 +47,11 @@ impl Grants {
         self.ending
     }
 
+    /// The configured listen window after a reply.
+    pub fn listen(&self) -> Option<Duration> {
+        self.listen
+    }
+
     /// Tool-granted absolute listen deadline, retained across replies.
     pub fn granted(&self) -> Option<Instant> {
         self.granted
