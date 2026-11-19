@@ -52,14 +52,16 @@ pub struct ConversationOptions<'a> {
 }
 
 impl<'o> super::ServeOptions<'o> {
-    pub(super) fn conversation<'a>(&self, instructions: &'a str, deadline: Instant) -> ConversationOptions<'a>
+    /// `texts` is the delegated turn's instructions, then the Live prompt.
+    pub(super) fn conversation<'a>(&self, texts: (&'a str, &'a str), deadline: Instant) -> ConversationOptions<'a>
     where
         'o: 'a,
     {
         ConversationOptions {
             call: crate::bridge_codex::Options {
                 voice: self.call.voice,
-                instructions,
+                instructions: texts.0,
+                prompt: texts.1,
                 model: self.call.model,
                 effort: self.call.effort,
                 time_zone: self.call.time_zone,

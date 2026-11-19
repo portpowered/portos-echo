@@ -21,6 +21,7 @@ pub(super) fn options() -> Options<'static> {
     Options {
         voice: Some("alloy"),
         instructions: "Client audio bridge",
+        prompt: "Live prompt",
         model: Some("fixture-model"),
         effort: None,
         time_zone: None,
@@ -69,7 +70,7 @@ pub(super) async fn start(server: &mut Server) -> Value {
         json!({
             "threadId":"thread-1","outputModality":"audio","transport":{"type":"webrtc","sdp":"fixture-offer"},
             "version":"v3","includeStartupContext":false,"clientManagedHandoffs":false,
-            "voice":"alloy","prompt":"Client audio bridge"
+            "voice":"alloy","prompt":"Live prompt"
         })
     );
     // Real app servers can emit SDP before the request's reply.
@@ -106,7 +107,7 @@ pub(super) async fn admitted_start(server: &mut Server, began: std::time::System
         json!({
             "threadId":"thread-1","outputModality":"audio","transport":{"type":"webrtc","sdp":"fixture-offer"},
             "version":"v3","includeStartupContext":false,"clientManagedHandoffs":false,
-            "voice":"alloy","prompt":prompt
+            "voice":"alloy","prompt":prompt.replacen("Client audio bridge", "Live prompt", 1)
         })
     );
     notification(

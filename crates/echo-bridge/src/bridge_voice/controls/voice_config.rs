@@ -119,6 +119,7 @@ impl Configured {
                 call: bridge_codex::Options {
                     voice: self.config.codex_voice(),
                     instructions: &self.config.codex.instructions,
+                    prompt: &self.config.codex.live_instructions,
                     model: self.config.codex_model(),
                     effort: self.config.codex.delegate_effort.as_deref(),
                     time_zone: self.config.codex.time_zone.as_deref(),
@@ -237,10 +238,7 @@ pub(super) mod tests {
     #[tokio::test(start_paused = true)]
     async fn configured_call_options_include_context_and_preserve_policy() {
         let prepared = configured().with_mcp_epoch(Some(123));
-        assert_eq!(
-            prepared.config.codex.instructions,
-            "Client audio bridge. Answer directly when the conversation and call-start context are sufficient. Delegate only when a tool or external lookup is needed. The context is a call-start snapshot; UTC does not establish the user's local time zone."
-        );
+        assert_eq!(prepared.config.codex.instructions, "Client audio bridge");
         let tool = DynamicTool {
             name: "test.echo".into(),
             description: "Echo".into(),
@@ -253,7 +251,12 @@ pub(super) mod tests {
             options.voice.call.time_zone,
         )
         .unwrap();
-        let call = options.voice.conversation(&text, options.host.deadline);
+        let call = options
+            .voice
+            .conversation((&text, "live snapshot"), options.host.deadline);
+        assert_eq!(call.call.prompt, "live snapshot");
+        assert!(options.voice.call.prompt.contains("Conversation is the default"));
+        assert_eq!(options.voice.call.prompt, prepared.config.codex.live_instructions);
         assert_eq!(
             call.call.instructions,
             format!(
@@ -312,6 +315,7 @@ pub(super) mod tests {
                 effort: Some("low"),
                 time_zone: Some("Europe/Berlin"),
                 instructions: "configured\n\u{8a9e} \n",
+                prompt: "live\n\u{8a9e} \n",
             },
             tools: vec![],
             session: SessionOptions {
@@ -332,7 +336,7 @@ pub(super) mod tests {
             &echo_link::fake::Observer,
             &tokio::sync::Notify,
         ),
-        expected: String,
+        expected: (String, String),
     ) {
         let (server, observer, started) = remote;
         let mut server = BufReader::new(server);
@@ -343,9 +347,9 @@ pub(super) mod tests {
             assert_eq!(request["method"], method);
             let params = &request["params"];
             match method {
-                "thread/start" => check_thread_context(params, &expected),
+                "thread/start" => check_thread_context(params, &expected.0),
                 "thread/realtime/start" => {
-                    check_realtime_context(params, &expected);
+                    check_realtime_context(params, &expected.1);
                     server.get_mut().write_all(b"{\"method\":\"thread/realtime/sdp\",\"params\":{\"threadId\":\"thread-1\",\"sdp\":\"fixture-answer\"}}\n").await.unwrap();
                 }
                 _ => {

@@ -91,6 +91,7 @@ async fn client(config: &CodexConfig, routes: &LocalRoutes, commands: mpsc::Send
                 &Options {
                     voice: None,
                     instructions: "Client audio bridge",
+                    prompt: "Client audio bridge",
                     model: None,
                     effort: None,
                     time_zone: None,

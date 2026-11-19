@@ -76,7 +76,9 @@ async fn configured_options_preserve_overrides_budgets_tools_and_default_voice()
     assert_eq!(options.mcp_epoch, None);
     assert_eq!(options.voice.call.voice, Some("cedar"));
     assert_eq!(options.voice.call.model, Some("delegate-model"));
-    let call = options.voice.conversation("snapshot", options.host.deadline);
+    let call = options
+        .voice
+        .conversation(("snapshot", "live snapshot"), options.host.deadline);
     assert_eq!(call.call.effort, Some("custom-effort"));
     assert_eq!(call.call.time_zone, Some("Europe/Berlin"));
     assert_eq!(options.voice.call.instructions, "configured instructions");
