@@ -59,6 +59,8 @@ pub(super) async fn replies<L: EchoLink>(
         if source.session.ending() {
             return Ok(());
         }
+        // A dispatch that outlives its spoken acknowledgement shows as thinking.
+        super::voice_source::think(client, source).await;
         if !listen((events, microphone), port, (source, drain), cancelled.as_mut(), observe).await? {
             return Ok(());
         }
@@ -140,7 +142,12 @@ async fn listening_step<E: LinkEvents>(
                     super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
-                MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),
+                MediaEvent::Control(Event::TurnCompleted { .. }) => {
+                    source.dispatch_completed();
+                    if !source.delegation.in_flight() {
+                        observe(Notice::Thinking(false))?;
+                    }
+                }
                 // Continuous RTP and stale done frames cannot renew listening.
                 MediaEvent::Control(_) | MediaEvent::Audio(_) => (),
             }

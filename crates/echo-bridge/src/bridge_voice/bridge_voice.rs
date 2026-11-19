@@ -87,6 +87,8 @@ pub enum Notice {
     /// Per-reply counters while a persistent run retains capture.
     ReplySettled(Stats),
     SessionTool(session_tools::Receipt),
+    /// A delegated turn began (true) or the last one in flight completed.
+    Thinking(bool),
 }
 
 #[derive(Clone, Copy)]
@@ -230,7 +232,7 @@ async fn generation<L: EchoLink>(
         tokio::select! {
             biased;
             () = cancelled => Err(Error::Control),
-            result = drive(events, microphone, port, &mut sink, (source, drain), options, observe) => result,
+            result = drive((client, events, microphone), port, &mut sink, (source, drain), options, observe) => result,
         }
     };
     let result = timeout_at(options.response_deadline + options.played_timeout, async {
@@ -265,9 +267,8 @@ async fn generation<L: EchoLink>(
     Ok(())
 }
 
-async fn drive<E: LinkEvents>(
-    events: &mut E,
-    microphone: &mut E::Run,
+async fn drive<L: EchoLink>(
+    link: (&L, &mut L::Events, &mut <L::Events as LinkEvents>::Run),
     port: &mut impl VoicePort,
     sink: &mut Option<impl ReplySink>,
     context: (
@@ -277,6 +278,7 @@ async fn drive<E: LinkEvents>(
     options: &Options,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    let (client, events, microphone) = link;
     let (source, drain) = context;
     let mut pending = None;
     let mut deadline = options.response_deadline;
@@ -284,6 +286,7 @@ async fn drive<E: LinkEvents>(
         if source.controller.cutting() {
             return Err(Error::Control);
         }
+        voice_source::think(client, source).await;
         if source.reply.drained() && pending.is_none() && sink.is_some() {
             drop(sink.take());
             deadline = Instant::now() + options.played_timeout;
@@ -460,12 +463,21 @@ async fn media(
             observe(Notice::Transcript { role, text, done })
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
+            let waiting = source.delegation.in_flight();
             source.delegation.started();
-            Ok(())
+            if waiting {
+                Ok(())
+            } else {
+                observe(Notice::Thinking(true))
+            }
         }
         MediaEvent::Control(Event::TurnCompleted { .. }) => {
             source.delegation.completed();
-            Ok(())
+            if source.delegation.in_flight() {
+                Ok(())
+            } else {
+                observe(Notice::Thinking(false))
+            }
         }
         MediaEvent::Control(Event::SpeechStarted) => source.interrupt(port),
         MediaEvent::Control(Event::Session(request)) => {

@@ -23,6 +23,8 @@ pub(super) struct Source {
     pub session: super::session_tools::Grants,
     /// Speech the bounded media sender has not taken yet, oldest first.
     uplink: VecDeque<PcmFrame>,
+    /// The device was told a dispatch is running in silence.
+    thinking: bool,
 }
 
 impl Source {
@@ -33,6 +35,16 @@ impl Source {
         self.delegation = self.delegation.carried();
         self.mouth = Mouth::default();
         Ok(())
+    }
+
+    /// True once per silent stretch of a running dispatch: when the turn
+    /// starts with the mouth closed, and again each time the mouth closes
+    /// under it. The device drops the indication itself when audio plays.
+    fn thinking_due(&mut self) -> bool {
+        let quiet = self.delegation.in_flight() && !self.mouth.open();
+        let due = quiet && !self.thinking;
+        self.thinking = quiet;
+        due
     }
 
     /// A dispatch that finished while listening gives its answer a fresh
@@ -61,6 +73,7 @@ impl Source {
             lead_ms,
             delegation: Delegation::default(),
             mouth: Mouth::default(),
+            thinking: false,
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),
             uplink: VecDeque::new(),
@@ -336,6 +349,15 @@ const OUTPUT_DELAY: Duration = Duration::from_millis(200);
 pub struct Mouth {
     clock: Option<Instant>,
     transitions: VecDeque<(Instant, bool)>,
+    open: bool,
+}
+
+/// Best effort: the indication is display only, so a device that cannot take
+/// it never fails or delays the reply.
+pub(super) async fn think<L: echo_link::EchoLink>(client: &L, source: &mut Source) {
+    if source.thinking_due() {
+        let _ = tokio::time::timeout(Duration::from_secs(1), client.thinking(true)).await;
+    }
 }
 
 impl Mouth {
@@ -374,7 +396,15 @@ impl Mouth {
     /// The change due by `now`, if any: true opens the mouth, false closes it.
     pub fn poll(&mut self, now: Instant) -> Option<bool> {
         self.due().filter(|due| *due <= now)?;
-        self.transitions.pop_front().map(|(_, open)| open)
+        let (_, open) = self.transitions.pop_front()?;
+        self.open = open;
+        Some(open)
+    }
+
+    /// Audible reply audio is playing on the Echo.
+    #[must_use]
+    pub fn open(&self) -> bool {
+        self.open
     }
 }
 

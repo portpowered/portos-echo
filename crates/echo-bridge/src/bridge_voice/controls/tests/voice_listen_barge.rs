@@ -237,6 +237,8 @@ async fn voice_listen_dispatch_in_flight_ignores_speech_and_holds_the_run_for_it
     reply(&tx, 5000).await;
     settle(&mut work, &observer, &receipts, 1).await;
     assert_eq!((frames(&observer), cuts(&observer)), (24, 0));
+    // The device was told once per silent stretch: before the filler, after it.
+    assert_eq!(told(&observer), 2);
     // Idle (3 s) cannot close the run under the dispatch.
     tokio::time::advance(Duration::from_secs(5)).await;
     poll(work.as_mut()).await;
@@ -253,4 +255,9 @@ async fn voice_listen_dispatch_in_flight_ignores_speech_and_holds_the_run_for_it
     let stats = work.await.unwrap();
     assert_eq!((stats.reply_sent, receipts.get(), cuts(&observer)), (36, 2, 0));
     assert_eq!(observer.commands().last(), Some(&Command::EndRun));
+}
+
+fn told(observer: &Observer) -> usize {
+    let commands = observer.commands();
+    commands.iter().filter(|c| **c == Command::Thinking(true)).count()
 }

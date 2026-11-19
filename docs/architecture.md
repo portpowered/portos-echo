@@ -800,7 +800,9 @@ The bridge sees `turn/started`, tool RPCs and `turn/completed`. Live can speak f
 the bridge holds the reply open across that filler. Budget/deadline enforcement uses `turn/interrupt`
 for the matching turn; nothing else does. While a delegated turn is in flight, user speech, barge-in and a
 wake neither cancel it nor cut the speaker, and the run is held open past idle until the turn completes or
-its deadline ends it. Barge-in applies again once the turn has completed. A response timeout can abandon a
+its deadline ends it. Barge-in applies again once the turn has completed. While the turn runs in silence
+the screen shows `thinking` and hassmic is sent a display-only `hassmic-thinking`; speaking wins while
+audio plays. A response timeout can abandon a
 late answer and finish the filler.
 
 #### Why — Delegation

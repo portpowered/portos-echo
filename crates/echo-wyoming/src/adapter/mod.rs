@@ -128,6 +128,9 @@ impl EchoLink for WyomingClient {
     async fn end_run(&self) -> Result<(), Error> {
         Self::end_run(self).await.map_err(error)
     }
+    async fn thinking(&self, on: bool) -> Result<(), Error> {
+        Self::thinking(self, on).await.map_err(error)
+    }
     async fn fail_run(&self, code: RunFailure) -> Result<(), Error> {
         let (code, text) = match code {
             RunFailure::RelinkRequired => ("echo-relink-required", "Relink required."),
