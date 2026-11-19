@@ -73,6 +73,16 @@ async fn save_during_playback(
             json!({"version":1,"restart_pending":true})
         );
     }
+    pending_snapshot(fixture).await;
+    assert_eq!(closed.load(Ordering::SeqCst), 0);
+    assert!(!observer.commands().contains(&Command::Close));
+    let rows = trace(path);
+    for event in ["settings.restart_prepared", "bridge.run_completed"] {
+        assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), 0);
+    }
+}
+
+async fn pending_snapshot(fixture: &Fixture) {
     // A completed HTTP snapshot crosses the live host after both commits.
     let snapshot: Value = reqwest::Client::new()
         .get(settings_runtime_url(fixture, "/settings/v1"))
@@ -85,19 +95,6 @@ async fn save_during_playback(
     assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 3);
     assert_eq!(snapshot["settings"]["codex"]["voice"], "marin");
     assert_eq!(snapshot["restart_pending"], true);
-    assert_eq!(closed.load(Ordering::SeqCst), 0);
-    assert!(!observer.commands().contains(&Command::Close));
-    let rows = trace(path);
-    assert_eq!(
-        rows.iter()
-            .filter(|row| row["event"] == "settings.restart_prepared")
-            .count(),
-        0
-    );
-    assert_eq!(
-        rows.iter().filter(|row| row["event"] == "bridge.run_completed").count(),
-        0
-    );
 }
 
 fn assert_coalesced(fixture: &Fixture, path: &Path, host: &mut echo_bridge::bridge_settings::SettingsHost) {
