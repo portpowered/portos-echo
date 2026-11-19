@@ -52,11 +52,9 @@ async fn exercise(finish: Finish) {
     wake(&mut satellite).await;
     let mut signal = BufReader::new(control);
     let media = remote(&mut signal).await;
-    held_playback(&fixture, &mut satellite).await;
+    held_playback(&fixture, &mut satellite, &mut signal).await;
     bridge_short::send(&mut satellite, "played", json!({})).await;
-    let mut line = String::new();
-    assert_ne!(signal.read_line(&mut line).await.unwrap(), 0);
-    assert_eq!(line, "closing\n");
+    closing(&mut signal).await;
     cleanup_control(&fixture, &mut process, finish);
     signal.get_mut().write_all(b"close\n").await.unwrap();
     drop(signal);
@@ -65,6 +63,12 @@ async fn exercise(finish: Finish) {
     assert_eq!(process.stderr().await, "");
     super::super::host::released(&fixture).await;
     completed(&fixture, finish);
+}
+
+async fn closing(signal: &mut BufReader<TcpStream>) {
+    let mut line = String::new();
+    assert_ne!(signal.read_line(&mut line).await.unwrap(), 0);
+    assert_eq!(line, "closing\n");
 }
 
 fn cleanup_control(fixture: &Fixture, process: &mut Process, finish: Finish) {
@@ -137,7 +141,6 @@ async fn remote(signal: &mut BufReader<TcpStream>) -> tokio::task::JoinHandle<()
         step(&mut peer).await;
     }
     send_audio(&mut peer).await;
-    signal.get_mut().write_all(b"reply\n").await.unwrap();
     tokio::spawn(async move {
         loop {
             step(&mut peer).await;
@@ -172,8 +175,8 @@ async fn step(peer: &mut LivePeer) {
     }
 }
 
-async fn held_playback(fixture: &Fixture, satellite: &mut TcpStream) {
-    receive_playback(satellite).await;
+async fn held_playback(fixture: &Fixture, satellite: &mut TcpStream, signal: &mut BufReader<TcpStream>) {
+    receive_playback(satellite, signal).await;
     for patch in [
         json!({"agent":{"max_tool_calls":3}}),
         json!({"codex":{"voice":"marin"}}),
@@ -200,7 +203,7 @@ async fn held_playback(fixture: &Fixture, satellite: &mut TcpStream) {
     );
 }
 
-async fn receive_playback(satellite: &mut TcpStream) {
+async fn receive_playback(satellite: &mut TcpStream, signal: &mut BufReader<TcpStream>) {
     assert_eq!(bridge_short::read_reply(satellite).await.0["type"], "audio-start");
     let mut bytes = 0;
     loop {
@@ -212,6 +215,11 @@ async fn receive_playback(satellite: &mut TcpStream) {
         );
         if kind == "audio-stop" {
             break;
+        }
+        // UDP media and the RPC pipe have independent ordering. Complete the
+        // synthetic reply only after real decoded audio crosses Wyoming.
+        if bytes == 0 && !payload.is_empty() {
+            signal.get_mut().write_all(b"reply\n").await.unwrap();
         }
         bytes += payload.len();
     }
