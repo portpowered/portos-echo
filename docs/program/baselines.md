@@ -199,7 +199,8 @@ Measured on the Echo with an instrumented armv7 `echo-bridge` at 34cbe231 and ha
 `chatgpt` realtime call over Wi-Fi. Every reply now records these values in a `reply.quality` trace record
 (`arrival_gap_max_ms`, `late_arrivals`, `underruns`, `underrun_max_ms`, `depth_min_ms`, `depth_max_ms`,
 `discarded.{after_reply,idle,cut,audible}`, `rtp_lost`; since the adaptive playout also
-`target_ms.{min,max,final}`, `reprimes`, `concealment_ms`, `fade_ins`, `drained_frames`). Depth and underruns
+`target_ms.{min,max,final}`, `reprimes`, `concealment_ms`, `fade_ins`, `drained_frames`; since 2026-11-19 also
+`cuts.{count,trigger}`). Depth and underruns
 are the bridge's model of the device queue (20 ms of playout per frame written); hassmic logs no underrun of
 its own.
 
@@ -211,6 +212,9 @@ its own.
 | Live run with the 100 ms prime, 4 replies (1,430, 250, 267 and 279 frames) | `late_arrivals` 5, 4, 1, 2; `underruns` 2, 3, 1, 1; `rtp_lost` 0; `dropped_frames` 0 |
 | Where the remaining underruns fall | one per `call.receive_reset` (5 resets, 7 underruns); `arrival_gap_max_ms` 162–443 spans the reset window |
 | Audible frames discarded while a reply was being cut | 0, 20, 9, 8 per reply (`discarded.cut` equal); cause not yet determined |
+| Cause of those discards (2026-11-19, traces pulled from the Echo) | each user transcript fragment during a reply cut it at once, while the model talked on; playback resumed at the next assistant fragment, 117–353 ms later |
+| `arrival_gap_max_ms` in a reply with cuts, same traces | the retired stretch, not the network: 13,072 ms beside 660 `discarded.cut` frames (13.2 s), 1,178 ms beside 67, 480 ms beside 21 |
+| `arrival_gap_max_ms` in a reply without a cut, same traces | 64–311 ms, in replies up to 49 s long; `rtp_lost` 0 after each call's first reply |
 | RTP sequence gaps | 0 in every measured reply |
 
 The pacing unit test `bridge_pacing_measured_jitter_never_runs_the_primed_echo_dry` replays the measured

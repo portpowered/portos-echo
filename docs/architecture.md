@@ -840,6 +840,14 @@ On current main, `-D` continues capture during reply audio, but configured Codex
 events to cut playback. Error/kill cleanup can cut through `hassmic-continue` and `audio-stop`, then await
 `played`; that cleanup closes/fails the voice run instead of continuing a normal interrupted question.
 
+The session controller's barge-in (2026-11-19) waits for the model to yield. The Live session transcribes
+whatever the microphone hears during a reply, and the model decides for itself whether to stop. A user
+transcript fragment or speech-start therefore only arms a barge-in for 2 s. It fires once the model has sent
+no audible reply audio for 500 ms, or at once when the model ends its turn. Firing retires the reply, drops
+the pacer lead and queued call audio, and flushes the device. A model that is still talking after the 2 s
+was not interrupted, and its reply plays on whole. Both times are constants in
+[reply_barge.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_barge.rs).
+
 #### Why — Barge-in
 
 It lets someone correct or stop a reply without waiting, provided the assistant's own speaker audio does

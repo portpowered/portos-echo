@@ -19,6 +19,8 @@ enum State {
 pub(super) struct Controller {
     state: State,
     played: bool,
+    /// The device closed a replacement playback that nothing was written to.
+    unanswered: bool,
     cut_receipts: usize,
     microphone_finished: bool,
     response_window: Option<Duration>,
@@ -58,6 +60,7 @@ impl Controller {
         }
         self.idle_deadline = None;
         self.played = false;
+        self.unanswered = false;
         Ok(())
     }
 
@@ -133,12 +136,16 @@ impl Controller {
     }
 
     /// False consumes a delayed cut receipt; true acknowledges this reply.
+    /// After a barge-in the model may say nothing more. The device then ends
+    /// the replacement playback itself, and the cut reply settles as played:
+    /// the run listens on instead of failing.
     pub fn played(&mut self, stopped: bool) -> Result<bool, Error> {
         if self.cut_receipts > 0 {
             self.cut_receipts -= 1;
             return Ok(false);
         }
-        if !stopped {
+        self.unanswered = self.state == State::Retired;
+        if !stopped && !self.unanswered {
             return Err(Error::Wyoming);
         }
         self.played = true;
@@ -172,7 +179,7 @@ impl Controller {
     }
 
     fn playback_settled(&self, stopped: bool, mouth_drained: bool) -> bool {
-        !self.cutting() && self.played && stopped && mouth_drained
+        !self.cutting() && self.played && (stopped || self.unanswered) && mouth_drained
     }
 }
 

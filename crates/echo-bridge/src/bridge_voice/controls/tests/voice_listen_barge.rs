@@ -82,6 +82,9 @@ async fn cut(
 ) {
     tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
     poll(work.as_mut()).await;
+    assert_eq!(cuts(observer), 0);
+    tokio::time::advance(crate::bridge_runtime::bridge_pacing::BARGE_QUIET).await;
+    poll(work.as_mut()).await;
     assert_eq!(cuts(observer), 1);
     assert_eq!(receipts.get(), 1);
     let before = paused.get();
