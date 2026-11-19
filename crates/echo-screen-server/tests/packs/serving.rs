@@ -123,7 +123,7 @@ async fn t3_screen_pack_files_revalidate_edits_and_local_identity_without_restar
     std::fs::write(pack.join("pack.json"), MANIFEST)?;
     std::fs::write(
         pack.join("unreferenced.css"),
-        ".pack-stage {background-image:url(https://example.invalid/a.png)}",
+        ".pack-stage {background-image:url(https://127.0.0.1/a.png)}",
     )?;
     assert_eq!(get(server.bound_addr, "rest.png", "").await?.0, 404);
     std::fs::remove_file(pack.join("unreferenced.css"))?;

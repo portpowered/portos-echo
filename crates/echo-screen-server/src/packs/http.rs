@@ -20,7 +20,7 @@ fn guard(state: &HttpState, uri: &Uri) -> Result<(), StatusCode> {
 }
 
 pub(crate) async fn file(State(state): State<HttpState>, request: Request) -> Response {
-    if !authorized(&state.core.lock().await, request.uri()) {
+    if !authorized(&*state.core.lock().await, request.uri()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     if let Err(status) = guard(&state, request.uri()) {
