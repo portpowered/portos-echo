@@ -9,7 +9,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import errno
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE = "/data/local/echo-bridge"
@@ -291,19 +293,42 @@ def failure_cases():
 
 
 
-def owners(base):
-    path = base / "owners.json"
-    return json.loads(path.read_text()) if path.exists() else {}
-
-
 def owner(base, path):
-    return owners(base).get(str(Path(path).stat().st_ino), "0:0")
+    try:
+        return os.getxattr(path, "user.echo_install_owner").decode("ascii")
+    except OSError as error:
+        if error.errno != errno.ENODATA:
+            raise
+        return "0:0"
 
 
 def set_owner(base, path, value):
-    values = owners(base)
-    values[str(Path(path).stat().st_ino)] = value
-    (base / "owners.json").write_text(json.dumps(values))
+    # Follow the filesystem object's lifetime: rename/hardlink retain ownership,
+    # deletion destroys it, and inode reuse cannot inherit a deleted owner.
+    os.setxattr(path, "user.echo_install_owner", value.encode("ascii"))
+
+
+def ownership_lifetime_case():
+    with tempfile.TemporaryDirectory(prefix="echo-owner-") as directory:
+        base = Path(directory)
+        path = base / "stage"
+        path.touch()
+        set_owner(base, path, "9999:9999")
+        deleted = path.stat()
+        path.unlink()
+        path.touch()
+        # Deterministically model inode recycling; never wait for an allocator.
+        with patch.object(Path, "stat", return_value=deleted):
+            require(owner(base, path) == "0:0", "recycled inode inherited deleted ownership")
+        set_owner(base, path, "9999:3990")
+        published = base / "published"
+        path.rename(published)
+        os.link(published, path)
+        require(owner(base, published) == owner(base, path) == "9999:3990",
+                "publication or hardlink lost ownership")
+        published.write_text("retained bytes")
+        require(owner(base, path) == "9999:3990", "writing retained data reset ownership")
+    print("NR ownership-lifetime=PASS")
 
 
 def metadata_tool(base, name, args):
@@ -404,6 +429,7 @@ if mode != 'exit':
 
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
+    ownership_lifetime_case()
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))
