@@ -244,6 +244,7 @@ fn screen(value: Value<'_>) -> Result<ScreenConfig, ConfigError> {
             .parse()
             .map_err(|_| ConfigError::new("screen.listen", "expected socket address"))?,
         pairing_token_file: f.required("pairing_token_file")?,
+        packs: f.optional("packs")?.unwrap_or_default(),
     };
     f.finish()?;
     Ok(result)

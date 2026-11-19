@@ -17,6 +17,7 @@ status: active; documentation index
 ## Program
 
 - [Program plan](program/plan.md)
+- [Screen-pack configuration and authoring](screen-packs.md)
 - [Standing rules](program/rules.md)
 - [Coordinator and factory](program/coordinator.md)
 - [Measured baselines](program/baselines.md)

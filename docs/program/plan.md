@@ -77,7 +77,7 @@ Echo Show (stock firmware + hassmic)            echo-bridge (Rust, operator's PC
 | Component | Runs on | Holds | Does |
 | --- | --- | --- | --- |
 | `hassmic` (our fork of echo-dot-assist, `portpowered/echo-dot-assist`, pinned) | The Echo | Nothing of ours | Wake word, echo canceller, capture and playback, mute latch, keys, light band. `PROTO=wyoming`, `ARGS` with `-D`. Installed by echo-dot-assist's `scripts/install-system.sh` |
-| `echo-screen` | The Echo, as hassmic's home app | A pairing token for the bridge's screen page | Shows the bridge's screen page full screen; touches go back to the bridge as `UiAction`s |
+| `echo-screen` | The Echo, as hassmic's home app | A pairing token for the bridge's screen page | Shows the bridge's screen page full screen; the bridge renders layouts and characters from downloadable screen-pack data; touches go back as `UiAction`s |
 | `echo-bridge` and its crates | The operator's PC first (section 6) | The Port OS grant (DPoP key, refresh token, access token); the app server's `CODEX_HOME` | Wyoming client; the media peer; the app server's client and supervisor; the tool host behind the delegated turns' `dynamicTools`; every MCP call; provider-backed read-only search via the app server (`codex.web_search`: live default, cached or disabled); the screen server; caps, audit log, kill switch |
 | `codex app-server` (OpenAI Codex, pinned release, Apache-2.0) | Beside the bridge, its child process over `stdio://` | The ChatGPT sign-in (`$CODEX_HOME/auth.json`) | Sign-in and refresh, Live call creation, the sideband control channel, delegated Codex turns with only the bridge's tools (section 3.3) |
 | `echo-lab` | The operator's workstation and CI | Bench session leases (never committed) | Runs scenario files with the `sim`, `cloud` or `device` driver and writes reports |
@@ -399,6 +399,21 @@ Coordinator device runs use Linux pe-ci with the existing T5 safeguards.
   `echo-screen` app's shape waits for spike S3. `echo-screen-server` (the screen page and its `UiState`/`UiAction`
   stream), `echo-delegation` (the agent turn) and `echo-signin` (the operator commands and credential modes) are
   libraries that `echo-bridge` hosts; the binary only wires them together.
+
+### Screen packs
+
+Owner direction (2026-11-19): "we want the hassmic side to be mostly a dumb pipe".
+hassmic owns wake word, echo cancellation, capture and playback, mute latch, keys,
+light band and hosting the screen app. The bridge's screen page decides and renders
+everything the user sees while connected. hassmic's native procedural face remains
+the disconnected fallback; screen packs require no hassmic or APK change.
+
+Layouts and characters are downloadable data, separate from the bridge binary.
+The first character format uses WebM/MP4 clips with a required rest pose, without VRM.
+The bridge owns verified background installation under `<home>/screens/`, selection
+through its existing settings writer, and hot rendering without a voice restart.
+[Screen-pack documentation](../screen-packs.md) records the format and implementation
+status; configuration support alone does not establish installation or playback.
 
 ## 7. Muse: a wrapper around the gadget SDK
 

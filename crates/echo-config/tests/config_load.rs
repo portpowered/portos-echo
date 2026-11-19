@@ -80,6 +80,7 @@ fn committed_example_loads_with_all_expected_values() {
         screen: ScreenConfig {
             listen: "0.0.0.0:16900".parse().unwrap(), // lint-rules: allow-literal configuration loader expected value fixture
             pairing_token_file: "credentials/screen-pairing.txt".into(),
+            packs: Vec::new(),
         },
         audit: AuditConfig {
             log_dir: "logs/audit".into(),
@@ -497,4 +498,5 @@ fn nested_secret_diagnostics_use_only_trusted_schema_context() {
 }
 
 mod config_profile;
+mod config_screen;
 mod config_settings;
