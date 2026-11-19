@@ -59,6 +59,8 @@ pub(super) async fn replies<L: EchoLink>(
         if source.session.ending() {
             return Ok(());
         }
+        // A dispatch that outlives its spoken acknowledgement shows as thinking.
+        super::voice_source::think(client, source).await;
         if !listen((events, microphone), port, (source, drain), cancelled.as_mut(), observe).await? {
             return Ok(());
         }

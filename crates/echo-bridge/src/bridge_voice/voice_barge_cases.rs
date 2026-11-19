@@ -287,8 +287,7 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     let mut sink = Some(Stalled);
     assert_eq!(
         drive(
-            &mut events,
-            &mut mic,
+            (&client, &mut events, &mut mic),
             &mut port,
             &mut sink,
             (&mut source, &mut None),

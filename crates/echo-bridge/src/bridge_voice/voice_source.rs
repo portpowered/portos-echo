@@ -23,6 +23,8 @@ pub(super) struct Source {
     pub session: super::session_tools::Grants,
     /// Speech the bounded media sender has not taken yet, oldest first.
     uplink: VecDeque<PcmFrame>,
+    /// The device was told a dispatch is running in silence.
+    thinking: bool,
 }
 
 impl Source {
@@ -33,6 +35,19 @@ impl Source {
         self.delegation = self.delegation.carried();
         self.mouth = Mouth::default();
         Ok(())
+    }
+
+    /// The device's thinking indication, when it must change. It goes on
+    /// when a dispatch runs with nothing to say and off as soon as audible
+    /// reply audio is written, so it stays up from a completed turn until its
+    /// answer is on its way, and always clears before that reply's audio ends.
+    /// The device drops it itself when the run ends.
+    fn thinking_change(&mut self) -> Option<bool> {
+        let wanted = !self.mouth.voiced() && (self.thinking || self.delegation.in_flight());
+        (wanted != self.thinking).then(|| {
+            self.thinking = wanted;
+            wanted
+        })
     }
 
     /// A dispatch that finished while listening gives its answer a fresh
@@ -61,6 +76,7 @@ impl Source {
             lead_ms,
             delegation: Delegation::default(),
             mouth: Mouth::default(),
+            thinking: false,
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),
             uplink: VecDeque::new(),
@@ -336,6 +352,15 @@ const OUTPUT_DELAY: Duration = Duration::from_millis(200);
 pub struct Mouth {
     clock: Option<Instant>,
     transitions: VecDeque<(Instant, bool)>,
+    open: bool,
+}
+
+/// Best effort: the indication is display only, so a device that cannot take
+/// it never fails or delays the reply.
+pub(super) async fn think<L: echo_link::EchoLink>(client: &L, source: &mut Source) {
+    if let Some(on) = source.thinking_change() {
+        let _ = tokio::time::timeout(Duration::from_secs(1), client.thinking(on)).await;
+    }
 }
 
 impl Mouth {
@@ -374,7 +399,15 @@ impl Mouth {
     /// The change due by `now`, if any: true opens the mouth, false closes it.
     pub fn poll(&mut self, now: Instant) -> Option<bool> {
         self.due().filter(|due| *due <= now)?;
-        self.transitions.pop_front().map(|(_, open)| open)
+        let (_, open) = self.transitions.pop_front()?;
+        self.open = open;
+        Some(open)
+    }
+
+    /// Audible reply audio is written to the Echo and not yet played out.
+    #[must_use]
+    pub fn voiced(&self) -> bool {
+        self.open || self.due().is_some()
     }
 }
 
