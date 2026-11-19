@@ -265,9 +265,9 @@ def native_lifecycle_cases(binary):
                 result = subprocess.run(
                     [binary, command, "--json", "--adb", str(box.tools / "adb"), *extra],
                     env=box.env, capture_output=True, text=True, timeout=10)
-                require(result.returncode == code, "native lifecycle exit differs: " + command)
                 for marker in ("synthetic-private-content-do-not-print", str(box.root)):
                     require(marker not in result.stdout + result.stderr, "native output leaked private data")
+                require(result.returncode == code, "native lifecycle exit differs: " + command + " " + result.stdout)
                 return json.loads(result.stdout)
 
             result = native("status")
