@@ -1,4 +1,6 @@
 //! T3 fault injection at the nominated bridge process/SSE boundary only.
+#[path = "lab_device_bridge/t5.rs"]
+mod t5;
 use serde_json::{Value, json};
 use std::{
     fs::{self, OpenOptions},
@@ -53,6 +55,9 @@ pub fn adb(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::E
 }
 
 pub fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::Error>> {
+    if fixture["device_bridge_fault"] == "t5" {
+        return t5::run(args, fixture);
+    }
     let fault = fixture["device_bridge_fault"].as_str().ok_or("missing fault")?;
     let index = args.iter().position(|s| s == "--trace").ok_or("missing trace")?;
     let path = args.get(index + 1).ok_or("missing trace path")?;

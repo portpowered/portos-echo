@@ -1,6 +1,6 @@
 id: session-two-turns
 milestone: M3
-tiers: [T3]
+tiers: [T3, T5]
 setup: {}
 steps:
   - say: "Computer, what time is it?"
@@ -15,3 +15,5 @@ steps:
 budgets:
   session_listen_seconds: 3
 negative: []
+# T5 uses device trace/receipts and synthesized authored speech.
+# A fake Live run is not milestone proof; missing receipts fail by name.

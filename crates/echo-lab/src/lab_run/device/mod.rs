@@ -6,6 +6,7 @@ mod observations;
 pub mod pcm;
 mod recovery;
 mod runtime;
+use runtime::wire;
 
 use super::{Driver, Step, run_device::Device, run_options::Options, run_report::Artifacts};
 
@@ -18,12 +19,23 @@ pub struct Configured<'a> {
     state: runtime::Runtime,
     config: String,
     iteration: u64,
+    wire_endpoint: Option<std::net::SocketAddr>,
+    wire: Option<wire::Observer>,
+    wire_replies: usize,
+    session: bool,
 }
 
 impl<'a> Configured<'a> {
     pub fn new(options: &'a Options, config: String, errors: &'a mut dyn std::io::Write) -> Result<Self, String> {
+        let wire_endpoint = wire::endpoint(options, &config)?;
+        let session = runtime::session::selected(options)?;
         let mut state = runtime::Runtime::default();
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
+        if config::setup::requested(options)? {
+            let parsed =
+                echo_config::BridgeConfig::from_toml_str(&config).map_err(|_| "device: invalid setup configuration")?;
+            state.spoof_port = Some(config::setup::port(&parsed)?);
+        }
         Ok(Self {
             options,
             errors,
@@ -37,17 +49,32 @@ impl<'a> Configured<'a> {
                 .map_err(|_| "device: cannot start runtime")?,
             state,
             config,
+            wire_endpoint,
+            wire: None,
+            wire_replies: 0,
+            session,
         })
     }
 
     fn start(&mut self, artifacts: &Artifacts) -> Result<(), String> {
         self.bench.firmware()?;
         if !self.state.started {
+            if let Some(address) = self.wire_endpoint {
+                self.wire = Some(wire::Observer::start(self.options, address)?);
+                let _entered = self.executor.enter();
+                self.wire.as_mut().ok_or("device: missing wire owner")?.launch()?;
+            }
             let result = self.executor.block_on(runtime::controlled(
                 self.state.start(
                     self.options.bridge.as_deref().ok_or("device: missing bridge")?,
                     &self.config,
                     &artifacts.root,
+                    self.options
+                        .bridge_config
+                        .as_deref()
+                        .filter(|_| self.options.live_real())
+                        .map(|path| config::voice::collect(self.options).map(|settings| (path, !settings.is_empty())))
+                        .transpose()?,
                 ),
                 self.options.cancel.as_deref(),
             ));
@@ -91,8 +118,21 @@ impl Driver for Configured<'_> {
                 self.state.ui(value, index, artifacts),
                 self.options.cancel.as_deref(),
             )),
-            Step::Trace(values) => self.state.expect_trace(values, index),
+            Step::Trace(values) => self.executor.block_on(runtime::controlled(
+                async {
+                    if self.session
+                        && values
+                            .iter()
+                            .any(|v| v.as_str().is_some_and(|v| v == "wyoming.run_ended"))
+                    {
+                        self.state.finish_session(index).await?;
+                    }
+                    self.state.trace_step(values, index).await
+                },
+                self.options.cancel.as_deref(),
+            )),
             Step::SayFile(path) => self.play(path, index, next, artifacts),
+            Step::SayText(text) => self.play_text(text, index, next, artifacts),
             _ => self.bench.execute(step, index, next, artifacts),
         }
     }
@@ -101,11 +141,19 @@ impl Driver for Configured<'_> {
         let bench = self.bench.close(artifacts);
         let root = artifacts.root.clone();
         let owned = self.executor.block_on(self.state.close(&root, artifacts));
-        super::combine(bench, owned)
+        let wire = match self.wire.as_mut() {
+            Some(wire) => self.executor.block_on(wire.close(artifacts)),
+            None => Ok(()),
+        };
+        self.wire.take();
+        super::combine(super::combine(bench, owned), wire)
     }
 }
 
 pub fn step(value: &serde_json::Value, scenario: &str, options: &Options) -> Result<Step, String> {
+    if value["expect_screen"]["sequence"].is_array() {
+        return Ok(Step::Ui(value["expect_screen"].clone()));
+    }
     if options.wake_clip.is_some() && value.get("restart").is_some() {
         let restart = &value["restart"];
         let process = restart["process"].as_str().ok_or("device: unsupported restart")?;

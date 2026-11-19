@@ -1,7 +1,7 @@
 """Offline projection of an explicitly nominated TOML; never reads credentials.
 
-The caller validates both input and output with echo-config. This helper adds
-the local, credential-free restrictions used by the device test journey.
+The caller validates both input and output with echo-config. The default path
+adds the credential-free restrictions; explicit real mode only overlays voice.
 """
 import json
 from pathlib import Path
@@ -41,12 +41,8 @@ def table_lines(table, prefix=""):
     return lines
 
 
-def project(path):
-    with path.open("rb") as source:
-        config = tomllib.loads(source.read(65537).decode("utf-8"))
-    for name in ["echo", "live", "agent", "mcp", "screen", "audit"]:
-        if not isinstance(config[name], dict):
-            raise ValueError("missing table")
+def restrict(config):
+    """The default lane keeps the existing credential-free projection."""
     if "muse" in config:
         raise ValueError("Muse credentials are outside the local M1 journey")
     local_socket(str(config["echo"]["host"]) + ":" + str(config["echo"].get("wyoming_port", 16700)))
@@ -60,17 +56,33 @@ def project(path):
         local_url(server["url"])
         if server["auth"] != "none" or "bearer_file" in server:
             raise ValueError("credentialed MCP is not admitted")
-    # Never resolve or read an input credential, even when the input selects
-    # ChatGPT. Only the private copy selects the existing synthetic API mode.
     config["live"].update(mode="api_key", voice="alloy", session_idle_seconds=0,
                           credential_file="credential")
     config["screen"].update(listen="127.0.0.1:0", pairing_token_file="pairing")
     config["audit"]["log_dir"] = "audit"
+
+
+def project(path, settings=None, real=False):
+    with path.open("rb") as source:
+        config = tomllib.loads(source.read(65537).decode("utf-8"))
+    for name in ["echo", "live", "agent", "mcp", "screen", "audit"]:
+        if not isinstance(config[name], dict):
+            raise ValueError("missing table")
+    # Both modes inspect only this nominated TOML, never any referenced state.
+    if not real:
+        restrict(config)
+    if settings:
+        if any(key not in ("session_listen_seconds", "session_max_seconds")
+               or type(value) is not int for key, value in settings.items()):
+            raise ValueError("invalid voice setting")
+        config.setdefault("voice", {}).update(settings)
     return "\n".join(table_lines(config)) + "\n"
 
 
 try:
-    print(json.dumps({"toml": project(Path(sys.argv[1]))}))
+    settings = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+    real = len(sys.argv) > 3 and sys.argv[3] == "real"
+    print(json.dumps({"toml": project(Path(sys.argv[1]), settings, real)}))
 except (OSError, ValueError, TypeError, KeyError, OverflowError):
     sys.stderr.write("device: invalid or unsafe nominated bridge configuration\n")
     sys.exit(1)

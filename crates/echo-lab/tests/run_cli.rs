@@ -10,6 +10,9 @@ mod oracles;
 #[cfg(test)]
 mod run_support;
 #[cfg(test)]
+#[path = "device_support/t5/mod.rs"]
+mod t5;
+#[cfg(test)]
 mod tests {
     use crate::run_support::{FAKE, Session, failed};
     // T3 through prebuilt CLI/tools; per-child fixtures and isolated directories.

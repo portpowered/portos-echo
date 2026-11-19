@@ -1,15 +1,36 @@
 use std::{io::Write, path::Path};
 
 use super::super::{run_command, run_options::Options};
+mod real;
+pub mod scenario;
+pub mod setup;
+pub mod voice;
 
 pub fn load(options: &Options) -> Result<Option<String>, String> {
     let Some(path) = &options.bridge_config else {
         return Ok(None);
     };
-    let config = echo_config::BridgeConfig::load(path)
-        .map_err(|_| "device: invalid or unsafe nominated bridge configuration")?;
+    let contents =
+        std::fs::read_to_string(path).map_err(|_| "device: invalid or unsafe nominated bridge configuration")?;
+    let config = echo_config::BridgeConfig::from_toml_str(&contents).map_err(|error| {
+        if options.live_real() && error.to_string().contains("secrets go in files, not config") {
+            "device: inline secret in bridge configuration"
+        } else {
+            "device: invalid or unsafe nominated bridge configuration"
+        }
+    })?;
     if config.echo.host != "127.0.0.1" {
         return Err("device: echo.host must be 127.0.0.1; forward the Echo's Wyoming port with adb forward".into());
+    }
+    if setup::requested(options)? {
+        setup::port(&config)?;
+    }
+    let settings = voice::collect(options)?;
+    if options.live_real() {
+        real::separate(&config, path, &options.out)?;
+        if settings.is_empty() {
+            return Ok(Some(contents));
+        }
     }
     let bytes = run_command::controlled(
         Path::new(&options.python),
@@ -17,6 +38,8 @@ pub fn load(options: &Options) -> Result<Option<String>, String> {
             "-c".into(),
             include_str!("config.py").into(),
             path.to_string_lossy().into_owned(),
+            serde_json::to_string(&settings).map_err(|_| "device: cannot encode voice settings")?,
+            if options.live_real() { "real" } else { "fake" }.into(),
         ],
         std::time::Instant::now() + std::time::Duration::from_secs(5),
         options.cancel.as_deref(),
@@ -24,9 +47,13 @@ pub fn load(options: &Options) -> Result<Option<String>, String> {
     .map_err(|_| "device: invalid or unsafe nominated bridge configuration")?;
     let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|_| "device: invalid configuration result")?;
-    let contents = value["toml"].as_str().ok_or("device: missing configuration result")?;
-    echo_config::BridgeConfig::from_toml_str(contents).map_err(|_| "device: invalid projected configuration")?;
-    Ok(Some(contents.to_owned()))
+    let derived = value["toml"].as_str().ok_or("device: missing configuration result")?;
+    echo_config::BridgeConfig::from_toml_str(derived)
+        .map_err(|error| format!("device: invalid projected configuration: {error}"))?;
+    if options.live_real() {
+        voice::validate(&contents, derived, &settings)?;
+    }
+    Ok(Some(derived.to_owned()))
 }
 
 pub fn stage(root: &Path, contents: &str) -> Result<(), String> {
@@ -37,24 +64,27 @@ pub fn stage(root: &Path, contents: &str) -> Result<(), String> {
         ("credential", "synthetic-local-api"),
         ("pairing", "synthetic-local-screen"),
     ] {
-        let path = directory.join(name);
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        options
-            .open(path)
-            .and_then(|mut file| file.write_all(contents.as_bytes()))
-            .map_err(|_| "device: cannot write private configuration")?;
+        write_private(&directory.join(name), contents)?;
         if name == "bridge.toml" {
             echo_config::BridgeConfig::load(directory.join(name))
                 .map_err(|_| "device: invalid staged configuration")?;
         }
     }
     Ok(())
+}
+
+pub(super) fn write_private(path: &Path, contents: &str) -> Result<(), String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .and_then(|mut file| file.write_all(contents.as_bytes()))
+        .map_err(|_| "device: cannot write private configuration".into())
 }
 
 #[cfg(test)]
@@ -121,6 +151,7 @@ mod tests {
 
     fn options(path: &Path) -> Options {
         Options {
+            live: crate::lab_run::run_options::Live::Fake,
             bridge_config: Some(path.to_owned()),
             python: "python3".into(),
             wake_clip: None,
@@ -143,9 +174,13 @@ mod tests {
     // T3: real Python/filesystem, synthetic inputs only. The audit hook observes
     // opens and directory access independently of the sentinel equality check.
     fn observed_projection(path: &Path, home: &Path) -> serde_json::Value {
+        observed_config(path, home, "{}", "fake")
+    }
+
+    fn observed_config(path: &Path, home: &Path, settings: &str, mode: &str) -> serde_json::Value {
         let observer = r"
 import contextlib, io, json, os, sys
-code, config, home = sys.argv[1:]
+code, config, home, settings, mode = sys.argv[1:]
 home = os.path.normcase(os.path.abspath(home))
 accesses = []
 def observe(event, args):
@@ -156,7 +191,7 @@ def observe(event, args):
         if path == home or path.startswith(home + os.sep):
             accesses.append(event)
 sys.addaudithook(observe)
-sys.argv = ['config.py', config]
+sys.argv = ['config.py', config, settings, mode]
 stdout, stderr = io.StringIO(), io.StringIO()
 status = 0
 with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -175,6 +210,8 @@ print(json.dumps(dict(status=status, stdout=stdout.getvalue(),
                 include_str!("config.py").into(),
                 path.to_string_lossy().into_owned(),
                 home.to_string_lossy().into_owned(),
+                settings.into(),
+                mode.into(),
             ],
             std::time::Instant::now() + std::time::Duration::from_secs(5),
             None,
@@ -287,5 +324,33 @@ print(json.dumps(dict(status=status, stdout=stdout.getvalue(),
             nomination()
         );
         assert_safe_projection(&contents, "Synthetic bridge instructions");
+    }
+
+    #[test]
+    fn t3_device_config_real_overlay_never_opens_protected_state() {
+        let root = tempfile::tempdir().unwrap();
+        let protected = root.path().join("protected");
+        std::fs::create_dir(&protected).unwrap();
+        let sentinel = b"inert synthetic sentinel\n";
+        std::fs::write(protected.join("auth.json"), sentinel).unwrap();
+        let path = root.path().join("nomination.toml");
+        let home = serde_json::to_string(&protected.to_string_lossy()).unwrap();
+        let contents = format!("{}\n[codex]\nhome = {home}\n", nomination());
+        std::fs::write(&path, &contents).unwrap();
+        let settings = r#"{"session_listen_seconds":3,"session_max_seconds":30}"#;
+        let observed = observed_config(&path, &protected, settings, "real");
+        assert_eq!(observed["status"], 0);
+        assert_eq!(observed["stderr"], "");
+        assert_eq!(observed["accesses"], serde_json::json!([]));
+        let output: serde_json::Value = serde_json::from_str(observed["stdout"].as_str().unwrap()).unwrap();
+        voice::validate(
+            &contents,
+            output["toml"].as_str().unwrap(),
+            &serde_json::from_str(settings).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
+        assert_eq!(std::fs::read(protected.join("auth.json")).unwrap(), sentinel);
+        assert_eq!(std::fs::read_dir(protected).unwrap().count(), 1);
     }
 }
