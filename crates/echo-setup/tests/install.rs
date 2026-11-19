@@ -1,6 +1,7 @@
 //! T3: native CLI/HTTP/recording-adb journey. Device execution is a separate shell witness.
 use echo_setup::integrity::{REQUIRED, digest};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
@@ -93,7 +94,8 @@ fn private_output(output: &Output) -> Result<serde_json::Value> {
 
 fn server(sums: String, bytes: Vec<u8>, count: usize) -> Result<(String, thread::JoinHandle<io::Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
-    let base = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
+    let mut base = String::from("http://127.0.0.1:");
+    write!(base, "{}", listener.local_addr()?.port())?;
     let handle = thread::spawn(move || {
         for _ in 0..count {
             let (mut stream, _) = listener.accept()?;
