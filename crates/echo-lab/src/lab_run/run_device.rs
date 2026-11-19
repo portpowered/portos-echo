@@ -399,7 +399,7 @@ impl Device<'_> {
                 self.play(
                     "file",
                     &[("{file}", file)],
-                    &artifacts.root.join(format!("reply-{index}.wav")),
+                    &self.reply_path(index, &artifacts.root),
                     artifacts,
                 )
             }
@@ -413,7 +413,7 @@ impl Device<'_> {
                 self.play(
                     "text",
                     &[("{text}", text), ("{endpoint}", endpoint), ("{model}", model)],
-                    &artifacts.root.join(format!("reply-{index}.wav")),
+                    &self.reply_path(index, &artifacts.root),
                     artifacts,
                 )
             }

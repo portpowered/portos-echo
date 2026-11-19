@@ -29,6 +29,21 @@ impl Say {
 }
 
 impl Device<'_> {
+    pub(super) fn reply_path(&self, index: usize, root: &std::path::Path) -> std::path::PathBuf {
+        let attempts = self.say.borrow().attempts;
+        if attempts == 0 && self.iteration == 0 {
+            root.join(format!("reply-{index}.wav"))
+        } else {
+            // A retained earlier WAV must never masquerade as a fresh held
+            // recording, especially when the replay is preempted.
+            root.join(format!(
+                "reply-{index}-iteration-{}-attempt-{}.wav",
+                self.iteration,
+                attempts + 1
+            ))
+        }
+    }
+
     pub(super) fn execute_say(&mut self, step: &Step, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
         self.observed_say(step, index, artifacts, None)
     }
