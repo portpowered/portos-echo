@@ -50,15 +50,14 @@ impl ToolHost for Mcp {
     }
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
         let client = self.client.as_ref().ok_or(ToolError::Denied)?;
-        let ordinal = match &self.receipts {
-            Some(receipts) => receipts.attempt(name, key).map_err(|_| ToolError::Transport)?,
-            None => {
-                self.trace
-                    .clone()
-                    .tool_attempt(name, key)
-                    .map_err(|_| ToolError::Transport)?;
-                0
-            }
+        let ordinal = if let Some(receipts) = &self.receipts {
+            receipts.attempt(name, key).map_err(|_| ToolError::Transport)?
+        } else {
+            self.trace
+                .clone()
+                .tool_attempt(name, key)
+                .map_err(|_| ToolError::Transport)?;
+            0
         };
         let result = client.call_tool(name, args, key).await;
         if let Some(receipts) = &self.receipts {

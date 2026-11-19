@@ -399,7 +399,7 @@ pub(crate) async fn assert_mcp_trust_refused(owner: &Runtime, config: &echo_conf
     )
     .unwrap();
     assert_eq!(host.list().await.err(), Some(McpError::Transport));
-    let zero = json!({"link":0,"token":0,"catalog":0,"query":0});
+    let zero = serde_json::json!({"link":0,"token":0,"catalog":0,"query":0});
     assert_eq!(unrelated.finish().await, zero);
     assert_eq!(wrong_host.finish().await, zero);
 }
