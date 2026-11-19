@@ -178,20 +178,7 @@ async fn t3_settings_configured_saved_prompts_reach_next_call_without_restart() 
     .unwrap();
     assert!(!result.unwrap().restart_requested);
     assert_eq!(closed.load(Ordering::SeqCst), 1);
-    let rows = trace(&path);
-    let saved: Vec<_> = rows
-        .iter()
-        .filter(|row| row["event"] == "prompt.saved")
-        .map(|row| row["prompt"].as_str().unwrap())
-        .collect();
-    assert_eq!(saved, ["voice", "runner"]);
-    assert_eq!(
-        rows.iter()
-            .filter(|row| row["event"] == "settings.reexec_attempt")
-            .count(),
-        0
-    );
-
+    saved_prompt_events(&path);
     assert_eq!(observer.commands().last(), Some(&Command::Close));
     assert_eq!(
         trace(&path)
@@ -251,4 +238,20 @@ async fn save_prompts(fixture: &Fixture) {
             text
         );
     }
+}
+
+fn saved_prompt_events(path: &Path) {
+    let rows = trace(path);
+    let saved: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "prompt.saved")
+        .map(|row| row["prompt"].as_str().unwrap())
+        .collect();
+    assert_eq!(saved, ["voice", "runner"]);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "settings.reexec_attempt")
+            .count(),
+        0
+    );
 }

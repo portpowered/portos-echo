@@ -64,12 +64,7 @@ async fn exercise(finish: Finish, delegated: bool) {
     let fixture = Fixture::new("chatgpt");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     configure(&fixture, listener.local_addr().unwrap().port());
-    if delegated {
-        let base = fixture.directory.path().join("bridge.toml");
-        let text = std::fs::read_to_string(&base).unwrap();
-        std::fs::write(base, format!("{text}\n[voice]\nsession_listen_enabled=false\n")).unwrap();
-        std::fs::write(fixture.home.join("delegated"), "").unwrap();
-    }
+    configure_delegation(&fixture, delegated);
     let mut command = super::super::voice_entry::command(&fixture);
     command.args([
         "--live-loopback",
@@ -111,15 +106,6 @@ async fn owed_answer(fixture: &Fixture, satellite: &mut TcpStream, signal: &mut 
         assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), 0);
     }
     signal.get_mut().write_all(b"settle\n").await.unwrap();
-    // Even an empty owed answer has its own device playback receipt.
-    assert_eq!(bridge_short::read_reply(satellite).await.0["type"], "audio-stop");
-    assert_eq!(binary_snapshot(fixture).await["restart_pending"], true);
-    assert!(
-        !trace(&fixture.directory.path().join("trace"))
-            .iter()
-            .any(|row| row["event"] == ATTEMPT)
-    );
-    bridge_short::send(satellite, "played", json!({})).await;
 }
 
 async fn settled(fixture: &Fixture, process: &mut Process, finish: Finish) {
@@ -383,5 +369,14 @@ fn generations(rows: &[Value], finish: Finish) {
             let allowed: [&[&str]; 3] = [&[], &[READY], &[READY, PREPARED]];
             assert!(allowed.contains(&after), "{after:?}");
         }
+    }
+}
+
+fn configure_delegation(fixture: &Fixture, delegated: bool) {
+    if delegated {
+        let base = fixture.directory.path().join("bridge.toml");
+        let text = std::fs::read_to_string(&base).unwrap();
+        std::fs::write(base, text.replace("[voice]", "[voice]\nsession_listen_enabled=false")).unwrap();
+        std::fs::write(fixture.home.join("delegated"), "").unwrap();
     }
 }

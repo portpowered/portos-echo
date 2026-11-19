@@ -53,27 +53,48 @@ pub(super) async fn replies<L: EchoLink>(
         if let Some(granted) = source.session.granted() {
             source.controller.extend_idle(granted);
         }
-        let mut stats = source.stats.clone();
-        stats.reply_dropped += source.reply.dropped_frames();
-        let totals = stats.clone();
-        stats.reply_received -= previous.reply_received;
-        stats.reply_sent -= previous.reply_sent;
-        stats.reply_dropped -= previous.reply_dropped;
-        stats.quality = source.settle(port.rtp_lost());
-        previous = totals;
-        observe(Notice::ReplySettled(stats))?;
-        observe(Notice::ReplyPlayed)?;
+        if options.listen_timeout.is_some() {
+            settled(source, port, &mut previous, observe)?;
+        }
         // A requested end closes right after this reply settles; no idle wait.
         if source.session.ending() {
             return Ok(());
         }
         // A dispatch that outlives its spoken acknowledgement shows as thinking.
         super::voice_source::think(client, source).await;
-        if !listen((events, microphone), port, (source, drain), cancelled.as_mut(), observe).await? {
+        if !listen(
+            (events, microphone),
+            port,
+            (source, drain),
+            options.listen_timeout.is_some(),
+            cancelled.as_mut(),
+            observe,
+        )
+        .await?
+        {
             return Ok(());
         }
         generation_options.response_deadline = source.controller.replacement_deadline()?;
     }
+}
+
+fn settled(
+    source: &mut Source,
+    port: &impl VoicePort,
+    previous: &mut super::Stats,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let mut stats = source.stats.clone();
+    stats.reply_dropped += source.reply.dropped_frames();
+    let totals = stats.clone();
+    stats.reply_received -= previous.reply_received;
+    stats.reply_sent -= previous.reply_sent;
+    stats.reply_dropped -= previous.reply_dropped;
+    stats.quality = source.settle(port.rtp_lost());
+    *previous = totals;
+    observe(Notice::ReplySettled(stats))?;
+    observe(Notice::ReplyPlayed)?;
+    Ok(())
 }
 
 async fn listen<E: LinkEvents>(
@@ -83,6 +104,7 @@ async fn listen<E: LinkEvents>(
         &mut Source,
         &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
     ),
+    followup: bool,
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<bool, Error> {
@@ -92,9 +114,6 @@ async fn listen<E: LinkEvents>(
     // A dispatch still in flight holds the run open past idle. It started
     // before this wait, so its own task deadline ends it inside this window.
     let hold = source.controller.replacement_deadline().ok();
-    // Completion may precede the owed spoken answer. Keep its response budget
-    // even after the delegated count reaches zero.
-    let owed = source.delegation.in_flight();
     loop {
         // A granted extension moves the deadline; a requested end closes now.
         let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
@@ -102,7 +121,7 @@ async fn listen<E: LinkEvents>(
             Some(hold) if source.delegation.in_flight() => idle.max(hold),
             _ => idle,
         };
-        if source.session.ending() {
+        if source.session.ending() || (!followup && !source.delegation.in_flight()) {
             return Ok(false);
         }
         tokio::select! {
@@ -110,7 +129,7 @@ async fn listen<E: LinkEvents>(
             () = cancelled.as_mut() => return Err(Error::Control),
             // Playback has settled before entering listen. A running delegated
             // turn still owns this reply; finish it before admitting cleanup.
-            () = crate::bridge_settings::settings_restart::requested(), if !owed && !source.delegation.in_flight() => return Ok(false),
+            () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
             () = tokio::time::sleep_until(deadline) => return Ok(false),
             result = listening_step(events, microphone, port, source, observe) => {
                 if result? { return Ok(true); }

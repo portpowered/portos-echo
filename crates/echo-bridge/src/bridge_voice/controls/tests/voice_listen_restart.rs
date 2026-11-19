@@ -84,10 +84,11 @@ async fn before_played(
 #[tokio::test(start_paused = true)]
 async fn settings_restart_followup_off_waits_for_delegation_and_owed_playback() {
     let restart = Restart::default();
-    restart.scope(disabled_dispatch(&restart)).await;
+    restart.scope(disabled_dispatch(&restart, false)).await;
+    restart.scope(disabled_dispatch(&restart, true)).await;
 }
 
-async fn disabled_dispatch(restart: &Restart) {
+async fn disabled_dispatch(restart: &Restart, completed_first: bool) {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -114,35 +115,37 @@ async fn disabled_dispatch(restart: &Restart) {
             Ok(())
         },
     ));
+    disabled_drive(&mut work, &tx, &observer, &receipts, (restart, completed_first)).await;
+}
+
+async fn disabled_drive(
+    work: &mut Pin<Box<impl Future<Output = Result<super::super::super::Stats, Error>>>>,
+    tx: &mpsc::Sender<MediaEvent>,
+    observer: &Observer,
+    receipts: &Cell<usize>,
+    (restart, completed_first): (&Restart, bool),
+) {
     tx.send(dispatch(true)).await.unwrap();
     reply(&tx, 5000).await;
     reply(&tx, 5000).await;
     restart.request();
-    settle(&mut work, &observer, &receipts, 1).await;
-    assert_eq!(receipts.get(), 1);
-    assert!(!observer.commands().contains(&Command::EndRun));
-    tokio::time::advance(Duration::from_secs(2)).await;
-    poll(work.as_mut()).await;
-    tx.send(dispatch(false)).await.unwrap();
-    poll(work.as_mut()).await;
-    assert!(!observer.commands().contains(&Command::EndRun));
-    reply(&tx, -5000).await;
-    for _ in 0..50 {
+    before_played(work, observer).await;
+    if completed_first {
+        tx.send(dispatch(false)).await.unwrap();
         poll(work.as_mut()).await;
-        if observer.commands().iter().filter(|cmd| **cmd == Command::Stop).count() == 2 {
-            break;
-        }
-        tokio::time::advance(Duration::from_millis(20)).await;
+        observer.finish(Ok(()));
+    } else {
+        observer.finish(Ok(()));
+        poll(work.as_mut()).await;
+        assert!(!observer.commands().contains(&Command::EndRun));
+        tokio::time::advance(Duration::from_secs(2)).await;
+        poll(work.as_mut()).await;
+        tx.send(dispatch(false)).await.unwrap();
     }
-    assert_eq!(
-        observer.commands().iter().filter(|cmd| **cmd == Command::Stop).count(),
-        2
-    );
-    assert_eq!(receipts.get(), 1);
+    assert_eq!(receipts.get(), 0);
     let now = Instant::now();
-    observer.finish(Ok(()));
-    let stats = work.await.unwrap();
-    assert_eq!((stats.reply_sent, receipts.get()), (36, 2));
+    let stats = work.as_mut().await.unwrap();
+    assert_eq!((stats.reply_sent, receipts.get()), (24, 1));
     assert!(now.elapsed() < Duration::from_secs(1));
     assert_eq!(
         observer

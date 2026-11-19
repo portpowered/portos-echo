@@ -86,6 +86,7 @@ async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
                     (&mut input.events, &mut input.microphone),
                     &mut port,
                     (&mut source, &mut drain),
+                    true,
                     std::future::pending(),
                     &mut observe,
                 );

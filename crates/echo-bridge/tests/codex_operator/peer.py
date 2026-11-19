@@ -137,10 +137,6 @@ for line in sys.stdin:
             if delegated:
                 assert signaling.readline() == b"settle\n"
                 emit({"method": "turn/completed", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
-                emit({"method": "thread/realtime/transcript/delta", "params": {
-                    "threadId": "fixture-thread", "role": "assistant", "delta": "owed answer"}})
-                emit({"method": "thread/realtime/transcript/done", "params": {
-                    "threadId": "fixture-thread", "role": "assistant", "text": "owed answer"}})
             continue
         emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
         approval = home.joinpath("mode").read_text() == "tool-approval"

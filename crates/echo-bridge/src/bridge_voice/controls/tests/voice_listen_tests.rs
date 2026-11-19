@@ -232,6 +232,7 @@ async fn voice_listen_acknowledges_clock_without_renewing_idle_and_expiry_wins()
         (&mut events, &mut microphone),
         &mut port,
         (&mut source, &mut drain),
+        true,
         std::future::pending(),
         &mut observe,
     ));
