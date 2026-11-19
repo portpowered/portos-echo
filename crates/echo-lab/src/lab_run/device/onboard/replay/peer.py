@@ -39,7 +39,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         assert self.path == "/.well-known/oauth-authorization-server"
         if mode == "hang":
             print("pending", flush=True)
-            report["closed"] = self.rfile.read(1) == b""
+            try:
+                report["closed"] = self.rfile.read(1) == b""
+            except (ConnectionResetError, ssl.SSLEOFError):
+                # Cancellation kills the owned helper. Its socket may close by
+                # reset instead of a TLS close_notify; both are observed closure.
+                report["closed"] = True
             return
         self.send(302 if mode == "redirect" else 200, {
             "issuer": origin + "/wrong" if mode == "wrong-issuer" else origin,
