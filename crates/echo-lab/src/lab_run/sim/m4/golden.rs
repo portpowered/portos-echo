@@ -70,8 +70,11 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
     trace
         .records
         .iter()
-        // Reply quality is a timing measurement with its own budgets, not a step.
-        .filter(|record| !incidental_probe(record) && record["event"] != "reply.quality")
+        // Reply quality and the bridge's `timing` samples are measurements with
+        // their own budgets, not steps: their values follow the run's pace.
+        .filter(|record| {
+            !incidental_probe(record) && !matches!(record["event"].as_str(), Some("reply.quality" | "timing"))
+        })
         .map(|record| {
             let mut record = record.clone();
             names.nested(&mut record)?;
