@@ -61,7 +61,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                   {"error": "invalid_dpop_proof" if mode == "wrong-error" else "invalid_grant"})
 
 
-server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+class Server(http.server.HTTPServer):
+    def handle_error(self, *_):
+        # Preserve the failure without dumping the synthetic request or proof.
+        # HTTPServer otherwise swallows handler errors into the silenced stderr.
+        error = sys.exc_info()[1]
+        report["peer_error"] = {
+            "type": type(error).__name__,
+            "errno": getattr(error, "errno", None),
+            "reason": getattr(error, "reason", None),
+        }
+
+
+server = Server(("127.0.0.1", 0), Handler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(root / "cert.pem", root / "key.pem")
 server.socket = context.wrap_socket(server.socket, server_side=True)

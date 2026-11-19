@@ -205,7 +205,7 @@ async fn t3_on_device_mcp_replay_cancel_closes_tls_child_without_token_request()
     }
     drop(pending);
     let report = peer.finish().await;
-    assert_eq!(report["closed"], true);
+    assert_eq!(report["closed"], true, "peer_error={}", report["peer_error"]);
     assert_eq!(report["requests"], 1);
     assert_eq!(report["discovery_credentials"], false);
 }
