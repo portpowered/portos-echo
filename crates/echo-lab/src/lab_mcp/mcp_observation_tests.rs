@@ -313,7 +313,11 @@ fn portos() -> PortosObservations {
 
 fn receipt(event: &str, fields: Value) -> Value {
     let mut row = json!({"event":event,"elapsed_ms":0,"provider_auth_mode":"api_key"});
-    row.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+    if let Value::Object(fields) = fields {
+        row.as_object_mut().unwrap().extend(fields);
+    } else {
+        panic!("receipt fields must be an object");
+    }
     row
 }
 
@@ -474,7 +478,7 @@ fn mcp_portos_observer_refuses_regressed_time_and_ambiguous_configuration() {
     );
     for names in [
         vec![],
-        vec!["".into()],
+        vec![String::new()],
         vec!["query".into(), "query".into()],
         vec!["private\nvalue".into()],
     ] {

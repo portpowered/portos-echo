@@ -390,7 +390,7 @@ mod mcp_trust_tests {
                     .is_error
             );
             for (mode, key, error) in [
-                ("http", "1:t1:u1:h", ToolError::Server("http_status:503".into())),
+                ("http", "1:t1:u1:h", ToolError::Server("http_status:503".into())), // lint-rules: allow-literal typed HTTP status assertion, never a network address
                 ("malformed", "1:t1:u1:m", ToolError::Transport),
             ] {
                 assert_eq!(
