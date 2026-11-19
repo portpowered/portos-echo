@@ -80,7 +80,7 @@ async fn t3_on_device_launch_pushes_the_derived_config_and_starts_in_its_own_ses
         format!("--config {PRIVATE}/bridge.toml --trace {PRIVATE}/trace.jsonl <lab-stdin"),
         format!("exec-out runas root 3990,inet cat {PRIVATE}/trace.jsonl"),
         "tail -c +1 /data/local/hassmic/boot.log".into(),
-        "forward tcp:0 tcp:16900".into(),
+        "forward tcp:0 tcp:16900".into(), // lint-rules: allow-literal synthetic adb argument comparison, no connection
     ] {
         assert!(world.ran(&expected), "{expected}");
     }

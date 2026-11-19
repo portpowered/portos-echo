@@ -78,7 +78,7 @@ impl Shell for Fake {
                 world.pushed.push((args[1].clone(), args[2].clone(), contents));
                 String::new()
             }
-            "forward" if args[1] == "tcp:0" => format!("{}\n", world.forward),
+            "forward" if args[1] == "tcp:0" => format!("{}\n", world.forward), // lint-rules: allow-literal synthetic adb argument comparison, no connection
             "exec-out" if command.contains("cat ") => world.trace.clone(),
             "exec-out" => {
                 let from = command
