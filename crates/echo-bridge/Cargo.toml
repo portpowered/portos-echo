@@ -29,6 +29,7 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros", "io-util", "test-util"] }
+rustix = { version = "=1.1.6", features = ["fs"] }
 
 [dev-dependencies]
 echo-lab = { version = "0.1.0", path = "../echo-lab" }

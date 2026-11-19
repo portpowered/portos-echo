@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 pub fn admits(scenario: &Value) -> Result<bool, String> {
     if !matches!(
         scenario["id"].as_str(),
-        Some("m2-live-connect" | "m4-spoof-tool" | "session-two-turns" | "session-idle-timeout")
+        Some("m2-live-connect" | "m4-spoof-tool" | "m5-port-os-link" | "session-two-turns" | "session-idle-timeout")
     ) {
         return Ok(false);
     }

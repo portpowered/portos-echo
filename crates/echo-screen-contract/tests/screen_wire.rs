@@ -165,3 +165,66 @@ fn extra_metadata_is_ignored() -> Result<(), Box<dyn Error>> {
     let state: UiState = serde_json::from_str(r#"{"state":"ready","message":"hello","metadata":42}"#)?;
     round_trip(&state, r#"{"state":"ready","message":"hello"}"#)
 }
+
+#[test]
+fn settings_v1_sparse_wire_and_decimal_cap_are_lossless() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::settings_v1::{PromptSaveV1, SaveResultV1, SettingsPatchV1};
+    for wire in [
+        r#"{"version":1,"settings":{"voice":{"session_listen_enabled":false}}}"#,
+        r#"{"version":1,"settings":{"codex":{"voice":"default"}}}"#,
+        r#"{"version":1,"settings":{"agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":8}}}"#,
+        r#"{"version":1,"settings":{"agent":{"daily_request_cap":"0"}}}"#,
+    ] {
+        let patch: SettingsPatchV1 = serde_json::from_str(wire)?;
+        assert!(patch.settings.is_nonempty());
+        round_trip(&patch, wire)?;
+    }
+    let wire = r#"{"version":1,"text":"\"<script>inert</script>\"\n日本語"}"#;
+    round_trip(&serde_json::from_str::<PromptSaveV1>(wire)?, wire)?;
+    let wire = r#"{"version":1,"restart_pending":false}"#;
+    round_trip(&serde_json::from_str::<SaveResultV1>(wire)?, wire)
+}
+
+#[test]
+fn settings_v1_rejects_versions_extras_nulls_and_lossy_caps() {
+    use echo_screen_contract::settings_v1::{PromptSaveV1, SettingsPatchV1};
+    for wire in [
+        r#"{"settings":{"agent":{"max_tool_calls":8}}}"#,
+        r#"{"version":2,"settings":{"agent":{"max_tool_calls":8}}}"#,
+        r#"{"version":"1","settings":{"agent":{"max_tool_calls":8}}}"#,
+        r#"{"version":1,"settings":{"agent":{"max_tool_calls":8}},"extra":0}"#,
+        r#"{"version":1,"settings":{"home":{"dir":"forbidden"}}}"#,
+        r#"{"version":1,"settings":{"voice":{"session_max_seconds":600}}}"#,
+        r#"{"version":1,"settings":{"voice":null}}"#,
+        r#"{"version":1,"settings":{"voice":{"session_listen_enabled":null}}}"#,
+        r#"{"version":1,"settings":{"codex":{}}}"#,
+        r#"{"version":1,"settings":{"codex":{"voice":"default","extra":0}}}"#,
+        r#"{"version":1,"settings":{"agent":{"daily_request_cap":9007199254740993}}}"#,
+        r#"{"version":1,"settings":{"agent":{"daily_request_cap":"01"}}}"#,
+        r#"{"version":1,"settings":{"agent":{"daily_request_cap":"-1"}}}"#,
+        r#"{"version":1,"settings":{"agent":{"daily_request_cap":""}}}"#,
+        r#"{"version":1,"settings":{"agent":{"daily_request_cap":"18446744073709551615"}}}"#,
+        r#"{"version":1,"settings":{"agent":{"max_tool_calls":1,"max_tool_calls":2}}}"#,
+    ] {
+        assert!(serde_json::from_str::<SettingsPatchV1>(wire).is_err(), "{wire}");
+    }
+    for wire in [
+        r#"{"version":1,"settings":{}}"#,
+        r#"{"version":1,"settings":{"voice":{}}}"#,
+        r#"{"version":1,"settings":{"agent":{}}}"#,
+        r#"{"version":1,"settings":{"codex":{"voice":"default"},"agent":{}}}"#,
+    ] {
+        assert!(
+            !serde_json::from_str::<SettingsPatchV1>(wire)
+                .unwrap()
+                .settings
+                .is_nonempty()
+        );
+    }
+    for wire in [
+        r#"{"version":1,"text":null}"#,
+        r#"{"version":1,"text":"a","path":"other"}"#,
+    ] {
+        assert!(serde_json::from_str::<PromptSaveV1>(wire).is_err());
+    }
+}

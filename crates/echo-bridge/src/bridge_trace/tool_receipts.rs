@@ -4,6 +4,51 @@ use crate::Error;
 use echo_codex::codex_protocol::{RequestId, ToolCall, TurnInterrupt};
 use echo_delegation::codex_dispatch::Catalog;
 use serde_json::json;
+use std::sync::Mutex;
+
+/// One configured Port OS host per process. The lock orders ordinals with the
+/// unchanged attempt records, even when admitted calls complete out of order.
+pub(crate) struct PortosReceipts {
+    trace: Trace,
+    server: String,
+    attempts: Mutex<u64>,
+}
+
+impl PortosReceipts {
+    pub fn new(trace: Trace, server: String) -> Self {
+        Self {
+            trace,
+            server,
+            attempts: Mutex::new(0),
+        }
+    }
+
+    pub fn catalog(&self, count: usize) -> Result<(), Error> {
+        self.trace.clone().record(
+            "mcp.tools_list.completed",
+            None,
+            json!({"server":self.server,"outcome":"success","count":count}),
+        )
+    }
+
+    pub fn attempt(&self, name: &str, key: &str) -> Result<u64, Error> {
+        let mut attempts = self.attempts.lock().map_err(|_| Error::Trace)?;
+        let ordinal = attempts.checked_add(1).ok_or(Error::Trace)?;
+        self.trace.clone().tool_attempt(name, key)?;
+        *attempts = ordinal;
+        Ok(ordinal)
+    }
+
+    // Only the outcome crosses this boundary; no arguments, result or key.
+    pub fn complete(&self, name: &str, ordinal: u64, success: bool) -> Result<(), Error> {
+        self.trace.clone().record(
+            "mcp.tool.completed",
+            None,
+            json!({"server":self.server,"name":name,
+                "outcome":if success { "success" } else { "error" },"attempt_count":ordinal}),
+        )
+    }
+}
 
 pub(crate) struct ToolTrace {
     trace: Trace,
@@ -62,6 +107,33 @@ impl ToolTrace {
 }
 
 impl Trace {
+    /// Local completion summary: callers supply only an authored tool/error
+    /// and a validated path. Contents and rejected arguments never reach here.
+    pub(crate) fn agent_tool(&mut self, tool: &str, path: Option<&str>, bytes: u64, result: &str) -> Result<(), Error> {
+        let run = self.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        self.record(
+            "agent.tool",
+            run.as_deref(),
+            json!({"tool":tool,"path":path,"bytes":bytes,"result":result}),
+        )
+    }
+
+    /// Only the validated prompt selector enters this receipt, never its text.
+    pub(crate) fn agent_prompt(
+        &mut self,
+        tool: &str,
+        which: Option<&str>,
+        bytes: u64,
+        result: &str,
+    ) -> Result<(), Error> {
+        let run = self.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        self.record(
+            "agent.tool",
+            run.as_deref(),
+            json!({"tool":tool,"which":which,"bytes":bytes,"result":result}),
+        )
+    }
+
     /// Record the host attempt after bridge policy/consent, before MCP execution.
     /// The length-prefixed dispatcher key supplies exact correlation without args.
     pub(crate) fn tool_attempt(&mut self, name: &str, key: &str) -> Result<(), Error> {
@@ -217,5 +289,36 @@ mod tests {
         call.turn_id = "invalid\nturn".into();
         assert_eq!(request.request(&RequestId::Number(1), &call), Err(Error::Decode));
         assert_eq!(std::fs::read(path).unwrap(), b"");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn receipts_portos_ordinals_preserve_attempt_order_and_exact_safe_envelopes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("trace");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        trace.tool_run(Some("run-1")).unwrap();
+        let receipts = PortosReceipts::new(trace, "portos".into());
+        receipts.catalog(2).unwrap();
+        assert_eq!(receipts.attempt("endpoint_query", "invalid"), Err(Error::Trace));
+        let first = receipts.attempt("endpoint_query", "1:t1:u1:a").unwrap();
+        let second = receipts.attempt("endpoint_list", "1:t1:u1:b").unwrap();
+        assert_eq!((first, second), (1, 2));
+        receipts.complete("endpoint_list", second, false).unwrap();
+        receipts.complete("endpoint_query", first, true).unwrap();
+        let rows: Vec<serde_json::Value> = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|row| serde_json::from_str(row).unwrap())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                json!({"event":"mcp.tools_list.completed","server":"portos","outcome":"success","count":2,"elapsed_ms":0,"provider_auth_mode":"api_key"}),
+                json!({"event":"tools/call","name":"endpoint_query","thread_id":"t","turn_id":"u","call_id":"a","run_id":"run-1","elapsed_ms":0,"provider_auth_mode":"api_key"}),
+                json!({"event":"tools/call","name":"endpoint_list","thread_id":"t","turn_id":"u","call_id":"b","run_id":"run-1","elapsed_ms":0,"provider_auth_mode":"api_key"}),
+                json!({"event":"mcp.tool.completed","server":"portos","name":"endpoint_list","outcome":"error","attempt_count":2,"elapsed_ms":0,"provider_auth_mode":"api_key"}),
+                json!({"event":"mcp.tool.completed","server":"portos","name":"endpoint_query","outcome":"success","attempt_count":1,"elapsed_ms":0,"provider_auth_mode":"api_key"}),
+            ]
+        );
     }
 }

@@ -29,6 +29,7 @@ const js = await readFile(
 export async function pageFor(
     t,
     query = "?events=%2Fevents&actions=%2Factions",
+    settings = false,
 ) {
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
@@ -68,7 +69,13 @@ export async function pageFor(
     await page.coverage.startJSCoverage({ resetOnNavigation: false });
     coverageStarted = true;
     await page.setContent(
-        html
+        (settings
+            ? html.replace(
+                  "<head>",
+                  '<head><meta name="echo-settings" content="v1">',
+              )
+            : html
+        )
             .replace('<link rel="stylesheet" href="screen.css" />', "")
             .replace('<script src="screen.js"></script>', "")
             .replace(
@@ -118,10 +125,19 @@ export async function pageFor(
             if (window.postStatus === "reject")
                 return Promise.reject(new Error("controlled"));
             if (window.postStatus === "pending")
-                return new Promise((resolve) => {
+                return new Promise((resolve, reject) => {
                     window.resolvePost = resolve;
+                    options.signal.addEventListener(
+                        "abort",
+                        () =>
+                            reject(new DOMException("Cancelled", "AbortError")),
+                        { once: true },
+                    );
                 });
-            return Promise.resolve({ status: window.postStatus });
+            return Promise.resolve({
+                status: window.postStatus,
+                json: async () => window.responseBody,
+            });
         };
     });
     await page.addScriptTag({ content: `${js}\n//# sourceURL=screen.js` });

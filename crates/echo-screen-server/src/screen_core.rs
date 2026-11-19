@@ -53,6 +53,10 @@ impl Core {
         self.draining = true;
     }
 
+    pub fn accepting(&self) -> bool {
+        !self.draining && !self.revoked
+    }
+
     fn close_clients(&mut self) {
         for client in self.clients.drain(..) {
             client.cancel.send_replace(true);

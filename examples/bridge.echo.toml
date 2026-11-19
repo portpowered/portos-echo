@@ -24,7 +24,9 @@ home = "/data/local/echo-bridge/private/codex-home"
 binary = "/data/local/echo-bridge/codex-app-server"
 launch = "standalone"
 # The child starts with a cleared environment and the Echo has no system bundle it can find.
-# This PEM file reaches the child as SSL_CERT_FILE. Omitted, no certificate variable is set.
+# This PEM file reaches the child as SSL_CERT_FILE and supplies explicit additional
+# trust roots to the bridge's Port OS OAuth and MCP HTTPS clients.
+# Omitted, no certificate variable or additional trust roots are set.
 ca_file = "/data/local/echo-bridge/cacert.pem"
 
 [agent]
@@ -32,9 +34,21 @@ max_tool_calls = 8
 task_deadline_seconds = 60
 daily_request_cap = 500
 
-# No MCP server: conversation only, until the Port OS grant lives on the device.
+# Public pilot endpoints; replace with your deployment's MCP resource URL.
+# Issuer is discovered and validated, not a config key:
+# https://auth.portoperatingsystem.com
+# The bridge creates portos/ as 0700 and grant.json as 0600.
 [mcp]
-server = []
+state_dir = "/data/local/echo-bridge/private/portos"
+client_id = "port1/systems/zero/oauth-clients/command-line-interface"
+scopes = ["endpoint:read"]
+operator_listen = "127.0.0.1:16902"
+
+[[mcp.server]]
+name = "portos"
+url = "https://api.portoperatingsystem.com/mcp"
+auth = "portos_device_code"
+allow_tools = ["endpoint_list", "endpoint_query", "control"]
 
 # The screen app on the same device loads the page from loopback; nothing on the LAN reaches it.
 [screen]
@@ -48,6 +62,8 @@ log_dir = "/data/local/echo-bridge/private/audit"
 # Non-secret agent home, separate from private credentials.
 [home]
 dir = "/data/local/echo-bridge/home"
+agent_tools = true
+# false or [] disables local tools; ["notes"] or ["prompts"] selects one group.
 # Copy examples/prompts/voice.md and runner.md into this home's prompts directory.
 # Edits apply to new conversations; missing files use built-ins, bad edits retain prior text.
 # settings.toml is reserved; the prompt loader never reads or writes it.

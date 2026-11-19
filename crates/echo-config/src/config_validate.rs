@@ -64,7 +64,11 @@ fn schema_field(path: &str, key: &str) -> bool {
         ],
         "home" => &["dir"],
         "audio" => &["reply_lead_ms"],
-        "voice" => &["session_listen_seconds", "session_max_seconds"],
+        "voice" => &[
+            "session_listen_enabled",
+            "session_listen_seconds",
+            "session_max_seconds",
+        ],
         "codex" => &["home", "binary", "launch", "ca_file", "voice", "instructions", "model"],
         "chatgpt_auth" => crate::config_auth::FIELDS,
         "echo" => &["host", "wyoming_port"],

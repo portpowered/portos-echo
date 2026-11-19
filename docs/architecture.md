@@ -175,13 +175,17 @@ planned; it is not established by the current PC journeys.
 
 #### Launch contract on the Echo — echo-bridge
 
-On the Echo the fork's service script starts the bridge. That script lives in the hassmic fork, not here; this is
-what it must do, each point measured on the device on 2026-11-18 ([baselines](program/baselines.md)).
-[examples/bridge.echo.toml](../examples/bridge.echo.toml) is the matching configuration.
+On the Echo the operator uses `scripts/echo-install.sh` to install and start the bridge. The contract combines
+the 2026-11-18 lifecycle and 2026-11-19 identity measurements ([baselines](program/baselines.md));
+actual bridge/child identity after migration remains coordinator T5 proof.
+[examples/bridge.echo.toml](../examples/bridge.echo.toml) supplies the base configuration; for the installer,
+set `codex.binary` and `codex.ca_file` under `bin/` as its help requires.
 
-1. **Run with gid 3990 and `inet`**, for example `runas root 3990,inet`. hassmic's firewall chain lets only its
-   egress group, gid 3990, leave the device. A bridge started as plain root reaches Wyoming on loopback and then
-   gets a network deadline on its first call. No firewall rule changes.
+1. **Run as existing Android nobody (uid 9999), with groups 3990 and `inet`**:
+   `/data/local/hassmic/runas nobody 3990,inet`. The inherited Codex child uses the same identity.
+   hassmic's firewall admits its egress group, gid 3990; omitting it blocks provider TCP. Root only prepares
+   fixed paths and drops privilege before any writable launch script executes. No custom uid, SELinux or
+   firewall changes. Nobody is shared and is not a separate child sandbox.
 2. **Start the bridge in its own session** (`setsid`). A bridge left in an adb session's process group received
    SIGTERM about 17 s after launch.
 3. **Hold the bridge's stdin open.** End of input on stdin is the bridge's clean-stop request
@@ -190,14 +194,20 @@ what it must do, each point measured on the device on 2026-11-18 ([baselines](pr
    ready, the bridge does not exit on a failure: it recovers inside the process (sequence (i)) and no longer
    relies on a restart. It still exits non-zero on the kill path and on a configuration or credential it cannot
    use at startup, and a script may restart it after those or after a crash.
-4. **Give it one private directory**, mode 0700, owned by the bridge's user. `codex.home`, `audit.log_dir`, the
-   trace, `live.credential_file` and `screen.pairing_token_file` sit inside it; `codex.binary` and `codex.ca_file`
+4. **Give it private/ and home/**, both owned by 9999:9999, mode 0700, data files 0600.
+   The installer migrates stopped root-owned descendants without replacing retained data and rejects links
+   and unsupported entries. It regenerates `private/launch.sh` (0700) on install/start; repeated migration
+   needs no corrective changes. Base/bin stay root-owned 0755, binaries 0755 and CA 0644.
+   Non-secret prompts and future notes/settings/screen packs belong in home/. `codex.home`, `audit.log_dir`, the
+   trace, `live.credential_file` and `screen.pairing_token_file` sit inside private/; `codex.binary` and `codex.ca_file`
    may sit outside. The bridge creates its audit directory, kill marker, tool ledger and trace with modes 0700 and
    0600 whatever the umask (`adb shell` runs with umask 000), and creates the Codex home with mode 0700 and refuses
    one whose mode differs. It does not change the mode of anything that already exists, and it does not create the
    files the script redirects its output to, so the script still sets `umask 077`.
 5. **Pass `--config` and `--trace`**, both inside the private directory. Health stays on `127.0.0.1:16901`.
-6. **Name the standalone app server in the configuration**: `codex.launch = "standalone"` with `codex.binary`,
+6. **Observe the process user** with installer `status` (`process_user=nobody`). Running root/0 or
+   unverifiable identity fails. Stop and reinstall before starting a root legacy installation.
+7. **Name the standalone app server in the configuration**: `codex.launch = "standalone"` with `codex.binary`,
    because the armv7 build takes no `app-server` subcommand, and `codex.ca_file`, because the child starts with a
    cleared environment and finds no certificate bundle on the device. No wrapper script is needed for either.
 
@@ -379,6 +389,8 @@ files; retained calls keep their original snapshot and text. Edits require no br
 Configure `[home] dir` with an absolute path (no tilde or environment expansion). On the Echo use
 `/data/local/echo-bridge/home`, separate from `/data/local/echo-bridge/private`, which still holds secrets.
 The bridge creates missing home/prompts directories with mode 0700 and preserves existing modes.
+The bridge user needs only search permission on the home's ancestors, as a non-root user has under `/data`;
+it owns and reads only the `prompts/` and `notes/` directories.
 Copy `examples/prompts/voice.md` and `runner.md` into the home's `prompts/` directory, then edit them.
 Omitting `[home]` intentionally selects built-ins without file access. A missing configured prompt uses
 its built-in default and emits one payload-free `prompt.defaulted` per kind per runtime lifetime.
@@ -827,6 +839,14 @@ On current main, `-D` continues capture during reply audio, but configured Codex
 `thread/realtime/itemAdded` speech/cancellation notifications to `Event::Other`. It does not use those
 events to cut playback. Error/kill cleanup can cut through `hassmic-continue` and `audio-stop`, then await
 `played`; that cleanup closes/fails the voice run instead of continuing a normal interrupted question.
+
+The session controller's barge-in (2026-11-19) waits for the model to yield. The Live session transcribes
+whatever the microphone hears during a reply, and the model decides for itself whether to stop. A user
+transcript fragment or speech-start therefore only arms a barge-in for 2 s. It fires once the model has sent
+no audible reply audio for 500 ms, or at once when the model ends its turn. Firing retires the reply, drops
+the pacer lead and queued call audio, and flushes the device. A model that is still talking after the 2 s
+was not interrupted, and its reply plays on whole. Both times are constants in
+[reply_barge.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_barge.rs).
 
 #### Why — Barge-in
 

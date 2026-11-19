@@ -3,12 +3,18 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-pub(crate) async fn index() -> Response {
-    (
-        [("content-type", "text/html; charset=utf-8")],
-        include_str!("../../../web/screen/src/index.html"),
-    )
-        .into_response()
+pub(crate) fn index_with_settings(settings: bool) -> Response {
+    let html = include_str!("../../../web/screen/src/index.html");
+    let html = if settings {
+        html.replacen(
+            "<head>",
+            "<head>\n    <meta name=\"echo-settings\" content=\"v1\" />",
+            1,
+        )
+    } else {
+        html.to_owned()
+    };
+    ([("content-type", "text/html; charset=utf-8")], html).into_response()
 }
 
 pub(crate) async fn css() -> Response {

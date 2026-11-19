@@ -19,6 +19,72 @@
     "bench_session_ids"
   ],
   "properties": {
+    "step_attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "iteration",
+          "attempts",
+          "first_try_woke"
+        ],
+        "properties": {
+          "step": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "iteration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2
+          },
+          "first_try_woke": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "talkback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eligible_steps",
+        "first_try_wakes",
+        "first_try_wake_rate",
+        "replay_count"
+      ],
+      "properties": {
+        "eligible_steps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "first_try_wakes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "first_try_wake_rate": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "replay_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
     "milestone": {
       "type": "string",
       "minLength": 1

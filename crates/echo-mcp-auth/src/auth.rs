@@ -8,7 +8,7 @@ use echo_contracts::secret::Secret;
 use reqwest::{Client, redirect::Policy};
 use serde::Deserialize;
 use std::{
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
 };
 use tokio::{sync::Mutex, time::Instant};
@@ -46,6 +46,7 @@ pub struct AuthClient {
     store: Store,
     state: Mutex<State>,
     generation: AtomicU64,
+    linked: AtomicBool,
     epoch: u64,
     started: Instant,
 }
@@ -56,7 +57,7 @@ impl AuthClient {
     /// # Errors
     /// Returns safe discovery, transport, binding or storage categories.
     pub async fn open(options: AuthOptions) -> Result<Self, AuthError> {
-        Self::open_with_epoch(options, None).await
+        Self::open_with_ca(options, None, None).await
     }
 
     /// Use an independently chosen UTC epoch for guarded simulated runs.
@@ -64,16 +65,33 @@ impl AuthClient {
     /// # Errors
     /// Returns the same categories as `open`.
     pub async fn open_at_epoch(options: AuthOptions, epoch_unix: u64) -> Result<Self, AuthError> {
-        Self::open_with_epoch(options, Some(epoch_unix)).await
+        Self::open_with_ca(options, Some(epoch_unix), None).await
     }
 
-    async fn open_with_epoch(options: AuthOptions, epoch: Option<u64>) -> Result<Self, AuthError> {
+    /// Add explicit PEM trust roots without changing native trust or hostname checks.
+    /// # Errors
+    /// Returns safe transport errors for malformed trust, or the categories of `open`.
+    pub async fn open_with_ca(
+        options: AuthOptions,
+        epoch: Option<u64>,
+        ca_pem: Option<&[u8]>,
+    ) -> Result<Self, AuthError> {
         options.validate()?;
-        let http = Client::builder()
+        let mut builder = Client::builder()
             .redirect(Policy::none())
-            .timeout(options.request_timeout)
-            .build()
-            .map_err(|_| AuthError::Transport)?;
+            .retry(reqwest::retry::never())
+            .no_proxy()
+            .timeout(options.request_timeout);
+        if let Some(pem) = ca_pem {
+            let roots = reqwest::Certificate::from_pem_bundle(pem).map_err(|_| AuthError::Transport)?;
+            if roots.is_empty() {
+                return Err(AuthError::Transport);
+            }
+            for root in roots {
+                builder = builder.add_root_certificate(root);
+            }
+        }
+        let http = builder.build().map_err(|_| AuthError::Transport)?;
         let metadata = discovery::discover(&http, &options).await?;
         let (store, record) = Store::open(&options, &metadata.issuer)?;
         Ok(Self {
@@ -81,6 +99,7 @@ impl AuthClient {
             metadata,
             http,
             store,
+            linked: AtomicBool::new(record.grant.is_some()),
             state: Mutex::new(State {
                 record,
                 uncertain: false,
@@ -92,6 +111,14 @@ impl AuthClient {
             },
             started: Instant::now(),
         })
+    }
+
+    /// Passive local grant status for presentation. Never acquires a token,
+    /// refreshes, reads a file or probes the authorization server. False while
+    /// a rotation/revocation is in flight or its outcome is uncertain.
+    #[must_use]
+    pub fn has_grant(&self) -> bool {
+        self.linked.load(Ordering::Acquire)
     }
 
     fn now(&self) -> u64 {
@@ -182,6 +209,7 @@ impl AuthClient {
     }
 
     fn publish(&self, state: &mut State, grant: Option<Secret<crate::store::Grant>>) -> Result<(), AuthError> {
+        self.linked.store(false, Ordering::Release);
         state.uncertain = true;
         let old = std::mem::replace(&mut state.record.grant, grant);
         if let Err(error) = self.store.save(&state.record) {
@@ -189,6 +217,7 @@ impl AuthClient {
             return Err(error);
         }
         state.uncertain = false;
+        self.linked.store(state.record.grant.is_some(), Ordering::Release);
         self.generation.fetch_add(1, Ordering::Release);
         Ok(())
     }
@@ -205,6 +234,7 @@ impl AuthClient {
         ];
         // Mark before the request: cancellation/transport failure can mean the
         // server rotated. Never replay an ambiguous refresh in this process.
+        self.linked.store(false, Ordering::Release);
         state.uncertain = true;
         match wire::post::<Pair>(
             &self.http,
@@ -247,6 +277,7 @@ impl AuthClient {
             ("client_id", self.options.client_id.as_str()),
         ];
         let request = self.http.post(&self.metadata.revocation_endpoint).form(&form);
+        self.linked.store(false, Ordering::Release);
         state.uncertain = true;
         let response = request.send().await.map_err(|_| AuthError::Transport)?;
         if !response.status().is_success() {

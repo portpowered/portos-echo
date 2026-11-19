@@ -4,8 +4,84 @@ import os
 import selectors
 import signal
 import subprocess
+from unittest.mock import patch
 
-from test_echo_install import Sandbox, prepare_lifecycle, require
+from test_echo_install import Sandbox, prepare_lifecycle, require, owner, set_owner
+
+
+def recovered_metadata(box):
+    for tree in ("private", "home"):
+        root = box.device / tree
+        for path in [root, *root.rglob("*")]:
+            expected = 0o700 if path.is_dir() or path.name == "launch.sh" else 0o600
+            require(path.stat().st_mode & 0o777 == expected, "recovery runtime mode differs")
+            expected_owner = "9999:3990" if path.name == "credential" else "9999:9999"
+            require(owner(box.root, path) == expected_owner, "recovery runtime owner differs")
+    for name, mode in (("", 0o755), ("bin", 0o755), ("bin/echo-bridge", 0o755),
+                       ("bin/codex-app-server", 0o755), ("bin/cacert.pem", 0o644)):
+        path = box.device / name
+        require(owner(box.root, path) == "0:0", "recovery executable owner differs")
+        require(path.stat().st_mode & 0o777 == mode, "recovery executable mode differs")
+
+
+def recreate_root_data(box):
+    # Control only the deleted object's inode identity, preserving other tests'
+    # real stat observations even while their sandboxes run in parallel.
+    recycled = box.device / "home/recreated"
+    recycled.write_text("new root-owned data")
+    deleted = box.root / "deleted-stage"
+    deleted.touch()
+    recycled_info = recycled.stat()
+    real_stat = type(deleted).stat
+
+    def observed_stat(path, *args, **kwargs):
+        return recycled_info if path == deleted else real_stat(path, *args, **kwargs)
+
+    with patch.object(type(deleted), "stat", observed_stat):
+        set_owner(box.root, deleted, "9999:3990")
+    deleted.unlink()
+
+
+def recovery_case(box, fault):
+    box.prompt("voice.md", "default voice")
+    prepare_lifecycle(box)
+    values = {"private/credential": "retained auth", "home/prompts/voice.md": "owner voice",
+              "home/settings.toml": "retained settings"}
+    for name, value in values.items():
+        (box.device / name).write_text(value)
+    set_owner(box.root, box.device / "private/credential", "9999:3990")
+    original = (box.device / "private/bridge.toml").read_bytes()
+    box.files["config"].write_text("replacement config")
+    before = len(box.calls())
+    (box.root / "fault").write_text(fault)
+    box.install(force=True, code=1)
+    require(not (box.root / "fault").exists(), "fault was not consumed")
+    require((box.device / "private/bridge.toml").read_bytes() == original, "failed stage lost config")
+    for name, value in values.items():
+        require((box.device / name).read_text() == value, "failed stage lost retained state")
+    require(not (box.device / "private/.install-stage").exists(), "stage leaked")
+    require(not (box.root / "remote/echo-bridge.lock").exists(), "failed operation leaked lock")
+    require(not any("setsid" in " ".join(call) for call in box.calls()[before:]), "failure launched")
+    recreate_root_data(box)
+    values["home/recreated"] = "new root-owned data"
+    box.install(force=True)
+    require((box.device / "private/bridge.toml").read_text() == "replacement config", "recovery force ineffective")
+    box.files["config"].write_text("unused config")
+    box.install()
+    require((box.device / "private/bridge.toml").read_text() == "replacement config", "reinstall lost config")
+    for name, value in values.items():
+        require((box.device / name).read_text() == value, "recovery lost retained state")
+    recovered_metadata(box)
+    require(not (box.device / "private/.install-stage").exists(), "recovery stage leaked")
+    require(not (box.root / "remote/echo-bridge.lock").exists(), "recovery lock leaked")
+    box.run(["start"])
+    require((box.root / "runas-user").read_text() == "nobody", "recovered launch identity differs")
+    require("process_user=nobody\n" in box.run(["status"]).stdout, "recovered status identity differs")
+    require((box.root / "child-session").read_text() == (box.root / "holder-pid").read_text(),
+            "recovered launch did not detach")
+    box.run(["stop"])
+    require((box.root / "eof").read_text() == "EOF", "recovered child did not see EOF")
+    require(not (box.device / "private/run").exists(), "recovered stop leaked run state")
 
 
 def paused_start(box, point):
@@ -137,3 +213,70 @@ def lifecycle_cases():
     concurrent_cases()
     interrupted_cases()
     print("F09 F10 F11 F12 F14 F15 F16: PASS")
+
+
+def nonroot_cases():
+    # Runtime ownership is modeled, never changed on the worker host.
+    for trigger in ("install", "start"):
+        with Sandbox() as box:
+            prepare_lifecycle(box)
+            values = {"private/credential": "retained auth", "home/settings.toml": "retained settings",
+                      "home/prompts/custom.md": "retained prompt"}
+            (box.device / "private/codex").mkdir()
+            values["private/codex/auth-marker"] = "retained marker"
+            for name, value in values.items():
+                (box.device / name).write_text(value)
+            for path in [box.device / "private", box.device / "home", *box.device.rglob("*")]:
+                if "/bin" not in str(path):
+                    set_owner(box.root, path, "0:0")
+            # A legacy generated launcher must be replaced before privilege drop.
+            (box.device / "private/launch.sh").write_text("exit 89\n")
+            box.install() if trigger == "install" else box.run(["start"])
+            if trigger == "start":
+                box.run(["stop"])
+            for tree in ("private", "home"):
+                root = box.device / tree
+                for path in [root, *root.rglob("*")]:
+                    require(owner(box.root, path) == "9999:9999", "runtime ownership differs")
+                    expected = 0o700 if path.is_dir() or path.name == "launch.sh" else 0o600
+                    require(path.stat().st_mode & 0o777 == expected, "runtime mode differs")
+            for name in ("bin", "bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem"):
+                require(owner(box.root, box.device / name) == "0:0", "executable ownership differs")
+            set_owner(box.root, box.device / "private/credential", "9999:3990")
+            before = (box.root / "ownership-ledger").read_text().splitlines()
+            box.install() if trigger == "install" else box.run(["start"])
+            if trigger == "start":
+                require((box.root / "runas-user").read_text() == "nobody", "launch did not drop privilege")
+                box.run(["stop"])
+            require(owner(box.root, box.device / "private/credential") == "9999:3990",
+                    "migration changed an already nobody-owned group")
+            delta = (box.root / "ownership-ledger").read_text().splitlines()[len(before):]
+            for name, value in values.items():
+                path = box.device / name
+                require(path.read_text() == value, "migration lost retained bytes")
+                require(not any(line.startswith(str(path) + "=") for line in delta), "migration not idempotent")
+            require(not any(line.startswith(str(box.device / tree) + "=") for tree in ("private", "home")
+                            for line in delta), "repeated migration corrected a directory")
+    for trigger in ("install", "start"):
+        for failure in ("chown", "symlink", "hardlink", "fifo"):
+            with Sandbox() as box:
+                prepare_lifecycle(box)
+                path = box.device / "private/retained"
+                path.write_text("retained bytes")
+                set_owner(box.root, path, "0:0")
+                outside = box.root / "outside"
+                outside.write_text("outside bytes")
+                if failure == "chown":
+                    (box.root / "fault").write_text("chown")
+                elif failure == "symlink":
+                    (box.device / "home/nested-link").symlink_to(outside)
+                elif failure == "hardlink":
+                    os.link(outside, box.device / "private/.install-stage")
+                else:
+                    os.mkfifo(box.device / "home/unsupported")
+                index = len(box.calls())
+                box.install(code=1) if trigger == "install" else box.run(["start"], 1)
+                require(not any("setsid" in " ".join(call) for call in box.calls()[index:]), "failed migration launched")
+                require(path.read_text() == "retained bytes" and outside.read_text() == "outside bytes", "migration escaped")
+                require(not (box.root / "remote/echo-bridge.lock").exists(), "migration leaked lock")
+    print("NR install=PASS ownership=PASS migration=PASS launch=PASS status=PASS")

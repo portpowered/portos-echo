@@ -1,4 +1,11 @@
 //! Closed event vocabulary and counters only. Never serialize provider events.
+//! `settings.saved` records only `restart_pending` after a committed save;
+//! `prompt.saved` records only the fixed voice|runner selector. A generation
+//! records `settings.reexec_pending` once when its first changed save commits.
+//! `settings.ignored` uses fixed reason `invalid_config` for an unusable overlay.
+//! Cleanup publishes `settings.restart_prepared`; only final EOF/kill admission
+//! publishes `settings.reexec_attempt`. A failed replacement records
+//! `settings.reexec_failed` with reason exec. No settings values, paths or text.
 //! `prompt.defaulted` names voice|runner once per missing kind per runtime.
 //! `prompt.reload_refused` adds a fixed reason; neither contains paths or text.
 //! `wyoming.probe_ok` acknowledges each successful idle describe probe when its
@@ -10,6 +17,8 @@
 //! fixed frame capacity. Final eviction totals remain in `reply.cut`.
 //! Release events acknowledge acquired listener owners after shutdown is joined.
 //! Voice runtime `screen.released` also counts clients dropped at the drain bound.
+//! `reply.quality` counts in `cuts` the barge-ins that cut the reply, with the
+//! `trigger` of the last: `user_transcript`, `speech_started` or null.
 //! `timing` follows a settled reply's `reply.quality` when that reply has a
 //! sample: `name` is `first_audio_after_endpoint_ms`, `duration_ms` is whole
 //! milliseconds on the bridge clock from the endpoint to the first reply frame
@@ -25,7 +34,7 @@ use std::{
 };
 use tokio::time::Instant;
 mod tool_receipts;
-pub(crate) use tool_receipts::ToolTrace;
+pub(crate) use tool_receipts::{PortosReceipts, ToolTrace};
 
 #[derive(Clone)]
 pub struct Trace {

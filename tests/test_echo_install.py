@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import errno
+import stat
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +41,7 @@ def fake_adb():
     if args[0] == "push":
         destination = Path(args[2].replace("/data/local", str(base / "remote")))
         shutil.copyfile(args[1], destination)
+        set_owner(base, destination, "0:0")
         print(SENTINEL)
         return 0
     if args[0] == "shell" and len(args) == 2:
@@ -56,7 +59,14 @@ def fake_adb():
         result = subprocess.run(["/bin/sh", "-c", command],
                                 env=dict(os.environ, PATH=str(base / "remote-tools") + ":/usr/bin:/bin"),
                                 capture_output=True, timeout=5)
-        if "setsid /bin/sh" in command and result.returncode == 0:
+        if result.returncode:
+            # Fixed labels only: never expose remote commands or private stderr.
+            stage = next((label for text, label in (
+                ("find ", "migration"), ("mv -f", "publication"),
+                ("mkdir", "directory"), ("ps -A", "process"),
+                ("chmod", "mode")) if text in command), "other")
+            (base / "failed-stage").write_text(stage)
+        if "setsid " in command and result.returncode == 0:
             # Readiness comes from the real child, not a scheduling sleep.
             fd = os.open(base / "ready", os.O_RDWR | os.O_NONBLOCK)
             with selectors.DefaultSelector() as selector:
@@ -84,6 +94,11 @@ class Sandbox:
         ps.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
                       + shlex.quote(str(Path(__file__).resolve())) + ' --tool ps "$@"\n')
         ps.chmod(0o755)
+        for name in ("stat", "chown", "chmod"):
+            wrapper = self.root / "remote-tools" / name
+            wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                               + shlex.quote(str(Path(__file__).resolve())) + " --tool " + name + ' "$@"\n')
+            wrapper.chmod(0o755)
         self.tools = self.root / "tools"
         self.tools.mkdir()
         # A closed caller PATH cannot resolve any real adb, even on a developer host.
@@ -99,7 +114,8 @@ class Sandbox:
         adb.chmod(0o755)
         runas = self.root / "remote/hassmic/runas"
         runas.parent.mkdir(parents=True)
-        runas.write_text("synthetic runas")
+        runas.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                         + shlex.quote(str(Path(__file__).resolve())) + ' --tool runas "$@"\n')
         runas.chmod(0o755)
         (self.root / "devices").write_text("fixture\tdevice\n")
         self.files = {}
@@ -133,7 +149,9 @@ class Sandbox:
     def run(self, args, code=0):
         result = subprocess.run(["/bin/sh", str(self.script), *args], cwd=self.root,
                                 env=self.env, capture_output=True, text=True, timeout=15)
-        require(result.returncode == code, "CLI exit differs: " + result.stderr)
+        stage = self.root / "failed-stage"
+        require(result.returncode == code, "CLI exit differs (stage="
+                + (stage.read_text() if stage.exists() else "unavailable") + "): " + result.stderr)
         require(SENTINEL not in result.stdout + result.stderr, "private bytes leaked")
         require(not (self.root / "escaped").exists(), "local input executed")
         if code:
@@ -251,17 +269,15 @@ def retention_cases():
 
 
 def failure_cases():
-    for fault in ("push", "chmod '600'", "mv -f", "ps -A"):
+    from test_echo_install_lifecycle import recovery_case
+    for label, fault in (("push", "push"), ("chmod", "chmod '600'"),
+                         ("rename", "mv -f"), ("observation", "ps -A")):
         with Sandbox() as box:
-            box.install()
-            original = (box.device / "private/bridge.toml").read_bytes()
-            box.files["config"].write_text("new config")
-            (box.root / "fault").write_text(fault)
-            box.install(force=True, code=1)
-            require((box.device / "private/bridge.toml").read_bytes() == original, "failed stage lost config")
-            require(not (box.device / "private/.install-stage").exists(), "stage leaked")
-            require(not (box.root / "remote/echo-bridge.lock").exists(), "failed operation leaked lock")
-            box.install(force=True)
+            try:
+                recovery_case(box, fault)
+            except AssertionError as error:
+                raise AssertionError("F08 recovery case=" + label + ": " + str(error)) from error
+        print("F08 recovery=" + label + ": PASS", flush=True)
     with Sandbox() as box:
         outside = box.root / "outside"
         outside.mkdir()
@@ -277,19 +293,109 @@ def failure_cases():
 
 
 
+def ownership_attribute(path):
+    info = path.stat()
+    if stat.S_ISFIFO(info.st_mode):
+        # Linux forbids user xattrs on FIFOs. Keep their generation-specific
+        # metadata on the parent directory, which supports user xattrs.
+        return path.parent, f"user.echo_fifo_{info.st_ino}_{info.st_ctime_ns}"
+    return path, "user.echo_install_owner"
+
+
+def owner(base, path):
+    target, attribute = ownership_attribute(path)
+    try:
+        return os.getxattr(target, attribute).decode("ascii")
+    except OSError as error:
+        if error.errno != errno.ENODATA:
+            raise
+        return "0:0"
+
+
+def set_owner(base, path, value):
+    # Follow the filesystem object's lifetime: rename/hardlink retain ownership,
+    # deletion destroys it, and inode reuse cannot inherit a deleted owner.
+    target, attribute = ownership_attribute(path)
+    os.setxattr(target, attribute, value.encode("ascii"))
+
+
+def ownership_lifetime_case():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="echo-owner-") as directory:
+        base = Path(directory)
+        path = base / "stage"
+        path.touch()
+        set_owner(base, path, "9999:9999")
+        deleted = path.stat()
+        path.unlink()
+        path.touch()
+        # Deterministically model inode recycling; never wait for an allocator.
+        with patch.object(Path, "stat", return_value=deleted):
+            require(owner(base, path) == "0:0", "recycled inode inherited deleted ownership")
+        set_owner(base, path, "9999:3990")
+        published = base / "published"
+        path.rename(published)
+        os.link(published, path)
+        require(owner(base, published) == owner(base, path) == "9999:3990",
+                "publication or hardlink lost ownership")
+        published.write_text("retained bytes")
+        require(owner(base, path) == "9999:3990", "writing retained data reset ownership")
+        fifo = base / "stdin"
+        os.mkfifo(fifo, 0o600)
+        set_owner(base, fifo, "9999:3990")
+        require(owner(base, fifo) == "9999:3990", "FIFO ownership transfer lost")
+        fifo.unlink()
+        os.mkfifo(fifo, 0o600)
+        require(owner(base, fifo) == "0:0", "recreated FIFO inherited deleted ownership")
+    print("NR ownership-lifetime=PASS")
+
+
+def metadata_tool(base, name, args):
+    if name == "runas":
+        require(args[:2] == ["nobody", "3990,inet"], "wrong launch identity")
+        # The private script and its inputs must be accessible before execution.
+        for path in (base / "remote/echo-bridge/private").rglob("*"):
+            require(owner(base, path).split(":")[0] == "9999", "nobody cannot access root-owned state")
+        (base / "runas-user").write_text("nobody")
+        os.execvpe(args[2], args[2:], dict(os.environ, FAKE_UID="9999"))
+    path = Path(args[-1])
+    if name in ("stat", "chmod") and os.environ.get("FAKE_UID") == "9999":
+        require(owner(base, path).split(":")[0] == "9999", "nobody access denied")
+    if name == "chown":
+        require(os.environ.get("FAKE_UID", "0") == "0", "nonroot chown")
+        operands = [arg for arg in args if not arg.startswith("-")]
+        value = operands[0]
+        for name in operands[1:]:
+            target = Path(name)
+            for entry in [target, *target.rglob("*")] if "-R" in args else [target]:
+                set_owner(base, entry, value)
+            with (base / "ownership-ledger").open("a") as output:
+                output.write(str(target) + "=" + value + "\n")
+        return 0
+    if name == "stat" and args[1] in ("%u", "%u:%g:%a"):
+        value = owner(base, path)
+        print(value.split(":")[0] if args[1] == "%u" else value + ":" + format(path.stat().st_mode & 0o777, "o"))
+        return 0
+    return subprocess.run(["/usr/bin/" + name, *args], check=False).returncode
+
+
 def remote_tool():
     base = Path(os.environ["FAKE_ROOT"])
     name = sys.argv[2]
+    if name in ("runas", "chown", "stat", "chmod"):
+        return metadata_tool(base, name, sys.argv[3:])
     if name == "ps":
-        print("PID NAME\n12 sh echo-bridge launcher")
+        user_mode = "PID,USER,NAME" in sys.argv
+        user = (base / "process-user").read_text() if (base / "process-user").exists() else "nobody"
+        print("PID USER NAME" if user_mode else "PID NAME\n12 sh echo-bridge launcher")
         path = base / "child-pid"
         if (base / "running").exists():
-            print("13 echo-bridge")
+            print("13 " + (user + " " if user_mode else "") + "echo-bridge")
         elif path.exists() and (base / "mode").read_text() != "hidden":
             try:
                 state = Path("/proc") / path.read_text() / "stat"
                 if state.read_text().split(") ")[1].split()[0] != "Z":
-                    print(path.read_text() + " echo-bridge")
+                    print(path.read_text() + " " + (user + " " if user_mode else "") + "echo-bridge")
             except FileNotFoundError:
                 pass
     elif name == "date":
@@ -306,8 +412,6 @@ def remote_tool():
 
 def prepare_lifecycle(box, mode="ready"):
     os.mkfifo(box.root / "ready")
-    runas = box.root / "remote/hassmic/runas"
-    runas.write_text('#!/bin/sh\n[ "$1" = root ] && [ "$2" = 3990,inet ] || exit 1\nshift 2\nexec "$@"\n')
     (box.root / "remote/hassmic/boot.log").write_text("old client connected\n")
     fixture = """import os, sys, signal, json
 from pathlib import Path
@@ -344,13 +448,15 @@ if mode != 'exit':
 
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
+    ownership_lifetime_case()
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))
-    from test_echo_install_lifecycle import lifecycle_cases
+    from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases
     lifecycle_cases()
     from test_echo_install_status import status_cases
     status_cases()
+    nonroot_cases()
     print("echo-install tests: install=PASS lifecycle=PASS status=PASS retention=PASS privacy=PASS")
 
 

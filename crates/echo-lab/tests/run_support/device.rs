@@ -96,7 +96,7 @@ fn device_typed_ui_requires_pair_but_golden_dispatch_is_preserved() {
     assert!(!session.0.join("artifacts").exists());
 }
 
-fn configured(session: &Session, steps: &serde_json::Value) -> std::process::Command {
+pub(crate) fn configured(session: &Session, steps: &serde_json::Value) -> std::process::Command {
     let original = include_str!("../../../../examples/bridge.example.toml")
         .replace("echo.example.invalid", "127.0.0.1")
         .replace("0.0.0.0:16900", "127.0.0.1:0"); // lint-rules: allow-literal inert template substitution
@@ -151,7 +151,12 @@ fn device_screen_faults_fail_closed_without_playback_and_collect_resources() {
         assert_eq!(session.report()["result"], "fail");
         assert_eq!(session.report()["checks"]["step_0"], false);
         assert!(session.report()["checks"]["step_1"].is_null());
-        assert_eq!(session.report()["checks"]["session_released"], true);
+        assert_eq!(
+            session.report()["checks"]["session_released"],
+            true,
+            "fault={fault}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(session.operations().iter().filter(|op| *op == "play").count(), 0);
         assert!(!session.0.join("artifacts/configured.private").exists());
         assert!(!session.0.join("artifacts/bridge.private.jsonl").exists());
@@ -196,7 +201,7 @@ fn device_final_trace_rechecks_late_duplicates_incomplete_records_and_errors() {
 fn device_wake_never_uses_stale_run_or_hides_late_duplicate_without_explicit_trace_step() {
     for (fault, message) in [
         ("late_wake", "expected 1 occurrences, observed 2"),
-        ("stale_wake", "wyoming.run_started): expected 1 occurrences, observed 0"),
+        ("stale_wake", "completed run does not match observed wake"),
     ] {
         let session = Session::new(&json!({"real_config":true,"device_bridge_fault":fault}));
         let output = configured(&session, &json!([{"say":"utterance.wav"}]))

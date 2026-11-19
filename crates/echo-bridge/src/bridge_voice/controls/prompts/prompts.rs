@@ -5,9 +5,10 @@ use echo_config::{LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS};
 use std::{
     cell::RefCell,
     future::Future,
-    io::Read,
     path::{Path, PathBuf},
 };
+
+mod storage;
 
 tokio::task_local! {
     static CURRENT: RefCell<Option<Prompts>>;
@@ -27,14 +28,33 @@ struct Prompts {
 }
 
 pub(super) async fn scope<T>(home: Option<&Path>, work: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
-    let prompts = home.map(Prompts::open).transpose()?;
+    scope_retained(home, None, work).await
+}
+
+/// Recovery starts with accepted text, even if a later external edit is invalid.
+/// Normal call admission still reloads disk and refuses invalid replacements.
+pub(super) async fn scope_retained<T>(
+    home: Option<&Path>,
+    retained: Option<echo_screen_contract::settings_v1::PromptTextsV1>,
+    work: impl Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    let prompts = match (home, retained) {
+        (Some(home), Some(text)) => Some(Prompts {
+            dir: home.join("prompts"),
+            runner: Prompt::retained("runner", text.runner),
+            voice: Prompt::retained("voice", text.voice),
+        }),
+        (home, None) => home.map(Prompts::open).transpose()?,
+        (None, Some(_)) => return Err(Error::Input),
+    };
     CURRENT.scope(RefCell::new(prompts), work).await
 }
 
 impl Prompts {
     fn open(home: &Path) -> Result<Self, Error> {
         let dir = home.join("prompts");
-        crate::bridge_private::directory(&dir).map_err(|_| Error::Prompt("home.dir: directory unavailable"))?;
+        crate::bridge_notes::notes_files::root_named(home, "prompts", true)
+            .map_err(|_| Error::Prompt("home.dir: directory unavailable"))?;
         Ok(Self {
             runner: Prompt::open(&dir, "runner")?,
             voice: Prompt::open(&dir, "voice")?,
@@ -44,6 +64,15 @@ impl Prompts {
 }
 
 impl Prompt {
+    fn retained(kind: &'static str, text: String) -> Self {
+        Self {
+            kind,
+            text,
+            missing: false,
+            reported: false,
+        }
+    }
+
     fn default_text(kind: &str) -> &'static str {
         if kind == "runner" {
             RUNNER_INSTRUCTIONS
@@ -88,6 +117,21 @@ impl Prompt {
     }
 }
 
+/// The settings snapshot starts from the runtime's accepted cache, never a
+/// second filesystem read that could admit an edit after startup validation.
+pub(super) fn accepted() -> Result<echo_screen_contract::settings_v1::PromptTextsV1, Error> {
+    CURRENT
+        .try_with(|current| {
+            let current = current.borrow();
+            let prompts = current.as_ref().ok_or(Error::Input)?;
+            Ok(echo_screen_contract::settings_v1::PromptTextsV1 {
+                voice: prompts.voice.text.clone(),
+                runner: prompts.runner.text.clone(),
+            })
+        })
+        .unwrap_or(Err(Error::Input))
+}
+
 pub(super) fn publish(trace: &mut Trace) -> Result<(), Error> {
     CURRENT
         .try_with(|current| {
@@ -116,25 +160,32 @@ pub(super) fn snapshot(runner: &str, voice: &str, trace: &mut Option<Trace>) -> 
 }
 
 fn read(path: &Path) -> Result<Option<String>, &'static str> {
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("unreadable"),
-    };
-    if !metadata.is_file() {
-        return Err("not_regular");
+    let home = path.parent().and_then(Path::parent).ok_or("unreadable")?;
+    let kind = path.file_stem().and_then(|name| name.to_str()).ok_or("unreadable")?;
+    storage::read(home, storage::Kind::parse(kind)?).map_err(|code| match code {
+        "symlink" | "io" => "unreadable",
+        other => other,
+    })
+}
+
+/// Read the effective validated base prompt, without an admission clock suffix.
+pub(crate) fn read_base(home: &Path, which: &str) -> Result<String, &'static str> {
+    let kind = storage::Kind::parse(which)?;
+    storage::read(home, kind)
+        .map(|text| text.unwrap_or_else(|| Prompt::default_text(which).into()))
+        .map_err(prompt_error)
+}
+
+/// The shared tool/settings mutation path. No active snapshot is modified.
+pub(crate) fn write_base(home: &Path, which: &str, content: &str) -> Result<(), &'static str> {
+    storage::write(home, storage::Kind::parse(which)?, content).map_err(prompt_error)
+}
+
+fn prompt_error(code: &'static str) -> &'static str {
+    match code {
+        "empty" | "oversized" | "invalid_utf8" => "invalid_prompt",
+        other => other,
     }
-    let file = std::fs::File::open(path).map_err(|_| "unreadable")?;
-    let mut bytes = Vec::new();
-    file.take(32_769).read_to_end(&mut bytes).map_err(|_| "unreadable")?;
-    if bytes.len() > 32_768 {
-        return Err("oversized");
-    }
-    let text = String::from_utf8(bytes).map_err(|_| "invalid_utf8")?;
-    if text.trim().is_empty() {
-        return Err("empty");
-    }
-    Ok(Some(text))
 }
 
 fn startup_error(kind: &str, reason: &str) -> Error {

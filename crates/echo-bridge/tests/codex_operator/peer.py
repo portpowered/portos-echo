@@ -104,18 +104,39 @@ for line in sys.stdin:
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     elif method == "thread/start":
         assert home.joinpath("mode").read_text().startswith("tool-")
-        assert [tool["name"] for tool in request["params"]["dynamicTools"]] == ["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion", "extend_session", "end_session"]
+        expected = ["extend_session", "end_session"] if home.joinpath("mode").read_text() == "tool-binary-reply" else ["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion", "extend_session", "end_session"]
+        assert [tool["name"] for tool in request["params"]["dynamicTools"]] == expected
         home.joinpath("thread-config").write_text(json.dumps(request["params"]))
         emit({"id": request["id"], "result": {"thread": {"id": "fixture-thread"}}})
     elif method == "thread/realtime/start":
-        assert request["params"]["transport"] == {"type": "webrtc", "sdp": "fixture-offer"}
+        binary_reply = home.joinpath("mode").read_text() == "tool-binary-reply"
+        if binary_reply:
+            connection, _ = control.accept()
+            signaling = connection.makefile("rwb", buffering=0)
+            signaling.write((json.dumps(request["params"]["transport"]) + "\n").encode())
+            answer = json.loads(signaling.readline())["answer"]
+        else:
+            assert request["params"]["transport"] == {"type": "webrtc", "sdp": "fixture-offer"}
+            answer = "fixture-answer"
         assert request["params"]["version"] == "v3"
-        emit({"method": "thread/realtime/sdp", "params": {"threadId": "fixture-thread", "sdp": "fixture-answer"}})
+        home.joinpath("realtime-config").write_text(json.dumps(request["params"]))
+        emit({"method": "thread/realtime/sdp", "params": {"threadId": "fixture-thread", "sdp": answer}})
         emit({"id": request["id"], "result": {}})
-        if home.joinpath("mode").read_text() == "tool-reply":
-            # One spoken reply and no delegated work: the run completes and its call stays warm.
-            emit({"method": "thread/realtime/transcript/done", "params": {
-                "threadId": "fixture-thread", "role": "assistant", "text": "fixture reply"}})
+        delegated = binary_reply and home.joinpath("delegated").exists()
+        if delegated:
+            emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
+        if binary_reply:
+            assert signaling.readline() == b"reply\n"
+        if binary_reply or home.joinpath("mode").read_text() == "tool-reply":
+            for _ in range(2 if delegated else 1):
+                if delegated:
+                    emit({"method": "thread/realtime/transcript/delta", "params": {
+                        "threadId": "fixture-thread", "role": "assistant", "delta": "fixture reply"}})
+                emit({"method": "thread/realtime/transcript/done", "params": {
+                    "threadId": "fixture-thread", "role": "assistant", "text": "fixture reply"}})
+            if delegated:
+                assert signaling.readline() == b"settle\n"
+                emit({"method": "turn/completed", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
             continue
         emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
         approval = home.joinpath("mode").read_text() == "tool-approval"
@@ -124,6 +145,9 @@ for line in sys.stdin:
             "tool": "test_requires_approval" if approval else "test_echo", "arguments": {} if approval else {"text": "delegated echo"},
             "namespace": None}})
     elif method == "thread/realtime/stop":
+        if home.joinpath("mode").read_text() == "tool-binary-reply":
+            signaling.write(b"closing\n")
+            assert signaling.readline() == b"close\n"
         emit({"method": "thread/realtime/closed", "params": {"threadId": "fixture-thread"}})
         emit({"id": request["id"], "result": {}})
     else:

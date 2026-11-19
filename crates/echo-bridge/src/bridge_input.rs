@@ -9,6 +9,8 @@ use std::{
 
 pub struct Settings {
     pub config: Option<echo_config::BridgeConfig>,
+    pub startup: Option<Box<echo_config::EffectiveConfig>>,
+    pub settings_warning: Option<String>,
     pub sim_clock: bool,
     pub sim_epoch: Option<u64>,
     pub mcp: Option<crate::bridge_mcp::Settings>,
@@ -174,6 +176,8 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
     };
     Ok(Settings {
         config: None,
+        startup: None,
+        settings_warning: None,
         sim_clock: false,
         sim_epoch: None,
         mcp: None,
@@ -201,7 +205,8 @@ fn configured(
     health: Option<&str>,
     origins: Option<(&str, &str)>,
 ) -> Result<Option<Settings>, Error> {
-    let config = echo_config::BridgeConfig::load(config).map_err(|error| prompt_config_error(&error))?;
+    let effective = echo_config::BridgeConfig::load_effective(config).map_err(|error| prompt_config_error(&error))?;
+    let config = effective.config.clone();
     let muse = if config.agent_backend == echo_config::AgentBackend::Muse {
         Some((config.agent.clone(), config.muse.clone().ok_or(Error::Input)?))
     } else {
@@ -221,6 +226,8 @@ fn configured(
     };
     Ok(Some(Settings {
         config: Some(config.clone()),
+        settings_warning: effective.warning.as_ref().map(ToString::to_string),
+        startup: Some(Box::new(effective)),
         sim_clock: false,
         sim_epoch: None,
         mcp: if muse.is_none() {
@@ -331,6 +338,49 @@ fn prompt_config_error(error: &echo_config::ConfigError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_overlay_configured_admission_uses_values_and_preserves_base() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("agent-home");
+        std::fs::create_dir(&home).unwrap();
+        let path = directory.path().join("bridge.toml");
+        let base = format!(
+            "{}\n[home]\ndir='{}'\n",
+            include_str!("../../../examples/bridge.example.toml").replace("echo.example.invalid", "127.0.0.1"),
+            home.display()
+        );
+        std::fs::write(&path, &base).unwrap();
+        let settings = home.join("settings.toml");
+        std::fs::write(&settings, "[voice]\nsession_listen_enabled=false\nsession_listen_seconds=42\n[codex]\nvoice='coral'\n[agent]\ndaily_request_cap=0\nmax_tool_calls=3\n").unwrap();
+        let loaded = configured(path.to_str().unwrap().into(), "unused-trace".into(), None, None)
+            .unwrap()
+            .unwrap();
+        let config = loaded.config.unwrap();
+        assert_eq!(config.voice.session_listen_seconds, 42);
+        assert!(!config.voice.session_listen_enabled);
+        assert_eq!(config.codex_voice(), Some("coral"));
+        assert_eq!(config.agent.daily_request_cap, 0);
+        assert_eq!(config.agent.max_tool_calls, 3);
+        assert_eq!(loaded.delegation.unwrap().0.max_tool_calls, 3);
+        assert_eq!(loaded.settings_warning, None);
+        std::fs::write(
+            &settings,
+            "[voice]\nsession_listen_seconds=42\n[agent]\nmax_tool_calls=0\n",
+        )
+        .unwrap();
+        let loaded = configured(path.to_str().unwrap().into(), "unused-trace".into(), None, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.config.unwrap().voice.session_listen_seconds, 15);
+        assert_eq!(loaded.delegation.unwrap().0.max_tool_calls, 8);
+        assert_eq!(
+            loaded.settings_warning.as_deref(),
+            Some("settings.toml: ignored overlay: agent.max_tool_calls: must be within 1..=32")
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), base);
+        assert!(!directory.path().join("unused-trace").exists());
+    }
 
     #[test]
     fn canonical_local_routes_ignore_only_the_unused_legacy_refresh_endpoint() {

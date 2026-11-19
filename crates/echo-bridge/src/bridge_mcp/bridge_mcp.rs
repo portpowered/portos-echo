@@ -1,7 +1,7 @@
 //! One runtime grant owner; operator processes never open the durable store.
 pub mod bridge_clock;
 #[cfg(test)]
-mod bridge_component;
+pub(crate) mod bridge_component;
 mod bridge_control;
 mod bridge_events;
 mod bridge_http;
@@ -49,6 +49,15 @@ impl Grant {
         }
     }
 
+    pub fn link_status(&self) -> echo_screen_contract::settings_v1::LinkStatusV1 {
+        use echo_screen_contract::settings_v1::LinkStatusV1;
+        if !self.blocked() && self.client.has_grant() {
+            LinkStatusV1::Linked
+        } else {
+            LinkStatusV1::LinkRequired
+        }
+    }
+
     pub fn blocked(&self) -> bool {
         self.rejected.load(Ordering::Acquire)
     }
@@ -83,11 +92,9 @@ impl Runtime {
             .map_err(|_| Error::Control)?;
         let address = listener.local_addr().map_err(|_| Error::Control)?;
         let grant = Arc::new(Grant {
-            client: match epoch {
-                Some(epoch) => AuthClient::open_at_epoch(settings.options, epoch).await,
-                None => AuthClient::open(settings.options).await,
-            }
-            .map_err(Error::Mcp)?,
+            client: AuthClient::open_with_ca(settings.options, epoch, settings.ca_pem.as_deref())
+                .await
+                .map_err(Error::Mcp)?,
             rejected: AtomicBool::new(false),
             presentation,
             failed: AtomicBool::new(false),

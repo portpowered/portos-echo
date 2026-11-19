@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 
+mod identity;
 mod literals;
 mod network;
 mod schema;
@@ -20,6 +21,7 @@ pub fn run() -> Result<(), String> {
     let adrs = read_adrs()?;
     let missing = missing_names(&current, &adrs);
     if missing.is_empty() {
+        identity::run()?;
         secret::run()?;
         network::run()?;
         schema::run(&current)

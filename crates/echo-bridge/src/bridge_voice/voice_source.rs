@@ -1,6 +1,6 @@
 use super::{Error, Stats, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
-use crate::bridge_runtime::bridge_pacing::{Discard, QUIET, ReplyMeter, ReplyQuality};
+use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Discard, QUIET, ReplyMeter, ReplyQuality};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
@@ -25,6 +25,8 @@ pub(super) struct Source {
     uplink: VecDeque<PcmFrame>,
     /// The device was told a dispatch is running in silence.
     thinking: bool,
+    /// User speech heard during the reply, until the model yields to it.
+    barge: Barge,
 }
 
 impl Source {
@@ -33,6 +35,7 @@ impl Source {
         self.fresh_reply()?;
         self.delegation = self.delegation.carried();
         self.mouth = Mouth::default();
+        self.barge = Barge::default();
         Ok(())
     }
 
@@ -101,18 +104,38 @@ impl Source {
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),
             uplink: VecDeque::new(),
+            barge: Barge::default(),
         })
     }
 
-    /// Retire all old playback state together; never flush an abandoned tail.
-    /// Stream order identifies the replacement at its next assistant delta.
+    /// A sign of user speech during a reply arms a barge-in; it cuts nothing
+    /// yet, because the model may talk on (`Barge`).
     /// A dispatch in flight is thinking, not a reply to talk over: user speech
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
+    pub fn heard_user(&mut self, trigger: BargeTrigger) {
+        if !self.delegation.in_flight() && self.controller.speaking() {
+            self.barge.arm(Instant::now(), trigger);
+        }
+    }
+
+    /// When the pending barge-in fires unless the model is heard first.
+    #[must_use]
+    pub fn barge_due(&self) -> Option<Instant> {
+        self.barge.due(Instant::now(), self.reply.finished())
+    }
+
+    /// The model has yielded to the user: the pending barge-in cuts the reply.
+    /// Retire all old playback state together; never flush an abandoned tail.
+    /// Stream order identifies the replacement at its next assistant delta.
     pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
+        let Some(trigger) = self.barge.fire(Instant::now(), self.reply.finished()) else {
+            return Ok(());
+        };
         if self.delegation.in_flight() || !self.controller.speaking() {
             return Ok(());
         }
+        self.meter.cut(trigger);
         port.retire_audio();
         self.fresh_reply()?;
         self.delegation = Delegation::default();
@@ -200,14 +223,21 @@ impl Source {
         } else {
             // PCM has no utterance identity. Only ordered assistant control
             // opens Speaking; the initial user transcript can lag audible RTP.
-            let wanted = self.meter.arrived(Instant::now());
+            let now = Instant::now();
+            self.barge.heard(now, audible(frame));
+            let wanted = self.meter.arrived(now);
             self.meter.targeted(self.reply.retarget(wanted));
             return self.reply.push(frame);
         };
-        let audible = frame.iter().any(|sample| sample.unsigned_abs() > QUIET);
+        let audible = audible(frame);
         self.meter.discarded(reason, audible);
         Ok(())
     }
+}
+
+/// The call frame holds more than WebRTC silence.
+fn audible(frame: &PcmFrame) -> bool {
+    frame.iter().any(|sample| sample.unsigned_abs() > QUIET)
 }
 
 /// Preserve playback ownership until the device acknowledges an interrupted

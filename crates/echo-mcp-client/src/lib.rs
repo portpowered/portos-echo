@@ -51,6 +51,18 @@ impl<P: TokenProvider> McpClient<P> {
     /// # Errors
     /// Returns a fixed configuration category for invalid endpoints or zero deadlines.
     pub fn new(server: McpServer, provider: P, deadline: Duration) -> Result<Self, McpError> {
+        Self::with_ca(server, provider, deadline, None)
+    }
+
+    /// Add explicit PEM trust roots; retain native roots and hostname validation.
+    /// # Errors
+    /// Returns a fixed configuration category for invalid options or malformed trust.
+    pub fn with_ca(
+        server: McpServer,
+        provider: P,
+        deadline: Duration,
+        ca_pem: Option<&[u8]>,
+    ) -> Result<Self, McpError> {
         let endpoint = reqwest::Url::parse(&server.url).map_err(|_| McpError::InvalidConfiguration)?;
         if !matches!(endpoint.scheme(), "http" | "https")
             || endpoint.host_str().is_none()
@@ -61,12 +73,20 @@ impl<P: TokenProvider> McpClient<P> {
         {
             return Err(McpError::InvalidConfiguration);
         }
-        let http = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
-            .no_proxy()
-            .build()
-            .map_err(|_| McpError::InvalidConfiguration)?;
+            .no_proxy();
+        if let Some(pem) = ca_pem {
+            let roots = reqwest::Certificate::from_pem_bundle(pem).map_err(|_| McpError::InvalidConfiguration)?;
+            if roots.is_empty() {
+                return Err(McpError::InvalidConfiguration);
+            }
+            for root in roots {
+                builder = builder.add_root_certificate(root);
+            }
+        }
+        let http = builder.build().map_err(|_| McpError::InvalidConfiguration)?;
         Ok(Self {
             endpoint,
             http,

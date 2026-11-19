@@ -70,6 +70,14 @@ fn device_m1_mute_requires_two_fresh_confirmations_and_measures_zero_window() {
     let report = bench.report();
     assert_eq!(report["result"], "pass");
     assert_eq!(report["checks"]["session_released"], true);
+    let attempts = report["step_attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 3);
+    assert_eq!(attempts[1]["attempts"], 1);
+    assert_eq!(attempts[1]["first_try_woke"], Value::Null);
+    assert_eq!(
+        report["talkback"],
+        json!({"eligible_steps":2,"first_try_wakes":2,"first_try_wake_rate":1.0,"replay_count":0})
+    );
     let wakes = report["observations"].as_array().unwrap();
     assert_eq!(wakes.len(), 2);
     assert_ne!(wakes[0]["run_id"], wakes[1]["run_id"]);

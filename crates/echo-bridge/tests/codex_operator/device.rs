@@ -11,7 +11,7 @@ use echo_link::{
 };
 use tokio::time::Instant;
 
-fn runtime_options<'a>(
+pub(super) fn runtime_options<'a>(
     config: &'a CodexConfig,
     screen: Option<&'a echo_config::ScreenConfig>,
     trace: &'a Path,
@@ -42,6 +42,7 @@ fn runtime_options<'a>(
             connect_timeout: OBSERVATION_TIMEOUT,
         },
         screen,
+        settings_warning: None,
         health: ([127, 0, 0, 1], 0).into(),
         trace,
         delegation: None,

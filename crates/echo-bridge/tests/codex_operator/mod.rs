@@ -5,6 +5,7 @@ mod device;
 mod fixture;
 mod host;
 mod recovery;
+mod settings_link;
 mod tools;
 mod voice_entry;
 use fixture::Fixture;

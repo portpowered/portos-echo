@@ -1,8 +1,13 @@
 //! T3: config through authenticated service; controlled process and device ports.
 use super::*;
+#[path = "configured/binary_turn.rs"]
+mod binary_turn;
+#[path = "configured/restart.rs"]
+mod restart;
+#[path = "configured/turn.rs"]
+mod turn;
 use echo_bridge::{Error, bridge_voice::Configured};
 use echo_link::fake::{Command, FakeConnector, Observer};
-
 /// Refuses the first connection, then behaves like the fake device.
 #[derive(Clone, Default)]
 struct RefusedDevice {
@@ -89,11 +94,189 @@ async fn codex_configured_refused_device_shows_error_then_retries_to_ready() {
     assert_eq!(launches.lines().count(), 2);
 }
 
-fn config(fixture: &Fixture) -> echo_config::BridgeConfig {
+pub(super) fn config(fixture: &Fixture) -> echo_config::BridgeConfig {
     let mut config = echo_config::BridgeConfig::load(fixture.directory.path().join("bridge.toml")).unwrap();
     config.audit.log_dir = fixture.directory.path().join("audit");
     config.live.credential_file = fixture.directory.path().join("nominated-key");
     config
+}
+
+// T3: the runtime's actual HTTP, settings store and owned controlled child.
+// This observes a cleanup-complete restart request, not binary exec.
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart() {
+    for restart in [false, true] {
+        let fixture = Fixture::new("chatgpt");
+        let effective = settings_startup(&fixture);
+        let home = effective.config.home.as_ref().unwrap().dir.clone();
+        let observer = Observer::default();
+        let path = fixture.directory.path().join("runtime-trace");
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let configured = Configured::from_effective(effective, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
+        let work = configured.execute_with_settings(
+            FakeConnector::new(observer.clone()),
+            async || -> Result<echo_media::Peer, Error> { unreachable!("no wake admits no peer") },
+            vec![],
+            async {
+                stopping.await.unwrap();
+            },
+        );
+        let inspect = async {
+            let _control = fixture.control().await;
+            let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+            while bridge_wire_screen::state(&mut screen).await["message"] != "Echo Live ready" {}
+            settings_runtime_requests(&fixture, &home).await;
+            presentation_owned(&path);
+            assert!(!observer.commands().contains(&Command::Close));
+            if restart {
+                let response = settings_runtime_patch(&fixture, json!({"agent":{"max_tool_calls":3}})).await;
+                assert_eq!(response, json!({"version":1,"restart_pending":true}));
+                assert_eq!(
+                    bridge_wire_screen::state(&mut screen).await,
+                    json!({"state":"ready","message":"Restarting bridge..."})
+                );
+                while let Some(line) = screen.next_line().await.unwrap() {
+                    assert!(!line.starts_with("data:"));
+                }
+            } else {
+                stop.send(()).unwrap();
+            }
+        };
+        let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+            tokio::join!(work, inspect)
+        }))
+        .await
+        .unwrap();
+        let completion = result.unwrap();
+        assert_eq!(completion.restart_requested, restart);
+        retained_settings(&mut completion.settings.unwrap(), restart);
+        assert_eq!(
+            observer.commands(),
+            [Command::Connect, Command::Capture, Command::Probe, Command::Close]
+        );
+        super::host::released(&fixture).await;
+        presentation_released(&path, "chatgpt", true);
+        let rows = trace(&path);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["event"] == "settings.restart_prepared")
+                .count(),
+            usize::from(restart)
+        );
+        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
+    }
+}
+
+fn settings_startup(fixture: &Fixture) -> echo_config::EffectiveConfig {
+    let mut base = config(fixture);
+    let home = fixture.directory.path().join("agent-home");
+    base.home = Some(echo_config::HomeConfig {
+        dir: home.clone(),
+        agent_tools: echo_config::AgentTools::default(),
+    });
+    std::fs::create_dir_all(home.join("prompts")).unwrap();
+    std::fs::write(home.join("prompts/voice.md"), "admitted voice").unwrap();
+    std::fs::write(home.join("prompts/runner.md"), "admitted runner").unwrap();
+    base.agent.max_tool_calls = 6;
+    let overlay = echo_config::SettingsOverlay::from_toml_str("[agent]\nmax_tool_calls = 8\n").unwrap();
+    std::fs::write(home.join("settings.toml"), overlay.to_toml_string().unwrap()).unwrap();
+    echo_config::EffectiveConfig {
+        config: overlay.apply_to(&base).unwrap(),
+        base,
+        overlay,
+        warning: None,
+    }
+}
+
+fn retained_settings(host: &mut echo_bridge::bridge_settings::SettingsHost, restart: bool) {
+    use echo_screen_contract::settings_v1::LinkStatusV1;
+    use echo_screen_server::{SettingsOperation, SettingsReply};
+    let SettingsReply::Snapshot(snapshot) = host.transaction(SettingsOperation::Snapshot, LinkStatusV1::Unconfigured)
+    else {
+        unreachable!("retained host refused snapshot")
+    };
+    assert_eq!(snapshot.restart_pending, restart);
+    assert_eq!(snapshot.settings.agent.max_tool_calls, if restart { 3 } else { 8 });
+    assert_eq!(snapshot.prompts.voice, "saved voice\n");
+    assert_eq!(snapshot.prompts.runner, "admitted runner");
+}
+
+pub(super) fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Url {
+    assert_eq!(fixture.screen.ip(), std::net::Ipv4Addr::LOCALHOST);
+    let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();
+    url.set_port(Some(fixture.screen.port())).unwrap();
+    url.set_path(path);
+    url.set_query(Some("token=synthetic-screen-pair"));
+    url
+}
+async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) -> serde_json::Value {
+    let response = reqwest::Client::new()
+        .post(settings_runtime_url(fixture, "/settings/v1"))
+        .json(&json!({"version":1,"settings":settings}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    response.json().await.unwrap()
+}
+
+async fn settings_runtime_requests(fixture: &Fixture, home: &Path) {
+    settings_runtime_snapshot(fixture).await;
+    let client = reqwest::Client::new();
+    let url = settings_runtime_url(fixture, "/settings/v1");
+    settings_runtime_saves(fixture, home, &client, &url).await;
+}
+
+async fn settings_runtime_snapshot(fixture: &Fixture) {
+    let client = reqwest::Client::new();
+    let mut url = settings_runtime_url(fixture, "/settings/v1");
+    url.set_query(None);
+    assert_eq!(
+        client.get(url.as_str()).send().await.unwrap().status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    url.set_query(Some("token=synthetic-screen-pair"));
+    for _ in 0..2 {
+        let snapshot: serde_json::Value = client.get(url.as_str()).send().await.unwrap().json().await.unwrap();
+        assert_eq!(snapshot["link_status"], "unconfigured");
+        assert_eq!(
+            snapshot["prompts"],
+            json!({"voice":"admitted voice","runner":"admitted runner"})
+        );
+        assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 8);
+    }
+}
+
+async fn settings_runtime_saves(fixture: &Fixture, home: &Path, client: &reqwest::Client, url: &reqwest::Url) {
+    assert_eq!(
+        settings_runtime_patch(fixture, json!({"agent":{"max_tool_calls":8}})).await,
+        json!({"version":1,"restart_pending":false})
+    );
+    let previous = std::fs::read(home.join("settings.toml")).unwrap();
+    let invalid = client
+        .post(url.as_str())
+        .json(&json!({"version":1,"settings":{"agent":{"max_tool_calls":33}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(std::fs::read(home.join("settings.toml")).unwrap(), previous);
+    let prompt = client
+        .post(settings_runtime_url(fixture, "/settings/v1/prompts/voice"))
+        .json(&json!({"version":1,"text":"saved voice\n"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(prompt.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        prompt.json::<serde_json::Value>().await.unwrap(),
+        json!({"version":1,"restart_pending":false})
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("prompts/voice.md")).unwrap(),
+        "saved voice\n"
+    );
 }
 
 #[tokio::test]
@@ -250,4 +433,65 @@ async fn codex_configured_service_health_bind_failure_releases_only_acquired_scr
         .unwrap();
     let (server, _) = occupied.accept().await.unwrap();
     assert_eq!(client.local_addr().unwrap(), server.peer_addr().unwrap());
+}
+
+// This uses the delivered CLI and SSE endpoint, with the existing controlled
+// account child and loopback Wyoming. A new fixture isolates each rejected file.
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge and local Python"]
+async fn t3_settings_overlay_invalid_startup_reports_and_ignores_entire_file() {
+    for (overlay, reason) in [
+        ("[voice", "settings.toml: invalid TOML syntax"),
+        (
+            "[voice]\nsession_listen_seconds=1\n",
+            "voice.session_listen_seconds: must be within 3..=300",
+        ),
+    ] {
+        let fixture = Fixture::new("chatgpt");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        super::voice_entry::configure(&fixture, listener.local_addr().unwrap().port());
+        let base = fixture.directory.path().join("bridge.toml");
+        let home = fixture.directory.path().join("agent-home");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(home.join("settings.toml"), overlay).unwrap();
+        let text = format!(
+            "{}\n[home]\ndir='{}'\n",
+            std::fs::read_to_string(&base).unwrap(),
+            home.display()
+        );
+        std::fs::write(&base, &text).unwrap();
+        let mut process = Process::spawn(&mut super::voice_entry::command(&fixture));
+        let mut satellite = tokio::time::timeout(OBSERVATION_TIMEOUT, listener.accept())
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "run-satellite");
+        assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
+        bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
+        assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
+        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        assert_eq!(
+            bridge_wire_screen::state(&mut screen).await,
+            json!({
+                "state":"error", "relink":false, "message": format!("settings.toml: ignored overlay: {reason}")
+            })
+        );
+        assert_eq!(std::fs::read_to_string(&base).unwrap(), text);
+        assert_eq!(std::fs::read_to_string(home.join("settings.toml")).unwrap(), overlay);
+        drop(process.input.take());
+        process.collect(0).await;
+        assert_eq!(process.stderr().await, "");
+        super::host::released(&fixture).await;
+        let rows = trace(&fixture.directory.path().join("trace"));
+        let warnings: Vec<_> = rows.iter().filter(|row| row["event"] == "settings.ignored").collect();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0]["reason"], "invalid_config");
+        assert_eq!(warnings[0].as_object().unwrap().len(), 4);
+        assert!(
+            !serde_json::to_string(&rows)
+                .unwrap()
+                .contains(&home.display().to_string())
+        );
+    }
 }

@@ -382,6 +382,7 @@ async fn wait<E: LinkEvents>(
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
+            () = crate::bridge_settings::settings_restart::requested() => return Ok(None),
             () = expiry(expires) => return Ok(None),
             result = idle_step(events, call, muted, observe) => {
                 if let Some(run) = result? { return Ok(Some(run)); }
@@ -436,3 +437,7 @@ async fn clear_idle(call: &mut impl VoicePort) -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "controls/tests/voice_restart_session.rs"]
+mod restart_tests;

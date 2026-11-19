@@ -2,7 +2,7 @@
 #[path = "earcon/earcon.rs"]
 mod earcon;
 #[path = "controls/prompts/prompts.rs"]
-mod prompts;
+pub(crate) mod prompts;
 #[path = "recovery/retained_link.rs"]
 mod retained_link;
 #[path = "controls/session_controller.rs"]
@@ -33,15 +33,16 @@ mod voice_tools;
 mod voice_view;
 pub use voice_admission::{ServeNotice, ServeOptions, serve};
 pub use voice_config::Configured;
+pub use voice_entry::execute_process;
 pub use voice_host::{HostOptions, with_device};
-pub use voice_runtime::{RuntimeOptions, execute};
+pub use voice_runtime::{RuntimeCompletion, RuntimeOptions, execute, execute_with_settings};
 pub use voice_session::{
     ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation, tool_conversation,
 };
 #[cfg(test)]
 mod voice_tests;
 
-pub use crate::bridge_runtime::bridge_pacing::{Endpoint, FirstAudio, ReplyQuality};
+pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, ReplyQuality};
 use crate::{
     Error,
     bridge_codex::{Event, MediaEvent},
@@ -54,15 +55,14 @@ use voice_source::Source;
 
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
-    /// Publish the admitted run identity; queued tools retain their original binding.
+    /// Bind the run identity, preserving queued tools' original binding.
     fn bind_session(&mut self, _run: Option<std::sync::Arc<()>>) {}
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
-    /// Queue one frame unless the bounded media sender is full; false leaves it
-    /// with the caller. Ports without a bounded sender always accept.
+    /// Queue a frame; false retains it with the caller when the sender is full.
     /// # Errors
-    /// The same categories as `send`.
+    /// Same errors as `send`; unbounded ports always accept.
     fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
         self.send(frame).map(|()| true)
     }
@@ -299,6 +299,7 @@ async fn drive<L: EchoLink>(
             return Err(Error::Control);
         }
         voice_source::think(client, source).await;
+        let barge = source.barge_due();
         if source.reply.drained() && pending.is_none() && sink.is_some() {
             drop(sink.take());
             deadline = Instant::now() + options.played_timeout;
@@ -321,6 +322,7 @@ async fn drive<L: EchoLink>(
                 source.reply.finish()?;
                 deadline = Instant::now() + options.played_timeout;
             },
+            () = tokio::time::sleep_until(barge.unwrap_or(deadline)), if barge.is_some() => source.interrupt(port)?,
             () = tokio::time::sleep_until(source.mouth.due().unwrap_or(deadline)), if source.mouth.due().is_some() => {
                 if let Some(open) = source.mouth.poll(Instant::now()) {
                     observe(if open { Notice::ReplyStarted } else { Notice::ReplyPaused })?;
@@ -469,7 +471,7 @@ async fn media(
         MediaEvent::Control(Event::Transcript { role, text, done }) => {
             if role == "user" {
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
-                source.interrupt(port)?;
+                source.heard_user(BargeTrigger::UserTranscript);
             } else if role == "assistant" && !done {
                 source.controller.reply_started();
                 source.delegation.spoke();
@@ -485,7 +487,10 @@ async fn media(
             source.delegation.completed();
             Ok(())
         }
-        MediaEvent::Control(Event::SpeechStarted) => source.interrupt(port),
+        MediaEvent::Control(Event::SpeechStarted) => {
+            source.heard_user(BargeTrigger::SpeechStarted);
+            Ok(())
+        }
         MediaEvent::Control(Event::Session(request)) => {
             session_tools::answer(request, &mut source.session, &mut source.controller, observe)
         }

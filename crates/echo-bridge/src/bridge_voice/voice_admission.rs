@@ -91,10 +91,7 @@ where
     P: MediaPeer,
 {
     let (mut tools, trace, wake_earcon, termination) = context;
-    super::voice_session::validate(&options.session)?;
-    if options.connect_timeout.is_zero() || Instant::now().checked_add(options.connect_timeout).is_none() {
-        return Err(Error::Input);
-    }
+    validate_service(&options)?;
     let mut events = client.events()?;
     // Heap-own the service to keep scoped supervision within the Windows stack.
     let work = Box::pin(async {
@@ -109,7 +106,7 @@ where
         loop {
             gate.sync(&mut observe)?;
             observe(ServeNotice::Ready)?;
-            let microphone = wait(
+            let Some(microphone) = wait(
                 client,
                 &mut events,
                 io,
@@ -117,7 +114,10 @@ where
                 cancelled.as_mut(),
                 &mut observe,
             )
-            .await?;
+            .await?
+            else {
+                return Ok(());
+            };
             let killed = std::cell::Cell::new(false);
             let result = Box::pin(admitted(
                 (&*client, &mut events, microphone),
@@ -151,6 +151,14 @@ where
         }
     });
     super::earcon::scope(client, wake_earcon, work).await
+}
+
+fn validate_service(options: &ServeOptions<'_>) -> Result<(), Error> {
+    super::voice_session::validate(&options.session)?;
+    if options.connect_timeout.is_zero() || Instant::now().checked_add(options.connect_timeout).is_none() {
+        return Err(Error::Input);
+    }
+    Ok(())
 }
 
 /// Only that run failed, and its call is already closed. End the device's run
@@ -247,7 +255,7 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     policy: (&mut bool, &mut Gate<'_>),
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
-) -> Result<<L::Events as LinkEvents>::Run, Error> {
+) -> Result<Option<<L::Events as LinkEvents>::Run>, Error> {
     let (muted, gate) = policy;
     tokio::pin!(cancelled);
     let mut poll = tokio::time::interval(Duration::from_millis(20));
@@ -260,6 +268,7 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
+            () = crate::bridge_settings::settings_restart::requested() => return Ok(None),
             result = async {
                 tokio::select! {
                     _ = poll.tick() => { gate.sync(observe)?; },
@@ -284,7 +293,7 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                     },
                 }
                 Ok::<_, Error>(None)
-            } => if let Some(run) = result? { return Ok(run); },
+            } => if let Some(run) = result? { return Ok(Some(run)); },
         }
         tokio::task::yield_now().await;
     }

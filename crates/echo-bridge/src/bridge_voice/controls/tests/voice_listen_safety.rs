@@ -69,6 +69,53 @@ fn source() -> Source {
 }
 
 #[tokio::test(start_paused = true)]
+async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
+    let restart = crate::bridge_settings::settings_restart::Restart::default();
+    restart
+        .scope(async {
+            let mut input = Input::new();
+            let (tx, rx) = mpsc::channel(2);
+            let mut port = Port(rx, std::rc::Rc::default());
+            let mut source = source();
+            source.delegation.started();
+            restart.request();
+            {
+                let mut drain = None;
+                let mut observe = |_| Ok(());
+                let work = super::super::listen(
+                    (&mut input.events, &mut input.microphone),
+                    &mut port,
+                    (&mut source, &mut drain),
+                    true,
+                    std::future::pending(),
+                    &mut observe,
+                );
+                tokio::pin!(work);
+                poll_fn(|cx| {
+                    assert!(work.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                tx.send(MediaEvent::Control(Event::TurnCompleted {
+                    thread: "fixture".into(),
+                    turn: "turn".into(),
+                }))
+                .await
+                .unwrap();
+                tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+                assert_eq!(work.await, Ok(false));
+            }
+            assert!(!source.delegation.in_flight());
+            assert!(source.controller.has_played());
+            assert!(matches!(
+                port.0.try_recv(),
+                Ok(MediaEvent::Control(Event::SpeechStarted))
+            ));
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn voice_listen_capture_continues_and_mute_discards_partial_pcm_without_renewal() {
     let mut input = Input::new();
     let (_tx, rx) = mpsc::channel(1);
@@ -144,6 +191,7 @@ async fn voice_listen_due_expiry_wins_over_ready_activity_without_consuming_it()
             (&mut input.events, &mut input.microphone),
             &mut port,
             (&mut source, &mut None),
+            true,
             std::future::pending(),
             &mut |_| Ok(()),
         )
@@ -177,6 +225,7 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
             (&mut events, &mut microphone),
             &mut port,
             (&mut source, &mut None),
+            true,
             std::future::pending(),
             &mut |_| Ok(()),
         )

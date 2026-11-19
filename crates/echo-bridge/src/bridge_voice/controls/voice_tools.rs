@@ -5,8 +5,9 @@ use crate::{
     Error,
     bridge_codex::{SessionCommand, SessionRequest, ToolBudget},
     bridge_mcp::{self, Token},
+    bridge_notes::{Local, NAMES, Notes},
     bridge_runtime::bridge_screen::Screen,
-    bridge_trace::Trace,
+    bridge_trace::{PortosReceipts, Trace},
 };
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::{AgentConfig, BridgeConfig};
@@ -19,21 +20,53 @@ use tokio::sync::{mpsc, oneshot};
 pub(super) struct Mcp {
     client: Option<McpClient<Token>>,
     trace: Trace,
+    receipts: Option<PortosReceipts>,
 }
+
+impl Mcp {
+    fn new(client: Option<McpClient<Token>>, trace: Trace, server: Option<&echo_config::McpServer>) -> Self {
+        let receipts = server
+            .filter(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
+            .map(|server| PortosReceipts::new(trace.clone(), server.name.clone()));
+        Self {
+            client,
+            trace,
+            receipts,
+        }
+    }
+}
+
 impl ToolHost for Mcp {
     async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
         match &self.client {
-            Some(host) => host.list_tools().await,
+            Some(host) => {
+                let tools = host.list_tools().await?;
+                if let Some(receipts) = &self.receipts {
+                    receipts.catalog(tools.len()).map_err(|_| ToolError::Transport)?;
+                }
+                Ok(tools)
+            }
             None => Ok(vec![]),
         }
     }
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
         let client = self.client.as_ref().ok_or(ToolError::Denied)?;
-        self.trace
-            .clone()
-            .tool_attempt(name, key)
-            .map_err(|_| ToolError::Transport)?;
-        client.call_tool(name, args, key).await
+        let ordinal = if let Some(receipts) = &self.receipts {
+            receipts.attempt(name, key).map_err(|_| ToolError::Transport)?
+        } else {
+            self.trace
+                .clone()
+                .tool_attempt(name, key)
+                .map_err(|_| ToolError::Transport)?;
+            0
+        };
+        let result = client.call_tool(name, args, key).await;
+        if let Some(receipts) = &self.receipts {
+            receipts
+                .complete(name, ordinal, result.as_ref().is_ok_and(|result| !result.is_error))
+                .map_err(|_| ToolError::Transport)?;
+        }
+        result
     }
 }
 
@@ -104,7 +137,7 @@ impl<H: ToolHost + Sync> ToolHost for Session<H> {
 }
 
 pub(super) struct Tools {
-    pub host: Option<Policy<Mcp>>,
+    pub host: Option<Local<Policy<Mcp>>>,
     pub config: AgentConfig,
     pub budget: ToolBudget,
     allowed: Vec<String>,
@@ -153,28 +186,38 @@ impl Tools {
             .server
             .first()
             .map(|server| {
-                McpClient::new(
+                let ca_pem = if server.auth == echo_config::McpAuth::PortosDeviceCode {
+                    bridge_mcp::Settings::ca_pem(config)?
+                } else {
+                    None
+                };
+                McpClient::with_ca(
                     server.clone(),
                     Token::new(server.clone(), self.runtime.as_ref().map(|r| r.grant.clone())),
                     Duration::from_secs(config.agent.task_deadline_seconds),
+                    ca_pem.as_deref(),
                 )
                 .map_err(|_| Error::Input)
             })
             .transpose()?;
         let host = Policy::new(
-            Mcp {
-                client,
-                trace: trace.clone(),
-            },
+            Mcp::new(client, trace.clone(), config.mcp.server.first()),
             &self.allowed,
             &config.audit.log_dir,
             screen.approvals.clone(),
             screen.presentation.clone(),
         )
         .map_err(|_| Error::Unavailable)?;
-        self.host = Some(host);
+        self.host = Some(Local {
+            host,
+            notes: Notes::new(config.home.as_ref(), trace.clone()),
+        });
         self.trace = Some(trace.clone());
         Ok(())
+    }
+
+    pub fn grant(&self) -> Option<Arc<bridge_mcp::Grant>> {
+        self.runtime.as_ref().map(|runtime| runtime.grant.clone())
     }
 
     pub async fn catalog(&mut self) -> Result<Catalog, Error> {
@@ -190,7 +233,13 @@ impl Tools {
         }
         // Link can complete through the operator endpoint before the first wake.
         // Discovery occurs once, before thread/start, and never grants authority.
-        session_catalog(self.specs.as_ref().ok_or(Error::Unavailable)?.clone(), &self.allowed)
+        let mut local = session_specs().to_vec();
+        local.extend(self.host.as_ref().ok_or(Error::Unavailable)?.notes.specs());
+        local_catalog(
+            self.specs.as_ref().ok_or(Error::Unavailable)?.clone(),
+            &self.allowed,
+            local,
+        )
     }
 
     pub async fn close(&mut self) {
@@ -203,15 +252,13 @@ impl Tools {
 
 /// Append both builtins after discovery. A discovered tool may neither
 /// duplicate nor displace either builtin's exact alias.
-pub(super) fn session_catalog(mut specs: Vec<ToolSpec>, allowed: &[String]) -> Result<Catalog, Error> {
-    specs.extend(session_specs());
-    let mut allowed = allowed.to_vec();
-    allowed.extend([EXTEND.to_owned(), END.to_owned()]);
-    let catalog = Catalog::new(specs, &allowed).map_err(|_| Error::Input)?;
-    if [EXTEND, END].iter().any(|name| catalog.resolve(name) != Some(*name)) {
-        return Err(Error::Input);
-    }
-    Ok(catalog)
+#[cfg(test)]
+pub(super) fn session_catalog(specs: Vec<ToolSpec>, allowed: &[String]) -> Result<Catalog, Error> {
+    local_catalog(specs, allowed, session_specs().to_vec())
+}
+
+fn local_catalog(specs: Vec<ToolSpec>, allowed: &[String], local: Vec<ToolSpec>) -> Result<Catalog, Error> {
+    Catalog::with_local(specs, allowed, local, &NAMES).map_err(|_| Error::Input)
 }
 
 pub(super) async fn conversation<L, R, W, P>(
@@ -284,3 +331,7 @@ where
         result.and_then(|completed| cleanup.map(|()| completed))
     }
 }
+
+#[cfg(test)]
+#[path = "voice_tools/mcp_trust_tests.rs"]
+mod mcp_trust_tests;

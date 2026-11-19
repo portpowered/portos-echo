@@ -232,6 +232,7 @@ async fn voice_listen_acknowledges_clock_without_renewing_idle_and_expiry_wins()
         (&mut events, &mut microphone),
         &mut port,
         (&mut source, &mut drain),
+        true,
         std::future::pending(),
         &mut observe,
     ));
@@ -315,6 +316,9 @@ async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
 mod barge;
 #[path = "voice_listen_safety.rs"]
 mod safety;
+
+#[path = "voice_listen_restart.rs"]
+mod restart;
 
 #[tokio::test(start_paused = true)]
 async fn voice_listen_empty_reply_requires_receipt_then_waits_without_audible_frames() {

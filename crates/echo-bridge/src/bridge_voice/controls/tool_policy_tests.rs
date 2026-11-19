@@ -35,6 +35,43 @@ fn policy(directory: &Path) -> (Policy<Host>, mpsc::Receiver<UiState>) {
 }
 
 #[tokio::test(start_paused = true)]
+async fn t3_mcp_receipts_are_absent_for_spoof_catalog_and_tool_returns() {
+    use super::super::voice_tools::Tools;
+    use crate::{bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
+    let directory = tempfile::tempdir().unwrap();
+    let spoof = echo_spoof_mcp::Spoof::start(echo_spoof_mcp::Options::default())
+        .await
+        .unwrap();
+    let mut config =
+        echo_config::BridgeConfig::from_toml_str(include_str!("../../../../../examples/bridge.example.toml")).unwrap();
+    config.mcp.server[0].url = spoof.url().into();
+    config.audit.log_dir = directory.path().join("audit");
+    let path = directory.path().join("trace");
+    let mut trace = Trace::open(&path, "api_key").unwrap();
+    let screen = Screen::bind(None).await.unwrap();
+    let mut tools = Tools::new(&config, Arc::new(|| 0));
+    tools.open(&config, &screen, &mut trace, None).await.unwrap();
+    tools.catalog().await.unwrap();
+    let result = tools
+        .host
+        .as_ref()
+        .unwrap()
+        .call_tool("test.echo", json!({"text":"synthetic-spoof-result"}), "1:t1:u1:c")
+        .await
+        .unwrap();
+    assert_eq!(result.content, json!([{"type":"text","text":"synthetic-spoof-result"}]));
+    assert!(!result.is_error);
+    tools.close().await;
+    let raw = std::fs::read_to_string(path).unwrap();
+    let rows: Vec<Value> = raw.lines().map(|row| serde_json::from_str(row).unwrap()).collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["event"], "tools/call");
+    assert_eq!(raw.matches("synthetic-spoof-result").count(), 0);
+    assert_eq!(spoof.snapshot().unwrap().calls.len(), 1);
+    spoof.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn policy_reserves_once_before_effect_and_reopen_never_replays() {
     let directory = tempfile::tempdir().unwrap();
     let (host, _screen) = policy(directory.path());

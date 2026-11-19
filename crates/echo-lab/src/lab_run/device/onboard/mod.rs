@@ -3,6 +3,9 @@
 mod budget;
 mod launch;
 mod link;
+pub(super) mod operator;
+mod query;
+pub(super) mod replay;
 #[cfg(test)]
 mod tests;
 
@@ -15,6 +18,8 @@ use std::{
 pub(super) use budget::admit;
 
 const INVALID: &str = "device: invalid on-device launcher";
+const IDENTITY: &str = "/data/local/hassmic/runas nobody 3990,inet";
+const ROOT_REFUSAL: &str = "device: on-device launcher must run as nobody, not root";
 const POLL: Duration = Duration::from_millis(200);
 const SETTLE: Duration = Duration::from_secs(10);
 // Launch contract (docs/architecture.md): own session, stdin held open by a FIFO
@@ -107,6 +112,13 @@ impl Launcher {
     }
 
     fn validate(&self) -> Result<(), String> {
+        let identity: Vec<_> = self.run_as.split_whitespace().collect();
+        if matches!(
+            identity.as_slice(),
+            ["runas" | "/data/local/hassmic/runas", "root" | "0", ..]
+        ) {
+            return Err(ROOT_REFUSAL.into());
+        }
         let inside = |path: &str| {
             device_path(path)
                 && path
@@ -115,10 +127,16 @@ impl Launcher {
         };
         let commands = match (&self.binary, &self.start, &self.stop) {
             (Some(binary), None, None) => device_path(binary),
-            (None, Some(start), Some(stop)) => !start.is_empty() && !stop.is_empty(),
+            (None, Some(start), Some(stop)) => [start, stop].iter().all(|args| {
+                matches!(args.as_slice(), [kind, payload] if kind == "shell" && !payload.is_empty() && !payload.contains('\''))
+            }),
             _ => false,
         };
-        let identity = self.run_as.is_empty() || self.run_as.split(' ').all(|part| word(part, b",/"));
+        let identity = identity.is_empty()
+            || matches!(
+                identity.as_slice(),
+                ["runas" | "/data/local/hassmic/runas", "nobody", "3990,inet"]
+            );
         if device_path(&self.private_dir)
             && inside(&self.config)
             && inside(&self.trace)
@@ -134,12 +152,8 @@ impl Launcher {
         }
     }
 
-    fn prefix(&self) -> String {
-        if self.run_as.is_empty() {
-            String::new()
-        } else {
-            format!("{} ", self.run_as)
-        }
+    fn prefix() -> String {
+        format!("{IDENTITY} ")
     }
 
     fn fill(&self, text: &str) -> String {
@@ -150,15 +164,11 @@ impl Launcher {
     }
 
     fn command(&self, nominated: Option<&Vec<String>>, default: &str) -> Vec<String> {
-        nominated.map_or_else(
-            || {
-                vec![
-                    "shell".into(),
-                    format!("{}sh -c '{}'", self.prefix(), self.fill(default)),
-                ]
-            },
-            |args| args.iter().map(|arg| self.fill(arg)).collect(),
-        )
+        let payload = nominated.map_or(default, |args| args[1].as_str());
+        vec![
+            "shell".into(),
+            format!("{}sh -c '{}'", Self::prefix(), self.fill(payload)),
+        ]
     }
 }
 
@@ -188,7 +198,7 @@ impl Remote {
     fn shell(&self, command: &str) -> Result<String, String> {
         let output = self
             .shell
-            .adb(&["shell".into(), format!("{}{command}", self.launcher.prefix())])?;
+            .adb(&["shell".into(), format!("{}{command}", Launcher::prefix())])?;
         Ok(String::from_utf8_lossy(&output).into_owned())
     }
 
@@ -196,7 +206,7 @@ impl Remote {
     fn read(&self, command: &str) -> Result<Vec<u8>, String> {
         self.shell.adb(&[
             "exec-out".into(),
-            format!("{}{command} 2>/dev/null", self.launcher.prefix()),
+            format!("{}{command} 2>/dev/null", Launcher::prefix()),
         ])
     }
 
@@ -234,9 +244,10 @@ impl Remote {
         let config = &self.launcher.config;
         self.shell
             .adb(&["push".into(), local.to_string_lossy().into_owned(), config.clone()])?;
+        self.shell.adb(&["shell".into(), format!("chown 9999:9999 {config}")])?;
         self.shell(&format!("chmod 600 {config}"))?;
-        if self.shell(&format!("stat -c %a {config}"))?.trim() != "600" {
-            return Err("device: unmet prerequisite: pushed bridge configuration with mode 0600 on the Echo".into());
+        if self.shell(&format!("stat -c %u:%g:%a {config}"))?.trim() != "9999:9999:600" {
+            return Err("device: unmet prerequisite: pushed bridge configuration with owner 9999:9999 and mode 0600 on the Echo".into());
         }
         Ok(())
     }

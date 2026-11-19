@@ -1,4 +1,5 @@
 //! T3 component witnesses: real loopback HTTP with synthetic state/action boundaries.
+mod screen_settings;
 mod support;
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use support::{Result, TOKEN, events, frame, post, report, request, server};
