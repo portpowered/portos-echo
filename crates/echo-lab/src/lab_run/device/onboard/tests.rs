@@ -31,6 +31,7 @@ pub(super) struct World {
     pub pushed: Vec<(String, String, String)>,
     pub grant: Vec<u8>,
     pub replacement_grant: Option<Vec<u8>>,
+    pub pem: Vec<u8>,
 }
 
 impl World {
@@ -81,6 +82,9 @@ impl Shell for Fake {
         let command = args.last().cloned().unwrap_or_default();
         if args[0] == "exec-out" && command.contains("head -c 65537") {
             return Ok(world.grant.clone());
+        }
+        if args[0] == "exec-out" && command.contains("head -c 1048577") {
+            return Ok(world.pem.clone());
         }
         let output = match args[0].as_str() {
             "exec-out" if command.contains("head -c 16385") => "synthetic-local-screen\n".into(),

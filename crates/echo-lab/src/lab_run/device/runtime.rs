@@ -49,6 +49,7 @@ pub struct Runtime {
     pub(super) excused: usize,
     pub(super) portos: Option<echo_lab::lab_mcp::PortosObservations>,
     pub(super) pending_mcp: Option<super::onboard::operator::Pending>,
+    pub(super) replay: super::onboard::replay::Replay,
 }
 
 pub(super) struct Startup {

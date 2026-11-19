@@ -291,6 +291,9 @@ async fn t3_on_device_mcp_operator_uses_owned_forward_pairing_and_exact_completi
     );
     state.mcp_operator(&McpAction::Approve, &config).await.unwrap();
     assert!(state.pending_mcp.is_none());
+    world.borrow_mut().grant = json!({"version":1,"private_key_jwk":{},"grant":{}})
+        .to_string()
+        .into_bytes();
     state.mcp_operator(&McpAction::Refresh, &config).await.unwrap();
     state.mcp_operator(&McpAction::Unlink, &config).await.unwrap();
     peer.await.unwrap();

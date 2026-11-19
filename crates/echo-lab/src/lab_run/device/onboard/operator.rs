@@ -205,6 +205,9 @@ impl Runtime {
             _ => return Err("device: unsupported MCP operator action".into()),
         };
         let (address, token) = self.mcp_control(config)?;
+        if matches!(action, McpAction::Refresh) {
+            self.capture_mcp_replay(config)?;
+        }
         let mut pending = Pending::begin(address, &token, operation).await?;
         if matches!(action, McpAction::Link) {
             pending.screen_after = self.screen.as_ref().map(|screen| (self.generation, screen.sequence()));

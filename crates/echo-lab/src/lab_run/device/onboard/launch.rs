@@ -28,6 +28,8 @@ impl crate::lab_run::device::Configured<'_> {
                 async {
                     if matches!(action, crate::lab_run::McpAction::Restart) {
                         self.state.mcp_restart(&self.config, artifacts).await
+                    } else if matches!(action, crate::lab_run::McpAction::Replay) {
+                        self.state.mcp_replay(&self.config, &self.options.python).await
                     } else {
                         self.state.mcp_operator(&action, &self.config).await
                     }

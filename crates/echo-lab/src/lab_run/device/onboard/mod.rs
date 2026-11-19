@@ -5,6 +5,7 @@ mod launch;
 mod link;
 pub(super) mod operator;
 mod query;
+pub(super) mod replay;
 #[cfg(test)]
 mod tests;
 

@@ -241,6 +241,26 @@ pub struct PortosObservations {
 }
 
 impl PortosObservations {
+    /// Record one externally observed invalid_grant after the rotated-token replay.
+    /// # Errors
+    /// Repeated replay or replay before a complete restart/use is invalid.
+    pub fn replay_rejected(&mut self) -> Result<(), &'static str> {
+        let counts = self.lifecycle.counts;
+        let result = if counts.link == 1
+            && counts.forced_refresh == 2
+            && counts.tool_call == 1
+            && counts.restart_grant_kept == 1
+            && counts.replay_rejected == 0
+            && self.settled()
+        {
+            self.lifecycle.counts.replay_rejected = 1;
+            Ok(())
+        } else {
+            Err(INVALID)
+        };
+        self.finish(result)
+    }
+
     /// # Errors
     /// Requires one configured server and an unambiguous permitted tool set.
     pub fn new(server: &str, names: &[String]) -> Result<Self, &'static str> {
