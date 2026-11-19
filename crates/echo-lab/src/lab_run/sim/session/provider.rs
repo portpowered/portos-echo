@@ -202,7 +202,7 @@ fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), Str
         Some("provider.delegation") => ("delegations", value["delegation_id"].clone()),
         Some("provider.append") => ("appends", value["delegation_id"].clone()),
         Some("provider.model") => ("models", json!({"turn":value["turn"],"outputs":value["outputs"]})),
-        Some("provider.transcripts") => return Ok(()),
+        Some("provider.transcripts" | "provider.heard") => return Ok(()),
         _ => return Err("session: provider contract failure".into()),
     };
     observed.send_modify(|state| {

@@ -21,6 +21,7 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
     let detail = match journey {
         Journey::Turns => turns(evidence, &summary)?,
         Journey::Idle => idle(&summary)?,
+        Journey::Dispatch => dispatch(evidence, &summary)?,
         Journey::Extend => extend(evidence, &summary, 12_000)?,
         Journey::LongWait => long_wait(evidence, &summary)?,
         Journey::End => end(evidence, &summary)?,
@@ -124,6 +125,27 @@ fn idle(summary: &Value) -> Result<Value, String> {
     let end = ended(summary)?;
     at(played + LISTEN_MS, end, "idle")?;
     Ok(json!({"idle_after_played_ms":end - played}))
+}
+
+/// Speech heard while the dispatch ran never cancelled it: no interrupt was
+/// requested, its answer played, and the run then idled out as usual.
+fn dispatch(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
+    let interrupts = evidence
+        .records
+        .iter()
+        .filter(|r| {
+            matches!(
+                r["event"].as_str(),
+                Some("turn/interrupt" | "turn.interrupt_acknowledged" | "turn.interrupted")
+            )
+        })
+        .count();
+    if interrupts != 0 {
+        return Err(format!(
+            "session dispatch: user speech interrupted the delegated turn ({interrupts} records)"
+        ));
+    }
+    Ok(json!({"turn_interrupts":0,"idle":idle(summary)?}))
 }
 
 fn turns(evidence: &Evidence, summary: &Value) -> Result<Value, String> {

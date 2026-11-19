@@ -177,3 +177,80 @@ fn assert_replacement_pcm(observer: &Observer) {
         assert!((i32::from(sample) + 5000).abs() <= 10);
     }
 }
+
+fn turn(started: bool) -> MediaEvent {
+    let (thread, turn) = ("thread-1".to_owned(), "turn-1".to_owned());
+    MediaEvent::Control(if started {
+        Event::TurnStarted { thread, turn }
+    } else {
+        Event::TurnCompleted { thread, turn }
+    })
+}
+
+/// T1: a dispatch in flight is thinking. Speech neither cuts the speaker nor
+/// ends the wait, idle cannot close the run under it, and its answer plays.
+#[tokio::test(start_paused = true)]
+async fn voice_listen_dispatch_in_flight_ignores_speech_and_holds_the_run_for_its_answer() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    observer.wake("Computer", vec![]);
+    let Some(LinkEvent::Wake(microphone)) = events.recv().await.unwrap() else {
+        unreachable!()
+    };
+    let (tx, rx) = mpsc::channel(64);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let receipts = Cell::new(0);
+    let mut work = Box::pin(super::super::super::run(
+        &client,
+        &mut events,
+        microphone,
+        &mut port,
+        Options {
+            listen_timeout: Some(Duration::from_secs(3)),
+            session_max: Duration::from_secs(600),
+            reply_lead_ms: 200,
+            response_deadline: Instant::now() + Duration::from_secs(10),
+            played_timeout: Duration::from_secs(1),
+            muted: false,
+        },
+        std::future::pending(),
+        |notice| {
+            if matches!(notice, Notice::ReplyPlayed) {
+                receipts.set(receipts.get() + 1);
+            }
+            Ok(())
+        },
+    ));
+    // The filler speaks while the turn runs; the user's own lagging transcript
+    // and fresh speech arrive on top of it.
+    tx.send(turn(true)).await.unwrap();
+    reply(&tx, 5000).await;
+    for done in [false, true] {
+        let (role, text) = ("user".to_owned(), "What day is it?".to_owned());
+        tx.send(MediaEvent::Control(Event::Transcript { role, text, done }))
+            .await
+            .unwrap();
+    }
+    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+    // A second utterance ends this reply with the turn still running.
+    reply(&tx, 5000).await;
+    settle(&mut work, &observer, &receipts, 1).await;
+    assert_eq!((frames(&observer), cuts(&observer)), (24, 0));
+    // Idle (3 s) cannot close the run under the dispatch.
+    tokio::time::advance(Duration::from_secs(5)).await;
+    poll(work.as_mut()).await;
+    assert!(!observer.commands().contains(&Command::EndRun));
+    // Completion re-arms a full listen window for the answer.
+    tx.send(turn(false)).await.unwrap();
+    poll(work.as_mut()).await;
+    tokio::time::advance(Duration::from_secs(3) - Duration::from_nanos(1)).await;
+    poll(work.as_mut()).await;
+    assert!(!observer.commands().contains(&Command::EndRun));
+    reply(&tx, -5000).await;
+    settle(&mut work, &observer, &receipts, 2).await;
+    tokio::time::advance(Duration::from_secs(3)).await;
+    let stats = work.await.unwrap();
+    assert_eq!((stats.reply_sent, receipts.get(), cuts(&observer)), (36, 2, 0));
+    assert_eq!(observer.commands().last(), Some(&Command::EndRun));
+}
