@@ -143,8 +143,8 @@ async fn reject(python: &str, record: &Secret<Value>, pem: &[u8]) -> Result<(), 
 fn proof(record: &Value, endpoint: &str) -> Result<Secret<String>, String> {
     let jwk = &record["private_key_jwk"];
     let private = Secret::new(B64.decode(jwk["d"].as_str().ok_or(ERROR)?).map_err(|_| ERROR)?);
-    let key = SigningKey::from_slice(private.expose()).map_err(|_| ERROR)?;
-    let public = key.verifying_key().to_sec1_point(false);
+    let key = Secret::new(SigningKey::from_slice(private.expose()).map_err(|_| ERROR)?);
+    let public = key.expose().verifying_key().to_sec1_point(false);
     if jwk["kty"] != "EC"
         || jwk["crv"] != "P-256"
         || jwk["x"] != B64.encode(&public.as_bytes()[1..33])
@@ -162,6 +162,6 @@ fn proof(record: &Value, endpoint: &str) -> Result<Secret<String>, String> {
     let claims = json!({"htm":"POST","htu":endpoint,"iat":now.as_secs(),
         "jti":format!("m5-{}-{}-{unique}",std::process::id(),now.as_nanos())});
     let input = format!("{}.{}", B64.encode(header.to_string()), B64.encode(claims.to_string()));
-    let signature: Signature = key.sign(input.as_bytes());
+    let signature: Signature = key.expose().sign(input.as_bytes());
     Ok(Secret::new(format!("{input}.{}", B64.encode(signature.to_bytes()))))
 }
