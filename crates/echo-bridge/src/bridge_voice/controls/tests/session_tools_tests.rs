@@ -344,7 +344,7 @@ async fn session_tools_cancelled_queued_end_and_extend_leave_state_and_cache_unc
     assert_eq!(controller.idle_deadline(), deadline);
     assert!(!grants.ending());
     assert_eq!(grants.granted(), None);
-    assert!(grants.answered.is_empty());
+    assert_eq!(grants.answered.len(), 0);
     assert_eq!(
         receipts,
         [
@@ -385,7 +385,7 @@ async fn session_tools_old_run_delivery_after_new_wake_is_refused_without_effect
     assert_eq!(controller.idle_deadline(), deadline);
     assert!(!grants.ending());
     assert_eq!(grants.granted(), None);
-    assert!(grants.answered.is_empty());
+    assert_eq!(grants.answered.len(), 0);
     assert_eq!(
         receipts,
         [
@@ -435,7 +435,7 @@ async fn session_tools_dispatch_timeout_before_controller_delivery_cannot_apply(
     assert_eq!(controller.idle_deadline(), deadline);
     assert!(!grants.ending());
     assert_eq!(grants.granted(), None);
-    assert!(grants.answered.is_empty());
+    assert_eq!(grants.answered.len(), 0);
     assert_eq!(receipts, [(END, "request_cancelled", None, None)]);
 }
 
