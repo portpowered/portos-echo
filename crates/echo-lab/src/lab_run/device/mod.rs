@@ -42,6 +42,11 @@ impl<'a> Configured<'a> {
         let session = runtime::session::selected(options)?;
         let window = runtime::observation(options.live_real(), &config)?;
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
+        for path in &options.scenarios {
+            if crate::lab_validate::load(path)?["id"] == "m5-port-os-link" {
+                state.configure_portos(&config)?;
+            }
+        }
         if config::setup::requested(options)? {
             let parsed =
                 echo_config::BridgeConfig::from_toml_str(&config).map_err(|_| "device: invalid setup configuration")?;

@@ -6,7 +6,7 @@ use crate::lab_run::{
         runtime::{Runtime, Startup},
     },
     run_report::Artifacts,
-    sim::{process::Process, production::Screen, trace::Trace},
+    sim::{process::Process, production::Screen},
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -89,11 +89,7 @@ impl Runtime {
         self.screen.take();
         self.remote()?.stop().await?;
         self.collect(artifacts)?;
-        self.trace = Trace::default();
-        self.offset = 0;
-        self.expectations.clear();
-        self.run = None;
-        self.generation += 1;
+        self.rotate_trace()?;
         self.startup = Some(Startup::new("bridge_spawn"));
         self.launch_remote().await
     }

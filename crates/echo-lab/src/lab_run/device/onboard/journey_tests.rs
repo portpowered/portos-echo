@@ -192,3 +192,140 @@ async fn t3_on_device_hassmic_restart_relaunches_a_bridge_that_ended_with_its_li
     state.close(root.path(), &mut artifacts).await.unwrap();
     assert!(artifacts.checks["bridge_errors_absent"]);
 }
+
+const PORTOS: &str = include_str!("../../../../../../examples/bridge.echo.toml");
+
+fn receipts(world: &Rc<RefCell<World>>, outcome: &str) {
+    let records = [
+        json!({"event":"tools/call","name":"endpoint_query","thread_id":"t",
+            "turn_id":"u","call_id":"c","run_id":"r","elapsed_ms":3}),
+        json!({"event":"mcp.tool.completed","server":"portos","name":"endpoint_query",
+            "attempt_count":1,"outcome":outcome,"elapsed_ms":4,"provider_auth_mode":"chatgpt"}),
+    ];
+    world
+        .borrow_mut()
+        .trace
+        .push_str(&records.map(|r| format!("{r}\n")).concat());
+}
+
+async fn portos_started() -> (tempfile::TempDir, Rc<RefCell<World>>, Runtime) {
+    let root = tempfile::tempdir().unwrap();
+    let world = world();
+    screen(&world).await;
+    let mut state = runtime(&world);
+    state.configure_portos(PORTOS).unwrap();
+    state.start(None, PORTOS, root.path(), None).await.unwrap();
+    (root, world, state)
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_reader_consumes_complete_receipts_once_and_drains_after_stop() {
+    let (root, world, mut state) = portos_started().await;
+    receipts(&world, "success");
+    // A partial last line must not be consumed until the writer finishes it.
+    let tail = world.borrow_mut().trace.pop().unwrap();
+    assert_eq!(tail, '\n');
+    state.observe().unwrap();
+    state.observe().unwrap();
+    let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+    assert!(state.link_counts(&mut artifacts).is_err());
+    assert!(artifacts.link_counts.is_none());
+    world.borrow_mut().trace.push('\n');
+    // close stops the launcher, then reads the final complete return.
+    state.close(root.path(), &mut artifacts).await.unwrap();
+    assert_eq!(
+        artifacts.link_counts.unwrap(),
+        echo_lab::lab_mcp::LinkCounts {
+            tool_call: 1,
+            ..Default::default()
+        }
+    );
+    let world = world.borrow();
+    assert!(!world.alive && world.trace.is_empty());
+    assert_eq!(world.pushed[0].2, PORTOS);
+    assert!(world.ran("kill $(cat"));
+    assert!(world.ran("forward --remove"));
+    assert!(!root.path().join("configured.private").exists());
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_reader_rotates_only_after_draining_the_actual_generation() {
+    let (root, world, mut state) = portos_started().await;
+    receipts(&world, "error");
+    state.observe().unwrap();
+    let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+    state.link_counts(&mut artifacts).unwrap();
+    assert_eq!(artifacts.link_counts.unwrap().tool_call, 0);
+    state.restart_remote(&mut artifacts).await.unwrap();
+    assert_eq!((state.generation, state.bridge_id()), (2, Ok(Some(2))));
+    receipts(&world, "success");
+    let reload = json!({"event":"mcp.grant.reloaded","elapsed_ms":5});
+    world.borrow_mut().trace.push_str(&format!("{reload}\n"));
+    state.observe().unwrap();
+    state.observe().unwrap();
+    state.close(root.path(), &mut artifacts).await.unwrap();
+    assert_eq!(
+        artifacts.link_counts.unwrap(),
+        echo_lab::lab_mcp::LinkCounts {
+            tool_call: 1,
+            restart_grant_kept: 1,
+            ..Default::default()
+        }
+    );
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_reader_late_duplicate_revokes_measurement_and_still_releases() {
+    let (root, world, mut state) = portos_started().await;
+    receipts(&world, "success");
+    state.observe().unwrap();
+    let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+    state.link_counts(&mut artifacts).unwrap();
+    assert_eq!(artifacts.link_counts.unwrap().tool_call, 1);
+    let duplicate = world.borrow().trace.lines().last().unwrap().to_owned();
+    world.borrow_mut().trace.push_str(&format!("{duplicate}\n"));
+    assert!(state.close(root.path(), &mut artifacts).await.is_err());
+    assert!(artifacts.link_counts.is_none());
+    assert!(state.invalid);
+    let world = world.borrow();
+    assert!(!world.alive && world.trace.is_empty());
+    assert!(world.ran("forward --remove"));
+    assert!(!root.path().join("configured.private").exists());
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_reader_unreturned_attempt_prevents_restart_and_passing_cleanup() {
+    let (root, world, mut state) = portos_started().await;
+    receipts(&world, "success");
+    let attempt = world.borrow().trace.lines().rev().nth(1).unwrap().to_owned();
+    world.borrow_mut().trace = format!("{attempt}\n");
+    let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+    assert!(state.restart_remote(&mut artifacts).await.is_err());
+    assert_eq!(state.generation, 1);
+    assert_eq!(world.borrow().pid, 1);
+    assert!(state.close(root.path(), &mut artifacts).await.is_err());
+    assert!(artifacts.link_counts.is_none());
+    assert!(world.borrow().ran("forward --remove"));
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_reader_truncated_or_incomplete_final_trace_never_passes() {
+    for truncate in [false, true] {
+        let (root, world, mut state) = portos_started().await;
+        receipts(&world, "success");
+        state.observe().unwrap();
+        let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
+        state.link_counts(&mut artifacts).unwrap();
+        assert_eq!(artifacts.link_counts.unwrap().tool_call, 1);
+        if truncate {
+            world.borrow_mut().trace.clear();
+        } else {
+            world.borrow_mut().trace.push_str("{\"event\":");
+        }
+        assert!(state.close(root.path(), &mut artifacts).await.is_err());
+        assert!(artifacts.link_counts.is_none());
+        assert!(!world.borrow().alive);
+        assert!(world.borrow().ran("forward --remove"));
+        assert!(!root.path().join("configured.private").exists());
+    }
+}
