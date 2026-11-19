@@ -6,7 +6,7 @@ import json
 import subprocess
 import time
 
-from test_echo_install import Sandbox, prepare_lifecycle, require
+from test_echo_install import Sandbox, prepare_lifecycle, require, set_owner
 
 
 def owner_state(box):
@@ -14,6 +14,8 @@ def owner_state(box):
               "home/prompts/voice.md": "owner voice", "home/settings.toml": "owner settings"}
     for name, value in values.items():
         (box.device / name).write_text(value)
+        # These are files authored by the existing nobody-owned runtime.
+        set_owner(box.root, box.device / name, "9999:9999")
     return values
 
 
