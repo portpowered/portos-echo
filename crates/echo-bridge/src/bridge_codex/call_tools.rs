@@ -36,6 +36,7 @@ pub enum SessionCommand {
 pub struct SessionRequest {
     pub command: SessionCommand,
     pub key: String,
+    pub run: Option<Arc<()>>,
     pub reply: oneshot::Sender<echo_agent_api::ToolResult>,
 }
 
@@ -97,6 +98,7 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     deferred: VecDeque<Event>,
     budget: ToolBudget,
     session: Option<mpsc::Receiver<SessionRequest>>,
+    run: Option<tokio::sync::watch::Sender<Option<Arc<()>>>>,
 }
 
 impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static>
@@ -125,13 +127,19 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             deferred: VecDeque::new(),
             budget,
             session: None,
+            run: None,
         })
     }
 
     /// Surface the composite host's session requests to the run controller.
     #[must_use]
-    pub fn with_session(mut self, requests: mpsc::Receiver<SessionRequest>) -> Self {
+    pub fn with_session(
+        mut self,
+        requests: mpsc::Receiver<SessionRequest>,
+        run: tokio::sync::watch::Sender<Option<Arc<()>>>,
+    ) -> Self {
         self.session = Some(requests);
+        self.run = Some(run);
         self
     }
 
@@ -325,6 +333,11 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 's
     }
     fn retire_audio(&mut self) {
         self.port.retire_audio();
+    }
+    fn bind_session(&mut self, run: Option<Arc<()>>) {
+        if let Some(owner) = &self.run {
+            owner.send_replace(run);
+        }
     }
     fn interrupt_turn(&mut self) -> Result<(), Error> {
         let Some(active) = self.active.clone() else {

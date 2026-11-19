@@ -23,6 +23,7 @@ pub struct Receipt {
 /// Grants belong to one admitted run; a fresh run starts without them.
 #[derive(Default)]
 pub(super) struct Grants {
+    pub(super) run: std::sync::Arc<()>,
     opened: Option<Instant>,
     listen: Option<Duration>,
     max: Duration,
@@ -72,8 +73,26 @@ pub(super) fn answer(
     controller: &mut Controller,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    let SessionRequest { command, key, reply } = request;
+    let SessionRequest {
+        command,
+        key,
+        run,
+        reply,
+    } = request;
     let tool = tool(command);
+    // Refusal precedes both controller mutation and idempotency-cache writes.
+    let refused = if reply.is_closed() {
+        Some("request_cancelled")
+    } else if run.as_ref().is_none_or(|run| !std::sync::Arc::ptr_eq(run, &grants.run)) {
+        Some("session_stale")
+    } else {
+        None
+    };
+    if let Some(outcome) = refused {
+        observe(Notice::SessionTool(receipt(tool, outcome)))?;
+        let _ = reply.send(failure(outcome));
+        return Ok(());
+    }
     // The same idempotency identity never mutates twice.
     let (result, receipt) = if let Some((_, cached)) = grants.answered.iter().find(|(answered, _)| *answered == key) {
         (cached.clone(), receipt(tool, "duplicate"))

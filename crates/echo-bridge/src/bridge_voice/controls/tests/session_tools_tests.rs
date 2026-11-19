@@ -38,6 +38,7 @@ fn ask(
     let request = SessionRequest {
         command,
         key: key.into(),
+        run: Some(grants.run.clone()),
         reply,
     };
     answer_one(request, grants, controller, receipts).unwrap();
@@ -215,6 +216,7 @@ async fn session_tools_failed_receipt_never_reports_success_and_idle_is_inactive
     let request = SessionRequest {
         command: SessionCommand::End,
         key: "k".into(),
+        run: Some(grants.run.clone()),
         reply,
     };
     let result = answer(request, &mut grants, &mut controller, &mut |_| Err(Error::Trace));
@@ -224,6 +226,7 @@ async fn session_tools_failed_receipt_never_reports_success_and_idle_is_inactive
     let request = SessionRequest {
         command: SessionCommand::Extend(3),
         key: "k2".into(),
+        run: None,
         reply,
     };
     let mut seen = vec![];
@@ -267,7 +270,9 @@ impl ToolHost for Inner {
 async fn session_tools_host_parses_strictly_and_routes_other_names_to_mcp() {
     let inner = Inner::default();
     let (requests, mut receiver) = mpsc::channel(1);
-    let host = Session::new(inner.clone(), requests);
+    let token = Arc::new(());
+    let (_run, active) = tokio::sync::watch::channel(Some(token.clone()));
+    let host = Session::new(inner.clone(), requests, active);
     let cases = [
         (EXTEND, json!({"seconds":5}), SessionCommand::Extend(5)),
         (EXTEND, json!({"seconds":0}), SessionCommand::Invalid { end: false }),
@@ -288,6 +293,7 @@ async fn session_tools_host_parses_strictly_and_routes_other_names_to_mcp() {
             let request = receiver.recv().await.unwrap();
             assert_eq!(request.command, expected);
             assert_eq!(request.key, "key");
+            assert!(Arc::ptr_eq(request.run.as_ref().unwrap(), &token));
             request
                 .reply
                 .send(echo_agent_api::ToolResult {
@@ -316,6 +322,121 @@ fn spec(name: &str) -> ToolSpec {
         description: "synthetic".into(),
         input_schema: json!({"type":"object","properties":{}}),
     }
+}
+
+// T1: cancelling the waiting caller cannot commit a queued controller command.
+#[tokio::test(start_paused = true)]
+async fn session_tools_cancelled_queued_end_and_extend_leave_state_and_cache_unchanged() {
+    let (mut grants, mut controller) = listening().await;
+    let deadline = controller.idle_deadline();
+    let mut receipts = Receipts::new();
+    for command in [SessionCommand::End, SessionCommand::Extend(20)] {
+        let (reply, receiver) = oneshot::channel();
+        let request = SessionRequest {
+            command,
+            key: "cancelled".into(),
+            run: Some(grants.run.clone()),
+            reply,
+        };
+        drop(receiver);
+        answer_one(request, &mut grants, &mut controller, &mut receipts).unwrap();
+    }
+    assert_eq!(controller.idle_deadline(), deadline);
+    assert!(!grants.ending());
+    assert_eq!(grants.granted(), None);
+    assert!(grants.answered.is_empty());
+    assert_eq!(
+        receipts,
+        [
+            (END, "request_cancelled", None, None),
+            (EXTEND, "request_cancelled", None, None)
+        ]
+    );
+    let valid = ask(
+        SessionCommand::End,
+        "cancelled",
+        &mut grants,
+        &mut controller,
+        &mut receipts,
+    );
+    assert!(!valid.is_error);
+    assert!(grants.ending());
+}
+
+#[tokio::test(start_paused = true)]
+async fn session_tools_old_run_delivery_after_new_wake_is_refused_without_effects() {
+    let (mut grants, mut controller) = listening().await;
+    let old = grants.run.clone();
+    grants = Grants::new(Some(LISTEN), MAX);
+    // No clock advance is needed to distinguish two admissions.
+    let deadline = controller.idle_deadline();
+    let mut receipts = Receipts::new();
+    for command in [SessionCommand::End, SessionCommand::Extend(20)] {
+        let (reply, mut receiver) = oneshot::channel();
+        let request = SessionRequest {
+            command,
+            key: "old".into(),
+            run: Some(old.clone()),
+            reply,
+        };
+        answer_one(request, &mut grants, &mut controller, &mut receipts).unwrap();
+        assert_eq!(receiver.try_recv().unwrap().content, json!({"error":"session_stale"}));
+    }
+    assert_eq!(controller.idle_deadline(), deadline);
+    assert!(!grants.ending());
+    assert_eq!(grants.granted(), None);
+    assert!(grants.answered.is_empty());
+    assert_eq!(
+        receipts,
+        [
+            (END, "session_stale", None, None),
+            (EXTEND, "session_stale", None, None)
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn session_tools_dispatch_timeout_before_controller_delivery_cannot_apply() {
+    use echo_codex::codex_protocol::ToolCall;
+    use echo_delegation::codex_dispatch::Dispatcher;
+    let (mut grants, mut controller) = listening().await;
+    let deadline = controller.idle_deadline();
+    let (requests, mut receiver) = mpsc::channel(1);
+    let (_run, active) = tokio::sync::watch::channel(Some(grants.run.clone()));
+    let host = Session::new(Inner::default(), requests, active);
+    let catalog = session_catalog(vec![], &[]).unwrap();
+    let config = echo_config::AgentConfig {
+        task_deadline_seconds: 1,
+        max_tool_calls: 8,
+        daily_request_cap: 100,
+        model: None,
+    };
+    let mut dispatcher = Dispatcher::new(host, catalog, "thread".into(), config).unwrap();
+    dispatcher.start_turn("thread", "turn").unwrap();
+    let call = ToolCall {
+        thread_id: "thread".into(),
+        turn_id: "turn".into(),
+        call_id: "call".into(),
+        tool: END.into(),
+        arguments: json!({}),
+        namespace: None,
+    };
+    let queued = async {
+        let request = receiver.recv().await.unwrap();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        request
+    };
+    let (outcome, request) = tokio::join!(dispatcher.dispatch(&call), queued);
+    assert!(!outcome.result.success);
+    assert!(outcome.interrupt.is_some());
+    assert!(request.reply.is_closed());
+    let mut receipts = Receipts::new();
+    answer_one(request, &mut grants, &mut controller, &mut receipts).unwrap();
+    assert_eq!(controller.idle_deadline(), deadline);
+    assert!(!grants.ending());
+    assert_eq!(grants.granted(), None);
+    assert!(grants.answered.is_empty());
+    assert_eq!(receipts, [(END, "request_cancelled", None, None)]);
 }
 
 #[test]

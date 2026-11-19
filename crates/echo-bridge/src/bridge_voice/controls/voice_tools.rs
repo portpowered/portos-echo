@@ -60,11 +60,16 @@ pub(super) fn session_specs() -> [ToolSpec; 2] {
 pub(super) struct Session<H> {
     host: H,
     requests: mpsc::Sender<SessionRequest>,
+    run: tokio::sync::watch::Receiver<Option<Arc<()>>>,
 }
 
 impl<H> Session<H> {
-    pub(super) fn new(host: H, requests: mpsc::Sender<SessionRequest>) -> Self {
-        Self { host, requests }
+    pub(super) fn new(
+        host: H,
+        requests: mpsc::Sender<SessionRequest>,
+        run: tokio::sync::watch::Receiver<Option<Arc<()>>>,
+    ) -> Self {
+        Self { host, requests, run }
     }
 }
 
@@ -90,6 +95,7 @@ impl<H: ToolHost + Sync> ToolHost for Session<H> {
         let request = SessionRequest {
             command,
             key: key.into(),
+            run: self.run.borrow().clone(),
             reply,
         };
         self.requests.send(request).await.map_err(|_| ToolError::Transport)?;
@@ -252,17 +258,18 @@ where
         observe(super::SessionNotice::Connected)?;
         // One bounded request at a time; the dispatch awaits the run's answer.
         let (requests, receiver) = mpsc::channel(1);
+        let (run, active) = tokio::sync::watch::channel(None);
         // Keep the retained scheduler/run future off the Windows main stack.
         Box::pin(super::voice_session::session_conversation(
             device,
             &mut call,
             (
-                Session::new(tools.host.as_ref().ok_or(Error::Unavailable)?.clone(), requests),
+                Session::new(tools.host.as_ref().ok_or(Error::Unavailable)?.clone(), requests, active),
                 catalog,
                 tools.config.clone(),
                 tools.budget.clone(),
             ),
-            Some(receiver),
+            Some((receiver, run)),
             options.session,
             cancelled.as_mut(),
             &mut observe,

@@ -50,6 +50,8 @@ use voice_source::Source;
 
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
+    /// Publish the admitted run identity; queued tools retain their original binding.
+    fn bind_session(&mut self, _run: Option<std::sync::Arc<()>>) {}
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
@@ -158,6 +160,7 @@ pub async fn run<L: EchoLink>(
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
     source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
+    port.bind_session(Some(source.session.run.clone()));
     source.controller.admit_response(options.response_deadline)?;
     // A cut replaces playback, while the run still owns pending clock receipts.
     let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
@@ -166,7 +169,7 @@ pub async fn run<L: EchoLink>(
     tokio::pin!(cancelled);
     // Retain the reply-loop state once per run rather than embedding it in
     // every conversation/admission future above this boundary.
-    Box::pin(voice_listen::replies(
+    let result = Box::pin(voice_listen::replies(
         client,
         (events, &mut microphone),
         port,
@@ -175,7 +178,9 @@ pub async fn run<L: EchoLink>(
         cancelled.as_mut(),
         &mut observe,
     ))
-    .await?;
+    .await;
+    port.bind_session(None);
+    result?;
     session_controller::close(
         client,
         (events, &mut microphone),

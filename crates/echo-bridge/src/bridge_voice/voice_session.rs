@@ -13,6 +13,11 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+type SessionRequests = (
+    tokio::sync::mpsc::Receiver<crate::bridge_codex::SessionRequest>,
+    tokio::sync::watch::Sender<Option<std::sync::Arc<()>>>,
+);
+
 #[derive(Clone, Copy)]
 pub struct SessionOptions {
     /// None retains one reply per wake; Some retains capture between replies.
@@ -219,7 +224,7 @@ pub(super) async fn session_conversation<L, R, W, P, H>(
         echo_config::AgentConfig,
         crate::bridge_codex::ToolBudget,
     ),
-    requests: Option<tokio::sync::mpsc::Receiver<crate::bridge_codex::SessionRequest>>,
+    requests: Option<SessionRequests>,
     mut options: SessionOptions,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
@@ -235,8 +240,8 @@ where
         validate(&options)?;
         let (host, catalog, config, budget) = tools;
         let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, config, budget)?;
-        if let Some(requests) = requests {
-            session = session.with_session(requests);
+        if let Some((requests, run)) = requests {
+            session = session.with_session(requests, run);
         }
         drive(device, &mut session, &mut options, cancelled, &mut observe).await
     };
