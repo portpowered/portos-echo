@@ -741,8 +741,8 @@ from it; the driver holds none.
   "config": "/data/local/echo-bridge/private/bridge.toml",
   "trace": "/data/local/echo-bridge/private/trace.jsonl",
   "hassmic_log": "/data/local/hassmic/boot.log",
-  "binary": "/data/local/echo-bridge/echo-bridge",
-  "run_as": "runas root 3990,inet"
+  "binary": "/data/local/echo-bridge/bin/echo-bridge",
+  "run_as": "/data/local/hassmic/runas nobody 3990,inet"
 }
 ```
 
@@ -751,9 +751,14 @@ from it; the driver holds none.
 | `private_dir` | The bridge's one 0700 directory. `config` and `trace` must be inside it. |
 | `hassmic_log` | The log `hassmic` writes its link and wake lines to. |
 | `binary` | The armv7 `echo-bridge`. Selects the built-in start and stop commands. |
-| `run_as` | Optional prefix for every device command, giving the bridge its uid and groups. |
+| `run_as` | Omitted/empty defaults to the absolute nobody prefix above. Short `runas nobody 3990,inet` normalizes to it. Root/uid 0 is refused before effects. |
 | `process` | Optional process name to look for. Default `echo-bridge`. |
-| `start`, `stop` | Instead of `binary`: adb argument lists, for a site with its own launch script. |
+| `start`, `stop` | Instead of `binary`: exactly `["shell", "PAYLOAD"]`, executed under nobody. Scripts must be executable by nobody; payloads cannot contain single quotes. Other argv forms are refused. |
+
+A root launcher is refused with `device: on-device launcher must run as nobody, not root`.
+The private directory must already be owned by 9999:9999, mode 0700. Root adb pushes the
+run-specific config, transfers it with `chown 9999:9999`, then nobody chmods/stats it;
+readback must be exactly `9999:9999:600`. Launch, trace reads, stop and cleanup use nobody.
 
 The built-in start follows the launch contract in `docs/architecture.md`: it
 runs under `setsid`, with stdin held open by a FIFO writer, and the built-in

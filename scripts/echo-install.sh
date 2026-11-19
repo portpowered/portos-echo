@@ -2,6 +2,13 @@
 # Manual Linux operator command. Hardware use belongs to the coordinator.
 set -eu
 
+# Fixed product identity, never a caller override or evaluated shell fragment.
+ECHO_RUN_AS='nobody 3990,inet'
+ECHO_RUN_OWNER='9999:9999'
+readonly ECHO_RUN_AS ECHO_RUN_OWNER
+run_user=${ECHO_RUN_AS%% *}
+run_groups=${ECHO_RUN_AS#* }
+
 help() {
   cat <<'HELP'
 Usage: sh scripts/echo-install.sh --help
@@ -31,17 +38,22 @@ all secrets and codex.home stay in private/.
 Supply config compatible with the bridge build; TOML is not validated or rewritten.
 Prompt defaults: examples/prompts/*.md; seed missing home/prompts files only.
 Absent defaults are skipped with a note.
-Launch: setsid, /data/local/hassmic/runas root 3990,inet, held stdin; no boot integration.
+Launch: setsid, /data/local/hassmic/runas nobody 3990,inet, held stdin; no boot integration.
 start requires exact echo-bridge NAME from ps -A -o PID,NAME and a new
 hassmic boot.log client connected line within 20 seconds.
 stop closes held stdin and verifies absence; never kills an unknown process.
-status shows process, uptime seconds, sanitized hassmic link and five bridge.log lines.
-Status fields: process=running|stopped; uptime_seconds=INTEGER|unavailable;
+private/ and home/: owner 9999:9999, directories 0700, data files 0600.
+bin/: owner 0:0, directory and binaries 0755; cacert.pem 0644.
+install and start migrate retained root-owned state.
+status shows process, process user, uptime seconds, sanitized hassmic link and five bridge.log lines.
+Status fields: process=running|stopped; process_user=USER|unavailable;
+uptime_seconds=INTEGER|unavailable;
 hassmic_link=SANITIZED_LINE|unavailable
 uninstall retains private/ and home/ unless --purge; never changes hassmic or /system.
 Success: echo-install: uninstalled (state retained)
 Success with --purge: echo-install: uninstalled (purged)
-Exit status: 0 success/help/status observation; 1 operation/prerequisite failure;
+A running root process fails; unverifiable running identity fails closed.
+Exit status: 0 success/help/safe status observation; 1 operation/prerequisite/unsafe process-user failure;
 2 usage error. Errors use fixed diagnostics without raw adb output.
 Example: sh scripts/echo-install.sh install --config ./bridge.toml --bridge ./build/echo-bridge --codex ./build/codex-app-server --ca ./build/cacert.pem
 HELP
@@ -181,6 +193,10 @@ if [ "$command_name" = status ]; then
 pid=\$(printf '%s\\n' \"\$observed\" | awk '\$2 == \"echo-bridge\" { print \$1; exit }')
 if test -n \"\$pid\"; then
   printf 'process=running\\n'
+  users=\$(ps -A -o PID,USER,NAME 2>/dev/null) || users=''
+  user=\$(printf '%s\\n' \"\$users\" | awk -v pid=\"\$pid\" '\$1 == pid && \$3 == \"echo-bridge\" { print \$2 }')
+  case \$user in nobody | 9999 | root | 0) ;; *) user=unavailable ;; esac
+  printf 'process_user=%s\\n' \"\$user\"
   age=unavailable
   case \$pid in *[!0-9]* | '') ;; *)
     if test -r /proc/\$pid/stat && test -r /proc/uptime && ticks=\$(getconf CLK_TCK 2>/dev/null); then
@@ -190,7 +206,7 @@ if test -n \"\$pid\"; then
     fi ;;
   esac
   printf 'uptime_seconds=%s\\n' \"\$age\"
-else printf 'process=stopped\\nuptime_seconds=unavailable\\n'; fi
+else printf 'process=stopped\\nprocess_user=unavailable\\nuptime_seconds=unavailable\\n'; fi
 if test -f /data/local/hassmic/boot.log && test ! -L /data/local/hassmic/boot.log; then
   link=\$(awk '/client connected|no Home Assistant link/ { line=\$0 } END { print line }' /data/local/hassmic/boot.log)
   printf 'hassmic_link=%s\\n' \"\${link:-unavailable}\"
@@ -209,6 +225,10 @@ else printf 'unavailable\\n'; fi"
       if (secret) print "[masked]"; else print
     }' "$log") || fail 'status filter failed'
   printf '%s\n' "$sanitized"
+  case $sanitized in
+    *'process_user=root'* | *'process_user=0'*) fail 'echo-bridge is running as root; stop and reinstall before starting' ;;
+    *'process=running'*'process_user=unavailable'*) fail 'cannot verify echo-bridge process user' ;;
+  esac
   exit 0
 fi
 run_adb shell "umask 077; mkdir '$lock'"
@@ -239,9 +259,64 @@ rm -f '$device/private/launch.sh'"
   fi
   exit 0
 fi
+# Only stopped, fixed runtime roots are traversed; never follow links or accept
+# FIFOs/devices/sockets as retained data. Validate the entire tree before changes.
+migrate_state() {
+  run_adb shell "for root in '$device/private' '$device/home'; do
+  test ! -e \"\$root\" || test -d \"\$root\" || exit 1
+  if test -d \"\$root\"; then
+    bad=\$(find \"\$root\" ! -type d ! -type f -print)
+    test -z \"\$bad\" || exit 1
+  fi
+done
+for root in '$device/private' '$device/home'; do
+  test -d \"\$root\" || continue
+  find \"\$root\" -exec sh -c '
+    for p do
+      uid=\$(stat -c %u \"\$p\") || exit 1
+      if test \"\$uid\" != 9999; then chown $ECHO_RUN_OWNER \"\$p\" || exit 1; fi
+      mode=600
+      if test -d \"\$p\" || test \"\$p\" = \"$device/private/launch.sh\"; then mode=700; fi
+      actual=\$(stat -c %a \"\$p\") || exit 1
+      if test \"\$actual\" != \"\$mode\"; then chmod \"\$mode\" \"\$p\" || exit 1; fi
+    done' sh {} + || exit 1
+done"
+}
+write_launcher() {
+  run_adb shell "test ! -L '$device/private/launch.sh'
+test ! -L '$device/private/bridge.log'
+umask 077
+cat > '$device/private/.install-stage' <<'LAUNCH'
+#!/system/bin/sh
+umask 077
+state=/data/local/echo-bridge/private/run
+# Atomic admission: cancellation may have consumed this gate first.
+rmdir \"\$state/control\" 2>/dev/null || exit 1
+if test -f \"\$state/stop\"; then touch \"\$state/finished\"; exit 1; fi
+# Only this session holds the write end. The bridge must not inherit it.
+exec 3<> \"\$state/stdin\"
+/data/local/echo-bridge/bin/echo-bridge --config /data/local/echo-bridge/private/bridge.toml --trace /data/local/echo-bridge/private/bridge.trace < \"\$state/stdin\" 3>&- &
+child=\$!
+(while test ! -f \"\$state/stop\"; do sleep 1; done; exec 3>&-) &
+holder=\$!
+exec 3>&-
+wait \"\$child\"
+# This child is still ours and unreaped, so its PID cannot have been reused.
+kill \"\$holder\" 2>/dev/null || :
+wait \"\$holder\" 2>/dev/null || :
+touch \"\$state/finished\"
+LAUNCH
+chown '$ECHO_RUN_OWNER' '$device/private/.install-stage' &&
+chmod 700 '$device/private/.install-stage' &&
+mv -f '$device/private/.install-stage' '$device/private/launch.sh' &&
+touch '$device/private/bridge.log' && chown '$ECHO_RUN_OWNER' '$device/private/bridge.log' && chmod 600 '$device/private/bridge.log'"
+}
 if [ "$command_name" = start ]; then
   # Recover only owned state after proving no bridge is currently running.
   stop_bridge
+  migrate_state
+  safe_paths=true
+  write_launcher
   run_adb shell "test -x '$device/private/launch.sh' && test -f '$device/private/bridge.toml'
 test ! -e '$device/private/run'
 umask 077
@@ -255,7 +330,8 @@ stat -c %i /data/local/hassmic/boot.log > '$device/private/run/log-inode'
 cksum < /data/local/hassmic/boot.log > '$device/private/run/log-prefix'
 trap - 0"
   starting=true
-  run_adb shell "setsid /system/bin/sh '$device/private/launch.sh' </dev/null >> '$device/private/bridge.log' 2>&1 &"
+  run_adb shell "chown -R '$ECHO_RUN_OWNER' '$device/private/run'"
+  run_adb shell "setsid /data/local/hassmic/runas \"$run_user\" \"$run_groups\" /system/bin/sh '$device/private/launch.sh' </dev/null >> '$device/private/bridge.log' 2>&1 &"
   run_adb shell "
 read -r end < '$device/private/run/deadline'
 read -r checksum bytes < '$device/private/run/log-prefix'
@@ -278,19 +354,23 @@ exit 1"
   exit 0
 fi
 # Fixed destinations only. Refuse links before chmod, redirects, push or rename.
+stop_bridge
 run_adb shell "for p in '$device' '$device/bin' '$device/private' '$device/home' '$device/home/prompts'; do
   test ! -L \"\$p\" && { test ! -e \"\$p\" || test -d \"\$p\"; } || exit 1
 done
 umask 077
 mkdir -p '$device/bin' '$device/private' '$device/home/prompts' &&
-chmod 755 '$device' '$device/bin' &&
-chmod 700 '$device/private' '$device/home' '$device/home/prompts'"
+chown 0:0 '$device' '$device/bin' &&
+chmod 755 '$device' '$device/bin'"
 safe_paths=true
+migrate_state
 
 # Each copy is staged privately; failed transfers never replace an existing file.
 # The destination leaf is fixed or a restricted prompt basename, never shell input.
 copy_file() {
   local_file=$1 destination=$2 mode=$3 replace=$4
+  owner=$ECHO_RUN_OWNER
+  case $destination in "$device/bin/"*) owner=0:0 ;; esac
   run_adb shell "test ! -L '$destination' && { test ! -e '$destination' || test -f '$destination'; }"
   if [ "$replace" = false ]; then
     run_adb shell "if test -f '$destination'; then printf retained; else printf missing; fi"
@@ -301,7 +381,7 @@ copy_file() {
   fi
   run_adb shell "test ! -e '$device/private/.install-stage' && test ! -L '$device/private/.install-stage'"
   run_adb push "$local_file" "$device/private/.install-stage"
-  run_adb shell "chmod '$mode' '$device/private/.install-stage' && mv -f '$device/private/.install-stage' '$destination'"
+  run_adb shell "chown '$owner' '$device/private/.install-stage' && chmod '$mode' '$device/private/.install-stage' && mv -f '$device/private/.install-stage' '$destination'"
 }
 copy_file "$bridge" "$device/bin/echo-bridge" 755 true
 copy_file "$codex" "$device/bin/codex-app-server" 755 true
@@ -315,31 +395,6 @@ for prompt in "$checkout"/examples/prompts/*.md; do
   copy_file "$prompt" "$device/home/prompts/$name" 600 false
   prompts=true
 done
-run_adb shell "test ! -L '$device/private/launch.sh'
-test ! -L '$device/private/bridge.log'
-umask 077
-cat > '$device/private/.install-stage' <<'LAUNCH'
-#!/system/bin/sh
-umask 077
-state=/data/local/echo-bridge/private/run
-# Atomic admission: cancellation may have consumed this gate first.
-rmdir \"\$state/control\" 2>/dev/null || exit 1
-if test -f \"\$state/stop\"; then touch \"\$state/finished\"; exit 1; fi
-# Only this session holds the write end. The bridge must not inherit it.
-exec 3<> \"\$state/stdin\"
-/data/local/hassmic/runas root 3990,inet /data/local/echo-bridge/bin/echo-bridge --config /data/local/echo-bridge/private/bridge.toml --trace /data/local/echo-bridge/private/bridge.trace < \"\$state/stdin\" 3>&- &
-child=\$!
-(while test ! -f \"\$state/stop\"; do sleep 1; done; exec 3>&-) &
-holder=\$!
-exec 3>&-
-wait \"\$child\"
-# This child is still ours and unreaped, so its PID cannot have been reused.
-kill \"\$holder\" 2>/dev/null || :
-wait \"\$holder\" 2>/dev/null || :
-touch \"\$state/finished\"
-LAUNCH
-chmod 700 '$device/private/.install-stage' &&
-mv -f '$device/private/.install-stage' '$device/private/launch.sh' &&
-touch '$device/private/bridge.log' && chmod 600 '$device/private/bridge.log'"
+write_launcher
 [ "$prompts" = true ] || printf '%s\n' 'echo-install: prompt defaults absent; skipped'
 printf '%s\n' 'echo-install: installed'

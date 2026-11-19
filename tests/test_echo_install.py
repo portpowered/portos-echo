@@ -39,6 +39,7 @@ def fake_adb():
     if args[0] == "push":
         destination = Path(args[2].replace("/data/local", str(base / "remote")))
         shutil.copyfile(args[1], destination)
+        set_owner(base, destination, "0:0")
         print(SENTINEL)
         return 0
     if args[0] == "shell" and len(args) == 2:
@@ -56,7 +57,7 @@ def fake_adb():
         result = subprocess.run(["/bin/sh", "-c", command],
                                 env=dict(os.environ, PATH=str(base / "remote-tools") + ":/usr/bin:/bin"),
                                 capture_output=True, timeout=5)
-        if "setsid /bin/sh" in command and result.returncode == 0:
+        if "setsid " in command and result.returncode == 0:
             # Readiness comes from the real child, not a scheduling sleep.
             fd = os.open(base / "ready", os.O_RDWR | os.O_NONBLOCK)
             with selectors.DefaultSelector() as selector:
@@ -84,6 +85,11 @@ class Sandbox:
         ps.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
                       + shlex.quote(str(Path(__file__).resolve())) + ' --tool ps "$@"\n')
         ps.chmod(0o755)
+        for name in ("stat", "chown", "chmod"):
+            wrapper = self.root / "remote-tools" / name
+            wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                               + shlex.quote(str(Path(__file__).resolve())) + " --tool " + name + ' "$@"\n')
+            wrapper.chmod(0o755)
         self.tools = self.root / "tools"
         self.tools.mkdir()
         # A closed caller PATH cannot resolve any real adb, even on a developer host.
@@ -99,7 +105,8 @@ class Sandbox:
         adb.chmod(0o755)
         runas = self.root / "remote/hassmic/runas"
         runas.parent.mkdir(parents=True)
-        runas.write_text("synthetic runas")
+        runas.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                         + shlex.quote(str(Path(__file__).resolve())) + ' --tool runas "$@"\n')
         runas.chmod(0o755)
         (self.root / "devices").write_text("fixture\tdevice\n")
         self.files = {}
@@ -277,19 +284,64 @@ def failure_cases():
 
 
 
+def owners(base):
+    path = base / "owners.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def owner(base, path):
+    return owners(base).get(str(Path(path).stat().st_ino), "0:0")
+
+
+def set_owner(base, path, value):
+    values = owners(base)
+    values[str(Path(path).stat().st_ino)] = value
+    (base / "owners.json").write_text(json.dumps(values))
+
+
+def metadata_tool(base, name, args):
+    if name == "runas":
+        require(args[:2] == ["nobody", "3990,inet"], "wrong launch identity")
+        # The private script and its inputs must be accessible before execution.
+        for path in (base / "remote/echo-bridge/private").rglob("*"):
+            require(owner(base, path).split(":")[0] == "9999", "nobody cannot access root-owned state")
+        (base / "runas-user").write_text("nobody")
+        os.execvpe(args[2], args[2:], dict(os.environ, FAKE_UID="9999"))
+    path = Path(args[-1])
+    if name in ("stat", "chmod") and os.environ.get("FAKE_UID") == "9999":
+        require(owner(base, path).split(":")[0] == "9999", "nobody access denied")
+    if name == "chown":
+        require(os.environ.get("FAKE_UID", "0") == "0", "nonroot chown")
+        value = args[-2].strip("'")
+        for target in [path, *path.rglob("*")] if "-R" in args else [path]:
+            set_owner(base, target, value)
+        with (base / "ownership-ledger").open("a") as output:
+            output.write(str(path) + "=" + value + "\n")
+        return 0
+    if name == "stat" and args[1] in ("%u", "%u:%g:%a"):
+        value = owner(base, path)
+        print(value.split(":")[0] if args[1] == "%u" else value + ":" + format(path.stat().st_mode & 0o777, "o"))
+        return 0
+    return subprocess.run(["/usr/bin/" + name, *args], check=False).returncode
+
+
 def remote_tool():
     base = Path(os.environ["FAKE_ROOT"])
     name = sys.argv[2]
+    if name in ("runas", "chown", "stat", "chmod"):
+        return metadata_tool(base, name, sys.argv[3:])
     if name == "ps":
-        print("PID NAME\n12 sh echo-bridge launcher")
+        user_mode = "PID,USER,NAME" in sys.argv
+        user = (base / "process-user").read_text() if (base / "process-user").exists() else "nobody"
+        print("PID USER NAME" if user_mode else "PID NAME\n12 sh echo-bridge launcher")
         path = base / "child-pid"
         if (base / "running").exists():
-            print("13 echo-bridge")
+            print("13 " + (user + " " if user_mode else "") + "echo-bridge")
         elif path.exists() and (base / "mode").read_text() != "hidden":
             try:
                 state = Path("/proc") / path.read_text() / "stat"
                 if state.read_text().split(") ")[1].split()[0] != "Z":
-                    print(path.read_text() + " echo-bridge")
+                    print(path.read_text() + " " + (user + " " if user_mode else "") + "echo-bridge")
             except FileNotFoundError:
                 pass
     elif name == "date":
@@ -306,8 +358,6 @@ def remote_tool():
 
 def prepare_lifecycle(box, mode="ready"):
     os.mkfifo(box.root / "ready")
-    runas = box.root / "remote/hassmic/runas"
-    runas.write_text('#!/bin/sh\n[ "$1" = root ] && [ "$2" = 3990,inet ] || exit 1\nshift 2\nexec "$@"\n')
     (box.root / "remote/hassmic/boot.log").write_text("old client connected\n")
     fixture = """import os, sys, signal, json
 from pathlib import Path
@@ -347,10 +397,11 @@ def main():
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))
-    from test_echo_install_lifecycle import lifecycle_cases
+    from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases
     lifecycle_cases()
     from test_echo_install_status import status_cases
     status_cases()
+    nonroot_cases()
     print("echo-install tests: install=PASS lifecycle=PASS status=PASS retention=PASS privacy=PASS")
 
 
