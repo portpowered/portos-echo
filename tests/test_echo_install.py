@@ -57,6 +57,13 @@ def fake_adb():
         result = subprocess.run(["/bin/sh", "-c", command],
                                 env=dict(os.environ, PATH=str(base / "remote-tools") + ":/usr/bin:/bin"),
                                 capture_output=True, timeout=5)
+        if result.returncode:
+            # Fixed labels only: never expose remote commands or private stderr.
+            stage = next((label for text, label in (
+                ("find ", "migration"), ("mv -f", "publication"),
+                ("mkdir", "directory"), ("ps -A", "process"),
+                ("chmod", "mode")) if text in command), "other")
+            (base / "failed-stage").write_text(stage)
         if "setsid " in command and result.returncode == 0:
             # Readiness comes from the real child, not a scheduling sleep.
             fd = os.open(base / "ready", os.O_RDWR | os.O_NONBLOCK)
@@ -140,7 +147,9 @@ class Sandbox:
     def run(self, args, code=0):
         result = subprocess.run(["/bin/sh", str(self.script), *args], cwd=self.root,
                                 env=self.env, capture_output=True, text=True, timeout=15)
-        require(result.returncode == code, "CLI exit differs: " + result.stderr)
+        stage = self.root / "failed-stage"
+        require(result.returncode == code, "CLI exit differs (stage="
+                + (stage.read_text() if stage.exists() else "unavailable") + "): " + result.stderr)
         require(SENTINEL not in result.stdout + result.stderr, "private bytes leaked")
         require(not (self.root / "escaped").exists(), "local input executed")
         if code:
@@ -258,17 +267,15 @@ def retention_cases():
 
 
 def failure_cases():
-    for fault in ("push", "chmod '600'", "mv -f", "ps -A"):
+    from test_echo_install_lifecycle import recovery_case
+    for label, fault in (("push", "push"), ("chmod", "chmod '600'"),
+                         ("rename", "mv -f"), ("observation", "ps -A")):
         with Sandbox() as box:
-            box.install()
-            original = (box.device / "private/bridge.toml").read_bytes()
-            box.files["config"].write_text("new config")
-            (box.root / "fault").write_text(fault)
-            box.install(force=True, code=1)
-            require((box.device / "private/bridge.toml").read_bytes() == original, "failed stage lost config")
-            require(not (box.device / "private/.install-stage").exists(), "stage leaked")
-            require(not (box.root / "remote/echo-bridge.lock").exists(), "failed operation leaked lock")
-            box.install(force=True)
+            try:
+                recovery_case(box, fault)
+            except AssertionError as error:
+                raise AssertionError("F08 recovery case=" + label + ": " + str(error)) from error
+        print("F08 recovery=" + label + ": PASS", flush=True)
     with Sandbox() as box:
         outside = box.root / "outside"
         outside.mkdir()
