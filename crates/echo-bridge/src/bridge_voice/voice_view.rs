@@ -203,11 +203,23 @@ impl<'a> View<'a> {
 
     fn reply_completed(&mut self, stats: &Stats) -> Result<(), Error> {
         let id = self.run.as_deref().ok_or(Error::Unavailable)?;
+        let quality = &stats.quality;
         self.trace.record(
             "reply.played",
             Some(id),
             json!({"outcome":"played",
-                "frames":stats.reply_sent, "received_frames":stats.reply_received, "dropped_frames":stats.reply_dropped
+                "frames":stats.reply_sent, "received_frames":stats.reply_received, "dropped_frames":stats.reply_dropped}),
+        )?;
+        // Measurements, not journey steps: they vary with timing run to run.
+        self.trace.record(
+            "reply.quality",
+            Some(id),
+            json!({"arrival_gap_max_ms":quality.arrival_gap_max_ms, "late_arrivals":quality.late_arrivals,
+                "underruns":quality.underruns, "underrun_max_ms":quality.underrun_max_ms,
+                "depth_min_ms":quality.depth_min_ms, "depth_max_ms":quality.depth_max_ms,
+                "discarded":{"after_reply":quality.discarded_after_reply, "idle":quality.discarded_idle,
+                    "cut":quality.discarded_cut, "audible":quality.discarded_audible},
+                "rtp_lost":quality.rtp_lost
             }),
         )
     }

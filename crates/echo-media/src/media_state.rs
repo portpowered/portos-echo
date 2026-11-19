@@ -14,6 +14,7 @@ pub(crate) struct Shared {
     pub(crate) resets: Queue<tokio::sync::oneshot::Sender<Result<(), Error>>>,
     readiness: Mutex<(bool, bool)>,
     setup: Mutex<(Option<SetupObserver>, u8)>,
+    pub(crate) lost: std::sync::atomic::AtomicU64,
     #[cfg(test)]
     pub(crate) sent: watch::Sender<(u32, u32)>,
     #[cfg(test)]
@@ -31,6 +32,7 @@ impl Shared {
             resets: Queue::new(1),
             readiness: Mutex::new((false, false)),
             setup: Mutex::new((None, 0)),
+            lost: std::sync::atomic::AtomicU64::new(0),
             #[cfg(test)]
             sent: watch::channel((0, 0)).0,
             #[cfg(test)]
@@ -155,6 +157,7 @@ impl Shared {
                 packet = self.ingress.pop() => {
                     let Some(packet) = packet else { break };
                     let expansion = decoder.decode(&packet);
+                    self.lost.store(decoder.lost, std::sync::atomic::Ordering::Relaxed);
                     #[cfg(test)]
                     let emitted = expansion.as_ref().is_ok_and(Option::is_some);
                     match expansion {

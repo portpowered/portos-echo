@@ -150,16 +150,16 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
     // Fully drained and audio-stop sent, but no played receipt: still pending.
     pending(work.as_mut()).await;
     observer.finish(Ok(()));
+    let stats = work.await.unwrap();
     assert_eq!(
-        work.await.unwrap(),
+        stats,
         Stats {
             received_chunks: 1,
-            dropped_chunks: 0,
             microphone_chunks: 1,
             microphone_frames: 2,
-            microphone_tail: 0,
             reply_received: 32,
             reply_sent: 32,
+            quality: stats.quality,
             ..Stats::default()
         }
     );

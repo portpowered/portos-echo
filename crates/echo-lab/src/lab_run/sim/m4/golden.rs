@@ -70,7 +70,8 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
     trace
         .records
         .iter()
-        .filter(|record| !incidental_probe(record))
+        // Reply quality is a timing measurement with its own budgets, not a step.
+        .filter(|record| !incidental_probe(record) && record["event"] != "reply.quality")
         .map(|record| {
             let mut record = record.clone();
             names.nested(&mut record)?;

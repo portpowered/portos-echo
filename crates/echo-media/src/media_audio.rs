@@ -83,6 +83,10 @@ pub(crate) struct Decoder {
     codec: opus::Decoder,
     sequence: Option<u16>,
     stream: Option<u32>,
+    /// Sequence numbers skipped by accepted packets since creation.
+    pub(crate) lost: u64,
+    /// A reset retired queued ingress: the next gap is the boundary, not loss.
+    resync: bool,
 }
 impl Decoder {
     pub(crate) fn new() -> Result<Self, Error> {
@@ -91,12 +95,15 @@ impl Decoder {
             codec: opus::Decoder::new(48_000, opus::Channels::Mono).map_err(|_| Error::Audio)?,
             sequence: None,
             stream: None,
+            lost: 0,
+            resync: false,
         })
     }
     pub(crate) fn reset(&mut self) -> Result<(), Error> {
         // Sequence/SSRC ownership survives replacement; a replay is still stale.
         self.converter = Converter::new(960, 1.0 / 3.0)?;
         self.codec = opus::Decoder::new(48_000, opus::Channels::Mono).map_err(|_| Error::Audio)?;
+        self.resync = true;
         Ok(())
     }
     pub(crate) fn decode(&mut self, packet: &rtc::rtp::Packet) -> Result<Option<PcmFrame>, Error> {
@@ -120,6 +127,11 @@ impl Decoder {
             .map_err(|_| Error::Audio)?;
         if count != 960 {
             return Err(Error::Audio);
+        }
+        if let Some(last) = self.sequence
+            && !std::mem::take(&mut self.resync)
+        {
+            self.lost += u64::from(sequence.wrapping_sub(last) - 1);
         }
         self.sequence = Some(sequence);
         self.stream = Some(packet.header.ssrc);

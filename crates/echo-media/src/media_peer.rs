@@ -278,6 +278,7 @@ impl MediaPeer for Peer {
         DropCounts {
             send: self.shared.send.drops(),
             recv: self.shared.recv.drops() + self.shared.ingress.drops(),
+            lost: self.shared.lost.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
     async fn close(&mut self) -> Result<(), Error> {

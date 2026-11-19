@@ -135,22 +135,28 @@ async fn reply_paces_ten_frames_then_twenty_ms_and_restarts_the_lead_after_the_d
 }
 
 #[tokio::test(start_paused = true)]
-async fn real_time_reply_goes_out_on_arrival_without_a_prebuffer_delay() {
+async fn real_time_reply_primes_the_echo_once_then_goes_out_on_arrival() {
     let mut reply = ReplyAudio::new(200).unwrap();
     let start = Instant::now();
     let mut sent = Vec::new();
     for _ in 0..60 {
         reply.push(&[0; 320]).unwrap();
+        // The run loop drops a waiting send whenever the next frame arrives.
         while reply.has_frames() {
-            reply.next_frame().await.unwrap();
+            let Ok(frame) = tokio::time::timeout(Duration::ZERO, reply.next_frame()).await else {
+                break;
+            };
+            frame.unwrap();
             sent.push(Instant::now() - start);
         }
         tokio::time::advance(Duration::from_millis(20)).await;
     }
     // The converter holds one frame of filter delay; 59 left for playback.
     assert_eq!(sent.len(), 59);
-    // Time to first audio is not delayed by the lead: each frame leaves as it arrives.
-    for (index, at) in sent.iter().enumerate() {
+    // The Echo starts with 100 ms of audio at once, not with a single frame.
+    assert_eq!(sent[..5], [Duration::from_millis(100); 5]);
+    // After the prime each frame leaves as it arrives: the delay never grows.
+    for (index, at) in sent.iter().enumerate().skip(5) {
         assert_eq!(*at, Duration::from_millis(20 * (index as u64 + 1)));
     }
 }

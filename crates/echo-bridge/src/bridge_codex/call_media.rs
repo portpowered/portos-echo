@@ -395,4 +395,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> crate::bridg
     fn retire_audio(&mut self) {
         Self::retire_audio(self);
     }
+    fn rtp_lost(&self) -> u64 {
+        self.dropped_frames().lost
+    }
 }

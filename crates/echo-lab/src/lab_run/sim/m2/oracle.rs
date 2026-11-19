@@ -108,7 +108,8 @@ pub fn check(measured: &Value) -> Result<(), String> {
 fn codex_pcm(records: &[Value]) -> Result<(), String> {
     let microphone: Vec<_> = records.iter().filter(|r| r["event"] == "mic.completed").collect();
     let reply: Vec<_> = records.iter().filter(|r| r["event"] == "reply.played").collect();
-    let ([microphone], [reply]) = (microphone.as_slice(), reply.as_slice()) else {
+    let quality: Vec<_> = records.iter().filter(|r| r["event"] == "reply.quality").collect();
+    let ([microphone], [reply], [quality]) = (microphone.as_slice(), reply.as_slice(), quality.as_slice()) else {
         return Err("m2: expected one measured microphone and played reply".into());
     };
     if microphone["count"].as_u64().is_none_or(|count| count < 1)
@@ -118,6 +119,10 @@ fn codex_pcm(records: &[Value]) -> Result<(), String> {
         || reply["frames"] != 10
         || reply["frames"] != reply["received_frames"]
         || reply["dropped_frames"] != 0
+        || quality["rtp_lost"] != 0
+        || quality["discarded"]["audible"] != 0
+        || quality["underruns"].as_u64().is_none()
+        || quality["depth_min_ms"].as_u64().is_none()
     {
         return Err("m2: PCM/played accounting failed".into());
     }

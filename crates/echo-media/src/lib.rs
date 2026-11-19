@@ -81,6 +81,8 @@ pub enum Error {
 pub struct DropCounts {
     pub send: u64,
     pub recv: u64,
+    /// RTP packets missing from the receive sequence; never evictions.
+    pub lost: u64,
 }
 
 /// Caller boundary. Configuration selects assigned IP addresses, never remote peers.

@@ -1,5 +1,6 @@
 use super::{Error, Stats, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
+use crate::bridge_runtime::bridge_pacing::{Discard, ReplyMeter};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
@@ -19,6 +20,7 @@ pub(super) struct Source {
     lead_ms: u16,
     pub delegation: Delegation,
     pub mouth: Mouth,
+    pub meter: ReplyMeter,
     pub stats: Stats,
     pub session: super::session_tools::Grants,
     /// Speech the bounded media sender has not taken yet, oldest first.
@@ -77,6 +79,7 @@ impl Source {
             delegation: Delegation::default(),
             mouth: Mouth::default(),
             thinking: false,
+            meter: ReplyMeter::default(),
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),
             uplink: VecDeque::new(),
@@ -170,12 +173,21 @@ impl Source {
     /// Continuous RTP received after a completed reply belongs to the retired
     /// converter. Discard both quiet and audible media at that boundary.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
-        if self.controller.accepts_audio() && !self.reply.finished() && !self.delegation.abandoned {
+        self.stats.reply_received += 1;
+        let reason = if self.controller.cutting() || self.controller.retired() {
+            Discard::Cut
+        } else if !self.controller.accepts_audio() {
+            Discard::Idle
+        } else if self.reply.finished() || self.delegation.abandoned {
+            Discard::AfterReply
+        } else {
             // PCM has no utterance identity. Only ordered assistant control
             // opens Speaking; the initial user transcript can lag audible RTP.
-            self.reply.push(frame)?;
-        }
-        self.stats.reply_received += 1;
+            self.meter.arrived(Instant::now());
+            return self.reply.push(frame);
+        };
+        let audible = frame.iter().any(|sample| sample.unsigned_abs() > QUIET);
+        self.meter.discarded(reason, audible);
         Ok(())
     }
 }

@@ -98,6 +98,7 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
         let old_frames = if done_first && signal == 2 { 3 } else { 12 };
         send(&tx, audible(old_frames)).await;
         pending(work.as_mut()).await;
+        tick(work.as_mut(), usize::from(old_frames == 3) * 5).await; // under the prime: held 100 ms
         assert_eq!(frames(&observer).len(), (old_frames - 1).min(10));
         if done_first {
             send(&tx, [same_text_done()]).await;
@@ -135,8 +136,7 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
         let stats = work.await.unwrap();
         assert_eq!(stats.reply_received, (old_frames + 6) as u64);
         assert_eq!(stats.reply_sent, (old_frames.min(10) + 3) as u64);
-        assert_eq!(stats.microphone_frames, 2);
-        assert_eq!(command_count(&observer, false), 1);
+        assert_eq!((stats.microphone_frames, command_count(&observer, false)), (2, 1));
     }
 }
 

@@ -628,7 +628,9 @@ the reply's “PCM24” here means 24 kHz, still signed 16-bit samples.
 
 The reply pacer uses a monotonic audio clock and `audio.reply_lead_ms` to limit how far sent PCM leads
 playout. Draining local queues or finishing a transcript does not prove that the speaker finished: the
-bridge still awaits `played`.
+bridge still awaits `played`. A dry device first gets 100 ms of audio at once (at most the lead), so
+arrival jitter from the call does not underrun the player; each reply's `reply.quality` trace record carries
+the arrival gaps, modelled device depth, underruns, discards and RTP loss.
 
 #### Why — Audio formats and resampling
 
