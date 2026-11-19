@@ -15,13 +15,15 @@ pub(super) enum Journey {
     Turns,
     Idle,
     Extend,
+    LongWait,
     End,
 }
 
-const JOURNEYS: [(&str, Journey); 4] = [
+const JOURNEYS: [(&str, Journey); 5] = [
     ("session-two-turns", Journey::Turns),
     ("session-idle-timeout", Journey::Idle),
     ("session-extend-capped", Journey::Extend),
+    ("session-extend-reconnected", Journey::LongWait),
     ("session-end-after-reply", Journey::End),
 ];
 
@@ -49,7 +51,7 @@ impl Journey {
         match self {
             Self::Turns => json!([[{"say":"It is noon."}], [{"say":"It is Tuesday."}]]),
             Self::Idle => json!([[{"say":"It is noon."}]]),
-            Self::Extend => json!([[
+            Self::Extend | Self::LongWait => json!([[
                 {"call":"extend_session","arguments":{"seconds":100}},
                 {"call":"extend_session","arguments":{"seconds":100}},
                 {"say":"I will keep listening."}
@@ -60,7 +62,11 @@ impl Journey {
 
     /// The configured run cap, when the journey changes the example default.
     fn max(self) -> Option<u64> {
-        (self == Self::Extend).then_some(12)
+        match self {
+            Self::Extend => Some(12),
+            Self::LongWait => Some(60),
+            _ => None,
+        }
     }
 
     fn budgets(self) -> Value {
@@ -150,7 +156,7 @@ impl Driver for Persistent<'_> {
                         .start(
                             (self.options.python.as_str(), bridge),
                             &artifacts.root.join("session.private"),
-                            self.journey.max(),
+                            self.journey,
                             &self.journey.script(),
                         )
                         .await?;

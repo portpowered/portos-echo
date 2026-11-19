@@ -6,6 +6,7 @@ use std::{collections::VecDeque, time::Duration};
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Session {
+    registrations: Vec<Vec<Value>>,
     opened: Vec<Duration>,
     ended: Vec<Duration>,
     capture_after_played: usize,
@@ -29,6 +30,14 @@ struct Playback {
 }
 
 impl Session {
+    pub fn generation(&mut self) {
+        self.registrations.push(vec![]);
+    }
+
+    pub fn registrations_ready(&self) -> bool {
+        self.registrations.len() == 2 && self.registrations[1].len() == 1
+    }
+
     /// Completed reply streams the device has reported Played.
     fn played(&self) -> usize {
         self.streams
@@ -69,6 +78,13 @@ impl Session {
 
     pub fn playback(&mut self, event: &Event, now: Duration, earcon: bool) {
         match event.header.r#type.as_str() {
+            "run-satellite" => {
+                if let (Some(generation), Ok(echo_contracts::wyoming::WyomingEvent::RunSatellite(data))) =
+                    (self.registrations.last_mut(), event.typed())
+                {
+                    generation.push(data);
+                }
+            }
             "audio-start" => {
                 self.streams.push(Playback {
                     started: Some(now),
@@ -122,7 +138,7 @@ impl Session {
                 })
             })
             .collect::<Vec<_>>();
-        json!({"run_opened_us":times(&self.opened),"explicit_end_us":times(&self.ended),
+        json!({"registrations":self.registrations,"run_opened_us":times(&self.opened),"explicit_end_us":times(&self.ended),
             "capture_chunks_after_reply_played":self.capture_after_played,
             "unmatched_played":self.unmatched_played,"streams":streams})
     }

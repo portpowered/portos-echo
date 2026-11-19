@@ -21,7 +21,8 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
     let detail = match journey {
         Journey::Turns => turns(evidence, &summary)?,
         Journey::Idle => idle(&summary)?,
-        Journey::Extend => extend(evidence, &summary)?,
+        Journey::Extend => extend(evidence, &summary, 12_000)?,
+        Journey::LongWait => long_wait(evidence, &summary)?,
         Journey::End => end(evidence, &summary)?,
     };
     Ok(json!({"timeline":summary,"journey":detail}))
@@ -174,8 +175,8 @@ fn receipts(records: &[Value], tool: &str) -> Vec<Value> {
         .collect()
 }
 
-fn extend(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
-    let expected = json!({"deadline_ms":12000,"capped":true});
+fn extend(evidence: &Evidence, summary: &Value, maximum: u64) -> Result<Value, String> {
+    let expected = json!({"deadline_ms":maximum,"capped":true});
     let results = outputs(evidence, 2)?;
     if results.iter().any(|result| *result != expected) {
         return Err(format!("session: extend results {results:?}"));
@@ -184,7 +185,7 @@ fn extend(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
     if receipts.len() != 2
         || receipts
             .iter()
-            .any(|r| r["outcome"] != "applied" || r["deadline_ms"] != 12000 || r["capped"] != true)
+            .any(|r| r["outcome"] != "applied" || r["deadline_ms"] != maximum || r["capped"] != true)
     {
         return Err(format!("session: extend receipts {receipts:?}"));
     }
@@ -195,7 +196,7 @@ fn extend(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
         .as_u64()
         .ok_or("session: missing receipt time")?;
     let end = ended(summary)?;
-    let admitted = end.checked_sub(12000).filter(|at| (opened..=granted).contains(at));
+    let admitted = end.checked_sub(maximum).filter(|at| (opened..=granted).contains(at));
     let admitted = admitted.ok_or_else(|| format!("session: cap end {end} ms outside run {opened}..{granted} ms"))?;
     let played = last_played(summary)?;
     if end <= played + LISTEN_MS {
@@ -205,6 +206,30 @@ fn extend(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
         json!({"results":results,"receipts":receipts,"controller_admitted_ms":admitted,
         "default_deadline_ms":played + LISTEN_MS}),
     )
+}
+
+fn long_wait(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
+    let mut detail = extend(evidence, summary, 60_000)?;
+    let checkpoint = evidence.wire.get(1).ok_or("session: missing long-wait checkpoint")?;
+    let epoch = checkpoint["checkpoint_epoch_ms"]
+        .as_u64()
+        .ok_or("session: missing checkpoint time")?;
+    let played = last_played(summary)?;
+    if epoch <= played + 30_000 || epoch >= ended(summary)? || checkpoint["explicit_end_us"] != json!([]) {
+        return Err(format!(
+            "session: premature end or invalid long-wait checkpoint {checkpoint}"
+        ));
+    }
+    // Both native-host connections must receive exactly one configured
+    // registration. The 60 s run cap plus 5 s playback allowance is 65 s.
+    let expected = json!([[{"hassmic_failsafe_seconds":65}], [{"hassmic_failsafe_seconds":65}]]);
+    let wire = evidence.wire.last().ok_or("session: missing final wire")?;
+    if wire["registrations"] != expected {
+        return Err(format!("session: reconnect watchdog/registration mismatch {wire}"));
+    }
+    detail["open_checkpoint_ms"] = json!(epoch);
+    detail["registrations"] = expected;
+    Ok(detail)
 }
 
 fn end(evidence: &Evidence, summary: &Value) -> Result<Value, String> {

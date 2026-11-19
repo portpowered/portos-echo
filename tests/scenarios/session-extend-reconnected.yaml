@@ -1,0 +1,18 @@
+id: session-extend-reconnected
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - expect_trace:
+      - run.started
+      - "session.tool_receipt {tool: extend_session, outcome: applied, deadline_ms: 60000, capped: true, count: 2}"
+      - "reply.played {outcome: played}"
+      - wyoming.run_ended
+# Reconnect before wake, observing one configured 65 s watchdog registration
+# per connection. After Played, witness the run still open beyond 30 s,
+# then require exactly one explicit end at the controller's 60 s grant cap.
+budgets:
+  session_listen_seconds: 3
+  session_max_seconds: 60
+negative: []

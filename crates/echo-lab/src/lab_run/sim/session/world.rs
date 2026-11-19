@@ -41,7 +41,7 @@ impl World {
         &mut self,
         options: (&str, &Path),
         root: &Path,
-        max: Option<u64>,
+        journey: super::Journey,
         script: &Value,
     ) -> Result<(), String> {
         let (python, bridge) = options;
@@ -59,12 +59,17 @@ impl World {
             process::connect,
         )
         .await?;
-        let relay = Relay::bind_fixture(address, crate::lab_run::sim::m3::fixture()).await?;
+        let relay = Relay::bind_session(
+            address,
+            crate::lab_run::sim::m3::fixture(),
+            journey == super::Journey::LongWait,
+        )
+        .await?;
         self.endpoints.push(relay.address);
         let provider = Provider::start(python, script).await?;
         let mut command = tokio::process::Command::new(bridge);
         crate::lab_run::sim::m3::configure(&mut command, root, relay.address.port(), &provider.origin)?;
-        if let Some(max) = max {
+        if let Some(max) = journey.max() {
             let path = root.join("configured.private/bridge.toml");
             let text = std::fs::read_to_string(&path).map_err(|_| "session: missing configuration")?;
             if !text.contains("session_max_seconds = 600 ") {
@@ -81,6 +86,10 @@ impl World {
             .ok_or("session: missing bridge")?
             .expect("bridge.ready")
             .await?;
+        if journey == super::Journey::LongWait {
+            self.control(json!({"action":"registered"})).await?;
+            self.reconnect().await?;
+        }
         self.control(json!({"action":"registered"})).await.map(|_| ())
     }
 
@@ -88,6 +97,18 @@ impl World {
         let host = self.host.as_mut().ok_or("session: missing host")?;
         host.send(&value).await?;
         host.expect("host.ack").await
+    }
+
+    async fn reconnect(&mut self) -> Result<(), String> {
+        self.relay.as_mut().ok_or("session: missing relay")?.reconnect()?;
+        let started = self.epoch();
+        while !self.relay()?.reconnected()? {
+            self.step(20).await?;
+            if self.epoch() > started + STALL_MS {
+                return Err(self.stalled("reconnect registration"));
+            }
+        }
+        Ok(())
     }
 
     /// Speak one utterance and settle its delegated reply. The first wakes the
@@ -174,7 +195,12 @@ impl World {
         let started = self.epoch();
         while !self.completed {
             self.step(20).await?;
-            if self.epoch() > started + STALL_MS {
+            if self.epoch() >= started + 31_000 && self.wire.len() == 1 {
+                let mut checkpoint = self.relay()?.timing().session_observation();
+                checkpoint["checkpoint_epoch_ms"] = json!(self.epoch());
+                self.wire.push(checkpoint);
+            }
+            if self.epoch() > started + 65_000 {
                 self.read_trace()?;
                 return Err(self.stalled("run end"));
             }
