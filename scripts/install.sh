@@ -103,7 +103,38 @@ download() {
     curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
       --connect-timeout 20 --max-time 600 --output "$2" "$1" >/dev/null 2>&1 || fail 'download failed'
   else
-    wget --https-only --timeout=60 --tries=1 --output-document="$2" "$1" >/dev/null 2>&1 || fail 'download failed'
+    wget_download "$1" "$2"
   fi
+}
+wget_download() {
+  url=$1
+  redirects=0
+  while :; do
+    case $url in https://?*) ;; *) fail 'download failed' ;; esac
+    # --https-only covers recursive links, not redirects. Never let wget follow.
+    if wget --https-only --max-redirect=0 --server-response --timeout=60 --tries=1 \
+      --output-document="$2" "$url" >/dev/null 2>"$temp/headers"; then
+      return
+    fi
+    location=$(awk '
+      $1 ~ /^HTTP\// { status=$2; location="" }
+      tolower($1) == "location:" { sub(/^[^:]*:[ \t]*/, ""); sub(/\r$/, ""); location=$0 }
+      END { if (status !~ /^(301|302|303|307|308)$/ || location == "" || location ~ /[[:space:]]/) exit 1; print location }
+      ' "$temp/headers") || fail 'download failed'
+    [ "$redirects" -lt 10 ] || fail 'download failed'
+    redirects=$((redirects + 1))
+    authority=${url#https://}
+    authority=${authority%%/*}
+    case $location in
+      https://*) url=$location ;;
+      //*) url=https:$location ;;
+      /*) url=https://$authority$location ;;
+      \?*) url=${url%%\?*}$location ;;
+      *)
+        case ${location%%/*} in *:*) fail 'download failed' ;; esac
+        url=${url%/*}/$location
+        ;;
+    esac
+  done
 }
 main "$@" </dev/null
