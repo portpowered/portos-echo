@@ -67,12 +67,12 @@ async fn exchange(
         .stdout
         .take()
         .ok_or(ERROR)?
-        .take(131073)
+        .take(131_073)
         .read_to_end(&mut bytes)
         .await
         .map_err(|_| ERROR)?;
     let output = Secret::new(bytes);
-    if output.expose().len() > 131072 || !child.wait().await.map_err(|_| ERROR)?.success() {
+    if output.expose().len() > 131_072 || !child.wait().await.map_err(|_| ERROR)?.success() {
         return Err(ERROR.into());
     }
     let value: Secret<Value> = Secret::new(serde_json::from_slice(output.expose()).map_err(|_| ERROR)?);

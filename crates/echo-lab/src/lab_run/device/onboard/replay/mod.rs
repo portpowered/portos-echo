@@ -141,6 +141,7 @@ async fn reject(python: &str, record: &Secret<Value>, pem: &[u8]) -> Result<(), 
 }
 
 fn proof(record: &Value, endpoint: &str) -> Result<Secret<String>, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let jwk = &record["private_key_jwk"];
     let private = Secret::new(B64.decode(jwk["d"].as_str().ok_or(ERROR)?).map_err(|_| ERROR)?);
     let key = Secret::new(SigningKey::from_slice(private.expose()).map_err(|_| ERROR)?);
@@ -155,7 +156,6 @@ fn proof(record: &Value, endpoint: &str) -> Result<Secret<String>, String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| ERROR)?;
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let header = json!({"typ":"dpop+jwt","alg":"ES256",
         "jwk":{"kty":"EC","crv":"P-256","x":jwk["x"],"y":jwk["y"]}});
