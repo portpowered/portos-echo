@@ -74,6 +74,16 @@ async fn relink(path: &Path) {
     let state = health(path).await;
     assert_eq!(state["relink_required"], true);
     assert!(state.get("startup_waiting_reason").is_none());
+    let rows = trace(path);
+    let address = rows.iter().find(|row| row["event"] == "screen.listening").unwrap()["address"]
+        .as_str()
+        .unwrap();
+    let mut screen = bridge_wire_screen::stream(address).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"error", "relink":true,
+            "message":"Run echo-bridge signin with your config, then restart the bridge."})
+    );
 }
 
 async fn exercise(mode: &str, inspect: impl AsyncFnOnce(&Fixture, &Path, &Observer)) -> Vec<Value> {

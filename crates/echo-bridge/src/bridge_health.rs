@@ -17,6 +17,7 @@ pub struct Links {
     pub live: &'static str,
     pub relink_required: bool,
     pub kill_switch: bool,
+    /// Present during pre-Ready dependency recovery; absent after Ready/auth rejection.
     pub startup_waiting_reason: Option<&'static str>,
 }
 
