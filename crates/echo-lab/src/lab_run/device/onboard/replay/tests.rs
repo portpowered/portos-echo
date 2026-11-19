@@ -210,6 +210,83 @@ async fn t3_on_device_mcp_replay_cancel_closes_tls_child_without_token_request()
     assert_eq!(report["discovery_credentials"], false);
 }
 
+async fn cancelled_report(mode: &str) -> Value {
+    let mut peer = Peer::start(mode).await;
+    let mut record = record();
+    record["issuer"] = peer.origin.clone().into();
+    let record = Secret::new(record);
+    let pem = peer.pem();
+    let mut pending = Box::pin(reject("python3", &record, &pem));
+    tokio::select! {
+        line = peer.lines.next_line() => assert_eq!(line.unwrap().as_deref(), Some("pending")),
+        result = &mut pending => assert_eq!(result, Err("unexpected completion".into())),
+    }
+    drop(pending);
+    peer.finish().await
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_replay_write_after_close_counts_as_closed() {
+    for (mode, error) in [
+        ("hang-write-after-close", "BrokenPipeError"),
+        ("hang-reset-after-close", "ConnectionResetError"),
+    ] {
+        let report = cancelled_report(mode).await;
+        assert_eq!(report["closed"], true);
+        assert_eq!(report["requests"], 1);
+        assert_eq!(report["discovery_credentials"], false);
+        assert_eq!(report["write_attempted"], true);
+        assert_eq!(report["write_error"], error);
+        assert_eq!(report.get("peer_error"), None);
+    }
+}
+
+#[tokio::test]
+async fn t3_on_device_mcp_replay_peer_keeps_unexpected_errors_and_data_visible() {
+    let report = cancelled_report("hang-unexpected-after-close").await;
+    assert_ne!(report["closed"], true);
+    assert_eq!(report["requests"], 1);
+    assert_eq!(report["discovery_credentials"], false);
+    assert_eq!(report["write_attempted"], true);
+    assert_eq!(report["write_error"], "ValueError");
+    assert_eq!(
+        report["peer_error"],
+        json!({"type":"ValueError","errno":null,"reason":null})
+    );
+
+    let mut peer = Peer::start("hang-write-after-close").await;
+    let client = tokio::process::Command::new("python3")
+        .args([
+            "-I",
+            "-c",
+            r#"
+import http.client, ssl, sys
+from urllib.parse import urlsplit
+origin = urlsplit(sys.argv[1])
+context = ssl.create_default_context(cafile=sys.argv[2])
+client = http.client.HTTPSConnection(origin.hostname, origin.port, context=context)
+client.putrequest("GET", "/.well-known/oauth-authorization-server")
+client.endheaders()
+client.sock.sendall(b"x")
+client.close()
+"#,
+        ])
+        .arg(&peer.origin)
+        .arg(peer.root.path().join("cert.pem"))
+        .kill_on_drop(true)
+        .status()
+        .await
+        .unwrap();
+    assert!(client.success());
+    assert_eq!(peer.lines.next_line().await.unwrap().as_deref(), Some("pending"));
+    let report = peer.finish().await;
+    assert_eq!(report["closed"], false);
+    assert_eq!(report["requests"], 1);
+    assert_eq!(report["discovery_credentials"], false);
+    assert_eq!(report.get("write_attempted"), None);
+    assert_eq!(report.get("peer_error"), None);
+}
+
 #[test]
 fn mcp_device_replay_capture_keeps_exact_initial_grant_without_a_writer() {
     use crate::lab_run::device::onboard::tests::{remote, world};

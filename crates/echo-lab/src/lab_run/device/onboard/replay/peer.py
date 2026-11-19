@@ -30,6 +30,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def cancelled(self):
+        print("pending", flush=True)
+        try:
+            try:
+                closed = self.rfile.read(1) == b""
+            except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
+                closed = True
+            if closed and mode != "hang":
+                self.write_after_close()
+            report["closed"] = closed
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
+            # Only cancellation I/O normalizes client-initiated closure.
+            report["closed"] = True
+
+    def write_after_close(self):
+        # Choose the writer's exception deterministically after real TLS closure,
+        # before recording success. Do not rely on the kernel choosing an errno.
+        error = {
+            "hang-write-after-close": BrokenPipeError,
+            "hang-reset-after-close": ConnectionResetError,
+            "hang-unexpected-after-close": ValueError,
+        }[mode]
+        report["write_attempted"] = True
+        report["write_error"] = error.__name__
+        raise error()
+
     def do_GET(self):
         report["requests"] += 1
         report["discovery_credentials"] = bool(
@@ -37,14 +63,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             or self.headers.get("Content-Length") not in (None, "0")
         )
         assert self.path == "/.well-known/oauth-authorization-server"
-        if mode == "hang":
-            print("pending", flush=True)
-            try:
-                report["closed"] = self.rfile.read(1) == b""
-            except (ConnectionResetError, ssl.SSLEOFError):
-                # Cancellation kills the owned helper. Its socket may close by
-                # reset instead of a TLS close_notify; both are observed closure.
-                report["closed"] = True
+        if mode == "hang" or mode.endswith("-after-close"):
+            self.cancelled()
             return
         self.send(302 if mode == "redirect" else 200, {
             "issuer": origin + "/wrong" if mode == "wrong-issuer" else origin,
