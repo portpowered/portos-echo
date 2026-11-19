@@ -1,24 +1,8 @@
 // V1 HTTP adapter. Settings never share the SSE integer decoder or action body.
-export type Values = {
-    voice: { session_listen_enabled: boolean; session_listen_seconds: number };
-    codex: { voice: string };
-    agent: { daily_request_cap: string; max_tool_calls: number };
-};
-export type Snapshot = {
-    version: 1;
-    settings: Values;
-    allowed_voices: string[];
-    prompts: { voice: string; runner: string };
-    link_status: "unconfigured" | "link_required" | "linked";
-    bridge_version: string;
-    restart_pending: boolean;
-    warnings: string[];
-};
-export type Patch = {
-    voice?: Partial<Values["voice"]>;
-    codex?: Values["codex"];
-    agent?: Partial<Values["agent"]>;
-};
+import type { SettingsPatchV1, SettingsSnapshotV1 } from "./model";
+export type Snapshot = SettingsSnapshotV1;
+export type Values = Snapshot["settings"];
+export type Patch = SettingsPatchV1["settings"];
 
 export function settingsUrl(actions: string, suffix = ""): string {
     const url = new URL(actions);
