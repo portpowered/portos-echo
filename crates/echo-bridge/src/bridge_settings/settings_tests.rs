@@ -9,6 +9,7 @@ fn setup() -> (tempfile::TempDir, SettingsStore) {
     let mut base = BridgeConfig::from_toml_str(BASE).unwrap();
     base.home = Some(echo_config::HomeConfig {
         dir: root.path().join("home"),
+        agent_tools: echo_config::AgentTools::default(),
     });
     fs::write(root.path().join("bridge.toml"), BASE).unwrap();
     let store = SettingsStore::open(base, SettingsOverlay::default()).unwrap();

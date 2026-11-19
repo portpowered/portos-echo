@@ -105,7 +105,10 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
         let fixture = Fixture::new("chatgpt");
         let mut base = config(&fixture);
         let home = fixture.directory.path().join("agent-home");
-        base.home = Some(echo_config::HomeConfig { dir: home.clone() });
+        base.home = Some(echo_config::HomeConfig {
+            dir: home.clone(),
+            agent_tools: echo_config::AgentTools::default(),
+        });
         std::fs::create_dir_all(home.join("prompts")).unwrap();
         std::fs::write(home.join("prompts/voice.md"), "admitted voice").unwrap();
         std::fs::write(home.join("prompts/runner.md"), "admitted runner").unwrap();

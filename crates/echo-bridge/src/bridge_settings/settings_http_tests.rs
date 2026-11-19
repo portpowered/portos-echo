@@ -26,6 +26,7 @@ impl Fixture {
         let mut base = BridgeConfig::from_toml_str(BASE).unwrap();
         base.home = Some(echo_config::HomeConfig {
             dir: root.path().join("home"),
+            agent_tools: echo_config::AgentTools::default(),
         });
         let mut owner = SettingsHost::open(
             base,
