@@ -255,12 +255,57 @@ async fn t3_settings_binary_failed_exec_remounts_pending_surface_without_retry()
             "message":"Could not restart bridge; saved settings remain pending"})
     );
     binary_pending_surface(&fixture).await;
+    binary_failed_trace(&fixture);
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let replacement = binary_retry(&fixture, &listener, &mut process).await;
+    assert_eq!(process_identity(pid), original);
     drop(process.input.take());
     process.collect(0).await;
     assert_eq!(process.stderr().await, "");
     super::super::host::released(&fixture).await;
-    binary_failed_trace(&fixture);
-    drop((satellite, recovery));
+    binary_retry_trace(&fixture);
+    drop((satellite, recovery, replacement));
+}
+
+async fn binary_retry(
+    fixture: &Fixture,
+    listener: &tokio::net::TcpListener,
+    process: &mut Process,
+) -> tokio::net::TcpStream {
+    assert_eq!(
+        settings_runtime_patch(fixture, json!({"agent":{"max_tool_calls":3}})).await,
+        json!({"version":1,"restart_pending":true})
+    );
+    let replacement = binary_ready(listener, process).await;
+    let snapshot = binary_snapshot(fixture).await;
+    assert_eq!(snapshot["restart_pending"], false);
+    assert_eq!(snapshot["warnings"], json!([]));
+    assert_eq!(snapshot["settings"]["voice"]["session_listen_seconds"], 4);
+    assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 3);
+    assert_eq!(snapshot["prompts"]["voice"], "accepted after failed exec\n");
+    let path = fixture.directory.path().join("agent-home/settings.toml");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "[agent]\nmax_tool_calls = 3\n\n[voice]\nsession_listen_seconds = 4\n"
+    );
+    owner_only(&path);
+    replacement
+}
+
+fn binary_retry_trace(fixture: &Fixture) {
+    let rows = trace(&fixture.directory.path().join("trace"));
+    for (event, count) in [
+        ("bridge.ready", 3),
+        ("settings.restart_prepared", 2),
+        ("settings.restart_failed", 1),
+        ("settings.restart_recovered", 1),
+    ] {
+        assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), count);
+    }
+    assert_eq!(
+        std::fs::read_to_string(fixture.home.join("launches")).unwrap(),
+        "started\nstarted\nstarted\n"
+    );
 }
 
 #[cfg(unix)]
