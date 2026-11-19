@@ -1,4 +1,5 @@
 //! T3 configured CLI journeys; all tools are synthetic and sockets loopback.
+mod session;
 mod setup;
 mod voice;
 use crate::run_support::{FAKE, Session, failed};

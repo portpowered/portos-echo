@@ -3,7 +3,10 @@ use super::super::super::{run_options::Options, run_report::Artifacts};
 use serde_json::{Value, json};
 
 pub fn admits(scenario: &Value) -> Result<bool, String> {
-    if scenario["id"] != "m2-live-connect" {
+    if !matches!(
+        scenario["id"].as_str(),
+        Some("m2-live-connect" | "session-two-turns" | "session-idle-timeout")
+    ) {
         return Ok(false);
     }
     if !scenario["tiers"]
@@ -34,7 +37,7 @@ pub fn record(options: &Options, config: Option<&str>, artifacts: &mut Artifacts
     }
     for path in &options.scenarios {
         let scenario = crate::lab_validate::load(path)?;
-        if scenario["id"] != "m2-live-connect" && !options.live_real() {
+        if !admits(&scenario)? && !options.live_real() {
             continue;
         }
         if !options.live_real() {

@@ -1,11 +1,16 @@
 //! Synthetic M2 bridge: real process, loopback SSE, no provider or device call.
 use super::{TcpListener, Value, Write, authenticated, fs, io, json};
 use std::io::Read;
+#[path = "session.rs"]
+mod session;
 #[path = "spoof.rs"]
 mod spoof;
 
 pub(super) fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::Error>> {
     let contents = launch_record(args, fixture)?;
+    if fixture["session_replies"].is_u64() {
+        return session::run(args, fixture, &contents);
+    }
     let index = args.iter().position(|s| s == "--trace").ok_or("missing trace")?;
     let path = args.get(index + 1).ok_or("missing trace path")?;
     let listener = TcpListener::bind("127.0.0.1:0")?;
