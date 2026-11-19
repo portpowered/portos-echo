@@ -47,6 +47,10 @@ pub(in crate::lab_run::device) fn endpoint(options: &Options, config: &str) -> R
     Ok(Some(address))
 }
 
+pub(in crate::lab_run::device) fn ceiling(options: &Options) -> Result<Option<f64>, String> {
+    latency::ceiling(options)
+}
+
 fn adb(adb: &std::path::Path, args: &[String], cancel: Option<&std::path::Path>) -> Result<Vec<u8>, String> {
     run_command::controlled(adb, args, std::time::Instant::now() + Duration::from_secs(20), cancel)
         .map_err(|_| "device: unmet prerequisite: owned Wyoming forward".into())

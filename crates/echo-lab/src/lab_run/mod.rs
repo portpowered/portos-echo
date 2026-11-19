@@ -277,6 +277,7 @@ fn execute_with_errors(args: &[String], output: &mut impl Write, errors: &mut im
     let (milestone, tier, steps) = load(&options)?;
     if !options.sim
         && options.bridge.is_none()
+        && options.on_device.is_none()
         && steps.iter().any(|step| {
             matches!(
                 step,

@@ -157,6 +157,7 @@ mod tests {
             wake_clip: None,
             sim: false,
             bridge: None,
+            on_device: None,
             scenarios: Vec::new(),
             port: PathBuf::default(),
             adb: PathBuf::default(),

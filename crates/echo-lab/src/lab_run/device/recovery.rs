@@ -78,10 +78,20 @@ impl Configured<'_> {
         let began = std::time::Instant::now();
         if process == "bridge" {
             let result = self.executor.block_on(runtime::controlled(
-                self.state.restart_bridge(
-                    self.options.bridge.as_deref().ok_or("device: missing bridge")?,
-                    artifacts,
-                ),
+                async {
+                    match self.options.bridge.as_deref() {
+                        Some(bridge) => self.state.restart_bridge(bridge, artifacts).await,
+                        None => self.state.restart_remote(artifacts).await,
+                    }
+                },
+                self.options.cancel.as_deref(),
+            ));
+            self.state.startup_result(result)?;
+        } else if self.options.on_device.is_some() {
+            let offset = self.state.arm_relink()?;
+            self.adb(&["shell".into(), "kill".into(), host.to_string()])?;
+            let result = self.executor.block_on(runtime::controlled(
+                self.state.relinked(offset, artifacts),
                 self.options.cancel.as_deref(),
             ));
             self.state.startup_result(result)?;
@@ -106,12 +116,7 @@ impl Configured<'_> {
         artifacts: &mut Artifacts,
     ) -> Result<(), String> {
         let host = self.host_pid()?;
-        let bridge = self
-            .state
-            .bridge
-            .as_ref()
-            .and_then(super::super::sim::process::Process::id)
-            .ok_or("device: missing bridge identity")?;
+        let bridge = self.state.bridge_id()?.ok_or("device: missing bridge identity")?;
         let previous = if process == "bridge" { bridge } else { host };
         let target = if process == "bridge" { None } else { Some(host) };
         observations::append(
@@ -122,14 +127,11 @@ impl Configured<'_> {
         )?;
         let reconnect = self.replace(process, host, artifacts)?;
         let current_host = self.host_pid()?;
-        let current_bridge = self
-            .state
-            .bridge
-            .as_ref()
-            .and_then(super::super::sim::process::Process::id)
-            .ok_or("device: missing recovered bridge")?;
+        let current_bridge = self.state.bridge_id()?.ok_or("device: missing recovered bridge")?;
+        // On the Echo a killed link ends the bridge too, so only the host run keeps its bridge.
+        let kept = current_bridge == bridge || self.options.on_device.is_some();
         if (process == "bridge" && (current_host != host || current_bridge == bridge))
-            || (process == "hassmic-host" && (current_host == host || current_bridge != bridge))
+            || (process == "hassmic-host" && (current_host == host || !kept))
         {
             return Err("device: restart did not preserve opposite process".into());
         }

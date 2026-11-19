@@ -3,6 +3,7 @@ pub mod config;
 mod confirmation;
 mod generation;
 mod observations;
+pub mod onboard;
 pub mod pcm;
 mod recovery;
 mod runtime;
@@ -27,9 +28,16 @@ pub struct Configured<'a> {
 
 impl<'a> Configured<'a> {
     pub fn new(options: &'a Options, config: String, errors: &'a mut dyn std::io::Write) -> Result<Self, String> {
-        let wire_endpoint = wire::endpoint(options, &config)?;
-        let session = runtime::session::selected(options)?;
         let mut state = runtime::Runtime::default();
+        let wire_endpoint = if let Some(launcher) = &options.on_device {
+            onboard::admit(options)?;
+            let shell = Box::new(onboard::Adb::new(&options.adb));
+            state.remote = Some(onboard::Remote::new(launcher.clone(), shell));
+            None
+        } else {
+            wire::endpoint(options, &config)?
+        };
+        let session = runtime::session::selected(options)?;
         state.clip = options.wake_clip.as_ref().map(|clip| clip.metadata.clone());
         if config::setup::requested(options)? {
             let parsed =
@@ -66,7 +74,7 @@ impl<'a> Configured<'a> {
             }
             let result = self.executor.block_on(runtime::controlled(
                 self.state.start(
-                    self.options.bridge.as_deref().ok_or("device: missing bridge")?,
+                    self.options.bridge.as_deref(),
                     &self.config,
                     &artifacts.root,
                     self.options
@@ -138,7 +146,7 @@ impl Driver for Configured<'_> {
     }
 
     fn close(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
-        let bench = self.bench.close(artifacts);
+        let bench = super::combine(self.bench.close(artifacts), self.trace_budget(artifacts));
         let root = artifacts.root.clone();
         let owned = self.executor.block_on(self.state.close(&root, artifacts));
         let wire = match self.wire.as_mut() {

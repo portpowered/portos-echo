@@ -13,6 +13,7 @@ const ALLOWED: &[&str] = &[
     "--cancel-file",
     "--bridge",
     "--bridge-config",
+    "--device-bridge",
     "--operator-confirm",
     "--wake-clip",
     "--allow-quiet-hours",
@@ -28,6 +29,8 @@ pub struct Options {
     pub sim: bool,
     pub bridge: Option<PathBuf>,
     pub bridge_config: Option<PathBuf>,
+    /// The bridge runs on the Echo; this launcher says how to start, stop and read it.
+    pub on_device: Option<super::device::onboard::Launcher>,
     pub scenarios: Vec<String>,
     pub port: PathBuf,
     pub adb: PathBuf,
@@ -134,6 +137,11 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
             .get("--bridge-config")
             .map(|v| configuration_path(v, live == Live::Real))
             .transpose()?,
+        on_device: super::device::onboard::Launcher::select(
+            flags.get("--device-bridge"),
+            flags.contains_key("--bridge"),
+            live == Live::Real,
+        )?,
         scenarios,
         port: explicit(required(&flags, "--port")?)?,
         adb: explicit(required(&flags, "--adb")?)?,
@@ -215,6 +223,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
         operator_confirm: None,
         bridge: Some(bridge),
         bridge_config: None,
+        on_device: None,
         scenarios,
         port: PathBuf::new(),
         adb: PathBuf::new(),
@@ -232,6 +241,7 @@ fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Optio
 fn device_bridge(flags: &BTreeMap<String, String>) -> Result<Option<PathBuf>, String> {
     match (flags.get("--bridge"), flags.get("--bridge-config")) {
         (None, None) => Ok(None),
+        (None, Some(_)) if flags.contains_key("--device-bridge") => Ok(None),
         (Some(bridge), Some(_)) => explicit(bridge)
             .map(Some)
             .map_err(|_| "device: --bridge requires an explicit existing executable".into()),
@@ -248,7 +258,7 @@ fn live_selection(flags: &BTreeMap<String, String>) -> Result<Live, String> {
     }
     if flags.get("--driver").map(String::as_str) != Some("device")
         || flags.get("--bench").map(String::as_str) != Some("ring")
-        || !flags.contains_key("--bridge")
+        || !(flags.contains_key("--bridge") || flags.contains_key("--device-bridge"))
         || !flags.contains_key("--bridge-config")
     {
         return Err("device: --live real requires device/ring with --bridge and --bridge-config".into());

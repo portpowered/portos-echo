@@ -19,7 +19,7 @@ impl Runtime {
             if super::selectors::check(&self.trace.records, &parsed, None).is_ok() {
                 return self.expect_trace(values, index);
             }
-            if self.child()?.exited()? {
+            if self.bridge_exited()? {
                 return Err("device: unmet prerequisite: live.closed receipt before bridge exit".into());
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
