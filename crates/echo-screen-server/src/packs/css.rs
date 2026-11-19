@@ -96,3 +96,42 @@ fn image(value: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// Only called on the exact bytes admitted by `validate`. References are rooted
+/// at the pack, including when the stylesheet itself is in a nested directory.
+pub(super) fn render(css: &str, base: &str, query: &str) -> Result<String, Error> {
+    let mut output = String::new();
+    let mut rest = css.trim();
+    while !rest.is_empty() {
+        let (selectors, body) = rest.split_once('{').ok_or(Error::Css)?;
+        let (declarations, tail) = body.split_once('}').ok_or(Error::Css)?;
+        output.push_str(
+            &selectors
+                .split(',')
+                .map(|s| format!(".screen-pack {}", s.trim()))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        output.push('{');
+        for declaration in declarations.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            let (key, value) = declaration.split_once(':').ok_or(Error::Css)?;
+            output.push_str(key.trim());
+            output.push(':');
+            if key.trim() == "background-image" {
+                let path = value
+                    .trim()
+                    .strip_prefix("url(")
+                    .and_then(|v| v.strip_suffix(')'))
+                    .ok_or(Error::Css)?;
+                let path = path.trim().trim_matches(['\'', '"']);
+                output.push_str(&format!("url(\"{base}{path}?{query}\")"));
+            } else {
+                output.push_str(value.trim());
+            }
+            output.push(';');
+        }
+        output.push('}');
+        rest = tail.trim();
+    }
+    Ok(output)
+}

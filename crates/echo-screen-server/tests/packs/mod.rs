@@ -1,5 +1,6 @@
 //! T3: production background installer against a synthetic local HTTPS peer.
 //! Python/OpenSSL are fixture owners, never a real account or internet endpoint.
+mod serving;
 use crate::support::{Result, request, server};
 use sha2::{Digest, Sha256};
 use std::{io::Write, path::Path};

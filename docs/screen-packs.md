@@ -49,6 +49,29 @@ rename to `<home>/screens/<name>@<version>/`; an existing conflicting identity i
 retained. Catalog routes, previews, interactive status and reload events remain
 implementation work. Installed data does not yet activate a renderer.
 
+## Authenticated pack files
+
+Once the bridge mounts its home-backed installer (including an empty download
+list), `GET /screen-packs/v1/<pack>/<file>?token=<pairing-token>` serves installed
+data. `<pack>` is an exact local name or `name@version`; nested file paths use
+normalized ASCII components. Percent-encoded path aliases are refused. The same
+pairing admission as `/events` applies before disk access and again before a
+response is returned; revoked tokens cannot read pack data.
+
+Every read revalidates the whole editable pack, references, CSS and size/file
+limits. Invalid packs, identity mismatches, symlinks, hardlinks and special
+files return an empty 404. Missing pack hosting and concurrent read saturation
+return 503. Validation runs outside the async executor, with one disk reader
+per server. Only json/css/png/webp/webm/mp4 are served, with exact MIME types and
+`nosniff`, `no-store`, `no-referrer` headers. Single byte ranges support explicit
+start/end, open end and suffix forms; malformed, multiple or unsatisfiable
+ranges return 416 with `Content-Range: bytes */<total>`.
+
+CSS is served with selectors scoped to `.screen-pack`. Validated image
+references are rooted at this pack and acquire the encoded pairing token;
+authors never include credentials in their stylesheet. These rewritten bytes
+are the representation used for CSS ranges. Page activation is still pending.
+
 ## Pack data validation
 
 `pack.json` requires `format: 1`, `name`, `version`, and at least one of `layout`

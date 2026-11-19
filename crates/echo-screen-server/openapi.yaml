@@ -1,8 +1,36 @@
 openapi: 3.1.0
-info: { title: Loopback screen server, version: 0.2.0 }
+info: { title: Loopback screen server, version: 0.3.0 }
 servers:
   - url: http://127.0.0.1:16900
 paths:
+  /screen-packs/v1/{pack}/{file}:
+    get:
+      security: [{ pairingToken: [] }]
+      description: Normalized nested file in a revalidated local pack; canonical screens root, regular allowlisted files only. CSS selectors are scoped to .screen-pack and local image URLs acquire the pairing token. No-store and no-referrer on every response.
+      parameters:
+        - { in: path, name: pack, required: true, schema: { type: string } }
+        - { in: path, name: file, required: true, schema: { type: string } }
+        - { in: header, name: Range, schema: { type: string, description: One bytes=start-end, start- or -suffix range } }
+      responses:
+        '200':
+          description: Exact validated bytes (CSS rewritten for safe scoped use)
+          headers:
+            Accept-Ranges: { schema: { const: bytes } }
+            Content-Length: { schema: { type: integer } }
+          content:
+            application/json: { schema: { type: string } }
+            text/css: { schema: { type: string } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+            video/mp4: { schema: { type: string, format: binary } }
+        '206':
+          description: Exact selected bytes with Content-Length, Accept-Ranges and Content-Range bytes start-end/total
+        '401': { description: Missing, wrong, empty, duplicate or revoked token; empty body }
+        '404': { description: Missing or invalid pack, normalized path, MIME type, symlink, hardlink or canonical root; empty body }
+        '416':
+          description: Malformed, multiple or unsatisfiable range; Content-Range bytes */total, empty body
+        '503': { description: Pack host absent, stopping, draining or read capacity exhausted; empty body }
   /:
     get:
       description: Existing events/actions bootstrap query grammar; fixed echo-settings v1 meta capability only when a home-backed settings inbox is mounted

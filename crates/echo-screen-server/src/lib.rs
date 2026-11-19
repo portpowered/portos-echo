@@ -46,6 +46,7 @@ pub struct ScreenServer {
     listener: Option<JoinHandle<usize>>,
     tasks: Vec<JoinHandle<()>>,
     downloads_started: bool,
+    pack_files: Arc<packs::Files>,
 }
 
 /// Safe completion for one configured background download. No input URL or path.
@@ -69,6 +70,7 @@ impl ScreenServer {
             return receive;
         }
         self.downloads_started = true;
+        let _ = self.pack_files.root.set(home.join("screens"));
         self.tasks.push(tokio::spawn(packs::start(
             packs::Downloads { home, ca, pins },
             self.core.clone(),
@@ -197,6 +199,7 @@ pub async fn serve_with_settings(
     let (actions_tx, actions) = mpsc::channel(32);
     let (stop, stop_rx) = watch::channel(false);
     let (drain, drain_rx) = watch::channel(None);
+    let pack_files = Arc::new(packs::Files::default());
     let app = screen_http::router(
         core.clone(),
         actions_tx,
@@ -204,6 +207,7 @@ pub async fn serve_with_settings(
         drain_rx.clone(),
         bound_addr,
         settings,
+        pack_files.clone(),
     );
     let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx, drain_rx));
     let (publication_requests, requests) = mpsc::channel(32);
@@ -218,6 +222,7 @@ pub async fn serve_with_settings(
         listener: Some(listener_task),
         tasks: vec![state_task],
         downloads_started: false,
+        pack_files,
     })
 }
 
@@ -250,6 +255,7 @@ mod tests {
                 listener: None,
                 tasks: vec![],
                 downloads_started: false,
+                pack_files: Arc::default(),
             },
             requests,
         )

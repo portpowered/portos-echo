@@ -21,10 +21,11 @@ use tokio::sync::{Mutex, mpsc, watch};
 
 #[derive(Clone)]
 pub(super) struct HttpState {
-    core: Arc<Mutex<Core>>,
+    pub(crate) core: Arc<Mutex<Core>>,
     actions: mpsc::Sender<UiAction>,
-    stop: watch::Receiver<bool>,
-    drain: watch::Receiver<Option<tokio::time::Instant>>,
+    pub(crate) stop: watch::Receiver<bool>,
+    pub(crate) drain: watch::Receiver<Option<tokio::time::Instant>>,
+    pub(crate) packs: Arc<crate::packs::Files>,
     origin: String,
     settings: Option<mpsc::Sender<SettingsRequest>>,
 }
@@ -36,6 +37,7 @@ pub(crate) fn router(
     drain: watch::Receiver<Option<tokio::time::Instant>>,
     addr: SocketAddr,
     settings: Option<mpsc::Sender<SettingsRequest>>,
+    packs: Arc<crate::packs::Files>,
 ) -> Router {
     Router::new()
         .route("/", get(index))
@@ -45,6 +47,7 @@ pub(crate) fn router(
         .route("/actions", post(actions_post))
         .route("/settings/v1", get(settings_http::snapshot).post(settings_http::save))
         .route("/settings/v1/prompts/{kind}", post(settings_http::prompt))
+        .route("/screen-packs/v1/{pack}/{*file}", get(crate::packs::http::file))
         .layer(middleware::from_fn(headers))
         .with_state(HttpState {
             core,
@@ -53,6 +56,7 @@ pub(crate) fn router(
             drain,
             origin: format!("http://{addr}"),
             settings,
+            packs,
         })
 }
 
@@ -198,6 +202,7 @@ mod tests {
             drain: drain_rx,
             origin: "http://127.0.0.1:1".into(),
             settings: None,
+            packs: Arc::default(),
         };
         let request = Request::builder()
             .uri("/events?token=synthetic-screen-pair")
@@ -233,6 +238,7 @@ mod tests {
                 drain: drain_rx,
                 origin: "http://127.0.0.1:1".into(),
                 settings: None,
+                packs: Arc::default(),
             };
             let request = Request::builder()
                 .uri("/events?token=synthetic-screen-pair")

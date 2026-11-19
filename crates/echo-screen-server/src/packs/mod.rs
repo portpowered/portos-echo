@@ -1,13 +1,21 @@
 //! Bounded data-only pack installation. No archive-controlled code is executed.
 mod archive;
+mod catalog;
 mod css;
 mod download;
+pub(crate) mod http;
 mod manifest;
 #[cfg(test)]
 mod tests;
 mod worker;
 
 pub(crate) use worker::{Downloads, start};
+
+#[derive(Default)]
+pub(crate) struct Files {
+    pub root: std::sync::OnceLock<std::path::PathBuf>,
+    pub busy: std::sync::Arc<tokio::sync::Mutex<()>>,
+}
 
 const MIB: u64 = 1024 * 1024;
 const EXPANDED_LIMIT: u64 = 64 * MIB;
