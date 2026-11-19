@@ -234,3 +234,30 @@ fn agent_tools_prompt_repeated_publish_failures_keep_history_bounded() {
     assert_eq!(entries.last().unwrap().0, "voice-25.md");
     assert!(entries.iter().all(|(_, text)| text == "old"));
 }
+
+#[test]
+fn agent_tools_prompt_reopen_recovers_interrupted_archive_and_publish() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    write(home, Kind::Voice, "original").unwrap();
+    write(home, Kind::Voice, "current").unwrap();
+    write(home, Kind::Runner, "runner unchanged").unwrap();
+    let before = history(home);
+    for directory in [home.join("prompts"), home.join("prompts/.history")] {
+        let temp = directory.join(".note-tmp-123-0");
+        fs::write(&temp, "interrupted bytes").unwrap();
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    // Fresh public callers observe the last committed text, then can replace it.
+    assert_eq!(super::super::read_base(home, "voice"), Ok("current".into()));
+    assert_eq!(super::super::write_base(home, "voice", "reopened"), Ok(()));
+    assert_eq!(super::super::read_base(home, "voice"), Ok("reopened".into()));
+    assert_eq!(super::super::read_base(home, "runner"), Ok("runner unchanged".into()));
+    let after = history(home);
+    assert_eq!(after[..before.len()], before);
+    assert_eq!(after.last().unwrap().1, "current");
+    assert!(!home.join("prompts/.note-tmp-123-0").exists());
+    assert!(!home.join("prompts/.history/.note-tmp-123-0").exists());
+    assert_eq!(fs::read_dir(home.join("prompts")).unwrap().count(), 3);
+    assert_eq!(after.len(), 2);
+}

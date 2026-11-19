@@ -112,6 +112,43 @@ pub(crate) fn read_limited(fd: &impl AsFd, name: &str, limit: u64) -> Result<Vec
     Ok(bytes)
 }
 
+/// The home has one process owner; callers hold the directory's writer lock.
+/// Reconcile only our reserved staging grammar and private, singly linked files.
+/// Lookalikes and unsafe entries remain untouched and fail closed.
+pub(crate) fn recover_staging(fd: &impl AsFd, name: &str) -> Result<bool> {
+    let Some(suffix) = name.strip_prefix(".note-tmp-") else {
+        return Ok(false);
+    };
+    let Some((pid, sequence)) = suffix.split_once('-') else {
+        return Ok(false);
+    };
+    let valid_pid = pid
+        .parse::<u32>()
+        .is_ok_and(|value| value > 0 && value.to_string() == pid);
+    let valid_sequence = sequence.parse::<u64>().is_ok_and(|value| value.to_string() == sequence);
+    if !valid_pid || !valid_sequence {
+        return Ok(false);
+    }
+    let stat = fs::statat(fd, name, AtFlags::SYMLINK_NOFOLLOW).map_err(error)?;
+    let owner = fs::fstat(fd).map_err(error)?.st_uid;
+    if regular(&stat)? > super::NOTE_BYTES || stat.st_uid != owner || stat.st_mode & 0o7777 != 0o600 {
+        return Err("io");
+    }
+    fs::unlinkat(fd, name, AtFlags::empty()).map_err(error)?;
+    fs::fsync(fd).map_err(error)?;
+    Ok(true)
+}
+
+pub(crate) fn recover_directory(fd: &impl AsFd) -> Result<()> {
+    for entry in fs::Dir::read_from(fd).map_err(error)? {
+        let entry = entry.map_err(error)?;
+        if let Ok(name) = entry.file_name().to_str() {
+            recover_staging(fd, name)?;
+        }
+    }
+    Ok(())
+}
+
 /// Exclusive staging never opens a pre-existing file, even under a hostile
 /// umask or competing writer. Dropping before rename cleans only our temp.
 pub(crate) fn replace(fd: &impl AsFd, name: &str, content: &[u8], fail: bool) -> Result<()> {

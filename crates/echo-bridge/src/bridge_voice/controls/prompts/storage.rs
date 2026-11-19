@@ -90,6 +90,7 @@ fn commit(home: &Path, kind: Kind, content: &str, now: SystemTime, fault: Fault)
     validate(content).map_err(|_| "invalid_prompt")?;
     let _guard = WRITER.lock().map_err(|_| "io")?;
     let dir = files::root_named(home, "prompts", true)?.ok_or("io")?;
+    files::recover_directory(&dir)?;
     let old = read_current(&dir, kind)?;
     // Check history even on a first write; never follow a replaced directory.
     let history = files::directory(&dir, std::ffi::OsStr::new(".history"), old.is_some())?;
@@ -137,7 +138,7 @@ fn history_entries(dir: &impl AsFd) -> Result<Vec<(u128, String)>> {
     for entry in Dir::read_from(dir).map_err(|_| "history")? {
         let entry = entry.map_err(|_| "history")?;
         let name = entry.file_name().to_str().map_err(|_| "history")?;
-        if matches!(name, "." | "..") {
+        if matches!(name, "." | "..") || files::recover_staging(dir, name)? {
             continue;
         }
         let stamp = name

@@ -322,6 +322,86 @@ fn agent_tools_notes_failed_staging_keeps_old_bytes_and_cleans_temp() {
 }
 
 #[test]
+fn agent_tools_notes_reopen_recovers_abandoned_staging_in_nested_directories() {
+    let root = tempfile::tempdir().unwrap();
+    let notes = provider(root.path(), true);
+    assert!(!call(&notes, "notes_write", &json!({"path":"a/b/c/old.md","content":"old"})).is_error);
+    drop(notes);
+    let base = root.path().join("home/notes");
+    for directory in [base.clone(), base.join("a/b/c")] {
+        let temp = directory.join(".note-tmp-123-0");
+        fs::write(&temp, "interrupted replacement").unwrap();
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let reopened = provider(root.path(), true);
+    let listed = call(&reopened, "notes_list", &json!({}));
+    assert!(!listed.is_error);
+    assert_eq!(listed.content["files"].as_array().unwrap().len(), 1);
+    assert_eq!(listed.content["files"][0]["path"], "a/b/c/old.md");
+    assert_eq!(listed.content["files"][0]["bytes"], 3);
+    assert_eq!(fs::read(base.join("a/b/c/old.md")).unwrap(), b"old");
+    assert!(!base.join(".note-tmp-123-0").exists());
+    assert!(!base.join("a/b/c/.note-tmp-123-0").exists());
+    assert!(
+        !call(
+            &reopened,
+            "notes_write",
+            &json!({"path":"unrelated.md","content":"new"})
+        )
+        .is_error
+    );
+    assert_eq!(
+        call(&reopened, "notes_read", &json!({"path":"unrelated.md"})).content["content"],
+        "new"
+    );
+}
+
+#[test]
+fn agent_tools_notes_recovery_preserves_lookalikes_and_unsafe_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = notes_files::root(&root.path().join("home"), true).unwrap().unwrap();
+    let base = root.path().join("home/notes");
+    for name in [
+        ".note-tmp-123-0.md",
+        ".note-tmp-123-x",
+        ".note-tmp-0-0",
+        ".note-tmp-01-0",
+    ] {
+        fs::write(base.join(name), "user bytes").unwrap();
+        fs::set_permissions(base.join(name), fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(notes_files::recover_staging(&directory, name), Ok(false));
+        assert_eq!(fs::read(base.join(name)).unwrap(), b"user bytes");
+    }
+    let target = root.path().join("sentinel");
+    fs::write(&target, "private sentinel").unwrap();
+    let temp = base.join(".note-tmp-123-0");
+    symlink(&target, &temp).unwrap();
+    assert_eq!(
+        notes_files::recover_staging(&directory, ".note-tmp-123-0"),
+        Err("symlink")
+    );
+    assert!(temp.is_symlink());
+    fs::remove_file(&temp).unwrap();
+    fs::hard_link(&target, &temp).unwrap();
+    assert_eq!(
+        notes_files::recover_staging(&directory, ".note-tmp-123-0"),
+        Err("not_regular")
+    );
+    fs::remove_file(&temp).unwrap();
+    fs::create_dir(&temp).unwrap();
+    assert_eq!(
+        notes_files::recover_staging(&directory, ".note-tmp-123-0"),
+        Err("not_regular")
+    );
+    fs::remove_dir(&temp).unwrap();
+    fs::write(&temp, "unowned permissions").unwrap();
+    fs::set_permissions(&temp, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(notes_files::recover_staging(&directory, ".note-tmp-123-0"), Err("io"));
+    assert_eq!(fs::read(&temp).unwrap(), b"unowned permissions");
+    assert_eq!(fs::read(&target).unwrap(), b"private sentinel");
+}
+
+#[test]
 fn agent_tools_notes_receipts_never_include_contents_or_rejected_arguments() {
     let root = tempfile::tempdir().unwrap();
     let notes = provider(root.path(), true);

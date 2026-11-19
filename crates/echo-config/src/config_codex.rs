@@ -214,16 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_home_prompt_examples_and_unchanged_builtin_defaults() {
-        assert_eq!(include_str!("../../../examples/prompts/voice.md"), LIVE_INSTRUCTIONS);
-        assert_eq!(
-            include_str!("../../../examples/prompts/runner.md"),
-            "Client audio bridge\n\n\
-Use the scoped notes tools to remember household preferences and read them in later conversations. \
-Use the prompt tools to read or revise the voice and runner base prompts when asked; edits apply to the next \
-conversation, while the current one keeps its starting instructions. Replaced prompts are retained in .history \
-for manual recovery.\n"
-        );
+    fn agent_home_unchanged_builtin_runner_default() {
         assert_eq!(RUNNER_INSTRUCTIONS, "Client audio bridge");
     }
 

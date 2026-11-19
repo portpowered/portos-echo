@@ -94,7 +94,7 @@ fn scan(fd: &impl AsFd, prefix: &str, entries: &mut Vec<Entry>) -> Result<(), &'
     for entry in dir {
         let entry = entry.map_err(files::error)?;
         let name = entry.file_name().to_str().map_err(|_| "invalid_path")?;
-        if matches!(name, "." | "..") {
+        if matches!(name, "." | "..") || files::recover_staging(fd, name)? {
             continue;
         }
         let stat = fs::statat(fd, name, AtFlags::SYMLINK_NOFOLLOW).map_err(files::error)?;
