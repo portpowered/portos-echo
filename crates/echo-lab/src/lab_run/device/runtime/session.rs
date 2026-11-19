@@ -24,6 +24,7 @@ impl Runtime {
     }
 
     fn completed(&mut self, value: &Value, index: usize, expected: Option<&str>) -> Result<(), String> {
+        self.observe()?;
         let id = value["run_id"]
             .as_str()
             .filter(|s| !s.is_empty())
@@ -34,6 +35,12 @@ impl Runtime {
             }
         } else if self.run.as_deref() == Some(id) {
             return Err("device: stale completed run".into());
+        }
+        if self.trace.records[self.wake_offset..]
+            .iter()
+            .any(|row| row["event"] == "wyoming.run_started" && row["run_id"] != id)
+        {
+            return Err("device: completed run does not match observed wake".into());
         }
         self.run = Some(id.into());
         self.expect_trace(

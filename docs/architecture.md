@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 18
+last modified: 2026, november, 19
 status: current main overview; W4 deployment and in-progress changes are labelled
 ---
 
@@ -137,7 +137,11 @@ Its libraries run inside the same process, rather than as one service per crate.
 [bridge_runtime.rs](../crates/echo-bridge/src/bridge_runtime.rs) selects the configured Codex voice owner;
 the retained simulator/Muse owner is separate. Config loading validates the nominated TOML before device
 effects. [voice_runtime.rs](../crates/echo-bridge/src/bridge_voice/voice_runtime.rs) owns trace, screen and
-health listeners around the entire authenticated device lifetime. [voice_host.rs](../crates/echo-bridge/src/bridge_voice/voice_host.rs)
+health listeners around the whole process lifetime and supervises one voice generation after another
+([voice_recovery.rs](../crates/echo-bridge/src/bridge_voice/recovery/voice_recovery.rs)): a generation is one
+app-server child with its sign-in, tools and calls, and a failed one is replaced after a bounded backoff
+(sequence (i)). [retained_link.rs](../crates/echo-bridge/src/bridge_voice/recovery/retained_link.rs) keeps the
+device connection across generations. [voice_host.rs](../crates/echo-bridge/src/bridge_voice/voice_host.rs)
 authenticates the child before enabling Wyoming capture and probing readiness. MCP grant ownership is
 opened next; catalog discovery happens on the first admitted call, not automatically as a boot-time link.
 
@@ -171,27 +175,39 @@ planned; it is not established by the current PC journeys.
 
 #### Launch contract on the Echo — echo-bridge
 
-On the Echo the fork's service script starts the bridge. That script lives in the hassmic fork, not here; this is
-what it must do, each point measured on the device on 2026-11-18 ([baselines](program/baselines.md)).
-[examples/bridge.echo.toml](../examples/bridge.echo.toml) is the matching configuration.
+On the Echo the operator uses `scripts/echo-install.sh` to install and start the bridge. The contract combines
+the 2026-11-18 lifecycle and 2026-11-19 identity measurements ([baselines](program/baselines.md));
+actual bridge/child identity after migration remains coordinator T5 proof.
+[examples/bridge.echo.toml](../examples/bridge.echo.toml) supplies the base configuration; for the installer,
+set `codex.binary` and `codex.ca_file` under `bin/` as its help requires.
 
-1. **Run with gid 3990 and `inet`**, for example `runas root 3990,inet`. hassmic's firewall chain lets only its
-   egress group, gid 3990, leave the device. A bridge started as plain root reaches Wyoming on loopback and then
-   gets a network deadline on its first call. No firewall rule changes.
+1. **Run as existing Android nobody (uid 9999), with groups 3990 and `inet`**:
+   `/data/local/hassmic/runas nobody 3990,inet`. The inherited Codex child uses the same identity.
+   hassmic's firewall admits its egress group, gid 3990; omitting it blocks provider TCP. Root only prepares
+   fixed paths and drops privilege before any writable launch script executes. No custom uid, SELinux or
+   firewall changes. Nobody is shared and is not a separate child sandbox.
 2. **Start the bridge in its own session** (`setsid`). A bridge left in an adb session's process group received
    SIGTERM about 17 s after launch.
-3. **Hold the bridge's stdin open, and restart the bridge when it exits.** End of input on stdin is the bridge's
-   clean-stop request ([bridge_runtime.rs](../crates/echo-bridge/src/bridge_runtime.rs)), so `</dev/null` stops it
-   at once. Give it the read end of a FIFO whose write end the script keeps open; closing that write end is the
-   clean stop. Any other exit is a failure the script restarts from: the bridge never restarts itself.
-4. **Give it one private directory**, mode 0700, owned by the bridge's user. `codex.home`, `audit.log_dir`, the
-   trace, `live.credential_file` and `screen.pairing_token_file` sit inside it; `codex.binary` and `codex.ca_file`
+3. **Hold the bridge's stdin open.** End of input on stdin is the bridge's clean-stop request
+   ([bridge_runtime.rs](../crates/echo-bridge/src/bridge_runtime.rs)), so `</dev/null` stops it at once. Give it
+   the read end of a FIFO whose write end the script keeps open; closing that write end is the clean stop. Once
+   ready, the bridge does not exit on a failure: it recovers inside the process (sequence (i)) and no longer
+   relies on a restart. It still exits non-zero on the kill path and on a configuration or credential it cannot
+   use at startup, and a script may restart it after those or after a crash.
+4. **Give it private/ and home/**, both owned by 9999:9999, mode 0700, data files 0600.
+   The installer migrates stopped root-owned descendants without replacing retained data and rejects links
+   and unsupported entries. It regenerates `private/launch.sh` (0700) on install/start; repeated migration
+   needs no corrective changes. Base/bin stay root-owned 0755, binaries 0755 and CA 0644.
+   Non-secret prompts and future notes/settings/screen packs belong in home/. `codex.home`, `audit.log_dir`, the
+   trace, `live.credential_file` and `screen.pairing_token_file` sit inside private/; `codex.binary` and `codex.ca_file`
    may sit outside. The bridge creates its audit directory, kill marker, tool ledger and trace with modes 0700 and
    0600 whatever the umask (`adb shell` runs with umask 000), and creates the Codex home with mode 0700 and refuses
    one whose mode differs. It does not change the mode of anything that already exists, and it does not create the
    files the script redirects its output to, so the script still sets `umask 077`.
 5. **Pass `--config` and `--trace`**, both inside the private directory. Health stays on `127.0.0.1:16901`.
-6. **Name the standalone app server in the configuration**: `codex.launch = "standalone"` with `codex.binary`,
+6. **Observe the process user** with installer `status` (`process_user=nobody`). Running root/0 or
+   unverifiable identity fails. Stop and reinstall before starting a root legacy installation.
+7. **Name the standalone app server in the configuration**: `codex.launch = "standalone"` with `codex.binary`,
    because the armv7 build takes no `app-server` subcommand, and `codex.ca_file`, because the child starts with a
    cleared environment and finds no certificate bundle on the device. No wrapper script is needed for either.
 
@@ -222,8 +238,8 @@ sideband connection. Native `delegation.created` becomes a Codex turn. The child
 sends `item/tool/call` requests to the bridge, receives their results and writes `delegation.context.append`
 back to Live. The bridge sees JSON-RPC turn/transcript notifications, not those native delegation frames.
 See [ADR 0026](adr/0026-codex-client.md) and the [source brief](spikes/codex-app-server.md); the release pin
-overrides the brief's older main snapshot. The supervisor offers explicit restart; the configured voice
-owner does not automatically restart failed sessions or replay work.
+overrides the brief's older main snapshot. When the child exits or a call fails, the configured voice owner
+starts a fresh child after a backoff (sequence (i)); it does not replay the failed turn.
 
 #### Language — Codex app server
 
@@ -373,6 +389,8 @@ files; retained calls keep their original snapshot and text. Edits require no br
 Configure `[home] dir` with an absolute path (no tilde or environment expansion). On the Echo use
 `/data/local/echo-bridge/home`, separate from `/data/local/echo-bridge/private`, which still holds secrets.
 The bridge creates missing home/prompts directories with mode 0700 and preserves existing modes.
+The bridge user needs only search permission on the home's ancestors, as a non-root user has under `/data`;
+it owns and reads only the `prompts/` and `notes/` directories.
 Copy `examples/prompts/voice.md` and `runner.md` into the home's `prompts/` directory, then edit them.
 Omitting `[home]` intentionally selects built-ins without file access. A missing configured prompt uses
 its built-in default and emits one payload-free `prompt.defaulted` per kind per runtime lifetime.
@@ -712,10 +730,10 @@ connections and owners; “connected” cannot mean that an SDP response alone p
 
 | Link | Transport and contents | If it drops |
 | --- | --- | --- |
-| Echo ↔ bridge | TCP Wyoming: wake/run controls, PCM, mute and playback receipts | Adapter invalidates the run and reconnects with backoff while owned; a failed configured voice owner closes and needs explicit restart |
-| Bridge ↔ app server | Child stdio, newline JSON-RPC: account, thread, call and tool messages | Pending RPC/call fails; owner cleans up media/device and reaps child; no automatic replay |
-| Bridge ↔ OpenAI media | WebRTC: Opus RTP protected by SRTP, plus ordered SCTP `oai-events` | Transport or data-channel loss fails the media peer and conversation |
-| App server ↔ Live | HTTPS SDP call creation and WSS sideband: transcripts, native delegation and call control | Creation can fail; control errors/closure are surfaced by the pin; bridge terminates on projected error/closed, rather than promising seamless recovery |
+| Echo ↔ bridge | TCP Wyoming: wake/run controls, PCM, mute and playback receipts | Adapter invalidates the run and reconnects with backoff while owned; the voice owner ends that run, keeps or redials the connection and serves the next wake |
+| Bridge ↔ app server | Child stdio, newline JSON-RPC: account, thread, call and tool messages | Pending RPC/call fails; owner cleans up media, reaps the child and starts a fresh one after a backoff; no automatic replay |
+| Bridge ↔ OpenAI media | WebRTC: Opus RTP protected by SRTP, plus ordered SCTP `oai-events` | Transport or data-channel loss fails the media peer and that call; the next generation's first wake makes a new call |
+| App server ↔ Live | HTTPS SDP call creation and WSS sideband: transcripts, native delegation and call control | Creation can fail; control errors/closure are surfaced by the pin; the bridge ends the call on projected error/closed and recovers with a fresh child, without replaying the turn |
 | App server ↔ Codex model | HTTPS Responses streaming: delegated reasoning, tool requests and results | Delegated turn cannot normally complete; pin reports turn outcome; bridge response/task deadlines bound waiting |
 | App server ↔ ChatGPT issuer | HTTPS: device-code authorization and refresh | Sign-in/admission can fail or require relink; no silent interactive login |
 | Bridge ↔ Port OS issuer | HTTPS OAuth: discovery, device authorization, token and refresh | Grant operation fails or latches relink; no unauthorized tool effect is retried |
@@ -1393,37 +1411,69 @@ the timer. The `live.closed` trace is a bridge projection after cleanup, not a c
 ```mermaid
 sequenceDiagram
     participant H as hassmic or test host
-    participant W as Wyoming supervisor - PC
-    participant B as Configured voice owner - PC
-    participant S as Screen
-    participant O as Operator or test fixture
-    H--xW: host loss or socket failure
-    W->>W: invalidate run and playback, reject operations during recovery
-    par adapter recovery while still owned
-        W->>W: capped exponential backoff
-        O->>H: restart host externally
-        W->>H: reconnect, run-satellite if capture was enabled
-        W->>H: describe when caller next probes
-        H-->>W: info
-    and configured owner observes failure
-        W-->>B: run/probe error
-        B->>B: stop call/media, close device, reap child
-        B->>S: Error, bridge.error
-        Note over B,S: Non-auth terminal failure exits after publication and closes presentation
+    participant W as Wyoming supervisor
+    participant B as Configured voice owner
+    participant A as Codex app server
+    participant S as Screen and health
+    Note over B,A: generation 1 is ready, its call idle or in a run
+    A--xB: media or signalling failure, call closed, or child exit
+    B->>B: stop call and media, close tools, reap child
+    opt a run was open
+        B->>H: end that run with the existing error
     end
-    O->>B: explicitly restart bridge if its owner terminated
-    Note over B,S: Auth failure instead holds relink Error until cancellation, no automatic login
+    B->>H: probe the kept connection
+    B->>S: Error or relink state, health live=error, bridge.recovering
+    B->>B: wait 1 s, doubling to 60 s per consecutive failure
+    H-->>B: a wake ends the wait at once
+    B->>A: spawn a fresh child, sign in, open tools
+    B->>S: Ready, bridge.ready
+    H->>B: wake
+    B->>A: new call on demand
+    Note over B,S: a generation that serves a run or stays ready 60 s resets the delay
+    H--xW: host loss or socket failure
+    W->>W: invalidate run and playback, capped exponential backoff, reconnect
+    W-->>B: run or probe error
+    B->>B: same recovery, a second device failure in a row redials the connection
 ```
 
-Transport reconnection does not guarantee recovery of an already failed configured conversation. A failed
-idle probe or active run terminates this borrower; there is no automatic app-server restart or replay.
-The lab restarts its pinned host/bridge as explicit scenario actions. Merged PR 190
-(`el-f-m1-host-restart-flake`) fixes the lab restart witness; it does not add automatic product recovery.
-Provider `thread/realtime/error` becomes a terminal fixed error. Missing/invalid OpenAI auth displays relink;
-MCP authorization failure has its own link overlay and grant owner. Mute may mask either until unmuted.
-Main has **no local spoken recovery fallback** for these transport/auth failures. Non-auth errors can be
-brief because the server closes after publication; the page then reports a lost connection. hassmic's own
-error indicator is separate from the page and is not a promised spoken explanation.
+After the first `bridge.ready`, no failure ends the configured voice owner
+([voice_recovery.rs](../crates/echo-bridge/src/bridge_voice/recovery/voice_recovery.rs)). The process exits in
+three cases only:
+
+- **A clean stop:** end of input on stdin. Exit 0, also when it arrives during a retry delay.
+- **The kill path:** the kill switch ending an active run, or the control side closing without a clean stop.
+  Exit 1, as before.
+- **An unusable start, before the first ready:** an invalid configuration, Codex home, binary, CA file or
+  import; or a sign-in or Port OS grant that needs the operator (`authorization`, relink, access denied,
+  expired). A missing sign-in still holds the relink screen until the stop.
+
+Everything else is one failed generation: Live media or signalling failing or closing, in a run or while the
+call idles between wakes; the app server exiting; an MCP or Port OS error; a screen publication failing; the
+Wyoming link dropping; a mute or a missing playback receipt cutting a run short; a wake refused by the daily
+budget. The owner ends the generation, ends an open device
+run with the existing error for that turn (`unavailable`, or `relink_required`), records `bridge.recovering`
+with `reason`, `attempt` and `delay_ms`, shows Error (or the relink overlay) on the screen and `live: "error"`
+on health, waits, and starts the next generation. `bridge.error` is now only the record of a terminal exit.
+
+The delay is 1, 2, 4, 8, 16, 32 and then 60 s for consecutive failed generations, and returns to 1 s once a
+generation has served a run or stayed ready for 60 s. A failure that never clears, such as a revoked
+credential, therefore retries once a minute, with the screen and health showing it, and never exits or spins.
+The same schedule covers a transient failure before the first ready, for example the device not answering yet.
+
+A wake never waits on a pending retry. The device connection is kept across generations, so a wake during the
+delay ends the delay and is served by the generation it starts; that generation makes its call on demand. If
+Live cannot be reached then, the turn ends with the existing error and the cycle repeats. The connection is
+redialled only when it fails its probe or when two device failures follow each other. One limit: the Wyoming
+client drops its connection itself when a reply playback is abandoned, so a failure while reply audio is
+playing reconnects inside the adapter rather than keeping the same socket. No failed turn is replayed.
+
+The retained simulator owner ([bridge_runtime.rs](../crates/echo-bridge/src/bridge_runtime.rs)), used by the
+lab's synthetic Live scenarios, keeps its one-shot protocol: it reports `bridge.error` and exits, because
+those scenarios assert on that exit. It does not run on the Echo. Provider `thread/realtime/error` ends the
+call and its generation. Missing or invalid OpenAI sign-in displays relink; MCP authorization failure has its
+own link overlay and grant owner. Mute may mask either until unmuted. Main has **no local spoken recovery
+fallback** for these failures. hassmic's own error indicator is separate from the page and is not a promised
+spoken explanation.
 
 ## Where to look in the code
 

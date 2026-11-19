@@ -112,6 +112,11 @@ for line in sys.stdin:
         assert request["params"]["version"] == "v3"
         emit({"method": "thread/realtime/sdp", "params": {"threadId": "fixture-thread", "sdp": "fixture-answer"}})
         emit({"id": request["id"], "result": {}})
+        if home.joinpath("mode").read_text() == "tool-reply":
+            # One spoken reply and no delegated work: the run completes and its call stays warm.
+            emit({"method": "thread/realtime/transcript/done", "params": {
+                "threadId": "fixture-thread", "role": "assistant", "text": "fixture reply"}})
+            continue
         emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
         approval = home.joinpath("mode").read_text() == "tool-approval"
         emit({"id": "fixture-tool", "method": "item/tool/call", "params": {

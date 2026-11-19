@@ -303,7 +303,7 @@ async fn interrupted(fault: &'static str) {
     first_frame.await.unwrap();
     assert_eq!(screen.next().await.unwrap()["state"]["state"], "listening");
     interrupt_control(binary, &root.0, &mut screen, fault).await;
-    interrupted_cleanup(bridge, collected, fault).await;
+    interrupted_cleanup(bridge, collected, &path, fault).await;
     let frames = satellite.await.unwrap();
     interrupted_frames(fault, frames);
     let observed = provider.close().await.unwrap();
@@ -325,13 +325,16 @@ async fn release_home(binary: &Path, root: config::Root) {
     assert!(!home.exists());
 }
 
+/// Only the stop and the kill switch end the bridge. A lost device, a mute or
+/// a withheld receipt during the run ends that run and is retried.
 async fn interrupted_cleanup(
     mut bridge: Process,
     collected: std::sync::mpsc::Receiver<std::process::ExitStatus>,
+    path: &Path,
     fault: &str,
 ) {
     if !matches!(fault, "shutdown" | "kill") {
-        assert_eq!(bridge.line().await, Err("process: exited before observation".into()));
+        return super::lifecycle::recovered_process(bridge, collected, path).await;
     }
     let result = bridge.close().await;
     drop(bridge);
@@ -376,6 +379,7 @@ async fn drain_unacknowledged(stream: &mut TcpStream) -> usize {
         } else {
             assert_eq!(bytes, Vec::<u8>::new());
         }
+        super::lifecycle::probed(stream, &header).await;
         // Deliberately withhold Played, including after a cut. The owner's
         // real settlement deadline must collect an unacknowledged operation.
     }

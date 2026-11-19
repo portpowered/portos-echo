@@ -44,6 +44,7 @@ pub enum Event {
 }
 
 /// Call media and thread profile; admission consumes the zone as instruction text.
+#[derive(Clone, Copy)]
 pub struct Options<'a> {
     pub voice: Option<&'a str>,
     /// The delegated thread's base instructions; never sent as the Live prompt.

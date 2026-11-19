@@ -1,6 +1,9 @@
 //! T3 fault injection at the nominated bridge process/SSE boundary only.
+#[path = "lab_device_bridge/ring.rs"]
+mod ring;
 #[path = "lab_device_bridge/t5.rs"]
 mod t5;
+pub use ring::{host as ring_host, play as ring_play, preempted};
 use serde_json::{Value, json};
 use std::{
     fs::{self, OpenOptions},
@@ -55,6 +58,9 @@ pub fn adb(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::E
 }
 
 pub fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::Error>> {
+    if fixture["device_bridge_fault"] == "ring_replay" {
+        return ring::run(args);
+    }
     if fixture["device_bridge_fault"] == "t5" {
         return t5::run(args, fixture);
     }

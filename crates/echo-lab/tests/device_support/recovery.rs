@@ -3,6 +3,38 @@ use super::*;
 
 #[test]
 #[ignore = "T3 requires prebuilt bridge and pinned native host"]
+fn ring_replay_recovery_keeps_each_iteration_and_original_process_counts() {
+    let bench = Bench::new();
+    fs::write(
+        bench.root.path().join("fixture.json"),
+        json!({"real_config":true,"ring_wakes":[false,true,true]}).to_string(),
+    )
+    .unwrap();
+    bench.scenario(&json!([{"restart":{"process":"hassmic-host","count":2,"say":"fixture.pcm"}}]));
+    let output = bench.command(&bridge()).output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = bench.report();
+    assert_eq!(
+        report["step_attempts"],
+        json!([
+        {"step":0,"iteration":1,"attempts":2,"first_try_woke":false},
+        {"step":0,"iteration":2,"attempts":1,"first_try_woke":true}])
+    );
+    assert_eq!(report["m1"]["hassmic_host_restarts"], 2);
+    assert_eq!(report["m1"]["bridge_restarts"], 0);
+    assert_eq!(
+        report["talkback"],
+        json!({"eligible_steps":2,"first_try_wakes":1,"first_try_wake_rate":0.5,"replay_count":1})
+    );
+}
+
+#[test]
+#[ignore = "T3 requires prebuilt bridge and pinned native host"]
 fn device_m1_complete_unchanged_scenario_recovers_ten_plus_ten() {
     let bench = Bench::new();
     let scenario = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/scenarios/m1-hassmic-bridge.yaml");

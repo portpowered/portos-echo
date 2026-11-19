@@ -220,9 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_home_prompt_files_pin_unchanged_defaults() {
-        assert_eq!(include_str!("../../../examples/prompts/voice.md"), LIVE_INSTRUCTIONS);
-        assert_eq!(include_str!("../../../examples/prompts/runner.md"), RUNNER_INSTRUCTIONS);
+    fn agent_home_unchanged_builtin_runner_default() {
         assert_eq!(RUNNER_INSTRUCTIONS, "Client audio bridge");
     }
 

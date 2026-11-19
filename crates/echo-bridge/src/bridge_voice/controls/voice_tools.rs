@@ -5,6 +5,7 @@ use crate::{
     Error,
     bridge_codex::{SessionCommand, SessionRequest, ToolBudget},
     bridge_mcp::{self, Token},
+    bridge_notes::{Local, NAMES, Notes},
     bridge_runtime::bridge_screen::Screen,
     bridge_trace::Trace,
 };
@@ -104,7 +105,7 @@ impl<H: ToolHost + Sync> ToolHost for Session<H> {
 }
 
 pub(super) struct Tools {
-    pub host: Option<Policy<Mcp>>,
+    pub host: Option<Local<Policy<Mcp>>>,
     pub config: AgentConfig,
     pub budget: ToolBudget,
     allowed: Vec<String>,
@@ -172,7 +173,10 @@ impl Tools {
             screen.presentation.clone(),
         )
         .map_err(|_| Error::Unavailable)?;
-        self.host = Some(host);
+        self.host = Some(Local {
+            host,
+            notes: Notes::new(config.home.as_ref(), trace.clone()),
+        });
         self.trace = Some(trace.clone());
         Ok(())
     }
@@ -190,7 +194,13 @@ impl Tools {
         }
         // Link can complete through the operator endpoint before the first wake.
         // Discovery occurs once, before thread/start, and never grants authority.
-        session_catalog(self.specs.as_ref().ok_or(Error::Unavailable)?.clone(), &self.allowed)
+        let mut local = session_specs().to_vec();
+        local.extend(self.host.as_ref().ok_or(Error::Unavailable)?.notes.specs());
+        local_catalog(
+            self.specs.as_ref().ok_or(Error::Unavailable)?.clone(),
+            &self.allowed,
+            local,
+        )
     }
 
     pub async fn close(&mut self) {
@@ -203,15 +213,13 @@ impl Tools {
 
 /// Append both builtins after discovery. A discovered tool may neither
 /// duplicate nor displace either builtin's exact alias.
-pub(super) fn session_catalog(mut specs: Vec<ToolSpec>, allowed: &[String]) -> Result<Catalog, Error> {
-    specs.extend(session_specs());
-    let mut allowed = allowed.to_vec();
-    allowed.extend([EXTEND.to_owned(), END.to_owned()]);
-    let catalog = Catalog::new(specs, &allowed).map_err(|_| Error::Input)?;
-    if [EXTEND, END].iter().any(|name| catalog.resolve(name) != Some(*name)) {
-        return Err(Error::Input);
-    }
-    Ok(catalog)
+#[cfg(test)]
+pub(super) fn session_catalog(specs: Vec<ToolSpec>, allowed: &[String]) -> Result<Catalog, Error> {
+    local_catalog(specs, allowed, session_specs().to_vec())
+}
+
+fn local_catalog(specs: Vec<ToolSpec>, allowed: &[String], local: Vec<ToolSpec>) -> Result<Catalog, Error> {
+    Catalog::with_local(specs, allowed, local, &NAMES).map_err(|_| Error::Input)
 }
 
 pub(super) async fn conversation<L, R, W, P>(

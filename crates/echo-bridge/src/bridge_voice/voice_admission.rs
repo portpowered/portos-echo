@@ -10,6 +10,7 @@ use tokio::{
     time::{Instant, timeout, timeout_at},
 };
 
+#[derive(Clone)]
 pub struct ServeOptions<'a> {
     pub kill_path: Option<&'a std::path::Path>,
     pub call: bridge_codex::Options<'a>,
@@ -37,7 +38,8 @@ pub enum ServeNotice {
 ///
 /// Cancellation must be forwarded here from the host's watch receiver. Active
 /// call/media cleanup is awaited before returning to device close/child reaping.
-/// A failed conversation terminates this borrower; no replay or restart occurs.
+/// A failed conversation terminates this borrower; no replay occurs. The
+/// runtime owner replaces the whole authenticated generation.
 ///
 /// # Errors
 /// Fixed device/control/media/observer failures and invalid budgets. The caller

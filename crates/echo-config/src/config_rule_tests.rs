@@ -19,6 +19,53 @@ fn change(key: &str, old: &str, new: &str) -> String {
 }
 
 #[test]
+fn agent_tools_selection_defaults_and_independent_groups_are_offline() {
+    use crate::AgentTools;
+    assert_eq!(BridgeConfig::from_toml_str(EXAMPLE).unwrap().home, None);
+    let home = std::env::temp_dir().join(format!("echo-agent-tools-uncreated-{}", std::process::id()));
+    assert!(!home.exists());
+    for (selection, notes, prompts) in [
+        ("", true, true),
+        ("agent_tools=true", true, true),
+        ("agent_tools=false", false, false),
+        ("agent_tools=[]", false, false),
+        ("agent_tools=['notes']", true, false),
+        ("agent_tools=['prompts']", false, true),
+        ("agent_tools=['notes','prompts']", true, true),
+        ("agent_tools=['prompts','notes']", true, true),
+    ] {
+        let input = format!("{EXAMPLE}\n[home]\ndir='{}'\n{selection}\n", home.display());
+        let parsed = BridgeConfig::from_toml_str(&input).unwrap().home.unwrap();
+        assert_eq!(parsed.dir, home);
+        assert_eq!(parsed.agent_tools, AgentTools { notes, prompts });
+        assert!(!home.exists());
+    }
+}
+
+#[test]
+fn agent_tools_rejects_duplicates_and_invalid_types_without_input_leaks() {
+    let home = std::env::temp_dir();
+    for (value, reason) in [
+        ("['notes','notes']", "duplicate group"),
+        ("['prompts','prompts']", "duplicate group"),
+        ("['notes','prompts','notes']", "duplicate group"),
+        ("['SYNTHETIC_VALUE']", "invalid type or value"),
+        ("['Notes']", "invalid type or value"),
+        ("['notes',true]", "invalid type or value"),
+        ("[false]", "invalid type or value"),
+        ("[1]", "invalid type or value"),
+        ("[{}]", "invalid type or value"),
+        ("'SYNTHETIC_VALUE'", "invalid type or value"),
+        ("1", "invalid type or value"),
+        ("1.0", "invalid type or value"),
+        ("{}", "invalid type or value"),
+    ] {
+        let input = format!("{EXAMPLE}\n[home]\ndir='{}'\nagent_tools={value}\n", home.display());
+        assert_eq!(error(&input, "home.agent_tools"), format!("home.agent_tools: {reason}"));
+    }
+}
+
+#[test]
 fn audio_lead_defaults_boundaries_and_safe_errors() {
     for suffix in ["", "\n[audio]\n"] {
         assert_eq!(

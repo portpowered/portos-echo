@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+mod ring_replay;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 pub const FAKE: &str = env!("CARGO_BIN_EXE_echo-lab-fake-run");

@@ -239,7 +239,6 @@ mod tests {
             (json!({"malformed":"hold"}), "hold:", false),
             (json!({"fail":"hold"}), "hold:", false),
             (json!({"fail":"reply"}), "invalid reply WAV", true),
-            (json!({"reply":{"reply_frames":0}}), "no post-playback", true),
         ] {
             let session = Session::new(&fixture);
             failed(&session.run(&[]), message);

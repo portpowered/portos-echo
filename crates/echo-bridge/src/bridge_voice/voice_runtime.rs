@@ -1,5 +1,11 @@
 //! Presentation lifetime encloses authenticated device and conversation cleanup.
-use super::{HostOptions, ServeOptions, voice_host::with_capture, voice_view::View};
+use super::{
+    HostOptions, ServeOptions,
+    retained_link::Retained,
+    voice_host::with_capture,
+    voice_recovery::{Round, Stage, supervise},
+    voice_view::View,
+};
 use crate::bridge_settings::SettingsService;
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_config::{LiveMode, ScreenConfig};
@@ -7,8 +13,8 @@ use echo_link::LinkConnector;
 use echo_media::MediaPeer;
 use echo_screen_contract::settings_v1::LinkStatusV1;
 use echo_screen_server::SettingsRequest;
-use std::{cell::Cell, future::Future, net::SocketAddr, path::Path};
-use tokio::sync::watch;
+use std::{cell::Cell, future::Future, net::SocketAddr, path::Path, pin::Pin};
+use tokio::{sync::watch, time::Instant};
 
 pub struct RuntimeOptions<'a> {
     pub host: HostOptions<'a>,
@@ -43,10 +49,15 @@ impl RuntimeOptions<'_> {
 /// policy, consent and the effect ledger across calls. The service monitors
 /// the nominated kill file; the caller supplies a peer factory.
 ///
+/// After first readiness no failure ends this owner: a failed generation is
+/// traced, shown on health and screen, and replaced after bounded backoff while
+/// the device link is kept (see `voice_recovery`).
+///
 /// # Errors
-/// Startup, service, publication and cleanup failures use fixed categories.
-/// Authorization failures publish the existing relink instruction and keep the
-/// screen available until cancellation; no implicit login or restart occurs.
+/// A stop that was not requested, the kill path, and configuration or
+/// credentials that are unusable before first readiness, in fixed categories.
+/// A startup authorization failure publishes the existing relink instruction
+/// and keeps the screen available until cancellation; no implicit login occurs.
 pub async fn execute<C: LinkConnector, P: MediaPeer>(
     options: RuntimeOptions<'_>,
     connector: C,
@@ -183,43 +194,18 @@ async fn work<C: LinkConnector, P: MediaPeer>(
         requested.set(true);
     };
     tokio::pin!(cancelled);
-    let termination = super::voice_kill::Termination::default();
-    let kill_path = options.voice.kill_path;
-    let failsafe_seconds = options.capture_failsafe_seconds();
-    let result = with_capture(
-        options.host,
-        connector,
-        failsafe_seconds,
-        cancelled.as_mut(),
-        async |io, client, stopping| {
-            let mut tools = options.delegation.map(|config| super::voice_tools::Tools::new(config, options.utc_day));
-            let setup = async {
-                if let (Some(config), Some(tools)) = (options.delegation, &mut tools) {
-                    view.open_tools(tools, config, options.mcp_epoch).await?;
-                }
-                Ok::<_, Error>(())
-            };
-            let ready = tokio::select! {
-                biased;
-                () = stopped(stopping.clone()) => Err(Error::Control),
-                result = tokio::time::timeout(std::time::Duration::from_secs(15), setup) => result.unwrap_or(Err(Error::Deadline)),
-            };
-            let setup_trace = view.setup_trace();
-            let result = match ready {
-                Ok(()) => super::voice_admission::service(client, io, options.voice, peer, stopped(stopping), |notice| {
-                termination.observe(&notice);
-                view.observe(notice)
-                }, (tools.as_mut(), Some(setup_trace), options.delegation.is_some_and(|config| config.wake_earcon), Some(&termination))).await,
-                Err(error) => Err(error),
-            };
-            termination.returned(&result, requested.get());
-            if let Some(tools) = &mut tools { tools.close().await; }
-            result
-        },
-    )
-    .await;
-    // with_device has now awaited call/media, device and process shutdown.
-    let result = termination.finish(result, requested.get(), kill_path, &mut |notice| view.observe(notice));
+    let link = Retained::new(connector);
+    let mut stage = Live {
+        budget: options.host.deadline.saturating_duration_since(Instant::now()),
+        options,
+        peer,
+        view,
+        requested,
+    };
+    // Every generation has awaited its call/media and process shutdown; the
+    // supervisor has closed the device link.
+    let result = supervise(&mut stage, &link, cancelled.as_mut()).await;
+    let view = stage.view;
     match result {
         Err(error) => {
             view.failed(&error).await?;
@@ -232,6 +218,103 @@ async fn work<C: LinkConnector, P: MediaPeer>(
     }
 }
 
+/// The production stage: each generation is one Codex child, its account
+/// admission, the kept device link, MCP tools and the wake service.
+struct Live<'a, 'v, 'w, F> {
+    options: RuntimeOptions<'a>,
+    peer: F,
+    view: &'v mut View<'w>,
+    requested: &'v Cell<bool>,
+    /// Startup allowance, granted afresh to every generation.
+    budget: std::time::Duration,
+}
+
+impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<C> for Live<'_, '_, '_, F> {
+    async fn generation(&mut self, link: &Retained<C>, cancelled: Pin<&mut impl Future<Output = ()>>) -> Round {
+        let (options, view, peer, requested) = (&self.options, &mut *self.view, &mut self.peer, self.requested);
+        let termination = super::voice_kill::Termination::default();
+        let (ready, served) = (Cell::new(None), Cell::new(false));
+        let mut host = options.host.clone();
+        host.deadline = Instant::now() + self.budget;
+        let mut voice = options.voice.clone();
+        voice.session.muted = link.muted().unwrap_or(voice.session.muted);
+        let result = with_capture(
+            host,
+            link,
+            options.capture_failsafe_seconds(),
+            cancelled,
+            async |io, client, stopping| {
+                let mut tools = options
+                    .delegation
+                    .map(|config| super::voice_tools::Tools::new(config, options.utc_day.clone()));
+                let setup = async {
+                    if let (Some(config), Some(tools)) = (options.delegation, &mut tools) {
+                        view.open_tools(tools, config, options.mcp_epoch).await?;
+                    }
+                    Ok::<_, Error>(())
+                };
+                let prepared = tokio::select! {
+                    biased;
+                    () = stopped(stopping.clone()) => Err(Error::Control),
+                    result = tokio::time::timeout(std::time::Duration::from_secs(15), setup) => result.unwrap_or(Err(Error::Deadline)),
+                };
+                let setup_trace = view.setup_trace();
+                let earcon = options.delegation.is_some_and(|config| config.wake_earcon);
+                let result = match prepared {
+                    Ok(()) => {
+                        let observe = |notice| {
+                            progress(&notice, &ready, &served);
+                            termination.observe(&notice);
+                            view.observe(notice)
+                        };
+                        let context = (tools.as_mut(), Some(setup_trace), earcon, Some(&termination));
+                        super::voice_admission::service(client, io, voice, peer, stopped(stopping), observe, context).await
+                    }
+                    Err(error) => Err(error),
+                };
+                termination.returned(&result, requested.get());
+                if let Some(tools) = &mut tools {
+                    tools.close().await;
+                }
+                result
+            },
+        )
+        .await;
+        // with_capture has now awaited call/media and process shutdown.
+        let result = termination.finish(result, requested.get(), options.voice.kill_path, &mut |notice| {
+            view.observe(notice)
+        });
+        Round {
+            result,
+            ready: ready.get(),
+            served: served.get(),
+            killed: termination.killed(),
+        }
+    }
+
+    fn requested(&self) -> bool {
+        self.requested.get()
+    }
+
+    async fn recovering(&mut self, error: &Error, attempt: u32, delay: std::time::Duration, linked: bool) {
+        // Reporting is best effort: a failed report must not end the retry.
+        let _ = self.view.recovering(error, (attempt, delay), linked);
+    }
+
+    fn device(&mut self, event: echo_link::LinkEvent<()>) {
+        let _ = self.view.observe(super::ServeNotice::Device(event));
+    }
+}
+
+fn progress(notice: &super::ServeNotice, ready: &Cell<Option<Instant>>, served: &Cell<bool>) {
+    use super::{ServeNotice, SessionNotice};
+    match notice {
+        ServeNotice::Ready if ready.get().is_none() => ready.set(Some(Instant::now())),
+        ServeNotice::Session(SessionNotice::Connected | SessionNotice::Completed(_)) => served.set(true),
+        _ => (),
+    }
+}
+
 async fn stopped(mut stopping: watch::Receiver<bool>) {
     loop {
         if *stopping.borrow_and_update() || stopping.changed().await.is_err() {
@@ -241,242 +324,5 @@ async fn stopped(mut stopping: watch::Receiver<bool>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::{Value, json};
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::TcpStream;
-
-    // T1: real terminal arbitration and trace projection, memory-only cleanup
-    // barriers and a private durable marker. No timer or socket is needed.
-    #[tokio::test(start_paused = true)]
-    async fn wake_earcon_kill_shutdown_ordering() {
-        for order in [
-            "kill_first",
-            "eof_first",
-            "both_ready",
-            "kill_cleared",
-            "shutdown",
-            "failure",
-            "mute",
-        ] {
-            terminal_order(order).await;
-        }
-    }
-
-    async fn terminal_order(order: &str) {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("kill");
-        let trace_path = directory.path().join("trace");
-        let mut trace = Trace::open(&trace_path, "api_key").unwrap();
-        let screen = Screen::bind(None).await.unwrap();
-        let health = Health::offline();
-        let mut view = View::new(&screen, &health, &mut trace);
-        let termination = super::super::voice_kill::Termination::default();
-        let requested = Cell::new(false);
-        let (entered, cleanup_entered) = tokio::sync::oneshot::channel();
-        let (release, cleanup_released) = tokio::sync::oneshot::channel();
-        let work = async {
-            observe_terminal(&termination, &mut view, super::super::ServeNotice::Listening);
-            let result = interrupt(order, &path, &termination, &mut view).await;
-            requested.set(order == "eof_first" || order == "both_ready" || order == "shutdown");
-            termination.returned(&result, requested.get());
-            entered.send(()).unwrap();
-            cleanup_released.await.unwrap();
-            termination.finish(result, requested.get(), Some(&path), &mut |notice| view.observe(notice))
-        };
-        let signals = async {
-            cleanup_entered.await.unwrap();
-            if order == "eof_first" {
-                std::fs::write(&path, b"").unwrap();
-            } else if order == "kill_cleared" {
-                std::fs::remove_file(&path).unwrap();
-            }
-            requested.set(true);
-            release.send(()).unwrap();
-        };
-        let (result, ()) = tokio::join!(work, signals);
-        assert_eq!(
-            result,
-            if order == "shutdown" {
-                Ok(())
-            } else if order == "failure" {
-                Err(Error::Wyoming)
-            } else {
-                Err(Error::Control)
-            },
-            "{order}"
-        );
-        terminal_receipts(&trace_path, order);
-        // Clear/recovery starts a new run rather than poisoning future EOF.
-        let _ = std::fs::remove_file(&path);
-        observe_terminal(&termination, &mut view, super::super::ServeNotice::Listening);
-        assert_eq!(
-            termination.finish(Err(Error::Control), true, Some(&path), &mut |notice| view
-                .observe(notice)),
-            Ok(())
-        );
-    }
-
-    fn terminal_receipts(trace_path: &Path, order: &str) {
-        let rows: Vec<Value> = std::fs::read_to_string(trace_path)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        assert_eq!(
-            rows.iter().filter(|row| row["event"] == "kill.enabled").count(),
-            usize::from(matches!(
-                order,
-                "kill_first" | "eof_first" | "both_ready" | "kill_cleared"
-            )),
-            "{order}"
-        );
-        assert!(!rows.iter().any(|row| matches!(
-            row["event"].as_str(),
-            Some("wake.earcon_played" | "reply.played" | "bridge.run_completed")
-        )));
-    }
-
-    fn observe_terminal(
-        termination: &super::super::voice_kill::Termination,
-        view: &mut View<'_>,
-        notice: super::super::ServeNotice,
-    ) {
-        termination.observe(&notice);
-        view.observe(notice).unwrap();
-    }
-
-    async fn interrupt(
-        order: &str,
-        path: &Path,
-        termination: &super::super::voice_kill::Termination,
-        view: &mut View<'_>,
-    ) -> Result<(), Error> {
-        use super::super::{Notice, ServeNotice, SessionNotice};
-        if matches!(order, "kill_first" | "kill_cleared" | "both_ready") {
-            std::fs::write(path, b"").unwrap();
-            let killed = Cell::new(false);
-            let gate = super::super::voice_kill::Gate::new(Some(path));
-            gate.cancel(
-                async {
-                    if order != "both_ready" {
-                        std::future::pending::<()>().await;
-                    }
-                },
-                &killed,
-            )
-            .await;
-            assert!(killed.get(), "{order}: ready kill must beat EOF");
-            if order == "kill_first" {
-                observe_terminal(termination, view, ServeNotice::Kill(true));
-            } else {
-                termination.trip();
-            }
-        } else if order == "mute" {
-            observe_terminal(
-                termination,
-                view,
-                ServeNotice::Session(SessionNotice::Run(Notice::Device(echo_link::LinkEvent::Mute(true)))),
-            );
-        }
-        Err(if order == "failure" {
-            Error::Wyoming
-        } else {
-            Error::Control
-        })
-    }
-
-    async fn screen(directory: &Path) -> Screen {
-        let token = directory.join("pairing");
-        std::fs::write(&token, "synthetic-screen-pair").unwrap();
-        Screen::bind(Some(&ScreenConfig {
-            listen: "127.0.0.1:0".parse().unwrap(),
-            pairing_token_file: token,
-        }))
-        .await
-        .unwrap()
-    }
-
-    async fn request(screen: &Screen, request: &str) -> BufReader<TcpStream> {
-        let mut stream = TcpStream::connect(screen.address().unwrap()).await.unwrap();
-        stream.write_all(request.as_bytes()).await.unwrap();
-        let mut reader = BufReader::new(stream);
-        let mut headers = String::new();
-        loop {
-            let mut line = String::new();
-            assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
-            headers.push_str(&line);
-            if line == "\r\n" {
-                break;
-            }
-        }
-        assert!(headers.starts_with("HTTP/1.1 200 OK") || headers.starts_with("HTTP/1.1 100 Continue"));
-        reader
-    }
-
-    // T3: actual loopback SSE, production error publication and release trace.
-    #[tokio::test]
-    async fn t3_uncancelled_terminal_error_reaches_screen_before_release() {
-        for _ in 0..100 {
-            let directory = tempfile::tempdir().unwrap();
-            let mut screen = screen(directory.path()).await;
-            let path = directory.path().join("trace");
-            let mut trace = Trace::open(&path, "api_key").unwrap();
-            let mut stream = request(
-                &screen,
-                "GET /events?token=synthetic-screen-pair HTTP/1.1\r\nHost: localhost\r\n\r\n",
-            )
-            .await;
-            let health = Health::offline();
-            View::new(&screen, &health, &mut trace)
-                .failed(&Error::Unavailable)
-                .await
-                .unwrap();
-            close_screen(&mut screen, &mut trace, true).await.unwrap();
-            let mut tail = String::new();
-            stream.read_to_string(&mut tail).await.unwrap();
-            let frame = tail.lines().find_map(|line| line.strip_prefix("data: ")).unwrap();
-            assert_eq!(
-                serde_json::from_str::<Value>(frame).unwrap(),
-                json!({
-                    "seq":1, "state":{"state":"error", "message":"Conversation unavailable. Try another wake.", "relink":false}
-                })
-            );
-            let rows: Vec<Value> = std::fs::read_to_string(path)
-                .unwrap()
-                .lines()
-                .map(|line| serde_json::from_str(line).unwrap())
-                .collect();
-            assert_eq!(rows[0]["event"], "bridge.error");
-            assert_eq!(rows[1]["event"], "screen.released");
-            assert_eq!(rows[1]["dropped_clients"], 0);
-        }
-    }
-
-    // T3: 100 Continue proves this owned HTTP handler is awaiting a real body.
-    // Unsent body bytes cannot be drained; cancellation must bypass that wait.
-    #[tokio::test(start_paused = true)]
-    async fn t3_screen_release_bounds_stalled_client_and_cancellation_skips_drain() {
-        for graceful in [true, false] {
-            let directory = tempfile::tempdir().unwrap();
-            let mut screen = screen(directory.path()).await;
-            let path = directory.path().join("trace");
-            let mut trace = Trace::open(&path, "api_key").unwrap();
-            let mut stream = request(&screen, "POST /actions?token=synthetic-screen-pair HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n").await;
-            let start = tokio::time::Instant::now();
-            close_screen(&mut screen, &mut trace, graceful).await.unwrap();
-            assert_eq!(
-                start.elapsed(),
-                std::time::Duration::from_millis(if graceful { 250 } else { 0 })
-            );
-            let row: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-            assert_eq!(row["event"], "screen.released");
-            assert_eq!(row["dropped_clients"], usize::from(graceful));
-            let mut tail = Vec::new();
-            stream.read_to_end(&mut tail).await.unwrap();
-            assert_eq!(tail, [] as [u8; 0]);
-            assert!(screen.address().is_none());
-        }
-    }
-}
+#[path = "recovery/runtime_tests.rs"]
+mod tests;

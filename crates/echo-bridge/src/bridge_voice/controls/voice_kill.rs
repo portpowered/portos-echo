@@ -40,6 +40,11 @@ impl Termination {
         }
     }
 
+    /// The kill switch ended the active run; final once `finish` has run.
+    pub fn killed(&self) -> bool {
+        self.killed.get()
+    }
+
     pub fn returned(&self, result: &Result<(), Error>, requested: bool) {
         if result.is_err() && !requested {
             self.failed.set(true);

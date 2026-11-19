@@ -8,6 +8,8 @@ pub mod bridge_input;
 pub mod bridge_mcp;
 #[path = "bridge_muse/bridge_muse.rs"]
 pub mod bridge_muse;
+#[path = "bridge_notes/notes.rs"]
+mod bridge_notes;
 pub mod bridge_operator;
 mod bridge_private;
 pub mod bridge_runtime;
