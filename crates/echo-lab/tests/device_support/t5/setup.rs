@@ -23,7 +23,7 @@ fn t3_device_t5_spoof_setup_uses_nominated_endpoint_and_joins_listener() {
         let session = prepare(&json!({"spoof_probe":true}));
         let path = nominate(
             &session,
-            &format!("http://{address}/mcp"),
+            &format!("http://{address}/mcp"), // lint-rules: allow-literal runtime address reserved on Ipv4Addr::LOCALHOST
             json!({"mcp":"spoof","backend":"client"}),
         );
         let original = fs::read_to_string(session.0.join("bridge.toml")).unwrap();
@@ -62,7 +62,11 @@ fn t3_device_t5_spoof_bind_failure_preserves_foreign_listener_and_starts_no_brid
     let reserved = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let address = reserved.local_addr().unwrap();
     let session = prepare(&json!({}));
-    let path = nominate(&session, &format!("http://{address}/mcp"), json!({"mcp":"spoof"}));
+    let path = nominate(
+        &session,
+        &format!("http://{address}/mcp"), // lint-rules: allow-literal runtime address reserved on Ipv4Addr::LOCALHOST
+        json!({"mcp":"spoof"}),
+    );
     let output = voice::budget_command(&session, true, &path).output().unwrap();
     failed(
         &output,
@@ -85,7 +89,11 @@ fn t3_device_t5_spoof_cleanup_retains_failed_screen_and_late_error_verdicts() {
         let reserved = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = reserved.local_addr().unwrap();
         let session = prepare(&fixture);
-        let path = nominate(&session, &format!("http://{address}/mcp"), json!({"mcp":"spoof"}));
+        let path = nominate(
+            &session,
+            &format!("http://{address}/mcp"), // lint-rules: allow-literal runtime address reserved on Ipv4Addr::LOCALHOST
+            json!({"mcp":"spoof"}),
+        );
         drop(reserved);
         let output = voice::budget_command(&session, true, &path).output().unwrap();
         failed(

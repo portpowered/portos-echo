@@ -71,7 +71,7 @@ mod tests {
         assert_eq!(port(&value), Ok(18080));
         let mut unrelated = original.clone();
         unrelated.name = "unrelated".into();
-        unrelated.url = "https://service.example.invalid/mcp".into();
+        unrelated.url = "https://service.example.invalid/mcp".into(); // lint-rules: allow-literal inert unrelated config entry, never connected
         unrelated.auth = McpAuth::BearerFile;
         unrelated.bearer_file = Some("absent-protected-state".into());
         unrelated.allow_tools = vec!["another.tool".into()];
@@ -92,7 +92,7 @@ mod tests {
             "http://127.0.0.1:18080/mcp#extra",
             "http://127.0.0.1:18080/other",
             "http://127.0.0.1:0/mcp",
-            "http://127.1:18080/mcp",
+            "http://127.1:18080/mcp", // lint-rules: allow-literal offline noncanonical URL refusal, never connected
             "http://127.0.0.1/mcp",
         ] {
             let mut value = config();

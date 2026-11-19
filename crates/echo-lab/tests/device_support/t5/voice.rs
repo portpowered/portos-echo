@@ -1,5 +1,6 @@
 //! Voice overlay witnesses use authored M2 steps; session runtime stays unclaimed.
 use super::*;
+use std::fmt::Write;
 
 pub(super) fn with_budgets(session: &Session, budgets: Value) -> PathBuf {
     let mut authored: Value = serde_norway::from_str(&fs::read_to_string(scenario()).unwrap()).unwrap();
@@ -28,7 +29,7 @@ fn t3_device_t5_voice_budget_copy_preserves_real_paths_and_operator_file() {
         let mut contents = fs::read_to_string(&path).unwrap();
         if real {
             let home = serde_json::to_string(&session.0.join("protected/home").to_string_lossy()).unwrap();
-            contents.push_str(&format!("\n[codex]\nhome = {home}\n"));
+            write!(contents, "\n[codex]\nhome = {home}\n").unwrap();
         }
         fs::write(&path, &contents).unwrap();
         let scenario = with_budgets(&session, json!({"session_listen_seconds":3,"session_max_seconds":30}));
