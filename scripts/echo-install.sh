@@ -36,7 +36,11 @@ start requires exact echo-bridge NAME from ps -A -o PID,NAME and a new
 hassmic boot.log client connected line within 20 seconds.
 stop closes held stdin and verifies absence; never kills an unknown process.
 status shows process, uptime seconds, sanitized hassmic link and five bridge.log lines.
+Status fields: process=running|stopped; uptime_seconds=INTEGER|unavailable;
+hassmic_link=SANITIZED_LINE|unavailable
 uninstall retains private/ and home/ unless --purge; never changes hassmic or /system.
+Success: echo-install: uninstalled (state retained)
+Success with --purge: echo-install: uninstalled (purged)
 Exit status: 0 success/help/status observation; 1 operation/prerequisite failure;
 2 usage error. Errors use fixed diagnostics without raw adb output.
 Example: sh scripts/echo-install.sh install --config ./bridge.toml --bridge ./build/echo-bridge --codex ./build/codex-app-server --ca ./build/cacert.pem
@@ -189,8 +193,8 @@ if test -n \"\$pid\"; then
 else printf 'process=stopped\\nuptime_seconds=unavailable\\n'; fi
 if test -f /data/local/hassmic/boot.log && test ! -L /data/local/hassmic/boot.log; then
   link=\$(awk '/client connected|no Home Assistant link/ { line=\$0 } END { print line }' /data/local/hassmic/boot.log)
-  printf 'hassmic=%s\\n' \"\${link:-unavailable}\"
-else printf 'hassmic=unavailable\\n'; fi
+  printf 'hassmic_link=%s\\n' \"\${link:-unavailable}\"
+else printf 'hassmic_link=unavailable\\n'; fi
 printf 'bridge.log (last 5):\\n'
 if test -f '$device/private/bridge.log'; then tail -n 5 '$device/private/bridge.log';
 else printf 'unavailable\\n'; fi"
@@ -229,8 +233,10 @@ if [ "$command_name" = uninstall ]; then
 rm -f '$device/private/launch.sh'"
   if [ "$purge" = true ]; then
     run_adb shell "rm -rf '$device/private' '$device/home'"
+    printf '%s\n' 'echo-install: uninstalled (purged)'
+  else
+    printf '%s\n' 'echo-install: uninstalled (state retained)'
   fi
-  printf '%s\n' 'echo-install: uninstalled'
   exit 0
 fi
 if [ "$command_name" = start ]; then
