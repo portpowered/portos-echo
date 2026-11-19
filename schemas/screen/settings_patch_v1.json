@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SettingsPatchV1",
+  "type": "object",
+  "properties": {
+    "settings": {
+      "$ref": "#/$defs/SettingsFieldsV1"
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV1"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "settings"
+  ],
+  "$defs": {
+    "AgentPatchV1": {
+      "type": "object",
+      "properties": {
+        "daily_request_cap": {
+          "$ref": "#/$defs/DailyCapV1"
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "CodexPatchV1": {
+      "type": "object",
+      "properties": {
+        "voice": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "voice"
+      ]
+    },
+    "DailyCapV1": {
+      "type": "string",
+      "maxLength": 19,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "SettingsFieldsV1": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentPatchV1"
+        },
+        "codex": {
+          "$ref": "#/$defs/CodexPatchV1"
+        },
+        "voice": {
+          "$ref": "#/$defs/VoicePatchV1"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SettingsVersionV1": {
+      "type": "integer",
+      "const": 1
+    },
+    "VoicePatchV1": {
+      "description": "Sparse editable leaves. Effective ranges/voices are validated by echo-config.",
+      "type": "object",
+      "properties": {
+        "session_listen_enabled": {
+          "type": "boolean"
+        },
+        "session_listen_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
