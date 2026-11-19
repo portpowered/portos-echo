@@ -60,7 +60,7 @@ fn screen_pack_urls_refuse_insecure_or_ambiguous_authorities_without_leaking_inp
         "https://127.0.0.1/pack.tar.gz#SYNTHETIC_VALUE",
         "https://SYNTHETIC_VALUE@127.0.0.1/pack.tar.gz",
         "https://127.0.0.1:65536/pack.tar.gz",
-        "https:///SYNTHETIC_VALUE",
+        "https:///SYNTHETIC_VALUE", // lint-rules: allow-literal inert malformed-authority parser fixture; never requested
         "https://127.0.0.1\\SYNTHETIC_VALUE",
         "https://127.0.0.1/SYNTHETIC_VALUE value",
         "https://127.0.0.1:/pack.tar.gz",

@@ -57,8 +57,10 @@ impl SettingsOverlay {
             toml::de::DeTable::parse(input).map_err(|_| ConfigError::new("settings.toml", "invalid TOML syntax"))?;
         let value = toml::de::DeValue::Table(table.into_inner());
         let mut fields = Fields::new(value, "config")?;
-        let mut result = Self::default();
-        result.screen_pack = fields.optional("screen_pack")?;
+        let mut result = Self {
+            screen_pack: fields.optional("screen_pack")?,
+            ..Self::default()
+        };
         if let Some(value) = result.screen_pack() {
             crate::config_screen::selection(value)?;
         }

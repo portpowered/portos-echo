@@ -335,3 +335,23 @@ fn screen_pack_store_persists_selection_without_voice_restart_and_preserves_sibl
         );
     }
 }
+
+#[test]
+fn screen_pack_store_failed_selection_save_retains_previous_file_and_accepted_choice() {
+    let (_root, mut store) = setup();
+    assert!(!store.save(&patch("screen_pack='template@0.1.0'")).unwrap());
+    let before = fs::read(store.home.join("settings.toml")).unwrap();
+    for stage in [Stage::Create, Stage::Write, Stage::FileSync, Stage::Rename] {
+        let error = store.save_with(&patch("screen_pack=''"), |current| {
+            if current == stage {
+                Err(std::io::Error::other("synthetic persistence failure"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(error, Err(SettingsError::Persistence)));
+        assert_eq!(store.overlay.screen_pack(), Some("template@0.1.0"));
+        assert_eq!(fs::read(store.home.join("settings.toml")).unwrap(), before);
+        assert_eq!(files(&store.home), ["settings.toml"]);
+    }
+}
