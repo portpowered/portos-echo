@@ -445,3 +445,30 @@ async fn codex_unsupported_commands_have_zero_wire_effects() {
         assert_eq!(writer, b"");
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn startup_network_account_classification_uses_decoded_wire_without_exposing_details() {
+    for (message, expected) in [
+        ("workspace routing discovery failed", AccountError::Transport),
+        ("workspace routing discovery timed out", AccountError::Transport),
+        (
+            "workspace routing discovery unauthorized (401)",
+            AccountError::Authorization,
+        ),
+        ("synthetic-private-detail", AccountError::Authorization),
+    ] {
+        let (mut io, mut peer) = pair();
+        let server = async {
+            let id = request(&mut peer, "account/read", json!({"refreshToken":false})).await;
+            send(
+                &mut peer,
+                json!({"id":id,"error":{"code":-32603,"message":message,
+                "data":"synthetic-private-detail"}}),
+            )
+            .await;
+        };
+        let (result, ()) = tokio::join!(authenticate(&mut io, LiveMode::Chatgpt, None), server);
+        assert_eq!(result, Err(expected));
+        assert!(!expected.to_string().contains("private"));
+    }
+}

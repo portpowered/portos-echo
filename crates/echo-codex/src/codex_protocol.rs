@@ -32,6 +32,7 @@ pub enum Message {
     Failure {
         id: RequestId,
         code: i64,
+        retryable: bool,
     },
 }
 
@@ -79,10 +80,20 @@ pub fn decode(bytes: &[u8]) -> Result<Message, super::codex_rpc::RpcError> {
             if !error.get("message").is_some_and(Value::is_string) {
                 return Err(RpcError::Malformed);
             }
-            Ok(Message::Failure { id, code })
+            let retryable = transient_discovery(code, &error["message"]);
+            Ok(Message::Failure { id, code, retryable })
         }
         _ => Err(RpcError::Malformed),
     }
+}
+
+// rust-v0.160.0's fixed transport categories; no raw text/data is retained.
+fn transient_discovery(code: i64, message: &Value) -> bool {
+    code == -32603
+        && matches!(
+            message.as_str(),
+            Some("workspace routing discovery failed" | "workspace routing discovery timed out")
+        )
 }
 
 /// Minimal initialization always opts into experimental methods.

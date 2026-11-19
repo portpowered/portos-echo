@@ -13,6 +13,7 @@ pub(super) struct View<'a> {
     connected: bool,
     pending_connected: bool,
     mouth_paused: bool,
+    ever_ready: bool,
 }
 
 impl<'a> View<'a> {
@@ -52,6 +53,7 @@ impl<'a> View<'a> {
             connected: false,
             pending_connected: false,
             mouth_paused: false,
+            ever_ready: false,
         }
     }
 
@@ -59,9 +61,13 @@ impl<'a> View<'a> {
         match notice {
             ServeNotice::Kill(enabled) => self.kill(enabled),
             ServeNotice::Ready => {
+                self.ever_ready = true;
                 self.closed("idle")?;
                 self.relinked()?;
-                self.health.state.send_modify(|state| state.wyoming = "connected");
+                self.health.state.send_modify(|state| {
+                    state.wyoming = "connected";
+                    state.startup_waiting_reason = None;
+                });
                 self.screen.ready()?;
                 self.trace.record("bridge.ready", None, json!({}))?;
                 crate::bridge_runtime::publish("bridge.ready", None)
@@ -278,6 +284,7 @@ impl<'a> View<'a> {
         self.health.state.send_modify(|state| {
             state.live = "error";
             state.relink_required = relink;
+            state.startup_waiting_reason = (!self.ever_ready && !relink).then_some("dependency_unavailable");
             if !linked {
                 state.wyoming = "connecting";
             }
@@ -301,6 +308,7 @@ impl<'a> View<'a> {
         self.health.state.send_modify(|state| {
             state.live = "error";
             state.relink_required = relink;
+            state.startup_waiting_reason = None;
         });
         let state = crate::bridge_runtime::bridge_screen::failure_state(relink);
         if relink {

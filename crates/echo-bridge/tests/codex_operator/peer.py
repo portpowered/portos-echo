@@ -87,6 +87,25 @@ for line in sys.stdin:
     elif method == "account/read":
         assert request["params"] == {"refreshToken": False}
         mode = home.joinpath("mode").read_text()
+        if mode == "startup-network":
+            try:
+                with socket.create_connection(("127.0.0.1", int(home.joinpath("provider-port").read_text()))):
+                    outcome = "accepted"
+            except ConnectionRefusedError:
+                outcome = "refused"
+            with home.joinpath("provider-attempts").open("a") as attempts:
+                attempts.write(outcome + "\n")
+            if outcome == "refused":
+                emit({"id": request["id"], "error": {
+                    "code": -32603, "message": "workspace routing discovery failed",
+                    "data": "synthetic-private-detail"}})
+                continue
+        if mode in ("startup-timeout", "startup-unauthorized"):
+            message = "workspace routing discovery " + (
+                "timed out" if mode == "startup-timeout" else "unauthorized (401)")
+            emit({"id": request["id"], "error": {
+                "code": -32603, "message": message}})
+            continue
         if mode == "blocked-account":
             connection, _ = control.accept()
             with connection:
