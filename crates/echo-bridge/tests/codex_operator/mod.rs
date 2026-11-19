@@ -4,6 +4,7 @@ mod configured;
 mod device;
 mod fixture;
 mod host;
+mod recovery;
 mod tools;
 mod voice_entry;
 use fixture::Fixture;

@@ -31,13 +31,13 @@ pub async fn with_device<C: LinkConnector, T>(
     cancelled: impl Future<Output = ()>,
     session: impl AsyncFnOnce(&mut RpcIo<ChildStdout, ChildStdin>, &mut C::Link, watch::Receiver<bool>) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    with_capture(options, connector, 30, cancelled, session).await
+    with_capture(options, &connector, 30, cancelled, session).await
 }
 
 /// Use the configured stalled-progress watchdog without changing call policy.
 pub(super) async fn with_capture<C: LinkConnector, T>(
     options: HostOptions<'_>,
-    connector: C,
+    connector: &C,
     failsafe_seconds: u32,
     cancelled: impl Future<Output = ()>,
     session: impl AsyncFnOnce(&mut RpcIo<ChildStdout, ChildStdin>, &mut C::Link, watch::Receiver<bool>) -> Result<T, Error>,
@@ -56,7 +56,7 @@ pub(super) async fn with_capture<C: LinkConnector, T>(
         },
         async |io| {
             admitted.set(true);
-            device(io, &connector, (deadline, failsafe_seconds), stopping, session).await
+            device(io, connector, (deadline, failsafe_seconds), stopping, session).await
         },
     );
     tokio::pin!(operation, cancelled);

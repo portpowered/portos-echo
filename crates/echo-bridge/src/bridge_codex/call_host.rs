@@ -9,6 +9,7 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+#[derive(Clone)]
 pub struct HostOptions<'a> {
     pub config: &'a CodexConfig,
     pub mode: LiveMode,

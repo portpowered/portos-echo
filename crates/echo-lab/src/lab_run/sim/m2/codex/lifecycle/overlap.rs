@@ -74,7 +74,7 @@ async fn codex_lifecycle_active_survivor_services_own_peer_through_other_collect
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt production echo-bridge and offline Codex pin"]
-async fn codex_lifecycle_premature_socket_eof_retains_first_run_and_nonzero_collection() {
+async fn codex_lifecycle_premature_socket_eof_retains_first_run_and_keeps_the_bridge() {
     tokio::time::timeout(DEADLINE, Box::pin(async {
         let (mut first, mut second) = tokio::join!(Owner::start(120, false), Owner::start(120, false));
         tokio::join!(first.run(1), second.run(1));
@@ -83,10 +83,9 @@ async fn codex_lifecycle_premature_socket_eof_retains_first_run_and_nonzero_coll
         second.satellite.abort();
         assert!(second.satellite.await.unwrap_err().is_cancelled());
         assert!(second.listener_lifetime.upgrade().is_none());
-        let failure = second.bridge.expect("bridge.run_completed").await;
-        assert_eq!(failure, Err("process: exited before observation".into()));
+        // The lost device ends run 2 only; the bridge retries and stays up.
         let path = second.output.path().join("bridge.private.jsonl");
-        failed_process(second.bridge, second.collected).await;
+        recovered_process(second.bridge, second.collected, &path).await;
         let rows = read_trace(&path).unwrap();
         for event in ["bridge.run_completed", "reply.played"] {
             let receipts: Vec<_> = rows.records.iter().filter(|r| r["event"] == event).collect();
@@ -99,6 +98,6 @@ async fn codex_lifecycle_premature_socket_eof_retains_first_run_and_nonzero_coll
         remove_root(second.root);
         first.receipts(1);
         first.close(1).await;
-        super::super::provider::driver::report(format_args!("F-4: real Wyoming EOF; error=process: exited before observation; child exit=1; B completed/played=1; B2 success=0; each owner collected once"));
+        super::super::provider::driver::report(format_args!("F-4: real Wyoming EOF; bridge.recovering, no bridge.error; clean stop exit=0; B completed/played=1; B2 success=0; each owner collected once"));
     })).await.unwrap();
 }

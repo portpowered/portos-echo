@@ -316,7 +316,7 @@ pub(super) async fn failed_call(fault: &str, earcon: bool) {
             .unwrap();
         assert_eq!(frame["state"]["state"], expected, "fault={fault} earcon={earcon}");
     }
-    failed_process(bridge, collected).await;
+    recovered_process(bridge, collected, &path).await;
     satellite.await.unwrap();
     let observed = provider.close().await.unwrap();
     failure_receipts(&observed, &path);
@@ -340,14 +340,19 @@ async fn failure_satellite(listener: Arc<TcpListener>, wake: tokio::sync::onesho
     )
     .await;
     while stream.peek(&mut [0]).await.unwrap() != 0 {
-        let (row, bytes) = read(&mut stream).await;
-        assert_eq!(
-            bytes.len(),
-            if row["type"] == "audio-chunk" && earcon { 960 } else { 0 }
-        );
         // Withhold Played: neither a failed call nor an unacknowledged
         // acknowledgement may manufacture successful playback.
+        unacknowledged(&mut stream, earcon).await;
     }
+}
+
+async fn unacknowledged(stream: &mut tokio::net::TcpStream, earcon: bool) {
+    let (row, bytes) = super::tests::read(stream).await;
+    assert_eq!(
+        bytes.len(),
+        if row["type"] == "audio-chunk" && earcon { 960 } else { 0 }
+    );
+    probed(stream, &row).await;
 }
 
 fn failure_receipts(observed: &Value, path: &Path) {
@@ -399,10 +404,31 @@ pub(super) async fn reopened_status(binary: &Path, root: &Path) {
     assert_eq!(status.stderr, b"");
 }
 
-async fn failed_process(mut bridge: Process, collected: std::sync::mpsc::Receiver<std::process::ExitStatus>) {
-    assert_eq!(bridge.close().await, Err("cleanup: owned child exited nonzero".into()));
+/// The device still answers the probe that follows a failed run.
+pub(super) async fn probed(stream: &mut tokio::net::TcpStream, row: &Value) {
+    if row["type"] == "describe" {
+        super::tests::send(stream, "info", json!({"satellite":{"name":"synthetic"}}), vec![]).await;
+    }
+}
+
+/// The failure ended that turn only and is retried inside the process: the
+/// bridge records the retry, and nothing but the stop ends it, cleanly.
+pub(super) async fn recovered_process(
+    mut bridge: Process,
+    collected: std::sync::mpsc::Receiver<std::process::ExitStatus>,
+    path: &Path,
+) {
+    let retried = |trace: Trace| trace.records.iter().any(|r| r["event"] == "bridge.recovering");
+    while !running_trace(path).is_ok_and(retried) {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(bridge.close().await, Ok(()));
     drop(bridge);
-    assert_eq!(collected.try_recv().unwrap().code(), Some(1));
+    assert!(collected.try_recv().unwrap().success());
+    let trace = read_trace(path).unwrap();
+    let count = |event: &str| trace.records.iter().filter(|r| r["event"] == event).count();
+    assert!(count("bridge.recovering") >= 1);
+    assert_eq!(count("bridge.error"), 0);
 }
 
 pub(super) async fn observed_listener() -> (Arc<TcpListener>, std::sync::Weak<TcpListener>) {
