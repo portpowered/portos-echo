@@ -89,6 +89,7 @@ The voice model answers conversation, explanations and general knowledge directl
 needs an effect or unavailable live/personal data. The runner gets bridge-declared tools, with native shell,
 unified execution and independent Codex MCP discovery disabled. Hosted read-only web search is the sole
 exception: `codex.web_search` defaults to `live`, accepts `cached` or `disabled`, and adds no local authority.
+The pin omits hosted tools for native `gpt-6.1-sol` Responses Lite; that path has no search in this change.
 A read-only runner sandbox does not prevent effects through explicitly granted MCP tools. Prompt instructions
 guide behavior; allowlists and caps enforce the available effect surface.
 

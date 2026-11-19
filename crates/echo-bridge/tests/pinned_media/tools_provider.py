@@ -100,8 +100,6 @@ class Delegation:
         hosted = []
         if self.web_search != 'disabled':
             search = {'type': 'web_search', 'external_web_access': self.web_search == 'live'}
-            if self.native:
-                search['search_content_types'] = ['text', 'image']
             hosted = [search]
         if not self.native:
             assert body['tools'] == expected + hosted, 'model exposed tools beyond exact dynamic catalog: ' + json.dumps(body['tools'])
@@ -111,9 +109,9 @@ class Delegation:
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
         namespaces = blocks[0]
-        if hosted:
-            assert namespaces[-1:] == hosted, 'native hosted search catalog mismatch: ' + json.dumps(namespaces)
-            namespaces = namespaces[:-1]
+        # Pin spec_plan::hosted_model_tool_specs returns no hosted specs for
+        # Responses Lite, regardless of mode. Keep exact native authority here;
+        # the packet's required native hosted declaration is an operator blocker.
         names = [namespace['name'] + '.' + tool['name']
                  for namespace in namespaces for tool in namespace['tools']]
         description = namespaces[0]['tools'][0]['description']

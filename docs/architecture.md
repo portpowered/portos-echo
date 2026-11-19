@@ -275,6 +275,10 @@ exposed. Search runs at the provider and adds no local callable, process, browse
 The complete bridge dynamic catalog and native wrappers remain unchanged; every other built-in effect
 stays disabled and `mcp_servers` stays `{}`.
 
+At the current pin, native `gpt-6.1-sol` uses Responses Lite, whose tool planner omits hosted tools even
+with live or cached selected. Search is therefore available on the conventional delegated model path;
+this configuration does not enable native standalone `web.run` or change native callables.
+
 Invalid types or values stop startup with exit 2, empty stdout and exactly
 `echo-bridge: codex.web_search: invalid type or value` on stderr followed by a newline, before child,
 home, trace or listener effects. The supplied value is never echoed. Both thread settings and local-fake
