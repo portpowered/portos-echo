@@ -264,11 +264,11 @@ async fn t3_settings_binary_failed_exec_remounts_pending_surface_without_retry()
 }
 
 #[cfg(unix)]
-fn private_image(fixture: &Fixture, path: &Path) -> Command {
+fn private_image(fixture: &Fixture, path: &Path) -> tokio::process::Command {
     let template = super::super::voice_entry::command(fixture);
     let template = template.as_std();
     std::fs::copy(template.get_program(), path).unwrap();
-    let mut command = Command::new(path);
+    let mut command = tokio::process::Command::new(path);
     command.args(template.get_args()).current_dir(fixture.directory.path());
     for (key, value) in template.get_envs() {
         if let Some(value) = value {
