@@ -2,6 +2,60 @@
 # Manual Linux operator command. Hardware use belongs to the coordinator.
 set -eu
 
+# Native host adapter: retain one lifecycle implementation behind two transports.
+# Only the trusted, embedded copy accepts an archive; the validated bundle owns install.
+if [ "${1:-}" = --device ]; then
+  shift
+  adb() {
+    case $1 in
+      devices) printf 'List of devices attached\nlocal\tdevice\n' ;;
+      shell) sh -c "$2" ;;
+      push) cp "$2" "$3" ;;
+      *) return 1 ;;
+    esac
+  }
+  if [ "${1:-}" = prepare-archive ]; then
+    [ "$#" = 7 ] && [ "$2" = --archive ] && [ "$4" = --sha256 ] && [ "$6" = --stage ] || exit 2
+    archive=$3 hash=$5 stage=$7
+    case $stage in /data/local/tmp/echo-setup-*) ;; *) exit 1 ;; esac
+    suffix=${stage#/data/local/tmp/echo-setup-}
+    case $suffix in '' | *[!0-9-]*) exit 1 ;; esac
+    [ "$archive" = "$stage/archive.tar.gz" ] || exit 1
+    [ "${#hash}" = 64 ] || exit 1
+    case $hash in *[!0-9a-f]*) exit 1 ;; esac
+    [ ! -L /data/local/tmp ] && [ ! -L "$stage" ] && [ -d "$stage" ] || exit 1
+    [ "$(stat -c %u "$stage")" = 0 ] && [ "$(stat -c %a "$stage")" = 700 ] || exit 1
+    [ ! -L "$archive" ] && [ -f "$archive" ] || exit 1
+    [ "$(sha256sum "$archive" | awk '{print $1}')" = "$hash" ] || exit 1
+    tar -tzf "$archive" >"$stage/names" 2>/dev/null || exit 1
+    awk '
+      /(^\/|(^|\/)\.\.?($|\/)|[^A-Za-z0-9_.\/-])/ { bad=1 }
+      !/^(MANIFEST|LICENSE|NOTICE|bin\/(echo-bridge|codex-app-server|cacert.pem)|apk\/echo-screen.apk|scripts\/echo-install.sh|examples\/(bridge.echo.toml|prompts\/(voice|runner).md)|licenses\/[A-Za-z0-9_.\/-]+)$/ { bad=1 }
+      { if (seen[$0]++) bad=1 }
+      END { exit bad }' "$stage/names" || exit 1
+    tar -tvzf "$archive" >"$stage/types" 2>/dev/null || exit 1
+    awk 'substr($0,1,1) != "-" { bad=1 } END { exit bad }' "$stage/types" || exit 1
+    umask 077
+    mkdir "$stage/bundle" || exit 1
+    tar -xzf "$archive" -C "$stage/bundle" --no-same-owner --no-same-permissions 2>/dev/null || exit 1
+    for member in MANIFEST LICENSE NOTICE bin/echo-bridge bin/codex-app-server bin/cacert.pem apk/echo-screen.apk scripts/echo-install.sh examples/bridge.echo.toml examples/prompts/voice.md examples/prompts/runner.md licenses/codex/LICENSE licenses/codex/NOTICE licenses/ca/MPL-2.0.txt licenses/ca/NOTICE; do
+      [ -f "$stage/bundle/$member" ] || exit 1
+    done
+    exit 0
+  fi
+  if [ "${1:-}" = install ] && [ "${2:-}" = --bundle ]; then
+    [ "$#" = 3 ] || { [ "$#" = 5 ] && [ "$4" = --config ]; } || exit 2
+    bundle=$3
+    case $bundle in /data/local/tmp/echo-setup-*/bundle) ;; *) exit 1 ;; esac
+    suffix=${bundle#/data/local/tmp/echo-setup-}
+    suffix=${suffix%/bundle}
+    case $suffix in '' | *[!0-9-]*) exit 1 ;; esac
+    config=${5:-$bundle/examples/bridge.echo.toml}
+    case $config in "$bundle/examples/bridge.echo.toml" | "${bundle%/bundle}/config") ;; *) exit 1 ;; esac
+    set -- install --config "$config" --bridge "$bundle/bin/echo-bridge" --codex "$bundle/bin/codex-app-server" --ca "$bundle/bin/cacert.pem"
+  fi
+fi
+
 # Fixed product identity, never a caller override or evaluated shell fragment.
 ECHO_RUN_AS='nobody 3990,inet'
 ECHO_RUN_OWNER='9999:9999'

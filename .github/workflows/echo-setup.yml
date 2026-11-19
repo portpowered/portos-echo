@@ -1,0 +1,30 @@
+name: Echo setup
+on:
+  pull_request:
+    paths:
+      - 'crates/echo-setup/**'
+      - 'scripts/echo-install.sh'
+      - 'tests/test_echo_install*.py'
+      - 'Cargo.lock'
+      - '.github/workflows/echo-setup.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    name: echo-setup (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Native installer tests
+        run: cargo test --locked -p echo-setup
+      - name: Existing Linux installer regression
+        if: runner.os == 'Linux'
+        run: python3 tests/test_echo_install.py

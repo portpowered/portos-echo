@@ -1008,6 +1008,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-setup"
+version = "0.2.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "echo-signin"
 version = "0.1.0"
 dependencies = [

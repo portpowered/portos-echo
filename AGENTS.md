@@ -23,6 +23,7 @@ Instructions for the coordinator agent and every factory worker in this reposito
 ## Supported platform
 
 Linux is the only supported platform for building, testing and running Echo.
+Owner exception (2026-11-19): only echo-setup supports Windows x86_64 and Linux x86_64; every other package stays Linux-only.
 Coordinator device runs use Linux pe-ci; workers never run hardware.
 
 ## Current phase

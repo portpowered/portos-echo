@@ -461,6 +461,10 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--device-transport"]:
+        from test_echo_install_lifecycle import device_transport_cases
+        device_transport_cases()
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "--tool":
         sys.exit(remote_tool())
     if sys.argv[1:] == ["--fake-adb"] or (len(sys.argv) > 1 and sys.argv[1] == "--fake-adb"):
