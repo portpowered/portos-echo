@@ -46,7 +46,9 @@ fn forbidden(source: &str) -> bool {
 }
 
 fn refusal_fixture(path: &str, source: &str, offset: usize, line: &str) -> bool {
-    if !path.ends_with(".rs") || !line.contains("// lint-rules: root-refusal fixture") {
+    if std::path::Path::new(path).extension() != Some(std::ffi::OsStr::new("rs"))
+        || !line.contains("// lint-rules: root-refusal fixture")
+    {
         return false;
     }
     let selected = super::test_source::select(path, source, false);
@@ -116,7 +118,7 @@ mod tests {
         let fixture = format!(
             "#[test]\nfn launcher_refuses_root() {{\n let input = \"{launch}\"; // lint-rules: root-refusal fixture\n}}\n"
         );
-        assert!(check("fixture.rs", &fixture).is_empty());
+        assert_eq!(check("fixture.rs", &fixture), Vec::<String>::new());
         assert_eq!(
             check(
                 "fixture.rs",
@@ -126,8 +128,11 @@ mod tests {
             1
         );
         assert_eq!(check("fixture.rs", &fixture.replace("#[test]", "")).len(), 1);
-        assert!(check("valid.sh", "runas nobody 3990,inet /bin/echo-bridge").is_empty());
-        assert!(check("valid.sh", "runas root inet /bin/id").is_empty()); // lint-rules: root-refusal fixture
+        assert_eq!(
+            check("valid.sh", "runas nobody 3990,inet /bin/echo-bridge"),
+            Vec::<String>::new()
+        );
+        assert_eq!(check("valid.sh", "runas root inet /bin/id"), Vec::<String>::new()); // lint-rules: root-refusal fixture
     }
 
     #[test]
