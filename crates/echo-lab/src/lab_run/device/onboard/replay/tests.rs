@@ -238,7 +238,6 @@ async fn t3_on_device_mcp_replay_write_after_close_counts_as_closed() {
         assert_eq!(report["write_attempted"], true);
         assert_eq!(report["write_error"], error);
         assert_eq!(report.get("peer_error"), None);
-        println!("{mode}: {report}");
     }
 }
 
@@ -254,7 +253,6 @@ async fn t3_on_device_mcp_replay_peer_keeps_unexpected_errors_and_data_visible()
         report["peer_error"],
         json!({"type":"ValueError","errno":null,"reason":null})
     );
-    println!("unexpected writer: {report}");
 
     let mut peer = Peer::start("hang-write-after-close").await;
     let client = tokio::process::Command::new("python3")
@@ -287,7 +285,6 @@ client.close()
     assert_eq!(report["discovery_credentials"], false);
     assert_eq!(report.get("write_attempted"), None);
     assert_eq!(report.get("peer_error"), None);
-    println!("nonempty input: {report}");
 }
 
 #[test]
