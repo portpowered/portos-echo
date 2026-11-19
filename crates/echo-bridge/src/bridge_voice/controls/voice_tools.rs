@@ -321,4 +321,5 @@ where
 }
 
 #[cfg(test)]
+#[path = "voice_tools/mcp_trust_tests.rs"]
 mod mcp_trust_tests;
