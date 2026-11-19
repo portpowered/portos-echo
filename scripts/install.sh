@@ -118,7 +118,7 @@ wget_download() {
     fi
     location=$(awk '
       $1 ~ /^HTTP\// { status=$2; location="" }
-      tolower($1) == "location:" { sub(/^[^:]*:[ \t]*/, ""); sub(/\r$/, ""); location=$0 }
+      /^[ \t]+/ && tolower($1) == "location:" { sub(/^[^:]*:[ \t]*/, ""); sub(/\r$/, ""); location=$0 }
       END { if (status !~ /^(301|302|303|307|308)$/ || location == "" || location ~ /[[:space:]]/) exit 1; print location }
       ' "$temp/headers") || fail 'download failed'
     [ "$redirects" -lt 10 ] || fail 'download failed'
