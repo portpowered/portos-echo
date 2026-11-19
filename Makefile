@@ -124,6 +124,11 @@ build-host:
 	cargo build --workspace --locked
 	git diff --exit-code HEAD -- Cargo.lock
 	$(MAKE) check-echo-screen
+	$(MAKE) test-echo-install
+
+.PHONY: test-echo-install
+test-echo-install:
+	python tests/test_echo_install.py
 
 .PHONY: build-echo-screen test-echo-screen-jvm test-echo-screen-url
 build-echo-screen:
