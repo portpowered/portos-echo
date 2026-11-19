@@ -38,35 +38,63 @@ pub(super) async fn replies<L: EchoLink>(
             continue;
         }
         result?;
-        let Some(timeout) = options.listen_timeout else {
+        if options.listen_timeout.is_none() && !source.delegation.in_flight() {
             return Ok(());
-        };
+        }
+        // Off suppresses new follow-up admission, not work already admitted.
+        let timeout = options.listen_timeout.unwrap_or(
+            source
+                .controller
+                .replacement_deadline()?
+                .saturating_duration_since(tokio::time::Instant::now()),
+        );
         source.controller.listen_after_reply(timeout)?;
         // Waiting granted during the reply outlives it, within the run's cap.
         if let Some(granted) = source.session.granted() {
             source.controller.extend_idle(granted);
         }
-        let mut stats = source.stats.clone();
-        stats.reply_dropped += source.reply.dropped_frames();
-        let totals = stats.clone();
-        stats.reply_received -= previous.reply_received;
-        stats.reply_sent -= previous.reply_sent;
-        stats.reply_dropped -= previous.reply_dropped;
-        stats.quality = source.settle(port.rtp_lost());
-        previous = totals;
-        observe(Notice::ReplySettled(stats))?;
-        observe(Notice::ReplyPlayed)?;
+        if options.listen_timeout.is_some() {
+            settled(source, port, &mut previous, observe)?;
+        }
         // A requested end closes right after this reply settles; no idle wait.
         if source.session.ending() {
             return Ok(());
         }
         // A dispatch that outlives its spoken acknowledgement shows as thinking.
         super::voice_source::think(client, source).await;
-        if !listen((events, microphone), port, (source, drain), cancelled.as_mut(), observe).await? {
+        if !listen(
+            (events, microphone),
+            port,
+            (source, drain),
+            options.listen_timeout.is_some(),
+            cancelled.as_mut(),
+            observe,
+        )
+        .await?
+        {
             return Ok(());
         }
         generation_options.response_deadline = source.controller.replacement_deadline()?;
     }
+}
+
+fn settled(
+    source: &mut Source,
+    port: &impl VoicePort,
+    previous: &mut super::Stats,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let mut stats = source.stats.clone();
+    stats.reply_dropped += source.reply.dropped_frames();
+    let totals = stats.clone();
+    stats.reply_received -= previous.reply_received;
+    stats.reply_sent -= previous.reply_sent;
+    stats.reply_dropped -= previous.reply_dropped;
+    stats.quality = source.settle(port.rtp_lost());
+    *previous = totals;
+    observe(Notice::ReplySettled(stats))?;
+    observe(Notice::ReplyPlayed)?;
+    Ok(())
 }
 
 async fn listen<E: LinkEvents>(
@@ -76,6 +104,7 @@ async fn listen<E: LinkEvents>(
         &mut Source,
         &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
     ),
+    followup: bool,
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<bool, Error> {
@@ -92,12 +121,15 @@ async fn listen<E: LinkEvents>(
             Some(hold) if source.delegation.in_flight() => idle.max(hold),
             _ => idle,
         };
-        if source.session.ending() {
+        if source.session.ending() || (!followup && !source.delegation.in_flight()) {
             return Ok(false);
         }
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
+            // Playback has settled before entering listen. A running delegated
+            // turn still owns this reply; finish it before admitting cleanup.
+            () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
             () = tokio::time::sleep_until(deadline) => return Ok(false),
             result = listening_step(events, microphone, port, source, observe) => {
                 if result? { return Ok(true); }

@@ -132,6 +132,7 @@ async fn t3_faults_are_bounded_redacted_and_revoke_can_be_retried() {
     let sentinel = "synthetic-private-body-sentinel";
     h.mock.fault("/custom/end", 503, json!({"error":sentinel}));
     let failure = drive(h.client.revoke()).await.err().unwrap();
+    assert!(!h.client.has_grant());
     assert_eq!(failure, AuthError::Transport);
     assert!(!format!("{failure:?} {failure}").contains(sentinel));
     assert_eq!(h.record()["grant"]["refresh_token"], "refresh-1");
@@ -213,6 +214,7 @@ async fn t3_discovery_and_refresh_server_failures_are_redacted_without_retry() {
     let h = Harness::linked().await;
     h.mock.fault("/custom/token", 503, json!({"error":sentinel}));
     let failure = drive(h.client.force_refresh()).await.err().unwrap();
+    assert!(!h.client.has_grant());
     assert_eq!(failure, AuthError::Transport);
     assert!(!format!("{failure:?} {failure}").contains(sentinel));
     error(drive(h.client.access_token()).await, AuthError::RelinkRequired);

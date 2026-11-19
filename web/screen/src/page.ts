@@ -2,6 +2,7 @@ import type { ScreenFrame, UiAction } from "./model";
 import { Presentation } from "./state";
 import { endpoints, postAction } from "./transport";
 import { animate } from "./emotion";
+import { mountSettings } from "./settings/view";
 
 function text(tag: string, value: string): HTMLElement {
     const node = document.createElement(tag);
@@ -22,6 +23,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     let disposed = false;
     let cancelPending: (() => void) | undefined;
     let stopAnimation: (() => void) | undefined;
+    let settings: ReturnType<typeof mountSettings> | undefined;
     async function send(action: UiAction, frame: ScreenFrame): Promise<void> {
         if (disposed || pending || presentation.current !== frame) return;
         const controller = new AbortController();
@@ -80,6 +82,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         return node;
     }
     function render(frame: ScreenFrame): void {
+        settings?.update(frame.state);
         stopAnimation?.();
         cancelPending?.();
         const state = frame.state;
@@ -157,6 +160,15 @@ export function startPage(root: HTMLElement, href: string): () => void {
     try {
         urls = endpoints(href);
         stream = new EventSource(urls.events);
+        if (document.querySelector('meta[name="echo-settings"][content="v1"]'))
+            settings = mountSettings(
+                root,
+                content,
+                diagnostic,
+                urls.actions,
+                (signal) =>
+                    postAction(urls.actions, { action: "relink" }, signal),
+            );
     } catch {
         diagnostic.textContent = "Screen configuration is invalid";
         return () => {};
@@ -178,6 +190,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         if (disposed) return;
         disposed = true;
         stopAnimation?.();
+        settings?.dispose();
         stream.close();
         cancelPending?.();
         window.removeEventListener("pagehide", dispose);

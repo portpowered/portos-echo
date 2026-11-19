@@ -23,7 +23,7 @@ async fn t3_agent_home_edits_reload_exact_rpc_and_bad_edits_retain_previous() {
     std::fs::write(dir.join("voice.md"), "voice one\n").unwrap();
     std::fs::write(dir.join("edit-during-retained"), "").unwrap();
     let path = root.path().join("trace");
-    admissions(Some(root.path()), &path, 4, |index| {
+    admissions(Some(root.path()), &path, 4, async |index| {
         let (runner, voice) = edit(&dir, index);
         (runner.into(), voice.into())
     })
@@ -35,7 +35,7 @@ async fn admissions(
     home: Option<&std::path::Path>,
     path: &std::path::Path,
     steps: usize,
-    edit: impl Fn(usize) -> (String, String),
+    mut edit: impl AsyncFnMut(usize) -> (String, String),
 ) {
     let trace = Trace::open(path, "api_key").unwrap();
     prompts::scope(home, async {
@@ -49,7 +49,7 @@ async fn admissions(
         options.call.time_zone = None;
         let mut server = BufReader::new(server);
         for index in 0..steps {
-            let expected = edit(index);
+            let expected = edit(index).await;
             observer.wake("admit", vec![]);
             let LinkEvent::Wake(run) = events.recv().await.unwrap().unwrap() else {
                 unreachable!()
@@ -292,7 +292,7 @@ async fn t3_agent_home_independent_edits_boundaries_atomic_replace_and_recovery(
         std::fs::create_dir(&dir).unwrap();
         let file = dir.join(format!("{kind}.md"));
         let path = root.path().join("trace");
-        admissions(Some(root.path()), &path, 10, |index| {
+        admissions(Some(root.path()), &path, 10, async |index| {
             let expected = change(&file, index);
             if kind == "runner" {
                 (expected, echo_config::LIVE_INSTRUCTIONS.into())
@@ -374,11 +374,74 @@ async fn t3_agent_home_absent_section_preserves_intentional_defaults_without_tra
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("trace");
     // The low-level admission port accepts explicit bases, unchanged without a home.
-    admissions(None, &path, 2, |_| {
+    admissions(None, &path, 2, async |_| {
         ("configured\n\u{8a9e} \n".into(), "live\n\u{8a9e} \n".into())
     })
     .await;
     let rows = std::fs::read_to_string(path).unwrap();
     assert!(!rows.contains("prompt."));
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+}
+
+// Real loopback HTTP and disk, production admission/RPC, controlled external peers.
+// Keep the same server, prompt scope and RpcIo alive across all three calls.
+#[tokio::test]
+async fn t3_screen_settings_prompt_http_save_reaches_next_call_and_refusal_retains_rpc() {
+    use crate::bridge_settings::settings_http_tests::Fixture;
+    let fixture = Fixture::open().await;
+    let home = fixture.path("");
+    let trace = home.join("trace");
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let runner = "runner B\n<script>inert</script>\n\u{8a9e} \n";
+    let voice = "voice B\n\u{1f308} \"quoted\" \n";
+    admissions(Some(&home), &trace, 3, async |index| {
+        if index == 0 {
+            tokio::time::pause();
+            return (
+                echo_config::RUNNER_INSTRUCTIONS.into(),
+                echo_config::LIVE_INSTRUCTIONS.into(),
+            );
+        }
+        tokio::time::resume(); // Native HTTP; freeze the clock again before admission.
+        for (kind, text) in [("runner", runner), ("voice", voice)] {
+            let submitted = if index == 1 { text } else { " \n\t" };
+            let response = client
+                .post(fixture.url(&format!("/settings/v1/prompts/{kind}")))
+                .json(&serde_json::json!({"version":1,"text":submitted}))
+                .send()
+                .await
+                .unwrap();
+            let (status, body) = if index == 1 {
+                (
+                    reqwest::StatusCode::OK,
+                    serde_json::json!({"version":1,"restart_pending":false}),
+                )
+            } else {
+                (
+                    reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+                    serde_json::json!({"version":1,"message":format!("prompts/{kind}.md: empty prompt")}),
+                )
+            };
+            assert_eq!(response.status(), status);
+            assert_eq!(response.json::<serde_json::Value>().await.unwrap(), body);
+            assert_eq!(
+                std::fs::read(fixture.path(&format!("prompts/{kind}.md"))).unwrap(),
+                text.as_bytes()
+            );
+        }
+        let snapshot = fixture.snapshot().await;
+        assert_eq!(snapshot.prompts.runner, runner);
+        assert_eq!(snapshot.prompts.voice, voice);
+        assert!(!snapshot.restart_pending);
+        tokio::time::pause();
+        (runner.into(), voice.into())
+    })
+    .await;
+    assert!(!fixture.path("settings.toml").exists());
+    let rows = std::fs::read_to_string(trace).unwrap();
+    assert!(!rows.contains("settings.reexec_attempt"));
+    assert!(!rows.contains("prompt.reload_refused"));
+    assert!(!rows.contains(runner));
+    assert!(!rows.contains(voice));
+    fixture.close().await;
 }

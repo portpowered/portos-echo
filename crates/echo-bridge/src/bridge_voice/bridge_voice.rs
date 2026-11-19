@@ -33,8 +33,9 @@ mod voice_tools;
 mod voice_view;
 pub use voice_admission::{ServeNotice, ServeOptions, serve};
 pub use voice_config::Configured;
+pub use voice_entry::execute_process;
 pub use voice_host::{HostOptions, with_device};
-pub use voice_runtime::{RuntimeOptions, execute};
+pub use voice_runtime::{RuntimeCompletion, RuntimeOptions, execute, execute_with_settings};
 pub use voice_session::{
     ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation, tool_conversation,
 };
@@ -54,15 +55,14 @@ use voice_source::Source;
 
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
-    /// Publish the admitted run identity; queued tools retain their original binding.
+    /// Bind the run identity, preserving queued tools' original binding.
     fn bind_session(&mut self, _run: Option<std::sync::Arc<()>>) {}
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
-    /// Queue one frame unless the bounded media sender is full; false leaves it
-    /// with the caller. Ports without a bounded sender always accept.
+    /// Queue a frame; false retains it with the caller when the sender is full.
     /// # Errors
-    /// The same categories as `send`.
+    /// Same errors as `send`; unbounded ports always accept.
     fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
         self.send(frame).map(|()| true)
     }

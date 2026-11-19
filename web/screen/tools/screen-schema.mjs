@@ -15,14 +15,20 @@ function shape(schema) {
     if (schema.$ref) return { ref: schema.$ref.split("/").at(-1) };
     if (schema.oneOf) return { variants: schema.oneOf.map(shape) };
     if (schema.const !== undefined) return { literal: schema.const };
+    if (schema.enum)
+        return { variants: schema.enum.map((literal) => ({ literal })) };
     if (schema.type === "object") {
+        const optional = Object.keys(schema.properties).filter(
+            (key) => !(schema.required ?? []).includes(key),
+        );
         return {
             fields: Object.fromEntries(
-                schema.required.map((key) => [
+                [...(schema.required ?? []), ...optional].map((key) => [
                     key,
                     shape(schema.properties[key]),
                 ]),
             ),
+            ...(optional.length ? { optional } : {}),
         };
     }
     if (schema.type === "array") return { array: shape(schema.items) };
@@ -34,10 +40,14 @@ function type(schema) {
     if ("literal" in schema) return JSON.stringify(schema.literal);
     if (schema.fields)
         return `{${Object.entries(schema.fields)
-            .map(([key, value]) => `${key}: ${type(value)}`)
+            .map(
+                ([key, value]) =>
+                    `${key}${schema.optional?.includes(key) ? "?" : ""}: ${type(value)}`,
+            )
             .join(";")}}`;
     if (schema.array) return `Array<${type(schema.array)}>`;
-    return schema.type === "u64" ? "bigint" : schema.type;
+    if (schema.type === "u64") return "bigint";
+    return schema.type === "integer" ? "number" : schema.type;
 }
 const models = Object.fromEntries(
     Object.values(sources).map((s) => [s.title, shape(s)]),
@@ -82,3 +92,55 @@ else {
     }
     console.log("screen schema: current");
 }
+
+// Settings uses ordinary JSON numbers and lossless decimal cap text. Keep its
+// HTTP types separate from the legacy SSE runtime model/integer decoder.
+const settingsSources = {};
+const settingsModels = {};
+for (const name of [
+    "settings_snapshot_v1",
+    "settings_patch_v1",
+    "prompt_save_v1",
+    "save_result_v1",
+    "settings_error_v1",
+]) {
+    const schema = JSON.parse(
+        await readFile(new URL(`${name}.json`, root), "utf8"),
+    );
+    settingsSources[name] = schema;
+    for (const [key, value] of Object.entries({
+        ...schema.$defs,
+        [schema.title]: schema,
+    })) {
+        const model = shape(value);
+        if (
+            settingsModels[key] &&
+            !isDeepStrictEqual(settingsModels[key], model)
+        )
+            throw new Error(`Conflicting settings definition: ${key}`);
+        settingsModels[key] = model;
+    }
+}
+const settingsHash = createHash("sha256")
+    .update(JSON.stringify(settingsSources))
+    .digest("hex");
+const settingsOutput = await prettier.format(
+    `// Generated from schemas/screen/*_v1.json by tools/screen-schema.mjs.\n// Schema SHA-256: ${settingsHash}\n${Object.entries(
+        settingsModels,
+    )
+        .map(([key, value]) => `export type ${key} = ${type(value)};`)
+        .join("\n")}\n`,
+    {
+        ...(await prettier.resolveConfig(fileURLToPath(target), {
+            editorconfig: true,
+        })),
+        parser: "typescript",
+    },
+);
+const settingsTarget = new URL("../src/settings/model.ts", import.meta.url);
+if (process.argv.includes("--write"))
+    await writeFile(settingsTarget, settingsOutput);
+else if (
+    (await readFile(settingsTarget, "utf8").catch(() => "")) !== settingsOutput
+)
+    throw new Error("settings schema drift: regenerate src/settings/model.ts");

@@ -49,6 +49,15 @@ impl Grant {
         }
     }
 
+    pub fn link_status(&self) -> echo_screen_contract::settings_v1::LinkStatusV1 {
+        use echo_screen_contract::settings_v1::LinkStatusV1;
+        if !self.blocked() && self.client.has_grant() {
+            LinkStatusV1::Linked
+        } else {
+            LinkStatusV1::LinkRequired
+        }
+    }
+
     pub fn blocked(&self) -> bool {
         self.rejected.load(Ordering::Acquire)
     }

@@ -34,6 +34,9 @@ fn main() -> ExitCode {
     if settings.sim_clock {
         return outcome(bridge_mcp::bridge_clock::execute(settings));
     }
+    if bridge_runtime::configured(&settings) {
+        return outcome(echo_bridge::bridge_voice::execute_process(settings));
+    }
     let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
     outcome(runtime().and_then(|runtime| runtime.block_on(bridge_runtime::execute(settings, connector))))
 }

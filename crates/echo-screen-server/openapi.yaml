@@ -1,14 +1,14 @@
 openapi: 3.1.0
-info: { title: Loopback screen server, version: 0.1.0 }
+info: { title: Loopback screen server, version: 0.2.0 }
 servers:
   - url: http://127.0.0.1:16900
 paths:
   /:
     get:
-      description: Existing events/actions bootstrap query grammar; static page only
+      description: Existing events/actions bootstrap query grammar; fixed echo-settings v1 meta capability only when a home-backed settings inbox is mounted
       responses:
         '200':
-          description: Existing page, no state or token injected
+          description: Existing page, no state or token injected; no-inbox HTML bytes unchanged
           content:
             text/html: { schema: { type: string } }
   /screen.css:
@@ -57,6 +57,182 @@ paths:
         '413': { description: Body exceeds 65536 bytes; nothing queued }
         '415': { description: Content-Type is not application/json; nothing queued }
         '503': { description: Action queue full or receiver closed; nothing queued }
+  /settings/v1:
+    get:
+      security: [{ pairingToken: [] }]
+      description: Authorized non-secret snapshot; supplied foreign Origin refused. No settings host means 503. Never returns paths or credentials.
+      responses:
+        '200':
+          description: Effective editable values, last accepted prompt texts, version and Port OS link status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsSnapshotV1' }
+        '401': { description: Missing, wrong, empty, duplicate or revoked token; empty body }
+        '403': { description: Supplied Origin differs from server origin; empty body }
+        '503': { description: Settings host absent, stopping, saturated or unavailable; empty body }
+    post:
+      security: [{ pairingToken: [] }]
+      description: Auth and Origin before parsing, rechecked at commit admission. Merge sparse patch into accepted overlay, validate effective config with echo-config, atomically replace settings.toml at 0600. No bridge.toml write.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsPatchV1' }
+      responses:
+        '200':
+          description: Durably saved; restart_pending is false for an effective no-op and true for a queued settings restart
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SaveResultV1' }
+        '400': { description: Malformed JSON, wrong version, empty patch, unknown key or invalid shape; nothing written }
+        '401': { description: Invalid or revoked pairing token; empty body, nothing written }
+        '403': { description: Supplied foreign Origin; empty body, nothing written }
+        '413': { description: JSON body exceeds 65536 bytes; nothing written }
+        '415': { description: Content-Type is not application/json; nothing written }
+        '422':
+          description: echo-config refuses effective candidate; unchanged file; safe exact validation message
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV1' }
+        '500':
+          description: Persistence failed; previous file retained for pre-rename failure; post-rename durability uncertainty explicitly reported, never a false rollback claim
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV1' }
+        '503': { description: Settings host absent, stopping, saturated or closed before commit; no queued retry }
+  /settings/v1/prompts/{kind}:
+    post:
+      security: [{ pairingToken: [] }]
+      description: Same auth, Origin, media and commit admission as settings. Prompt JSON-body limit is 196672 bytes (six-byte JSON escapes per maximum UTF-8 byte plus envelope). Atomic 0600 write to the selected fixed prompt file; no restart.
+      parameters:
+        - in: path
+          name: kind
+          required: true
+          schema: { type: string, enum: [voice, runner] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [version, text]
+              properties:
+                version: { type: integer, const: 1 }
+                text: { type: string, description: Nonblank UTF-8, 1..32768 bytes, preserved exactly; byte limit enforced after JSON decoding }
+      responses:
+        '200':
+          description: Prompt durably saved; restart_pending is false
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SaveResultV1' }
+        '400': { description: Invalid JSON/version/shape/unknown property; no write }
+        '401': { description: Invalid or revoked token; empty body, no write }
+        '403': { description: Supplied foreign Origin; empty body, no write }
+        '404': { description: Unknown prompt kind; no arbitrary file path }
+        '413': { description: Encoded JSON body exceeds 196672 bytes; no write }
+        '415': { description: Content-Type is not application/json; no write }
+        '422':
+          description: Empty, whitespace-only or over-32768-byte prompt; safe named validation error, old file retained
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV1' }
+        '500':
+          description: Persistence failed; fixed diagnostic and explicit durability uncertainty after rename
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV1' }
+        '503': { description: Settings host absent, stopping, saturated or closed before commit; no retry }
 components:
   securitySchemes:
     pairingToken: { type: apiKey, in: query, name: token }
+  schemas:
+    SettingsValuesV1:
+      type: object
+      additionalProperties: false
+      required: [voice, codex, agent]
+      properties:
+        voice:
+          type: object
+          additionalProperties: false
+          required: [session_listen_enabled, session_listen_seconds]
+          properties:
+            session_listen_enabled: { type: boolean }
+            session_listen_seconds: { type: integer, minimum: 3, maximum: 300 }
+        codex:
+          type: object
+          additionalProperties: false
+          required: [voice]
+          properties:
+            voice: { type: string, description: default or a name from allowed_voices; echo-config is authoritative }
+        agent:
+          type: object
+          additionalProperties: false
+          required: [daily_request_cap, max_tool_calls]
+          properties:
+            daily_request_cap: { type: string, pattern: '^(0|[1-9][0-9]*)$', maxLength: 19, description: Lossless unsigned decimal; maximum TOML integer 9223372036854775807; zero refuses new admissions }
+            max_tool_calls: { type: integer, minimum: 1, maximum: 32 }
+    SettingsPatchV1:
+      type: object
+      additionalProperties: false
+      required: [version, settings]
+      properties:
+        version: { type: integer, const: 1 }
+        settings:
+          type: object
+          additionalProperties: false
+          minProperties: 1
+          properties:
+            voice:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                session_listen_enabled: { type: boolean }
+                session_listen_seconds: { type: integer, minimum: 3, maximum: 300 }
+            codex:
+              type: object
+              additionalProperties: false
+              required: [voice]
+              properties:
+                voice: { type: string, description: Validated by echo-config against its pinned allowed list }
+            agent:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                daily_request_cap: { type: string, pattern: '^(0|[1-9][0-9]*)$', maxLength: 19 }
+                max_tool_calls: { type: integer, minimum: 1, maximum: 32 }
+    SettingsSnapshotV1:
+      type: object
+      additionalProperties: false
+      required: [version, settings, allowed_voices, prompts, link_status, bridge_version, restart_pending, warnings]
+      properties:
+        version: { type: integer, const: 1 }
+        settings: { $ref: '#/components/schemas/SettingsValuesV1' }
+        allowed_voices: { type: array, items: { type: string }, description: default plus the existing echo-config pinned list; no independently maintained UI list }
+        prompts:
+          type: object
+          additionalProperties: false
+          required: [voice, runner]
+          properties:
+            voice: { type: string }
+            runner: { type: string }
+        link_status: { type: string, enum: [unconfigured, link_required, linked] }
+        bridge_version: { type: string }
+        restart_pending: { type: boolean }
+        warnings: { type: array, items: { type: string }, description: Fixed payload-free diagnostics, including ignored settings.toml }
+    SaveResultV1:
+      type: object
+      additionalProperties: false
+      required: [version, restart_pending]
+      properties:
+        version: { type: integer, const: 1 }
+        restart_pending: { type: boolean }
+    SettingsErrorV1:
+      type: object
+      additionalProperties: false
+      required: [version, message]
+      properties:
+        version: { type: integer, const: 1 }
+        message: { type: string, description: Trusted field/file name and fixed category only; never submitted values or absolute paths }

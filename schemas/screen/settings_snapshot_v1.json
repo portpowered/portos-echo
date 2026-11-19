@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SettingsSnapshotV1",
+  "type": "object",
+  "properties": {
+    "allowed_voices": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bridge_version": {
+      "type": "string"
+    },
+    "link_status": {
+      "$ref": "#/$defs/LinkStatusV1"
+    },
+    "prompts": {
+      "$ref": "#/$defs/PromptTextsV1"
+    },
+    "restart_pending": {
+      "type": "boolean"
+    },
+    "settings": {
+      "$ref": "#/$defs/SettingsValuesV1"
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV1"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "settings",
+    "allowed_voices",
+    "prompts",
+    "link_status",
+    "bridge_version",
+    "restart_pending",
+    "warnings"
+  ],
+  "$defs": {
+    "AgentValuesV1": {
+      "type": "object",
+      "properties": {
+        "daily_request_cap": {
+          "$ref": "#/$defs/DailyCapV1"
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "daily_request_cap",
+        "max_tool_calls"
+      ]
+    },
+    "CodexPatchV1": {
+      "type": "object",
+      "properties": {
+        "voice": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "voice"
+      ]
+    },
+    "DailyCapV1": {
+      "type": "string",
+      "maxLength": 19,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "LinkStatusV1": {
+      "type": "string",
+      "enum": [
+        "unconfigured",
+        "link_required",
+        "linked"
+      ]
+    },
+    "PromptTextsV1": {
+      "type": "object",
+      "properties": {
+        "runner": {
+          "type": "string"
+        },
+        "voice": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "voice",
+        "runner"
+      ]
+    },
+    "SettingsValuesV1": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentValuesV1"
+        },
+        "codex": {
+          "$ref": "#/$defs/CodexPatchV1"
+        },
+        "voice": {
+          "$ref": "#/$defs/VoiceValuesV1"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "voice",
+        "codex",
+        "agent"
+      ]
+    },
+    "SettingsVersionV1": {
+      "type": "integer",
+      "const": 1
+    },
+    "VoiceValuesV1": {
+      "type": "object",
+      "properties": {
+        "session_listen_enabled": {
+          "type": "boolean"
+        },
+        "session_listen_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_listen_enabled",
+        "session_listen_seconds"
+      ]
+    }
+  }
+}

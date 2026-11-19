@@ -216,6 +216,10 @@ impl Tools {
         Ok(())
     }
 
+    pub fn grant(&self) -> Option<Arc<bridge_mcp::Grant>> {
+        self.runtime.as_ref().map(|runtime| runtime.grant.clone())
+    }
+
     pub async fn catalog(&mut self) -> Result<Catalog, Error> {
         if self.specs.is_none() {
             self.specs = Some(

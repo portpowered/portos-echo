@@ -1,4 +1,11 @@
 //! Closed event vocabulary and counters only. Never serialize provider events.
+//! `settings.saved` records only `restart_pending` after a committed save;
+//! `prompt.saved` records only the fixed voice|runner selector. A generation
+//! records `settings.reexec_pending` once when its first changed save commits.
+//! `settings.ignored` uses fixed reason `invalid_config` for an unusable overlay.
+//! Cleanup publishes `settings.restart_prepared`; only final EOF/kill admission
+//! publishes `settings.reexec_attempt`. A failed replacement records
+//! `settings.reexec_failed` with reason exec. No settings values, paths or text.
 //! `prompt.defaulted` names voice|runner once per missing kind per runtime.
 //! `prompt.reload_refused` adds a fixed reason; neither contains paths or text.
 //! `wyoming.probe_ok` acknowledges each successful idle describe probe when its

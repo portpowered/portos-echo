@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PromptSaveV1",
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string"
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV1"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "text"
+  ],
+  "$defs": {
+    "SettingsVersionV1": {
+      "type": "integer",
+      "const": 1
+    }
+  }
+}

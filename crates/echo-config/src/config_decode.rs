@@ -51,6 +51,13 @@ impl<'a> Fields<'a> {
             .ok_or_else(|| ConfigError::new(self.field(key), "missing required field"))
     }
 
+    pub(super) fn section(&mut self, key: &str) -> Result<Option<Self>, ConfigError> {
+        self.table
+            .remove(key)
+            .map(|value| Self::new(value.into_inner(), &self.field(key)))
+            .transpose()
+    }
+
     pub(super) fn reject(&self, key: &str, message: &str) -> Result<(), ConfigError> {
         if self.table.contains_key(key) {
             return Err(ConfigError::new(self.field(key), message));

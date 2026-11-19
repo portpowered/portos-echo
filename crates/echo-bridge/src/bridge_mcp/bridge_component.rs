@@ -41,6 +41,10 @@ async fn t3_grant_resource_401_latches_before_return_and_blocks_token_and_refres
         assert_eq!(client.list().await.err(), Some(McpError::HttpStatus(401)));
         assert!(owner.grant.blocked());
         assert_eq!(
+            owner.grant.link_status(),
+            echo_screen_contract::settings_v1::LinkStatusV1::LinkRequired
+        );
+        assert_eq!(
             screen.try_recv().unwrap(),
             UiState::Error {
                 message: bridge_presentation::RELINK.into(),
@@ -109,12 +113,24 @@ async fn linked(mock: &Mock, directory: &std::path::Path) -> (Runtime, tokio::sy
     let owner = Runtime::open(settings, Presentation::new(Some(send)), trace, None)
         .await
         .unwrap();
+    assert_eq!(
+        owner.grant.link_status(),
+        echo_screen_contract::settings_v1::LinkStatusV1::LinkRequired
+    );
     let link = owner.grant.client.begin_link().await.unwrap();
     let grant = owner.grant.clone();
     let approval = tokio::spawn(async move { grant.client.await_approval(link).await });
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(5)).await;
     approval.await.unwrap().unwrap();
+    let requests = mock.state.lock().unwrap().requests.len();
+    for _ in 0..3 {
+        assert_eq!(
+            owner.grant.link_status(),
+            echo_screen_contract::settings_v1::LinkStatusV1::Linked
+        );
+    }
+    assert_eq!(mock.state.lock().unwrap().requests.len(), requests);
     (owner, screen)
 }
 

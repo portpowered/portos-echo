@@ -23,10 +23,7 @@ use echo_live::{
     call::{LiveAuthMode, LiveCall, LiveCallFactory, SessionOptions},
 };
 use serde_json::json;
-use std::{
-    io::{Read, Write},
-    time::Duration,
-};
+use std::{io::Write, time::Duration};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -41,7 +38,7 @@ pub struct Control {
 pub async fn execute<C: LinkConnector>(settings: Settings, connector: C) -> Result<(), Error> {
     let control = Control {
         utc_day: std::sync::Arc::new(utc_day),
-        shutdown: control()?,
+        shutdown: crate::bridge_settings::settings_process::shutdown()?,
     };
     execute_with_control(settings, control, connector).await
 }
@@ -54,17 +51,22 @@ pub async fn execute_with_control<C: LinkConnector>(
     control: Control,
     connector: C,
 ) -> Result<(), Error> {
-    if settings.config.is_some()
+    if configured(&settings) {
+        return Box::pin(crate::bridge_voice::voice_entry::execute(settings, control, connector)).await;
+    }
+    Box::pin(execute_controlled(settings, control, connector)).await
+}
+
+/// Whether these inputs select the configured Codex owner.
+#[must_use]
+pub fn configured(settings: &Settings) -> bool {
+    settings.config.is_some()
         && settings.muse.is_none()
         && (settings.model_url.is_none()
             || settings
                 .config
                 .as_ref()
                 .is_some_and(|config| config.codex.home.is_some()))
-    {
-        return Box::pin(crate::bridge_voice::voice_entry::execute(settings, control, connector)).await;
-    }
-    Box::pin(execute_controlled(settings, control, connector)).await
 }
 
 fn utc_day() -> u64 {
@@ -110,6 +112,7 @@ pub async fn execute_controlled<C: LinkConnector>(
         },
     )?;
     let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
+    screen.settings_warning(settings.settings_warning.as_deref(), &mut trace)?;
     let health = Health::bind(settings.health).await?;
     screen.supervise_actions(health.state.subscribe());
     trace.record(
@@ -415,19 +418,6 @@ async fn create(factory: &LiveCallFactory<Provider>, settings: &Settings, id: &s
         .create(peer, options, (Instant::now() + Duration::from_secs(5)).into_std())
         .await
         .map_err(Error::from)
-}
-
-fn control() -> Result<oneshot::Receiver<bool>, Error> {
-    let (send, receive) = oneshot::channel();
-    // Tokio's blocking stdin cannot be cancelled on an operational failure.
-    // An OS thread owns no async resource and cannot delay process exit.
-    std::thread::Builder::new()
-        .name("bridge-control".into())
-        .spawn(move || {
-            let _ = send.send(matches!(std::io::stdin().read(&mut [0]), Ok(0)));
-        })
-        .map_err(|_| Error::Control)?;
-    Ok(receive)
 }
 
 pub(crate) fn publish(event: &str, run: Option<&str>) -> Result<(), Error> {
