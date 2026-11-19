@@ -15,19 +15,27 @@ impl crate::lab_run::device::Configured<'_> {
     pub(in crate::lab_run::device) fn mcp(
         &mut self,
         action: crate::lab_run::McpAction,
+        index: usize,
         artifacts: &mut Artifacts,
     ) -> Result<(), String> {
-        let result = self.executor.block_on(crate::lab_run::device::runtime::observed(
-            async {
-                if matches!(action, crate::lab_run::McpAction::Restart) {
-                    self.state.mcp_restart(&self.config, artifacts).await
-                } else {
-                    self.state.mcp_operator(&action, &self.config).await
-                }
-            },
-            self.options.cancel.as_deref(),
-            self.window,
-        ));
+        let result = if matches!(
+            action,
+            crate::lab_run::McpAction::Call | crate::lab_run::McpAction::Probe
+        ) {
+            self.mcp_query(action, index, artifacts)
+        } else {
+            self.executor.block_on(crate::lab_run::device::runtime::observed(
+                async {
+                    if matches!(action, crate::lab_run::McpAction::Restart) {
+                        self.state.mcp_restart(&self.config, artifacts).await
+                    } else {
+                        self.state.mcp_operator(&action, &self.config).await
+                    }
+                },
+                self.options.cancel.as_deref(),
+                self.window,
+            ))
+        };
         self.state.invalid |= result.is_err();
         if result.is_err() {
             artifacts.link_counts = None;

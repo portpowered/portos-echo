@@ -4,6 +4,7 @@ mod budget;
 mod launch;
 mod link;
 pub(super) mod operator;
+mod query;
 #[cfg(test)]
 mod tests;
 
