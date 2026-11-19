@@ -106,6 +106,7 @@ fn m2_codex_oracle_requires_exact_frames_and_measured_audibility() {
     valid["trace"].as_array_mut().unwrap().extend([
         json!({"event":"mic.completed","count":10,"dropped_chunks":0,"tail_samples":0}),
         json!({"event":"reply.played","outcome":"played","frames":10,"received_frames":10,"dropped_frames":0}),
+        json!({"event":"reply.quality","underruns":0,"depth_min_ms":20,"rtp_lost":0,"discarded":{"audible":0}}),
     ]);
     assert_eq!(oracle::check(&valid), Ok(()));
     for field in ["pcm_bytes", "nonzero_samples", "audible_samples"] {
@@ -121,6 +122,20 @@ fn m2_codex_oracle_requires_exact_frames_and_measured_audibility() {
         wrong["trace"][2]["frames"] = json!(count);
         wrong["trace"][2]["received_frames"] = json!(count);
         assert!(oracle::check(&wrong).is_err(), "wrong frame count {count}");
+    }
+    // Reply-quality records: lost packets and discarded speech fail the run.
+    let fields = [
+        ("/rtp_lost", true),
+        ("/discarded/audible", true),
+        ("/underruns", false),
+        ("/depth_min_ms", false),
+    ];
+    for (pointer, one_fails) in fields {
+        let mut wrong = valid.clone();
+        *wrong["trace"][3].pointer_mut(pointer).unwrap() = json!(1);
+        assert_eq!(oracle::check(&wrong).is_err(), one_fails, "{pointer}");
+        *wrong["trace"][3].pointer_mut(pointer).unwrap() = json!(null);
+        assert!(oracle::check(&wrong).is_err(), "missing {pointer}");
     }
 }
 

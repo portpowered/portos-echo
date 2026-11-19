@@ -187,6 +187,29 @@ connection never closed the sink within 4 s. A wake (SIGUSR1) while speaking emi
 `-D` the existing microphone stream continues. So the time to cut a reply is bounded by the reply audio the bridge
 has already sent and not yet played.
 
+## Reply audio on the Echo (2026-11-18)
+
+Measured on the Echo with an instrumented armv7 `echo-bridge` at 34cbe231 and hassmic aaf1ca0 in `-D` mode,
+`chatgpt` realtime call over Wi-Fi. Every reply now records these values in a `reply.quality` trace record
+(`arrival_gap_max_ms`, `late_arrivals`, `underruns`, `underrun_max_ms`, `depth_min_ms`, `depth_max_ms`,
+`discarded.{after_reply,idle,cut,audible}`, `rtp_lost`). Depth and underruns are the bridge's model of the
+device queue (20 ms of playout per frame written); hassmic logs no underrun of its own.
+
+| Fact | Value |
+| --- | --- |
+| Call frame arrival at the bridge, 2,065 frames over 41.1 s | mean gap 19.9 ms, longest 62 ms; 7 gaps over 40 ms, 108 in 26–40 ms, 165 at or under 15 ms |
+| Same arrivals forwarded frame by frame (no prime), 8 replies of 5 s | 41 modelled underruns in 40 s, longest dry spell 40 ms, median depth 21 ms |
+| Same arrivals with a 40, 60, 80 or 100 ms prime | 0 underruns; median depth 43, 69, 91 and 119 ms |
+| Live run with the 100 ms prime, 4 replies (1,430, 250, 267 and 279 frames) | `late_arrivals` 5, 4, 1, 2; `underruns` 2, 3, 1, 1; `rtp_lost` 0; `dropped_frames` 0 |
+| Where the remaining underruns fall | one per `call.receive_reset` (5 resets, 7 underruns); `arrival_gap_max_ms` 162–443 spans the reset window |
+| Audible frames discarded while a reply was being cut | 0, 20, 9, 8 per reply (`discarded.cut` equal); cause not yet determined |
+| RTP sequence gaps | 0 in every measured reply |
+
+The pacing unit test `bridge_pacing_measured_jitter_never_runs_the_primed_echo_dry` replays the measured
+gap pattern and fails if a primed stream underruns. This is one device, one network and one evening; it
+establishes no Wi-Fi-wide bound. Room recordings through the Ring were too noisy to count clicks (ambient
+alone scored 16 "dropouts"), so no acoustic before/after count exists.
+
 ## Milestones
 
 | Fact | Value | Measured |

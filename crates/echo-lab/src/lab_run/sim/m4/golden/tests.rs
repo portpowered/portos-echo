@@ -98,6 +98,14 @@ fn normalizes_only_incidental_values_and_keeps_measurements_and_relationships() 
 }
 
 #[test]
+fn reply_quality_measurements_are_not_golden_steps() {
+    let mut records = journey();
+    let expected = recorded(&records);
+    records.push(json!({"event":"reply.quality","elapsed_ms":9,"run_id":"r-a","underruns":3}));
+    assert_eq!(compare(&trace(&records), &expected), Ok(()));
+}
+
+#[test]
 fn any_semantic_change_fails_with_expected_actual_and_line_number() {
     let original = journey();
     let expected = recorded(&original);

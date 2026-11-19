@@ -35,6 +35,7 @@ pub use voice_session::{
 #[cfg(test)]
 mod voice_tests;
 
+pub use crate::bridge_runtime::bridge_pacing::ReplyQuality;
 use crate::{
     Error,
     bridge_codex::{Event, MediaEvent},
@@ -68,6 +69,10 @@ pub trait VoicePort {
     fn ready_audio(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, Error>>;
     /// Mark the interrupted media generation for retirement at replacement.
     fn retire_audio(&mut self) {}
+    /// Cumulative RTP packets missing from the call's receive sequence.
+    fn rtp_lost(&self) -> u64 {
+        0
+    }
 }
 
 /// No payload-bearing observation implements Debug or Display.
@@ -112,6 +117,8 @@ pub struct Stats {
     pub reply_received: u64,
     pub reply_sent: u64,
     pub reply_dropped: u64,
+    /// The settled reply's pacing and discard facts.
+    pub quality: ReplyQuality,
 }
 
 /// Run an already connected call without creating a second process or IO reader.
@@ -189,6 +196,7 @@ pub async fn run<L: EchoLink>(
     source.stats.received_chunks = microphone.stats().received;
     source.stats.dropped_chunks = microphone.stats().dropped;
     source.stats.reply_dropped += source.reply.dropped_frames();
+    source.stats.quality = source.meter.settle(port.rtp_lost());
     Ok(source.stats)
 }
 
@@ -363,6 +371,7 @@ async fn step<E: LinkEvents>(
             result.inspect_err(|_| { source.failure = "reply_send"; })?;
             if let Some(frame) = pending.take() {
                 source.mouth.wrote(&frame, Instant::now());
+                source.meter.wrote(Instant::now());
                 if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
                     clock.submitted("reply")?;
                 }

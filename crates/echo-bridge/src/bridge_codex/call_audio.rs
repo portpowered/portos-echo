@@ -167,9 +167,10 @@ impl ReplyAudio {
     }
 
     /// Cancellation while waiting consumes no PCM. Frames are never sent more
-    /// than the lead ahead of the audio clock; late wakeups catch up.
+    /// than the lead ahead of the audio clock; late wakeups catch up. A dry
+    /// device is primed first (`ClockPacer`).
     pub async fn next_frame(&mut self) -> Option<Vec<u8>> {
-        self.pacer.next_frame(&mut self.queue).await
+        self.pacer.next_frame(&mut self.queue, self.finished).await
     }
 
     /// Whether a paced receive can eventually yield a retained frame.

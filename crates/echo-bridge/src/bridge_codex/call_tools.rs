@@ -325,6 +325,9 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     fn retire_audio(&mut self) {
         self.port.retire_audio();
     }
+    fn rtp_lost(&self) -> u64 {
+        self.port.dropped_frames().lost
+    }
     fn bind_session(&mut self, run: Option<Arc<()>>) {
         if let Some(owner) = &self.run {
             owner.send_replace(run);
