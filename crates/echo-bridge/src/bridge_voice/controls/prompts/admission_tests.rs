@@ -137,37 +137,48 @@ async fn prompt_remote(
     index: usize,
     home: Option<&std::path::Path>,
 ) {
-    let suffix = "\n[Call-start context: 1970-01-01 Thursday 00:00:00 UTC+00:00; local offset unavailable]"; // lint-rules: allow-literal UTC calendar expectation, never an endpoint
     let thread = format!("thread-{index}");
     for method in ["thread/start", "thread/realtime/start", "thread/realtime/stop"] {
         let mut line = String::new();
         server.read_line(&mut line).await.unwrap();
         let request: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(request["method"], method);
-        let result = if method == "thread/start" {
-            assert_eq!(request["params"]["baseInstructions"], format!("{}{suffix}", expected.0));
-            assert_eq!(request["params"]["model"], "fixture-model");
-            assert_eq!(request["params"]["config"]["model_reasoning_effort"], "low");
-            serde_json::json!({"thread":{"id":thread}})
-        } else {
-            assert_eq!(request["params"]["threadId"], thread);
-            if method == "thread/realtime/start" {
-                assert_eq!(request["params"]["prompt"], format!("{}{suffix}", expected.1));
-                assert_eq!(request["params"]["voice"], "cedar");
-                let event = serde_json::json!({"method":"thread/realtime/sdp","params":{"threadId":thread,"sdp":"fixture-answer"}});
-                send(server, &event).await;
-            } else {
-                let event = serde_json::json!({"method":"thread/realtime/closed","params":{"threadId":thread}});
-                send(server, &event).await;
-            }
-            serde_json::json!({})
-        };
+        let result = prompt_result(server, &request, method, &thread, expected).await;
         let response = serde_json::json!({"id":request["id"],"result":result});
         send(server, &response).await;
         if method == "thread/realtime/start" {
             edit_retained(home, index);
             replies(server, observer, started, &thread).await;
         }
+    }
+}
+
+async fn prompt_result(
+    server: &mut BufReader<tokio::io::DuplexStream>,
+    request: &serde_json::Value,
+    method: &str,
+    thread: &str,
+    expected: (&str, &str),
+) -> serde_json::Value {
+    let suffix = "\n[Call-start context: 1970-01-01 Thursday 00:00:00 UTC+00:00; local offset unavailable]"; // lint-rules: allow-literal UTC calendar expectation, never an endpoint
+    if method == "thread/start" {
+        assert_eq!(request["params"]["baseInstructions"], format!("{}{suffix}", expected.0));
+        assert_eq!(request["params"]["model"], "fixture-model");
+        assert_eq!(request["params"]["config"]["model_reasoning_effort"], "low");
+        serde_json::json!({"thread":{"id":thread}})
+    } else {
+        assert_eq!(request["params"]["threadId"], thread);
+        if method == "thread/realtime/start" {
+            assert_eq!(request["params"]["prompt"], format!("{}{suffix}", expected.1));
+            assert_eq!(request["params"]["voice"], "cedar");
+            let event =
+                serde_json::json!({"method":"thread/realtime/sdp","params":{"threadId":thread,"sdp":"fixture-answer"}});
+            send(server, &event).await;
+        } else {
+            let event = serde_json::json!({"method":"thread/realtime/closed","params":{"threadId":thread}});
+            send(server, &event).await;
+        }
+        serde_json::json!({})
     }
 }
 
