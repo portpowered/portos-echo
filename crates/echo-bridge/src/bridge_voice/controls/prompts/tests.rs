@@ -169,3 +169,26 @@ async fn agent_home_trace_failure_cannot_claim_default_or_reload() {
     .await
     .unwrap();
 }
+
+/// T1: the Android layout, where a non-root bridge may search but not list the
+/// home's ancestors. Startup must open the home instead of refusing it.
+#[cfg(unix)]
+#[tokio::test(start_paused = true)]
+async fn agent_home_opens_below_a_search_only_ancestor() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let gate = root.path().join("gate");
+    let home = gate.join("home");
+    std::fs::create_dir_all(home.join("prompts")).unwrap();
+    std::fs::write(home.join("prompts/voice.md"), "voice").unwrap();
+    std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o111)).unwrap();
+    // Root ignores directory modes, so the walk cannot be told apart there.
+    let enforced = std::fs::read_dir(&gate).is_err();
+    let opened = Prompts::open(&home).map(|prompts| (prompts.runner.text, prompts.voice.text));
+    std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if !enforced {
+        eprintln!("skipped: this user bypasses directory permissions");
+        return;
+    }
+    assert_eq!(opened, Ok((RUNNER_INSTRUCTIONS.into(), "voice".into())));
+}

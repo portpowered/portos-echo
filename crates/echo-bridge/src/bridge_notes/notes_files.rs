@@ -15,6 +15,10 @@ const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::NOFOLLOW)
     .union(OFlags::CLOEXEC);
+/// Anchors only resolve names beneath them. `O_PATH` needs search permission,
+/// never read, so a home below directories the bridge user may traverse but not
+/// list still opens. `O_DIRECTORY` keeps a raced-in link refused (`ENOTDIR`).
+const ANCHOR: OFlags = OFlags::PATH.union(DIRECTORY);
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn error(error: Errno) -> &'static str {
@@ -27,6 +31,8 @@ pub(super) fn error(error: Errno) -> &'static str {
 
 /// Walk even home ancestors without following a link. Never create anything
 /// until a validated write needs it; reads/list of missing notes stay inert.
+/// The home and its ancestors are anchors; only `child` is opened for reading,
+/// because listing and fsync need a real descriptor.
 pub(super) fn root(home: &Path, create: bool) -> Result<Option<OwnedFd>> {
     root_named(home, "notes", create)
 }
@@ -35,21 +41,26 @@ pub(crate) fn root_named(home: &Path, child: &str, create: bool) -> Result<Optio
     if !home.is_absolute() {
         return Err("io");
     }
-    let mut fd = fs::open("/", DIRECTORY, Mode::empty()).map_err(error)?;
+    let mut fd = fs::open("/", ANCHOR, Mode::empty()).map_err(error)?;
     for part in home.components() {
         match part {
             Component::RootDir => (),
-            Component::Normal(name) => match directory(&fd, name, create)? {
+            Component::Normal(name) => match step(&fd, name, create, ANCHOR)? {
                 Some(child) => fd = child,
                 None => return Ok(None),
             },
             _ => return Err("io"),
         }
     }
-    directory(&fd, std::ffi::OsStr::new(child), create)
+    step(&fd, std::ffi::OsStr::new(child), create, DIRECTORY)
 }
 
+/// A readable directory inside the opened root, owned by the bridge user.
 pub(crate) fn directory(fd: &impl AsFd, name: &std::ffi::OsStr, create: bool) -> Result<Option<OwnedFd>> {
+    step(fd, name, create, DIRECTORY)
+}
+
+fn step(fd: &impl AsFd, name: &std::ffi::OsStr, create: bool, flags: OFlags) -> Result<Option<OwnedFd>> {
     match fs::statat(fd, name, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => match FileType::from_raw_mode(stat.st_mode) {
             FileType::Symlink => return Err("symlink"),
@@ -63,7 +74,7 @@ pub(crate) fn directory(fd: &impl AsFd, name: &std::ffi::OsStr, create: bool) ->
         Err(Errno::NOENT) => return Ok(None),
         Err(failure) => return Err(error(failure)),
     }
-    fs::openat(fd, name, DIRECTORY, Mode::empty()).map(Some).map_err(error)
+    fs::openat(fd, name, flags, Mode::empty()).map(Some).map_err(error)
 }
 
 pub(crate) fn regular(stat: &Stat) -> Result<u64> {

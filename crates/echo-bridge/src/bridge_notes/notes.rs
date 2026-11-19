@@ -6,6 +6,8 @@ mod notes_prompts;
 mod notes_store;
 #[cfg(test)]
 mod notes_tests;
+#[cfg(test)]
+mod notes_walk_tests;
 
 use crate::bridge_trace::Trace;
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
