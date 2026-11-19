@@ -20,6 +20,10 @@ pub mod bridge_voice;
 pub enum Error {
     #[error("invalid input")]
     Input,
+    #[error("{0}")]
+    Prompt(&'static str),
+    #[error("{0}")]
+    PromptConfig(String),
     #[error("codex.home: required for Codex runtime")]
     CodexHomeRequired,
     #[error("codex.home: private ownership unavailable")]

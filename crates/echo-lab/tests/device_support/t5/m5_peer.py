@@ -127,6 +127,8 @@ class World:
                 self.record("mcp.unlink.completed", operation_id=99)
         elif "wc -c" in command:
             return str(len(self.log))
+        elif "stat -c %u:%g:%a" in command:
+            return "9999:9999:600"
         elif "stat -c %a" in command:
             return "700" if command.endswith("/portos") else "600"
         elif "rm -f" in command and "trace.jsonl" in command:

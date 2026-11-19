@@ -345,18 +345,29 @@ async fn refused() {
         .unwrap()
         .with_routes(LocalRoutes::new(&provider.origin, &provider.origin).unwrap());
     let observer = Observer::default();
+    let (cancel, cancelled) = oneshot::channel();
     let work = owner.execute(
         FakeConnector::new(observer.clone()),
         async || -> Result<Media, echo_bridge::Error> { unreachable!("over-cap call opened media") },
         vec![],
-        std::future::pending(),
+        async {
+            cancelled.await.unwrap();
+        },
     );
     let inspect = async {
         receipt(root, "bridge.ready").await;
         observer.wake("refused", vec![]);
+        // The refused wake ends on the device and the bridge stays up.
+        let refusal = LinkCommand::FailRun(echo_link::RunFailure::Unavailable);
+        while !observer.commands().contains(&refusal) {
+            tokio::task::yield_now().await;
+        }
+        receipt(root, "bridge.recovering").await;
+        cancel.send(()).unwrap();
     };
     let (result, ()) = Box::pin(async { tokio::join!(work, inspect) }).await;
-    assert_eq!(result, Err(echo_bridge::Error::Unavailable));
+    assert_eq!(result, Ok(()));
+    assert_eq!(rows(root, "bridge.error"), Vec::<Value>::new());
     assert_eq!(
         provider.snapshot().await,
         json!({"calls":[],"sidebands":0,"external":0})

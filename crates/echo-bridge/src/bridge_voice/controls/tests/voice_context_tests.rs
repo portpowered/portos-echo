@@ -63,7 +63,6 @@ async fn configured_options_preserve_overrides_budgets_tools_and_default_voice()
     prepared.config.live.voice = Some("alloy".into());
     prepared.config.codex.model = Some("configured-model".into());
     prepared.config.agent.model = Some("legacy-model".into());
-    prepared.config.codex.instructions = "configured instructions".into();
     prepared.config.live.session_idle_seconds = 43;
     prepared.config.agent.task_deadline_seconds = 17;
     prepared.config.audio.reply_lead_ms = 120;
@@ -81,7 +80,7 @@ async fn configured_options_preserve_overrides_budgets_tools_and_default_voice()
         .conversation(("snapshot", "live snapshot"), options.host.deadline);
     assert_eq!(call.call.effort, Some("custom-effort"));
     assert_eq!(call.call.time_zone, Some("Europe/Berlin"));
-    assert_eq!(options.voice.call.instructions, "configured instructions");
+    assert_eq!(options.voice.call.instructions, echo_config::RUNNER_INSTRUCTIONS);
     assert_eq!(options.voice.tools, [tool]);
     assert_eq!(options.voice.session.idle, Duration::from_secs(43));
     assert_eq!(options.voice.session.response_timeout, Duration::from_secs(17));

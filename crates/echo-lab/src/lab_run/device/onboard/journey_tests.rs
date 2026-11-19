@@ -73,12 +73,13 @@ async fn t3_on_device_launch_pushes_the_derived_config_and_starts_in_its_own_ses
         assert_eq!(std::fs::metadata(&staged).unwrap().permissions().mode() & 0o777, 0o600);
     }
     for expected in [
-        format!("runas root 3990,inet chmod 600 {PRIVATE}/bridge.toml"),
-        format!("runas root 3990,inet stat -c %a {PRIVATE}/bridge.toml"),
-        format!("runas root 3990,inet sh -c 'umask 077; cd {PRIVATE} || exit 1;"),
+        format!("shell chown 9999:9999 {PRIVATE}/bridge.toml"), // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
+        format!("/data/local/hassmic/runas nobody 3990,inet chmod 600 {PRIVATE}/bridge.toml"),
+        format!("/data/local/hassmic/runas nobody 3990,inet stat -c %u:%g:%a {PRIVATE}/bridge.toml"),
+        format!("/data/local/hassmic/runas nobody 3990,inet sh -c 'umask 077; cd {PRIVATE} || exit 1;"),
         "setsid sh -c".into(),
         format!("--config {PRIVATE}/bridge.toml --trace {PRIVATE}/trace.jsonl <lab-stdin"),
-        format!("exec-out runas root 3990,inet cat {PRIVATE}/trace.jsonl"),
+        format!("exec-out /data/local/hassmic/runas nobody 3990,inet cat {PRIVATE}/trace.jsonl"),
         "tail -c +1 /data/local/hassmic/boot.log".into(),
         "forward tcp:0 tcp:16900".into(), // lint-rules: allow-literal synthetic adb argument comparison, no connection
     ] {
@@ -133,7 +134,7 @@ async fn t3_on_device_pushed_config_must_read_back_owner_only() {
     let mut state = runtime(&world);
     assert_eq!(
         state.start(None, DERIVED, root.path(), None).await.unwrap_err(),
-        "device: unmet prerequisite: pushed bridge configuration with mode 0600 on the Echo"
+        "device: unmet prerequisite: pushed bridge configuration with owner 9999:9999 and mode 0600 on the Echo" // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
     );
     assert!(!world.borrow().ran("setsid"));
 }
@@ -449,4 +450,19 @@ async fn t3_on_device_mcp_restart_refuses_public_store_and_failed_relaunch_canno
     assert!(artifacts.link_counts.is_none());
     assert!(!world.borrow().alive);
     assert!(world.borrow().ran("forward --remove"));
+}
+
+#[tokio::test]
+async fn t3_on_device_push_or_chown_failure_never_launches() {
+    for failure in ["bridge.toml", "chown"] {
+        let root = tempfile::tempdir().unwrap();
+        let world = world();
+        world.borrow_mut().fail = failure.into();
+        let mut state = runtime(&world);
+        assert_eq!(
+            state.start(None, DERIVED, root.path(), None).await.unwrap_err(),
+            "synthetic staging failure"
+        );
+        assert!(!world.borrow().ran("setsid"));
+    }
 }

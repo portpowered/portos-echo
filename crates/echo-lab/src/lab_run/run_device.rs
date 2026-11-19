@@ -6,7 +6,12 @@ use super::run_options::Options;
 use super::run_report::Artifacts;
 use super::{Driver, Step};
 
+mod replay;
+pub(super) use replay::Wake;
+
 pub struct Device<'a> {
+    say: std::cell::RefCell<replay::Say>,
+    pub(super) iteration: u64,
     options: &'a Options,
     hold: Option<(String, String)>,
     clock: LeaseClock,
@@ -21,6 +26,8 @@ pub struct Device<'a> {
 impl<'a> Device<'a> {
     pub fn new(options: &'a Options) -> Self {
         Self {
+            say: std::cell::RefCell::new(replay::Say::default()),
+            iteration: 0,
             options,
             hold: None,
             clock: LeaseClock::new(),
@@ -162,6 +169,7 @@ impl<'a> Device<'a> {
             if cleanup { None } else { self.options.cancel.as_deref() },
         )?;
         if playing {
+            self.say.borrow_mut().dispatched();
             // Launch can queue remote audio even if waiting for the CLI later fails.
             self.playback_end.borrow_mut().pending = Some(String::new());
         }
@@ -221,9 +229,13 @@ impl<'a> Device<'a> {
         let reply = self
             .host("reply", &trim)
             .map_err(|_| "play: invalid reply WAV or timing")?;
-        if reply["reply_frames"].as_u64().is_none_or(|frames| frames == 0) {
+        let frames = reply["reply_frames"]
+            .as_u64()
+            .ok_or("play: invalid reply measurement")?;
+        if frames == 0 {
             return Err("play: no post-playback reply audio".into());
         }
+        self.say.borrow_mut().reply(true, self.options.bridge_config.is_none());
         self.reply = Some(path.to_path_buf());
         Ok(())
     }
@@ -247,9 +259,15 @@ impl<'a> Device<'a> {
 impl Device<'_> {
     // Persistent sessions cannot wait for a ten-second acoustic capture after
     // every input. The configured owner waits on independent wire Played instead.
-    pub(super) fn session_input(&mut self, step: &Step, index: usize, artifacts: &mut Artifacts) -> Result<(), String> {
+    pub(super) fn session_input(
+        &mut self,
+        step: &Step,
+        index: usize,
+        artifacts: &mut Artifacts,
+        wake: Option<&mut dyn Wake>,
+    ) -> Result<(), String> {
         self.capture_window = true;
-        let result = self.attempt(step, index, artifacts);
+        let result = self.observed_say(step, index, artifacts, wake);
         self.deferred_reply = false;
         self.reply = None;
         result
@@ -381,7 +399,7 @@ impl Device<'_> {
                 self.play(
                     "file",
                     &[("{file}", file)],
-                    &artifacts.root.join(format!("reply-{index}.wav")),
+                    &self.reply_path(index, &artifacts.root),
                     artifacts,
                 )
             }
@@ -395,7 +413,7 @@ impl Device<'_> {
                 self.play(
                     "text",
                     &[("{text}", text), ("{endpoint}", endpoint), ("{model}", model)],
-                    &artifacts.root.join(format!("reply-{index}.wav")),
+                    &self.reply_path(index, &artifacts.root),
                     artifacts,
                 )
             }
@@ -427,14 +445,7 @@ impl Driver for Device<'_> {
             return Err(format!("device: MCP {} control unavailable", action.name()));
         }
         self.capture_window = matches!(next, Some(Step::Frame(_)));
-        let result = self.attempt(step, index, artifacts);
-        if result.as_ref().err().is_some_and(|error| error == "play: preempted") {
-            artifacts.event("preempted", Some(index), None)?;
-            self.close(artifacts)?;
-            artifacts.event("retry_started", Some(index), None)?;
-            return self.attempt(step, index, artifacts);
-        }
-        result
+        self.execute_say(step, index, artifacts)
     }
 
     fn close(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {

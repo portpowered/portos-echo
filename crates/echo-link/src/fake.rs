@@ -142,6 +142,15 @@ impl Observer {
         }
     }
 }
+struct Abandoned<'a>(&'a Observer, Arc<Mutex<Queue>>);
+impl Drop for Abandoned<'_> {
+    fn drop(&mut self) {
+        let mut state = lock(&self.0.0);
+        if state.source.as_ref().is_some_and(|source| Arc::ptr_eq(source, &self.1)) {
+            state.source = None;
+        }
+    }
+}
 /// One link owner; taking events twice is rejected.
 pub struct FakeLink {
     observer: Observer,
@@ -366,6 +375,9 @@ impl EchoLink for FakeLink {
             state.stopped = false;
             state.outcome = None;
         }
+        // An abandoned playback releases the speaker, as the device adapter
+        // does by ending that reply's connection state before another reply.
+        let _abandoned = Abandoned(&self.observer, source.0.clone());
         poll_fn(|cx| {
             let mut state = lock(&self.observer.0);
             let mut queue = lock(&source.0);

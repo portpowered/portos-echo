@@ -10,10 +10,12 @@ use std::sync::{
 };
 use tokio::sync::watch;
 
-struct Media {
-    state: watch::Sender<PeerState>,
-    closed: Arc<AtomicUsize>,
-    setup: OnceLock<SetupObserver>,
+pub(super) struct Media {
+    pub state: watch::Sender<PeerState>,
+    pub closed: Arc<AtomicUsize>,
+    pub setup: OnceLock<SetupObserver>,
+    /// Notified to make the next media read fail, as a lost call does.
+    pub lost: Arc<tokio::sync::Notify>,
 }
 impl MediaPeer for Media {
     fn create(_: PeerConfig) -> impl Future<Output = Result<Self, echo_media::Error>> {
@@ -42,8 +44,9 @@ impl MediaPeer for Media {
     fn send(&self, _: PcmFrame) -> Result<(), echo_media::Error> {
         Ok(())
     }
-    fn recv(&mut self) -> impl Future<Output = Result<Option<PcmFrame>, echo_media::Error>> {
-        std::future::pending()
+    async fn recv(&mut self) -> Result<Option<PcmFrame>, echo_media::Error> {
+        self.lost.notified().await;
+        Err(echo_media::Error::State)
     }
     fn dropped_frames(&self) -> DropCounts {
         DropCounts::default()
@@ -55,7 +58,7 @@ impl MediaPeer for Media {
     }
 }
 
-fn config(fixture: &Fixture, url: &str) -> echo_config::BridgeConfig {
+pub(super) fn config(fixture: &Fixture, url: &str) -> echo_config::BridgeConfig {
     let mut config = echo_config::BridgeConfig::load(fixture.directory.path().join("bridge.toml")).unwrap();
     config.audit.log_dir = fixture.directory.path().join("audit");
     config.mcp.server[0].url = url.into();
@@ -67,7 +70,7 @@ fn config(fixture: &Fixture, url: &str) -> echo_config::BridgeConfig {
     config
 }
 
-async fn result(fixture: &Fixture) -> Value {
+pub(super) async fn result(fixture: &Fixture) -> Value {
     loop {
         if let Ok(bytes) = std::fs::read(fixture.home.join("tool-result"))
             && let Ok(result) = serde_json::from_slice(&bytes)
@@ -95,6 +98,7 @@ async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accept
                 state: watch::channel(PeerState::New).0,
                 closed: closed.clone(),
                 setup: OnceLock::new(),
+                lost: Arc::default(),
             })
         },
         vec![],
@@ -138,7 +142,7 @@ async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accept
     output
 }
 
-async fn ready(fixture: &Fixture) -> (tokio::net::TcpStream, Lines<BufReader<tokio::net::TcpStream>>) {
+pub(super) async fn ready(fixture: &Fixture) -> (tokio::net::TcpStream, Lines<BufReader<tokio::net::TcpStream>>) {
     let control = fixture.control().await;
     let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
     loop {
@@ -251,22 +255,31 @@ async fn codex_configured_tools_exhausted_call_admission_never_opens_media_or_mo
         ([127, 0, 0, 1], 0).into(),
     )
     .unwrap();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
     let work = prepared.execute(
         FakeConnector::new(observer.clone()),
         async || -> Result<Media, echo_bridge::Error> { unreachable!("over-cap admission cannot create a peer") },
         vec![],
-        std::future::pending(),
+        async {
+            stopping.await.unwrap();
+        },
     );
     let inspect = async {
         let (_control, _screen) = ready(&fixture).await;
         observer.wake("refused", vec![]);
+        // The refused wake ends on the device and the bridge stays up.
+        let refusal = echo_link::fake::Command::FailRun(echo_link::RunFailure::Unavailable);
+        while !observer.commands().contains(&refusal) {
+            tokio::task::yield_now().await;
+        }
+        stop.send(()).unwrap();
     };
     let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::join!(work, inspect)
     }))
     .await
     .unwrap();
-    assert_eq!(result, Err(echo_bridge::Error::Unavailable));
+    assert_eq!(result, Ok(()));
     assert_eq!(spoof.snapshot().unwrap(), echo_spoof_mcp::Snapshot::default());
     assert!(!fixture.home.join("thread-config").exists());
     assert!(!fixture.home.join("tool-result").exists());

@@ -278,7 +278,7 @@ print(json.dumps(dict(status=status, stdout=stdout.getvalue(),
         }
     }
 
-    fn assert_safe_projection(contents: &str, instructions: &str) {
+    fn assert_safe_projection(contents: &str, model: Option<&str>) {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("nomination.toml");
         std::fs::write(&path, contents).unwrap();
@@ -294,7 +294,7 @@ print(json.dumps(dict(status=status, stdout=stdout.getvalue(),
         expected.audit.log_dir = "audit".into();
         assert_eq!(actual, expected);
         assert_eq!(actual.codex.home, None);
-        assert_eq!(actual.codex.instructions, instructions);
+        assert_eq!(actual.codex.model.as_deref(), model);
         stage(root.path(), &projected).unwrap();
         let directory = root.path().join("configured.private");
         assert_eq!(
@@ -315,16 +315,13 @@ print(json.dumps(dict(status=status, stdout=stdout.getvalue(),
 
     #[test]
     fn t3_device_config_without_codex_preserves_safe_projection_and_stage() {
-        assert_safe_projection(&nomination(), "Client audio bridge");
+        assert_safe_projection(&nomination(), None);
     }
 
     #[test]
     fn t3_device_config_preserves_home_free_codex_settings() {
-        let contents = format!(
-            "{}\n[codex]\ninstructions = \"Synthetic bridge instructions\"\n",
-            nomination()
-        );
-        assert_safe_projection(&contents, "Synthetic bridge instructions");
+        let contents = format!("{}\n[codex]\nmodel = \"synthetic-model\"\n", nomination());
+        assert_safe_projection(&contents, Some("synthetic-model"));
     }
 
     #[test]

@@ -1,4 +1,6 @@
 //! Closed event vocabulary and counters only. Never serialize provider events.
+//! `prompt.defaulted` names voice|runner once per missing kind per runtime.
+//! `prompt.reload_refused` adds a fixed reason; neither contains paths or text.
 //! `wyoming.probe_ok` acknowledges each successful idle describe probe when its
 //! owner observes completion. It carries only the existing envelope, no payload.
 //! `reply.cut` also reports `bridge_evicted` (prior capacity evictions) and
