@@ -15,6 +15,25 @@ enum Finish {
 }
 type ImageIdentity = (PathBuf, Vec<u8>, PathBuf);
 
+const READY_LINE: &str = r#"{"event":"bridge.ready"}"#;
+// A process image reports its two absent prompt files once, before its first
+// runtime generation; a generation the same image starts later reports none.
+const IMAGE: &str = "prompt.defaulted";
+const STARTED: &str = "bridge.started";
+const READY: &str = "bridge.ready";
+const KILL: &str = "kill.enabled";
+const PREPARED: &str = "settings.restart_prepared";
+const LIFECYCLE: [&str; 8] = [
+    IMAGE,
+    STARTED,
+    READY,
+    "reply.played",
+    "bridge.run_completed",
+    KILL,
+    PREPARED,
+    "settings.restart_failed",
+];
+
 #[tokio::test]
 #[ignore = "T3 requires prebuilt Linux echo-bridge and local Python"]
 async fn t3_settings_binary_active_saves_exec_once_after_played_and_cleanup() {
@@ -64,9 +83,27 @@ async fn exercise(finish: Finish) {
     drop(signal);
     media.abort();
     finish_generation(&fixture, &listener, &mut process, finish, (pid, identity)).await;
+    settled(&fixture, &mut process, finish).await;
+}
+
+async fn settled(fixture: &Fixture, process: &mut Process, finish: Finish) {
+    let output = remaining_output(process).await;
     assert_eq!(process.stderr().await, "");
-    super::super::host::released(&fixture).await;
-    completed(&fixture, finish);
+    super::super::host::released(fixture).await;
+    completed(fixture, finish, &output);
+}
+
+/// Every stdout line the exited process published and no step consumed.
+async fn remaining_output(process: &mut Process) -> Vec<String> {
+    let mut lines = vec![];
+    while let Some(line) = tokio::time::timeout(OBSERVATION_TIMEOUT, process.lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        lines.push(line);
+    }
+    lines
 }
 
 async fn closing(signal: &mut BufReader<TcpStream>) {
@@ -95,6 +132,11 @@ async fn finish_generation(
     if finish == Finish::Eof {
         process.collect(0).await;
     } else {
+        // Readiness is service state, not a generation identity: the first
+        // generation returns to its wait and reports it once more, and only
+        // that wait takes the pending restart. The replacement's own report
+        // follows its fresh device admission.
+        assert_eq!(process.line().await, READY_LINE);
         let replacement = binary_ready(listener, process).await;
         assert_eq!(process_identity(pid), identity);
         after_cleanup(fixture, finish).await;
@@ -247,7 +289,7 @@ async fn after_cleanup(fixture: &Fixture, finish: Finish) {
     }
 }
 
-fn completed(fixture: &Fixture, finish: Finish) {
+fn completed(fixture: &Fixture, finish: Finish, output: &[String]) {
     let rows = trace(&fixture.directory.path().join("trace"));
     let count = |event| rows.iter().filter(|row| row["event"] == event).count();
     if finish == Finish::Eof {
@@ -257,7 +299,11 @@ fn completed(fixture: &Fixture, finish: Finish) {
         assert_eq!(count("settings.restart_prepared"), 1);
     }
     assert_eq!(count("settings.restart_failed"), 0);
-    assert_eq!(count("bridge.ready"), if finish == Finish::Eof { 1 } else { 2 });
+    generations(&rows, finish);
+    // Each readiness row has exactly one stdout line: three were consumed
+    // around a replacement, one before an EOF.
+    let consumed = if finish == Finish::Eof { 1 } else { 3 };
+    assert_eq!(output, vec![READY_LINE; count(READY) - consumed]);
     let prepared = rows.iter().position(|row| row["event"] == "settings.restart_prepared");
     let played = rows.iter().position(|row| row["event"] == "reply.played").unwrap();
     assert!(prepared.is_none_or(|prepared| played < prepared));
@@ -270,4 +316,28 @@ fn completed(fixture: &Fixture, finish: Finish) {
             "started\nstarted\n"
         }
     );
+}
+
+/// The exact lifecycle order across process images and runtime generations.
+fn generations(rows: &[Value], finish: Finish) {
+    let lifecycle: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| row["event"].as_str())
+        .filter(|event| LIFECYCLE.contains(event))
+        .collect();
+    let turn = [IMAGE, IMAGE, STARTED, READY, "reply.played", "bridge.run_completed"];
+    assert!(lifecycle.starts_with(&turn), "{lifecycle:?}");
+    let after = &lifecycle[turn.len()..];
+    match finish {
+        // One real exec: a second image starts the only other generation.
+        Finish::Replace => assert_eq!(after, [READY, PREPARED, IMAGE, IMAGE, STARTED, READY]),
+        // No exec: the same image starts the next generation, still killed.
+        Finish::Kill => assert_eq!(after, [KILL, READY, PREPARED, STARTED, KILL, READY]),
+        // No second image or generation. EOF may win during the held cleanup,
+        // in the renewed wait, or only at the final synchronous gate.
+        Finish::Eof => {
+            let allowed: [&[&str]; 3] = [&[], &[READY], &[READY, PREPARED]];
+            assert!(allowed.contains(&after), "{after:?}");
+        }
+    }
 }
