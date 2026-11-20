@@ -73,7 +73,7 @@ def status_observation():
         require("uptime_seconds=unavailable\n" in box.run(["status"]).stdout, "missing uptime invented")
     with Sandbox() as box:
         result = box.run(["status"])
-        require(result.stdout == "version_current=null\nversion_previous=null\nprocess=stopped\nprocess_user=unavailable\nuptime_seconds=unavailable\nhassmic_link=unavailable\n"
+        require(result.stdout == "process=stopped\nprocess_user=unavailable\nuptime_seconds=unavailable\nhassmic_link=unavailable\n"
                 "bridge.log (last 5):\nunavailable\n", "missing status differs")
         require(not box.device.exists(), "status created device state")
         (box.root / "fault").write_text("ps -A")

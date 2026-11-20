@@ -462,11 +462,11 @@ def main():
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))
     from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, release_cases
+    release_cases()
     lifecycle_cases()
     from test_echo_install_status import status_cases
     status_cases()
     nonroot_cases()
-    release_cases()
     print("echo-install tests: install=PASS lifecycle=PASS status=PASS retention=PASS privacy=PASS")
 
 
