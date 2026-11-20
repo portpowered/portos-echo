@@ -156,3 +156,53 @@ button:disabled {
     object-fit: contain;
     background: #101827;
 }
+.screen-pack {
+    position: fixed;
+    left: var(--pack-x);
+    top: var(--pack-y);
+    width: var(--pack-width);
+    height: var(--pack-height);
+    max-height: var(--pack-height);
+    padding: 12px;
+    isolation: isolate;
+    overflow: hidden;
+}
+.screen-pack > h1,
+.screen-pack > .details,
+.screen-pack > .controls,
+.screen-pack > p {
+    z-index: 1;
+    max-width: 100%;
+    max-height: 100%;
+    overflow: auto;
+    flex-shrink: 0;
+}
+.screen-pack > .details {
+    flex-shrink: 1;
+}
+.screen-pack .controls {
+    flex-wrap: wrap;
+}
+.screen-pack .pack-stage {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 50%;
+    height: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    overflow: hidden;
+    z-index: -1;
+}
+.pack-stage img,
+.pack-stage video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+.pack-clock,
+.pack-date {
+    margin: 0;
+}

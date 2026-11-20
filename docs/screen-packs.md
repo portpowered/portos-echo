@@ -2,7 +2,7 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 19
-status: in progress; installer, paired controls and reload publication implemented; renderer pending
+status: in progress; installer, controls and renderer implemented; generated template proof pending
 ---
 
 # Screen packs
@@ -105,7 +105,7 @@ and `character`. Unknown fields are refused. A character requires a PNG/WebP
 `mode` (`loop` or `once`) and at least one role-matching `webm`/`mp4` file.
 All references must resolve to normalized relative files in the same pack.
 Future `wake`, `dnd`, `timer` and `call` states validate but have no contract state
-yet. Emote names have 1–128 characters. Playback is pending.
+yet. Emote names have 1–128 characters.
 
 Layouts require a percent viewport `safe_area` (`x`, `y`, `width`, `height`),
 `slots` (optional `clock`, `date`, `status`, `link_code`, `approval`, `error`) and
@@ -267,5 +267,37 @@ so an installation seen by the watcher emits one event. Shutdown joins reads;
 revocation and draining still refuse final publication. Watching never writes
 settings or requests a restart.
 
-The page renderer is still pending. Selecting data does not yet change the main
-page's look.
+## Page playback and layout
+
+The paired home-backed page reads the catalog on startup and SSE reconnect,
+and refreshes it on `screen-pack-reload`. It derives authenticated same-origin
+file URLs from the selected identity, cancels superseded reads, and changes the
+look without navigating or changing the ordinary screen-frame sequence. Invalid
+or unavailable packs restore the built-in presentation.
+
+Ready and Connected select `idle`; LinkCode selects `setup`. Other current
+states select the same lowercase name. Missing states use `idle`, then the rest
+still. Unknown Emotion names retain the existing frame animation. Known emotes
+play once and resume the prior state loop. State clips with `mode: once` return
+to rest after completion. Enter and exit clips play once. Every clip must begin
+and end at the same rest pose; loop clips must join seamlessly.
+
+Two muted inline videos share one stage. The old video stays visible while the
+next loads; the page reveals the next video on its first decoded frame. State
+changes wait for the current clip's end, except Listening, Error and Approval,
+which cut immediately. Superseded media callbacks cannot advance newer clips.
+VP9-capable browsers choose WebM; otherwise they choose MP4. Reduced-motion
+preference shows the rest still. Speaking follows state duration without audio
+level or lip synchronization.
+
+Safe-area coordinates are percentages of the viewport. Slot coordinates are
+percentages within that safe area. Clock and date appear on idle; the clock
+updates once a second. The stage anchor is its center within the safe area;
+scale 1 occupies half its width and height. Text is clamped inside the area,
+with oversized cards scrollable and native approval controls retained. Character
+only packs keep default positions; layout only packs retain built-in content.
+Pack CSS is scoped to this presentation, never to Settings.
+
+Generated-template media, artifact packaging and the assembled installation
+journey remain pending; controlled media-event tests do not establish codec or
+physical WebView behavior. Device playback remains coordinator-owned T5 proof.

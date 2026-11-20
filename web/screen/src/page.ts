@@ -3,6 +3,7 @@ import { Presentation } from "./state";
 import { endpoints, postAction } from "./transport";
 import { animate } from "./emotion";
 import { mountSettings } from "./settings/view";
+import { mountPacks } from "./packs/view";
 
 function text(tag: string, value: string): HTMLElement {
     const node = document.createElement(tag);
@@ -24,6 +25,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     let cancelPending: (() => void) | undefined;
     let stopAnimation: (() => void) | undefined;
     let settings: ReturnType<typeof mountSettings> | undefined;
+    let packs: ReturnType<typeof mountPacks> | undefined;
     async function send(action: UiAction, frame: ScreenFrame): Promise<void> {
         if (disposed || pending || presentation.current !== frame) return;
         const controller = new AbortController();
@@ -86,7 +88,13 @@ export function startPage(root: HTMLElement, href: string): () => void {
         stopAnimation?.();
         cancelPending?.();
         const state = frame.state;
-        content.replaceChildren(text("h1", state.state.replace(/_/g, " ")));
+        const retained = content.querySelectorAll(
+            ":scope > [data-pack-persistent]",
+        );
+        content.replaceChildren(
+            ...retained,
+            text("h1", state.state.replace(/_/g, " ")),
+        );
         const details = document.createElement("div");
         details.className = "details";
         const controls = document.createElement("div");
@@ -156,10 +164,18 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 );
                 break;
         }
+        if (packs?.update(state)) {
+            stopAnimation?.();
+            details.querySelector('[aria-label="Animation frame"]')?.remove();
+        }
     }
     try {
         urls = endpoints(href);
         stream = new EventSource(urls.events);
+        if (document.querySelector('meta[name="echo-packs"][content="v1"]'))
+            packs = mountPacks(content, urls.actions, stream, () => {
+                if (presentation.current) render(presentation.current);
+            });
         if (document.querySelector('meta[name="echo-settings"][content="v1"]'))
             settings = mountSettings(
                 root,
@@ -191,6 +207,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         disposed = true;
         stopAnimation?.();
         settings?.dispose();
+        packs?.dispose();
         stream.close();
         cancelPending?.();
         window.removeEventListener("pagehide", dispose);

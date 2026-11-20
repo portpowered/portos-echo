@@ -20,6 +20,7 @@ await build({
         "src/state.ts",
         "src/transport.ts",
         "src/emotion.ts",
+        "src/packs/player.ts",
     ],
     outdir: "dist/lib",
     platform: "neutral",

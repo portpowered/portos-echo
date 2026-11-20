@@ -30,6 +30,7 @@ export async function pageFor(
     t,
     query = "?events=%2Fevents&actions=%2Factions",
     settings = false,
+    configure,
 ) {
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
@@ -140,6 +141,7 @@ export async function pageFor(
             });
         };
     });
+    if (configure) await configure(page);
     await page.addScriptTag({ content: `${js}\n//# sourceURL=screen.js` });
     await page.evaluate(() => document.fonts.ready);
     return page;

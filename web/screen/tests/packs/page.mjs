@@ -1,0 +1,365 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { pageFor, emit } from "../browser.mjs";
+import { frame } from "../fixtures.mjs";
+
+const clip = (name) => ({
+    webm: `${name}.webm`,
+    mp4: `${name}.mp4`,
+    mode: "loop",
+});
+const character = {
+    rest: "rest.png",
+    states: Object.fromEntries(
+        ["idle", "listening", "thinking", "speaking", "error", "approval"].map(
+            (name) => [name, { clip: clip(name) }],
+        ),
+    ),
+    emotes: { wave: clip("wave") },
+};
+const layout = {
+    safe_area: { x: 10, y: 10, width: 80, height: 80 },
+    slots: {
+        clock: { x: 5, y: 5 },
+        link_code: { x: 20, y: 25 },
+        status: { x: 0, y: 0 },
+        approval: { x: 95, y: 95 },
+        error: { x: 0, y: 10 },
+    },
+    stage: { anchor: { x: 50, y: 50 }, scale: 1, background: "#101827" },
+};
+const manifest = {
+    format: 1,
+    name: "sample",
+    version: "1.0.0",
+    character,
+    layout,
+};
+
+async function packPage(t, pack = manifest, vp9 = true) {
+    return pageFor(
+        t,
+        "?events=%2Fevents%3Ftoken%3Dsynthetic-screen-pair&actions=%2Factions%3Ftoken%3Dsynthetic-screen-pair",
+        false,
+        async (page) => {
+            await page.evaluate(
+                ({ pack, vp9 }) => {
+                    const marker = document.createElement("meta");
+                    marker.name = "echo-packs";
+                    marker.content = "v1";
+                    document.head.append(marker);
+                    window.EventSource = class extends EventTarget {
+                        constructor(url) {
+                            super();
+                            this.url = url;
+                            window.streams.push(this);
+                        }
+                        close() {}
+                    };
+                    window.packData = pack;
+                    window.packRevision = 0;
+                    window.packActive = "sample@1.0.0";
+                    window.packStatus = 200;
+                    window.packRequests = [];
+                    window.fetch = async (url, options) => {
+                        window.packRequests.push({
+                            url,
+                            cache: options.cache,
+                            signal: options.signal,
+                        });
+                        if (url.includes("pack.json"))
+                            return {
+                                status: window.packStatus,
+                                json: async () => window.packData,
+                            };
+                        return {
+                            status: 200,
+                            json: async () => ({
+                                version: 1,
+                                revision: window.packRevision,
+                                active: window.packActive,
+                                warning: null,
+                                installed: [
+                                    {
+                                        id: "sample@1.0.0",
+                                        name: "sample",
+                                        version: "1.0.0",
+                                        rest_url:
+                                            "/screen-packs/v1/sample@1.0.0/rest.png",
+                                    },
+                                ],
+                                jobs: [],
+                            }),
+                        };
+                    };
+                    // Media readiness/first-frame events are controlled here. Actual
+                    // generated codec decode belongs to the generated-template witness.
+                    Object.defineProperty(HTMLImageElement.prototype, "src", {
+                        set(value) {
+                            this.dataset.src = value;
+                        },
+                        get() {
+                            return this.dataset.src;
+                        },
+                    });
+                    Object.defineProperty(HTMLMediaElement.prototype, "src", {
+                        set(value) {
+                            this.dataset.src = value;
+                        },
+                        get() {
+                            return this.dataset.src;
+                        },
+                    });
+                    HTMLMediaElement.prototype.canPlayType = () =>
+                        vp9 ? "probably" : "";
+                    HTMLMediaElement.prototype.load = function () {};
+                    HTMLMediaElement.prototype.pause = function () {};
+                    HTMLMediaElement.prototype.play = function () {
+                        return window.rejectPlay
+                            ? Promise.reject(new Error("controlled"))
+                            : Promise.resolve();
+                    };
+                    HTMLVideoElement.prototype.requestVideoFrameCallback =
+                        function (callback) {
+                            this.firstFrame = callback;
+                            return 1;
+                        };
+                    HTMLVideoElement.prototype.cancelVideoFrameCallback =
+                        function () {
+                            this.firstFrame = undefined;
+                        };
+                },
+                { pack, vp9 },
+            );
+        },
+    );
+}
+const send = (page, seq, state) =>
+    emit(page, frame(seq, JSON.stringify(state)));
+const loaded = (page) =>
+    page.evaluate(() => {
+        const video = [...document.querySelectorAll("video")].find(
+            (v) => v.hidden && v.dataset.src,
+        );
+        video.dispatchEvent(new Event("loadeddata"));
+        video.firstFrame?.();
+    });
+const end = (page) =>
+    page.evaluate(() =>
+        document
+            .querySelector("video:not([hidden])")
+            .dispatchEvent(new Event("ended")),
+    );
+const visible = (page) =>
+    page
+        .locator("video:not([hidden])")
+        .evaluate((node) => new URL(node.src).pathname.split("/").at(-1));
+const reload = (page, revision) =>
+    page.evaluate((revision) => {
+        window.packRevision = revision;
+        window.streams[0].dispatchEvent(
+            new MessageEvent("screen-pack-reload", {
+                data: JSON.stringify({ version: 1, revision }),
+            }),
+        );
+    }, revision);
+
+test("pack page: state src sequence, first-frame handoff, urgent cuts and Emotion fallbacks", async (t) => {
+    const page = await packPage(t);
+    await page.locator(".screen-pack").waitFor();
+    await send(page, 1, { state: "ready", message: "Ready" });
+    await loaded(page);
+    const observed = [await visible(page)];
+    await send(page, 2, { state: "listening" });
+    // Old video remains visible until the first decoded next frame.
+    assert.equal(await visible(page), "idle.webm");
+    await page.evaluate(() => {
+        const back = document.querySelector("video[hidden]");
+        back.dispatchEvent(new Event("loadeddata"));
+    });
+    assert.equal(await visible(page), "idle.webm");
+    await page.evaluate(() =>
+        document.querySelector("video[hidden]").firstFrame(),
+    );
+    observed.push(await visible(page));
+    for (const [seq, state] of [
+        [3, "thinking"],
+        [4, "speaking"],
+        [5, "ready"],
+    ]) {
+        const prior = await visible(page);
+        await send(page, seq, { state, message: "Ready" });
+        assert.equal(await visible(page), prior);
+        await end(page);
+        await loaded(page);
+        observed.push(await visible(page));
+    }
+    assert.deepEqual(observed, [
+        "idle.webm",
+        "listening.webm",
+        "thinking.webm",
+        "speaking.webm",
+        "idle.webm",
+    ]);
+    await send(page, 6, {
+        state: "emotion",
+        name: "wave",
+        frames: ["old"],
+        frame_ms: 10,
+    });
+    await loaded(page);
+    assert.equal(await visible(page), "wave.webm");
+    assert.equal(await page.getByLabel("Animation frame").count(), 0);
+    await end(page);
+    await loaded(page);
+    assert.equal(await visible(page), "idle.webm");
+    await send(page, 7, {
+        state: "emotion",
+        name: "unknown",
+        frames: ["frame-a", "frame-b"],
+        frame_ms: 10,
+    });
+    assert.equal(
+        await page.getByLabel("Animation frame").textContent(),
+        "frame-a",
+    );
+    assert.equal(await page.locator(".pack-stage").isVisible(), false);
+    await page.clock.runFor(10);
+    assert.equal(
+        await page.getByLabel("Animation frame").textContent(),
+        "frame-b",
+    );
+    assert.equal(await page.locator("video").count(), 2);
+    assert.equal(await page.locator(".pack-clock").isVisible(), false);
+    const requests = await page.evaluate(() =>
+        window.packRequests.map((r) => r.url),
+    );
+    assert.ok(
+        requests.every(
+            (url) =>
+                new URL(url).searchParams.get("token") ===
+                "synthetic-screen-pair",
+        ),
+    );
+    console.log(`pack clip sequence: ${observed.join(" -> ")}`);
+});
+
+test("pack page: MP4 capability fallback, idle/rest, character-only, and reduced motion", async (t) => {
+    const page = await packPage(
+        t,
+        {
+            ...manifest,
+            layout: undefined,
+            character: {
+                ...character,
+                states: { idle: { clip: clip("idle") } },
+            },
+        },
+        false,
+    );
+    await page.locator(".screen-pack").waitFor();
+    await send(page, 1, { state: "muted" });
+    await loaded(page);
+    assert.equal(await visible(page), "idle.mp4");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    assert.equal(await page.locator("video:not([hidden])").count(), 0);
+    await send(page, 2, { state: "speaking" });
+    assert.equal(await page.locator(".pack-stage img").isVisible(), true);
+    await page.evaluate(() => {
+        window.packData = { format: 1, character: { rest: "rest.png" } };
+    });
+    await reload(page, 1);
+    await page.waitForFunction(() => window.packRequests.length === 4);
+    await send(page, 3, { state: "ready", message: "Rest only" });
+    assert.equal(await page.locator(".pack-stage img").isVisible(), true);
+    assert.equal(await page.locator("video:not([hidden])").count(), 0);
+});
+
+test("pack page: layout clock/link coordinates, safe-area approval containment and no-pack reset", async (t) => {
+    const page = await packPage(t, { ...manifest, character: undefined });
+    await page.locator(".screen-pack").waitFor();
+    await send(page, 1, { state: "ready", message: "Clock" });
+    assert.equal(await page.locator("video").count(), 0);
+    assert.equal(await page.locator(".pack-clock").isVisible(), true);
+    const clock = await page.locator(".pack-clock").boundingBox();
+    assert.equal(Math.round(clock.x), 179);
+    assert.equal(Math.round(clock.y), 112);
+    await send(page, 2, {
+        state: "link_code",
+        user_code: "ABCD",
+        verification_uri: "local",
+        expires_at_unix: 100,
+    });
+    const code = await page.locator(".pack-link-code").boundingBox();
+    assert.equal(Math.round(code.x), 333);
+    assert.equal(Math.round(code.y), 240);
+    await send(page, 3, {
+        state: "approval",
+        id: "local",
+        prompt: "Approve this action",
+        accept_label: "Allow",
+        deny_label: "Deny",
+    });
+    for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 640, height: 600 },
+    ]) {
+        await page.setViewportSize(viewport);
+        await page
+            .getByRole("button", { name: "Allow", exact: true })
+            .scrollIntoViewIfNeeded();
+        const card = await page.locator(".pack-approval").boundingBox();
+        const safe = await page.locator(".screen-pack").boundingBox();
+        assert.ok(card.x >= safe.x && card.y >= safe.y);
+        assert.ok(card.x + card.width <= safe.x + safe.width + 1);
+        assert.ok(card.y + card.height <= safe.y + safe.height + 1);
+        assert.equal(
+            await page
+                .getByRole("button", { name: "Allow", exact: true })
+                .isVisible(),
+            true,
+        );
+    }
+    await page.evaluate(() => {
+        window.packActive = null;
+    });
+    await reload(page, 1);
+    await page.waitForFunction(() => !document.querySelector(".screen-pack"));
+    assert.equal(await page.locator(".pack-clock").count(), 0);
+    assert.equal(await page.locator("h1").textContent(), "approval");
+    assert.equal(await page.locator("section").getAttribute("data-seq"), "3");
+});
+
+test("pack page: reload freshness, reconnect, safe failures and disposal", async (t) => {
+    const page = await packPage(t);
+    await page.locator(".screen-pack").waitFor();
+    await send(page, 1, { state: "ready", message: "Ready" });
+    await loaded(page);
+    await reload(page, 1);
+    await page.waitForFunction(() => window.packRequests.length === 4);
+    assert.equal(await page.locator("h1").textContent(), "ready");
+    assert.equal(await page.locator("section").getAttribute("data-seq"), "1");
+    await reload(page, 1);
+    assert.equal(await page.evaluate(() => window.packRequests.length), 4);
+    await page.evaluate(() => {
+        window.packStatus = 404;
+        window.streams[0].dispatchEvent(new Event("open"));
+    });
+    await page.waitForFunction(() => !document.querySelector(".screen-pack"));
+    assert.equal(await page.locator("h1").textContent(), "ready");
+    await page.evaluate(() => {
+        window.packStatus = 200;
+    });
+    await reload(page, 2);
+    await page.locator(".screen-pack").waitFor();
+    await page.evaluate(() =>
+        document
+            .querySelector(".pack-stage img")
+            .dispatchEvent(new Event("error")),
+    );
+    assert.equal(await page.locator(".screen-pack").count(), 0);
+    await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+    const count = await page.evaluate(() => window.packRequests.length);
+    await reload(page, 3);
+    assert.equal(await page.evaluate(() => window.packRequests.length), count);
+});
