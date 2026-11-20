@@ -17,6 +17,7 @@ status: active; documentation index
 ## Program
 
 - [Program plan](program/plan.md)
+- [Screen-pack configuration and authoring](screen-packs.md)
 - [Standing rules](program/rules.md)
 - [Coordinator and factory](program/coordinator.md)
 - [Measured baselines](program/baselines.md)
@@ -95,6 +96,7 @@ Add each new tracked documentation page to this index in the same change.
 - [Pinned Codex app-server client](adr/0026-codex-client.md)
 - [Codex local fake: S5](spikes/codex-local-fake.md)
 - [Frame-based Codex media peer](adr/0027-echo-media.md)
+- [Screen-pack archive decoding](adr/0029-screen-pack-archives.md)
 
 ## Linux hosts
 

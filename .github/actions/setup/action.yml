@@ -61,6 +61,24 @@ runs:
       with:
         tool: cargo-nextest@0.9.152
         fallback: none
+    - name: Generated screen media tools
+      if: inputs.target == 'test-unit'
+      shell: sh
+      run: |
+        # Use a single pinned static Linux build to avoid the APT dependency fetch.
+        directory=$(mktemp -d "$RUNNER_TEMP/screen-media.XXXXXX")
+        archive="$directory/ffmpeg.gz"
+        timeout --kill-after=5s 75s curl --fail --silent --show-error --location \
+          --connect-timeout 10 --max-time 30 --retry 2 \
+          https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-x64.gz \
+          --output "$archive"
+        echo "bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa  $archive" | sha256sum --check
+        gzip -dc "$archive" > "$directory/ffmpeg"
+        chmod +x "$directory/ffmpeg"
+        "$directory/ffmpeg" -hide_banner -encoders > "$directory/encoders"
+        grep -E '[[:space:]]libvpx-vp9[[:space:]]' "$directory/encoders"
+        grep -E '[[:space:]]libx264[[:space:]]' "$directory/encoders"
+        echo "$directory" >> "$GITHUB_PATH"
     - name: Documentation link checker
       if: contains(fromJSON('["lint-docs","lint-docs-online","lint-self-tests"]'), inputs.target)
       shell: sh

@@ -11,7 +11,7 @@ use axum::{
     extract::{Query, Request, State},
     http::{StatusCode, Uri},
     middleware::{self, Next},
-    response::{IntoResponse, Response, Sse, sse::Event},
+    response::{IntoResponse, Response, Sse},
     routing::{get, post},
 };
 use echo_screen_contract::UiAction;
@@ -21,11 +21,12 @@ use tokio::sync::{Mutex, mpsc, watch};
 
 #[derive(Clone)]
 pub(super) struct HttpState {
-    core: Arc<Mutex<Core>>,
+    pub(crate) core: Arc<Mutex<Core>>,
     actions: mpsc::Sender<UiAction>,
-    stop: watch::Receiver<bool>,
-    drain: watch::Receiver<Option<tokio::time::Instant>>,
-    origin: String,
+    pub(crate) stop: watch::Receiver<bool>,
+    pub(crate) drain: watch::Receiver<Option<tokio::time::Instant>>,
+    pub(crate) packs: Arc<crate::packs::Files>,
+    pub(crate) origin: String,
     settings: Option<mpsc::Sender<SettingsRequest>>,
 }
 
@@ -36,6 +37,7 @@ pub(crate) fn router(
     drain: watch::Receiver<Option<tokio::time::Instant>>,
     addr: SocketAddr,
     settings: Option<mpsc::Sender<SettingsRequest>>,
+    packs: Arc<crate::packs::Files>,
 ) -> Router {
     Router::new()
         .route("/", get(index))
@@ -45,6 +47,10 @@ pub(crate) fn router(
         .route("/actions", post(actions_post))
         .route("/settings/v1", get(settings_http::snapshot).post(settings_http::save))
         .route("/settings/v1/prompts/{kind}", post(settings_http::prompt))
+        .route("/screen-packs/v1", get(crate::packs::view::snapshot))
+        .route("/screen-packs/v1/install", post(crate::packs::jobs::install))
+        .route("/screen-packs/v1/selection", post(crate::packs::view::selection))
+        .route("/screen-packs/v1/{pack}/{*file}", get(crate::packs::http::file))
         .layer(middleware::from_fn(headers))
         .with_state(HttpState {
             core,
@@ -53,6 +59,7 @@ pub(crate) fn router(
             drain,
             origin: format!("http://{addr}"),
             settings,
+            packs,
         })
 }
 
@@ -83,7 +90,7 @@ async fn index(State(state): State<HttpState>) -> Response {
 }
 
 impl HttpState {
-    fn settings_dispatch(&self) -> SettingsDispatch {
+    pub(crate) fn settings_dispatch(&self) -> SettingsDispatch {
         SettingsDispatch {
             core: self.core.clone(),
             stop: self.stop.clone(),
@@ -121,9 +128,9 @@ async fn events(
                 () = cancelled(client.cancelled.clone()) => None,
                 () = crate::draining(drain.clone()), if !client.frames.is_closed() => {
                     client.frames.close();
-                    client.frames.recv().await.map(|wire| (Ok::<_, Infallible>(Event::default().data(wire)), (client, stop, drain)))
+                    client.frames.recv().await.map(|wire| (Ok::<_, Infallible>(wire.event()), (client, stop, drain)))
                 },
-                frame = client.frames.recv() => frame.map(|wire| (Ok::<_, Infallible>(Event::default().data(wire)), (client, stop, drain))),
+                frame = client.frames.recv() => frame.map(|wire| (Ok::<_, Infallible>(wire.event()), (client, stop, drain))),
             }
         },
     );
@@ -198,6 +205,7 @@ mod tests {
             drain: drain_rx,
             origin: "http://127.0.0.1:1".into(),
             settings: None,
+            packs: Arc::default(),
         };
         let request = Request::builder()
             .uri("/events?token=synthetic-screen-pair")
@@ -233,6 +241,7 @@ mod tests {
                 drain: drain_rx,
                 origin: "http://127.0.0.1:1".into(),
                 settings: None,
+                packs: Arc::default(),
             };
             let request = Request::builder()
                 .uri("/events?token=synthetic-screen-pair")

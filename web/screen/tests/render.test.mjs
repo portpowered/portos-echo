@@ -6,6 +6,9 @@ import { pageFor, emit, calls, bounds } from "./browser.mjs";
 import { states, frame } from "./fixtures.mjs";
 import "./settings/usability.mjs";
 import "./settings/page.mjs";
+import "./settings/packs.mjs";
+import "./packs/player.mjs";
+import "./packs/page.mjs";
 
 test("F01 F02 F11: exact supplied status/link/error values, semantic snapshots and reference bounds", async (t) => {
     const page = await pageFor(t);

@@ -84,7 +84,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         ],
         "muse" => &["url", "ca_file", "credential_file"],
         "mcp" => &["server", "state_dir", "client_id", "scopes", "operator_listen"],
-        "screen" => &["listen", "pairing_token_file"],
+        "screen" => &["listen", "pairing_token_file", "packs"],
         "audit" => &["log_dir"],
         p if p.starts_with("mcp.server[") && p.ends_with(']') => &["name", "url", "auth", "bearer_file", "allow_tools"],
         _ => &[],
@@ -106,6 +106,7 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
+    crate::config_screen::validate(config)?;
     config.voice.validate()?;
     crate::config_codex::validate(&config.codex)?;
     crate::config_codex::validate_voice(config)?;

@@ -1,4 +1,5 @@
 //! Authenticated, bounded loopback screen transport. LAN exposure requires W3 TLS.
+mod packs;
 mod screen_assets;
 mod screen_core;
 mod screen_http;
@@ -6,6 +7,8 @@ mod screen_listener;
 mod screen_settings;
 mod screen_url;
 
+pub use packs::PackSettings;
+pub use packs::view::PackCatalog;
 pub use screen_settings::{PromptKind, SettingsOperation, SettingsReply, SettingsRequest, settings_channel};
 pub use screen_url::page_url;
 
@@ -44,9 +47,46 @@ pub struct ScreenServer {
     drain: watch::Sender<Option<tokio::time::Instant>>,
     listener: Option<JoinHandle<usize>>,
     tasks: Vec<JoinHandle<()>>,
+    downloads_started: bool,
+    pack_files: Arc<packs::Files>,
+}
+
+/// Safe completion for one configured background download. No input URL or path.
+pub struct PackInstallResult {
+    pub installed: Option<String>,
+    pub reason: Option<String>,
 }
 
 impl ScreenServer {
+    /// Install configured pins serially outside the voice path. Listener lifetime
+    /// owns cancellation and joins synchronous validation before shutdown returns.
+    /// Failures retain existing installed directories and never stop the server.
+    pub fn install_configured_packs(
+        &mut self,
+        home: std::path::PathBuf,
+        ca: Option<std::path::PathBuf>,
+        pins: Vec<(String, String)>,
+    ) -> mpsc::Receiver<PackInstallResult> {
+        let (send, receive) = mpsc::channel(4);
+        if self.downloads_started {
+            return receive;
+        }
+        self.downloads_started = true;
+        let _ = self.pack_files.root.set(home.join("screens"));
+        let (requests, inbox) = mpsc::channel(4);
+        let _ = self.pack_files.requests.set(requests);
+        self.tasks.push(tokio::spawn(packs::start(
+            packs::Downloads { home, ca, pins },
+            self.core.clone(),
+            self.stop.subscribe(),
+            self.drain.subscribe(),
+            send,
+            self.pack_files.clone(),
+            inbox,
+        )));
+        receive
+    }
+
     /// Acknowledge states admitted before this call through the existing pump.
     /// Success commits the current snapshot, not delivery to existing clients.
     ///
@@ -165,6 +205,10 @@ pub async fn serve_with_settings(
     let (actions_tx, actions) = mpsc::channel(32);
     let (stop, stop_rx) = watch::channel(false);
     let (drain, drain_rx) = watch::channel(None);
+    let pack_files = Arc::new(packs::Files::default());
+    if let Some(host) = &settings {
+        let _ = pack_files.settings.set(host.downgrade());
+    }
     let app = screen_http::router(
         core.clone(),
         actions_tx,
@@ -172,6 +216,7 @@ pub async fn serve_with_settings(
         drain_rx.clone(),
         bound_addr,
         settings,
+        pack_files.clone(),
     );
     let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx, drain_rx));
     let (publication_requests, requests) = mpsc::channel(32);
@@ -185,6 +230,8 @@ pub async fn serve_with_settings(
         drain,
         listener: Some(listener_task),
         tasks: vec![state_task],
+        downloads_started: false,
+        pack_files,
     })
 }
 
@@ -216,6 +263,8 @@ mod tests {
                 drain: watch::channel(None).0,
                 listener: None,
                 tasks: vec![],
+                downloads_started: false,
+                pack_files: Arc::default(),
             },
             requests,
         )

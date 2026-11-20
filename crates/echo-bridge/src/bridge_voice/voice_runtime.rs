@@ -159,6 +159,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     super::prompts::publish(&mut trace)?;
     let (service, send) = settings.map_or((None, None), |(service, send)| (Some(service), Some(send)));
     let mut screen = Screen::bind_with_settings(options.screen, send).await?;
+    screen.download_packs(options.delegation, &trace);
     screen.settings_warning(options.settings_warning, &mut trace)?;
     let health = match Health::bind(options.health).await {
         Ok(health) => health,

@@ -8,6 +8,7 @@ const MAX_OVERLAY_BYTES: u64 = 65_536;
 /// Private fields ensure decoding and merges cannot introduce another key.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SettingsOverlay {
+    screen_pack: Option<String>,
     listen_enabled: Option<bool>,
     listen_seconds: Option<u32>,
     voice: Option<String>,
@@ -38,6 +39,7 @@ impl SettingsOverlay {
         tool_cap: Option<u32>,
     ) -> Self {
         Self {
+            screen_pack: None,
             listen_enabled,
             listen_seconds,
             voice,
@@ -46,7 +48,7 @@ impl SettingsOverlay {
         }
     }
 
-    /// Decode only the five editable keys. Validation against the base is separate.
+    /// Decode only editable keys. Validation against the base is separate.
     ///
     /// # Errors
     /// Returns fixed field diagnostics, never submitted keys, values or paths.
@@ -55,7 +57,13 @@ impl SettingsOverlay {
             toml::de::DeTable::parse(input).map_err(|_| ConfigError::new("settings.toml", "invalid TOML syntax"))?;
         let value = toml::de::DeValue::Table(table.into_inner());
         let mut fields = Fields::new(value, "config")?;
-        let mut result = Self::default();
+        let mut result = Self {
+            screen_pack: fields.optional("screen_pack")?,
+            ..Self::default()
+        };
+        if let Some(value) = result.screen_pack() {
+            crate::config_screen::selection(value)?;
+        }
         if let Some(mut voice) = fields.section("voice")? {
             result.listen_enabled = voice.optional("session_listen_enabled")?;
             result.listen_seconds = voice.optional("session_listen_seconds")?;
@@ -82,6 +90,9 @@ impl SettingsOverlay {
     /// # Errors
     /// Returns echo-config's safe validation diagnostic; the base is unchanged.
     pub fn apply_to(&self, base: &BridgeConfig) -> Result<BridgeConfig, ConfigError> {
+        if let Some(value) = self.screen_pack() {
+            crate::config_screen::selection(value)?;
+        }
         let mut config = base.clone();
         if let Some(value) = self.listen_enabled {
             config.voice.session_listen_enabled = value;
@@ -107,6 +118,7 @@ impl SettingsOverlay {
     #[must_use]
     pub fn merge(&self, patch: &Self) -> Self {
         Self {
+            screen_pack: patch.screen_pack.clone().or_else(|| self.screen_pack.clone()),
             listen_enabled: patch.listen_enabled.or(self.listen_enabled),
             listen_seconds: patch.listen_seconds.or(self.listen_seconds),
             voice: patch.voice.clone().or_else(|| self.voice.clone()),
@@ -150,7 +162,26 @@ impl SettingsOverlay {
                 .or_default()
                 .insert("max_tool_calls", value.into());
         }
-        toml::to_string(&tables).map_err(|_| ConfigError::new("settings.toml", "cannot encode overlay"))
+        let mut root: BTreeMap<&str, toml::Value> = tables
+            .into_iter()
+            .map(|(key, table)| {
+                (
+                    key,
+                    toml::Value::Table(table.into_iter().map(|(k, v)| (k.into(), v)).collect()),
+                )
+            })
+            .collect();
+        if let Some(value) = self.screen_pack() {
+            root.insert("screen_pack", value.into());
+        }
+        toml::to_string(&root).map_err(|_| ConfigError::new("settings.toml", "cannot encode overlay"))
+    }
+
+    /// Omitted means automatic template selection; empty explicitly disables it.
+    /// Resolution against installed packs belongs to the screen owner.
+    #[must_use]
+    pub fn screen_pack(&self) -> Option<&str> {
+        self.screen_pack.as_deref()
     }
 }
 

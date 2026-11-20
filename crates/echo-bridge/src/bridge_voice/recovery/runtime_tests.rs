@@ -149,6 +149,7 @@ async fn screen(directory: &Path) -> Screen {
     Screen::bind(Some(&ScreenConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         pairing_token_file: token,
+        packs: Vec::new(),
     }))
     .await
     .unwrap()

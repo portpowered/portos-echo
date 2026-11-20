@@ -6,6 +6,7 @@ mod config_clock;
 mod config_codex;
 mod config_decode;
 mod config_muse;
+mod config_screen;
 mod config_settings;
 mod config_validate;
 mod config_voice;
@@ -13,6 +14,7 @@ pub use config_auth::ChatGptAuthConfig;
 pub use config_clock::{ClockConfig, DEFAULT_TIME_SERVERS};
 pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS, WebSearch, realtime_voices};
 pub use config_muse::{AgentBackend, MuseConfig};
+pub use config_screen::ScreenPackDownload;
 pub use config_settings::{EffectiveConfig, SettingsOverlay};
 pub use config_voice::VoiceConfig;
 
@@ -243,6 +245,8 @@ impl McpAuth {
 pub struct ScreenConfig {
     pub listen: SocketAddr,
     pub pairing_token_file: PathBuf,
+    /// Verified downloads, scheduled by the screen owner outside the voice path.
+    pub packs: Vec<ScreenPackDownload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

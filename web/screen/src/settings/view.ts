@@ -8,6 +8,7 @@ import {
 import { element, promptForm, settingsForm } from "./forms";
 import { mountKeyboard } from "./keyboard";
 import type { UiState } from "../model";
+import { packControls } from "./packs";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
@@ -116,6 +117,17 @@ export function mountSettings(
                     focused.isConnected
                 )
                     focused.focus();
+                else if (
+                    !disposed &&
+                    !panel.hidden &&
+                    focused instanceof HTMLElement &&
+                    !focused.isConnected
+                )
+                    fields
+                        .querySelector<HTMLButtonElement>(
+                            ".settings-packs > button",
+                        )
+                        ?.focus();
             }
         }
     }
@@ -147,7 +159,7 @@ export function mountSettings(
                     Object.assign(data.settings.agent, patch.agent);
             });
         });
-        fields.append(form);
+        fields.append(form, packControls(actions, perform));
         for (const kind of ["voice", "runner"] as const)
             fields.append(
                 promptForm(kind, data.prompts[kind], (text) => {
