@@ -89,7 +89,7 @@ fn t3_device_t5_m2_authored_scenario_and_negative_disposition() {
             assert_eq!(skip["negative_index"], index);
             assert_eq!(skip["disposition"], "not run at T5 (T3/T4 cover it)");
         }
-        assert_eq!(rows.iter().filter(|row| row["event"] == "device.ui").count(), 6);
+        assert_eq!(rows.iter().filter(|row| row["event"] == "device.ui").count(), 7);
         assert_eq!(session.operations().iter().filter(|op| *op == "bridge").count(), 1);
         assert_eq!(session.operations().iter().filter(|op| *op == "play").count(), 1);
         assert_eq!(session.operations().iter().filter(|op| *op == "release").count(), 1);
