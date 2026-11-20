@@ -330,14 +330,8 @@ pub(super) fn session_guidance((runner, voice): (String, String), advertised: bo
     if !advertised {
         return (runner, voice);
     }
-    let join = |base: String, guidance: &str| {
-        format!(
-            "{}
-
-{guidance}",
-            base.trim_end()
-        )
-    };
+    // The admitted text stays byte for byte; the guidance only follows it.
+    let join = |base: String, guidance: &str| format!("{base}\n\n{guidance}");
     (
         join(runner, echo_config::RUNNER_SESSION_GUIDANCE),
         join(voice, echo_config::LIVE_SESSION_GUIDANCE),

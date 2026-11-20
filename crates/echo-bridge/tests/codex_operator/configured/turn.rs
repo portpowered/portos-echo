@@ -206,14 +206,26 @@ async fn saved_prompt_call(fixture: &Fixture, observer: &Observer, path: &Path) 
     let read = |name| -> Value { serde_json::from_slice(&std::fs::read(fixture.home.join(name)).unwrap()).unwrap() };
     let runner = read("thread-config");
     let voice = read("realtime-config");
-    let suffix = runner["baseInstructions"]
-        .as_str()
-        .unwrap()
-        .strip_prefix("saved runner\n")
-        .unwrap();
-    assert!(suffix.starts_with("\n[Call-start context: "));
-    assert_eq!(suffix.matches("[Call-start context:").count(), 1);
-    assert_eq!(voice["prompt"], format!("saved voice\n語 \n{suffix}"));
+    // The saved text, then the bridge's own session guidance, then exactly
+    // one call-start snapshot shared by the runner and the voice.
+    let snapshot = |sent: &Value, saved: &str, guidance: &str| -> String {
+        let sent = sent.as_str().unwrap();
+        let suffix = sent.strip_prefix(&format!("{saved}\n\n{guidance}")).unwrap();
+        assert!(suffix.starts_with("\n[Call-start context: "));
+        assert_eq!(sent.matches("[Call-start context:").count(), 1);
+        suffix.to_owned()
+    };
+    let suffix = snapshot(
+        &runner["baseInstructions"],
+        "saved runner\n",
+        echo_config::RUNNER_SESSION_GUIDANCE,
+    );
+    let voice = snapshot(
+        &voice["prompt"],
+        "saved voice\n語 \n",
+        echo_config::LIVE_SESSION_GUIDANCE,
+    );
+    assert_eq!(voice, suffix);
     observer.finish(Ok(()));
     while trace(path).iter().all(|row| row["event"] != "bridge.run_completed") {
         tokio::task::yield_now().await;
