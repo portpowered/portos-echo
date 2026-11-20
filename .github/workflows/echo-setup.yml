@@ -29,6 +29,11 @@ jobs:
           persist-credentials: false
       - name: Native installer tests
         run: cargo test --locked -p echo-setup
+      - name: Provision FFmpeg for screen-pack generation
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - name: Existing Linux release regression
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: |
