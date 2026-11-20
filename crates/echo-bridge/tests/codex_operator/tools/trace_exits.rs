@@ -69,7 +69,14 @@ async fn journey(fixture: &Fixture, cause: &str) {
     }))
     .await
     .unwrap();
-    assert_eq!(outcome, Ok(()));
+    assert_eq!(
+        outcome,
+        if cause == "kill" {
+            Err(echo_bridge::Error::Control)
+        } else {
+            Ok(())
+        }
+    );
     assert_eq!(closed.load(Ordering::SeqCst), 1);
     assert_eq!(observer.commands().last(), Some(&echo_link::fake::Command::Close));
     assert_rows(fixture, cause);
@@ -106,8 +113,16 @@ async fn inspect(
         _ => (),
     }
     wait(fixture, "delegation.resolved").await;
+    if matches!(cause, "child" | "error" | "closed" | "malformed" | "media" | "timeout") {
+        // Let the existing failure and cleanup enter recovery before asking
+        // for shutdown. A racing stop preserves the original failure instead.
+        wait(fixture, "bridge.recovering").await;
+    }
     if let Some(stop) = stop {
-        stop.send(()).unwrap();
+        let _ = stop.send(());
+    }
+    while observer.commands().last() != Some(&echo_link::fake::Command::Close) {
+        tokio::task::yield_now().await;
     }
     observer.finish(Ok(()));
 }
