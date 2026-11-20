@@ -462,15 +462,12 @@ if mode != 'exit':
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
     ownership_lifetime_case()
+    from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, release_cases
+    from test_echo_install_status import status_cases
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
-                      (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases, failure_cases)))
-    from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, release_cases
-    release_cases()
-    lifecycle_cases()
-    from test_echo_install_status import status_cases
-    status_cases()
-    nonroot_cases()
+                      (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases,
+                       failure_cases, release_cases, lifecycle_cases, status_cases, nonroot_cases)))
     print("echo-install tests: install=PASS lifecycle=PASS status=PASS retention=PASS privacy=PASS")
 
 

@@ -269,7 +269,6 @@ release_metadata
 versions=$(cat "$log")
 if [ "$command_name" = status ]; then
   release_guard
-  [ -z "$versions" ] || printf '%s\n' "$versions"
   # Read-only observation. Optional unsupported/missing proc data is explicit.
   run_adb shell "observed=\$(ps -A -o PID,NAME)
 pid=\$(printf '%s\\n' \"\$observed\" | awk '\$2 == \"echo-bridge\" { print \$1; exit }')
@@ -306,6 +305,7 @@ else printf 'unavailable\\n'; fi"
       }
       if (secret) print "[masked]"; else print
     }' "$log") || fail 'status filter failed'
+  [ -z "$versions" ] || printf '%s\n' "$versions"
   printf '%s\n' "$sanitized"
   case $sanitized in
     *'process_user=root'* | *'process_user=0'*) fail 'echo-bridge is running as root; stop and reinstall before starting' ;;

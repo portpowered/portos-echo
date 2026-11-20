@@ -91,6 +91,11 @@ fn fix(error: &str) -> &'static str {
         "unsafe_archive_or_missing_device_tools" => {
             "Use a complete release and check device tar and sha256sum support."
         }
+        "rollback_failed" => {
+            "A verified previous release could not be restored. Run status and doctor; use a verified bundle to reinstall if needed."
+        }
+        "stop_failed" => "The bridge did not stop safely. Inspect status before retrying the update.",
+        "start_failed" => "The installed files remain available. Run doctor to diagnose startup.",
         "command_not_implemented" => "This installer command is still under development.",
         _ => "Check device connectivity and prerequisites, then run install again.",
     }

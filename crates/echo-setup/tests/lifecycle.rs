@@ -324,6 +324,11 @@ fn t3_rollback_starts_only_after_shell_owned_restore_succeeds() -> Result {
         assert_eq!(result["ok"], !failed);
         if failed {
             assert_eq!(result["error"], "rollback_failed");
+            assert!(
+                result["fix"]
+                    .as_str()
+                    .is_some_and(|fix| fix.contains("verified previous release"))
+            );
         }
         let ledger = fs::read_to_string(fixture.0.join("ledger"))?;
         assert_eq!(ledger.contains("--device start"), !failed);
