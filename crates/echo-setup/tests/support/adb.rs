@@ -143,6 +143,16 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
             io::stdout().write_all(&fs::read(root.join(name))?)?;
             return Ok(());
         }
+        if command == "sh -s -- --device confirm-cursor" || command.starts_with("sh -s -- --device confirm-check ") {
+            let name = if command.ends_with("confirm-cursor") {
+                "confirm-cursor"
+            } else {
+                "confirm-evidence"
+            };
+            notify(root, "wake-barrier", b"ready")?;
+            io::stdout().write_all(&fs::read(root.join(name))?)?;
+            return Ok(());
+        }
         fs::write(root.join("last-operation"), command)?;
     }
     if command.contains("--device start") {

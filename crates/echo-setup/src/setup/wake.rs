@@ -74,7 +74,7 @@ impl WakeAttempt {
     }
 }
 
-async fn bounded<T>(deadline: Instant, operation: impl Future<Output = Result<T>>) -> Result<T> {
+pub(super) async fn bounded<T>(deadline: Instant, operation: impl Future<Output = Result<T>>) -> Result<T> {
     if Instant::now() >= deadline {
         return Err(Failure("setup_timeout"));
     }
@@ -83,7 +83,7 @@ async fn bounded<T>(deadline: Instant, operation: impl Future<Output = Result<T>
         .map_err(|_| Failure("setup_timeout"))?
 }
 
-fn valid_cursor(output: &str) -> bool {
+pub(super) fn valid_cursor(output: &str) -> bool {
     let Some(cursor) = output.strip_suffix('\n') else {
         return false;
     };

@@ -6,10 +6,7 @@ import selectors
 import json
 import subprocess
 import time
-
 from test_echo_install import Sandbox, prepare_lifecycle, require, set_owner
-
-
 def owner_state(box):
     values = {"private/bridge.toml": "owner config", "private/credential": "owner private",
               "home/prompts/voice.md": "owner voice", "home/settings.toml": "owner settings"}
@@ -18,18 +15,12 @@ def owner_state(box):
         # These are files authored by the existing nobody-owned runtime.
         set_owner(box.root, box.device / name, "9999:9999")
     return values
-
-
 def retained(box, values):
     for name, value in values.items():
         require((box.device / name).read_text() == value, "owner bytes changed: " + name)
-
-
 def snapshot(box):
     return {str(path.relative_to(box.device)): (path.stat().st_mode, path.read_bytes())
             for path in box.device.rglob("*") if path.is_file()}
-
-
 def exited(box):
     for name in ("child-pid", "holder-pid"):
         try:
@@ -42,8 +33,6 @@ def exited(box):
                 require(bool(selector.select(3)), "journey leaked a fixture process")
         finally:
             os.close(fd)
-
-
 def status_observation():
     with Sandbox() as box:
         box.install()
@@ -93,12 +82,9 @@ def status_observation():
             require(result.stderr == "echo-install: " + expected + "\n", "identity refusal differs")
             require(snapshot(box) == before, "identity refusal mutated files")
     print("F18 F20: PASS")
-
-
 def status_privacy():
     # Synthetic strings, assembled so fixtures cannot be mistaken for credentials.
-    values = ["token=" + "fixture-one", "Authorization: Bearer " + "fixture-two",
-              "API_KEY: " + "fixture-three", "eyJ" + "fixture.payload.signature",
+    values = ["token=" + "fixture-one", "Authorization: Bearer " + "fixture-two", "API_KEY: " + "fixture-three", "eyJ" + "fixture.payload.signature",
               "x" * 40, '"access_token": "fixture-four"', "password=fixture-five"]
     with Sandbox() as box:
         box.install()
@@ -108,8 +94,7 @@ def status_privacy():
             (box.root / "remote/hassmic/boot.log").write_text("client connected " + value + "\n")
             result = box.run(["status"])
             require(value not in result.stdout + result.stderr, "token-like bytes leaked")
-            require(result.stdout.count("[masked]") == 2 and "harmless\n" in result.stdout,
-                    "masking or harmless output differs")
+            require(result.stdout.count("[masked]") == 2 and "harmless\n" in result.stdout, "masking or harmless output differs")
         # A failing local sanitizer must not print even partially filtered data.
         awk = box.tools / "awk"
         real = awk.read_text()
@@ -122,8 +107,6 @@ def status_privacy():
         result = box.run(["status"], 1)
         require(not result.stdout, "adb error leaked status payload")
     print("F19: PASS")
-
-
 def uninstall_failures():
     for child in ("", "bin", "private", "home", "private/launch.sh"):
         with Sandbox() as box:
@@ -153,8 +136,6 @@ def uninstall_failures():
             retained(box, values)
             box.run(["uninstall", "--purge"])
     print("F22: PASS")
-
-
 def full_journey():
     with Sandbox() as box:
         help_text = box.run(["--help"]).stdout
@@ -196,17 +177,14 @@ def full_journey():
         require(box.run(["uninstall", "--purge"]).stdout == "echo-install: uninstalled (purged)\n",
                 "repeated purge output differs")
     print("F21 F23: PASS")
-
-
 def status_cases():
+    confirmation_cases()
     status_observation()
     status_privacy()
     uninstall_failures()
     full_journey()
     doctor_cases()
     release_status_cases()
-
-
 def release_status_cases():
     """Read the shell's own canonical metadata without mutating retained state."""
     with Sandbox() as box:
@@ -275,8 +253,6 @@ def release_status_cases():
                 metadata.rmdir()
                 metadata.touch()
     print("echo-install release status: versions=PASS malformed=PASS redirected=PASS readonly=PASS")
-
-
 def doctor_tools(box):
     """Closed external probes: never resolve or connect to a real endpoint."""
     epoch = int(time.time())
@@ -289,8 +265,6 @@ def doctor_tools(box):
         tool.write_text("#!/bin/sh\n" + body)
         tool.chmod(0o755)
     return epoch
-
-
 def doctor_cases():
     with Sandbox() as box:
         box.install()
@@ -324,8 +298,6 @@ def doctor_cases():
         require(snapshot(box) == before, "doctor modified installed state")
         require(not (box.root / "remote/echo-bridge.lock").exists(), "doctor took mutation lock")
     print("echo-install doctor: probes=PASS identity=PASS readonly=PASS")
-
-
 def native_lifecycle_cases(binary):
     """Consume Cargo's prebuilt installer, execute its real streamed device shell."""
     for purge in (False, True):
@@ -334,7 +306,6 @@ def native_lifecycle_cases(binary):
             values = owner_state(box)
             hassmic = (box.root / "remote/hassmic/runas").read_bytes()
             before = snapshot(box)
-
             def native(command, *extra, code=0):
                 result = subprocess.run(
                     [binary, command, "--json", "--adb", str(box.tools / "adb"), *extra],
@@ -343,7 +314,6 @@ def native_lifecycle_cases(binary):
                     require(marker not in result.stdout + result.stderr, "native output leaked private data")
                 require(result.returncode == code, "native lifecycle exit differs: " + command + " " + result.stdout)
                 return json.loads(result.stdout)
-
             result = native("status")
             require(result["process"] == "stopped" and result["process_user"] == "unavailable",
                     "native stopped observation differs")
@@ -384,15 +354,11 @@ def native_lifecycle_cases(binary):
                 retained(box, values)
             require((box.root / "remote/hassmic/runas").read_bytes() == hassmic, "native changed hassmic")
     print("echo-setup native shell: status=PASS identity=PASS uninstall=PASS retention=PASS privacy=PASS")
-
-
 def public_bytes(box):
     return {str(path.relative_to(box.device)): path.read_bytes()
             for name in ("bin", "apk", "scripts", "MANIFEST")
             for path in ([box.device / name] if (box.device / name).is_file()
                          else (box.device / name).rglob("*")) if path.is_file()}
-
-
 def release_cases():
     from test_echo_install_lifecycle import device_archive
     # Run both the actual bundle device entry and ordinary Linux operator CLI.
@@ -405,14 +371,12 @@ def release_cases():
                                 env=env, capture_output=True, timeout=5)
         require(result.returncode == 0, "release archive preparation failed")
         bundle = stage / "bundle"
-
         def install(version):
             result = subprocess.run(["/bin/sh", str(bundle / "scripts/echo-install.sh"),
                                      "--device", "install", "--bundle", str(bundle),
                                      "--release-version", version], env=env,
                                     capture_output=True, timeout=15)
             require(result.returncode == 0, "release install failed: " + result.stderr.decode())
-
         install("0.1.0")
         original = public_bytes(box)
         box.run(["rollback"], 1)
@@ -488,3 +452,49 @@ def release_cases():
                         "unsafe snapshot changed active or outside bytes")
                 require(not (box.root / "remote/echo-bridge.lock").exists(), "unsafe snapshot took lock")
     print("echo-install releases: snapshot=PASS rollback=PASS partial=PASS retention=PASS")
+def confirmation_cases():
+    # Actual authored shell; synthetic private trace and hassmic log only.
+    row = json.dumps({"elapsed_ms": 4, "event": "wyoming.run_started",
+                      "provider_auth_mode": "chatgpt", "run_id": "run-1"}, sort_keys=True, separators=(",", ":")) + "\n"
+    wake = "wake: COMPUTER type=2\nsatellite: running\n"
+    cases = {"stale": ("", "", "pending", "pending", "pending"),
+             "wake-only": (wake, "", "confirmed", "connected", "pending"),
+             "run-only": ("", row, "pending", "pending", "started"),
+             "fresh": (wake, row, "confirmed", "connected", "started"),
+             "key-mode": (wake, row.replace('"chatgpt"', '"api_key"'), "confirmed", "connected", "started"),
+             "wrong-event": (wake, row.replace("wyoming.run_started", "wyoming.probe_ok"), "confirmed", "connected", "pending"),
+             "embedded": (wake, json.dumps({"message": row}) + "\n", "confirmed", "connected", "pending"),
+             "partial": (wake, row.rstrip(), "confirmed", "connected", "pending"),
+             "partial-after": (wake, row + "{", "confirmed", "connected", "pending"),
+             "invalid": (wake, row.replace('"elapsed_ms":4', '"elapsed_ms":04'), "confirmed", "connected", "pending")}
+    faults = ("rotate", "truncate", "rewrite", "symlink", "parent-link", "hardlink", "owner", "mode", "missing", "inject")
+    for kind in (*cases, *faults):
+        with Sandbox() as box:
+            for path in box.script.parent.glob("echo-install*.sh"):
+                path.write_text(path.read_text().replace("/data/local", str(box.root / "remote")))
+            box.env["PATH"] = str(box.root / "remote-tools") + ":/usr/bin:/bin"
+            log, trace = box.root / "remote/hassmic/boot.log", box.device / "private/bridge.trace"
+            trace.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(wake); trace.write_text(row)
+            trace.chmod(0o600); set_owner(box.root, trace, "9999:3990")
+            cursor = box.run(["--device", "confirm-cursor"]).stdout.splitlines()
+            require(len(cursor) == 2, "paired baseline differs")
+            if kind in cases:
+                log.write_text(wake + cases[kind][0]); trace.write_text(row + cases[kind][1])
+            elif kind == "rotate": trace.rename(trace.with_suffix(".old")); trace.write_text(row + row)
+            elif kind == "truncate": trace.write_text("")
+            elif kind == "rewrite": trace.write_text("x" * len(row) + row)
+            elif kind == "missing": trace.unlink()
+            elif kind == "hardlink": os.link(trace, trace.with_suffix(".alias"))
+            elif kind == "owner": set_owner(box.root, trace, "0:0")
+            elif kind == "mode": trace.chmod(0o644)
+            elif kind == "inject": cursor[1] = "1:1:0:$(touch escaped)"
+            else:
+                target = trace if kind == "symlink" else trace.parent
+                saved = target.with_name(target.name + "-saved")
+                target.rename(saved); target.symlink_to(saved, target_is_directory=kind == "parent-link")
+            result = box.run(["--device", "confirm-check", *cursor], 0 if kind in cases else 1)
+            expected = "wake=%s\nlink=%s\nrun=%s\n" % cases[kind][2:] if kind in cases else ""
+            require(result.stdout == expected and not result.stderr, "paired evidence/privacy differs: " + kind)
+            require(not (box.root / "remote/echo-bridge.lock").exists(), "confirmation took lifecycle lock")
+    print("echo-install confirmation: fresh=PASS stale=PASS one-sided=PASS trace-safety=PASS privacy=PASS")

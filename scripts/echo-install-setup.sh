@@ -6,16 +6,28 @@ setup_observation() {
       setup_wake "$@" 2>/dev/null || exit 1
       exit 0
       ;;
+    confirm-cursor | confirm-check)
+      setup_confirmation "$@" 2>/dev/null || exit 1
+      exit 0
+      ;;
   esac
 }
 
 setup_wake() {
-  # Only this private transport observes boot.log; never return any log content.
+  # Only fixed projections escape these private log observers.
   wake_log=/data/local/hassmic/boot.log
-  test ! -L /data/local/hassmic && test -d /data/local/hassmic || return 1
+  wake_parent=/data/local/hassmic
+  case $1 in run-*)
+    wake_parent=/data/local/echo-bridge/private
+    wake_log=$wake_parent/bridge.trace
+    test ! -L /data/local/echo-bridge || return 1
+    test "$(stat -c %u:%h:%a "$wake_log")" = 9999:1:600 || return 1
+    ;;
+  esac
+  test ! -L "$wake_parent" && test -d "$wake_parent" || return 1
   test ! -L "$wake_log" && test -f "$wake_log" || return 1
   identity=$(stat -c %d:%i "$wake_log") || return 1
-  if [ "$1" = wake-cursor ]; then
+  if [ "$1" = wake-cursor ] || [ "$1" = run-cursor ]; then
     [ "$#" = 1 ] || return 1
     bytes=$(wc -c <"$wake_log") || return 1
     # Never let an old partial record become this attempt's first wake.
@@ -37,18 +49,8 @@ setup_wake() {
   bytes=${rest%%:*} digest=${rest#*:}
   [ "$identity" = "$old_identity" ] || return 1
   setup_wake_prefix || return 1
-  if [ "$1" = wake-check ]; then
-    # The sentinel makes awk discard an unterminated final record. Evidence is
-    # ordered: a link before the confirmed wake cannot complete this attempt.
-    evidence=$({
-      tail -c +$((bytes + 1)) "$wake_log" && printf '\001'
-    } | awk '
-      index($0, "\001") { complete=1; if (index($0, "\001")>1) wake=linked=0; next }
-      /(^|[[:space:]])wake: COMPUTER type=2([[:space:]]|$)/ { wake=1 }
-      wake && /satellite: running([[:space:]]|$)/ { linked=1 }
-      /client disconnected|no Home Assistant link/ { linked=0 }
-      END { if (!complete) exit 1
-        printf "wake=%s\nlink=%s\n", wake ? "confirmed" : "pending", linked ? "connected" : "pending" }') || return 1
+  if [ "$1" = wake-check ] || [ "$1" = run-check ]; then
+    evidence=$(setup_log_evidence "$1") || return 1
     setup_wake_prefix || return 1
     printf '%s\n' "$evidence"
   else
@@ -56,11 +58,46 @@ setup_wake() {
   fi
 }
 
+setup_log_evidence() {
+  # A trailing sentinel invalidates an incomplete suffix, even after evidence.
+  if [ "$1" = run-check ]; then
+    { tail -c +$((bytes + 1)) "$wake_log" && printf '\001'; } | awk '
+      index($0, "\001") { complete=1; if (index($0, "\001")>1) run=0; next }
+      /^\{"elapsed_ms":(0|[1-9][0-9]*),"event":"wyoming\.run_started","provider_auth_mode":"(chatgpt|api_key)","run_id":"run-[1-9][0-9]*"\}$/ { run=1 }
+      END { if (!complete) exit 1; printf "run=%s\n", run ? "started" : "pending" }'
+  else
+    { tail -c +$((bytes + 1)) "$wake_log" && printf '\001'; } | awk '
+      index($0, "\001") { complete=1; if (index($0, "\001")>1) wake=linked=0; next }
+      /(^|[[:space:]])wake: COMPUTER type=2([[:space:]]|$)/ { wake=1 }
+      wake && /satellite: running([[:space:]]|$)/ { linked=1 }
+      /client disconnected|no Home Assistant link/ { linked=0 }
+      END { if (!complete) exit 1
+        printf "wake=%s\nlink=%s\n", wake ? "confirmed" : "pending", linked ? "connected" : "pending" }'
+  fi
+}
+
 setup_wake_prefix() {
-  test ! -L /data/local/hassmic && test ! -L "$wake_log" && test -f "$wake_log" || return 1
+  test ! -L "$wake_parent" && test ! -L "$wake_log" && test -f "$wake_log" || return 1
   [ "$(stat -c %d:%i "$wake_log")" = "$old_identity" ] || return 1
   [ "$(wc -c <"$wake_log")" -ge "$bytes" ] || return 1
   [ "$(head -c "$bytes" "$wake_log" | sha256sum | awk '{print $1}')" = "$digest" ]
+}
+
+setup_confirmation() {
+  if [ "$1" = confirm-cursor ]; then
+    [ "$#" = 1 ] || return 1
+    wake=$(setup_wake wake-cursor) || return 1
+    run=$(setup_wake run-cursor) || return 1
+    # Detect replacement/rewrite during the paired capture too.
+    setup_wake wake-check "$wake" >/dev/null || return 1
+    setup_wake run-check "$run" >/dev/null || return 1
+    printf '%s\n%s\n' "$wake" "$run"
+  else
+    [ "$#" = 3 ] || return 1
+    wake=$(setup_wake wake-check "$2") || return 1
+    run=$(setup_wake run-check "$3") || return 1
+    printf '%s\n%s\n' "$wake" "$run"
+  fi
 }
 
 setup_doctor() {

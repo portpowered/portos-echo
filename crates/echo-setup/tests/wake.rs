@@ -3,7 +3,7 @@
 use echo_setup::{
     Failure,
     cli::Options,
-    setup::{WakeAttempt, WakeEvidence},
+    setup::{WakeAttempt, WakeConfirmation, WakeEvidence},
 };
 use std::{
     fs,
@@ -212,5 +212,155 @@ async fn t3_wake_deadline_cancels_owned_adb_child_without_reporting_success() ->
     assert!(matches!(closed, Ok(0)) || closed.is_err());
     peer.shutdown().await?;
     assert_eq!(fixture.calls()?.len(), 4);
+    Ok(())
+}
+
+fn confirmation_fixture() -> Result<Fixture> {
+    let fixture = Fixture::new(&cursor())?;
+    fs::write(fixture.0.join("confirm-cursor"), format!("{}{}", cursor(), cursor()))?;
+    Ok(fixture)
+}
+
+#[tokio::test]
+async fn t3_confirmation_requires_fresh_wake_link_and_run_on_one_selected_device() -> Result {
+    let fixture = confirmation_fixture()?;
+    let attempt = WakeConfirmation::begin(&fixture.options()?, deadline())
+        .await
+        .map_err(fixed)?;
+    for (wake, run, complete) in [
+        ("pending\nlink=pending", "pending", false),
+        ("pending\nlink=pending", "started", false),
+        ("confirmed\nlink=pending", "started", false),
+        ("confirmed\nlink=connected", "pending", false),
+        ("confirmed\nlink=connected", "started", true),
+    ] {
+        fs::write(
+            fixture.0.join("confirm-evidence"),
+            format!("wake={wake}\r\nrun={run}\r\n"),
+        )?;
+        let observed = attempt.observe().await.map_err(fixed)?;
+        assert_eq!(observed.complete(), complete);
+        assert_eq!(observed.run_started, run == "started");
+    }
+    assert!(attempt.wait().await.map_err(fixed)?.complete());
+    let calls = fixture.calls()?;
+    assert_eq!(calls.len(), 9);
+    assert_eq!(calls[0], ["devices"]);
+    assert_eq!(calls[2][3], "sh -s -- --device confirm-cursor");
+    for args in &calls[3..] {
+        assert_eq!(args[..3], ["-s", "SYNTHETIC-DEVICE", "shell"]);
+        assert_eq!(
+            args[3],
+            format!(
+                "sh -s -- --device confirm-check '{}' '{}'",
+                cursor().trim(),
+                cursor().trim()
+            )
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("adapter-input"))?,
+        echo_setup::DEVICE_SCRIPT
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_confirmation_refuses_partial_private_or_failed_observation_without_rebaselining() -> Result {
+    for bad in [
+        cursor(),
+        format!("{}';id\n", cursor()),
+        format!("{}{}SYNTHETIC-TOKEN\n", cursor(), cursor()),
+    ] {
+        let fixture = confirmation_fixture()?;
+        fs::write(fixture.0.join("confirm-cursor"), bad)?;
+        assert_eq!(
+            WakeConfirmation::begin(&fixture.options()?, deadline()).await.err(),
+            Some(Failure("setup_wake_unavailable"))
+        );
+        assert_eq!(fixture.calls()?.len(), 3);
+    }
+    let fixture = confirmation_fixture()?;
+    let attempt = WakeConfirmation::begin(&fixture.options()?, deadline())
+        .await
+        .map_err(fixed)?;
+    fs::write(
+        fixture.0.join("confirm-evidence"),
+        "wake=confirmed\nlink=connected\nrun=started\nSYNTHETIC-ACCOUNT\n",
+    )?;
+    assert_eq!(attempt.wait().await, Err(Failure("setup_wake_unavailable")));
+    fs::write(fixture.0.join("operation-failed"), "")?;
+    assert_eq!(attempt.observe().await, Err(Failure("setup_wake_unavailable")));
+    assert_eq!(
+        fixture
+            .calls()?
+            .iter()
+            .filter(|args| args.last().is_some_and(|arg| arg.ends_with("confirm-cursor")))
+            .count(),
+        1
+    );
+    assert!(!fixed(Failure("setup_wake_unavailable")).contains("SYNTHETIC"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_confirmation_expired_deadline_has_no_adb_effect_and_partial_evidence_cannot_complete() -> Result {
+    let fixture = confirmation_fixture()?;
+    assert_eq!(
+        WakeConfirmation::begin(&fixture.options()?, Instant::now()).await.err(),
+        Some(Failure("setup_timeout"))
+    );
+    assert!(!fixture.0.join("ledger").exists());
+    let attempt = WakeConfirmation::begin(&fixture.options()?, deadline())
+        .await
+        .map_err(fixed)?;
+    fs::write(
+        fixture.0.join("confirm-evidence"),
+        "wake=confirmed\nlink=connected\nrun=pending\n",
+    )?;
+    assert!(!attempt.observe().await.map_err(fixed)?.complete());
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(21)).await;
+    assert_eq!(attempt.wait().await, Err(Failure("setup_timeout")));
+    assert_eq!(fixture.calls()?.len(), 4);
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_confirmation_deadline_and_caller_cancellation_close_only_owned_adb_child() -> Result {
+    for cancel in [false, true] {
+        let fixture = confirmation_fixture()?;
+        let attempt = WakeConfirmation::begin(&fixture.options()?, deadline())
+            .await
+            .map_err(fixed)?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        fs::write(
+            fixture.0.join("wake-barrier"),
+            listener.local_addr()?.port().to_string(),
+        )?;
+        fs::write(
+            fixture.0.join("confirm-evidence"),
+            "wake=confirmed\nlink=connected\nrun=started\n",
+        )?;
+        let waiting = tokio::spawn(async move { attempt.wait().await });
+        let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
+        let mut ready = [0; 5];
+        tokio::time::timeout(Duration::from_secs(10), peer.read_exact(&mut ready)).await??;
+        assert_eq!(&ready, b"ready");
+        if cancel {
+            waiting.abort();
+            assert!(waiting.await.unwrap_err().is_cancelled());
+        } else {
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(21)).await;
+            assert_eq!(waiting.await?, Err(Failure("setup_timeout")));
+            tokio::time::resume();
+        }
+        let mut byte = [0];
+        let closed = tokio::time::timeout(Duration::from_secs(5), peer.read(&mut byte)).await?;
+        assert!(matches!(closed, Ok(0)) || closed.is_err());
+        peer.shutdown().await?;
+        assert_eq!(fixture.calls()?.len(), 4);
+    }
     Ok(())
 }
