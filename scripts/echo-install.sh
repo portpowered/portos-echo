@@ -494,7 +494,7 @@ for prompt in "$checkout"/examples/prompts/*.md; do
   copy_file "$prompt" "$device/home/prompts/$name" 600 false
   prompts=true
 done
-write_launcher
 release_publish
+write_launcher
 [ "$prompts" = true ] || printf '%s\n' 'echo-install: prompt defaults absent; skipped'
 printf '%s\n' 'echo-install: installed'
