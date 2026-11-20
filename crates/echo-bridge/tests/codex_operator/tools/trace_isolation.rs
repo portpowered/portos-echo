@@ -26,6 +26,7 @@ async fn owner(server: &str) {
         // same external IDs must start fresh state in the next generation.
         std::fs::remove_file(fixture.directory.path().join("tool-trace")).unwrap();
         std::fs::remove_file(fixture.home.join("tool-result")).unwrap();
+        std::fs::remove_file(fixture.home.join("peer-port")).unwrap();
     }
     spoof.shutdown().await.unwrap();
 }
