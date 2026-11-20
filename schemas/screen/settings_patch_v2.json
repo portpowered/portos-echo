@@ -46,6 +46,9 @@
         "delegate_effort": {
           "type": "string"
         },
+        "delegate_fast": {
+          "type": "boolean"
+        },
         "delegate_model": {
           "type": "string"
         },

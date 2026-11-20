@@ -85,6 +85,7 @@ async fn call_bad_thread_or_remote_failure_closes_before_realtime_start() {
                 call.start(
                     &Options {
                         effort: Some("low"),
+                        fast: false,
                         ..options()
                     },
                     vec![],
@@ -110,6 +111,7 @@ async fn call_bad_thread_or_remote_failure_closes_before_realtime_start() {
             call.start(
                 &Options {
                     effort: Some("low"),
+                    fast: false,
                     ..options()
                 },
                 vec![],
@@ -395,13 +397,15 @@ async fn call_profile_fields_are_independent_and_unset_request_is_unchanged() {
                 let params = start(&mut server).await;
                 let mut expected = json!({
                     "ephemeral": true, "approvalPolicy": "never", "sandbox": "read-only",
+                    "serviceTier": null,
                     "environments": [], "dynamicTools": [], "baseInstructions": "Client audio bridge",
                     "config": {
                         "features.shell_tool": false, "features.unified_exec": false,
                         "features.multi_agent": false, "features.multi_agent_v2": false, "agents.enabled": false,
                         "features.goals": false, "tools.experimental_request_user_input.enabled": false,
                         "tools.update_plan.enabled": false,
-                "features.code_mode.direct_only_tool_namespaces": ["web", "functions"], "web_search": web_search.as_str(), "mcp_servers": {}
+                        "features.code_mode.direct_only_tool_namespaces": ["web", "functions"],
+                        "web_search": web_search.as_str(), "mcp_servers": {}, "skills.include_instructions": false
                     }
                 });
                 if let Some(model) = model {

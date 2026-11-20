@@ -18,6 +18,7 @@ pub(super) fn runtime_options<'a>(
 ) -> echo_bridge::bridge_voice::RuntimeOptions<'a> {
     use echo_bridge::{bridge_codex, bridge_voice};
     bridge_voice::RuntimeOptions {
+        runner_skills: None,
         host: options(config),
         voice: bridge_voice::ServeOptions {
             kill_path: None,
@@ -27,6 +28,7 @@ pub(super) fn runtime_options<'a>(
                 prompt: "synthetic fixture",
                 model: None,
                 effort: None,
+                fast: false,
                 time_zone: None,
                 web_search: echo_config::WebSearch::default(),
             },

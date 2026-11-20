@@ -46,8 +46,10 @@ pub struct CodexConfig {
     pub model: Option<String>,
     pub delegate_model: Option<String>,
     pub delegate_effort: Option<String>,
+    pub delegate_fast: bool,
     pub time_zone: Option<String>,
     pub web_search: WebSearch,
+    pub skills: Vec<String>,
 }
 
 /// Owner, 2026-11-18: conversation is the default and a hand-off is the exception.
@@ -114,11 +116,50 @@ pub(super) fn decode(value: DeValue<'_>) -> Result<CodexConfig, ConfigError> {
         model: fields.optional("model")?,
         delegate_model: fields.optional("delegate_model")?,
         delegate_effort: fields.optional("delegate_effort")?,
+        delegate_fast: fields.optional("delegate_fast")?.unwrap_or_default(),
         time_zone: fields.optional("time_zone")?,
         web_search: fields.optional("web_search")?.unwrap_or_default(),
+        skills: fields.optional("skills")?.unwrap_or_default(),
     };
     fields.finish()?;
     Ok(config)
+}
+
+impl BridgeConfig {
+    /// Validate the selection before the runtime uses any name as a path component.
+    /// Parsing does not inspect which skills are installed.
+    ///
+    /// # Errors
+    /// Requires the configured client runner and agent home for a nonempty selection.
+    /// Names must be distinct, single path components.
+    pub fn validate_skill_selection(&self) -> Result<(), ConfigError> {
+        if self.codex.skills.is_empty() {
+            return Ok(());
+        }
+        if self.agent_backend != crate::AgentBackend::Client || self.codex.home.is_none() || self.home.is_none() {
+            return Err(ConfigError::new(
+                "codex.skills",
+                "requires the Codex client runner and home.dir",
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (index, name) in self.codex.skills.iter().enumerate() {
+            let reason = if name.trim().is_empty()
+                || name == "."
+                || name.contains("..")
+                || name.contains(['/', '\\', '\u{2028}', '\u{2029}'])
+                || name.chars().any(char::is_control)
+            {
+                "expected a single skill name"
+            } else if !seen.insert(name) {
+                "duplicate skill name"
+            } else {
+                continue;
+            };
+            return Err(ConfigError::new(format!("codex.skills[{index}]"), reason));
+        }
+        Ok(())
+    }
 }
 
 /// An unknown voice is refused offline: the app server rejects the whole

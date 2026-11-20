@@ -16,6 +16,7 @@ use tokio::{
 type SessionRequests = (
     tokio::sync::mpsc::Receiver<crate::bridge_codex::SessionRequest>,
     tokio::sync::watch::Sender<Option<std::sync::Arc<()>>>,
+    bool,
 );
 
 pub(super) const NO_ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
@@ -66,6 +67,7 @@ impl<'o> super::ServeOptions<'o> {
                 prompt: texts.1,
                 model: self.call.model,
                 effort: self.call.effort,
+                fast: self.call.fast,
                 time_zone: self.call.time_zone,
                 web_search: self.call.web_search,
             },
@@ -257,8 +259,8 @@ where
         validate(&options)?;
         let (host, catalog, budget) = tools;
         let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, budget)?;
-        if let Some((requests, run)) = requests {
-            session = session.with_session(requests, run);
+        if let Some((requests, run, skills_enabled)) = requests {
+            session = session.with_session(requests, run).with_skill_reader(skills_enabled);
         }
         let result = drive(device, &mut session, (&mut options, opened), cancelled, &mut observe).await;
         if result == Err(Error::SessionCeiling) {

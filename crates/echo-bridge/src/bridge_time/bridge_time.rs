@@ -39,6 +39,11 @@ const RETRY: Duration = Duration::from_secs(60);
 /// Network time when it was measured, carried forward on the monotonic clock.
 static ANCHOR: Mutex<Option<(i64, Instant)>> = Mutex::new(None);
 
+tokio::task_local! {
+    /// Model-facing UTC anchor owned by a guarded, fixed-epoch simulation.
+    pub(crate) static SIM_TIME: Option<(SystemTime, tokio::time::Instant)>;
+}
+
 fn reference_ms() -> Option<i64> {
     let (measured, at) = (*ANCHOR.lock().ok()?)?;
     measured.checked_add(i64::try_from(at.elapsed().as_millis()).ok()?)
@@ -47,6 +52,9 @@ fn reference_ms() -> Option<i64> {
 /// The current time for everything the model is told.
 #[must_use]
 pub fn now() -> SystemTime {
+    if let Ok(Some((epoch, start))) = SIM_TIME.try_with(|anchor| *anchor) {
+        return epoch.checked_add(start.elapsed()).unwrap_or(epoch);
+    }
     corrected(SystemTime::now(), reference_ms())
 }
 

@@ -1,8 +1,11 @@
 //! T3 public executable: pin + real media + loopback Wyoming, controlled clock.
 use super::*;
 use std::io::Write as _;
+#[cfg(target_os = "linux")]
+mod fast_mode;
 mod first_wake;
 pub(super) mod lifecycle;
+mod runner_skills;
 mod unanswered;
 use echo_contracts::wyoming::{Event as WireEvent, Header, encode};
 use lifecycle::Ending;

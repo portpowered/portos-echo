@@ -31,6 +31,7 @@ this is not a dedicated per-agent sandbox. The screen app receives public state 
 | `private/audit/` | Audit directory 0700 with private 0600 records and `bridge-kill` state. Keep operational data private. |
 | `private/bridge.trace`, `private/bridge.log` | Installer launcher trace and process output; private diagnostics, not microphone recordings. |
 | `home/notes/` | Optional local notes exposed through the bridge's scoped home tools; keep credentials out. |
+| `home/skills/` | Optional owner skills exposed to the delegated runner through its `read_skill` tool. |
 
 For a manual host placement, nominate equivalent paths outside the repository and preserve the same private modes.
 The installer does not rewrite the old binary/CA paths in the Echo example; use the corrected `bin/` paths in
@@ -40,7 +41,7 @@ The base must validate first. If `[home]` is configured, `BridgeConfig::load_eff
 optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leaves:
 
 - Voice and OpenAI use `voice.session_listen_enabled`, `voice.session_listen_seconds`,
-  `codex.voice`, `codex.web_search`, `codex.delegate_model` and `codex.delegate_effort`.
+  `codex.voice`, `codex.web_search`, `codex.delegate_model`, `codex.delegate_effort` and `codex.delegate_fast`.
   An empty delegated model or effort selects the pinned app server's default.
 - Agent settings include `agent.daily_request_cap`
   and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
@@ -79,6 +80,25 @@ migration diagnostics naming these prompt files.
 An invalid prompt on initial startup has no previously accepted text to retain and fails admission;
 correct it before starting. The retain-previous behavior applies to reloads of a running owner.
 
+### Owner skills
+
+Copy the [sample skill](../examples/skills/brief/SKILL.md) to `skills/brief/SKILL.md` under the directory
+configured in `[home].dir`. Set `skills = ["brief"]` in the base `[codex]` table and restart.
+Use a UTF-8 Markdown file with `---` delimiters around the front matter and one line each for `name`
+and `description`. The name must exactly match its folder and its entry in the selection.
+Use distinct folder names without path separators or `..`. Use ordinary directories and files.
+The private Codex home is unsupported for owner skills.
+
+The delegated runner sees the enabled names and descriptions and can call `read_skill` for their Markdown
+bodies. The body starts after the closing delimiter's line ending and retains its original whitespace.
+The bridge reads the enabled files at startup, so restart after changing either a file or the selection.
+Omit `skills` or set `skills = []` to disable the catalog and tool. An unknown selected name reports its
+indexed key, such as `codex.skills[0]: unknown skill`, and exits with status 2. Remove the key before rolling
+back to an older bridge binary.
+
+The encoded catalog may use up to half of the Codex RPC frame (512 KiB). The rest is available for the
+runner prompt, settings, and tool declarations. An oversized selection reports `codex.skills` at startup.
+
 ## Voice agent access and what it may do
 
 The `chatgpt` voice path and the delegated Codex runner use the **same app-server ChatGPT sign-in**, kept in
@@ -92,6 +112,18 @@ The repository has no established subscription-tier guarantee for Live. Third-pa
 terms and account entitlement remain open under [plan section 4.5](program/plan.md#45-risks-the-operator-accepts-with-the-chatgpt-mode).
 Do not assume that a particular paid plan, API subscription or a working Codex login guarantees Live eligibility.
 The pinned server owns its realtime model; `codex.delegate_model` chooses the runner model, not the voice model.
+
+In paired Settings, open OpenAI, select **Delegated fast mode**, and choose **Save settings**. Wait for
+Settings to report that the saved values are active. The next runner thread starts with the saved tier.
+Fast mode requests priority processing for a supported runner model. The pin's bundled catalog advertises
+priority for `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`,
+`gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5`. The provider controls eligibility, cost and speed.
+The Live voice uses its own start parameters.
+
+For standard processing, clear the checkbox and save, or set `delegate_fast = false` under `[codex]` in TOML.
+A saved false overrides a true base value. To return to the base preference, stop the bridge, remove just
+`delegate_fast` from the home's `settings.toml`, and start the bridge again. Before downgrading to a bridge
+without this key, remove it from both TOML files.
 
 In the current backend, desktop `import-codex` is refused. `signin --browser` is an alternate app-server flow
 for a browser-capable host. `api_key` is an alternate credential mode: the bridge reads the nominated
@@ -219,7 +251,9 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.model` | Optional nonblank legacy runner-model alias; overrides agent.model. | restart / no |
 | `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. An empty screen override selects the pinned app server default even when a legacy model key is set. | boundary / yes |
 | `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | boundary / yes |
+| `codex.delegate_fast` | Boolean, default false. True requests priority processing for the delegated model. False selects standard routing. | boundary / yes |
 | `codex.time_zone` | Default unset; IANA-name syntax (nonempty slash components using ASCII letters/digits/underscore/plus/minus). Not a lookup validating that zone exists. | restart / no |
+| `codex.skills` | Default []; ordered list of distinct owner skill names under `home.dir/skills`. Nonempty requires the configured Codex client runner and agent home. | restart / no |
 
 Set `codex.time_zone` to the operator's IANA time zone for time answers.
 Run `adb shell getprop persist.sys.timezone` to see the device zone.

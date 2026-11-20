@@ -199,8 +199,7 @@ async fn setup_realtime(server: &mut Server) {
 #[tokio::test(start_paused = true)]
 async fn setup_thread_preparation_finishes_before_held_offer_and_realtime_waits_for_both() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("trace");
-    let trace = crate::bridge_trace::Trace::open(&path, "api_key").unwrap();
+    let trace = crate::bridge_trace::Trace::open(&directory.path().join("trace"), "api_key").unwrap();
     let (mut io, mut server) = fixture();
     let (peer, state, _tx) = peer(true, None);
     let gate = Arc::new(tokio::sync::Notify::new());
@@ -219,6 +218,7 @@ async fn setup_thread_preparation_finishes_before_held_offer_and_realtime_waits_
         let mut expected = serde_json::to_value(echo_codex::ThreadSettings::new(vec![])).unwrap();
         expected["baseInstructions"] = options().instructions.into();
         expected["model"] = options().model.unwrap().into();
+        expected["serviceTier"] = serde_json::Value::Null;
         assert_eq!(request["params"], expected);
         assert_eq!(state.offers.load(Ordering::SeqCst), 1);
         assert_eq!(began.elapsed(), std::time::Duration::ZERO);
@@ -243,7 +243,7 @@ async fn setup_thread_preparation_finishes_before_held_offer_and_realtime_waits_
         stop(&mut server).await;
     };
     tokio::join!(client, remote);
-    let rows: Vec<serde_json::Value> = std::fs::read_to_string(path)
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(directory.path().join("trace"))
         .unwrap()
         .lines()
         .map(|row| serde_json::from_str(row).unwrap())

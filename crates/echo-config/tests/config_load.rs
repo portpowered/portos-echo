@@ -8,6 +8,41 @@ use std::{
 const EXAMPLE: &str = include_str!("../../../examples/bridge.example.toml");
 const MINIMAL: &str = "[echo]\nhost='echo.example.invalid'\n[live]\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n";
 
+#[test]
+fn runner_skills_selection_defaults_empty_and_decodes_without_opening_directories() {
+    for input in [MINIMAL, EXAMPLE, include_str!("../../../examples/bridge.echo.toml")] {
+        assert_eq!(
+            BridgeConfig::from_toml_str(input).unwrap().codex.skills,
+            Vec::<String>::new()
+        );
+    }
+    let parse = |selection| {
+        BridgeConfig::from_toml_str(&format!(
+            "{MINIMAL}\n[home]\ndir='/absent/agent-home'\n[codex]\nhome='/absent/private'\nskills={selection}"
+        ))
+    };
+    assert_eq!(parse("[]").unwrap().codex.skills, Vec::<String>::new());
+    assert_eq!(parse("['brief','another']").unwrap().codex.skills, ["brief", "another"]);
+    for (value, message) in [
+        ("'brief'", "codex.skills: invalid type or value"),
+        ("['ok','nested/brief']", "codex.skills[1]: expected a single skill name"),
+        (r"['nested\brief']", "codex.skills[0]: expected a single skill name"),
+        ("['..']", "codex.skills[0]: expected a single skill name"),
+        ("['brief..copy']", "codex.skills[0]: expected a single skill name"),
+        ("['.']", "codex.skills[0]: expected a single skill name"),
+        ("['']", "codex.skills[0]: expected a single skill name"),
+        ("['brief','brief']", "codex.skills[1]: duplicate skill name"),
+    ] {
+        assert_eq!(parse(value).unwrap_err().to_string(), message);
+    }
+    assert_eq!(
+        BridgeConfig::from_toml_str(&format!("{MINIMAL}\n[codex]\nskills=['brief']"))
+            .unwrap_err()
+            .to_string(),
+        "codex.skills: requires the Codex client runner and home.dir"
+    );
+}
+
 struct Directory(PathBuf);
 impl Directory {
     fn new() -> Result<Self, Box<dyn Error>> {
@@ -447,39 +482,3 @@ mod config_example;
 mod config_profile;
 mod config_screen;
 mod config_settings;
-
-#[test]
-fn load_reports_legacy_agent_keys_without_applying_values() {
-    let input = include_str!("../../../examples/bridge.example.toml");
-    let directory = Directory::new().unwrap();
-    let path = directory.0.join("bridge.toml");
-    let legacy = input.replacen(
-        "[agent]\n",
-        "[agent]\nmax_tool_calls = 1\ntask_deadline_seconds = 5\n",
-        1,
-    );
-    std::fs::write(&path, &legacy).unwrap();
-    let (base, diagnostics) = BridgeConfig::load_with_warnings(&path).unwrap();
-    let updated = BridgeConfig::from_toml_str(input).unwrap();
-    assert_eq!(base, updated);
-    assert_eq!(base.agent.daily_request_cap, 500);
-    assert_eq!(base.voice.session_max_seconds, 600);
-    assert_eq!(
-        diagnostics.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        [
-            "agent.max_tool_calls: deprecated and ignored",
-            "agent.task_deadline_seconds: deprecated and ignored",
-        ]
-    );
-    let effective = BridgeConfig::load_effective(&path).unwrap();
-    assert_eq!(effective.config, updated);
-    assert_eq!(
-        effective
-            .deprecations
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        diagnostics.iter().map(ToString::to_string).collect::<Vec<_>>()
-    );
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
-}

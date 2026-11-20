@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
-// Schema SHA-256: 3af45b9865d82ff648793bcc2b93c64fcb4bcaffab9d1a005feb59c9627a4334
+// Schema SHA-256: ee38d5fe6f3310ef2698b4719f809cbbbb5c9f6a413a46376b25ea2ceaf08ba4
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -57,6 +57,7 @@ export type CodexValuesV2 = {
     web_search: WebSearchV2;
     delegate_model: string;
     delegate_effort: string;
+    delegate_fast: boolean;
 };
 export type HomeSettingsV2 = { agent_tools: Array<HomeToolGroupV2> };
 export type HomeToolGroupV2 = "notes" | "prompts";
@@ -130,6 +131,7 @@ export type AgentPatchV2 = {
 };
 export type CodexPatchV2 = {
     delegate_effort?: string;
+    delegate_fast?: boolean;
     delegate_model?: string;
     voice?: string;
     web_search?: WebSearchV2;

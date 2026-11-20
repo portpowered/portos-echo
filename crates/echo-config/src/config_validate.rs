@@ -71,7 +71,16 @@ fn schema_field(path: &str, key: &str) -> bool {
             "session_listen_seconds",
             "session_max_seconds",
         ],
-        "codex" => &["home", "binary", "launch", "ca_file", "voice", "instructions", "model"],
+        "codex" => &[
+            "home",
+            "binary",
+            "launch",
+            "ca_file",
+            "voice",
+            "instructions",
+            "model",
+            "skills",
+        ],
         "chatgpt_auth" => crate::config_auth::FIELDS,
         "echo" => &["host", "wyoming_port"],
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
@@ -109,6 +118,7 @@ pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
     crate::config_screen::validate(config)?;
     config.voice.validate()?;
     crate::config_codex::validate(&config.codex)?;
+    config.validate_skill_selection()?;
     crate::config_codex::validate_voice(config)?;
     crate::config_muse::validate(config)?;
     config.chatgpt_auth.validate()?;

@@ -121,15 +121,7 @@ pub(super) async fn collected(process: tokio::process::Child, root: &Path, endin
 }
 
 pub(in super::super) async fn screen(root: &Path) -> Screen {
-    let rows: Vec<Value> = std::fs::read_to_string(root.join("trace"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    let address = rows.iter().find(|row| row["event"] == "screen.listening").unwrap()["address"]
-        .as_str()
-        .unwrap();
-    let mut stream = TcpStream::connect(address).await.unwrap();
+    let mut stream = TcpStream::connect(screen_address(root)).await.unwrap();
     stream
         .write_all(b"GET /events?token=synthetic-screen-pair HTTP/1.1\r\nHost: local\r\n\r\n")
         .await
@@ -137,6 +129,19 @@ pub(in super::super) async fn screen(root: &Path) -> Screen {
     let mut lines = BufReader::new(stream).lines();
     assert_eq!(lines.next_line().await.unwrap().unwrap(), "HTTP/1.1 200 OK");
     lines
+}
+
+pub(super) fn screen_address(root: &Path) -> std::net::SocketAddr {
+    let rows: Vec<Value> = std::fs::read_to_string(root.join("trace"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    rows.iter().rfind(|row| row["event"] == "screen.listening").unwrap()["address"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap()
 }
 
 pub(in super::super) async fn next_frame(screen: &mut Screen) -> Option<Value> {

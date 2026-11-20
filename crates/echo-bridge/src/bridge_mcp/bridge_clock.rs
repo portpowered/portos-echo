@@ -6,6 +6,7 @@
 //! completed writes through the guarded local Wyoming forwarder. State rows
 //! contain `epoch_ms/state` at projected publication; the step flushes the screen
 //! snapshot before acknowledging. Epoch is paused Tokio time since owner startup.
+//! An explicit `--sim-epoch` also anchors model-facing UTC to that clock.
 //! Both pre-advance and post-advance drains require a voice-owner acknowledgement,
 //! matching submitted/written PCM counts, and a screen publication receipt.
 //! Missing/failed acknowledgements, overflow, a missing screen or a five-second
@@ -27,7 +28,7 @@ use std::{
     future::Future,
     io::{Read, Write},
     task::Poll,
-    time::Duration,
+    time::{Duration, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -38,6 +39,10 @@ pub fn execute(settings: Settings) -> Result<(), Error> {
     if !settings.sim_clock || settings.model_url.is_none() || settings.lab {
         return Err(Error::Input);
     }
+    let epoch = settings
+        .sim_epoch
+        .map(|seconds| UNIX_EPOCH.checked_add(Duration::from_secs(seconds)).ok_or(Error::Input))
+        .transpose()?;
     let commands = input()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -46,8 +51,12 @@ pub fn execute(settings: Settings) -> Result<(), Error> {
         .map_err(|_| Error::Control)?;
     runtime.block_on(async {
         let context = receipt::Context::new();
-        receipt::CURRENT
-            .scope(context.clone(), drive(run(settings, commands, context)))
+        let clock = epoch.map(|time| (time, tokio::time::Instant::now()));
+        crate::bridge_time::SIM_TIME
+            .scope(
+                clock,
+                receipt::CURRENT.scope(context.clone(), drive(run(settings, commands, context))),
+            )
             .await
     })
 }

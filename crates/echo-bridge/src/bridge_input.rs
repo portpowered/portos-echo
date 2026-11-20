@@ -1,5 +1,5 @@
 //! Offline startup validation and explicitly nominated credential acquisition.
-use crate::Error;
+use crate::{Error, bridge_voice::RunnerSkills};
 use echo_contracts::secret::Secret;
 use echo_live::call::{CallError, CredentialProvider, LiveAuthMode, LiveCredential};
 use std::{
@@ -10,6 +10,7 @@ use std::{
 pub struct Settings {
     pub config: Option<echo_config::BridgeConfig>,
     pub startup: Option<Box<echo_config::EffectiveConfig>>,
+    pub runner_skills: RunnerSkills,
     pub settings_warning: Option<String>,
     pub sim_clock: bool,
     pub sim_epoch: Option<u64>,
@@ -177,6 +178,7 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
     Ok(Settings {
         config: None,
         startup: None,
+        runner_skills: RunnerSkills::default(),
         settings_warning: None,
         sim_clock: false,
         sim_epoch: None,
@@ -207,6 +209,7 @@ fn configured(
 ) -> Result<Option<Settings>, Error> {
     let effective = echo_config::BridgeConfig::load_effective(config).map_err(|error| prompt_config_error(&error))?;
     let config = effective.config.clone();
+    let runner_skills = RunnerSkills::load(&config)?;
     let muse = if config.agent_backend == echo_config::AgentBackend::Muse {
         Some((config.agent.clone(), config.muse.clone().ok_or(Error::Input)?))
     } else {
@@ -228,6 +231,7 @@ fn configured(
         config: Some(config.clone()),
         settings_warning: effective.warning.as_ref().map(ToString::to_string),
         startup: Some(Box::new(effective)),
+        runner_skills,
         sim_clock: false,
         sim_epoch: None,
         mcp: if muse.is_none() {
@@ -331,6 +335,8 @@ fn prompt_config_error(error: &echo_config::ConfigError) -> Error {
         "codex.instructions:",
         "codex.live_instructions:",
         "codex.web_search:",
+        "codex.skills:",
+        "codex.skills[",
     ]
     .iter()
     .any(|prefix| text.starts_with(prefix))

@@ -56,6 +56,7 @@ impl ThreadSettings {
                 "features.code_mode.direct_only_tool_namespaces": ["web", "functions"],
                 "web_search": "live",
                 "mcp_servers": {},
+                "skills.include_instructions": false,
             }),
         }
     }
@@ -115,6 +116,7 @@ mod tests {
                 "features.code_mode.direct_only_tool_namespaces": ["web", "functions"],
                 "web_search": "live",
                 "mcp_servers": {},
+                "skills.include_instructions": false,
             })
         );
         let tool = DynamicTool {

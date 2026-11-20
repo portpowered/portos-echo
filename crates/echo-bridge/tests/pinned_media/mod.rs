@@ -103,6 +103,7 @@ async fn client(config: &CodexConfig, routes: &LocalRoutes, commands: mpsc::Send
                     prompt: "Live voice prompt",
                     model: None,
                     effort: None,
+                    fast: false,
                     time_zone: None,
                     web_search: echo_config::WebSearch::default(),
                 },

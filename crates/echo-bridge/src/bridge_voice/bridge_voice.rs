@@ -44,6 +44,8 @@ pub use voice_runtime::{RuntimeCompletion, RuntimeOptions, execute, execute_with
 pub use voice_session::{
     ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation, tool_conversation,
 };
+pub use voice_tools::RunnerSkills;
+pub(crate) use voice_tools::normalize_skill_arguments;
 #[cfg(test)]
 mod voice_tests;
 
@@ -145,9 +147,8 @@ pub struct Stats {
 /// cannot renew it. None keeps the explicit one-reply lifetime.
 ///
 /// # Errors
-/// Tools without a dispatcher, unexpected
-/// wake, EOF, cancellation and fixed deadlines fail closed. Error cleanup
-/// requests a bounded cut; the host must then await call and device close.
+/// Tools without a dispatcher, unexpected wakes, EOF, cancellation and fixed deadlines fail closed.
+/// Error cleanup requests a bounded cut. The host then awaits call and device close.
 /// The host may retain a healthy call after the reply.
 pub async fn run<L: EchoLink>(
     client: &L,

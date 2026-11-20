@@ -42,6 +42,9 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
     const effort = element("input");
     effort.value = codex.delegate_effort;
     effort.placeholder = "Pin default";
+    const fast = element("input");
+    fast.type = "checkbox";
+    fast.checked = codex.delegate_fast;
     const local =
         home && choices("Local agent tools", groups, home.agent_tools);
     return {
@@ -49,6 +52,7 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
             field("Web search", search),
             field("Delegated model", model),
             field("Delegated reasoning effort", effort),
+            field("Delegated fast mode", fast),
             local?.fieldset ?? element("p", "Local agent tools unavailable"),
         ],
         addPatch(patch: PatchV2) {
@@ -59,6 +63,8 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
                 (patch.codex ??= {}).delegate_model = model.value;
             if (effort.value !== codex.delegate_effort)
                 (patch.codex ??= {}).delegate_effort = effort.value;
+            if (fast.checked !== codex.delegate_fast)
+                (patch.codex ??= {}).delegate_fast = fast.checked;
             if (local?.changed())
                 patch.home = { agent_tools: local.selected() };
         },

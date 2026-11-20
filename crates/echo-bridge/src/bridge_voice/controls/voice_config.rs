@@ -1,5 +1,5 @@
 //! Offline configuration admission, then explicitly nominated credential loading.
-use super::{HostOptions, RuntimeOptions, ServeOptions, SessionOptions};
+use super::{HostOptions, RunnerSkills, RuntimeOptions, ServeOptions, SessionOptions};
 use crate::{Error, bridge_codex};
 use echo_codex::DynamicTool;
 use echo_config::{BridgeConfig, EffectiveConfig, LiveMode};
@@ -13,6 +13,7 @@ use tokio::time::Instant;
 /// Preparation never opens credentials, resolves a binary or creates a home.
 pub struct Configured {
     config: BridgeConfig,
+    runner_skills: RunnerSkills,
     kill_path: PathBuf,
     trace: PathBuf,
     health: SocketAddr,
@@ -30,6 +31,16 @@ impl Configured {
     /// # Errors
     /// Missing home or a backend outside this voice owner's responsibility.
     pub fn new(config: BridgeConfig, trace: PathBuf, health: SocketAddr) -> Result<Self, Error> {
+        let runner_skills = RunnerSkills::load(&config)?;
+        Self::admit(config, trace, health, runner_skills)
+    }
+
+    pub(super) fn admit(
+        config: BridgeConfig,
+        trace: PathBuf,
+        health: SocketAddr,
+        runner_skills: RunnerSkills,
+    ) -> Result<Self, Error> {
         if config.codex.home.is_none() {
             return Err(Error::CodexHomeRequired);
         }
@@ -41,6 +52,7 @@ impl Configured {
             // Only servers the operator named: the executable adds the public defaults.
             time_servers: config.clock.servers.clone().unwrap_or_default(),
             config,
+            runner_skills,
             trace,
             health,
             routes: None,
@@ -61,10 +73,13 @@ impl Configured {
     /// # Errors
     /// Uses the same offline backend admission as `new`.
     pub fn from_effective(startup: EffectiveConfig, trace: PathBuf, health: SocketAddr) -> Result<Self, Error> {
-        let mut owner = Self::new(startup.config.clone(), trace, health)?;
-        owner.settings_warning = startup.warning.as_ref().map(ToString::to_string);
-        owner.startup = Some(Box::new(startup));
-        Ok(owner)
+        Ok(Self::new(startup.config.clone(), trace, health)?.with_effective(Box::new(startup)))
+    }
+
+    pub(super) fn with_effective(mut self, startup: Box<EffectiveConfig>) -> Self {
+        self.settings_warning = startup.warning.as_ref().map(ToString::to_string);
+        self.startup = Some(startup);
+        self
     }
 
     /// Route only the owned child to validated local fakes; no global mutation.
@@ -276,6 +291,7 @@ impl Configured {
 
     fn options<'a>(&'a self, api_key: Option<&'a Secret<String>>, tools: Vec<DynamicTool>) -> RuntimeOptions<'a> {
         RuntimeOptions {
+            runner_skills: Some(&self.runner_skills),
             host: HostOptions {
                 config: &self.config.codex,
                 mode: self.config.live.mode,
@@ -291,6 +307,7 @@ impl Configured {
                     prompt: echo_config::LIVE_INSTRUCTIONS,
                     model: self.config.codex_model(),
                     effort: self.config.codex.delegate_effort.as_deref(),
+                    fast: self.config.codex.delegate_fast,
                     time_zone: self.config.codex.time_zone.as_deref(),
                     web_search: self.config.codex.web_search,
                 },
