@@ -114,13 +114,17 @@ async function geometry(page, state) {
             `${state}: ${JSON.stringify(box)}`,
         );
     }
+    // Ready's transparent hit area intentionally spans the pack content.
+    const paintedButtons = buttons.filter(
+        (button) => state !== "ready" || button.label !== "home-tap",
+    );
     for (const [i, a] of slots.entries()) {
-        for (const b of [character, ...slots.slice(i + 1), ...buttons]) {
+        for (const b of [character, ...slots.slice(i + 1), ...paintedButtons]) {
             // The approval and error actions are native children of their card.
             if (
                 ["approval", "error"].includes(state) &&
                 a.label.includes("details") &&
-                buttons.includes(b) &&
+                paintedButtons.includes(b) &&
                 b.label !== "settings-gear"
             )
                 continue;
@@ -130,7 +134,7 @@ async function geometry(page, state) {
             );
         }
     }
-    for (const button of buttons)
+    for (const button of paintedButtons)
         assert.ok(
             !overlap(button, character),
             `${state}: ${button.label} overlaps character`,
@@ -144,6 +148,50 @@ async function geometry(page, state) {
             );
         }
     }
+}
+
+async function checkReadyTap(f) {
+    const tap = f.page.getByRole("button", {
+        name: "Begin session",
+        exact: true,
+    });
+    assert.deepEqual(
+        await tap.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return {
+                background: style.backgroundColor,
+                image: style.backgroundImage,
+                border: style.borderWidth,
+                shadow: style.boxShadow,
+                text: element.textContent,
+            };
+        }),
+        {
+            background: "rgba(0, 0, 0, 0)",
+            image: "none",
+            border: "0px",
+            shadow: "none",
+            text: "",
+        },
+    );
+    await tap.focus();
+    await f.page.keyboard.press("Tab");
+    await f.page.keyboard.press("Shift+Tab");
+    assert.ok(
+        await tap.evaluate((element) => {
+            const { outlineStyle, outlineWidth } = getComputedStyle(element);
+            return (
+                element.matches(":focus-visible") &&
+                outlineStyle === "solid" &&
+                parseFloat(outlineWidth) > 0
+            );
+        }),
+        "Ready tap area has a visible keyboard focus outline",
+    );
+    await f.page.keyboard.press("Enter");
+    assert.deepEqual(await f.next(), {
+        action: { action: "tap", target: "primary" },
+    });
 }
 
 async function playPresentations(f) {
@@ -163,6 +211,7 @@ async function playPresentations(f) {
                 path: `${screenshots}/companion-${state.state}-960x600.png`,
             });
         }
+        if (state.state === "ready") await checkReadyTap(f);
         if (state.state === "approval") {
             const long = {
                 ...approval,
@@ -201,7 +250,7 @@ async function playPresentations(f) {
     await playing(f.page, "idle.webm", id);
     await f.update(presentations[0][0]);
     console.log(
-        `B2 viewport=960x600 overlap=0 ${paths.join(" ")} happy=once->idle long_approval=scroll+keyboard`,
+        `B2 viewport=960x600 overlap=0 ${paths.join(" ")} ready_tap=transparent+focus+primary happy=once->idle long_approval=scroll+keyboard`,
     );
 }
 
