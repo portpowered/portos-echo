@@ -52,18 +52,20 @@ async fn t3_screen_pack_configured_completion_notifies_before_result_and_skips_d
     let mut events = crate::support::events(server.bound_addr).await?;
     let pin = (format!("{}/good", peer.base), peer.digest());
     let mut results = server.install_configured_packs(home.path().into(), Some(peer.ca()), vec![pin.clone(), pin]);
-    for _ in 0..2 {
+    for index in 0..2 {
         let result = results.recv().await.ok_or("missing configured result")?;
         assert_eq!(result.installed.as_deref(), Some("template@0.1.0"));
         assert_eq!(result.reason, None);
         assert_eq!(catalog(server.bound_addr).await?["revision"], 1);
+        if index == 0 {
+            reload(&mut events, json!("template@0.1.0")).await?;
+        }
     }
     assert!(results.recv().await.is_none());
     server.revoke_pairing().await?;
     let mut wire = String::new();
     tokio::time::timeout(std::time::Duration::from_secs(2), events.read_to_string(&mut wire)).await??;
-    assert_eq!(wire.matches("event: screen-pack-reload").count(), 1);
-    assert!(wire.contains(r#"data: {"active":"template@0.1.0","revision":1,"version":1}"#));
+    assert_eq!(wire.matches("event: screen-pack-reload").count(), 0);
     assert!(!home.path().join("settings.toml").exists());
     server.shutdown().await?;
     peer.stop().await
@@ -89,6 +91,7 @@ async fn t3_screen_pack_install_reload_once_uses_accepted_selection_and_deduplic
         };
         assert_eq!(installed["active"], active);
         assert_eq!(installed["revision"], 1);
+        reload(&mut events, active).await?;
         assert_eq!(post(addr, &url, &peer.digest()).await?.0, 202);
         assert_eq!(settled(addr, "2", "installed").await?["revision"], 1);
         assert_eq!(post(addr, &url, &"0".repeat(64)).await?.0, 202);
@@ -96,19 +99,37 @@ async fn t3_screen_pack_install_reload_once_uses_accepted_selection_and_deduplic
         server.revoke_pairing().await?;
         let mut wire = String::new();
         tokio::time::timeout(std::time::Duration::from_secs(2), events.read_to_string(&mut wire)).await??;
-        assert_eq!(wire.matches("event: screen-pack-reload").count(), 1);
-        let data = wire
-            .lines()
-            .find_map(|line| line.strip_prefix("data: "))
-            .ok_or("missing reload")?;
-        assert_eq!(
-            serde_json::from_str::<Value>(data)?,
-            json!({"version":1,"revision":1,"active":active})
-        );
+        assert_eq!(wire.matches("event: screen-pack-reload").count(), 0);
         assert!(!home.path().join("settings.toml").exists());
         server.shutdown().await?;
     }
     peer.stop().await
+}
+
+async fn reload(events: &mut BufReader<tokio::net::TcpStream>, active: Value) -> Result {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut named = false;
+        loop {
+            let mut line = String::new();
+            if events.read_line(&mut line).await? == 0 {
+                return Err("missing reload".into());
+            }
+            if line.starts_with("event: ") {
+                assert_eq!(line.trim(), "event: screen-pack-reload");
+                assert!(!named);
+                named = true;
+            }
+            if let Some(data) = line.strip_prefix("data: ") {
+                assert!(named);
+                assert_eq!(
+                    serde_json::from_str::<Value>(data)?,
+                    json!({"version":1,"revision":1,"active":active})
+                );
+                return Ok(());
+            }
+        }
+    })
+    .await?
 }
 
 async fn post(addr: SocketAddr, url: &str, sha256: &str) -> Result<(u16, Value)> {
