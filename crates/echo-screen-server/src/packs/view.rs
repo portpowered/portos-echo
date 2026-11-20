@@ -151,6 +151,9 @@ async fn read(state: &HttpState) -> Result<PackCatalog, StatusCode> {
         .try_lock_owned()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let root = state.packs.root.get().cloned().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    // Observe completion before scanning: an installed job must never accompany
+    // a catalog captured before that job's atomic directory publication.
+    let jobs = state.packs.jobs.lock().await.snapshot();
     let mut catalog = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         scan(&root)
@@ -158,7 +161,7 @@ async fn read(state: &HttpState) -> Result<PackCatalog, StatusCode> {
     .await
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    catalog.jobs = state.packs.jobs.lock().await.snapshot();
+    catalog.jobs = jobs;
     Ok(catalog)
 }
 
