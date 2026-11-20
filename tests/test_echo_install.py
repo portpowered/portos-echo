@@ -425,6 +425,8 @@ def remote_tool():
                 state = Path("/proc") / path.read_text() / "stat"
                 if state.read_text().split(") ")[1].split()[0] != "Z":
                     print(path.read_text() + " " + (user + " " if user_mode else "") + "echo-bridge")
+                    if user_mode and (base / "mode").read_text() == "stale":
+                        (base / "stale-observed").touch()
             except FileNotFoundError:
                 pass
     elif name == "date":
@@ -435,7 +437,14 @@ def remote_tool():
         clock.write_text(str(value + 1))
         print(value)
     elif name == "sleep":
-        pass  # Production polling is driven by the synthetic date clock.
+        # Advance the virtual deadline only after a failed, observed stale poll.
+        # The nobody FIFO-holder and stop cleanup must not advance this clock.
+        run = base / "remote/echo-bridge/private/run"
+        if (os.environ.get("FAKE_UID") != "9999" and (base / "stale-observed").exists()
+                and not (base / "stale-expired").exists() and not (run / "stop").exists()):
+            clock = base / "clock"
+            clock.write_text(str(int(clock.read_text()) + 20))
+            (base / "stale-expired").touch()
     return 0
 
 
