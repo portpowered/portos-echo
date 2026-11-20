@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       release_bundle:
-        description: Exercise the delivered Linux installer against bundled-shell fixtures
+        description: Exercise the native release asset build and bundled shell
         type: boolean
         required: true
 permissions:
@@ -12,40 +12,42 @@ jobs:
   delivery:
     if: inputs.release_bundle
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Build the prebuilt Linux installer
-        env:
-          ECHO_SETUP_RELEASE_VERSION: '0.1.0'
+      - name: Provision the release host targets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64-posix
+          rustup target add --toolchain 1.100.0 x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
+      - name: Cross-build native release installers and assemble the controlled bundle
         run: |
           python3 - <<'PY'
+          import os
           import subprocess
           import sys
           import tempfile
           from pathlib import Path
           sys.path.insert(0, 'tests')
           from test_release_kit import PACK
-          with tempfile.TemporaryDirectory(prefix='echo-release-probe-', dir='/tmp') as work:
-              subprocess.run(['cargo', 'build', '--locked', '-p', 'echo-setup', '--bin', 'echo-setup'],
-                             env=PACK.build_environment(Path(work)), check=True)
+          with tempfile.TemporaryDirectory(prefix='echo-native-release-', dir='/tmp') as temp:
+              work = Path(temp)
+              env = PACK.build_environment(work)
+              installers = PACK.build_installers(work, '0.2.0', env)
+              inputs = work / 'android-fixtures'
+              inputs.mkdir()
+              leaves = ('codex-app-server', 'cacert.pem', 'LICENSE', 'NOTICE', 'echo-bridge', 'screen.apk')
+              for name in leaves:
+                  (inputs / name).write_text('synthetic Android release input ' + name)
+              out = Path('dist')
+              out.mkdir()
+              head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+              PACK.assemble(out, '0.2.0', head, 'b' * 40, inputs, inputs / 'echo-bridge', inputs / 'screen.apk',
+                            {'licenses/ca/MPL-2.0.txt': b'fixture CA license', 'licenses/ca/NOTICE': b'fixture CA notice'},
+                            installers)
           PY
-      - name: Run artifact journey with synthetic Android payload
-        run: |
-          python3 - <<'PY'
-          import shutil
-          import sys
-          from pathlib import Path
-          sys.path.insert(0, 'tests')
-          from test_release_kit import ReleaseBox
-          with ReleaseBox() as box:
-              shutil.copyfile('target/debug/echo-setup', box.installer)
-              windows = box.assets / 'echo-setup-0.1.0-windows-x86_64.exe'
-              windows.write_bytes(b'MZ' + bytes(58) + b'\x40\x00\x00\x00PE\x00\x00\x64\x86')
-              box.rehash()
-              shutil.copytree(box.assets, 'dist')
-          PY
-          python3 tests/test_release_kit.py --assets dist
+      - name: Consume the prebuilt release assets
+        run: python3 tests/test_release_kit.py --assets dist
 
