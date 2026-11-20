@@ -63,7 +63,7 @@ snapshot; UTC does not establish the user's local time zone.";
 /// Built-in delegated runner instructions, unchanged by the file migration.
 pub const RUNNER_INSTRUCTIONS: &str = "Client audio bridge
 
-For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Report what changed in one short sentence, or state the failure or uncertainty without repeating the action. If the tool says to relink Port OS, relay that instruction.";
+For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction.";
 
 /// The app server's `RealtimeVoice` values at the pinned rust-v0.160.0 schema.
 /// `default` is ours: it omits the field so the app server picks its voice.

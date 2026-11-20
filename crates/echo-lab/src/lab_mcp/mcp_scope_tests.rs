@@ -249,17 +249,29 @@ async fn t3_portos_full_grant_resolves_and_controls_only_twin_room() {
     .await
     .unwrap();
     let room: Value = serde_json::from_str(found["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(room["groups"][0]["id"], control()["arguments"]["id"]);
-    assert_eq!(room["groups"][0]["messages"], json!(["power/turn-off"]));
-    let controlled: Value = drive(h.request("tools/call", control()).await.json()).await.unwrap();
+    let mut action = control();
+    action["arguments"]["waitForResult"] = json!(true);
+    assert_eq!(room["results"][0]["id"], action["arguments"]["id"]);
+    assert_eq!(room["results"][0]["messages"], json!(["power/turn-off"]));
     assert_eq!(
-        controlled["result"],
-        json!({"content":[{"type":"text","text":"{\"status\":\"accepted\"}"}],"isError":false})
+        room["results"][0]["members"],
+        json!([{"endpointId":"light-a","name":"Twin one"},{"endpointId":"light-b","name":"Twin two"}])
+    );
+    let controlled: Value = drive(h.request("tools/call", action.clone()).await.json())
+        .await
+        .unwrap();
+    assert_eq!(controlled["result"]["isError"], false);
+    let receipt: Value = serde_json::from_str(controlled["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        receipt,
+        json!({"id":"request-twin-room","status":"SUCCEEDED","errors":[],
+            "results":[{"targetId":"light-a","routeId":"route-light-a"},{"targetId":"light-b","routeId":"route-light-b"}],
+            "deadline":"2026-11-19T00:00:30Z","syncDeadlineSeconds":30})
     );
     assert_eq!(
         h.fixture.home_snapshot().unwrap(),
         json!({"calls":[
-        {"name":"group_query","arguments":{"query":{"name":{"eq":"Twin room"},"role":{"eq":"ROOM"}}}},control()
+        {"name":"group_query","arguments":{"query":{"name":{"eq":"Twin room"},"role":{"eq":"ROOM"}}}},action
     ],"lights_on":[false,false],"plug_on":true})
     );
     h.fixture.shutdown().await.unwrap();

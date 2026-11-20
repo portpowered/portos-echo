@@ -40,6 +40,7 @@ pub enum HomeFault {
     NoRoom,
     AmbiguousRoom,
     ControlUnavailable,
+    ControlPending,
 }
 
 struct State {

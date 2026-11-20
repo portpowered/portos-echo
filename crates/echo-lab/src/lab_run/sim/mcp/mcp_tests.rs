@@ -113,6 +113,19 @@ async fn t3_portos_control_service_error_never_retries_or_claims_success() {
     assert_eq!(observed["home"]["calls"].as_array().unwrap().len(), 2);
 }
 
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge, offline Codex pin and hassmic-host"]
+async fn t3_portos_pending_light_control_reports_submission_once() {
+    let observed = portos_journey(Journey::Twin, Some(HomeFault::ControlPending)).await;
+    assert_eq!(
+        observed["reply"],
+        "I sent the request to turn off the Twin room lights."
+    );
+    assert_eq!(observed["home"]["lights_on"], json!([true, true]));
+    assert_eq!(observed["home"]["plug_on"], true);
+    assert_eq!(observed["home"]["calls"].as_array().unwrap().len(), 2);
+}
+
 async fn portos_journey(journey: Journey, fault: Option<HomeFault>) -> Value {
     let options = options("m5-twin-room-lights");
     let mut session = Session::default().for_journey(journey);

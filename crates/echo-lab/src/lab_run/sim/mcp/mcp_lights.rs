@@ -154,19 +154,27 @@ impl Session {
 
 fn action(readonly: bool) -> Value {
     json!({"id":if readonly {"light-a"} else {"group-twin-room"},"message":"power/turn-off",
-        "payload":{},"idempotencyKey":"twin-room-off-1","waitForResult":false})
+        "payload":{},"idempotencyKey":"twin-room-off-1","waitForResult":!readonly})
 }
 
 fn expected_home(readonly: bool, fault: Option<HomeFault>, control: &Value) -> Value {
     let calls = if readonly {
         let query = json!({"name":"endpoint_query","arguments":{"query":{"name":{"eq":"Twin one"}}}});
-        vec![query.clone(), query]
+        let reading = json!({"name":"endpoint_query","arguments":{"query":{"name":{"eq":"Twin one"}},
+            "expand":["power"],"forceDeviceAttributeQuery":true}});
+        vec![query, reading]
     } else {
         let mut calls = vec![json!({"name":"group_query","arguments":{
             "query":{"name":{"eq":"Twin room"},"role":{"eq":"ROOM"}}
         }})];
-        if matches!(fault, None | Some(HomeFault::ControlUnavailable)) {
+        if !matches!(fault, Some(HomeFault::NoRoom | HomeFault::AmbiguousRoom)) {
             calls.push(json!({"name":"control","arguments":control}));
+        }
+        if fault.is_none() {
+            calls.push(
+                json!({"name":"endpoint_query","arguments":{"query":{"id":{"in":["light-a","light-b"]}},
+                "expand":["power"],"forceDeviceAttributeQuery":true}}),
+            );
         }
         calls
     };

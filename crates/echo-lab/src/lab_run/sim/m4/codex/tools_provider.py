@@ -202,11 +202,14 @@ class PortosDelegation(McpDelegation):
         expected = function_tools(self.tools)
         assert body['tools'] == expected, f"Port OS dynamic catalog mismatch: {body['tools']!r}"
         assert body['model'] == 'gpt-5.4', 'Port OS wrong delegated model'
-        assert 'Lights need no extra confirmation.' in body.get('instructions', ''), 'missing default runner guidance'
+        instructions = body.get('instructions', '')
+        assert 'Lights need no extra confirmation.' in instructions, 'missing default runner guidance'
+        assert 'Describe a queued or pending action as submitted and stop.' in instructions, 'missing pending guidance'
+        assert "read the resolved lights' fresh power state once" in instructions, 'missing power confirmation guidance'
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
         index = len(self.models)
         assert self.reply is None, 'Port OS model request after final reply'
-        assert index <= (3 if self.readonly else 2), 'Port OS model retry'
+        assert index <= 3, 'Port OS model retry'
         assert len(outputs) == index and outputs[:max(0, index - 1)] == self.outputs, 'Port OS tool history mismatch'
         self.outputs = outputs
         for i, output in enumerate(outputs):
@@ -225,27 +228,43 @@ class PortosDelegation(McpDelegation):
             name, args = ('endpoint_query', endpoint_query) if self.readonly else (
                 'group_query', {'query': {'name': {'eq': 'Twin room'}, 'role': {'eq': 'ROOM'}}})
         elif index == 1:
-            discovery = self.content(outputs[0])
-            if not self.readonly and len(discovery['groups']) != 1:
-                text = 'Which Twin room did you mean?' if discovery['groups'] else 'I could not find Twin room.'
+            discovered = self.content(outputs[0])['results']
+            if not self.readonly and len(discovered) != 1:
+                text = 'Which Twin room did you mean?' if discovered else 'I could not find Twin room.'
                 return self.final_reply(index, text)
-            target = discovery['endpoints'][0] if self.readonly else discovery['groups'][0]
-            if not self.readonly:
-                assert target['name'] == 'Twin room' and target['endpointIds'] == ['light-a', 'light-b']
-            name, args = 'control', {'id': target['id'], 'message': target['messages'][0], 'payload': {},
-                                     'idempotencyKey': 'twin-room-off-1', 'waitForResult': False}
+            target, = discovered
+            if self.readonly:
+                message = target['interfaces'][0]['messages'][0]['id']
+            else:
+                assert target['name'] == 'Twin room' and target['role'] == 'ROOM'
+                assert self.members(target) == ['light-a', 'light-b']
+                message = target['messages'][0]
+            name, args = 'control', {'id': target['id'], 'message': message, 'payload': {},
+                                     'idempotencyKey': 'twin-room-off-1', 'waitForResult': not self.readonly}
         elif self.readonly and index == 2:
             assert json.loads(outputs[1]['output']) == [{'type': 'text', 'text':
                 'mcp.scope_insufficient: control requires message:send. Link Echo to Port OS again to control devices.'}]
-            name, args = 'endpoint_query', endpoint_query
+            name, args = 'endpoint_query', {**endpoint_query, 'expand': ['power'], 'forceDeviceAttributeQuery': True}
+        elif not self.readonly and index == 2:
+            if outputs[1]['output'] == 'tool execution failed':
+                return self.final_reply(index, 'I could not confirm the Twin room lights were turned off.')
+            receipt = self.content(outputs[1])
+            if receipt['status'] in ('QUEUED', 'IN_PROGRESS'):
+                assert receipt['results'] == [] and receipt['errors'] == [], 'unexpected pending outcome'
+                return self.final_reply(index, 'I sent the request to turn off the Twin room lights.')
+            members = self.members(self.content(outputs[0])['results'][0])
+            assert receipt['status'] == 'SUCCEEDED' and receipt['errors'] == [], 'unexpected dispatch outcome'
+            assert sorted(item['targetId'] for item in receipt['results']) == members, 'wrong dispatch targets'
+            name, args = 'endpoint_query', {'query': {'id': {'in': members}},
+                                           'expand': ['power'], 'forceDeviceAttributeQuery': True}
         else:
+            readings = self.content(outputs[2])['results']
             if self.readonly:
-                assert self.content(outputs[2])['endpoints'][0]['power'] is True, 'read-only state changed'
+                assert self.power(readings) == {'light-a': 'ON'}, 'read-only state changed'
                 reply = 'Link Echo to Port OS again to control devices.'
-            elif outputs[1]['output'] == 'tool execution failed':
-                reply = 'I could not confirm the Twin room lights were turned off.'
             else:
-                assert self.content(outputs[1]) == {'status': 'accepted'}, 'Port OS control was not accepted'
+                members = self.members(self.content(outputs[0])['results'][0])
+                assert self.power(readings) == dict.fromkeys(members, 'OFF'), 'lights are not confirmed off'
                 reply = 'The Twin room lights are off.'
             return self.final_reply(index, reply)
         return {'type': 'function_call', 'id': f'home-fc-{index}', 'call_id': f'home-call-{index}',
@@ -255,6 +274,18 @@ class PortosDelegation(McpDelegation):
         self.reply = text
         return {'type': 'message', 'id': f'home-msg-{index}', 'role': 'assistant', 'status': 'completed',
                 'content': [{'type': 'output_text', 'text': text, 'annotations': []}]}
+
+    @staticmethod
+    def members(room):
+        return sorted(member['endpointId'] for member in room['members'])
+
+    @staticmethod
+    def power(readings):
+        return {device['id']: attribute['value']['value']
+                for device in readings for interface in device['interfaces']
+                if interface['name'] == 'port1/systems/zero/capability-interfaces/power'
+                for attribute in interface['attributes']
+                if attribute['name'] == 'powerState' and attribute['freshness'] == 'FRESH'}
 
     @staticmethod
     def content(output):

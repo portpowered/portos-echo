@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 
 const ROOM: &str = "group-twin-room";
 const MESSAGE: &str = "power/turn-off";
+const LIGHTS: [(&str, &str); 2] = [("light-a", "Twin one"), ("light-b", "Twin two")];
+const POWER: &str = "port1/systems/zero/capability-interfaces/power";
 const TOOLS: [(&str, &str); 11] = [
     ("control", "message:send"),
     ("endpoint_query", "endpoint:read"),
@@ -54,17 +56,9 @@ impl Home {
         self.calls.push(json!({"name":name,"arguments":args}));
         match name {
             "group_query" => self.group_query(),
-            "endpoint_query" | "endpoint_show" => content(
-                &json!({"endpoints":[
-                    {"id":"light-a","name":"Twin one","power":self.lights_on,"messages":[MESSAGE]},
-                    {"id":"light-b","name":"Twin two","power":self.lights_on,"messages":[MESSAGE]},
-                    {"id":"plug-unrelated","name":"Unrelated plug","power":true}
-                ]}),
-                false,
-            ),
+            "endpoint_query" | "endpoint_show" => self.endpoint_query(args),
             "control" if args["id"] == ROOM && args["message"] == MESSAGE && args["payload"] == json!({}) => {
-                self.lights_on = false;
-                content(&json!({"status":"accepted"}), false)
+                self.control(args["waitForResult"] == true)
             }
             "guide" => content(
                 &json!({"text":"Resolve the room, copy its ID and message, then control once."}),
@@ -76,18 +70,64 @@ impl Home {
 
     fn group_query(&self) -> Value {
         use super::HomeFault::{AmbiguousRoom, NoRoom};
-        let room = json!({"id":ROOM,"name":"Twin room","messages":[MESSAGE],"endpointIds":["light-a","light-b"]});
+        let members = LIGHTS.map(|(id, name)| json!({"endpointId":id,"name":name}));
         let groups = match self.fault {
             Some(NoRoom) => vec![],
-            Some(AmbiguousRoom) => vec![
-                room,
-                json!({"id":"group-twin-other","name":"Twin room",
-                "messages":[MESSAGE],"endpointIds":[]}),
-            ],
-            _ => vec![room],
+            Some(AmbiguousRoom) => vec![room(ROOM, &members), room("group-twin-other", &[])],
+            _ => vec![room(ROOM, &members)],
         };
-        content(&json!({"groups":groups}), false)
+        content(&json!({"results":groups}), false)
     }
+
+    fn endpoint_query(&self, args: &Value) -> Value {
+        let name_filter = args["query"]["name"]["eq"].as_str();
+        let id_filter = args["query"]["id"]["in"].as_array();
+        let fresh_power = args["forceDeviceAttributeQuery"] == true && args["expand"] == json!(["power"]);
+        let results: Vec<_> = LIGHTS
+            .map(|(id, name)| (id, name, "LIGHT", self.lights_on))
+            .into_iter()
+            .chain([("plug-unrelated", "Unrelated plug", "PLUG", true)])
+            .filter(|(id, name, _, _)| {
+                name_filter.is_none_or(|wanted| wanted == *name)
+                    && id_filter.is_none_or(|wanted| wanted.iter().any(|item| item == *id))
+            })
+            .map(|(id, name, kind, on)| {
+                let attributes = if fresh_power {
+                    json!([{"name":"powerState","freshness":"FRESH","retrievability":"RETRIEVABLE",
+                        "autoUpdateFrequency":"REALTIME","sampledAt":"2026-11-19T00:00:00Z",
+                        "value":{"value":if on {"ON"} else {"OFF"}}}])
+                } else {
+                    json!([])
+                };
+                json!({"id":id,"etag":"fixture","name":{"type":"TEXT","value":name},"type":kind,
+                    "enablement":"ENABLED","interfaces":[{"name":POWER,"version":"1.0",
+                        "messages":[{"id":MESSAGE,"name":"turn-off"}],"attributes":attributes}]})
+            })
+            .collect();
+        content(&json!({"results":results}), false)
+    }
+
+    fn control(&mut self, wait: bool) -> Value {
+        let completed = wait && self.fault != Some(super::HomeFault::ControlPending);
+        let results = if completed {
+            self.lights_on = false;
+            LIGHTS
+                .map(|(id, _)| json!({"targetId":id,"routeId":format!("route-{id}")}))
+                .to_vec()
+        } else {
+            Vec::new()
+        };
+        content(
+            &json!({"id":"request-twin-room","status":if completed {"SUCCEEDED"} else {"QUEUED"},
+                "results":results,"errors":[],"deadline":"2026-11-19T00:00:30Z","syncDeadlineSeconds":30}),
+            false,
+        )
+    }
+}
+
+fn room(id: &str, members: &[Value]) -> Value {
+    json!({"id":id,"name":"Twin room","role":"ROOM","etag":"fixture","enablement":"ENABLED",
+        "members":members,"messages":[MESSAGE],"parentPath":[],"children":[],"controllers":[],"providers":[]})
 }
 
 pub(super) async fn request(State(shared): State<Shared>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
@@ -158,10 +198,20 @@ pub(super) fn catalog() -> Vec<Value> {
 fn schema(name: &str) -> Value {
     let mut schema = json!({"type":"object","properties":{},"additionalProperties":false});
     match name {
-        "group_query" | "endpoint_query" | "endpoint_show" => {
+        "group_query" => {
             let predicate = json!({"type":"object","additionalProperties":false,"properties":{"eq":{"type":"string"}}});
             schema["properties"]["query"] = json!({"type":"object","additionalProperties":false,
                 "properties":{"name":predicate,"role":predicate}});
+        }
+        "endpoint_query" | "endpoint_show" => {
+            schema["properties"] = json!({
+                "query":{"type":"object","additionalProperties":false,"properties":{
+                    "name":{"type":"object","additionalProperties":false,"properties":{"eq":{"type":"string"}}},
+                    "id":{"type":"object","additionalProperties":false,"properties":{"in":{"type":"array","items":{"type":"string"}}}}
+                }},
+                "expand":{"type":"array","items":{"type":"string"}},
+                "forceDeviceAttributeQuery":{"type":"boolean"}
+            });
         }
         "control" => {
             schema["properties"] = json!({"id":{"type":"string"},"message":{"type":"string"},

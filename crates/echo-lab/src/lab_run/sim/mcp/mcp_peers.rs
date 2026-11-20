@@ -142,8 +142,9 @@ fn validate_home(value: &Value, journey: Journey, fault: Option<HomeFault>) -> R
         Some(HomeFault::NoRoom) => (2, "I could not find Twin room."),
         Some(HomeFault::AmbiguousRoom) => (2, "Which Twin room did you mean?"),
         Some(HomeFault::ControlUnavailable) => (3, "I could not confirm the Twin room lights were turned off."),
+        Some(HomeFault::ControlPending) => (3, "I sent the request to turn off the Twin room lights."),
         None if journey == Journey::ReadOnly => (4, "Link Echo to Port OS again to control devices."),
-        None => (3, "The Twin room lights are off."),
+        None => (4, "The Twin room lights are off."),
     };
     let models: Vec<_> = (0..requests).map(|outputs|
         json!({"tools":["control","endpoint_query","group_query","extend_session","end_session"],"outputs":outputs})
