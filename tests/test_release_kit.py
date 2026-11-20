@@ -19,6 +19,7 @@ import tarfile
 import tempfile
 from unittest.mock import patch
 
+from release_asset_cases import companion_cases, path_diagnostic_cases
 from test_echo_install import Sandbox, fake_adb, require, SENTINEL
 from test_screen_pack_assets import exclusion_cases, generate, independent_bundle, push_cases
 
@@ -69,7 +70,7 @@ def executable(path, command):
 
 
 class ReleaseBox(Sandbox):
-    def __init__(self, wget=False, template=None):
+    def __init__(self, wget=False, *, template=None, companion=None):
         super().__init__()
         self.assets = self.root / "assets"
         self.assets.mkdir()
@@ -87,7 +88,8 @@ class ReleaseBox(Sandbox):
                                      .replace(b"@ECHO_VERSION@", self.version.encode()))
             (self.assets / "SHA256SUMS").write_text(f"{sha(payload.read_bytes())}  {self.installer.name}\n")
         else:
-            assemble_fixture(self.assets, self.files["bridge"], self.files["ca"], (payload, payload), template)
+            assemble_fixture(self.assets, self.files["bridge"], self.files["ca"], (payload, payload),
+                             template, companion)
         for name in ("sha256sum", "chmod", "python3"):
             executable(self.tools / name, shlex.quote(shutil.which(name)))
         executable(self.tools / ("wget" if wget else "curl"), entry + ("wget" if wget else "curl"))
@@ -116,11 +118,12 @@ class ReleaseBox(Sandbox):
 def asset_names(version):
     return (f"echo-{version}-armv7.tar.gz", f"echo-setup-{version}-linux-x86_64",
             f"echo-setup-{version}-windows-x86_64.exe", "install.sh", "install.ps1",
-            f"template-{version}.screenpack.tar.gz")
+            f"template-{version}.screenpack.tar.gz", "companion-0.1.0.screenpack.tar.gz")
 
 
-def assemble_fixture(assets, bridge, apk, installers, template, private_binary=None):
+def assemble_fixture(assets, bridge, apk, installers, template, companion, private_binary=None):
     shutil.copyfile(template, assets / template.name)
+    shutil.copyfile(companion, assets / companion.name)
     codex = assets.parent / "codex"
     codex.mkdir()
     for name in ("codex-app-server", "cacert.pem", "LICENSE", "NOTICE"):
@@ -135,6 +138,7 @@ def assemble_fixture(assets, bridge, apk, installers, template, private_binary=N
 def verify_delivered_assets(assets):
     from test_release_delivery import delivered_journey
 
+    require((assets / "companion-0.1.0.screenpack.tar.gz").is_file(), "current dist requires Companion")
     manifest = independent_bundle(assets, PACK, asset_names)
     release = manifest["version"]
     _, linux_name, windows_name, *_ = asset_names(release)
@@ -246,8 +250,8 @@ def interruption_case():
     print("F32 Linux bootstrap: interruption cleanup=PASS")
 
 
-def package_cases(template):
-    path_diagnostic_cases(template)
+def package_cases(template, companion, witness):
+    path_diagnostic_cases(PACK, partial(assemble_fixture, template=template, companion=companion))
     native_flags_cases()
     for value in ("0.1.0", "0.0.0-dev.abc123"):
         require(PACK.version(value) == value, "version changed")
@@ -257,8 +261,9 @@ def package_cases(template):
             raise AssertionError("invalid version accepted")
         except ValueError:
             pass
-    with ReleaseBox(template=template) as box:
+    with ReleaseBox(template=template, companion=companion) as box:
         independent_bundle(box.assets, PACK, asset_names)
+        companion_cases(box.assets, PACK, witness)
         checksum_set_cases(box)
         for marker in (b"/home/example/private/file", b"C:\\Users\\example\\private", b"-----BEGIN PRIVATE KEY-----"):
             require(PACK.PRIVATE.search(marker) is not None, "private marker missed")
@@ -275,7 +280,7 @@ def package_cases(template):
     for name, content, update in (("licenses/extra.txt", b"/home/example/private/file", True),
                                   ("licenses/secret.txt", b"seed", True),
                                   ("bin/cacert.pem", b"changed", False)):
-        with ReleaseBox(template=template) as box:
+        with ReleaseBox(template=template, companion=companion) as box:
             with tarfile.open(box.archive) as bundle:
                 files = {m.name: bundle.extractfile(m).read() for m in bundle.getmembers()}
             files[name] = content
@@ -317,45 +322,20 @@ def checksum_set_cases(box):
             pass
         else:
             raise AssertionError("invalid asset checksum set accepted")
-
-
-def path_diagnostic_cases(template):
-    paths = (b'/home/example/.cargo/registry/src/index/public-1.0/src/lib.rs',
-             b'/Users/example/.rustup/toolchains/stable/lib/source.rs',
-             b'C:\\Users\\example\\private\\file')
-    counts = PACK.private_path_counts(b'\x00' + b'\x00'.join(paths) + b'\x00' + paths[0])
-    require(counts == {"registry": 2, "toolchain": 1, "checkout": 0, "other": 1,
-                       "current_home": 0, "current_cargo": 0, "current_rustup": 0, "external": 4},
-            "sanitized path category counts differ")
-    require(all(count == 0 for count in PACK.private_path_counts(b'/data/local/echo/home/prompts').values()),
-            "device home classified as a host path")
-    for boundary in (b'\v', b'\f', b'='):
-        require(PACK.private_path_counts(boundary + paths[0])["registry"] == 1,
-                "path delimiter changed classification")
-    with patch.object(PACK.Path, "home", return_value=Path("/home/example")), \
-            patch.object(PACK, "ROOT", Path("/home/example/source")):
-        flags = b'-ffile-prefix-map=/home/example=/build/user -ffile-prefix-map=/home/example/source=/build/echo\x00'
-        mapped = PACK.private_path_counts(flags * 2)
-        require(mapped["checkout"] == 2 and mapped["other"] == 2 and mapped["current_home"] == 4
-                and mapped["external"] == 0, "remap arguments misclassified as external paths")
-    with tempfile.TemporaryDirectory() as temporary:
-        assets = Path(temporary) / "assets"
-        assets.mkdir()
-        fixture = assets.parent / "public"
-        fixture.write_bytes(b"synthetic public input")
+    setup = box.assets / "install.ps1"
+    content = setup.read_bytes()
+    sums.write_text("\n".join(rows) + "\n")
+    for invalid in (None, content + b"tampered"):
+        if invalid is None:
+            setup.unlink()
+        else:
+            setup.write_bytes(invalid)
         try:
-            assemble_fixture(assets, fixture, fixture, (fixture, fixture), template, b'\x00'.join(paths))
-            raise AssertionError("private binary accepted")
-        except PACK.BundleError:
-            pass
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/package-dist.py"), "verify",
-                                 str(assets / "echo-0.1.0-armv7.tar.gz"), "--checksums",
-                                 str(assets / "SHA256SUMS")], capture_output=True, text=True)
-        require(result.returncode == 1 and result.stdout == "", "private binary CLI status differs")
-        expected = dict(counts, registry=1, external=3)
-        require(result.stderr == "release-kit: rejected path categories " + json.dumps(expected, sort_keys=True)
-                + "\nrelease-kit: private path or key in bin/codex-app-server\n", "diagnostic leaked or counts differ")
-    print("U-PACK sanitized path diagnostics: PASS")
+            PACK.verify(box.archive, sums)
+        except PACK.BundleError as error:
+            require(str(error) == "asset checksum mismatch", "setup rejection diagnostic differs")
+        else:
+            raise AssertionError("missing or tampered setup asset accepted")
 
 
 def native_metadata_case(work):
@@ -436,6 +416,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path)
     parser.add_argument("--configure-native", action="store_true")
+    parser.add_argument("--companion-witness-out", type=Path)
     args = parser.parse_args()
     require(sys.platform == "linux", "Linux is required for this runtime witness")
     if args.configure_native:
@@ -445,13 +426,18 @@ def main():
         verify_delivered_assets(args.assets.resolve())
         return
     with tempfile.TemporaryDirectory(prefix="template-witness-") as temporary:
-        generated = Path(temporary) / "generated"
+        work = Path(temporary)
+        generated = work / "generated"
         generate(generated)
         push_cases(generated)
         template = generated / "template-0.1.0.screenpack.tar.gz"
         exclusion_cases(template, PACK)
+        stage = work / "stage"
+        stage.mkdir()
+        companion = PACK.stage_companion(stage, work)
         with ThreadPoolExecutor(max_workers=4) as pool:
-            cases = (partial(package_cases, template), happy_cases, integrity_cases, usage_cases, interruption_case)
+            cases = (partial(package_cases, template, companion, args.companion_witness_out),
+                     happy_cases, integrity_cases, usage_cases, interruption_case)
             list(pool.map(lambda function: function(), cases))
     print("release-kit tests: integrity=PASS bootstrap=PASS privacy=PASS")
 

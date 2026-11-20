@@ -387,6 +387,31 @@ the bridge. A download test must serve the generated archive from a
 local HTTPS peer trusted exclusively by the configured CA; never use public
 release downloads in tests.
 
+## Companion pack
+
+Companion 0.1.0 is an optional cel-shaded character with poses for Echo's screen
+states and a happy emote. Codex image generation produced an original reference
+sheet and edited it into the pose sheets. The checked-in PNGs and their
+[generation prompts](../scripts/packs/companion/prompts.md) are the source for
+the offline video build.
+
+On Linux with Python 3 and ffmpeg (libvpx-vp9 and libx264 enabled):
+
+```sh
+pack_root=$(mktemp -d)
+sh scripts/make-companion-screenpack.sh --version 0.1.0 --out "$pack_root/generated"
+cd "$pack_root/generated"
+sha256sum --check companion-0.1.0.screenpack.tar.gz.sha256
+```
+
+For a released build, use the HTTPS URL for
+`companion-0.1.0.screenpack.tar.gz` and that file's digest from the same
+release's `SHA256SUMS`. Enter both in **Settings > Load screen packs**. After
+installation, select **companion 0.1.0**, choose **Use screen pack**, then
+choose **Back** to see the new appearance. The release example pins template as
+the default. To roll back, select the installed template or **Built-in
+appearance**, save with **Use screen pack**, and choose **Back**.
+
 ## Local push
 
 On a Linux authoring host with Python 3 and adb:

@@ -14,15 +14,19 @@ import tempfile
 import tomllib
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?"
+COMPANION_VERSION = "0.1.0"
+COMPANION_ASSET = f"companion-{COMPANION_VERSION}.screenpack.tar.gz"
 REQUIRED = {
     "bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem", "apk/echo-screen.apk",
-    "scripts/echo-install.sh", "scripts/echo-install-release.sh", "scripts/echo-install-setup.sh", "examples/bridge.echo.toml", "examples/prompts/voice.md",
+    "scripts/echo-install.sh", "examples/bridge.echo.toml", "examples/prompts/voice.md",
     "examples/prompts/runner.md", "LICENSE", "NOTICE", "licenses/codex/LICENSE",
     "licenses/codex/NOTICE", "licenses/ca/MPL-2.0.txt", "licenses/ca/NOTICE",
 }
+SETUP_SCRIPTS = {"scripts/echo-install-release.sh", "scripts/echo-install-setup.sh"}
 PERSONAL = re.compile(rb'''(?:^|[\s\x00"'=])(?:/home/[^/\s]+/|/Users/[^/\s]+/|[A-Za-z]:[\\/]Users[\\/])''', re.I)
 PRIVATE = re.compile(PERSONAL.pattern + rb"|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", re.I)
 
@@ -72,7 +76,7 @@ def safe_name(name):
     path = PurePosixPath(name)
     return (name == str(path) and not path.is_absolute() and ".." not in path.parts
             and re.fullmatch(r"[A-Za-z0-9_./-]+", name)
-            and (name in REQUIRED or name == "MANIFEST" or name.startswith("licenses/"))
+            and (name in REQUIRED or name in SETUP_SCRIPTS or name == "MANIFEST" or name.startswith("licenses/"))
             and not re.search(r"token|secret|credential|auth\.json|hassmic", name, re.I))
 
 
@@ -103,49 +107,67 @@ def config_projection(data, release, template_sha):
     return (text[:table.start()] + changed + text[table.end():]).encode()
 
 
-def template_payload(archive, release):
+def screen_pack_payload(archive, name, release):
     """Read the separate generated asset without extracting it into the bundle."""
-    if archive.name != f"template-{release}.screenpack.tar.gz" or archive.stat().st_size > 65 * 1024**2:
-        raise BundleError("invalid template archive")
+    if (archive.name != f"{name}-{release}.screenpack.tar.gz" or archive.is_symlink()
+            or not archive.is_file() or archive.stat().st_size > 65 * 1024**2):
+        raise BundleError(f"invalid {name} archive")
     with tarfile.open(archive, "r:gz") as source:
         members = source.getmembers()
         if (len(members) > 64 or sum(m.size for m in members) > 64 * 1024**2
                 or any(not m.isfile() or m.name != PurePosixPath(m.name).name
                        or not re.fullmatch(r"[a-z][a-z0-9-]*\.(?:json|png|webm|mp4)", m.name)
                        or m.size > 8 * 1024**2 for m in members)):
-            raise BundleError("invalid template members")
+            raise BundleError(f"invalid {name} members")
         files = {m.name: source.extractfile(m).read() for m in members}
     if len(files) != len(members):
-        raise BundleError("duplicate template member")
+        raise BundleError(f"duplicate {name} member")
     manifest = json.loads(files["pack.json"])
-    if (manifest.get("format") != 1 or manifest.get("name") != "template"
-            or manifest.get("version") != release or manifest["character"]["rest"] != "rest.png"):
-        raise BundleError("invalid template identity")
+    character = manifest.get("character") if isinstance(manifest, dict) else None
+    if (not isinstance(character, dict) or character.get("rest") != "rest.png" or "rest.png" not in files
+            or manifest.get("format") != 1 or manifest.get("name") != name
+            or manifest.get("version") != release):
+        raise BundleError(f"invalid {name} identity")
     return files
 
 
-def exclude_template(files, binaries):
+def exclude_screen_pack(name, files, binaries):
     for data in files.values():
         if any(data in binary for binary in binaries):
-            raise BundleError("template data embedded in executable or JavaScript")
+            raise BundleError(f"{name} data embedded in executable or JavaScript")
+
+
+def exclude_companion_from_apk(files, data):
+    if any(content in data for content in files.values()):
+        raise BundleError("companion data embedded in APK")
+    apk = io.BytesIO(data)
+    if zipfile.is_zipfile(apk):
+        with zipfile.ZipFile(apk) as source:
+            for member in source.infolist():
+                entry = source.read(member)
+                if any(content in entry for content in files.values()):
+                    raise BundleError("companion data embedded in APK")
 
 
 def installer_names(release):
     return (f"echo-setup-{release}-linux-x86_64", f"echo-setup-{release}-windows-x86_64.exe")
 
 
-def checksum_assets(archive):
+def checksum_assets(archive, has_setup=True):
     release = archive.name.removeprefix("echo-").removesuffix("-armv7.tar.gz")
-    return (archive.name, *installer_names(release), "install.sh", "install.ps1",
-            f"template-{release}.screenpack.tar.gz")
+    template = f"template-{release}.screenpack.tar.gz"
+    if has_setup:
+        return (archive.name, *installer_names(release), "install.sh", "install.ps1", template)
+    return (archive.name, "install.sh", template)
 
 
 def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, installers):
     """Only explicit runtime inputs and license texts can enter the archive."""
     version(release)
     template = out / f"template-{release}.screenpack.tar.gz"
-    art = template_payload(template, release)
-    exclude_template(art, (bridge.read_bytes(),))
+    companion = out / COMPANION_ASSET
+    if companion.is_symlink() or not companion.is_file() or companion.stat().st_size > 65 * 1024**2:
+        raise BundleError("invalid companion asset membership")
     payload = {
         "bin/echo-bridge": bridge.read_bytes(),
         "bin/codex-app-server": (codex / "codex-app-server").read_bytes(),
@@ -187,11 +209,11 @@ def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, i
         wrapper = (ROOT / "scripts" / name).read_bytes().replace(b"@ECHO_VERSION@", release.encode())
         (out / name).write_bytes(wrapper)
     (out / "SHA256SUMS").write_text("".join(
-        f"{digest((out / name).read_bytes())}  {name}\n" for name in checksum_assets(archive)))
-    verify(archive, out / "SHA256SUMS")
+        f"{digest((out / name).read_bytes())}  {name}\n" for name in (*checksum_assets(archive), COMPANION_ASSET)))
+    verify(archive, out / "SHA256SUMS", require_companion=True)
 
 
-def verify(archive, checksums):
+def verify(archive, checksums, *, require_companion=False):
     with tarfile.open(archive, "r:gz") as source:
         members = source.getmembers()
         names = [member.name for member in members]
@@ -209,6 +231,8 @@ def verify(archive, checksums):
         raise BundleError("invalid bundle identity")
     if not REQUIRED <= payload.keys() or manifest["files"] != {name: digest(data) for name, data in payload.items()}:
         raise BundleError("manifest membership or digest mismatch")
+    if SETUP_SCRIPTS & payload.keys() and not SETUP_SCRIPTS <= payload.keys():
+        raise BundleError("incomplete setup runtime")
     components = manifest["components"]
     if set(components) != {"echo_bridge", "codex", "echo_screen", "ca_bundle"}:
         raise BundleError("invalid component provenance")
@@ -227,35 +251,58 @@ def verify(archive, checksums):
             if binary:
                 print("release-kit: rejected path categories " + json.dumps(private_path_counts(data), sort_keys=True), file=sys.stderr)
             raise BundleError("private path or key in " + name)
-        if not binary:
-            if re.search(rb'(?:Bearer\s+[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,})', data):
-                raise BundleError("credential-shaped payload")
-    expected = {name: digest(path.read_bytes()) for name in checksum_assets(archive)
-                for path in (archive if name == archive.name else checksums.parent / name,)}
+        if not binary and re.search(rb'(?:Bearer\s+[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,})', data):
+            raise BundleError("credential-shaped payload")
     template = checksums.parent / f"template-{release}.screenpack.tar.gz"
-    art = template_payload(template, release)
-    exclude_template(art, (payload["bin/echo-bridge"],))
+    art = screen_pack_payload(template, "template", release)
+    exclude_screen_pack("template", art, (payload["bin/echo-bridge"],))
     config = tomllib.loads(payload["examples/bridge.echo.toml"].decode())
-    if config["screen"]["packs"] != [{"url": f"https://github.com/portpowered/portos-echo/releases/download/v{release}/{template.name}", "sha256": expected[template.name]}]:
+    if config["screen"]["packs"] != [{"url": f"https://github.com/portpowered/portos-echo/releases/download/v{release}/{template.name}", "sha256": digest(template.read_bytes())}]:
         raise BundleError("template config pin mismatch")
-    actual = {}
-    for line in checksums.read_text().splitlines():
-        match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
-        if not match or match[2] in actual:
-            raise BundleError("invalid checksums")
-        actual[match[2]] = match[1]
-    if actual != expected:
-        raise BundleError("asset checksum mismatch")
-    for name in ("install.sh", "install.ps1"):
+    has_setup = SETUP_SCRIPTS <= payload.keys()
+    companion = verify_asset_digests(archive, checksums, release, has_setup, require_companion)
+    if companion is not None:
+        art = screen_pack_payload(companion, "companion", COMPANION_VERSION)
+        exclude_screen_pack("companion", art, (payload["bin/echo-bridge"],))
+        exclude_companion_from_apk(art, payload["apk/echo-screen.apk"])
+    for name in (("install.sh", "install.ps1") if has_setup else ("install.sh",)):
         if PRIVATE.search((checksums.parent / name).read_bytes()):
             raise BundleError("private path in installer")
-    for name in installer_names(release):
+    for name in installer_names(release) if has_setup else ():
         data = (checksums.parent / name).read_bytes()
         if PERSONAL.search(data):
             print("release-kit: rejected path categories " + json.dumps(private_path_counts(data), sort_keys=True), file=sys.stderr)
             raise BundleError("private path in " + name)
     print("release-kit: verified binary paths checkout=0 current_home=0", flush=True)
     return manifest
+
+
+def verify_asset_digests(archive, checksums, release, has_setup, require_companion):
+    actual = {}
+    for line in checksums.read_text().splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
+        if not match or match[2] in actual:
+            raise BundleError("invalid checksums")
+        actual[match[2]] = match[1]
+    names = checksum_assets(archive, has_setup)
+    if not has_setup and any(os.path.lexists(checksums.parent / name)
+                             for name in (*installer_names(release), "install.ps1")):
+        raise BundleError("invalid setup asset membership")
+    companion = checksums.parent / COMPANION_ASSET
+    if require_companion or COMPANION_ASSET in actual or os.path.lexists(companion):
+        if (not has_setup or companion.is_symlink() or not companion.is_file() or COMPANION_ASSET not in actual
+                or companion.stat().st_size > 65 * 1024**2):
+            raise BundleError("invalid companion asset membership")
+        names += (COMPANION_ASSET,)
+    else:
+        companion = None
+    paths = {name: archive if name == archive.name else checksums.parent / name for name in names}
+    if actual.keys() != paths.keys() or any(path.is_symlink() or not path.is_file()
+                                            for path in paths.values()):
+        raise BundleError("asset checksum mismatch")
+    if actual != {name: digest(path.read_bytes()) for name, path in paths.items()}:
+        raise BundleError("asset checksum mismatch")
+    return companion
 
 
 def license_inputs(codex_work, env):
@@ -357,6 +404,15 @@ def build_installers(work, release, env):
     return artifacts
 
 
+def stage_companion(stage, work, env=None):
+    generated = work / "companion"
+    subprocess.run(["sh", "scripts/make-companion-screenpack.sh", "--version", COMPANION_VERSION,
+                    "--out", str(generated)], cwd=ROOT, env=env, check=True)
+    archive = stage / COMPANION_ASSET
+    shutil.copyfile(generated / archive.name, archive)
+    return archive
+
+
 def build(args):
     if sys.platform != "linux":
         raise BundleError("Linux is required")
@@ -368,15 +424,20 @@ def build(args):
     # Native source and build paths must stay outside a user's TMPDIR/home.
     with tempfile.TemporaryDirectory(prefix="echo-release-", dir="/tmp") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
         work = Path(work)
+        stage = Path(stage)
         env = build_environment(work)
         installers = build_installers(work, args.version, env)
         generated = work / "template"
         subprocess.run(["sh", "scripts/make-template-screenpack.sh", "--version", args.version,
                         "--out", str(generated)], cwd=ROOT, env=env, check=True)
         template = generated / f"template-{args.version}.screenpack.tar.gz"
-        shutil.copyfile(template, Path(stage) / template.name)
+        shutil.copyfile(template, stage / template.name)
+        companion = stage_companion(stage, work, env)
         screen_bundle(env)
-        exclude_template(template_payload(template, args.version), ((ROOT / "web/screen/dist/screen.js").read_bytes(),))
+        javascript = (ROOT / "web/screen/dist/screen.js").read_bytes()
+        for archive, name, pack_version in ((template, "template", args.version),
+                                            (companion, "companion", COMPANION_VERSION)):
+            exclude_screen_pack(name, screen_pack_payload(archive, name, pack_version), (javascript,))
         # build-echo deliberately builds offline. Provision this fresh cache,
         # rather than relying on CI setup's separate default Cargo home.
         subprocess.run(["cargo", "+1.100.0", "fetch", "--locked"], cwd=ROOT, env=env, check=True)
@@ -392,7 +453,7 @@ def build(args):
         print("release-kit: collecting license texts", flush=True)
         licenses = license_inputs(work / "codex-work", env)
         print("release-kit: assembling and verifying bundle", flush=True)
-        assemble(Path(stage), args.version, source, identity[0], work / "codex-out",
+        assemble(stage, args.version, source, identity[0], work / "codex-out",
                  target / "armv7-linux-androideabi/release/echo-bridge", ROOT / "target/echo-screen/echo-screen.apk",
                  licenses, installers)
         os.rename(stage, out)
@@ -408,6 +469,7 @@ def main():
     verifier = commands.add_parser("verify")
     verifier.add_argument("archive", type=Path)
     verifier.add_argument("--checksums", required=True, type=Path)
+    verifier.add_argument("--require-companion", action="store_true")
     commands.add_parser("screen-proof")
     args = parser.parse_args()
     if args.command == "build":
@@ -419,13 +481,13 @@ def main():
         if args.command == "build":
             build(args)
         elif args.command == "verify":
-            verify(args.archive, args.checksums)
+            verify(args.archive, args.checksums, require_companion=args.require_companion)
         else:
             screen_proof()
     except BundleError as error:
         print("release-kit: " + str(error), file=sys.stderr)
         return 1
-    except (OSError, ValueError, KeyError, tarfile.TarError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, tarfile.TarError, zipfile.BadZipFile, subprocess.SubprocessError):
         print("release-kit: build, input, integrity or privacy check failed", file=sys.stderr)
         return 1
     if args.command != "screen-proof":

@@ -118,7 +118,7 @@ def independent_bundle(assets, pack, asset_names):
         'sha256': expected[template.name]}], 'template release pin differs')
     require(manifest['components']['ca_bundle']['sha256'] == hashlib.sha256(files['bin/cacert.pem']).hexdigest(),
             'CA provenance differs')
-    pack.verify(archive, assets / 'SHA256SUMS')
+    pack.verify(archive, assets / 'SHA256SUMS', require_companion=True)
     return manifest
 
 
@@ -126,13 +126,13 @@ def exclusion_cases(archive, pack):
     art = independent_template(archive)
     for name, data in art.items():
         try:
-            pack.exclude_template(art, (b'synthetic-executable', b'prefix' + data + b'suffix'))
+            pack.exclude_screen_pack('template', art, (b'synthetic-executable', b'prefix' + data + b'suffix'))
         except pack.BundleError as error:
             require(str(error) == 'template data embedded in executable or JavaScript',
                     'media exclusion diagnostic differs')
         else:
             raise AssertionError('embedded generated payload accepted: ' + name)
-    pack.exclude_template(art, (b'synthetic-executable', b'synthetic-javascript'))
+    pack.exclude_screen_pack('template', art, (b'synthetic-executable', b'synthetic-javascript'))
     print('U-PACK complete generated payload exclusion: PASS')
 
 
