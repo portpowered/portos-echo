@@ -27,6 +27,7 @@ const TOOLS: [(&str, &str); 11] = [
 pub(super) struct Home {
     calls: Vec<Value>,
     pub(super) scope_denials: Vec<Value>,
+    pub(super) fault: Option<super::HomeFault>,
     lights_on: bool,
 }
 
@@ -35,6 +36,7 @@ impl Default for Home {
         Self {
             calls: Vec::new(),
             scope_denials: Vec::new(),
+            fault: None,
             lights_on: true,
         }
     }
@@ -51,13 +53,7 @@ impl Home {
         }
         self.calls.push(json!({"name":name,"arguments":args}));
         match name {
-            "group_query" => content(
-                &json!({"groups":[{
-                    "id":ROOM,"name":"Twin room","messages":[MESSAGE],
-                    "endpointIds":["light-a","light-b"]
-                }]}),
-                false,
-            ),
+            "group_query" => self.group_query(),
             "endpoint_query" | "endpoint_show" => content(
                 &json!({"endpoints":[
                     {"id":"light-a","name":"Twin one","power":self.lights_on,"messages":[MESSAGE]},
@@ -76,6 +72,21 @@ impl Home {
             ),
             _ => content(&json!({"error":"unsupported synthetic operation"}), true),
         }
+    }
+
+    fn group_query(&self) -> Value {
+        use super::HomeFault::{AmbiguousRoom, NoRoom};
+        let room = json!({"id":ROOM,"name":"Twin room","messages":[MESSAGE],"endpointIds":["light-a","light-b"]});
+        let groups = match self.fault {
+            Some(NoRoom) => vec![],
+            Some(AmbiguousRoom) => vec![
+                room,
+                json!({"id":"group-twin-other","name":"Twin room",
+                "messages":[MESSAGE],"endpointIds":[]}),
+            ],
+            _ => vec![room],
+        };
+        content(&json!({"groups":groups}), false)
     }
 }
 
@@ -119,10 +130,17 @@ pub(super) async fn request(State(shared): State<Shared>, headers: HeaderMap, Js
         "notifications/initialized" => return StatusCode::ACCEPTED.into_response(),
         "tools/list" => json!({"tools":TOOLS.iter().map(|(name,_)| json!({
             "name":name,"description":"Synthetic local home tool",
-            "inputSchema":{"type":"object","properties":{},"additionalProperties":true}
+            "inputSchema":{"type":"object","properties":{},"additionalProperties":false}
         })).collect::<Vec<_>>()}),
         "tools/call" if TOOLS.iter().any(|(tool, _)| *tool == name) => {
-            state.home.call(name, &body["params"]["arguments"])
+            let arguments = &body["params"]["arguments"];
+            if name == "control" && state.home.fault == Some(super::HomeFault::ControlUnavailable) {
+                if state.home.calls.len() < 128 {
+                    state.home.calls.push(json!({"name":name,"arguments":arguments}));
+                }
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            state.home.call(name, arguments)
         }
         _ => {
             return Json(json!({"jsonrpc":"2.0","id":body["id"],

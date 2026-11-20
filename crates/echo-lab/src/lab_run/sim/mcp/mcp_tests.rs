@@ -1,10 +1,11 @@
 //! T3 component with delivered bridge/pin/media/OAuth/MCP and controlled Wyoming.
 use super::*;
+use echo_spoof_mcp::Options as SpoofOptions;
 
 #[tokio::test]
 async fn t3_m5_codex_provider_quiesces_and_closes_without_admitting_a_call() {
     let python = "python3";
-    let provider = super::super::mcp_peers::Peers::bind(python, Journey::Lifecycle)
+    let provider = super::super::mcp_peers::Peers::bind(python, Journey::Lifecycle, None)
         .await
         .unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -80,8 +81,42 @@ fn options(scenario: &str) -> Options {
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge, offline Codex pin and hassmic-host"]
 async fn t3_portos_read_only_delegation_replies_to_relink_without_retry() {
+    let observed = portos_journey(Journey::ReadOnly, None).await;
+    assert_eq!(observed["reply"], "Link Echo to Port OS again to control devices.");
+    assert_eq!(observed["health"], "relink_for_scope");
+    use std::io::Write as _;
+    writeln!(std::io::stdout(), "{}", observed["diagnostics"][0]).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge, offline Codex pin and hassmic-host"]
+async fn t3_portos_missing_or_ambiguous_rooms_do_not_dispatch_control() {
+    for (fault, reply) in [
+        (HomeFault::NoRoom, "I could not find Twin room."),
+        (HomeFault::AmbiguousRoom, "Which Twin room did you mean?"),
+    ] {
+        let observed = portos_journey(Journey::Twin, Some(fault)).await;
+        assert_eq!(observed["reply"], reply);
+        assert_eq!(observed["home"]["calls"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge, offline Codex pin and hassmic-host"]
+async fn t3_portos_control_service_error_never_retries_or_claims_success() {
+    let observed = portos_journey(Journey::Twin, Some(HomeFault::ControlUnavailable)).await;
+    assert_eq!(
+        observed["reply"],
+        "I could not confirm the Twin room lights were turned off."
+    );
+    assert_eq!(observed["home"]["lights_on"], json!([true, true]));
+    assert_eq!(observed["home"]["calls"].as_array().unwrap().len(), 2);
+}
+
+async fn portos_journey(journey: Journey, fault: Option<HomeFault>) -> Value {
     let options = options("m5-twin-room-lights");
-    let mut session = Session::default().for_journey(Journey::ReadOnly);
+    let mut session = Session::default().for_journey(journey);
+    session.home_fault = fault;
     let root = tempfile::tempdir().unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(24), async {
         session.start(&options, root.path()).await?;
@@ -91,12 +126,9 @@ async fn t3_portos_read_only_delegation_replies_to_relink_without_retry() {
     })
     .await;
     let cleanup = session.close().await;
-    let observed = result.expect("Port OS readonly journey timed out").unwrap();
-    assert_eq!(cleanup, Ok(()));
-    assert_eq!(observed["reply"], "Link Echo to Port OS again to control devices.");
-    assert_eq!(observed["health"], "relink_for_scope");
+    assert_eq!(cleanup, Ok(()), "Port OS journey {result:?}");
     assert_eq!(session.released, ["bridge", "provider", "authorization", "host"]);
-    println!("{}", observed["diagnostics"][0]);
+    result.expect("Port OS control journey timed out").unwrap()
 }
 
 fn assert_closed(session: &Session) {

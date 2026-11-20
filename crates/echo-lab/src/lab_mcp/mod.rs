@@ -34,6 +34,14 @@ pub enum Approval {
     Denied,
 }
 
+/// Controlled alternatives at the synthetic home service boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HomeFault {
+    NoRoom,
+    AmbiguousRoom,
+    ControlUnavailable,
+}
+
 struct State {
     issuer: String,
     resource: String,
@@ -170,6 +178,18 @@ impl Fixture {
     /// A poisoned fixture returns a fixed local error.
     pub fn scope_denials(&self) -> std::io::Result<Vec<Value>> {
         Ok(self.shared.lock().map_err(|_| invalid())?.home.scope_denials.clone())
+    }
+
+    /// Select the home fixture response before device authorization.
+    /// # Errors
+    /// Rejects changes after a link attempt.
+    pub fn set_home_fault(&self, fault: HomeFault) -> std::io::Result<()> {
+        let mut state = self.shared.lock().map_err(|_| invalid())?;
+        if state.device != 0 {
+            return Err(invalid());
+        }
+        state.home.fault = Some(fault);
+        Ok(())
     }
 
     #[must_use]

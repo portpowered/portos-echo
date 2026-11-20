@@ -107,7 +107,7 @@ pub(super) async fn link(session: &mut Session, mock: &Mock, directory: &Path) {
     session.prompt(mock).await;
     tokio::time::advance(Duration::from_secs(5)).await;
     session.advance(5000).await;
-    completed(&link.await.unwrap(), 0, "MCP linked\n", "");
+    completed(&link.await.unwrap(), 0, &linked_output(&mock.base), "");
     assert_eq!(
         bridge_wire_screen::state(&mut session.screen).await,
         json!({"state":"ready","message":"Echo Live ready"})

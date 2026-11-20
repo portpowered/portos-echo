@@ -71,7 +71,7 @@ async fn t3_portos_generic_forbidden_and_unauthorized_preserve_auth_behavior() {
         relink(owner).await;
         let host = tools.host.as_ref().unwrap();
         for mode in ["forbidden", "unknown", "unauthorized"] {
-            let key = format!("1:t1:u1:{mode}");
+            let key = format!("1:t1:u{}:{mode}", mode.len());
             assert_eq!(
                 host.call_tool("control", json!({"mode":mode}), &key).await,
                 Err(ToolError::Unauthorized)
@@ -82,10 +82,10 @@ async fn t3_portos_generic_forbidden_and_unauthorized_preserve_auth_behavior() {
             );
         }
         assert_eq!(
-            host.call_tool("endpoint_query", json!({}), "1:t1:u1:query").await,
+            host.call_tool("endpoint_query", json!({}), "1:t1:u5:query").await,
             Err(ToolError::Unauthorized)
         );
-        assert!(scope_rows(&path).is_empty());
+        assert_eq!(scope_rows(&path).len(), 0);
         tools.close().await;
         assert_eq!(
             peer.finish().await,
@@ -106,7 +106,7 @@ async fn relink(owner: &bridge_mcp::Runtime) {
 }
 
 async fn health_response(health: &Health) -> Value {
-    reqwest::get(format!("http://{}/healthz", health.address))
+    reqwest::get(format!("http://127.0.0.1:{}/healthz", health.address.port()))
         .await
         .unwrap()
         .json()

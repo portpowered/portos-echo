@@ -199,11 +199,13 @@ class PortosDelegation(McpDelegation):
             'content': [{'type': 'input_text', 'text': self.utterance}]}}
 
     def respond(self, body):
-        assert body['tools'] == function_tools(self.tools), 'Port OS exact dynamic catalog mismatch'
+        expected = function_tools(self.tools)
+        assert body['tools'] == expected, f"Port OS dynamic catalog mismatch: {body['tools']!r}"
         assert body['model'] == 'gpt-5.4', 'Port OS wrong delegated model'
         assert 'Lights need no extra confirmation.' in body.get('instructions', ''), 'missing default runner guidance'
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
         index = len(self.models)
+        assert self.reply is None, 'Port OS model request after final reply'
         assert index <= (3 if self.readonly else 2), 'Port OS model retry'
         assert len(outputs) == index and outputs[:max(0, index - 1)] == self.outputs, 'Port OS tool history mismatch'
         self.outputs = outputs
@@ -224,6 +226,9 @@ class PortosDelegation(McpDelegation):
                 'group_query', {'query': {'name': {'eq': 'Twin room'}, 'role': {'eq': 'ROOM'}}})
         elif index == 1:
             discovery = self.content(outputs[0])
+            if not self.readonly and len(discovery['groups']) != 1:
+                text = 'Which Twin room did you mean?' if discovery['groups'] else 'I could not find Twin room.'
+                return self.final_reply(index, text)
             target = discovery['endpoints'][0] if self.readonly else discovery['groups'][0]
             if not self.readonly:
                 assert target['name'] == 'Twin room' and target['endpointIds'] == ['light-a', 'light-b']
@@ -236,14 +241,20 @@ class PortosDelegation(McpDelegation):
         else:
             if self.readonly:
                 assert self.content(outputs[2])['endpoints'][0]['power'] is True, 'read-only state changed'
-                self.reply = 'Link Echo to Port OS again to control devices.'
+                reply = 'Link Echo to Port OS again to control devices.'
+            elif outputs[1]['output'] == 'tool execution failed':
+                reply = 'I could not confirm the Twin room lights were turned off.'
             else:
                 assert self.content(outputs[1]) == {'status': 'accepted'}, 'Port OS control was not accepted'
-                self.reply = 'The Twin room lights are off.'
-            return {'type': 'message', 'id': f'home-msg-{index}', 'role': 'assistant', 'status': 'completed',
-                    'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
+                reply = 'The Twin room lights are off.'
+            return self.final_reply(index, reply)
         return {'type': 'function_call', 'id': f'home-fc-{index}', 'call_id': f'home-call-{index}',
                 'name': name, 'arguments': json.dumps(args), 'status': 'completed'}
+
+    def final_reply(self, index, text):
+        self.reply = text
+        return {'type': 'message', 'id': f'home-msg-{index}', 'role': 'assistant', 'status': 'completed',
+                'content': [{'type': 'output_text', 'text': text, 'annotations': []}]}
 
     @staticmethod
     def content(output):

@@ -4,8 +4,8 @@ use std::{
 };
 
 use echo_contracts::secret::Secret;
-use echo_lab::lab_mcp::{Approval, Fixture, LinkCounts, Observations};
-use echo_spoof_mcp::{Options as SpoofOptions, Spoof};
+use echo_lab::lab_mcp::{Approval, Fixture, HomeFault, LinkCounts, Observations};
+use echo_spoof_mcp::Spoof;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -25,6 +25,7 @@ pub(super) const EPOCH: u64 = 1_800_000_000;
 #[derive(Default)]
 pub struct Session {
     pub(super) journey: Journey,
+    pub(super) home_fault: Option<HomeFault>,
     pub(super) host: Option<Process>,
     pub(super) bridge: Option<Process>,
     pub(super) fixture: Option<Fixture>,
@@ -183,33 +184,6 @@ impl Session {
             return Err("M5: clock acknowledgment mismatch".into());
         }
         Ok(())
-    }
-
-    async fn start_peers(&mut self, address: SocketAddr, python: &str) -> Result<String, String> {
-        self.fixture = Some(
-            Fixture::bind(EPOCH)
-                .await
-                .map_err(|_| "M5: authorization startup failed")?,
-        );
-        let fixture = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?;
-        self.endpoints.push(endpoint(fixture.base())?);
-        let resource = if self.journey == Journey::Lifecycle {
-            let spoof = Spoof::start_authorized(SpoofOptions::default(), Some(fixture.validator()))
-                .await
-                .map_err(|_| "M5: resource startup failed")?;
-            let url = spoof.url().to_owned();
-            fixture.set_resource(&url).map_err(|_| "M5: resource binding failed")?;
-            self.endpoints.push(endpoint(&url)?);
-            self.spoof = Some(spoof);
-            url
-        } else {
-            format!("{}/mcp", fixture.base())
-        };
-        self.live = Some(super::mcp_peers::Peers::bind(python, self.journey).await?);
-        let origin = self.live.as_ref().ok_or("M5: missing Live fixture")?.origin.clone();
-        self.endpoints.push(endpoint(&origin)?);
-        mcp_wire::configure(&self.directory, address, &resource, self.journey)?;
-        Ok(origin.trim_end_matches('/').into())
     }
 
     fn address(&self, event: &str) -> Result<String, String> {

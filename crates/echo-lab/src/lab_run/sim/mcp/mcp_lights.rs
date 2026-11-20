@@ -1,6 +1,7 @@
 //! Oracle for the installed bridge's local Port OS control journey.
 use super::mcp_session::Session;
 use crate::lab_run::{Step, run_oracles};
+use echo_lab::lab_mcp::HomeFault;
 use serde_json::{Value, json};
 
 const UTTERANCE: &str = "Computer, turn off twin room lights";
@@ -57,7 +58,7 @@ impl Session {
         let home = fixture.home_snapshot().map_err(|_| "M5: home snapshot failed")?;
         let denials = fixture.scope_denials().map_err(|_| "M5: scope observations failed")?;
         let control = action(readonly);
-        if home != expected_home(readonly, &control)
+        if home != expected_home(readonly, self.home_fault, &control)
             || denials
                 != if readonly {
                     vec![json!({"name":"control","arguments":control,"scope":"message:send"})]
@@ -156,15 +157,19 @@ fn action(readonly: bool) -> Value {
         "payload":{},"idempotencyKey":"twin-room-off-1","waitForResult":false})
 }
 
-fn expected_home(readonly: bool, control: &Value) -> Value {
+fn expected_home(readonly: bool, fault: Option<HomeFault>, control: &Value) -> Value {
     let calls = if readonly {
         let query = json!({"name":"endpoint_query","arguments":{"query":{"name":{"eq":"Twin one"}}}});
         vec![query.clone(), query]
     } else {
-        vec![
-            json!({"name":"group_query","arguments":{"query":{"name":{"eq":"Twin room"},"role":{"eq":"ROOM"}}}}),
-            json!({"name":"control","arguments":control}),
-        ]
+        let mut calls = vec![json!({"name":"group_query","arguments":{
+            "query":{"name":{"eq":"Twin room"},"role":{"eq":"ROOM"}}
+        }})];
+        if matches!(fault, None | Some(HomeFault::ControlUnavailable)) {
+            calls.push(json!({"name":"control","arguments":control}));
+        }
+        calls
     };
-    json!({"calls":calls,"lights_on":[readonly,readonly],"plug_on":true})
+    let lights_on = readonly || fault.is_some();
+    json!({"calls":calls,"lights_on":[lights_on,lights_on],"plug_on":true})
 }

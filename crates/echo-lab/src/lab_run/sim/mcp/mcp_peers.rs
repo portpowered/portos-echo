@@ -1,13 +1,54 @@
 //! M5 local V3/Responses service and real media remote, owned across linking.
 use super::super::process::Process;
 use super::mcp_lights::Journey;
+use super::{
+    mcp_session::{EPOCH, Session},
+    mcp_wire::{self, endpoint},
+};
+use echo_lab::lab_mcp::{Fixture, HomeFault};
 use echo_live::LivePeer;
+use echo_spoof_mcp::{Options as SpoofOptions, Spoof};
 use serde_json::{Value, json};
 use tokio::{
     sync::{mpsc, watch},
     task::JoinHandle,
     time::Instant,
 };
+
+impl Session {
+    pub(super) async fn start_peers(&mut self, address: std::net::SocketAddr, python: &str) -> Result<String, String> {
+        self.fixture = Some(
+            Fixture::bind(EPOCH)
+                .await
+                .map_err(|_| "M5: authorization startup failed")?,
+        );
+        let fixture = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?;
+        if let Some(fault) = self.home_fault {
+            fixture
+                .set_home_fault(fault)
+                .map_err(|_| "M5: home fixture setup failed")?;
+        }
+        self.endpoints.push(endpoint(fixture.base())?);
+        let resource = if self.journey == Journey::Lifecycle {
+            let spoof = Spoof::start_authorized(SpoofOptions::default(), Some(fixture.validator()))
+                .await
+                .map_err(|_| "M5: resource startup failed")?;
+            let url = spoof.url().to_owned();
+            fixture.set_resource(&url).map_err(|_| "M5: resource binding failed")?;
+            self.endpoints.push(endpoint(&url)?);
+            self.spoof = Some(spoof);
+            url
+        } else {
+            format!("{}/mcp", fixture.base())
+        };
+        let live = Peers::bind(python, self.journey, self.home_fault).await?;
+        let origin = live.origin.clone();
+        self.live = Some(live);
+        self.endpoints.push(endpoint(&origin)?);
+        mcp_wire::configure(&self.directory, address, &resource, self.journey)?;
+        Ok(origin.trim_end_matches('/').into())
+    }
+}
 
 pub struct Peers {
     pub origin: String,
@@ -17,9 +58,10 @@ pub struct Peers {
     stop: mpsc::Sender<Option<tokio::sync::oneshot::Sender<()>>>,
     task: Option<JoinHandle<Result<Value, String>>>,
     journey: Journey,
+    fault: Option<HomeFault>,
 }
 impl Peers {
-    pub async fn bind(python: &str, journey: Journey) -> Result<Self, String> {
+    pub async fn bind(python: &str, journey: Journey, fault: Option<HomeFault>) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
@@ -45,6 +87,7 @@ impl Peers {
             stop,
             task: Some(task),
             journey,
+            fault,
         })
     }
     pub async fn tick(&mut self) -> Result<(), String> {
@@ -62,7 +105,7 @@ impl Peers {
         if self.journey == Journey::Lifecycle {
             validate(&value)?;
         } else {
-            validate_home(&value, self.journey)?;
+            validate_home(&value, self.journey, self.fault)?;
         }
         Ok(value)
     }
@@ -87,21 +130,22 @@ fn provider_configuration(journey: Journey) -> Value {
         .map(|name| {
             json!({
                 "name":name,"description":"Synthetic local home tool",
-                "inputSchema":{"type":"object","properties":{},"additionalProperties":true}
+                "inputSchema":{"type":"object","properties":{},"additionalProperties":false}
             })
         })
         .collect();
     json!({"portos":if journey == Journey::Twin {"twin"} else {"readonly"},"tools":tools})
 }
 
-fn validate_home(value: &Value, journey: Journey) -> Result<(), String> {
-    let readonly = journey == Journey::ReadOnly;
-    let reply = if readonly {
-        "Link Echo to Port OS again to control devices."
-    } else {
-        "The Twin room lights are off."
+fn validate_home(value: &Value, journey: Journey, fault: Option<HomeFault>) -> Result<(), String> {
+    let (requests, reply) = match fault {
+        Some(HomeFault::NoRoom) => (2, "I could not find Twin room."),
+        Some(HomeFault::AmbiguousRoom) => (2, "Which Twin room did you mean?"),
+        Some(HomeFault::ControlUnavailable) => (3, "I could not confirm the Twin room lights were turned off."),
+        None if journey == Journey::ReadOnly => (4, "Link Echo to Port OS again to control devices."),
+        None => (3, "The Twin room lights are off."),
     };
-    let models: Vec<_> = (0..if readonly { 4 } else { 3 }).map(|outputs|
+    let models: Vec<_> = (0..requests).map(|outputs|
         json!({"tools":["control","endpoint_query","group_query","extend_session","end_session"],"outputs":outputs})
     ).collect();
     let expected = json!({"event":"provider.snapshot","calls":[{
@@ -242,17 +286,15 @@ async fn conversation(
                 }
             }
         };
-        if delegate {
-            process.send(&json!({"transcripts":true})).await?;
-        } else if value.is_none() {
-            process.send(&json!({"complete":true})).await?;
-        }
-        if let Some(value) = value {
-            observation(observe, &value)?;
-            if journey != Journey::Lifecycle && value["event"] == "provider.append" {
-                reply = Some(0);
-                cadence.reset();
-            }
+        let Some(value) = value else {
+            let command = if delegate { "transcripts" } else { "complete" };
+            process.send(&json!({(command):true})).await?;
+            continue;
+        };
+        observation(observe, &value)?;
+        if journey != Journey::Lifecycle && value["event"] == "provider.append" {
+            reply = Some(0);
+            cadence.reset();
         }
     }
 }

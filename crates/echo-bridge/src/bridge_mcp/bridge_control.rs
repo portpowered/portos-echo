@@ -269,7 +269,7 @@ mod tests {
                 expires_at_unix: 1,
             }))
             .unwrap();
-        screen.recv().await.unwrap();
+        assert!(screen.recv().await.is_some());
         let prepared = Prepared {
             settings: settings(&mock, root, owner.address),
             operation: Operation::Link,
@@ -278,11 +278,7 @@ mod tests {
         let mut output = Probe(send, Vec::new());
         let mut operation = Box::pin(prepared.execute(&mut output));
         let prefix = format!("Verification URL: {}/approve\nUser code: TEST-CODE\n", mock.base);
-        let pending = tokio::select! {
-            result = &mut operation => Err(result),
-            value = flushed.recv() => Ok(value),
-        };
-        assert_eq!(pending, Ok(Some(prefix.as_bytes().to_vec())));
+        assert_guidance(operation.as_mut(), &mut flushed, &prefix).await;
         assert_pending(&mock, root, &owner, screen.recv().await).await;
         tokio::time::advance(Duration::from_secs(5)).await;
         let result = operation.await;
@@ -293,6 +289,18 @@ mod tests {
             assert_eq!(state.requests.iter().filter(|r| r.path == "/custom/token").count(), 1);
         }
         owner.close().await;
+    }
+
+    async fn assert_guidance(
+        operation: std::pin::Pin<&mut impl Future<Output = Result<(), Error>>>,
+        flushed: &mut tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+        prefix: &str,
+    ) {
+        let pending = tokio::select! {
+            result = operation => Err(result),
+            value = flushed.recv() => Ok(value),
+        };
+        assert_eq!(pending, Ok(Some(prefix.as_bytes().to_vec())));
     }
 
     async fn assert_pending(
@@ -312,7 +320,7 @@ mod tests {
         };
         let mut refused = Vec::new();
         assert_eq!(competing.execute(&mut refused).await, Err(Error::Control));
-        assert!(refused.is_empty());
+        assert_eq!(refused, b"");
     }
 
     async fn assert_outcome(
