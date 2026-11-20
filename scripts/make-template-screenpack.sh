@@ -219,9 +219,9 @@ def generate(stage, work, version):
     }
     if use_eyes:
         manifest['layout']['slots'] = {
-            'clock': {'x': 44, 'y': 86.5, 'font_scale': 1.1},
+            'clock': {'x': 43.6, 'y': 86.5, 'font_scale': 1.1},
             'date': {'x': 44, 'y': 94, 'font_scale': 0.7},
-            'status': {'x': 68, 'y': 4, 'font_scale': 0.9},
+            'status': {'x': 68, 'y': 21, 'font_scale': 0.9},
             **{state: {'x': 2, 'y': 0} for state in ('link_code', 'approval', 'error')},
         }
         manifest['layout']['stage'] = {
