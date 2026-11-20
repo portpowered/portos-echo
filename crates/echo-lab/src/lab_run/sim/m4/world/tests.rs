@@ -96,7 +96,11 @@ fn assert_trace(trace: &Trace) {
     ])
     .unwrap();
     assert_eq!(
-        crate::lab_run::sim::selectors::check(&trace.records, &selectors, Some("run-1")),
+        crate::lab_run::sim::selectors::check(
+            &super::super::golden::milestone_records(trace),
+            &selectors,
+            Some("run-1")
+        ),
         Ok(())
     );
     for forbidden in ["synthetic-m4-key", "test-pair"] {

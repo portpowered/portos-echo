@@ -151,16 +151,13 @@ impl<'a> M4<'a> {
         if !self.completed {
             return Err("m4: missing completed current-case observations".into());
         }
+        let records = golden::milestone_records(&self.world.trace);
         match step {
-            Step::Trace(values) => selectors::check(
-                &self.world.trace.records,
-                &selectors::parse(values)?,
-                self.run.as_deref(),
-            ),
+            Step::Trace(values) => selectors::check(&records, &selectors::parse(values)?, self.run.as_deref()),
             Step::TraceAbsent(values) => {
                 for value in values {
                     if selectors::check(
-                        &self.world.trace.records,
+                        &records,
                         &selectors::parse(std::slice::from_ref(value))?,
                         self.run.as_deref(),
                     )
