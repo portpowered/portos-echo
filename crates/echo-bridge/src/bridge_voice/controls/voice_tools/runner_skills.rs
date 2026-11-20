@@ -143,6 +143,17 @@ fn front_matter(text: &str) -> Option<(Cow<'_, str>, Cow<'_, str>, &str)> {
     None
 }
 
+fn scalar(value: &str) -> Option<Cow<'_, str>> {
+    let scalar = match value.as_bytes().first()? {
+        b'"' => Cow::Owned(serde_json::from_str::<String>(value).ok()?),
+        b'\'' => Cow::Owned(value.strip_prefix('\'')?.strip_suffix('\'')?.replace("''", "'")),
+        b'|' | b'>' | b'#' => return None,
+        _ => Cow::Borrowed(value.split_once(" #").map_or(value, |(text, _)| text.trim_end())),
+    };
+    (!scalar.trim().is_empty() && !scalar.contains(['\u{2028}', '\u{2029}']) && !scalar.chars().any(char::is_control))
+        .then_some(scalar)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,15 +249,4 @@ mod tests {
             Some(Error::PromptConfig("codex.skills[1]: unknown skill".into()))
         );
     }
-}
-
-fn scalar(value: &str) -> Option<Cow<'_, str>> {
-    let scalar = match value.as_bytes().first()? {
-        b'"' => Cow::Owned(serde_json::from_str::<String>(value).ok()?),
-        b'\'' => Cow::Owned(value.strip_prefix('\'')?.strip_suffix('\'')?.replace("''", "'")),
-        b'|' | b'>' | b'#' => return None,
-        _ => Cow::Borrowed(value.split_once(" #").map_or(value, |(text, _)| text.trim_end())),
-    };
-    (!scalar.trim().is_empty() && !scalar.contains(['\u{2028}', '\u{2029}']) && !scalar.chars().any(char::is_control))
-        .then_some(scalar)
 }

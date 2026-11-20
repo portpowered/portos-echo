@@ -390,10 +390,9 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                 let mut tools = options
                     .delegation
                     .map(|config| {
-                        let mut tools = super::voice_tools::Tools::new(config, options.utc_day.clone())
-                            .with_portos_permissions(grant.permissions.clone());
-                        tools.skills = options.runner_skills.cloned().unwrap_or_default();
-                        tools
+                        super::voice_tools::Tools::new(config, options.utc_day.clone())
+                            .with_portos_permissions(grant.permissions.clone())
+                            .with_runner_skills(options.runner_skills)
                     });
                 let setup = grant.open_tools(view, options, &mut tools);
                 let prepared = tokio::select! {

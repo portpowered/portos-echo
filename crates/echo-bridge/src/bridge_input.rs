@@ -10,7 +10,7 @@ use std::{
 pub struct Settings {
     pub config: Option<echo_config::BridgeConfig>,
     pub startup: Option<Box<echo_config::EffectiveConfig>>,
-    pub(crate) runner_skills: RunnerSkills,
+    pub runner_skills: RunnerSkills,
     pub settings_warning: Option<String>,
     pub sim_clock: bool,
     pub sim_epoch: Option<u64>,

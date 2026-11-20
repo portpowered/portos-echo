@@ -69,15 +69,7 @@ async fn configured_journey(selection: Option<&str>, enabled: bool) {
     let root = directory.path();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let config = configure_skills(root, listener.local_addr().unwrap().port(), selection);
-    let mut provider = Command::new("python3")
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut control = provider.stdin.take().unwrap();
-    let mut observed = BufReader::new(provider.stdout.take().unwrap()).lines();
+    let (mut provider, mut control, mut observed) = start_provider();
     let ready = read_json(&mut observed).await;
     let tools = declarations(enabled);
     if enabled {
@@ -129,6 +121,19 @@ async fn configured_journey(selection: Option<&str>, enabled: bool) {
     peer.close();
     drop(control);
     assert!(provider.wait().await.unwrap().success());
+}
+
+fn start_provider() -> (tokio::process::Child, tokio::process::ChildStdin, Output) {
+    let mut provider = Command::new("python3")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let control = provider.stdin.take().unwrap();
+    let observed = BufReader::new(provider.stdout.take().unwrap()).lines();
+    (provider, control, observed)
 }
 
 async fn acknowledge_cut(satellite: &mut TcpStream) {
