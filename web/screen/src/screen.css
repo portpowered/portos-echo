@@ -133,6 +133,12 @@ button:disabled {
     margin: 0;
     pointer-events: none;
 }
+.screen-pack + [role="status"] {
+    z-index: 1;
+    width: fit-content;
+    background: #101827;
+    pointer-events: none;
+}
 .settings-gear {
     position: fixed;
     top: 12px;
