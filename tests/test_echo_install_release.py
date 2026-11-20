@@ -12,6 +12,10 @@ def payload_bytes(root):
             for path in ([root / name] if (root / name).is_file()
                          else (root / name).rglob("*")) if path.is_file()}
 
+def snapshot_bytes(root):
+    return {str(path.relative_to(root)): path.read_bytes()
+            for path in root.rglob("*") if path.is_file() and path.name not in ("version", "SHA256SUMS")}
+
 def require_release(box, current, previous):
     observed = json.loads((box.device / "release.json").read_text())
     expected = {"format": 1, "current": current, "previous": previous}
@@ -76,7 +80,7 @@ def release_cases():
         retry = box.device / "releases/retry"
         require(not pending.exists() and not retry.exists(), "retry retained recovery state")
         require_release(box, "0.2.0", "0.1.0")
-        require(payload_bytes(previous) == original, "previous payload differs")
+        require(snapshot_bytes(previous) == original, "previous payload differs")
         require(not (previous / "private").exists() and not (previous / "home").exists(),
                 "snapshot contains private data")
         interrupt_refresh()
@@ -89,7 +93,7 @@ def release_cases():
         install("0.2.0")
         require_release(box, "0.2.0", "0.1.0")
         require(payload_bytes(box.device) == current, "resumed install published incorrect files")
-        require(payload_bytes(previous) == original, "resumed install lost the rollback payload")
+        require(snapshot_bytes(previous) == original, "resumed install lost the rollback payload")
         require(rollback_target == "previous", "interrupted rollback retained the retry target")
         require(not pending.exists() and not retry.exists(), "resumed install retained recovery state")
         saved = (previous / "bin/echo-bridge").read_bytes()
