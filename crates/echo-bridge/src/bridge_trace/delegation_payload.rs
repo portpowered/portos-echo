@@ -111,7 +111,13 @@ fn redact_text(text: &str) -> String {
             if !token.is_empty() {
                 bearer = token.eq_ignore_ascii_case("bearer");
             }
-            if credential || jwt(token) || token.starts_with("sk-") {
+            // Periods delimit JWT segments, but can also surround a token in prose.
+            let candidate = token.trim_matches('.');
+            if jwt(candidate) {
+                let prefix = &token[..token.len() - token.trim_start_matches('.').len()];
+                let punctuation = &token[prefix.len() + candidate.len()..];
+                format!("{prefix}[redacted]{punctuation}{suffix}")
+            } else if credential || token.starts_with("sk-") {
                 format!("[redacted]{suffix}")
             } else {
                 part.to_owned()
@@ -145,6 +151,47 @@ mod tests {
             "text":"Bearer [redacted] [redacted]",
             "content":"{\"text\":\"synthetic-result-7\",\"token\":\"[redacted]\"}"})
         );
+    }
+
+    #[test]
+    fn delegation_trace_writer_redacts_jwt_at_punctuation_boundaries() {
+        use crate::bridge_trace::Trace;
+        let root = tempfile::tempdir().unwrap();
+        let secret = "eyJfixture.payload.signature";
+        let input = [("", ""), ("", "."), ("", "..."), ("(", ")."), ("...", "., next")]
+            .map(|(prefix, suffix)| format!("Token: {prefix}{secret}{suffix}"))
+            .join("\n");
+        let expected = json!({"text":input.replace(secret, "[redacted]")});
+        for enabled in [true, false] {
+            let path = root.path().join(enabled.to_string());
+            let mut trace = Trace::open(&path, "api_key").unwrap();
+            if !enabled {
+                trace = trace.with_payloads(false);
+            }
+            for (event, field) in [
+                ("delegation.created", "task"),
+                ("delegation.tool", "request"),
+                ("delegation.tool", "response"),
+                ("delegation.resolved", "answer"),
+            ] {
+                trace
+                    .record(event, Some("run-fixture"), json!({field:{"text":input}}))
+                    .unwrap();
+            }
+            let text = std::fs::read_to_string(path).unwrap();
+            assert!(!text.contains(secret));
+            let mut rows = text.lines().map(|line| serde_json::from_str::<Value>(line).unwrap());
+            for field in FIELDS {
+                let row = rows.next().unwrap();
+                if enabled {
+                    assert_eq!(row[field], expected);
+                } else {
+                    assert!(row.get(field).is_none());
+                    assert!(!text.contains("Token:"));
+                }
+            }
+            assert!(rows.next().is_none());
+        }
     }
 
     #[test]
