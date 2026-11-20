@@ -206,7 +206,7 @@ pub async fn serve_with_settings(
     let (drain, drain_rx) = watch::channel(None);
     let pack_files = Arc::new(packs::Files::default());
     if let Some(host) = &settings {
-        let _ = pack_files.settings.set(host.clone());
+        let _ = pack_files.settings.set(host.downgrade());
     }
     let app = screen_http::router(
         core.clone(),

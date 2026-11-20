@@ -19,7 +19,7 @@ pub(crate) struct Files {
     pub busy: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub jobs: tokio::sync::Mutex<jobs::Jobs>,
     pub requests: std::sync::OnceLock<tokio::sync::mpsc::Sender<jobs::Request>>,
-    pub settings: std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::SettingsRequest>>,
+    pub settings: std::sync::OnceLock<tokio::sync::mpsc::WeakSender<crate::SettingsRequest>>,
 }
 
 const MIB: u64 = 1024 * 1024;
