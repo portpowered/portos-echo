@@ -95,7 +95,7 @@ Linux only; requires adb on PATH and exactly one ready device with hassmic.
   (relative defaults are resolved from the checkout).
 --codex FILE: default $CODEX_ARMV7_OUTPUT_DIR/codex-app-server; otherwise required.
 --ca FILE: default $CODEX_ARMV7_OUTPUT_DIR/cacert.pem; otherwise required.
---force: replace bridge.toml only; existing prompts are always retained.
+--force: replace bridge.toml.
 --purge: also remove private/ and home/ after a verified stop.
 Device root: /data/local/echo-bridge
 Config: private/bridge.toml (0600); private/ and home/ are 0700.
@@ -103,7 +103,8 @@ Config must select [codex] launch = "standalone", binary = "/data/local/echo-bri
 W5 shared-home config: [home] dir = "/data/local/echo-bridge/home";
 all secrets and codex.home stay in private/.
 Supply config compatible with the bridge build; TOML is not validated or rewritten.
-Prompt defaults: examples/prompts/*.md; seed missing home/prompts files only.
+Install suggests setting codex.time_zone when the supplied config lacks a time_zone assignment.
+Prompt defaults: seed missing prompts, refresh recognized release seeds, and keep owner edits.
 Launch: setsid, /data/local/hassmic/runas nobody 3990,inet, held stdin; the hassmic fork repeats it at boot.
 start requires exact echo-bridge NAME from ps -A -o PID,NAME and a new
 hassmic boot.log client connected line within 20 seconds.
@@ -408,6 +409,18 @@ chmod 700 '$device/private/.install-stage' &&
 mv -f '$device/private/.install-stage' '$device/private/launch.sh' &&
 touch '$device/private/bridge.log' && chown '$ECHO_RUN_OWNER' '$device/private/bridge.log' && chmod 600 '$device/private/bridge.log'"
 }
+time_zone_hint() {
+  if awk '/^[[:space:]]*time_zone[[:space:]]*=/ { found=1; exit } END { exit !found }' <"$1"; then
+    return 0
+  fi
+  zone=$(adb shell 'getprop persist.sys.timezone' 2>/dev/null) || zone=''
+  hint='echo-install: set codex.time_zone in bridge.toml for local time answers'
+  case $zone in
+    '' | /* | */ | *//* | *[!A-Za-z0-9_+/-]*) ;;
+    *) hint="$hint (device zone: $zone)" ;;
+  esac
+  printf '%s\n' "$hint" >&2
+}
 if [ "$command_name" = start ]; then
   # Recover only owned state after proving no bridge is currently running.
   stop_bridge
@@ -461,40 +474,16 @@ mkdir -p '$device/bin' '$device/private' '$device/home/prompts' &&
 chown 0:0 '$device' '$device/bin' &&
 chmod 755 '$device' '$device/bin'"
 safe_paths=true
+release_guard_prompts
 migrate_state
 release_recover
 release_snapshot
-# Each copy is staged privately; failed transfers never replace an existing file.
-# The destination leaf is fixed or a restricted prompt basename, never shell input.
-copy_file() {
-  local_file=$1 destination=$2 mode=$3 replace=$4
-  owner=$ECHO_RUN_OWNER
-  case $destination in "$device/bin/"*) owner=0:0 ;; esac
-  run_adb shell "test ! -L '$destination' && { test ! -e '$destination' || test -f '$destination'; }"
-  if [ "$replace" = false ]; then
-    run_adb shell "if test -f '$destination'; then printf retained; else printf missing; fi"
-    if [ "$(awk '{print}' "$log")" = retained ]; then
-      run_adb shell "chmod '$mode' '$destination'"
-      return 0
-    fi
-  fi
-  run_adb shell "test ! -e '$device/private/.install-stage' && test ! -L '$device/private/.install-stage'"
-  run_adb push "$local_file" "$device/private/.install-stage"
-  run_adb shell "chown '$owner' '$device/private/.install-stage' && chmod '$mode' '$device/private/.install-stage' && mv -f '$device/private/.install-stage' '$destination'"
-}
 copy_file "$bridge" "$device/bin/echo-bridge" 755 true
 copy_file "$codex" "$device/bin/codex-app-server" 755 true
 copy_file "$ca" "$device/bin/cacert.pem" 644 true
 copy_file "$config" "$device/private/bridge.toml" 600 "$force"
-prompts=false
-for prompt in "$checkout"/examples/prompts/*.md; do
-  [ -f "$prompt" ] || continue
-  name=${prompt##*/}
-  case $name in *[!a-zA-Z0-9_.-]*) fail 'unsupported prompt filename' ;; esac
-  copy_file "$prompt" "$device/home/prompts/$name" 600 false
-  prompts=true
-done
+release_install_prompts "${release_bundle:-$checkout}/examples/prompts"
 release_publish
 write_launcher
-[ "$prompts" = true ] || printf '%s\n' 'echo-install: prompt defaults absent; skipped'
+LC_ALL=C time_zone_hint "$config"
 printf '%s\n' 'echo-install: installed'

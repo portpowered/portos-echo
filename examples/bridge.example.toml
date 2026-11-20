@@ -12,14 +12,16 @@ credential_file = "credentials/live.json"
 voice = "default"
 session_idle_seconds = 120
 
-# Optional Codex settings (add a table named codex to customize):
+# Optional Codex settings. Uncomment [codex] and the settings you want to use.
 # Base instructions are files in the optional agent home: prompts/runner.md for thread/start,
 # prompts/voice.md for the Live prompt. Each new call appends the same UTC context snapshot.
 # With no home, built-in defaults remain: conversation first, a hand-off as the exception.
 # Optional keys in that same codex table; all default to unset:
+# [codex]
 # delegate_model = "fixture-model"
 # delegate_effort = "low"
-# time_zone = "Europe/Berlin"
+# Sets the operator's IANA time zone for time answers. Run `adb shell getprop persist.sys.timezone` to see the device zone.
+# time_zone = "America/Los_Angeles"
 # delegate_model selects the Codex thread model used by delegated turns.
 # Precedence: delegate_model, codex.model, agent.model, then the pin's default.
 # It does not select the realtime audio model. Unset keeps the pin's default, the measured choice

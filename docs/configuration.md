@@ -223,6 +223,9 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | boundary / yes |
 | `codex.time_zone` | Default unset; IANA-name syntax (nonempty slash components using ASCII letters/digits/underscore/plus/minus). Not a lookup validating that zone exists. | restart / no |
 
+Set `codex.time_zone` to the operator's IANA time zone for time answers.
+Run `adb shell getprop persist.sys.timezone` to see the device zone.
+
 Safe legacy endpoint URLs use HTTPS or literal IPv4 loopback HTTP, with no inline credentials, query or fragment.
 Defaults are independent constants: changing issuer alone does not derive new defaults for other endpoints.
 The public client defaults are defined in

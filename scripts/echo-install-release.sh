@@ -198,3 +198,134 @@ fi"
   release_metadata
   versions=$(cat "${log:?}")
 }
+
+# Each copy is staged privately; failed transfers never replace an existing file.
+# Destinations are fixed or have a restricted prompt basename.
+copy_file() {
+  local_file=$1 destination=$2 mode=$3 replace=$4 digest=${5:-}
+  owner=${ECHO_RUN_OWNER:?}
+  case $destination in "${device:?}/bin/"*) owner=0:0 ;; esac
+  run_adb shell "test ! -L '$destination' && { test ! -e '$destination' || test -f '$destination'; }"
+  if [ "$replace" = false ]; then
+    run_adb shell "if test -f '$destination'; then printf retained; else printf missing; fi"
+    if [ "$(cat "${log:?}")" = retained ]; then
+      run_adb shell "chmod '$mode' '$destination'"
+      return 0
+    fi
+  fi
+  stage_file=$device/private/.install-stage
+  run_adb shell "test ! -e '$stage_file' && test ! -L '$stage_file'"
+  run_adb push "$local_file" "$stage_file"
+  if [ -n "$digest" ]; then
+    run_adb shell "sum=\$(sha256sum < '$stage_file')
+test \"\${sum%% *}\" = '$digest'"
+  fi
+  run_adb shell "chown '$owner' '$stage_file' && chmod '$mode' '$stage_file' && mv -f '$stage_file' '$destination'"
+}
+
+# SHA-256 of the release blobs at 3313a7da, e707712d and 218736fe, per basename.
+historical_prompt_seed() {
+  case $1:$2 in
+    runner:0ab110ae3c6cd256eb01db6862b5d60db67fe2853bb9debb0ae0376a10daca04 | \
+      runner:a18d535d17f290d80c2abb96cc36f4eb55912f7618370cf453224474d7db1bd4 | \
+      runner:2656728cf9edbc981852fa484c49f4b27b90befb4f4421cba11cb61f2967297a | \
+      voice:88821b161b9570cdd9a93663c3dff8fd75c85f633c8c36733eed5cbff5414212 | \
+      voice:cb6f6bb7d6756a758e94beba11f91f5f9baa06f4fd7b27dd1619b73b15d92c34) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+release_guard_prompts() {
+  run_adb shell "seeds='${device:?}/private/prompt-seeds'
+test ! -L \"\$seeds\" && { test ! -e \"\$seeds\" || test -d \"\$seeds\"; } || exit 1
+for name in runner voice; do
+  for leaf in '${device:?}/home/prompts/'\$name.md \"\$seeds/\$name.sha256\"; do
+    test ! -L \"\$leaf\" && { test ! -e \"\$leaf\" || test -f \"\$leaf\"; } || exit 1
+  done
+done"
+}
+
+read_prompt_seed() {
+  # The largest record holds two 64-digit digests and the three field labels.
+  run_adb shell "bytes=0
+if test -f '$seed_record'; then
+  bytes=\$(stat -c %s '$seed_record')
+fi
+if test \"\$bytes\" -gt 0 && test \"\$bytes\" -le 156; then
+  awk -v bytes=\"\$bytes\" '
+    function digest(s) { return s == \"-\" || (length(s) == 64 && s ~ /^[0-9a-f]+\$/) }
+    { size += length(\$0) + 1 }
+    NR == 1 { version = (\$0 == \"version 1\") }
+    NR == 2 && /^applied / { applied = substr(\$0, 9) }
+    NR == 3 && /^pending / { pending = substr(\$0, 9) }
+    END {
+      if (version && NR == 3 && size == bytes && digest(applied) && digest(pending))
+        print applied, pending
+      else print \"- -\"
+    }' '$seed_record'
+else
+  printf '%s\\n' '- -'
+fi"
+  read -r applied pending <"${log:?}"
+}
+
+write_prompt_seed() {
+  run_adb shell "umask 077
+if ! test -d '$seed_dir'; then
+  mkdir '$seed_dir' && chown '${ECHO_RUN_OWNER:?}' '$seed_dir' || exit 1
+fi
+test ! -e '$device/private/.install-stage' && test ! -L '$device/private/.install-stage' || exit 1
+printf '%s\\n' 'version 1' 'applied $1' 'pending $2' > '$device/private/.install-stage'
+chown '$ECHO_RUN_OWNER' '$device/private/.install-stage' &&
+chmod 600 '$device/private/.install-stage' &&
+mv -f '$device/private/.install-stage' '$seed_record'"
+}
+
+reconcile_prompt() (
+  prompt_name=$2
+  prompt_destination=${device:?}/home/prompts/$prompt_name.md
+  seed_dir=$device/private/prompt-seeds
+  seed_record=$seed_dir/$prompt_name.sha256
+  candidate=$(sha256sum <"$1") || fail 'required local input is not readable'
+  candidate=${candidate%% *}
+  read_prompt_seed
+  run_adb shell "
+if test -e '$prompt_destination'; then
+  sha256sum < '$prompt_destination'
+else
+  printf '%s\\n' '-'
+fi"
+  read -r installed _ <"$log"
+  if [ "$installed" = "$candidate" ]; then
+    if [ "$applied" != "$candidate" ] || [ "$pending" != - ]; then
+      write_prompt_seed "$candidate" -
+    fi
+    disposition=current
+  elif [ "$installed" = - ] || [ "$installed" = "$applied" ] ||
+    [ "$installed" = "$pending" ] || historical_prompt_seed "$prompt_name" "$installed"; then
+    # Journal the seed still on disk and the verified replacement before the rename.
+    write_prompt_seed "$installed" "$candidate"
+    copy_file "$1" "$prompt_destination" 600 true "$candidate"
+    write_prompt_seed "$candidate" -
+    disposition=refreshed
+    [ "$installed" != - ] || disposition=seeded
+  else
+    disposition=kept
+  fi
+  printf 'echo-install: prompt %s.md %s\n' "$prompt_name" "$disposition"
+)
+
+release_install_prompts() {
+  prompts=false
+  for prompt in "$1"/*.md; do
+    [ -f "$prompt" ] || continue
+    name=${prompt##*/}
+    case $name in
+      runner.md | voice.md) reconcile_prompt "$prompt" "${name%.md}" ;;
+      *[!a-zA-Z0-9_.-]*) fail 'unsupported prompt filename' ;;
+      *) copy_file "$prompt" "${device:?}/home/prompts/$name" 600 false ;;
+    esac
+    prompts=true
+  done
+  [ "$prompts" = true ] || printf '%s\n' 'echo-install: prompt defaults absent; skipped'
+}

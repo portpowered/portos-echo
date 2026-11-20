@@ -7,6 +7,7 @@ import stat
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE = "/data/local/echo-bridge"
 SENTINEL = "synthetic-private-content-do-not-print"
+TIME_ZONE_HINT = "echo-install: set codex.time_zone in bridge.toml for local time answers"
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -107,10 +108,16 @@ fi
                                + "exec " + shlex.quote(sys.executable) + " -S "
                                + shlex.quote(str(Path(__file__).resolve())) + " --tool " + name + ' "$@"\n')
             wrapper.chmod(0o755)
+        getprop = self.root / "remote-tools/getprop"
+        getprop.write_text('''#!/bin/sh
+[ "$#" -eq 1 ] && [ "$1" = persist.sys.timezone ] || exit 1
+if [ -f "$FAKE_ROOT/time-zone" ]; then cat "$FAKE_ROOT/time-zone"; fi
+''')
+        getprop.chmod(0o755)
         self.tools = self.root / "tools"
         self.tools.mkdir()
         # A closed caller PATH cannot resolve any real adb, even on a developer host.
-        for tool in ("dirname", "cat", "awk", "mktemp", "rm"):
+        for tool in ("dirname", "cat", "awk", "mktemp", "rm", "sha256sum"):
             executable = shutil.which(tool)
             require(executable is not None, "required Linux utility absent")
             wrapper = self.tools / tool
@@ -228,7 +235,8 @@ def modes_and_defaults():
                 result = box.run(["install", "--config", str(box.files["config"])])
             else:
                 result = box.install()
-            require(result.stdout == "echo-install: installed\n" and not result.stderr, "install output differs")
+            require(result.stdout == "echo-install: prompt voice.md seeded\necho-install: installed\n"
+                    and result.stderr == TIME_ZONE_HINT + "\n", "install output differs")
             modes = {"": 0o755, "bin": 0o755, "private": 0o700, "home": 0o700,
                      "bin/echo-bridge": 0o755, "bin/codex-app-server": 0o755,
                      "bin/cacert.pem": 0o644, "private/bridge.toml": 0o600,
@@ -454,11 +462,13 @@ def main(part="1/1"):
     from concurrent.futures import ThreadPoolExecutor
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
     from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, ownership_lifetime_case, setup_operator_cases
-    from test_echo_install_release import release_cases
+    from test_echo_install_prompts import prompt_seed_cases
+    from test_echo_install_release import release_cases, time_zone_hint_cases
     from test_echo_install_status import status_cases
     # CI runs the two groups as parallel jobs (--part 1/2 and 2/2); together they run every case once.
     groups = ((cli_cases, prerequisite_cases, retention_cases, failure_cases, lifecycle_cases, setup_operator_cases),
-              (modes_and_defaults, release_cases, status_cases, nonroot_cases, setup_wake_cases))
+              (modes_and_defaults, release_cases, status_cases, nonroot_cases, setup_wake_cases,
+               prompt_seed_cases, time_zone_hint_cases))
     require(part in ("1/1", "1/2", "2/2"), "--part expects 1/2 or 2/2")
     cases = [case for number, group in enumerate(groups, 1) if part in ("1/1", f"{number}/2") for case in group]
     if part != "2/2":
