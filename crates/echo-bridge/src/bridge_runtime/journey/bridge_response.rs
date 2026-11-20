@@ -65,7 +65,7 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         source.resume_reply()?;
         context.played = false;
         context.speaking = false;
-        context.wait = bridge_timing::Wait::new(context.wait.cutoff);
+        context.wait.next_reply();
     }
     client.end_run().await?;
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -95,7 +95,11 @@ async fn play<L: EchoLink>(
 ) -> Result<bool, Error> {
     let client = context.client;
     let (tx, rx) = client.reply_channel(NonZeroUsize::new(1).ok_or(Error::Audio)?);
-    let play = client.play_with_timeout(bridge_audio::format(24_000), rx, context.wait.playback());
+    let play = client.play_with_timeout(
+        bridge_audio::format(24_000),
+        rx,
+        context.wait.playback(context.kill.settings),
+    );
     let mut failure = None;
     let mut tx = Some(tx);
     let producer = async {
@@ -159,6 +163,32 @@ async fn complete_playback(
 }
 
 impl<L: EchoLink> PlaybackContext<'_, L> {
+    async fn service_delegation(
+        &mut self,
+        source: &Source,
+        call: &mut impl LivePort,
+    ) -> Result<(Option<Instant>, Error), Error> {
+        let timing = self.wait.deadline(source.user_speaking);
+        if timing.1 == Error::SessionCeiling && timing.0.is_some_and(|deadline| Instant::now() >= deadline) {
+            self.delegation.abandon().await;
+            return Err(Error::SessionCeiling);
+        }
+        self.delegation.service(call, self.trace, self.screen).await?;
+        Ok(timing)
+    }
+
+    async fn poll_deadline(&mut self, (deadline, error): (Option<Instant>, Error)) -> Result<Instant, Error> {
+        let now = Instant::now();
+        if deadline.is_some_and(|deadline| now >= deadline) {
+            if error == Error::SessionCeiling {
+                self.delegation.abandon().await;
+            }
+            return Err(error);
+        }
+        let poll = now + Duration::from_millis(20);
+        Ok(deadline.map_or(poll, |deadline| poll.min(deadline)))
+    }
+
     async fn finish_playback(
         &mut self,
         play: impl std::future::Future<Output = Result<PlayOutcome, echo_link::Error>>,
@@ -293,17 +323,7 @@ async fn produce_turns<L: EchoLink>(
         if source.received > received {
             context.wait.media_started();
         }
-        let deadline = match context
-            .wait
-            .deadline(source.user_speaking, completed || source.audio_done)
-        {
-            Err(Error::SessionCeiling) => {
-                context.delegation.abandon().await;
-                return Err(Error::SessionCeiling);
-            }
-            result => result?,
-        };
-        context.delegation.service(call, context.trace, context.screen).await?;
+        let timing = context.service_delegation(source, call).await?;
         context.screen.presentation.expire_emotion()?;
         context.pressure(source, &mut pressure_reported)?;
         let echo_done = source.echo_done(lab);
@@ -314,8 +334,7 @@ async fn produce_turns<L: EchoLink>(
         if completed && source.queue.is_empty() && output.is_empty() {
             return Ok(());
         }
-        let poll = Instant::now() + Duration::from_millis(20);
-        let poll = deadline.map_or(poll, |deadline| poll.min(deadline));
+        let poll = context.poll_deadline(timing).await?;
         tokio::select! {
             biased;
             () = context.delegation.ready() => (),

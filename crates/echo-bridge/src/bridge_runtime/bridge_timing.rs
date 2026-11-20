@@ -40,26 +40,30 @@ impl Wait {
         self.media = true;
     }
 
-    pub fn deadline(&self, user_speaking: bool, draining: bool) -> Result<Option<Instant>, Error> {
-        if draining || self.delegated && !self.media && user_speaking {
-            return Ok(None);
+    pub fn next_reply(&mut self) {
+        if self.delegated {
+            self.response = Instant::now() + RESPONSE;
         }
-        let waiting = self.delegated && !self.media;
-        let deadline = if waiting { self.cutoff } else { self.response };
-        if Instant::now() >= deadline {
-            return Err(if waiting {
-                Error::SessionCeiling
-            } else {
-                Error::Deadline
-            });
-        }
-        Ok(Some(deadline))
+        self.delegated = false;
+        self.media = false;
     }
 
-    pub fn playback(&self) -> Duration {
+    pub fn deadline(&self, user_speaking: bool) -> (Option<Instant>, Error) {
+        if self.delegated && !self.media {
+            ((!user_speaking).then_some(self.cutoff), Error::SessionCeiling)
+        } else {
+            (Some(self.response), Error::Deadline)
+        }
+    }
+
+    pub fn playback(&self, settings: &Settings) -> Duration {
         // The transport is a backstop. The producer, cut and Played retain
         // their phase bounds, with room for audio accepted near the cutoff.
-        let room = self.cutoff.saturating_duration_since(Instant::now());
+        let room = if settings.delegation.is_some() || settings.muse.is_some() {
+            self.cutoff.saturating_duration_since(Instant::now())
+        } else {
+            Duration::ZERO
+        };
         RESPONSE + room + CONTROL * 3
     }
 }

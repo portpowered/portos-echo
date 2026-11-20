@@ -101,7 +101,7 @@ fn check_gadget(call: &Value, id: &str) {
 }
 
 async fn reply(live: &mut bridge_peer::Live, bridge: &mut Process, host: &mut Process, path: &Path, text: &str) {
-    play_reply(live, bridge, host, path, ("muse-d-1", text, "run-1")).await;
+    play_reply(live, bridge, host, path, ("muse-d-1", text, "run-1"), false).await;
 }
 
 async fn play_reply(
@@ -110,6 +110,7 @@ async fn play_reply(
     host: &mut Process,
     path: &Path,
     (delegation, text, run): (&str, &str, &str),
+    clocked: bool,
 ) {
     let commentary = tokio::time::timeout(OBSERVATION_TIMEOUT, live.commentary.recv())
         .await
@@ -119,18 +120,51 @@ async fn play_reply(
         serde_json::from_str::<Value>(&commentary).unwrap(),
         json!({"type":"session.commentary.append","delegation_id":delegation,"text":text})
     );
-    live.events.send("synthetic.muse_audio".into()).await.unwrap();
+    live.send_acknowledged("synthetic.muse_audio".into()).await;
+    if clocked {
+        for _ in 0..250 {
+            if trace(path)
+                .iter()
+                .any(|row| row["event"] == "reply.started" && row["run_id"] == run)
+            {
+                break;
+            }
+            assert!(!playback_tick(bridge, run).await);
+        }
+    }
     wait(path, "reply.started").await;
     live.events
         .send(json!({"type":"response.audio.done"}).to_string())
         .await
         .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
-        json!({"event":"bridge.run_completed","run_id":run})
-    );
+    if clocked {
+        let mut completed = false;
+        for _ in 0..250 {
+            if playback_tick(bridge, run).await {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "no played completion: {:?}", trace(path));
+    } else {
+        assert_eq!(
+            serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
+            json!({"event":"bridge.run_completed","run_id":run})
+        );
+    }
     assert_eq!(host.command("pcm").await, "9600 0");
     assert!(live.commentary.try_recv().is_err());
+}
+
+async fn playback_tick(bridge: &mut Process, run: &str) -> bool {
+    let line = bridge.command(r#"{"action":"advance_clock","milliseconds":20}"#).await;
+    let value: Value = serde_json::from_str(&line).unwrap();
+    if value["event"] == "bridge.run_completed" {
+        assert_eq!(value["run_id"], run);
+        return true;
+    }
+    assert_eq!(value, json!({"event":"bridge.clock_advanced","milliseconds":20}));
+    false
 }
 
 fn check_trace(path: &Path, id: Option<&str>) {

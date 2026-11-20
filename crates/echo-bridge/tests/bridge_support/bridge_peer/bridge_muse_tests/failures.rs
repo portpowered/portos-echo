@@ -190,6 +190,7 @@ async fn muse_run_ceiling_cancels_and_next_wake_plays() {
         &mut rig.host,
         &path,
         ("muse-d-2", "Muse test job completed", "run-2"),
+        true,
     )
     .await;
     assert_eq!(
