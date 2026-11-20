@@ -22,16 +22,22 @@ pub(super) enum Journey {
     LongWait,
     End,
     Dispatch,
+    Limits,
 }
 
-const JOURNEYS: [(&str, Journey); 6] = [
+const JOURNEYS: [(&str, Journey); 7] = [
     ("session-two-turns", Journey::Turns),
     ("session-idle-timeout", Journey::Idle),
     ("session-extend-capped", Journey::Extend),
     ("session-extend-reconnected", Journey::LongWait),
     ("session-end-after-reply", Journey::End),
     ("session-dispatch-waits", Journey::Dispatch),
+    ("session-delegation-limits", Journey::Limits),
 ];
+
+const LONG_ANSWER: &str = "The twelve checks are complete.";
+const LONG_CALLS: usize = 12;
+const LONG_WAIT_MS: u64 = 61_000;
 
 fn journey(id: &str) -> Option<Journey> {
     JOURNEYS
@@ -65,6 +71,11 @@ impl Journey {
                 {"say":"I will keep listening."}
             ]]),
             Self::End => json!([[{"call":"end_session","arguments":{}}, {"say":"Goodbye."}]]),
+            Self::Limits => {
+                let mut steps = vec![json!({"call":"extend_session","arguments":{"seconds":1}}); LONG_CALLS];
+                steps.push(json!({"say":LONG_ANSWER,"wait_for_release":true}));
+                json!([steps])
+            }
         }
     }
 
@@ -73,6 +84,7 @@ impl Journey {
         match self {
             Self::Extend => Some(12),
             Self::LongWait => Some(60),
+            Self::Limits => Some(90),
             _ => None,
         }
     }

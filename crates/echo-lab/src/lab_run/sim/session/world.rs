@@ -34,6 +34,7 @@ pub(super) struct World {
     /// Model requests with the tool outputs the pinned engine returned.
     pub models: Vec<Value>,
     pub endpoints: Vec<std::net::SocketAddr>,
+    wait_for_long_answer: bool,
 }
 
 impl World {
@@ -69,13 +70,23 @@ impl World {
         let provider = Provider::start(python, script).await?;
         let mut command = tokio::process::Command::new(bridge);
         crate::lab_run::sim::m3::configure(&mut command, root, relay.address.port(), &provider.origin)?;
+        self.wait_for_long_answer = journey == super::Journey::Limits;
         if let Some(max) = journey.max() {
             let path = root.join("configured.private/bridge.toml");
             let text = std::fs::read_to_string(&path).map_err(|_| "session: missing configuration")?;
             if !text.contains("session_max_seconds = 600 ") {
                 return Err("session: missing example run cap".into());
             }
-            let text = text.replace("session_max_seconds = 600 ", &format!("session_max_seconds = {max} "));
+            let mut text = text.replace("session_max_seconds = 600 ", &format!("session_max_seconds = {max} "));
+            if self.wait_for_long_answer {
+                let home = root.join("agent-home");
+                std::fs::create_dir(&home).map_err(|_| "session: cannot create settings home")?;
+                std::fs::write(home.join("settings.toml"), "[agent]\nmax_tool_calls = 4\n")
+                    .map_err(|_| "session: cannot seed V1 settings overlay")?;
+                use std::fmt::Write as _;
+                write!(text, "\n[home]\ndir = '{}'\nagent_tools = false\n", home.display())
+                    .map_err(|_| "session: cannot configure settings home")?;
+            }
             std::fs::write(path, text).map_err(|_| "session: cannot configure run cap")?;
         }
         self.relay = Some(relay);
@@ -135,7 +146,7 @@ impl World {
 
     async fn settle(&mut self, index: usize) -> Result<(), String> {
         let mut gates = Gates::new(index);
-        let started = self.epoch();
+        let mut started = self.epoch();
         loop {
             let provider = self.provider.as_mut().ok_or("session: missing provider")?;
             // RTP and transcript gates follow the media cadence; once the reply
@@ -146,6 +157,12 @@ impl World {
             let timing = self.relay.as_ref().ok_or("session: missing wire")?.timing();
             let admitted = index > 0 || (connected(&self.clock) && timing.endpoint_seen());
             let milliseconds = gates.advance(provider, &timing, admitted).await?;
+            if self.wait_for_long_answer {
+                self.release_long_answer().await?;
+                if !self.wait_for_long_answer {
+                    started = self.epoch();
+                }
+            }
             self.step(milliseconds).await?;
             if gates.idle && self.played()? > index {
                 return Ok(());
@@ -154,6 +171,37 @@ impl World {
                 return Err(self.stalled(&format!("reply {index}")));
             }
         }
+    }
+
+    async fn release_long_answer(&mut self) -> Result<(), String> {
+        let provider = self.provider.as_ref().ok_or("session: missing provider")?;
+        if provider.count("waiting") == 0 {
+            self.read_trace()?;
+            if self.trace.records.iter().any(|row| row["event"] == "turn/interrupt") {
+                let applied = self
+                    .trace
+                    .records
+                    .iter()
+                    .filter(|row| row["event"] == "session.tool_receipt")
+                    .count();
+                return Err(format!(
+                    "session: admitted long turn interrupted after {applied} of {} tool effects",
+                    super::LONG_CALLS
+                ));
+            }
+            return Ok(());
+        }
+        // The pin has acknowledged all twelve calls and is waiting on its
+        // last model response. Advance only the bridge's injected clock.
+        self.step(60_000).await?;
+        self.step(super::LONG_WAIT_MS - 60_000).await?;
+        self.provider
+            .as_ref()
+            .ok_or("session: missing provider")?
+            .control(Control::ReleaseGoodbye)
+            .await?;
+        self.wait_for_long_answer = false;
+        Ok(())
     }
 
     async fn step(&mut self, milliseconds: u64) -> Result<(), String> {

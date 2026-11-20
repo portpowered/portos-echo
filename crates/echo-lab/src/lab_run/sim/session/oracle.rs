@@ -25,8 +25,43 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
         Journey::Extend => extend(evidence, &summary, 12_000)?,
         Journey::LongWait => long_wait(evidence, &summary)?,
         Journey::End => end(evidence, &summary)?,
+        Journey::Limits => limits(evidence, &summary)?,
     };
     Ok(json!({"timeline":summary,"journey":detail}))
+}
+
+fn limits(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
+    let count = super::LONG_CALLS;
+    let results = outputs(evidence, count)?;
+    let receipts = receipts(evidence.records, "extend_session");
+    if receipts.len() != count {
+        return Err(format!(
+            "session: expected {count} applied extensions, got {receipts:?}"
+        ));
+    }
+    let mut previous = None;
+    for (receipt, output) in receipts.iter().zip(&results) {
+        let deadline = receipt["deadline_ms"]
+            .as_u64()
+            .ok_or("session: extension omitted its deadline")?;
+        if receipt["outcome"] != "applied"
+            || *output != json!({"deadline_ms":deadline,"capped":false})
+            || previous.is_some_and(|prior| deadline != prior + 1000)
+        {
+            return Err(format!(
+                "session: extension effect and tool result disagree: {receipt} {output}"
+            ));
+        }
+        previous = Some(deadline);
+    }
+    let opened = summary["run_opened_ms"].as_u64().ok_or("session: missing run open")?;
+    let elapsed = last_played(summary)?
+        .checked_sub(opened)
+        .ok_or("session: invalid elapsed time")?;
+    if elapsed < super::LONG_WAIT_MS {
+        return Err(format!("session: long answer played after only {elapsed} ms"));
+    }
+    Ok(json!({"successful_calls":count,"elapsed_to_played_ms":elapsed,"turn":dispatch(evidence, summary)?}))
 }
 
 fn elapsed(records: &[Value], event: &str) -> Vec<u64> {
