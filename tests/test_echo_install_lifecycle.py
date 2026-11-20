@@ -438,4 +438,3 @@ def release_stop(box):
     require(not (box.device / "private/run").exists(), "release stop leaked state")
     # A later start must prove its own held stdin rather than inherit this marker.
     (box.root / "eof").unlink()
-
