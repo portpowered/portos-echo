@@ -125,9 +125,9 @@ fn shards_cover_every_partition_exactly_once() {
             "make build-host-workspace || true",
         ),
         (
-            "test-echo-install",
-            "make test-echo-install",
-            "make test-echo-install || true",
+            "test-echo-install-parts",
+            "ECHO_INSTALL_PART=${{ matrix.shard }}/2",
+            "ECHO_INSTALL_PART=1/2",
         ),
     ] {
         let block = shards::part(part);
@@ -138,7 +138,10 @@ fn shards_cover_every_partition_exactly_once() {
 fn make_targets_of_split_gates_equal_their_parts() {
     let (makefile, workflow) = fixture();
     for rule in shards::MAKE_SPLITS {
-        let unsharded = rule.replace(" $(NEXTEST_SHARD)", "").replace(" $(SCENARIO_SHARD)", "");
+        let unsharded = rule
+            .replace(" $(NEXTEST_SHARD)", "")
+            .replace(" $(SCENARIO_SHARD)", "")
+            .replace(" $(if $(ECHO_INSTALL_PART),--part $(ECHO_INSTALL_PART))", "");
         for changed in [String::new(), format!("{rule}{rule}"), unsharded]
             .into_iter()
             .filter(|changed| changed != rule)

@@ -142,10 +142,14 @@ jobs:
           target: build-host
       - name: build-host-workspace
         run: make build-host-workspace
-  test-echo-install:
-    name: test-echo-install
+  test-echo-install-parts:
+    name: test-echo-install ${{ matrix.shard }}/2
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -155,7 +159,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: test-echo-install
-        run: make test-echo-install
+        run: make test-echo-install ECHO_INSTALL_PART=${{ matrix.shard }}/2
   format:
     name: format
     runs-on: ubuntu-latest
@@ -355,13 +359,13 @@ jobs:
         run: make test-concurrency
   build-host:
     name: build-host
-    needs: [build-host-workspace, test-echo-install]
+    needs: [build-host-workspace, test-echo-install-parts]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: build-host
-        run: test '${{ needs.build-host-workspace.result }}' = success && test '${{ needs.test-echo-install.result }}' = success
+        run: test '${{ needs.build-host-workspace.result }}' = success && test '${{ needs.test-echo-install-parts.result }}' = success
   build-echo:
     name: build-echo
     runs-on: ubuntu-latest

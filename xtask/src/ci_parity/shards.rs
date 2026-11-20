@@ -15,14 +15,17 @@ const EVIDENCE: &str = "      - name: Publish screen screenshot evidence\n      
 const PYTHON: &str = "      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n        with:\n          python-version: '3.12'\n";
 
 // The Make target of each split gate must be exactly its parts, so `make <gate>` runs what the
-// parts run in CI. NEXTEST_SHARD is empty unless a part names its partition.
-pub(super) const MAKE_SPLITS: [&str; 6] = [
+// parts run in CI. The *_SHARD and part variables are empty unless a part names its partition.
+pub(super) const MAKE_SPLITS: [&str; 9] = [
     "NEXTEST_SHARD = $(if $(NEXTEST_PARTITION),--partition $(NEXTEST_PARTITION) --no-tests=pass)\n",
+    "SCENARIO_SHARD = $(if $(SCENARIO_PARTITION),--partition $(SCENARIO_PARTITION))\n",
     "test-unit: test-unit-rust test-unit-python test-unit-screen\n",
     "test-unit-rust:\n\tcargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci $(NEXTEST_SHARD)\n\n",
     "test-sim-suites: test-sim-scenarios test-sim-bridge test-sim-components\n",
+    "test-sim-scenarios: sim-prereqs\n\tcargo run --locked -p echo-lab -- validate\n\tcargo run --locked -p echo-lab -- run --all --driver sim $(SCENARIO_SHARD)\n\n",
     "test-sim-host: sim-prereqs\n\tcargo nextest run -p echo-lab --test sim_host --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate $(NEXTEST_SHARD)\n\tcargo nextest run -p echo-lab --bin echo-lab --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate $(NEXTEST_SHARD)\n\n",
     "build-host: build-host-workspace test-echo-install\n",
+    "test-echo-install:\n\tpython tests/test_echo_install.py $(if $(ECHO_INSTALL_PART),--part $(ECHO_INSTALL_PART))\n",
 ];
 
 // Split gates and their part job ids, in workflow order.
@@ -33,7 +36,7 @@ pub(super) const SPLIT: [(&str, &[&str]); 4] = [
         &["test-sim-scenarios-shards", "test-sim-suites-parts"],
     ),
     ("test-sim-host", &["test-sim-host-shards"]),
-    ("build-host", &["build-host-workspace", "test-echo-install"]),
+    ("build-host", &["build-host-workspace", "test-echo-install-parts"]),
 ];
 
 pub(super) fn parts(gate: &str) -> Option<&'static [&'static str]> {
@@ -58,39 +61,27 @@ fn step(name: &str, run: &str) -> String {
     format!("      - name: {name}\n        run: {run}\n")
 }
 
+// A matrix job named `<label> K/N` with one entry per partition K from 1 to N.
+fn sharded(id: &str, label: &str, count: u32, timeout: u32) -> String {
+    let values: Vec<_> = (1..=count).map(|shard| shard.to_string()).collect();
+    let name = format!("{label} ${{{{ matrix.shard }}}}/{count}");
+    header(id, &name, timeout, Some(("shard", &values.join(", "))))
+}
+
 // One canonical part job per id; every partition from 1 to N appears exactly once.
 pub(super) fn part(id: &str) -> String {
     match id {
         "test-unit-rust" => {
-            let mut block = header(
-                id,
-                "test-unit-rust ${{ matrix.shard }}/4",
-                15,
-                Some(("shard", "1, 2, 3, 4")),
-            );
-            block.push_str(&setup(id, false));
-            block.push_str(CODEX);
-            block.push_str(NAMESPACE);
-            block + &step(id, "make test-unit-rust NEXTEST_PARTITION=count:${{ matrix.shard }}/4")
+            let run = "make test-unit-rust NEXTEST_PARTITION=count:${{ matrix.shard }}/4";
+            sharded(id, id, 4, 15) + &setup(id, false) + CODEX + NAMESPACE + &step(id, run)
         }
         "test-unit-screen" => {
-            let mut block = header(id, id, 15, None);
-            block.push_str(&setup(id, false));
-            block.push_str(SCREEN);
-            block.push_str(CHROMIUM);
-            block.push_str(SANDBOX);
-            block.push_str(&step(id, "make test-unit-python test-unit-screen"));
-            block + EVIDENCE
+            let run = "make test-unit-python test-unit-screen";
+            header(id, id, 15, None) + &setup(id, false) + SCREEN + CHROMIUM + SANDBOX + &step(id, run) + EVIDENCE
         }
         "test-sim-scenarios-shards" => {
-            let block = header(
-                id,
-                "test-sim-scenarios ${{ matrix.shard }}/2",
-                15,
-                Some(("shard", "1, 2")),
-            );
             let run = "make test-sim-scenarios SCENARIO_PARTITION=${{ matrix.shard }}/2";
-            block + &setup("test-sim-suites", true) + &step("test-sim-suites", run)
+            sharded(id, "test-sim-scenarios", 2, 15) + &setup("test-sim-suites", true) + &step("test-sim-suites", run)
         }
         "test-sim-suites-parts" => {
             let parts = "test-sim-bridge, test-sim-components";
@@ -98,19 +89,16 @@ pub(super) fn part(id: &str) -> String {
             block + &setup("test-sim-suites", true) + &step("test-sim-suites", "make ${{ matrix.part }}")
         }
         "test-sim-host-shards" => {
-            let block = header(
-                id,
-                "test-sim-host ${{ matrix.shard }}/3",
-                15,
-                Some(("shard", "1, 2, 3")),
-            );
             let run = "make test-sim-host NEXTEST_PARTITION=count:${{ matrix.shard }}/3";
-            block + &setup("test-sim-host", true) + &step("test-sim-host", run)
+            sharded(id, "test-sim-host", 3, 15) + &setup("test-sim-host", true) + &step("test-sim-host", run)
         }
         "build-host-workspace" => {
             header(id, id, 10, None) + &setup("build-host", false) + &step(id, "make build-host-workspace")
         }
-        "test-echo-install" => header(id, id, 10, None) + CHECKOUT + PYTHON + &step(id, "make test-echo-install"),
+        "test-echo-install-parts" => {
+            let run = "make test-echo-install ECHO_INSTALL_PART=${{ matrix.shard }}/2";
+            sharded(id, "test-echo-install", 2, 10) + CHECKOUT + PYTHON + &step("test-echo-install", run)
+        }
         _ => String::new(),
     }
 }

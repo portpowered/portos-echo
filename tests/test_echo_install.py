@@ -450,19 +450,22 @@ def setup_wake_cases():
         log.write_text("")
         require(":0:" in box.run(["--device", "wake-cursor"]).stdout, "empty cursor refused")
     print("echo-install wake: fresh=PASS stale=PASS rotation=PASS partial=PASS privacy=PASS")
-def main():
+def main(part="1/1"):
     from concurrent.futures import ThreadPoolExecutor
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
     from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, ownership_lifetime_case, setup_operator_cases
     from test_echo_install_release import release_cases
     from test_echo_install_status import status_cases
-    ownership_lifetime_case()
+    # CI runs the two groups as parallel jobs (--part 1/2 and 2/2); together they run every case once.
+    groups = ((cli_cases, prerequisite_cases, retention_cases, failure_cases, lifecycle_cases, setup_operator_cases),
+              (modes_and_defaults, release_cases, status_cases, nonroot_cases, setup_wake_cases))
+    require(part in ("1/1", "1/2", "2/2"), "--part expects 1/2 or 2/2")
+    cases = [case for number, group in enumerate(groups, 1) if part in ("1/1", f"{number}/2") for case in group]
+    if part != "2/2":
+        ownership_lifetime_case()
     with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda function: function(),
-                      (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases,
-                       failure_cases, release_cases, lifecycle_cases, status_cases, nonroot_cases,
-                       setup_operator_cases, setup_wake_cases)))
-    print("echo-install tests: install=PASS lifecycle=PASS status=PASS retention=PASS privacy=PASS")
+        list(pool.map(lambda function: function(), cases))
+    print(f"echo-install tests (part {part}): " + " ".join(f"{case.__name__}=PASS" for case in cases))
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--native-lifecycle":
@@ -477,4 +480,8 @@ if __name__ == "__main__":
         sys.exit(remote_tool())
     if sys.argv[1:] == ["--fake-adb"] or (len(sys.argv) > 1 and sys.argv[1] == "--fake-adb"):
         sys.exit(fake_adb())
+    if sys.argv[1:2] == ["--part"]:
+        require(len(sys.argv) == 3, "--part expects 1/2 or 2/2")
+        main(sys.argv[2])
+        sys.exit(0)
     main()

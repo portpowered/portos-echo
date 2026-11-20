@@ -39,7 +39,7 @@ Four slow gates (`test-unit`, `test-sim-suites`, `test-sim-host`, `build-host`) 
 part jobs, which split their Make target into prerequisite targets or nextest and scenario
 partitions; the job named after the gate passes only when every part passed. The part jobs
 (`test-unit-rust K/4`, `test-unit-screen`, `test-sim-scenarios K/2`, `test-sim-bridge`,
-`test-sim-components`, `test-sim-host K/3`, `build-host-workspace`, `test-echo-install`)
+`test-sim-components`, `test-sim-host K/3`, `build-host-workspace`, `test-echo-install K/2`)
 are not required checks themselves.
 `make lint` also runs parity and both existing lint self-tests.
 Local execution needs the tools pinned in `.github/actions/setup/action.yml`, GNU Make,

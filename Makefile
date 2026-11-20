@@ -152,9 +152,11 @@ build-host-workspace:
 	git diff --exit-code HEAD -- Cargo.lock
 	$(MAKE) check-echo-screen
 
+# ECHO_INSTALL_PART=K/2 runs one of the installer test's two case groups; unset, it runs both.
+ECHO_INSTALL_PART ?=
 .PHONY: test-echo-install
 test-echo-install:
-	python tests/test_echo_install.py
+	python tests/test_echo_install.py $(if $(ECHO_INSTALL_PART),--part $(ECHO_INSTALL_PART))
 
 .PHONY: build-echo-screen test-echo-screen-jvm test-echo-screen-url
 build-echo-screen:
