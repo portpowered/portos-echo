@@ -21,7 +21,13 @@ impl Drop for Clock {
 }
 
 async fn until(path: &Path, event: &str, count: usize) {
+    let ceiling = std::time::Instant::now();
     while trace(path).iter().filter(|row| row["event"] == event).count() < count {
+        assert!(
+            ceiling.elapsed() < Duration::from_secs(8),
+            "waiting for {event}: {:?}",
+            trace(path)
+        );
         tokio::task::yield_now().await;
     }
 }
@@ -32,7 +38,7 @@ async fn health(path: &Path) -> Value {
         .as_str()
         .unwrap()
         .to_owned();
-    reqwest::get(format!("http://{addr}/healthz"))
+    reqwest::get(format!("http://{addr}/healthz")) // lint-rules: allow-literal address obtained from an owned IPv4 loopback listener
         .await
         .unwrap()
         .json()

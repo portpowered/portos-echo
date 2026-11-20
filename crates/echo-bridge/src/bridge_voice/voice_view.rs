@@ -4,6 +4,12 @@ use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen,
 use echo_screen_contract::UiState;
 use serde_json::json;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Startup {
+    Pending,
+    Ready,
+}
+
 pub(super) struct View<'a> {
     screen: &'a Screen,
     health: &'a Health,
@@ -13,7 +19,7 @@ pub(super) struct View<'a> {
     connected: bool,
     pending_connected: bool,
     mouth_paused: bool,
-    ever_ready: bool,
+    startup: Startup,
 }
 
 impl<'a> View<'a> {
@@ -53,7 +59,7 @@ impl<'a> View<'a> {
             connected: false,
             pending_connected: false,
             mouth_paused: false,
-            ever_ready: false,
+            startup: Startup::Pending,
         }
     }
 
@@ -61,7 +67,7 @@ impl<'a> View<'a> {
         match notice {
             ServeNotice::Kill(enabled) => self.kill(enabled),
             ServeNotice::Ready => {
-                self.ever_ready = true;
+                self.startup = Startup::Ready;
                 self.closed("idle")?;
                 self.relinked()?;
                 self.health.state.send_modify(|state| {
@@ -284,7 +290,8 @@ impl<'a> View<'a> {
         self.health.state.send_modify(|state| {
             state.live = "error";
             state.relink_required = relink;
-            state.startup_waiting_reason = (!self.ever_ready && !relink).then_some("dependency_unavailable");
+            state.startup_waiting_reason =
+                (self.startup == Startup::Pending && !relink).then_some("dependency_unavailable");
             if !linked {
                 state.wyoming = "connecting";
             }

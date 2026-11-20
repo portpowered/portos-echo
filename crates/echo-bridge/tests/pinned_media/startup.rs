@@ -25,7 +25,13 @@ fn rows(path: &Path) -> Vec<Value> {
         .collect()
 }
 async fn event(path: &Path, name: &str) {
+    let ceiling = std::time::Instant::now();
     while !rows(path).iter().any(|row| row["event"] == name) {
+        assert!(
+            ceiling.elapsed() < Duration::from_secs(8),
+            "waiting for {name}: {:?}",
+            rows(path)
+        );
         tokio::task::yield_now().await;
     }
 }
@@ -34,7 +40,7 @@ async fn health(path: &Path) -> Value {
     let addr = rows.iter().find(|row| row["event"] == "bridge.started").unwrap()["health_addr"]
         .as_str()
         .unwrap();
-    reqwest::get(format!("http://{addr}/healthz"))
+    reqwest::get(format!("http://{addr}/healthz")) // lint-rules: allow-literal address obtained from an owned IPv4 loopback listener
         .await
         .unwrap()
         .json()
@@ -79,7 +85,7 @@ async fn serve(mut stream: TcpStream, unauthorized: bool) -> bool {
         (
             "200 OK",
             json!({"accounts":[{"id":"synthetic-local",
-        "workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}),
+        "workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}), // lint-rules: allow-literal inert pin routing metadata; all HTTP uses LocalRoutes proxy
         )
     } else {
         ("200 OK", json!({"requirements_toml":{}}))
@@ -101,7 +107,7 @@ async fn exercise(unauthorized: bool) {
     let directory = tempfile::tempdir().unwrap();
     let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = reserved.local_addr().unwrap();
-    let origin = format!("http://{address}");
+    let origin = format!("http://{address}"); // lint-rules: allow-literal address obtained from an owned IPv4 loopback listener
     let (config, auth) = configure(directory.path(), &origin);
     let home = config.codex.home.clone().unwrap();
     let path = directory.path().join("trace");
