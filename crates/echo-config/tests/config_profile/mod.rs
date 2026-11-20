@@ -108,3 +108,21 @@ fn documented_profile_can_be_enabled_without_changing_defaults() {
         assert_eq!(config.codex.time_zone.as_deref(), Some("Europe/Berlin"));
     }
 }
+
+#[test]
+fn trace_payload_defaults_and_overrides_load_without_other_file_access() {
+    let directory = Directory::new().unwrap();
+    for (section, expected) in [
+        ("", true),
+        ("[trace]", true),
+        ("[trace]\npayloads=true", true),
+        ("[trace]\npayloads=false", false),
+    ] {
+        let input = format!("{MINIMAL}\n{section}\n");
+        let parsed = BridgeConfig::from_toml_str(&input).unwrap();
+        assert_eq!(parsed.trace.payloads, expected);
+        assert_eq!(BridgeConfig::load(directory.write(input).unwrap()).unwrap(), parsed);
+    }
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    assert!(!directory.0.join("absent").exists());
+}

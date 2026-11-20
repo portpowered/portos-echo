@@ -130,6 +130,19 @@ async fn finish(
         "Muse is unavailable. Please try again."
     };
     reply(live, bridge, host, path, text).await;
+    let outcome = if mode == "duplicate" { "completed" } else { "failed" };
+    let reason = if mode == "interrupted" {
+        "submission_failed"
+    } else {
+        "task_failed"
+    };
+    check_resolution(
+        path,
+        outcome,
+        "submitted",
+        Some(text),
+        (outcome == "failed").then_some(reason),
+    );
     let entries = trace(path);
     let terminals: Vec<_> = entries.iter().filter(|e| e["event"] == "muse.terminal").collect();
     let admitted = mode != "interrupted";
@@ -155,7 +168,6 @@ async fn finish(
         "Private guessed success",
         "Private provider response",
         "synthetic-api-key",
-        "Muse test job completed",
     ] {
         assert!(!raw.contains(secret));
     }

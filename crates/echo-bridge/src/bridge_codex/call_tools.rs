@@ -129,6 +129,12 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         })
     }
 
+    pub(crate) fn trace_deadline(&mut self) {
+        if let Some((_, turn)) = &self.active {
+            self.port.trace_timeout(turn);
+        }
+    }
+
     /// Surface the composite host's session requests to the run controller.
     #[must_use]
     pub fn with_session(
@@ -158,6 +164,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             biased;
             () = expiry(deadline) => {
                 if let Some(params) = self.dispatcher.as_mut().and_then(Dispatcher::expire) {
+                    self.port.trace_timeout(&params.turn_id);
                     self.port.interrupt(&params, Instant::now() + Duration::from_secs(2))?;
                 }
                 Ok(other())

@@ -110,7 +110,8 @@ pub async fn execute_controlled<C: LinkConnector>(
             LiveAuthMode::Chatgpt => "chatgpt",
             LiveAuthMode::ApiKey => "api_key",
         },
-    )?;
+    )?
+    .with_payloads(settings.config.as_ref().is_none_or(|config| config.trace.payloads));
     let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
     screen.settings_warning(settings.settings_warning.as_deref(), &mut trace)?;
     let health = Health::bind(settings.health).await?;

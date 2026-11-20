@@ -11,6 +11,8 @@ async fn pending<T>(future: std::pin::Pin<&mut impl Future<Output = T>>) {
     .await;
 }
 
+mod trace_tests;
+
 #[tokio::test(start_paused = true)]
 async fn call_turn_events_match_thread_and_keep_early_lifecycle_order() {
     let (mut io, mut server) = fixture();

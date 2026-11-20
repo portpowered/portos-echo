@@ -7,6 +7,7 @@ use echo_config::{AgentConfig, McpAuth, McpServer};
 use echo_delegation::codex_dispatch::Catalog;
 use echo_mcp_client::{McpClient, TokenError, TokenProvider};
 use echo_spoof_mcp::{Fault, Spoof};
+use std::io::Write as _;
 
 struct NoToken;
 impl TokenProvider for NoToken {
@@ -194,6 +195,7 @@ async fn exercise_search(
     remote.close();
     assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
     snapshot(&mut input, &mut output, exhausted, model, web_search).await;
+    append_receipts(&mut input, &mut output, negative, exhausted).await;
     check_mcp(&spoof, exhausted);
     drop(input);
     assert!(provider.wait().await.unwrap().success());
@@ -443,4 +445,22 @@ fn check_mcp(spoof: &Spoof, exhausted: bool) {
     assert_eq!(observed.calls[0].name, "test.echo");
     assert_eq!(observed.calls[0].args, json!({"text":"delegated echo"}));
     assert_eq!(observed.calls[0].count, 1);
+}
+
+async fn append_receipts(
+    input: &mut tokio::process::ChildStdin,
+    output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    negative: bool,
+    exhausted: bool,
+) {
+    input.write_all(b"{\"append_receipts\":true}\n").await.unwrap();
+    let observed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+    let expected = if exhausted {
+        json!([])
+    } else {
+        json!([{"type":"delegation.context.append","delegation_item_id":"delegation-local",
+            "content":[{"type":"input_text","text":if negative { "I couldn't call test echo." } else { "test echo: delegated echo" }}]}])
+    };
+    assert_eq!(observed, json!({"append_receipts":expected}));
+    writeln!(std::io::stdout(), "{observed}").unwrap();
 }

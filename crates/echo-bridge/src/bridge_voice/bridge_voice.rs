@@ -42,7 +42,7 @@ pub use voice_session::{
 #[cfg(test)]
 mod voice_tests;
 
-pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, ReplyQuality};
+pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, Heard, ReplyQuality};
 use crate::{
     Error,
     bridge_codex::{Event, MediaEvent},
@@ -378,8 +378,7 @@ async fn step<E: LinkEvents>(
         result = forward(sink, pending.as_deref()), if pending.is_some() => {
             result.inspect_err(|_| { source.failure = "reply_send"; })?;
             if let Some(frame) = pending.take() {
-                source.mouth.wrote(&frame, Instant::now());
-                source.meter.wrote(Instant::now());
+                source.wrote(&frame);
                 if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
                     clock.submitted("reply")?;
                 }
@@ -448,7 +447,7 @@ async fn media(
     match event {
         MediaEvent::Audio(frame) => source.audio(&frame),
         MediaEvent::Control(Event::ReplyDone { text }) => {
-            if source.controller.retired() {
+            if source.stale() {
                 return Ok(());
             }
             observe(Notice::Transcript {
@@ -473,8 +472,7 @@ async fn media(
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
                 source.heard_user(BargeTrigger::UserTranscript);
             } else if role == "assistant" && !done {
-                source.controller.reply_started();
-                source.delegation.spoke();
+                source.spoke();
             }
             observe(Notice::Transcript { role, text, done })
         }

@@ -200,7 +200,7 @@ Measured on the Echo with an instrumented armv7 `echo-bridge` at 34cbe231 and ha
 (`arrival_gap_max_ms`, `late_arrivals`, `underruns`, `underrun_max_ms`, `depth_min_ms`, `depth_max_ms`,
 `discarded.{after_reply,idle,cut,audible}`, `rtp_lost`; since the adaptive playout also
 `target_ms.{min,max,final}`, `reprimes`, `concealment_ms`, `fade_ins`, `drained_frames`; since 2026-11-19 also
-`cuts.{count,trigger}`). Depth and underruns
+`cuts.{count,trigger}` and `cuts.holds`). Depth and underruns
 are the bridge's model of the device queue (20 ms of playout per frame written); hassmic logs no underrun of
 its own.
 
@@ -221,6 +221,42 @@ The pacing unit test `bridge_pacing_measured_jitter_never_runs_the_primed_echo_d
 gap pattern and fails if a primed stream underruns. This is one device, one network and one evening; it
 establishes no Wi-Fi-wide bound. Room recordings through the Ring were too noisy to count clicks (ambient
 alone scored 16 "dropouts"), so no acoustic before/after count exists.
+
+## Barge-in on the Echo (2026-11-19)
+
+Measured on the Echo from hassmic's boot log and the bridge trace of one owner run: `echo-bridge` at
+e707712d, hassmic aaf1ca0 in `-D` mode, a `chatgpt` realtime call. The owner talked over the replies.
+
+| Fact | Value |
+| --- | --- |
+| Flushes in the run | 9 in 47 s |
+| Reply audio each flush found left to discard | 0 to 5,760 bytes (at most 120 ms); `written` equals `before` in all 9 |
+| Flush receipt to closed player in hassmic | 1 to 13 ms |
+| Audio written to one reply before its flush | 1,279,680 bytes over 27.1 s: real time at 48,000 bytes/s, not a backlog |
+| Replacement playback opened after each flush | 1 to 14 ms later (`speaking -> listening -> speaking`) |
+| Model's next assistant fragment after a cut (`call.receive_reset`) | 0.1 to 0.6 s later, after 8 of the 9 cuts |
+| After the last cut, with no further model audio | hassmic's duplex failsafe ended the open playback 30.04 s later and went idle |
+| Bridge after that failsafe | held the run 35 s more, to the response deadline plus the played timeout, then `live.closed` `failed`, `bridge.recovering` `deadline` |
+| A wake 13.5 s after the failsafe | not answered: the bridge still owned the dead run |
+| `reply.played` and `reply.quality` rows for the run | none: a reply's rows were written only when it ended uncut |
+
+The cuts came late and the flush had nothing to stop; the flush itself is prompt. One run, one room.
+
+Second owner run, `echo-bridge` at 00287e17 (holds on a sign of user speech), from the bridge trace: 12
+replies.
+
+| Fact | Value |
+| --- | --- |
+| Replies cut | 6 of 12, every one with `cuts.trigger` `user_transcript` |
+| Holds with no cut (the model talked on) | 2 replies; 74 and 93 silent frames dropped to give the delay back, 0 audible frames lost |
+| Replies in which the Echo ran dry | 5 of 12; `underrun_max_ms` 241, 292, 185, 249, 324 |
+| Jitter target when those stalls came | `target_ms.min` 100, 220, 180, 180, 100 against arrival gaps of 299, 268, 146, 181, 233 ms |
+| `depth_max_ms` | 180 in every reply: the 200 ms lead less one 20 ms frame, by construction |
+
+Speech onset to a silent device is not measurable from this trace: nothing in it marks the onset. On a
+scripted T3 timeline (`bridge_barge_mic.rs`: transcript 700 ms after the speech, loopback device, echo at a
+tenth of the reply) it was 785 ms with the transcript as the only sign and 133 ms with the microphone's.
+The 700 ms and the echo level are assumptions of that timeline, not measurements of the Echo.
 
 ## Milestones
 

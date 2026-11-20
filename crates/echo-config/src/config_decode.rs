@@ -129,8 +129,23 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
         mcp: mcp(root.node("mcp")?)?,
         screen: screen(root.node("screen")?)?,
         audit: audit(root.node("audit")?)?,
+        trace: root
+            .table
+            .remove("trace")
+            .map(|v| trace(v.into_inner()))
+            .transpose()?
+            .unwrap_or_default(),
     };
     root.finish()?;
+    Ok(result)
+}
+
+fn trace(value: Value<'_>) -> Result<crate::TraceConfig, ConfigError> {
+    let mut fields = Fields::new(value, "trace")?;
+    let result = crate::TraceConfig {
+        payloads: fields.optional("payloads")?.unwrap_or(true),
+    };
+    fields.finish()?;
     Ok(result)
 }
 

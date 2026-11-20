@@ -249,7 +249,17 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         }
         let result = match self.io.next_event().await {
             Ok(message) => self.project(message),
-            Err(error) => Err(rpc_error(error)),
+            Err(error) => {
+                if let Some(trace) = &mut self.tool_trace {
+                    let reason = if error == RpcError::Malformed {
+                        "control_failed"
+                    } else {
+                        "app_server_exit"
+                    };
+                    let _ = trace.close("failed", Some(reason));
+                }
+                Err(rpc_error(error))
+            }
         };
         if result.is_err() {
             self.fail();
@@ -265,7 +275,11 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if self.phase != Phase::Active {
             return Err(Error::Unavailable);
         }
-        self.io.respond(id, result).map_err(rpc_error)
+        self.io.respond(id, result).map_err(rpc_error)?;
+        if let Some(trace) = &mut self.tool_trace {
+            trace.answer(id, result)?;
+        }
+        Ok(())
     }
 
     /// The negotiated thread belongs to this process generation only.
@@ -343,6 +357,9 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
     }
 
     fn fail(&mut self) {
+        if let Some(trace) = &mut self.tool_trace {
+            let _ = trace.close("failed", Some("control_failed"));
+        }
         self.io.close(RpcError::Disconnected);
         self.phase = Phase::Closed;
         self.early.clear();

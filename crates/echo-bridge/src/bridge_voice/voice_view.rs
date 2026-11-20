@@ -220,7 +220,7 @@ impl<'a> View<'a> {
         self.trace.record(
             "reply.played",
             Some(id),
-            json!({"outcome":"played",
+            json!({"outcome":if quality.cuts > 0 { "cut" } else { "played" },
                 "frames":stats.reply_sent, "received_frames":stats.reply_received, "dropped_frames":stats.reply_dropped}),
         )?;
         // Measurements, not journey steps: they vary with timing run to run.
@@ -237,7 +237,11 @@ impl<'a> View<'a> {
                     "final":quality.target_final_ms},
                 "reprimes":quality.reprimes, "concealment_ms":quality.concealment_ms,
                 "fade_ins":quality.fade_ins, "drained_frames":quality.drained_frames,
-                "cuts":{"count":quality.cuts, "trigger":quality.cut_trigger.map(BargeTrigger::name)}
+                "cuts":{"count":quality.cuts, "trigger":quality.cut_trigger.map(BargeTrigger::name),
+                    "holds":quality.holds, "hold_ms":quality.hold_ms},
+                "mic":{"onsets":quality.mic.onsets, "mistakes":quality.mic.mistakes,
+                    "lead_ms":quality.mic_lead_ms, "echo_max":quality.mic.echo_max,
+                    "level_max":quality.mic.level_max, "coupling":quality.mic.coupling}
             }),
         )?;
         let Some(first) = quality.first_audio else {

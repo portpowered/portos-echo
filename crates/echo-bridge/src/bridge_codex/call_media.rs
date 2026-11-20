@@ -43,13 +43,22 @@ pub struct MediaCall<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPe
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a, R, W, P> {
+    pub(super) fn trace_timeout(&mut self, turn: &str) {
+        if let Some(trace) = &mut self.call.tool_trace {
+            trace.timeout(turn);
+        }
+    }
+
     pub(crate) fn trace_tools(
         &mut self,
         trace: crate::bridge_trace::Trace,
         catalog: &echo_delegation::codex_dispatch::Catalog,
+        server: Option<&str>,
     ) {
         self.trace = Some(trace.clone());
-        self.call.tool_trace = Some(crate::bridge_trace::ToolTrace::new(trace, catalog));
+        let mut observer = crate::bridge_trace::ToolTrace::new(trace, catalog);
+        observer.server(server);
+        self.call.tool_trace = Some(observer);
     }
 
     pub(crate) fn trace_setup(&mut self, trace: crate::bridge_trace::Trace) -> Result<(), Error> {
@@ -250,6 +259,11 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         if result.is_err() || matches!(&result, Ok(MediaEvent::Control(Event::Closed))) {
             let diagnostic = self.diagnostic(source);
             self.active = false;
+            if source == "call.media_failed"
+                && let Some(trace) = &mut self.call.tool_trace
+            {
+                let _ = trace.close("failed", Some("media_failed"));
+            }
             self.call.fail();
             let _ = self.peer.close().await;
             self.closed = true;

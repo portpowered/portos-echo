@@ -85,6 +85,19 @@ pub struct BridgeConfig {
     pub mcp: McpConfig,
     pub screen: ScreenConfig,
     pub audit: AuditConfig,
+    pub trace: TraceConfig,
+}
+
+/// Private delegation payload capture, applied when the bridge starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceConfig {
+    pub payloads: bool,
+}
+
+impl Default for TraceConfig {
+    fn default() -> Self {
+        Self { payloads: true }
+    }
 }
 
 /// Operator-owned non-secret agent home; settings.toml is reserved.

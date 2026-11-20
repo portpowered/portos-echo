@@ -7,6 +7,86 @@ status: current main overview; W4 deployment and in-progress changes are labelle
 
 # Architecture and conversation lifecycle
 
+## Delegation trace payload boundary
+
+Delegation diagnostics use the private bridge trace. The payload boundary for
+`delegation.created`, retained `session.delegation.created`, `delegation.tool`
+and `delegation.resolved` accepts observed task, request, response and answer
+objects. `[trace] payloads` defaults to true; setting it false and restarting
+removes these fields and retains lifecycle metadata. It is base configuration,
+not a screen settings overlay; remove the table before rolling back to an older binary.
+
+Credentials, authorization values, account and installation identifiers are
+redacted recursively, including JSON nested in tool text. Bearer and JWT-shaped
+credentials in text are replaced by `[redacted]`. Each object is measured after
+redaction and capped at 65536 compact JSON bytes. A larger object is replaced by
+`{"truncated":true,"original_bytes":N}` with the exact redacted pre-cap size;
+there is no raw preview. A delegation row permits at most two such objects plus
+the existing 4096-byte metadata envelope. Unrelated trace rows retain their
+4096-byte rejection limit and private file ownership.
+
+The native path can observe a handoff request and a final agent answer, but the
+fixed app-server pin exposes no native send receipt. Its handback must remain
+`unobserved` even after a completed agent item and turn. A real-pin local-provider
+test may observe exact append identity and content only for its own run. Retained
+`submitted` or `failed` describes the local append boundary, never remote acknowledgement.
+
+The retained Muse owner now enriches its existing `session.delegation.created`
+row with the observed task event and writes one `delegation.resolved` row. The
+terminal outcome is `completed`, `failed`, `timed_out` or `cancelled`; fixed
+failure classes distinguish submission, task, worker and local append failures.
+`duration_ms` measures the owner's monotonic lifetime. Muse cannot observe the
+remote agent's individual tool calls, so its `tool_counts` is empty. Unknown
+thread and turn IDs are omitted. An observed prepared answer is included when
+payloads are enabled; it remains the same text passed to the local append.
+Normal abandonment joins cancellation and closes the trace lifetime; owner drop
+attempts a cancelled resolution without replacing the original runtime error.
+The native single reader records each observed `handoff_request` as
+`delegation.created`, with its task and the run active at creation. Observed
+turn completion, failure or interruption closes matching delegations once;
+an observed deadline takes precedence over the interrupt it triggers. A run's
+response expiry (`Deadline` or `NoResponse`) is also `timed_out` when existing
+run cleanup closes a delegation before its own timer fires. This does not add
+an interrupt or change either deadline. Requested realtime closure and owner
+abandonment cancel outstanding lifetimes. An unsolicited active-call closure
+instead fails with `realtime_closed`. Control, child EOF and media failures use
+fixed failure classes. Final agent-item text may populate
+`answer`, but never changes `handback=unobserved`. Duplicate handoffs and terminal
+notifications cannot produce additional lifetimes or resolutions.
+The native observer also writes `delegation.tool` for observed search, catalogued
+dynamic tools, MCP, command and function completions. Catalogued notes/prompt
+tools have kind `agent`; session controls have kind `home`. Function outputs
+retain their reported namespace/name, with catalog aliases recovered when
+applicable. Native execution/wait/input and clock wrappers do not add rows.
+MCP server identity comes from the reported item or the configured single MCP
+host for dynamic tool results. A correlated request arriving after handoff but
+before `turn/started` supplies its observed turn identity and start time. Reported durations
+are preferred, otherwise a matching observed start supplies monotonic duration;
+missing starts do not imply zero duration. Search result counts are included only
+when the item reports results. RPC results and item completion for the same turn
+and item share one receipt and count. Wrappers do not imply nested tool calls.
+Native counts describe emitted rows, not an assertion that no other tool ran.
+The retained Client observes the existing runner through default no-op
+`TraceSink::task_terminal` and `TraceSink::tool_completed` callbacks, implemented
+only by its bridge sink. Existing trace events, tool results/errors and prepared
+commentary are unchanged for other sinks. Its creation records the task; each
+completed MCP invocation records original name, configured server, arguments,
+result or error and monotonic duration. Failed transport and `is_error` results
+are `failed`; a dispatch denial is `declined`. Counts describe observed completed
+invocations, including failures. Thread/turn/item IDs unavailable to this legacy
+runner are omitted. An actual completed task is `completed` regardless of its
+answer text. Failed tasks are `failed`, with the runner's fixed `task timed out`
+failure category recorded as `timed_out`. Abandonment closes the lifetime without
+appending commentary; replaced workers receive a fresh observer generation.
+Local append failure is `handback=failed`; success is only `submitted`.
+Controlled configured-owner tests cover native managed exits, actual interrupt
+acknowledgement, response expiry, duplicate/late events and isolated owners,
+turns and generations. Real-peer configured journeys compare the diagnostic
+rows against exact independently observed native append identity/content and
+zero interrupted append. That test observer adds no production delivery receipt.
+The lifetime guarantee applies to observed managed exits and successful trace
+writes; abrupt process termination and filesystem failure cannot promise a row.
+
 ## Purpose and placement
 
 This page explains the running parts and follows a conversation across them. It describes main at
@@ -874,13 +954,29 @@ On current main, `-D` continues capture during reply audio, but configured Codex
 events to cut playback. Error/kill cleanup can cut through `hassmic-continue` and `audio-stop`, then await
 `played`; that cleanup closes/fails the voice run instead of continuing a normal interrupted question.
 
-The session controller's barge-in (2026-11-19) waits for the model to yield. The Live session transcribes
-whatever the microphone hears during a reply, and the model decides for itself whether to stop. A user
-transcript fragment or speech-start therefore only arms a barge-in for 2 s. It fires once the model has sent
-no audible reply audio for 500 ms, or at once when the model ends its turn. Firing retires the reply, drops
-the pacer lead and queued call audio, and flushes the device. A model that is still talking after the 2 s
-was not interrupted, and its reply plays on whole. Both times are constants in
+The session controller's barge-in (2026-11-19) silences the reply at once and cuts it when the model
+yields. The Live session transcribes whatever the microphone hears during a reply, and the model decides for
+itself whether to stop: the pinned V3 session has no request that cancels a response. A user transcript
+fragment or speech-start therefore arms a barge-in for 2 s. While it is pending the bridge holds the reply:
+it writes nothing more to the device, which plays out the lead it already has (about 200 ms), and the
+model's audio waits in the reply queue. The barge-in fires once the model has sent no audible reply audio
+for 500 ms, or at once when the model ends its turn. Firing retires the reply, drops the held audio and
+flushes the device. The cut reply then settles: `reply.played` (`outcome` `cut`) and `reply.quality` are
+written, call audio is discarded until the model's next utterance, and the run listens for that answer
+with no playback open. More speech from the user renews the listen window and opens nothing. A model that
+is still talking after the 2 s was not interrupted: the held audio plays, late but whole, and the delay is
+given back in the reply's silent frames. The times are constants in
 [reply_barge.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_barge.rs).
+
+The session's transcript of the user is its earliest sign of speech at the pin, and it comes some hundred
+milliseconds after the speech. The bridge therefore also listens to the microphone frames it forwards
+([reply_ear.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_ear.rs)): a level three times
+above what the reply audio written in the last 700 ms can explain, for 80 ms, is speech. How much of the
+reply the microphone hears is learned per call, from the reply's first half second and from every frame not
+taken for speech. Speech at the microphone holds the reply for 800 ms; the transcript that follows extends
+the hold as before. A hold the session does not bear out is released with nothing lost, and the ear raises
+its estimate of the echo. The ear never cuts a reply by itself: without the model's yield there is no cut.
+Its calibration on the Echo is unmeasured; `reply.quality` `mic` reports what it heard.
 
 #### Why — Barge-in
 

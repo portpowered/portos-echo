@@ -13,9 +13,11 @@ const CEILING: Duration = Duration::from_millis(320);
 /// Kept above the worst lateness: when a frame is due the Echo holds one
 /// period less than the cushion, and the pacer fades out with one period left.
 const MARGIN_MS: u32 = 40;
-/// A stall counts in full this long: the stalls measured on the Echo came
-/// about every 9 s of reply, so the cushion stays up while they keep coming.
-const HOLD: Duration = Duration::from_secs(20);
+/// A stall counts in full this long. The stalls measured on the Echo came
+/// 20 to 50 s apart, across replies (`docs/program/baselines.md`): a hold of
+/// 20 s let the cushion decay between them, and four stalls in five ran the
+/// Echo dry. The cushion stays up while they keep coming.
+const HOLD: Duration = Duration::from_secs(120);
 /// After that it is forgotten at 5 ms a second.
 const DECAY_MS_PER_SECOND: u128 = 5;
 /// A silence this long is the model pausing, not the network: start afresh.
@@ -143,8 +145,8 @@ mod tests {
         feed(&mut jitter, &mut now, &[0; 12]);
         feed(&mut jitter, &mut now, &[10, 20, 20]);
         assert_eq!((jitter.held(now), target_ms(&jitter, now)), (250, 300));
-        // Held in full for 20 s, then 5 ms a second: 200 ms at 30 s, then 0.
-        feed(&mut jitter, &mut now, &[20; 998]);
+        // Held in full for 120 s, then 5 ms a second: 200 ms at 130 s, then 0.
+        feed(&mut jitter, &mut now, &vec![20; 5998]);
         assert_eq!((jitter.held(now), target_ms(&jitter, now)), (250, 300));
         feed(&mut jitter, &mut now, &[20; 500]);
         assert_eq!((jitter.held(now), target_ms(&jitter, now)), (200, 240));

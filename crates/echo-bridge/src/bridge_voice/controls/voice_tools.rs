@@ -141,6 +141,7 @@ pub(super) struct Tools {
     pub config: AgentConfig,
     pub budget: ToolBudget,
     allowed: Vec<String>,
+    server: Option<String>,
     specs: Option<Vec<ToolSpec>>,
     runtime: Option<bridge_mcp::Runtime>,
     trace: Option<Trace>,
@@ -158,6 +159,7 @@ impl Tools {
                 .first()
                 .map_or_else(Vec::new, |server| server.allow_tools.clone()),
             specs: None,
+            server: config.mcp.server.first().map(|server| server.name.clone()),
             runtime: None,
             trace: None,
         }
@@ -291,7 +293,7 @@ where
                 };
                 let trace = tools.trace.as_ref().ok_or(Error::Unavailable)?.clone();
                 call.trace_setup(trace.clone())?;
-                call.trace_tools(trace, &catalog);
+                call.trace_tools(trace, &catalog, tools.server.as_deref());
                 tokio::select! {
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),

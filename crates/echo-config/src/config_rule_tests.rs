@@ -2,6 +2,21 @@ use crate::{BridgeConfig, LiveMode, McpAuth};
 
 const EXAMPLE: &str = include_str!("../../../examples/bridge.example.toml");
 
+#[test]
+fn trace_payload_rejects_invalid_values_and_unknown_keys_safely() {
+    for value in ["'SYNTHETIC_VALUE'", "1", "1.0", "[]", "{}"] {
+        let input = EXAMPLE.replace("payloads = true", &format!("payloads = {value}"));
+        assert_eq!(error(&input, "trace.payloads"), "trace.payloads: invalid type or value");
+    }
+    let input = EXAMPLE.replace("[trace]", "[trace]\nSYNTHETIC_VALUE=true");
+    assert_eq!(error(&input, "trace"), "trace: unknown field");
+    let input = EXAMPLE.replace("[trace]\npayloads = true", "");
+    assert_eq!(
+        error(&format!("trace='SYNTHETIC_VALUE'\n{input}"), "trace"),
+        "trace: expected table"
+    );
+}
+
 fn error(input: &str, field: &str) -> String {
     let err = BridgeConfig::from_toml_str(input).unwrap_err();
     let text = err.to_string();

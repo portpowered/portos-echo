@@ -8,6 +8,8 @@ fn frame(level: i16) -> Vec<u8> {
 #[derive(Default)]
 struct Narrow {
     room: std::cell::Cell<usize>,
+    /// What the microphone hears of the reply frame last written.
+    echo: std::cell::Cell<i16>,
     sent: std::cell::RefCell<Vec<i16>>,
 }
 
@@ -215,11 +217,113 @@ async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
         [target(100, 300, 280), 1.into(), 20.into(), 2.into(), 3.into()]
     );
     let cuts = [&rows[3], &rows[5]].map(|row| row["cuts"].clone());
-    let cut = |count: u32, trigger: Option<&str>| serde_json::json!({"count":count, "trigger":trigger});
+    let cut = |count: u32, trigger: Option<&str>| serde_json::json!({"count":count, "trigger":trigger, "holds":0, "hold_ms":0});
     assert_eq!(cuts, [cut(0, None), cut(2, Some("user_transcript"))]);
     assert_eq!(
         rows[6],
         serde_json::json!({"event":"timing", "elapsed_ms":0, "provider_auth_mode":"chatgpt", "run_id":"run-1",
             "name":"first_audio_after_endpoint_ms", "duration_ms":730, "endpoint":"user_transcript"})
     );
+}
+
+fn heard(level: i16) -> MicFrame {
+    let format = echo_link::PcmFormat {
+        rate: 16000,
+        width: 2,
+        channels: 1,
+    };
+    let payload = level.to_le_bytes().repeat(320);
+    MicFrame { format, payload }
+}
+
+/// One 20 ms step of a reply at `level`: the model's frame arrives, the one
+/// that is due is written to the Echo, and the microphone hears a tenth of
+/// what the Echo was last sent plus `voice`.
+async fn replying(source: &mut Source, port: &Narrow, level: i16, voice: i16) {
+    source.audio(&[level; 320]).unwrap();
+    if source.playable()
+        && let Ok(Some(frame)) = tokio::time::timeout(Duration::ZERO, source.reply.next_or_fade()).await
+    {
+        source.wrote(&frame);
+        port.echo.set(i16::from_le_bytes([frame[0], frame[1]]) / 10);
+    }
+    source.capture(Some(heard(port.echo.get() + voice)), port).unwrap();
+    tokio::time::advance(Duration::from_millis(20)).await;
+}
+
+/// T1, the device's overflow: the owner talked over a reply and it played on
+/// until the Live session's transcript of the speech arrived. Speech at the
+/// microphone now holds the reply within 100 ms, and the transcript that
+/// follows keeps it held until the model yields.
+#[tokio::test(start_paused = true)]
+async fn barge_in_holds_the_reply_on_speech_at_the_microphone_before_its_transcript() {
+    let mut source = Source::new(200, false).unwrap();
+    let mut port = Narrow::default();
+    port.room.set(usize::MAX);
+    source.spoke();
+    for _ in 0..50 {
+        replying(&mut source, &port, 2000, 0).await;
+    }
+    assert!(source.playable());
+    // The user speaks. The model has not heard it yet and talks on.
+    let mut held = None;
+    for step in 0..35 {
+        replying(&mut source, &port, 2000, 6000).await;
+        held = held.or((!source.playable()).then_some(step));
+    }
+    assert!(held.is_some_and(|step| step < 5), "{held:?}");
+    // The session's transcript of that speech comes 700 ms after it began.
+    source.heard_user(BargeTrigger::UserTranscript);
+    for _ in 0..26 {
+        replying(&mut source, &port, 0, 6000).await;
+    }
+    source.interrupt(&mut port).unwrap();
+    assert!(source.stale());
+    let quality = source.settle(0);
+    assert_eq!(
+        (quality.cuts, quality.cut_trigger, quality.holds),
+        (1, Some(BargeTrigger::MicSpeech), 1)
+    );
+    assert_eq!((quality.mic.onsets, quality.mic.mistakes), (1, 0));
+    let lead = quality.mic_lead_ms.unwrap();
+    assert!(
+        (600..=700).contains(&lead) && quality.hold_ms >= lead + 500,
+        "{quality:?}"
+    );
+}
+
+/// 200 ms of noise under 1.6 s of reply: the steps the reply was held for.
+async fn noise(source: &mut Source, port: &Narrow) -> u32 {
+    let mut held = 0;
+    for step in 0..80 {
+        replying(source, port, 2000, if step < 10 { 600 } else { 0 }).await;
+        held += u32::from(source.barge.pending());
+    }
+    held
+}
+
+/// T1: the reply's own echo never holds it, however loud the reply gets. A
+/// noise the Live session transcribes as nothing holds it for under a second;
+/// the model talks on, nothing is lost, and the same noise against the same
+/// reply holds nothing again.
+#[tokio::test(start_paused = true)]
+async fn barge_in_echo_never_holds_the_reply_and_a_noise_holds_it_once() {
+    let mut source = Source::new(200, false).unwrap();
+    let port = Narrow::default();
+    port.room.set(usize::MAX);
+    source.spoke();
+    for level in [2000, 6000, 2000] {
+        for _ in 0..50 {
+            replying(&mut source, &port, level, 0).await;
+            assert!(!source.barge.pending(), "{level}");
+        }
+    }
+    // 200 ms of noise: held for its length and the 800 ms after it.
+    let held = noise(&mut source, &port).await;
+    assert!((40..=55).contains(&held), "{held}");
+    assert_eq!(noise(&mut source, &port).await, 0);
+    let quality = source.settle(0);
+    assert_eq!((quality.cuts, quality.holds, quality.discarded_audible), (0, 1, 0));
+    assert_eq!((quality.mic.onsets, quality.mic.mistakes), (1, 1));
+    assert_eq!((source.stats.reply_dropped, quality.mic_lead_ms), (0, None));
 }

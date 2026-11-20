@@ -154,6 +154,8 @@ try:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:
             emit({'transcripts': transcript_count})
+        elif command == {'append_receipts': True}:
+            emit({'append_receipts': delegation.append_receipts})
         elif command == {'snapshot': True}:
             emit(observed if delegation is None else {**observed, **delegation.snapshot()})
         else:
