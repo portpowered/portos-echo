@@ -103,6 +103,20 @@ def independent_bundle(assets, pack):
     pack.verify(archive, assets / 'SHA256SUMS')
 
 
+def exclusion_cases(archive, pack):
+    art = independent_template(archive)
+    for name, data in art.items():
+        try:
+            pack.exclude_template(art, (b'synthetic-executable', b'prefix' + data + b'suffix'))
+        except pack.BundleError as error:
+            require(str(error) == 'template data embedded in executable or JavaScript',
+                    'media exclusion diagnostic differs')
+        else:
+            raise AssertionError('embedded generated payload accepted: ' + name)
+    pack.exclude_template(art, (b'synthetic-executable', b'synthetic-javascript'))
+    print('U-PACK complete generated payload exclusion: PASS')
+
+
 def media_cases(pack):
     neutral = decode(pack / 'rest.png', 'null')
     require(len(neutral) == 640 * 640 * 4, 'rest dimensions differ')

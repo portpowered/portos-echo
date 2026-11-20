@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from test_echo_install import Sandbox, fake_adb, require, SENTINEL
 from test_echo_install_lifecycle import configure_lifecycle, release_started, release_stop
-from test_screen_pack_assets import generate, independent_bundle
+from test_screen_pack_assets import exclusion_cases, generate, independent_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("package_dist", ROOT / "scripts/package-dist.py")
@@ -477,6 +477,7 @@ def main():
 
 
 def run_cases():
+    exclusion_cases(TEMPLATE, PACK)
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(), (package_cases, happy_cases, integrity_cases, failure_cases, retention_cases, interruption_case)))
     from test_release_redirects import redirect_cases
