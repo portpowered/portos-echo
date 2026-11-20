@@ -468,6 +468,12 @@ fn expired_result(result: Option<&str>, json: bool) -> Result {
 }
 
 fn expired_cleanup(fixture: &Fixture) -> Result {
+    failure_cleanup(fixture)?;
+    assert!(fixture.0.join("process-user").exists());
+    Ok(())
+}
+
+fn failure_cleanup(fixture: &Fixture) -> Result {
     let calls = fixture.ledger()?;
     let operations: Vec<_> = calls.iter().filter_map(|args| args.last()).collect();
     assert_eq!(
@@ -486,6 +492,5 @@ fn expired_cleanup(fixture: &Fixture) -> Result {
     );
     let remaining: Vec<String> = serde_json::from_slice(&fs::read(fixture.0.join("forwards.json"))?)?;
     assert_eq!(remaining, Vec::<String>::new());
-    assert!(fixture.0.join("process-user").exists());
     Ok(())
 }

@@ -57,5 +57,6 @@ async fn interrupted(portos: bool, json: bool) -> Result {
     assert_public(&stderr);
     assert_eq!(stderr.contains("Setup cancelled. Installed files remain."), !json);
     server.await?.map_err(io::Error::other)?;
-    expired_cleanup(&fixture)
+    assert_eq!(fixture.0.join("process-user").exists(), portos);
+    failure_cleanup(&fixture)
 }
