@@ -117,7 +117,15 @@ fn m4_audio(session: &Session, report: &Value, case: &str) {
     assert_eq!(frames.len(), 7);
     for (index, (frame, state)) in frames
         .iter()
-        .zip(["ready", "listening", "connected", "thinking", "speaking", "connected", "ready"])
+        .zip([
+            "ready",
+            "listening",
+            "connected",
+            "thinking",
+            "speaking",
+            "connected",
+            "ready",
+        ])
         .enumerate()
     {
         assert_eq!(frame["seq"], index + 1);
