@@ -10,6 +10,8 @@ use std::sync::{
 };
 use tokio::sync::{oneshot, watch};
 
+mod trace;
+
 type Lines = tokio::io::Lines<BufReader<tokio::process::ChildStdout>>;
 struct Provider {
     child: tokio::process::Child,
@@ -46,12 +48,15 @@ impl Provider {
         self.input.write_all(format!("{value}\n").as_bytes()).await.unwrap();
     }
     async fn cycle(&mut self, identity: &str, exhausted: bool) {
+        self.cycle_result(identity, exhausted, false).await;
+    }
+    async fn cycle_result(&mut self, identity: &str, exhausted: bool, negative: bool) {
         let mut tools: Vec<_> = echo_spoof_mcp::catalog().as_array().unwrap().iter().enumerate()
             .map(|(i, t)| json!({"name":(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"][i]),"description":t["description"],"inputSchema":t["inputSchema"]})).collect();
         // The configured bridge appends its two session builtins after discovery.
         tools.extend(session_tools());
         self.model_ingress = 0;
-        self.send(json!({"tools":tools,"negative":false,"exhausted":exhausted,"manual":true,"identity":identity}))
+        self.send(json!({"tools":tools,"negative":negative,"exhausted":exhausted,"manual":true,"identity":identity}))
             .await;
         assert_eq!(self.read().await, json!({"initialized":identity}));
         self.send(json!({"transcripts":true})).await;

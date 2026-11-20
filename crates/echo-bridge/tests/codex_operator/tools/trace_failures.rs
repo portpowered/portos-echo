@@ -57,6 +57,10 @@ fn assert_tool(tool: &Value, output: &Value, accepted: bool, payloads: bool) {
     assert!(tool["duration_ms"].is_u64());
     assert_eq!(tool.get("request"), payloads.then(|| json!({})).as_ref());
     assert_eq!(tool.get("response"), payloads.then_some(output));
+    assert_response(output, accepted);
+}
+
+fn assert_response(output: &Value, accepted: bool) {
     let text = output["contentItems"][0]["text"].as_str().unwrap();
     if accepted {
         assert!(text.contains("approval_required"), "{output}");

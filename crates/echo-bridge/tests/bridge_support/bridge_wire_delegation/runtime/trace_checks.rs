@@ -55,8 +55,8 @@ async fn delegation_trace_client_tool_payload_switch_and_error_preserve_backend_
                 app.spoof.set_fault(echo_spoof_mcp::Fault::Http500).unwrap();
             }
             let mut model = app.request("tool").await;
-            let args = json!({"text":"synthetic-result-7","authorization":"synthetic-auth-value",
-                "account_id":"synthetic-account-value","url":"http://127.0.0.1/synthetic-source"});
+            let args = json!({"text":json!({"message":"synthetic-result-7","authorization":"synthetic-auth-value",
+                "account_id":"synthetic-account-value","url":"http://127.0.0.1/synthetic-source"}).to_string()});
             let call =
                 json!({"type":"function_call","call_id":"retained-call","name":"tool_0","arguments":args.to_string()});
             let body = sse(&call);
@@ -67,12 +67,12 @@ async fn delegation_trace_client_tool_payload_switch_and_error_preserve_backend_
             if failed {
                 assert_eq!(
                     result,
-                    json!({"content":{"error":"server error: http_status:500"},"is_error":true})
+                    json!({"content":{"error":format!("server error: http_status:{}", 500)},"is_error":true})
                 ); // lint-rules: allow-literal inert error text
             } else {
                 assert_eq!(
                     result,
-                    json!({"content":[{"type":"text","text":"synthetic-result-7"}],"is_error":false})
+                    json!({"content":[{"type":"text","text":args["text"]}],"is_error":false})
                 );
             }
             respond(&mut followup, "synthetic-answer-7").await.unwrap();
@@ -98,15 +98,21 @@ fn check_tool(app: &Application, payloads: bool, failed: bool) {
     assert!(tool["server"].as_str().is_some());
     assert!(tool["duration_ms"].as_u64().is_some());
     assert_eq!(tool["status"], if failed { "failed" } else { "completed" });
+    check_payload(app, tool, &row, payloads);
+    writeln!(std::io::stdout(), "{tool}").unwrap();
+}
+
+fn check_payload(app: &Application, tool: &Value, row: &Value, payloads: bool) {
     let text = std::fs::read_to_string(app.path()).unwrap();
     for secret in ["synthetic-auth-value", "synthetic-account-value", "synthetic-mcp-token"] {
         assert!(!text.contains(secret));
     }
     if payloads {
-        assert_eq!(tool["request"]["text"], "synthetic-result-7");
-        assert_eq!(tool["request"]["url"], "http://127.0.0.1/synthetic-source");
-        assert_eq!(tool["request"]["authorization"], "[redacted]");
-        assert_eq!(tool["request"]["account_id"], "[redacted]");
+        let request: Value = serde_json::from_str(tool["request"]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(request["message"], "synthetic-result-7");
+        assert_eq!(request["url"], "http://127.0.0.1/synthetic-source");
+        assert_eq!(request["authorization"], "[redacted]");
+        assert_eq!(request["account_id"], "[redacted]");
         assert_eq!(row["answer"], json!({"text":"synthetic-answer-7"}));
     } else {
         for seed in [
@@ -116,7 +122,8 @@ fn check_tool(app: &Application, payloads: bool, failed: bool) {
         ] {
             assert!(!text.contains(seed));
         }
-        assert!(tool.get("request").is_none() && tool.get("response").is_none());
+        assert!(tool.get("request").is_none());
+        assert!(tool.get("response").is_none());
         assert!(row.get("answer").is_none());
     }
     writeln!(std::io::stdout(), "{tool}").unwrap();
