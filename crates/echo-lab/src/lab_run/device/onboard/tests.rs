@@ -64,6 +64,8 @@ impl World {
             self.trace.clear();
         } else if command.contains("wc -c") {
             return format!("{} log\n", self.log.len());
+        } else if command.contains("stat -c %d:%i") {
+            return "1:2\n".into();
         } else if command.contains("stat -c %a") && command.ends_with("/portos") {
             return "700\n".into();
         } else if command.contains("stat -c %a") {

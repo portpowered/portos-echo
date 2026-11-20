@@ -8,9 +8,15 @@ const CONFIG: &str = include_str!("../../../../../../examples/bridge.echo.toml")
 
 fn runtime() -> (Rc<RefCell<World>>, Runtime) {
     let world = world();
+    let root = tempfile::tempdir().unwrap();
+    let local = root.path().join("config");
+    std::fs::write(&local, CONFIG).unwrap();
+    let mut owned = remote(&world);
+    owned.stage(&local).unwrap();
+    owned.attempted = true;
     world.borrow_mut().alive = true;
     let mut state = Runtime::default();
-    state.remote = Some(remote(&world));
+    state.remote = Some(owned);
     state.configure_portos(CONFIG).unwrap();
     state.started = true;
     state.generation = 1;

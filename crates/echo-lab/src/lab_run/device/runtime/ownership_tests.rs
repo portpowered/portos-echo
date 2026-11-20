@@ -1,4 +1,5 @@
 //! T3: real confined Linux filesystem shell, controlled adb and process observations.
+#![cfg(unix)]
 use super::super::{IDENTITY, Launcher, Remote, Shell};
 use std::{
     cell::RefCell,
@@ -146,7 +147,7 @@ fn t3_on_device_two_owners_and_lost_ack_never_borrow_cleanup_authority() {
         fixture.state.borrow_mut().fail.clear();
         let result = fixture.remote.release();
         assert_eq!(result.is_err(), command == "mkdir -m");
-        assert_eq!(fixture.path("bench.toml").exists(), false);
+        assert!(!fixture.path("bench.toml").exists());
         fixture.preserved();
     }
 }
@@ -156,6 +157,7 @@ fn t3_on_device_release_is_once_only_and_refuses_a_foreign_replacement() {
     for replace_before in [false, true] {
         let mut fixture = Fixture::new();
         fixture.stage().unwrap();
+        assert_eq!(fs::metadata(fixture.path("bench.toml")).unwrap().mode() & 0o777, 0o600);
         let path = fixture.path("bench.toml");
         if replace_before {
             fs::remove_file(&path).unwrap();
@@ -171,6 +173,23 @@ fn t3_on_device_release_is_once_only_and_refuses_a_foreign_replacement() {
         assert_eq!(fs::read(path).unwrap(), b"replacement");
         fixture.preserved();
     }
+}
+
+#[test]
+fn t3_on_device_partial_acquisition_does_not_clean_a_replaced_owner_directory() {
+    let mut fixture = Fixture::new();
+    fixture.state.borrow_mut().fail = "push".into();
+    // Fail after mkdir/identity by making the local input unavailable.
+    fs::remove_file(fixture.root.path().join("local")).unwrap();
+    assert!(fixture.stage().is_err());
+    let directory = fixture.path("bench.toml.lab-owner");
+    fs::rename(&directory, fixture.path("original-owner")).unwrap();
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("config"), b"foreign source").unwrap();
+    fixture.state.borrow_mut().fail.clear();
+    assert!(fixture.remote.release().unwrap_err().contains("directory replaced"));
+    assert_eq!(fs::read(directory.join("config")).unwrap(), b"foreign source");
+    fixture.preserved();
 }
 
 #[test]

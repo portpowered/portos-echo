@@ -145,6 +145,9 @@ class World:
                 self.record("mcp.unlink.completed", operation_id=99)
         elif "wc -c" in command:
             return str(len(self.log))
+        elif "stat -c %d:%i" in command and "sh -c" not in command:
+            path = Path(command.split()[-1].replace("/data/local/echo-bridge/private", str(self.remote)))
+            return str(path.stat().st_dev) + ":" + str(path.stat().st_ino)
         elif "stat -c %u:%g:%a" in command:
             path = Path(command.split()[-1].replace("/data/local/echo-bridge/private", str(self.remote)))
             return "9999:9999:" + ("644" if self.mode == "mode" else oct(path.stat().st_mode & 0o777)[2:])

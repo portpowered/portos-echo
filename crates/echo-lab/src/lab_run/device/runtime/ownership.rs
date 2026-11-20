@@ -2,13 +2,14 @@
 use super::Remote;
 use std::path::Path;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "ownership_tests.rs"]
 mod tests;
 
 #[derive(Default)]
 pub(super) struct Owned {
     directory: Option<String>,
+    directory_id: String,
     entries: Vec<(String, String)>,
     uncertain: bool,
     ready: bool,
@@ -24,6 +25,16 @@ impl Remote {
         self.owned.uncertain = true;
         self.shell(&format!("mkdir -m 700 {directory}"))?;
         self.owned.directory = Some(directory.clone());
+        let identity = self.shell(&format!("stat -c %d:%i {directory}"))?;
+        let parts: Vec<_> = identity.trim().split(':').collect();
+        if parts.len() != 2
+            || parts
+                .iter()
+                .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return Err("device: invalid bench directory identity; coordinator recovery required".into());
+        }
+        self.owned.directory_id = identity.trim().into();
         self.owned.uncertain = false;
         let config = format!("{directory}/config");
         self.shell
@@ -63,10 +74,25 @@ impl Remote {
         format!("test ! -L {destination} && test {source} -ef {destination}")
     }
 
+    fn check_directory(&self) -> Result<(), String> {
+        let directory = self
+            .owned
+            .directory
+            .as_ref()
+            .ok_or("device: bench directory not acquired")?;
+        self.shell(&format!(
+            "sh -c 'test ! -L {directory} && test \"$(stat -c %d:%i {directory})\" = {}'",
+            self.owned.directory_id
+        ))
+        .map(|_| ())
+        .map_err(|_| "device: bench directory replaced; residue retained; coordinator recovery required".into())
+    }
+
     pub(super) fn check_owned(&self) -> Result<(), String> {
         if !self.owned.ready {
             return Err("device: bench acquisition incomplete".into());
         }
+        self.check_directory()?;
         for (source, destination) in &self.owned.entries {
             self.shell(&format!("sh -c '{}'", Self::identity(source, destination)))
                 .map_err(|_| "device: bench artifact replaced; coordinator recovery required")?;
@@ -79,6 +105,9 @@ impl Remote {
             return Err("device: uncertain bench ownership or process still running; residue retained; coordinator recovery required".into());
         }
         self.owned.ready = false;
+        if self.owned.directory.is_some() {
+            self.check_directory()?;
+        }
         let mut failures = Vec::new();
         for (source, destination) in std::mem::take(&mut self.owned.entries) {
             let command = format!(

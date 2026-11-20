@@ -113,6 +113,21 @@ impl Peer {
             usize::from(played)
         );
         assert!(!self.session.0.join("artifacts/configured.private").exists());
+        self.preserved();
+        for name in ["report.json", "events.jsonl", "device-steps.jsonl"] {
+            let contents = fs::read_to_string(self.session.0.join("artifacts").join(name)).unwrap();
+            for marker in [
+                "PRIVATE-",
+                "synthetic-consumed",
+                "synthetic-rotated-",
+                "private_key_jwk",
+            ] {
+                assert!(!contents.contains(marker), "{name} leaked {marker}");
+            }
+        }
+        assert!(!serde_json::to_string(&calls).unwrap().contains("PRIVATE-"));
+    }
+    fn preserved(&self) {
         let remote = self.session.0.join("remote");
         assert_eq!(
             fs::read(remote.join("bridge.toml")).unwrap(),
@@ -140,18 +155,6 @@ impl Peer {
                 assert!(!remote.join(name).exists(), "owned residue: {name}");
             }
         }
-        for name in ["report.json", "events.jsonl", "device-steps.jsonl"] {
-            let contents = fs::read_to_string(self.session.0.join("artifacts").join(name)).unwrap();
-            for marker in [
-                "PRIVATE-",
-                "synthetic-consumed",
-                "synthetic-rotated-",
-                "private_key_jwk",
-            ] {
-                assert!(!contents.contains(marker), "{name} leaked {marker}");
-            }
-        }
-        assert!(!serde_json::to_string(&calls).unwrap().contains("PRIVATE-"));
     }
 }
 
