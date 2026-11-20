@@ -69,13 +69,15 @@ impl Prepared {
             .connect_timeout(Duration::from_secs(5))
             .build()
             .map_err(|_| Error::Control)?;
-        let mut response = http
+        let request = http
             .post(format!("http://{}/operator/mcp", settings.listen))
             .bearer_auth(token.expose())
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .json(&serde_json::json!({"operation":self.operation.name()}))
-            .send()
+            .send();
+        let mut response = tokio::time::timeout(Duration::from_secs(5), request)
             .await
+            .map_err(|_| Error::Control)?
             .map_err(|_| Error::Control)?;
         if response.status().as_u16() != 200
             || response
@@ -263,7 +265,7 @@ mod tests {
             .presentation
             .overlay(Some(UiState::LinkCode {
                 user_code: "STALE".into(),
-                verification_uri: "https://stale.invalid".into(),
+                verification_uri: "http://127.0.0.1/stale".into(),
                 expires_at_unix: 1,
             }))
             .unwrap();
@@ -297,7 +299,7 @@ mod tests {
         };
         let mut refused = Vec::new();
         assert_eq!(competing.execute(&mut refused).await, Err(Error::Control));
-        assert_eq!(refused, []);
+        assert_eq!(refused.as_slice(), b"");
         tokio::time::advance(Duration::from_secs(5)).await;
         let result = operation.await;
         assert_outcome(result, failure, &output.1, &prefix, &owner, &mut screen).await;
@@ -377,5 +379,52 @@ mod tests {
         assert!(parse(&["status".into()], false).unwrap().is_none());
         assert_eq!(error("access_denied"), Ok(AuthError::AccessDenied));
         assert_eq!(error("hostile text"), Err(Error::Control));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn t3_portos_link_invalid_pairing_and_unavailable_owner_print_nothing() {
+        super::super::bridge_component::drive(async {
+            let mock = echo_mcp_auth::mock::Mock::bind().await.unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let (mut owner, _) = owner(&mock, root).await;
+            std::fs::write(root.join("pair"), "wrong-owner").unwrap();
+            for stopped in [false, true] {
+                if stopped {
+                    owner.close().await;
+                }
+                let command = Prepared {
+                    settings: settings(&mock, root, owner.address),
+                    operation: Operation::Link,
+                };
+                let mut output = Vec::new();
+                assert_eq!(command.execute(&mut output).await, Err(Error::Control));
+                assert_eq!(output.as_slice(), b"");
+            }
+            assert_eq!(mock.state.lock().unwrap().requests.len(), 2); // discovery only
+        })
+        .await;
+    }
+
+    #[test]
+    fn link_output_requires_fresh_code_and_never_turns_an_error_into_success() {
+        use serde_json::json;
+        let mut output = Vec::new();
+        let mut shown = false;
+        assert_eq!(
+            present(&json!({"outcome":"linked"}), Operation::Link, &mut output, &mut shown),
+            Err(Error::Control)
+        );
+        assert_eq!(output.as_slice(), b"");
+        for category in ["access_denied", "expired", "untrusted text"] {
+            assert!(present(&json!({"error":category}), Operation::Link, &mut output, &mut shown).is_err());
+            assert_eq!(output.as_slice(), b"");
+        }
+        let state = json!({"state":{"state":"link_code","user_code":"CODE\nMCP linked","verification_uri":"http://127.0.0.1","expires_at_unix":1}});
+        assert_eq!(
+            present(&state, Operation::Link, &mut output, &mut shown),
+            Err(Error::Control)
+        );
+        assert_eq!(output.as_slice(), b"");
     }
 }

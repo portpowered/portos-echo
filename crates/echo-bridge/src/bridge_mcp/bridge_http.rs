@@ -33,7 +33,7 @@ async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, send: mpsc::
             let _ = respond(&mut stream, code, Value::Null).await;
             return;
         }
-        Err(_) => return,
+        Err(()) => return,
     };
     let Ok(permit) = slot.try_acquire_owned() else {
         let _ = respond(&mut stream, 409, Value::Null).await;
@@ -56,7 +56,7 @@ async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, send: mpsc::
     let (code, body) = match result {
         Ok(Ok(outcome)) => (200, json!({"outcome":outcome})),
         Ok(Err(error)) => (422, json!({"error":super::category(&error)})),
-        Err(_) => return,
+        Err(()) => return,
     };
     if streaming {
         let _ = event(&mut stream, body).await;
