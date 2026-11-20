@@ -56,17 +56,68 @@ def device_transport_cases():
             if kind != "valid":
                 require(not (stage / "bundle").exists(), "unsafe archive extracted before validation")
                 continue
-            bundle = stage / "bundle"
-            result = subprocess.run(["/bin/sh", str(bundle / "scripts/echo-install.sh"),
-                                     "--device", "install", "--bundle", str(bundle), "--release-version", "0.2.0"],
-                                    env=env, capture_output=True, timeout=10)
-            require(result.returncode == 0, "direct bundled install failed")
-            require((box.device / "bin/echo-bridge").read_bytes() == b"synthetic public bytes",
-                    "direct install bytes differ")
-            require(owner(box.root, box.device / "private/bridge.toml") == "9999:9999",
-                    "direct install changed private owner")
-            require(box.calls() == [], "direct transport invoked adb")
-    print("echo-install direct transport: install=PASS archive-safety=PASS")
+            device_config_cases(box, stage, env)
+    print("echo-install direct transport: install=PASS archive-safety=PASS "
+          "config-retention=PASS config-force=PASS config-refusal=PASS")
+
+def device_config_cases(box, stage, env):
+    bundle = stage / "bundle"
+    def install(version, *options, code=0):
+        result = subprocess.run(["/bin/sh", str(bundle / "scripts/echo-install.sh"),
+                                 "--device", "install", "--bundle", str(bundle),
+                                 "--release-version", version, *options],
+                                env=env, capture_output=True, timeout=10)
+        require(result.returncode == code, "direct bundled install exit differs")
+        expected = b"echo-install: installed\n" if code == 0 else b""
+        require(result.stdout == expected, "direct bundled install output differs")
+
+    example = bundle / "examples/bridge.echo.toml"
+    config = box.device / "private/bridge.toml"
+    install("0.1.0")
+    require((box.device / "bin/echo-bridge").read_bytes() == b"synthetic public bytes",
+            "direct install bytes differ")
+    base = example.read_bytes()
+    require(config.read_bytes() == base, "first install did not seed the bundled config")
+    require(owner(box.root, config) == "9999:9999", "direct install changed private owner")
+    retained = {"home/prompts/voice.md": b"custom voice prompt",
+                "home/prompts/runner.md": b"custom runner prompt",
+                "home/settings.toml": b"saved settings",
+                "home/grant.json": b"retained synthetic grant",
+                "private/codex-home/auth.json": b"retained synthetic credential"}
+    for name, value in retained.items():
+        path = box.device / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(value)
+    candidate = stage / "config"
+    replacement = b"synthetic replacement configuration\n"
+    candidate.write_bytes(replacement)
+    for version, previous in (("0.1.0", None), ("0.2.0", "0.1.0")):
+        install(version, "--config", str(candidate))
+        require_release(box, version, previous)
+        require(config.read_bytes() == base, "plain install changed the base config")
+        for name, value in retained.items():
+            require((box.device / name).read_bytes() == value, "plain install changed retained data")
+
+    before = snapshot_bytes(box.device)
+    install("0.3.0", "--force", code=2)
+    for source in (example, box.files["config"]):
+        install("0.3.0", "--config", str(source), "--force", code=1)
+    candidate.unlink()
+    candidate.symlink_to(example)
+    install("0.3.0", "--config", str(candidate), "--force", code=1)
+    candidate.unlink()
+    require(snapshot_bytes(box.device) == before, "config refusal changed installed state")
+    require_release(box, "0.2.0", "0.1.0")
+
+    candidate.write_bytes(replacement)
+    install("0.2.0", "--config", str(candidate), "--force")
+    require_release(box, "0.2.0", "0.1.0")
+    require(config.read_bytes() == replacement, "forced install did not replace the base config")
+    require(config.stat().st_mode & 0o777 == 0o600, "forced config mode differs")
+    require(owner(box.root, config) == "9999:9999", "forced config owner differs")
+    for name, value in retained.items():
+        require((box.device / name).read_bytes() == value, "forced install changed retained data")
+    require(box.calls() == [], "direct transport invoked adb")
 
 def payload_bytes(root):
     return {str(path.relative_to(root)): path.read_bytes()

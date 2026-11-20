@@ -61,6 +61,14 @@ pub async fn install(
     cancelled: &crate::Cancellation,
 ) -> Result<String> {
     cancelled.until(async { Ok(()) }).await?;
+    if options.force
+        && !options
+            .config
+            .as_ref()
+            .is_some_and(|path| path.is_file() && fs::File::open(path).is_ok())
+    {
+        return Err(Failure("config_unreadable"));
+    }
     let scratch = Scratch::create()?;
     let input = if let Some(directory) = &options.from_dir {
         Input::Offline(integrity::offline(directory, scratch.0.join("bundle"))?)
@@ -166,6 +174,9 @@ async fn stage_install(
     if let Some(config) = &options.config {
         adb.push(config, &format!("{stage}/config")).await?;
         let _ = write!(command, " --config '{stage}/config'");
+    }
+    if options.force {
+        command.push_str(" --force");
     }
     adb.shell(&command).await.map_err(|_| Failure("install_failed"))?;
     adb.shell(&format!("sh '{bundle}/scripts/echo-install.sh' --device screen-setup"))

@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 19
+last modified: 2026, november, 20
 status: active; Windows/Linux installer and Linux source guide
 ---
 
@@ -75,9 +75,10 @@ It uses curl or wget and sha256sum. The raw source bootstrap needs an explicit `
 `echo-setup install --from-dir ./bundle --config ./bridge.toml`.
 
 Approve the ChatGPT and Port OS codes at the URLs displayed in the terminal, then say **Computer** when
-prompted. If setup times out, run the same install command again to resume. `status --json` shows the installed
-version and runtime identity. `update --version VERSION` installs another release and keeps the previous
-public files for `rollback`. `uninstall` retains credentials and settings. Use `uninstall --purge` to remove
+prompted. If setup times out, run the plain `install --config FILE` command again to resume.
+`status --json` shows the installed version and runtime identity. `update --version VERSION` installs
+another release and keeps the previous public files for `rollback`. Both commands retain the installed
+base config and prompts. `uninstall` retains credentials and settings. Use `uninstall --purge` to remove
 them as well. The installer uses the bundled shell to maintain the device and reuses an installed screen APK.
 
 ### Build from source
@@ -146,7 +147,10 @@ Expected install success: `echo-install: installed`; screen success: `echo-scree
 The installer copies files and seeds missing prompt files; it does not validate or rewrite TOML.
 It retains an existing `bridge.toml` unless given `--force`, and always retains existing prompts.
 It creates private/home directories with mode 0700 and configuration/prompts with mode 0600.
-There is **no bridge boot integration** in this installer. After a device reboot, start it explicitly.
+On reboot, the [updated hassmic fork's satellite service](program/decisions.md#decided) starts the
+bridge as `nobody` when both `private/launch.sh` and `private/bridge.toml` are present under
+`/data/local/echo-bridge`. Update older fork scripts through the fork's own update procedure for boot
+startup. Check `status` after reboot.
 
 ## Sign in, start, link and speak
 
@@ -189,13 +193,33 @@ between wakes. Device/audio/provider success still needs the operator's actual o
 Open Settings on the screen for voice, continued-listening enable/duration, daily cap and tool-call cap.
 Changes are saved in `home/settings.toml`. During a call they remain pending until a safe between-call boundary;
 the screen reports applied or pending. If automatic replacement fails, stop/start applies the saved settings.
-For other base settings, edit the local file, stop, reinstall with the same install command plus `--force`, then
-start. A saved overlay still wins for its five keys; changing only the base does not override it.
 
-For updates, stop, obtain compatible paired release artifacts or rebuild, reinstall and start.
-Keep a private backup of configuration/state before updating. Plain install updates binaries/CA but retains
-configuration and prompts. `--force` replaces only base configuration. To roll back, install the previous
-compatible artifact set with the retained state and start; do not mix Codex and bridge release versions.
+For other base settings, edit your local `bridge.toml` and keep a private backup of the installed config.
+Use a matching native installer and release bundle with `--force` support. On Windows PowerShell run:
+
+```powershell
+.\echo-setup-VERSION-windows-x86_64.exe install --config .\bridge.toml --force
+```
+
+On Linux run:
+
+```sh
+./echo-setup-VERSION-linux-x86_64 install --config ./bridge.toml --force
+```
+
+The installer stops the bridge, replaces `private/bridge.toml`, and guides startup and setup. Existing
+prompts, the saved settings overlay, credentials and grants are retained. A saved overlay still wins for
+its five keys. Native `rollback` restores the previous verified public files and starts the bridge.
+Restore a previous base config separately from its private backup.
+For a Linux source build, use the source install command above with `--force`, followed by the source
+`start` command.
+
+For an optional screen pack, use the [local directory push](screen-packs.md#local-push) from a Linux
+authoring host. It places a validated `<name>@<version>` directory under the installed home’s `screens/`.
+For a hosted pack, open Settings > **Load screen packs** on the paired screen, enter the HTTPS URL and
+its 64-digit hexadecimal SHA-256 digest under **Add from URL**, then choose **Download pack**. Use **Refresh packs** to
+check installation. Select the installed pack and choose **Use screen pack** in the same
+[paired controls](screen-packs.md#paired-controls).
 
 To unlink Port OS while the bridge is running:
 
@@ -227,7 +251,7 @@ Neither bridge uninstall nor screen uninstall removes hassmic.
 | Network deadline despite working root networking | The non-root launch needs Android network group 3990 as well as inet. Use `runas nobody 3990,inet`; do not switch to root to hide the error. |
 | TLS/certificate failure | The child has a cleared environment and cannot discover the Echo's system CA bundle. Set absolute `codex.ca_file` to the installed PEM bundle; it also supplies bridge OAuth/MCP trust roots. |
 | Echo asks to link Port OS again, or `/healthz` shows `"mcp":"relink_for_scope"` | The current grant lacks a permission required by a called tool. Run the link command above and review the requested permissions. Then ask for the action again. |
-| Fresh release `start failed; installed files retained` | Complete the stopped-bridge sign-in and screen setup above, then start. Files may be installed even though the wrapper did not print success. |
+| Native `start_failed` | Installed files remain available. Run `doctor` with the same installer to diagnose startup, correct the reported prerequisite, then run plain `install` to resume. |
 | Home already owned / second start refused | Stop the existing owner and wait for cleanup before sign-in/start. Do not delete the lease or blindly kill an unknown process. |
 | Invalid base / rejected settings | An invalid base prevents startup. An invalid overlay is rejected wholly and the validated base is retained with a warning. Correct the reported field and retry. |
 

@@ -10,8 +10,7 @@ if ! command -v setup_operator >/dev/null 2>&1; then
   . "$(dirname -- "$0")/echo-install-setup.sh"
 fi
 release_bundle='' release_version=null device_mode=false
-# Native host adapter: retain one lifecycle implementation behind two transports.
-# Only the trusted, embedded copy accepts an archive; the validated bundle owns install.
+# The trusted adapter prepares the archive; the validated bundle owns install.
 if [ "${1:-}" = --device ]; then
   shift
   device_mode=true
@@ -54,19 +53,24 @@ if [ "${1:-}" = --device ]; then
     exit 0
   fi
   if [ "${1:-}" = install ] && [ "${2:-}" = --bundle ]; then
-    [ "$#" = 5 ] || { [ "$#" = 7 ] && [ "$6" = --config ]; } || exit 2
+    case $# in
+      5) ;;
+      7) [ "$6" = --config ] || exit 2 ;;
+      8) [ "$6" = --config ] && [ "$8" = --force ] || exit 2 ;;
+      *) exit 2 ;;
+    esac
     [ "$4" = --release-version ] || exit 2
-    release_version=$5
+    bundle=$3 release_version=$5
     release_version_valid "$release_version" || exit 2
-    bundle=$3
     case $bundle in /data/local/tmp/echo-setup-*/bundle) ;; *) exit 1 ;; esac
-    suffix=${bundle#/data/local/tmp/echo-setup-}
-    suffix=${suffix%/bundle}
+    stage=${bundle%/bundle}
+    suffix=${stage#/data/local/tmp/echo-setup-}
     case $suffix in '' | *[!0-9-]*) exit 1 ;; esac
-    release_bundle=$bundle
     config=${7:-$bundle/examples/bridge.echo.toml}
-    case $config in "$bundle/examples/bridge.echo.toml" | "${bundle%/bundle}/config") ;; *) exit 1 ;; esac
-    set -- install --config "$config" --bridge "$bundle/bin/echo-bridge" --codex "$bundle/bin/codex-app-server" --ca "$bundle/bin/cacert.pem"
+    case $config in "$bundle/examples/bridge.echo.toml" | "$stage/config") ;; *) exit 1 ;; esac
+    [ "$#" != 8 ] || { [ "$config" = "$stage/config" ] && [ ! -L "$stage" ] && [ ! -L "$config" ]; } || exit 1
+    release_bundle=$bundle
+    set -- install --config "$config" --bridge "$bundle/bin/echo-bridge" --codex "$bundle/bin/codex-app-server" --ca "$bundle/bin/cacert.pem" ${8+"$8"}
   fi
 fi
 # Fixed product identity, never a caller override or evaluated shell fragment.
