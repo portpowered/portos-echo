@@ -173,11 +173,14 @@ async fn t3_account_completion_refuses_dependency_failure_and_untrusted_stdout()
 }
 
 async fn ready(listener: &TcpListener) -> Result<TcpStream> {
-    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await??;
-    let mut bytes = [0; 5];
-    socket.read_exact(&mut bytes).await?;
-    assert_eq!(&bytes, b"ready");
-    Ok(socket)
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (mut socket, _) = listener.accept().await?;
+        let mut bytes = [0; 5];
+        socket.read_exact(&mut bytes).await?;
+        assert_eq!(&bytes, b"ready");
+        Ok(socket)
+    })
+    .await?
 }
 
 #[tokio::test]

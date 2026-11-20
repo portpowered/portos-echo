@@ -1,6 +1,7 @@
 //! T3 guided-account owner through real native processes and authenticated HTTP.
 use super::*;
 use echo_setup::setup::Prompt;
+use std::io::ErrorKind;
 use tokio::sync::oneshot;
 
 fn prepare(fixture: &Fixture, screen: u16, verb: &str) -> Result {
@@ -71,8 +72,11 @@ async fn stream(listener: TcpListener, state: &'static str) -> Result {
     let body = format!("data: {{\"seq\":1,\"state\":{state}}}\n\ndata: {{\"seq\":2,\"state\":{state}}}\n\n");
     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n", body.len()).as_bytes()).await?;
     let mut byte = [0];
-    let closed = socket.read(&mut byte).await;
-    assert!(matches!(closed, Ok(0)) || closed.is_err());
+    let read = socket
+        .read(&mut byte)
+        .await
+        .map_err(|error| format!("SSE client close: {error:?}"))?;
+    assert_eq!(read, 0, "SSE client must close after the response");
     Ok(())
 }
 
@@ -178,16 +182,25 @@ async fn t3_guided_observation_and_output_failures_settle_before_returning() -> 
         } else {
             "{\"state\":\"error\",\"relink\":false,\"message\":\"SYNTHETIC-ACCOUNT\"}"
         };
-        let server = tokio::spawn(stream(screen, state));
+        let (publish, account_ready) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            account_ready.await?;
+            tokio::time::timeout(Duration::from_secs(5), stream(screen, state))
+                .await
+                .map_err(|_| "SSE exchange did not finish before the deadline")?
+        });
         let mut count = 0;
         let mut guided = Box::pin(connection.guide_account(AccountCommand::Signin, 100, |_| {
             count += 1;
             Err(Failure("output_failed"))
         }));
-        let child = tokio::select! {
-            result = &mut guided => return Err(format!("early result: {result:?}").into()),
+        let mut child = tokio::select! {
+            result = &mut guided => return Err(format!("guide completed before the account child was ready: {result:?}").into()),
             socket = ready(&barrier) => socket?,
         };
+        // The screen cannot deliver a terminal frame before we observe the
+        // account child blocked at its readiness barrier.
+        publish.send(()).map_err(|()| "SSE peer dropped before publication")?;
         let result = guided.await;
         assert_eq!(
             result,
@@ -198,9 +211,20 @@ async fn t3_guided_observation_and_output_failures_settle_before_returning() -> 
             }))
         );
         assert_eq!(count, usize::from(output_failure));
-        drop(child);
-        server.await??;
         cleaned(&fixture, true)?;
+        let mut byte = [0];
+        let closed = tokio::time::timeout(Duration::from_secs(5), child.read(&mut byte))
+            .await
+            .map_err(|_| "account child socket did not close before the deadline")?;
+        // Forced child termination can reset the readiness connection on Windows.
+        assert!(
+            matches!(closed, Ok(0))
+                || closed
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == ErrorKind::ConnectionReset),
+            "account child socket must close without sending another receipt: {closed:?}"
+        );
+        server.await??;
     }
     Ok(())
 }

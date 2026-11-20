@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use super::mcp_session::Session;
+use super::{mcp_lights::Journey, mcp_peers::Control};
 
 impl Session {
     pub fn expect_screen(&self, expected: &Value) -> Result<(), String> {
@@ -96,11 +97,12 @@ impl Session {
     }
 
     pub(super) async fn dispatch(&self) -> Result<(), String> {
-        self.live
-            .as_ref()
-            .ok_or("M5: missing Live fixture")?
-            .events
-            .send(())
+        let live = self.live.as_ref().ok_or("M5: missing Live fixture")?;
+        if self.journey != Journey::Lifecycle && live.observed.borrow()["media_ready"] != true {
+            return Err("M5: home delegation requires provider media readiness".into());
+        }
+        live.events
+            .send(Control::Delegate)
             .await
             .map_err(|_| "M5: delegation control failed".into())
     }
@@ -176,18 +178,26 @@ impl Session {
             // Negotiation needs the media cadence. Once established, the replay
             // probe polls without consuming the turn deadline or grant lifetime.
             self.live.as_mut().ok_or("M5: missing provider")?.tick().await?;
-            let milliseconds = if appends == 1 { 20 } else { 0 };
-            self.advance_bridge(milliseconds).await?;
-            self.elapsed_ms += milliseconds;
-            if milliseconds != 0 && self.elapsed_ms.is_multiple_of(1000) {
-                self.fixture
-                    .as_ref()
-                    .ok_or("M5: missing authorization fixture")?
-                    .advance(1)
-                    .map_err(|_| "M5: fixture clock failed")?;
+            if appends == 1 {
+                self.advance_media().await?;
+            } else {
+                self.advance_bridge(0).await?;
             }
             tokio::task::yield_now().await;
         }
+    }
+
+    pub(super) async fn advance_media(&mut self) -> Result<(), String> {
+        self.advance_bridge(20).await?;
+        self.elapsed_ms += 20;
+        if self.elapsed_ms.is_multiple_of(1000) {
+            self.fixture
+                .as_ref()
+                .ok_or("M5: missing authorization fixture")?
+                .advance(1)
+                .map_err(|_| "M5: fixture clock failed")?;
+        }
+        Ok(())
     }
 }
 

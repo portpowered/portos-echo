@@ -41,8 +41,15 @@ impl Session {
             return Err("M5: committed grant scope mismatch".into());
         }
         self.wake().await?;
+        self.wait_for_media().await?;
         self.dispatch().await?;
-        self.reach(1).await?;
+        // With transport established and no reply yet, native model and
+        // resource I/O can settle at the same bridge clock instant.
+        self.live
+            .as_ref()
+            .ok_or("M5: missing Live fixture")?
+            .wait_home_append()
+            .await?;
         self.wait_for_reply().await?;
         let fixture = self.fixture.as_ref().ok_or("M5: missing home fixture")?;
         if fixture.counts().map_err(|_| "M5: authorization observation failed")? != counts
@@ -125,6 +132,21 @@ impl Session {
         run_oracles::speech(self.transcript()?.as_bytes(), phrases)
     }
 
+    async fn wait_for_media(&mut self) -> Result<(), String> {
+        let mut observed = self.live.as_ref().ok_or("M5: missing Live fixture")?.observed.clone();
+        loop {
+            let live = self.live.as_mut().ok_or("M5: missing Live fixture")?;
+            tokio::select! {
+                biased;
+                ready = observed.wait_for(|state| state["media_ready"] == true) => {
+                    return ready.map(|_| ()).map_err(|_| "M5: provider ended before home media readiness".into());
+                }
+                tick = live.tick() => tick?,
+            }
+            self.advance_media().await?;
+        }
+    }
+
     async fn wait_for_reply(&mut self) -> Result<(), String> {
         loop {
             self.observe()?;
@@ -135,12 +157,18 @@ impl Session {
                 .iter()
                 .filter(|row| row["event"] == "reply.played")
                 .count();
-            if live.observed.borrow()["transcripts"]
-                .as_array()
-                .is_some_and(|items| items.len() == 2)
-                && played == 1
-            {
-                return Ok(());
+            if played > 1 {
+                return Err("M5: received multiple home playback receipts".into());
+            }
+            if played == 1 {
+                // The bridge can observe Played before the independent
+                // provider stdout reader has received both transcripts.
+                return live
+                    .observed
+                    .wait_for(|state| state["transcripts"].as_array().is_some_and(|items| items.len() == 2))
+                    .await
+                    .map(|_| ())
+                    .map_err(|_| "M5: provider ended before home transcripts".into());
             }
             if live.observed.has_changed().is_err() || self.bridge.as_mut().ok_or("M5: missing bridge")?.exited()? {
                 return Err("M5: home reply ended before playback".into());
