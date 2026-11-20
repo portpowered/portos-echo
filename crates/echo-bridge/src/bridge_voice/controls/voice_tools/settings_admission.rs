@@ -18,7 +18,8 @@ async fn t3_settings_v2_live_narrowing() {
         let catalog = tools.catalog().await.unwrap();
         let grant = tools.grant().unwrap();
         let addr = screen.address().unwrap();
-        let url = format!("http://127.0.0.1:{}/settings/v2?token=synthetic-owner", addr.port());
+        let origin = "http://127.0.0.1";
+        let url = format!("{origin}:{}/settings/v2?token=synthetic-owner", addr.port());
         let client = Client::builder().no_proxy().build().unwrap();
         let (release, stopped) = oneshot::channel();
         let work = async {
