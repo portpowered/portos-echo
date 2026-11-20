@@ -133,11 +133,22 @@ button:disabled {
     margin: 0;
     pointer-events: none;
 }
+/* Action feedback floats at the top left, mirroring the gear; it takes no
+   layout space and shows no box while empty. A side status slot overrides. */
 .screen-pack + [role="status"] {
+    position: fixed;
+    top: 12px;
+    left: 24px;
+    max-width: calc(100vw - 144px);
+    min-height: 0;
+    margin: 0;
     z-index: 1;
     width: fit-content;
     background: #101827;
     pointer-events: none;
+}
+.screen-pack + [role="status"]:empty {
+    visibility: hidden;
 }
 /* A plain icon: no box, border or fill; a 72 px target and a focus ring. */
 .settings-gear {

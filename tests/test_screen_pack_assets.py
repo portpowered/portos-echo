@@ -19,12 +19,12 @@ STATES = {'idle', 'connecting', 'listening', 'thinking', 'speaking', 'muted',
           'setup', 'approval', 'error'}
 
 
-def generate(out, version='0.1.0'):
+def generate(out, version='0.1.0', name='template'):
     command = ['sh', str(ROOT / 'scripts/make-template-screenpack.sh'),
-               '--version', version, '--out', str(out)]
+               '--version', version, '--name', name, '--out', str(out)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=120)
     require(result.returncode == 0, 'template generation failed: ' + result.stderr)
-    require(result.stdout == f'screenpack: template={version} generated=PASS checksum=PASS\n',
+    require(result.stdout == f'screenpack: {name}={version} generated=PASS checksum=PASS\n',
             'generator success diagnostic differs')
     rejected = subprocess.run(command, capture_output=True, text=True, timeout=10)
     require(rejected.returncode == 1 and rejected.stdout == '', 'existing output was replaced')
@@ -33,8 +33,11 @@ def generate(out, version='0.1.0'):
     command[command.index('--version') + 1] = '../escape'
     rejected = subprocess.run(command, capture_output=True, text=True, timeout=10)
     require(rejected.returncode == 2, 'invalid version was accepted')
-    independent_template(out / f'template-{version}.screenpack.tar.gz')
-    if version == '0.2.0':
+    independent_template(out / f'{name}-{version}.screenpack.tar.gz', name)
+    if name == 'default':
+        from screen_pack_face import face_cases
+        face_cases(out / f'{name}@{version}', decode)
+    elif version == '0.2.0':
         from screen_pack_eyes import eyes_cases
         eyes_cases(out / f'template@{version}', decode)
     else:
@@ -42,29 +45,32 @@ def generate(out, version='0.1.0'):
     print('F23 template: identity=PASS archive=PASS checksum=PASS codecs=PASS rest_boundaries=PASS')
 
 
-def independent_template(archive):
+def independent_template(archive, name='template'):
+    # The default face adds the awake (wake) clip pair and its pack.css.
+    states = STATES | {'wake'} if name == 'default' else STATES
+    count = 2 + 2 * (len(states) + 1) + (name == 'default')
     with tarfile.open(archive) as source:
         members = source.getmembers()
-        require(len(members) == 22 and all(m.isfile() for m in members), 'template membership differs')
+        require(len(members) == count and all(m.isfile() for m in members), 'template membership differs')
         files = {m.name: source.extractfile(m).read() for m in members}
-        require(len(files) == 22, 'duplicate template member')
+        require(len(files) == count, 'duplicate template member')
     manifest = json.loads(files['pack.json'])
-    require(manifest['format'] == 1 and manifest['name'] == 'template', 'template identity differs')
-    require(manifest['version'] == archive.name[9:-18], 'template version differs')
+    require(manifest['format'] == 1 and manifest['name'] == name, 'template identity differs')
+    require(manifest['version'] == archive.name[len(name) + 1:-18], 'template version differs')
     require(manifest['character']['rest'] == 'rest.png', 'rest reference differs')
-    require(set(manifest['character']['states']) == STATES, 'mapped states differ')
+    require(set(manifest['character']['states']) == states, 'mapped states differ')
     if tuple(map(int, manifest['version'].split('-', 1)[0].split('.')[:2])) < (0, 2):
         require(manifest['layout'] == {
             'safe_area': {'x': 0, 'y': 0, 'width': 100, 'height': 100}, 'slots': {},
             'stage': {'anchor': {'x': 50, 'y': 50}, 'scale': 1, 'background': '#101820'}},
             'default layout differs')
-    expected = {'pack.json', 'rest.png'}
-    for name in sorted(STATES | {'happy'}):
-        clip = (manifest['character']['emotes']['happy'] if name == 'happy'
-                else manifest['character']['states'][name]['clip'])
-        require(clip == {'webm': name + '.webm', 'mp4': name + '.mp4',
-                         'mode': 'once' if name == 'happy' else 'loop'}, 'clip mapping differs')
-        expected.update((name + '.webm', name + '.mp4'))
+    expected = {'pack.json', 'rest.png'} | ({'pack.css'} if name == 'default' else set())
+    for clip_name in sorted(states | {'happy'}):
+        clip = (manifest['character']['emotes']['happy'] if clip_name == 'happy'
+                else manifest['character']['states'][clip_name]['clip'])
+        require(clip == {'webm': clip_name + '.webm', 'mp4': clip_name + '.mp4',
+                         'mode': 'once' if clip_name == 'happy' else 'loop'}, 'clip mapping differs')
+        expected.update((clip_name + '.webm', clip_name + '.mp4'))
     require(set(files) == expected, 'unexpected template payload')
     require(sum(map(len, files.values())) <= 64 * 1024**2, 'expanded limit exceeded')
     require(all(len(data) <= 8 * 1024**2 for name, data in files.items()
@@ -472,5 +478,6 @@ if __name__ == '__main__':
         destination = Path(sys.argv[2]).resolve()
         generate(destination, '0.2.0')
         generate(destination / 'older')
+        generate(destination / 'default', '0.3.0', 'default')
         contact_sheet(destination / 'template@0.2.0', destination / 'contact.png', decode)
         push_cases(destination, '0.2.0', destination / 'pushed-home')

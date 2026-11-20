@@ -194,6 +194,14 @@ export function startPage(root: HTMLElement, href: string): () => void {
         if (packs?.update(state)) {
             stopAnimation?.();
             details.replaceChildren();
+            // The face plays the emote; a tap anywhere dismisses it, with no box.
+            const dismiss = controls.querySelector("button");
+            if (state.state === "emotion" && dismiss) {
+                dismiss.textContent = "";
+                dismiss.className = "home-tap";
+                dismiss.setAttribute("aria-label", "Dismiss");
+                content.append(dismiss);
+            }
         } else if (state.state === "emotion" && face) {
             // An emote the pack lacks keeps the native frame animation.
             content.insertBefore(heading, details);

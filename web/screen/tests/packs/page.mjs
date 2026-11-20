@@ -225,18 +225,35 @@ test("pack page: state src sequence, first-frame handoff, urgent cuts and Emotio
         document.querySelector("video[hidden]").firstFrame(),
     );
     observed.push(await visible(page));
-    for (const [seq, state] of [
-        [3, "thinking"],
-        [4, "speaking"],
-        [5, "ready"],
+    // States cut at once; speaking starts after SPEAK_START_MS and the
+    // mouth closes only after SPEAK_HOLD_MS of silence.
+    for (const [seq, state, wait] of [
+        [3, "thinking", 0],
+        [4, "speaking", 100],
+        [5, "ready", 500],
     ]) {
         const prior = await visible(page);
-        await send(page, seq, { state, message: "Ready" });
+        await send(page, seq, { state, message: "" });
         assert.equal(await visible(page), prior);
-        await end(page);
+        const clip = `${state === "ready" ? "idle" : state}.webm`;
+        const requested = () =>
+            page.evaluate(
+                (clip) =>
+                    [...document.querySelectorAll("video")].some((video) =>
+                        (video.dataset.src ?? "").includes(clip),
+                    ),
+                clip,
+            );
+        if (wait) {
+            await page.clock.runFor(wait - 1);
+            assert.equal(await requested(), false, `${state} waits`);
+            await page.clock.runFor(1);
+        }
+        assert.equal(await requested(), true, `${state} requested`);
         await loaded(page);
         observed.push(await visible(page));
     }
+    assert.equal(await page.locator("main h1").count(), 0, "no state text");
     assert.deepEqual(observed, [
         "idle.webm",
         "listening.webm",
@@ -273,7 +290,8 @@ test("pack page: state src sequence, first-frame handoff, urgent cuts and Emotio
         "frame-b",
     );
     assert.equal(await page.locator("video").count(), 2);
-    assert.equal(await page.locator(".pack-clock").isVisible(), false);
+    // Time and date stay on screen through every state.
+    assert.equal(await page.locator(".pack-clock").isVisible(), true);
     const requests = await page.evaluate(() =>
         window.packRequests.map((r) => r.url),
     );
@@ -315,7 +333,10 @@ test("pack page: MP4 capability fallback, idle/rest, character-only, and reduced
     });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.evaluate(() => window.motionSettled.then(() => undefined));
-    assert.equal(await page.locator("video:not([hidden]):not([data-leaving])").count(), 0);
+    assert.equal(
+        await page.locator("video:not([hidden]):not([data-leaving])").count(),
+        0,
+    );
     await send(page, 2, { state: "speaking" });
     assert.equal(await page.locator(".pack-stage img").isVisible(), true);
     await page.evaluate(() => {
@@ -325,7 +346,10 @@ test("pack page: MP4 capability fallback, idle/rest, character-only, and reduced
     await page.waitForFunction(() => window.packRequests.length === 4);
     await send(page, 3, { state: "ready", message: "Rest only" });
     assert.equal(await page.locator(".pack-stage img").isVisible(), true);
-    assert.equal(await page.locator("video:not([hidden]):not([data-leaving])").count(), 0);
+    assert.equal(
+        await page.locator("video:not([hidden]):not([data-leaving])").count(),
+        0,
+    );
 });
 
 test("pack page: layout clock/link coordinates, safe-area approval containment and no-pack reset", async (t) => {

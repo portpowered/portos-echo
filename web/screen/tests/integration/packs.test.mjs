@@ -191,7 +191,9 @@ test("FACE 960×600 generated template keeps stage and native controls apart", a
 
 async function playing(page, name) {
     await page.waitForFunction((name) => {
-        const video = document.querySelector("video:not([hidden]):not([data-leaving])");
+        const video = document.querySelector(
+            "video:not([hidden]):not([data-leaving])",
+        );
         return (
             video &&
             new URL(video.src).pathname.endsWith(`/${name}`) &&
@@ -408,7 +410,8 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     }
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.waitForFunction(
-        () => !document.querySelector("video:not([hidden]):not([data-leaving])"),
+        () =>
+            !document.querySelector("video:not([hidden]):not([data-leaving])"),
     );
     assert.equal(await page.locator(".pack-stage img").isVisible(), true);
     assert.equal(

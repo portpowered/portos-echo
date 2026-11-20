@@ -82,15 +82,13 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             node.style.fontSize = `${28 * value.font_scale}px`;
         return value;
     }
-    function besideStage(value: Slot | undefined): value is Slot {
-        return !!(
-            value &&
-            value.x < 100 &&
-            value.y < 100 &&
-            layout &&
-            host.querySelector(".pack-stage") &&
-            value.x >= layout.stage.anchor.x + 25 * layout.stage.scale
-        );
+    // A slot right of the stage is beside it. Over a full-page stage, a card
+    // slot in the right half is fitted to the right edge as well.
+    function besideStage(value: Slot | undefined, card = false): value is Slot {
+        if (!value || value.x >= 100 || value.y >= 100 || !layout) return false;
+        if (!host.querySelector(".pack-stage")) return false;
+        const right = layout.stage.anchor.x + 25 * layout.stage.scale;
+        return value.x >= (card ? Math.min(50, right) : right);
     }
     function placeFeedback(status?: Slot) {
         // The page keeps its live region immediately after the presentation.
@@ -170,7 +168,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             if (heading) {
                 const status = slot(heading, "status");
                 heading.dataset.packSlot = "";
-                if (besideStage(status)) {
+                if (besideStage(status, true)) {
                     fitSideSlot(heading, status);
                     heading.style.lineHeight = "1.4";
                 }
@@ -184,7 +182,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
                 // Native buttons stay with their prompt inside one scrollable card.
                 const controls = host.querySelector<HTMLElement>(".controls");
                 if (controls) details.append(controls);
-                if (besideStage(anchor)) {
+                if (besideStage(anchor, true)) {
                     fitSideSlot(details, anchor);
                     fitSideCard(details, controls);
                 }
