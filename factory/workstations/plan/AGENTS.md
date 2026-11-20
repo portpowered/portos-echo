@@ -11,9 +11,8 @@ Before planning, read these files in full:
 4. `factory/docs/standards/review-standards.md`
 5. `factory/docs/standards/testing-standards.md` whenever the work adds,
    changes, moves, optimizes, or reviews tests
-6. `docs/internal/standards/STANDARDS.md` and the repository-wide standards
-   relevant to the affected backend, frontend, contract, testing, or writing
-   surfaces
+6. `docs/program/rules.md` (this repository's standing rules) and
+   `docs/program/baselines.md`; `docs/program/plan.md` wins over `docs/design/`
 
 The factory standards are authoritative for plan and task shape. Do not copy a
 conflicting pattern from an older PRD or from this prompt.
