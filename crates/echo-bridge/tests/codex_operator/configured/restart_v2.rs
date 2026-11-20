@@ -104,8 +104,8 @@ allow_tools = ["endpoint_query", "control"]"#
         .unwrap()
         .replace("server = []", &mcp)
         .replace(
-            "[codex]\n",
-            "[codex]\nweb_search = 'live'\ndelegate_model = 'original-runner'\n",
+            "\n[codex]\n",
+            "\n[codex]\nweb_search = 'live'\ndelegate_model = 'original-runner'\n",
         )
         .into_bytes();
     std::fs::write(path, &base).unwrap();

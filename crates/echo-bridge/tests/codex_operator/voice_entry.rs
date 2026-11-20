@@ -470,7 +470,7 @@ fn configure_routes(fixture: &Fixture, port: u16, live: &str, api_key: bool, sea
     let path = fixture.directory.path().join("bridge.toml");
     let mut text = std::fs::read_to_string(&path).unwrap();
     if let Some(search) = search {
-        text = text.replace("[codex]", &format!("[codex]\nweb_search='{search}'"));
+        text = text.replace("\n[codex]\n", &format!("\n[codex]\nweb_search='{search}'\n"));
     }
     std::fs::write(path, format!("{text}\n[chatgpt_auth]\ntoken_endpoint='{live}/token'\n")).unwrap();
     if api_key {

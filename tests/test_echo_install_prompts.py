@@ -1,12 +1,18 @@
 """Exercise release-seed provenance through the manual installer and fake adb."""
 import hashlib
 import os
-import subprocess
 
 from test_echo_install import DEVICE, ROOT, TIME_ZONE_HINT, Sandbox, owner, require
 
 NAMES = ("runner", "voice")
 FAILURE = "echo-install: device operation failed\n"
+HISTORICAL_PROMPTS = ROOT / "tests/fixtures/echo-install-prompts"
+# 218736fe changed runner.md only. Both releases shipped the same voice blob.
+HISTORICAL_RELEASES = (
+    ("3313a7da-runner.md", "3313a7da-voice.md"),
+    ("e707712d-runner.md", "e707712d-voice.md"),
+    ("218736fe-runner.md", "e707712d-voice.md"),
+)
 
 
 def prompt_path(box, name):
@@ -56,11 +62,10 @@ def check_retry_cleanup(box):
 
 
 def historical_cases():
-    for revision in ("3313a7da", "e707712d", "218736fe"):
+    for release in HISTORICAL_RELEASES:
         with Sandbox() as box:
-            for name in NAMES:
-                previous = subprocess.check_output(
-                    ["git", "show", f"{revision}:examples/prompts/{name}.md"], cwd=ROOT)
+            for name, fixture in zip(NAMES, release, strict=True):
+                previous = (HISTORICAL_PROMPTS / fixture).read_bytes()
                 installed = prompt_path(box, name)
                 installed.parent.mkdir(parents=True, exist_ok=True)
                 installed.write_bytes(previous)
@@ -85,7 +90,7 @@ def current_and_edited_cases():
             check_seed(box, name, data)
 
         # Even historical release bytes for a different prompt are owner edits here.
-        edited = subprocess.check_output(["git", "show", "3313a7da:examples/prompts/runner.md"], cwd=ROOT)
+        edited = (HISTORICAL_PROMPTS / "3313a7da-runner.md").read_bytes()
         voice = prompt_path(box, "voice")
         voice.write_bytes(edited)
         before = identity(voice), identity(seed_record(box, "voice"))

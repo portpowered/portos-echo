@@ -242,7 +242,8 @@ async fn codex_operator_required_home_and_offline_cache_miss_fail_before_spawn()
     let fixture = Fixture::new("chatgpt");
     let path = fixture.directory.path().join("bridge.toml");
     let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, text.split("[codex]").next().unwrap()).unwrap();
+    let (without_codex, _) = text.split_once("\n[codex]\n").unwrap();
+    std::fs::write(&path, without_codex).unwrap();
     fixture
         .invoke(
             &["status", "--config", "bridge.toml"],
@@ -281,7 +282,7 @@ async fn web_search_invalid_cli_rejects_before_child_trace_home_or_connection() 
     let absent = fixture.directory.path().join("absent-codex-home");
     let text = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("[codex]", "[codex]\nweb_search='invalid-private-input'")
+        .replace("\n[codex]\n", "\n[codex]\nweb_search='invalid-private-input'\n")
         .replace(&fixture.home.display().to_string(), &absent.display().to_string());
     std::fs::write(path, text).unwrap();
     let mut process = Process::spawn(&mut voice_entry::command(&fixture));

@@ -417,7 +417,7 @@ time_zone_hint() {
   hint='echo-install: set codex.time_zone in bridge.toml for local time answers'
   case $zone in
     '' | /* | */ | *//* | *[!A-Za-z0-9_+/-]*) ;;
-    UTC | GMT | */*) hint="$hint (device zone: $zone)" ;;
+    *) hint="$hint (device zone: $zone)" ;;
   esac
   printf '%s\n' "$hint" >&2
 }
