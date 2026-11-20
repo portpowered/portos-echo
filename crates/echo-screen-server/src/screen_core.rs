@@ -12,11 +12,12 @@ pub(crate) struct Publication {
 
 impl Publication {
     pub fn event(self) -> axum::response::sse::Event {
-        let event = axum::response::sse::Event::default().data(self.data);
+        let event = axum::response::sse::Event::default();
         match self.name {
             Some(name) => event.event(name),
             None => event,
         }
+        .data(self.data)
     }
 }
 
