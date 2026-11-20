@@ -1,6 +1,5 @@
 //! T3: actual configured owner exits, controlled child/media, real dispatcher/MCP.
 use super::*;
-use std::io::Write as _;
 
 #[tokio::test]
 #[ignore = "T3 controlled child and loopback MCP"]
@@ -134,7 +133,17 @@ fn assert_rows(fixture: &Fixture, cause: &str) {
         .collect();
     assert_eq!(created.len(), 1);
     assert_eq!(resolved.len(), 1);
-    let (outcome, reason) = match cause {
+    assert_terminal(resolved[0], created[0], cause);
+    assert!(
+        !std::fs::read_to_string(fixture.directory.path().join("tool-trace"))
+            .unwrap()
+            .contains("synthetic-private-error")
+    );
+    writeln!(std::io::stdout(), "{}", resolved[0]).unwrap();
+}
+
+fn expected(cause: &str) -> (&str, Option<&str>) {
+    match cause {
         "child" => ("failed", Some("app_server_exit")),
         "failed" => ("failed", Some("turn_failed")),
         "error" => ("failed", Some("realtime_error")),
@@ -145,21 +154,19 @@ fn assert_rows(fixture: &Fixture, cause: &str) {
         "timeout" => ("timed_out", None),
         "interrupt" => ("interrupted", None),
         _ => ("cancelled", None),
-    };
-    assert_eq!(resolved[0]["outcome"], outcome);
+    }
+}
+
+fn assert_terminal(resolved: &Value, created: &Value, cause: &str) {
+    let (outcome, reason) = expected(cause);
+    assert_eq!(resolved["outcome"], outcome);
     assert_eq!(
-        resolved[0].get("reason_class"),
+        resolved.get("reason_class"),
         reason.map(|reason| json!(reason)).as_ref()
     );
-    assert_eq!(resolved[0]["handback"], "unobserved");
-    assert_eq!(resolved[0]["delegation_id"], created[0]["delegation_id"]);
-    assert_eq!(resolved[0]["thread_id"], "fixture-thread");
-    assert_eq!(resolved[0]["run_id"], "run-1");
-    assert!(resolved[0].get("answer").is_none());
-    assert!(
-        !std::fs::read_to_string(fixture.directory.path().join("tool-trace"))
-            .unwrap()
-            .contains("synthetic-private-error")
-    );
-    writeln!(std::io::stdout(), "{}", resolved[0]).unwrap();
+    assert_eq!(resolved["handback"], "unobserved");
+    assert_eq!(resolved["delegation_id"], created["delegation_id"]);
+    assert_eq!(resolved["thread_id"], "fixture-thread");
+    assert_eq!(resolved["run_id"], "run-1");
+    assert!(resolved.get("answer").is_none());
 }

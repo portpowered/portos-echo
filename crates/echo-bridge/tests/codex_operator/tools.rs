@@ -12,6 +12,7 @@ use tokio::sync::watch;
 
 mod trace_exits;
 mod trace_failures;
+mod trace_isolation;
 
 pub(super) struct Media {
     pub state: watch::Sender<PeerState>,
@@ -168,9 +169,16 @@ async fn wait_resolution(fixture: &Fixture) {
     }
     loop {
         let raw = std::fs::read_to_string(fixture.directory.path().join("tool-trace")).unwrap();
+        let expected = if std::fs::read_to_string(fixture.home.join("mode")).unwrap() == "tool-trace-isolation" {
+            2
+        } else {
+            1
+        };
         if raw
             .lines()
-            .any(|line| serde_json::from_str::<Value>(line).is_ok_and(|row| row["event"] == "delegation.resolved"))
+            .filter(|line| serde_json::from_str::<Value>(line).is_ok_and(|row| row["event"] == "delegation.resolved"))
+            .count()
+            == expected
         {
             return;
         }

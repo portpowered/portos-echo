@@ -40,9 +40,12 @@ def emit(value):
     print(json.dumps(value), flush=True)
 
 
+trace_turn = "fixture-turn"
+
+
 def tool_request(approval=False):
     emit({"id": "fixture-tool", "method": "item/tool/call", "params": {
-        "threadId": "fixture-thread", "turnId": "fixture-turn", "callId": "fixture-call",
+        "threadId": "fixture-thread", "turnId": trace_turn, "callId": "fixture-call",
         "tool": "test_requires_approval" if approval else "test_echo",
         "arguments": {} if approval else {"text": "delegated echo"}, "namespace": None}})
 
@@ -88,20 +91,33 @@ for line in sys.stdin:
         if home.joinpath("mode").read_text().startswith("tool-trace"):
             # The RPC result and item completion name the same logical call.
             emit({"method": "item/completed", "params": {
-                "threadId": "fixture-thread", "turnId": "fixture-turn", "item": {
+                "threadId": "fixture-thread", "turnId": trace_turn, "item": {
                     "type": "dynamicToolCall", "id": "fixture-call",
                     "tool": "test_requires_approval" if home.joinpath("mode").read_text() == "tool-trace-approval" else "test_echo",
                     "arguments": {} if home.joinpath("mode").read_text() == "tool-trace-approval" else {"text": "delegated echo"},
                     "status": "completed", "contentItems": request["result"]["contentItems"],
                     "success": request["result"]["success"]}}})
             emit({"method": "item/completed", "params": {
-                "threadId": "fixture-thread", "turnId": "fixture-turn", "item": {
+                "threadId": "fixture-thread", "turnId": trace_turn, "item": {
                     "type": "agentMessage", "id": "answer-7", "phase": "final_answer",
                     "text": "synthetic-result-7"}}})
             for _ in range(2):
                 emit({"method": "turn/completed", "params": {
-                    "threadId": "fixture-thread", "turn": {"id": "fixture-turn", "status": "completed"}}})
+                    "threadId": "fixture-thread", "turn": {"id": trace_turn, "status": "completed"}}})
         home.joinpath("tool-result").write_text(json.dumps(request["result"]))
+        if home.joinpath("mode").read_text() == "tool-trace-isolation" and trace_turn == "fixture-turn":
+            trace_turn = "fixture-turn-2"
+            emit({"method": "thread/realtime/itemAdded", "params": {"threadId": "fixture-thread", "item": {
+                "type": "handoff_request", "handoff_id": "delegation-8", "item_id": "handoff-8",
+                "input_transcript": "second task", "active_transcript": []}}})
+            emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": trace_turn}}})
+            for thread, turn in (("foreign-thread", trace_turn), ("fixture-thread", "unknown-turn"), ("fixture-thread", "fixture-turn")):
+                emit({"method": "item/completed", "params": {"threadId": thread, "turnId": turn, "item": {
+                    "type": "mcpToolCall", "id": "foreign-item", "tool": "foreign_tool", "server": "foreign-server",
+                    "status": "completed", "result": {"content": []}}}})
+            emit({"method": "turn/completed", "params": {"threadId": "fixture-thread", "turn": {
+                "id": "fixture-turn", "status": "completed"}}})
+            tool_request()
         continue
     method = request["method"]
     home.joinpath("last-method").write_text(method)
