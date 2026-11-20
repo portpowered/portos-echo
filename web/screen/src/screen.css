@@ -453,13 +453,73 @@ main.settings-open {
     min-height: 64px;
     margin: 4px 0;
 }
-.settings-packs img {
+.settings-packs .pack-rail {
+    --pack-card-width: 48%;
+    --pack-gap: 12px;
+    display: flex;
+    gap: var(--pack-gap);
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+}
+/* Let the first and last card reach the same center as the middle cards. */
+.settings-packs .pack-rail::before,
+.settings-packs .pack-rail::after {
+    content: "";
+    flex: 0 0 calc((100% - var(--pack-card-width)) / 2 - var(--pack-gap));
+}
+.settings-packs .pack-card {
+    flex: 0 0 var(--pack-card-width);
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-height: none;
+    margin: 0;
+    padding: 12px;
+    scroll-snap-align: center;
+}
+.settings-packs .pack-card:focus-visible {
+    outline-offset: -6px;
+}
+.settings-packs .pack-card[aria-pressed="true"] {
+    border-color: #ffdb70;
+}
+.settings-packs .pack-preview {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 160px;
+    font-size: 20px;
+    background: #101827;
+}
+.settings-packs .pack-preview img {
     display: block;
     width: 160px;
     height: 160px;
     max-width: 100%;
     object-fit: contain;
-    background: #101827;
+}
+.settings-packs .pack-marker {
+    visibility: hidden;
+    font-size: 20px;
+}
+.settings-packs .pack-card[aria-pressed="true"] .pack-marker {
+    visibility: visible;
+}
+.settings-packs .pack-navigation {
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+.settings-packs .pack-navigation button {
+    min-width: 64px;
+    min-height: 64px;
+    padding: 12px 16px;
+}
+.settings-packs .pack-navigation button[aria-disabled="true"] {
+    background: #35445b;
 }
 .screen-pack {
     position: fixed;
