@@ -119,17 +119,7 @@ async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accept
             }
         }
         let output = result(fixture).await;
-        if std::fs::read_to_string(fixture.home.join("mode")).unwrap() == "tool-trace" {
-            loop {
-                let raw = std::fs::read_to_string(fixture.directory.path().join("tool-trace")).unwrap();
-                if raw.lines().any(|line| {
-                    serde_json::from_str::<Value>(line).is_ok_and(|row| row["event"] == "delegation.resolved")
-                }) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        }
+        wait_resolution(fixture).await;
         stop.send(()).unwrap();
         while !observer
             .commands()
@@ -161,6 +151,22 @@ pub(super) async fn ready(fixture: &Fixture) -> (tokio::net::TcpStream, Lines<Bu
         if state["state"] == "ready" && state["message"] == "Echo Live ready" {
             return (control, screen);
         }
+    }
+}
+
+async fn wait_resolution(fixture: &Fixture) {
+    if std::fs::read_to_string(fixture.home.join("mode")).unwrap() != "tool-trace" {
+        return;
+    }
+    loop {
+        let raw = std::fs::read_to_string(fixture.directory.path().join("tool-trace")).unwrap();
+        if raw
+            .lines()
+            .any(|line| serde_json::from_str::<Value>(line).is_ok_and(|row| row["event"] == "delegation.resolved"))
+        {
+            return;
+        }
+        tokio::task::yield_now().await;
     }
 }
 

@@ -15,7 +15,7 @@ async fn pending<T>(future: std::pin::Pin<&mut impl Future<Output = T>>) {
 type TracedCall<'a> =
     Call<'a, tokio::io::ReadHalf<tokio::io::DuplexStream>, tokio::io::WriteHalf<tokio::io::DuplexStream>>;
 
-fn traced<'a>(io: &'a mut Io, trace: crate::bridge_trace::Trace) -> TracedCall<'a> {
+fn traced(io: &mut Io, trace: crate::bridge_trace::Trace) -> TracedCall<'_> {
     let mut call = Call::new(io);
     call.thread = Some("thread-1".into());
     call.phase = Phase::Active;
@@ -25,7 +25,9 @@ fn traced<'a>(io: &'a mut Io, trace: crate::bridge_trace::Trace) -> TracedCall<'
 }
 
 fn project(call: &mut TracedCall<'_>, method: &str, params: Value) -> Result<Event, Error> {
-    let raw = serde_json::to_vec(&json!({"method":method,"params":params})).unwrap();
+    let mut envelope = json!({"method":method});
+    envelope["params"] = params;
+    let raw = serde_json::to_vec(&envelope).unwrap();
     call.project(echo_codex::codex_protocol::decode(&raw).unwrap())
 }
 

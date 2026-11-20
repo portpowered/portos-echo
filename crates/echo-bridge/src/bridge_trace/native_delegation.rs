@@ -182,7 +182,13 @@ impl Native {
         result
     }
 
-    pub fn tool(&mut self, method: &str, params: &Value, names: &[(String, String)]) -> Result<(), Error> {
+    pub fn tool(
+        &mut self,
+        method: &str,
+        params: &Value,
+        names: &[(String, String)],
+        request: Option<&echo_codex::codex_protocol::RequestId>,
+    ) -> Result<(), Error> {
         for (id, entry) in &mut self.active {
             if params["threadId"] != entry.thread || params["turnId"].as_str() != entry.turn.as_deref() {
                 continue;
@@ -191,6 +197,10 @@ impl Native {
                 fields["delegation_id"] = id.clone().into();
                 fields["thread_id"] = entry.thread.clone().into();
                 fields["turn_id"] = params["turnId"].clone();
+                if let Some(request) = request {
+                    fields["request_id"] = json!(request);
+                    fields["call_id"] = params["item"]["id"].clone();
+                }
                 self.trace.record("delegation.tool", entry.run.as_deref(), fields)?;
             }
         }

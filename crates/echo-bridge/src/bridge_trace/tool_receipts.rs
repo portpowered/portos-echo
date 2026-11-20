@@ -1,4 +1,4 @@
-//! Correlation-only dispatch receipts. Tool bodies never enter the trace.
+//! Legacy dispatch receipts plus bounded native completion observation.
 use super::Trace;
 use crate::Error;
 use echo_codex::codex_protocol::{RequestId, ToolCall, ToolResult, TurnInterrupt};
@@ -76,7 +76,7 @@ impl ToolTrace {
     }
 
     pub fn notification(&mut self, method: &str, params: &serde_json::Value) -> Result<(), Error> {
-        self.native.tool(method, params, &self.names)?;
+        self.native.tool(method, params, &self.names, None)?;
         self.native.notification(method, params)
     }
 
@@ -125,7 +125,7 @@ impl ToolTrace {
         super::delegation_payload::prepare(&mut payload, self.trace.payloads)?;
         let params = json!({"threadId":call.thread_id,"turnId":call.turn_id,"item":{
             "type":"dynamicToolCall","id":call.call_id,"tool":call.tool,"arguments":payload.remove("request")}});
-        self.native.tool("item/started", &params, &self.names)?;
+        self.native.tool("item/started", &params, &self.names, None)?;
         if self.pending.len() >= 1024 {
             return Err(Error::Trace);
         }
@@ -151,7 +151,7 @@ impl ToolTrace {
         .into();
         params["item"]["success"] = result.success.into();
         params["item"]["contentItems"] = serde_json::to_value(&result.content_items).map_err(|_| Error::Trace)?;
-        self.native.tool("item/completed", &params, &self.names)
+        self.native.tool("item/completed", &params, &self.names, Some(id))
     }
 }
 
