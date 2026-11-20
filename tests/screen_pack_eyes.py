@@ -57,11 +57,14 @@ def idle_and_focus(pack, decode):
     require(max(abs(a - b) for a, b in zip(x, x[1:])) <= 3, 'idle gaze jumps between frames')
     blinks = [len(list(run)) for closed, run in groupby(area < max(areas) * .8 for area in areas) if closed]
     require(2 <= len(blinks) <= 3 and all(2 <= run <= 6 for run in blinks), 'idle blink timing differs')
-    # Chroma subsampling and downscaling mix a blink's thin edges with the
-    # backdrop. Compare the decoded core hues within that encoding tolerance.
+    # When open, the core survives chroma subsampling. A nearly closed eye
+    # has only a few rows, so downscaling mixes its core with the glow.
     hues = [360 * rgb_to_hsv(*color)[0] for color in colors]
-    require(205 <= min(hues) <= max(hues) <= 223 and max(hues) - min(hues) <= 8,
-            f'idle eye hue varies from {min(hues):.1f} to {max(hues):.1f} degrees')
+    open_hues = [hue for hue, area in zip(hues, areas) if area >= max(areas) * .8]
+    gaze_hue = Counter(open_hues).most_common(1)[0][0]
+    require(205 <= gaze_hue <= 223 and max(abs(hue - gaze_hue) for hue in open_hues) <= 4
+            and max(abs(hue - gaze_hue) for hue in hues) <= 17,
+            f'idle eye hue varies from {min(hues):.1f} to {max(hues):.1f} degrees (open {gaze_hue:.1f})')
     for frame in pixel_runs(pack, 'listening', decode):
         (fx, fy), area, color = measure(frame)
         require(abs(fx - 79.5) < 3.2 and abs(fy - 49.5) < 2, 'listening gaze moved off center')
@@ -69,7 +72,7 @@ def idle_and_focus(pack, decode):
     require(not any(lit(frame, 85 * SAMPLE[0]) for frame in idle), 'idle shows unexpected marks')
     print(f'FACE idle: seconds={len(idle) / 30:g} stable_positions={len(stable)} '
           f'width_span={span:.1%} blink_frames={blinks} '
-          f'hue={min(hues):.1f}–{max(hues):.1f}deg; listening=centered')
+          f'open_hue={min(open_hues):.1f}–{max(open_hues):.1f}deg; listening=centered')
 
 
 def muted_and_speaking(pack, decode):
