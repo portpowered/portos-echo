@@ -73,33 +73,6 @@ impl Jobs {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn jobs_bound_pending_and_history_without_evicting_live_work() {
-        let mut jobs = Jobs::default();
-        let first = jobs.admit().unwrap();
-        jobs.update(&first, "downloading", None);
-        for _ in 0..3 {
-            assert!(jobs.admit().is_some());
-        }
-        assert_eq!(jobs.admit(), None);
-        for _ in 0..40 {
-            let id = jobs.configured().unwrap();
-            jobs.update(&id, "failed", Some(Error::Digest));
-        }
-        assert_eq!(jobs.snapshot().len(), 32);
-        assert_eq!(jobs.snapshot()[0].id, first);
-        assert_eq!(jobs.snapshot()[0].status, "downloading");
-        assert_eq!(jobs.snapshot()[31].reason, Some("checksum_mismatch"));
-        jobs.update(&first, "installed", None);
-        assert!(jobs.admit().is_some());
-        assert_eq!(jobs.admit(), None);
-    }
-}
-
 fn reason(error: Error) -> &'static str {
     match error {
         Error::Ca => "tls_failed",
@@ -169,10 +142,11 @@ pub(crate) async fn install(State(state): State<HttpState>, request: HttpRequest
     if !authorized(&core, &uri) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    let mut jobs = state.packs.jobs.lock().await;
     if !core.accepting() || *state.stop.borrow() || state.drain.borrow().is_some() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    let Some(id) = state.packs.jobs.lock().await.admit() else {
+    let Some(id) = jobs.admit() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     permit.send(Request {
@@ -181,4 +155,31 @@ pub(crate) async fn install(State(state): State<HttpState>, request: HttpRequest
         digest: input.sha256,
     });
     (StatusCode::ACCEPTED, Json(serde_json::json!({"version":1,"job":id}))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jobs_bound_pending_and_history_without_evicting_live_work() {
+        let mut jobs = Jobs::default();
+        let first = jobs.admit().unwrap();
+        jobs.update(&first, "downloading", None);
+        for _ in 0..3 {
+            assert!(jobs.admit().is_some());
+        }
+        assert_eq!(jobs.admit(), None);
+        for _ in 0..40 {
+            let id = jobs.configured().unwrap();
+            jobs.update(&id, "failed", Some(Error::Digest));
+        }
+        assert_eq!(jobs.snapshot().len(), 32);
+        assert_eq!(jobs.snapshot()[0].id, first);
+        assert_eq!(jobs.snapshot()[0].status, "downloading");
+        assert_eq!(jobs.snapshot()[31].reason, Some("checksum_mismatch"));
+        jobs.update(&first, "installed", None);
+        assert!(jobs.admit().is_some());
+        assert_eq!(jobs.admit(), None);
+    }
 }

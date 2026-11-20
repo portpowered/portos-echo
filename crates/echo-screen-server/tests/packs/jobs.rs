@@ -99,6 +99,7 @@ async fn t3_screen_pack_interactive_install_status_checksum_failure_and_continue
     );
     assert_eq!(request(addr, "GET", "/screen.css", "", "").await?.0, 200);
     assert_eq!(std::fs::read_dir(home.path().join("screens"))?.count(), 2);
+    assert!(!home.path().join("settings.toml").exists());
     assert!(!bad.to_string().contains(&peer.base));
     assert!(!bad.to_string().contains(TOKEN));
     server.shutdown().await?;
@@ -125,7 +126,7 @@ async fn t3_screen_pack_interactive_auth_origin_media_and_revocation() -> Result
         );
     }
     assert_eq!(
-        request(addr, "POST", &path, &good, "Origin: http://foreign.invalid\r\n")
+        request(addr, "POST", &path, &good, "Origin: http://127.0.0.1:1\r\n")
             .await?
             .0,
         403

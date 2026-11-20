@@ -26,6 +26,15 @@ impl Drop for Cancellation {
     }
 }
 
+struct Worker {
+    root: PathBuf,
+    client: Result<reqwest::Client, Error>,
+    core: Arc<Mutex<Core>>,
+    stop: watch::Receiver<bool>,
+    drain: watch::Receiver<Option<tokio::time::Instant>>,
+    files: Arc<super::Files>,
+}
+
 pub(crate) async fn start(
     downloads: Downloads,
     core: Arc<Mutex<Core>>,
@@ -33,75 +42,84 @@ pub(crate) async fn start(
     drain: watch::Receiver<Option<tokio::time::Instant>>,
     results: mpsc::Sender<crate::PackInstallResult>,
     files: Arc<super::Files>,
-    mut requests: mpsc::Receiver<jobs::Request>,
+    requests: mpsc::Receiver<jobs::Request>,
 ) {
-    let root = downloads.home.join("screens");
-    let client = download::client(downloads.ca.as_deref()).await;
-    for (url, digest) in downloads.pins {
-        let Some(id) = files.jobs.lock().await.configured() else {
-            break;
-        };
-        let result = execute(
-            &root,
-            &client,
-            jobs::Request { id, url, digest },
-            &core,
-            &stop,
-            &drain,
-            &files,
-        )
-        .await;
-        tokio::select! {
-            biased;
-            () = crate::cancelled(stop.clone()) => return,
-            () = crate::draining(drain.clone()) => return,
-            sent = results.send(result) => if sent.is_err() { break; },
-        }
-    }
-    drop(results);
-    loop {
-        let request = tokio::select! {
-            biased;
-            () = crate::cancelled(stop.clone()) => break,
-            () = crate::draining(drain.clone()) => break,
-            request = requests.recv() => match request { Some(request) => request, None => break },
-        };
-        let _ = execute(&root, &client, request, &core, &stop, &drain, &files).await;
-    }
+    let worker = Worker {
+        root: downloads.home.join("screens"),
+        client: download::client(downloads.ca.as_deref()).await,
+        core,
+        stop,
+        drain,
+        files,
+    };
+    worker.configured(downloads.pins, results).await;
+    worker.interactive(requests).await;
 }
 
-async fn execute(
-    root: &std::path::Path,
-    client: &Result<reqwest::Client, Error>,
-    request: jobs::Request,
-    core: &Mutex<Core>,
-    stop: &watch::Receiver<bool>,
-    drain: &watch::Receiver<Option<tokio::time::Instant>>,
-    files: &super::Files,
-) -> crate::PackInstallResult {
-    files.jobs.lock().await.update(&request.id, "downloading", None);
-    let result = if *stop.borrow() || drain.borrow().is_some() || !core.lock().await.accepting() {
-        Err(Error::Cancelled)
-    } else {
-        match client {
-            Ok(client) => install(root, client, &request.url, &request.digest, core, stop, drain).await,
-            Err(error) => Err(*error),
+impl Worker {
+    async fn configured(&self, pins: Vec<(String, String)>, results: mpsc::Sender<crate::PackInstallResult>) {
+        for (url, digest) in pins {
+            let Some(id) = self.files.jobs.lock().await.configured() else {
+                break;
+            };
+            let result = self.execute(jobs::Request { id, url, digest }).await;
+            tokio::select! {
+                biased;
+                () = crate::cancelled(self.stop.clone()) => return,
+                () = crate::draining(self.drain.clone()) => return,
+                sent = results.send(result) => if sent.is_err() { break; },
+            }
         }
-    };
-    files.jobs.lock().await.update(
-        &request.id,
-        if result.is_ok() { "installed" } else { "failed" },
-        result.as_ref().err().copied(),
-    );
-    match result {
-        Ok(id) => crate::PackInstallResult {
-            installed: Some(id),
-            reason: None,
-        },
-        Err(error) => crate::PackInstallResult {
-            installed: None,
-            reason: Some(error.to_string()),
-        },
+    }
+
+    async fn interactive(&self, mut requests: mpsc::Receiver<jobs::Request>) {
+        loop {
+            let request = tokio::select! {
+                biased;
+                () = crate::cancelled(self.stop.clone()) => break,
+                () = crate::draining(self.drain.clone()) => break,
+                request = requests.recv() => match request { Some(request) => request, None => break },
+            };
+            let _ = self.execute(request).await;
+        }
+    }
+
+    async fn execute(&self, request: jobs::Request) -> crate::PackInstallResult {
+        self.files.jobs.lock().await.update(&request.id, "downloading", None);
+        let result = if *self.stop.borrow() || self.drain.borrow().is_some() || !self.core.lock().await.accepting() {
+            Err(Error::Cancelled)
+        } else {
+            match &self.client {
+                Ok(client) => {
+                    install(
+                        &self.root,
+                        client,
+                        &request.url,
+                        &request.digest,
+                        &self.core,
+                        &self.stop,
+                        &self.drain,
+                    )
+                    .await
+                }
+                Err(error) => Err(*error),
+            }
+        };
+        self.files.jobs.lock().await.update(
+            &request.id,
+            if result.is_ok() { "installed" } else { "failed" },
+            result.as_ref().err().copied(),
+        );
+        match result {
+            Ok(id) => crate::PackInstallResult {
+                installed: Some(id),
+                reason: None,
+            },
+            Err(error) => crate::PackInstallResult {
+                installed: None,
+                reason: Some(error.to_string()),
+            },
+        }
     }
 }
 async fn install(
