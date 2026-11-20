@@ -222,6 +222,9 @@ async fn respond(
     let state = wire.borrow().clone();
     if *phase == 0 && frames > 0 && state.inputs == 1 {
         order.begin(process).await?;
+        // The question's transcript is whole before its answer: the bridge
+        // takes a later user turn for the interruption.
+        transcript(process, "user", "What time is it?", true).await?;
         transcript(process, "assistant", "The time is twelve.", false).await?;
         answer(peer, 0..5).await?;
         observed.send_modify(|state| {
