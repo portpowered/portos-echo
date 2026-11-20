@@ -125,6 +125,7 @@ fn notify(root: &Path, name: &str, message: &[u8]) -> io::Result<()> {
 fn shell(root: &Path, command: &str) -> io::Result<()> {
     if (command == "test -x /data/local/hassmic/runas" && root.join("no-hassmic").exists())
         || (command.contains("prepare-archive") && root.join("unsafe-archive").exists())
+        || (command.ends_with("--device screen-setup") && root.join("screen-failed").exists())
     {
         std::process::exit(1);
     }

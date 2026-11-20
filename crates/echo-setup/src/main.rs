@@ -157,6 +157,9 @@ fn fix(error: &str) -> &'static str {
         }
         "stop_failed" => "The bridge did not stop safely. Inspect status before retrying the update.",
         "start_failed" => "The installed files remain available. Run doctor to diagnose startup.",
+        "screen_setup_failed" => {
+            "Screen setup failed. Installed files remain. Check the device package manager and home-app state, then run install again."
+        }
         "unsafe_process_user" => {
             "The running bridge identity is unsafe. Run status and doctor before retrying; no process was signalled."
         }

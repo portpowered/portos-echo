@@ -172,5 +172,8 @@ async fn stage_install(
         let _ = write!(command, " --config '{stage}/config'");
     }
     adb.shell(&command).await.map_err(|_| Failure("install_failed"))?;
+    adb.shell(&format!("sh '{bundle}/scripts/echo-install.sh' --device screen-setup"))
+        .await
+        .map_err(|_| Failure("screen_setup_failed"))?;
     Ok(version)
 }

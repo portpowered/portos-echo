@@ -155,6 +155,11 @@ printf 'process_user=%s\\n' \"\$user\""
 }
 
 setup_operator() {
+  if [ "${command_name:?}" = screen-setup ]; then
+    setup_screen
+    printf '%s\n' 'echo-install: screen ready'
+    return
+  fi
   case ${command_name:?} in
     signin | ensure-signin)
       [ "${running:?}" = 0 ] || fail 'stop the bridge before signing in'
@@ -183,4 +188,27 @@ if test '${command_name:?}' = ensure-signin; then
 fi
 /data/local/hassmic/runas \"${run_user:?}\" \"${run_groups:?}\" '${device:?}/bin/echo-bridge' '${operator_command:?}' --config '${device:?}/private/bridge.toml' </dev/null"
   printf 'echo-install: %s completed\n' "$command_name"
+}
+
+setup_screen() {
+  # The shell owns Android package/home selection for every native host.
+  # Reapply home selection after an interrupted setup, even if pm installed it.
+  run_adb shell "test ! -L /data/local/hassmic && test -d /data/local/hassmic/state
+test ! -L /data/local/hassmic/state
+for leaf in screen_home .echo-screen-home; do
+  test ! -L /data/local/hassmic/state/\$leaf
+  test ! -e /data/local/hassmic/state/\$leaf || test -f /data/local/hassmic/state/\$leaf
+  test ! -e /data/local/hassmic/state/\$leaf || test \"\$(stat -c %h /data/local/hassmic/state/\$leaf)\" = 1
+done
+test -f '${device:?}/apk/echo-screen.apk'
+packages=\$(pm list packages org.portos.echoscreen)
+if ! printf '%s\\n' \"\$packages\" | awk '\$0 == \"package:org.portos.echoscreen\" { found=1 } END { exit !found }'; then
+  pm install -r '${device:?}/apk/echo-screen.apk' >/dev/null
+fi
+umask 077
+printf '%s\\n' org.portos.echoscreen > /data/local/hassmic/state/.echo-screen-home
+chown system:system /data/local/hassmic/state/.echo-screen-home
+chmod 644 /data/local/hassmic/state/.echo-screen-home
+mv -f /data/local/hassmic/state/.echo-screen-home /data/local/hassmic/state/screen_home
+am start -n org.portos.echoscreen/.MainActivity >/dev/null"
 }

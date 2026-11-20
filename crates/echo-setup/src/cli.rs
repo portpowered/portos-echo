@@ -18,6 +18,7 @@ Ctrl+C cancels setup with exit 1 after bounded cleanup; run install again to res
 Stdin is not consumed; closed stdin is supported for bootstrap/script invocation.
 Device identifiers, credentials and dependency logs are never printed.
 Install/update confirm the running nobody identity and requested version after start.
+Install/update prepare the screen app before account linking; existing app installs are retained.
 Rollback confirms the running nobody identity after the shell restores and starts.
 Doctor: read-only checks, at most 15 seconds; clock within 300 seconds of host,
 256 MiB free on data, TCP 443 egress as nobody (device nc required).

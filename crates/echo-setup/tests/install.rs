@@ -15,6 +15,8 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[path = "support/install_setup.rs"]
 mod install_setup;
+#[path = "support/screen.rs"]
+mod screen;
 
 struct Fixture(PathBuf, Option<install_setup::Service>);
 

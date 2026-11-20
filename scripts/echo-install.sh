@@ -137,9 +137,9 @@ if [ "$1" = --help ]; then
 fi
 command_name=$1
 shift
-case $command_name in signin | ensure-signin | link) [ "$device_mode" = true ] || usage ;;
+case $command_name in signin | ensure-signin | link | screen-setup) [ "$device_mode" = true ] || usage ;;
 esac
-case $command_name in install | start | stop | status | uninstall | doctor | rollback | signin | ensure-signin | link) ;; *) usage ;; esac
+case $command_name in install | start | stop | status | uninstall | doctor | rollback | signin | ensure-signin | link | screen-setup) ;; *) usage ;; esac
 config='' bridge='' codex='' ca='' force=false purge=false seen=' '
 while [ "$#" -gt 0 ]; do
   flag=$1
@@ -370,7 +370,7 @@ for root in '$device/private' '$device/home'; do
     done' sh {} + || exit 1
 done"
 }
-case $command_name in signin | ensure-signin | link)
+case $command_name in signin | ensure-signin | link | screen-setup)
   setup_operator
   exit 0
   ;;
