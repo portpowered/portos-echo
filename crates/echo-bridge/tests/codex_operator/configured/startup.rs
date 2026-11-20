@@ -161,10 +161,10 @@ async fn cleanup(fixture: &Fixture, path: &Path, auth: &[u8]) {
 async fn startup_network_two_refusals_then_ready_without_relink_or_restart() {
     let rows = exercise("startup-network", async |fixture, path, observer| {
         waiting(path, 1).await;
-        assert!(observer.commands().is_empty());
+        assert_eq!(observer.commands(), Vec::<Command>::new());
         tokio::time::advance(Duration::from_millis(1001)).await;
         waiting(path, 2).await;
-        assert!(observer.commands().is_empty());
+        assert_eq!(observer.commands(), Vec::<Command>::new());
         let port: u16 = std::fs::read_to_string(fixture.home.join("provider-port"))
             .unwrap()
             .parse()
@@ -199,7 +199,7 @@ async fn startup_network_timeout_retries_and_auth_transition_clears_waiting() {
     for reject in [false, true] {
         let rows = exercise("startup-timeout", async |fixture, path, observer| {
             waiting(path, 1).await;
-            assert!(observer.commands().is_empty());
+            assert_eq!(observer.commands(), Vec::<Command>::new());
             std::fs::write(
                 fixture.home.join("mode"),
                 if reject { "startup-unauthorized" } else { "chatgpt" },
@@ -236,7 +236,7 @@ async fn startup_network_healthy_and_definite_auth_keep_existing_admission() {
                 ready_health(path).await;
             } else {
                 relink(path).await;
-                assert!(observer.commands().is_empty());
+                assert_eq!(observer.commands(), Vec::<Command>::new());
             }
         })
         .await;
@@ -262,7 +262,7 @@ async fn startup_network_cancel_during_account_or_retry_releases_all_owners() {
                 } else {
                     waiting(path, 1).await;
                 }
-                assert!(observer.commands().is_empty());
+                assert_eq!(observer.commands(), Vec::<Command>::new());
             },
         )
         .await;
@@ -279,7 +279,7 @@ async fn startup_network_stalled_account_deadline_retries_to_ready() {
         while !std::fs::read_to_string(fixture.home.join("last-method")).is_ok_and(|m| m == "account/read") {
             tokio::task::yield_now().await;
         }
-        assert!(observer.commands().is_empty());
+        assert_eq!(observer.commands(), Vec::<Command>::new());
         tokio::time::advance(Duration::from_millis(30001)).await;
         waiting(path, 1).await;
         std::fs::write(fixture.home.join("mode"), "chatgpt").unwrap();

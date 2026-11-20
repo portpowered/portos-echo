@@ -66,33 +66,64 @@ fn configure(root: &Path, origin: &str) -> (echo_config::BridgeConfig, Vec<u8>) 
     (config, auth)
 }
 
-async fn serve(mut stream: TcpStream, unauthorized: bool) -> bool {
+#[derive(Default)]
+struct Ledger {
+    accounts: std::sync::atomic::AtomicUsize,
+    refreshes: std::sync::atomic::AtomicUsize,
+}
+
+async fn request_path(stream: &mut TcpStream) -> String {
     let mut request = Vec::new();
     while !request.ends_with(b"\r\n\r\n") {
         request.push(stream.read_u8().await.unwrap());
         assert!(request.len() < 16384);
     }
     let request = String::from_utf8(request).unwrap();
-    let first = request.lines().next().unwrap();
+    let length = request
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+        .map_or(0, |(_, value)| value.trim().parse::<usize>().unwrap());
+    assert!(length < 16384);
+    stream.read_exact(&mut vec![0; length]).await.unwrap();
+    request.lines().next().unwrap().to_owned()
+}
+
+async fn serve(mut stream: TcpStream, unauthorized: bool, ledger: &Ledger) {
+    use std::sync::atomic::Ordering;
+    let first = request_path(&mut stream).await;
     let accounts = first.starts_with("GET /backend-api/wham/accounts/check ");
+    let refresh = first == "POST /token HTTP/1.1";
     assert!(
-        accounts || first.starts_with("GET /backend-api/wham/config/bundle "),
+        accounts || refresh || first.starts_with("GET /backend-api/wham/config/bundle "),
         "unexpected provider path"
     );
-    let (status, body) = if accounts && unauthorized {
+    ledger.accounts.fetch_add(usize::from(accounts), Ordering::SeqCst);
+    ledger.refreshes.fetch_add(usize::from(refresh), Ordering::SeqCst);
+    let (status, body) = if refresh {
+        ("401 Unauthorized", json!({"error":"invalid_grant"}))
+    } else if accounts && unauthorized {
         ("401 Unauthorized", json!({}))
     } else if accounts {
         (
             "200 OK",
             json!({"accounts":[{"id":"synthetic-local",
-        "workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}), // lint-rules: allow-literal inert pin routing metadata; all HTTP uses LocalRoutes proxy
+        "workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}),
         )
-    } else {
+    }
+    // lint-rules: allow-literal inert pin routing metadata; all HTTP uses LocalRoutes proxy
+    else {
         ("200 OK", json!({"requirements_toml":{}}))
     };
     let body = body.to_string();
     stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-    accounts
+}
+
+async fn serve_all(listener: TcpListener, unauthorized: bool, ledger: std::sync::Arc<Ledger>) {
+    loop {
+        let (stream, _) = listener.accept().await.unwrap();
+        serve(stream, unauthorized, &ledger).await;
+    }
 }
 
 #[tokio::test]
@@ -154,22 +185,13 @@ async fn inspect(
     stop: tokio::sync::oneshot::Sender<()>,
 ) {
     event(path, "bridge.recovering").await;
-    assert!(observer.commands().is_empty());
+    assert_eq!(observer.commands(), Vec::<LinkCommand>::new());
     let state = health(path).await;
     assert_eq!(state["relink_required"], false);
     assert_eq!(state["startup_waiting_reason"], "dependency_unavailable");
     let listener = TcpListener::bind(address).await.unwrap();
-    let accounts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let ledger = accounts.clone();
-    let serving = tokio::spawn(async move {
-        loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            ledger.fetch_add(
-                usize::from(serve(stream, unauthorized).await),
-                std::sync::atomic::Ordering::SeqCst,
-            );
-        }
-    });
+    let ledger = std::sync::Arc::new(Ledger::default());
+    let serving = tokio::spawn(serve_all(listener, unauthorized, ledger.clone()));
     // Cross the timer wheel's millisecond rounding at the 1 s retry boundary.
     tokio::time::advance(Duration::from_millis(1001)).await;
     event(
@@ -185,7 +207,11 @@ async fn inspect(
     assert_eq!(state["relink_required"], unauthorized);
     assert!(state.get("startup_waiting_reason").is_none());
     assert_eq!(observer.commands().contains(&LinkCommand::Probe), !unauthorized);
-    assert!(accounts.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+    assert!(ledger.accounts.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+    assert_eq!(
+        ledger.refreshes.load(std::sync::atomic::Ordering::SeqCst) != 0,
+        unauthorized
+    );
     stop.send(()).unwrap();
     serving.abort();
     let _ = serving.await;
