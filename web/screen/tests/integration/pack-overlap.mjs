@@ -177,7 +177,7 @@ export async function checkTemplateLayout(
             ],
             violations,
         );
-        if (await card.evaluate((el) => el.scrollHeight > el.clientHeight))
+        if (await message.evaluate((el) => el.scrollHeight > el.clientHeight))
             violations.push(`${frame.state}: reviewed prompt does not fit`);
         for (const [, button] of buttons) await button.click({ trial: true });
         await page.screenshot({
@@ -196,6 +196,34 @@ export async function checkTemplateLayout(
             violations,
         );
     }
+    const longPrompt = cases[0].text.repeat(5);
+    await fixture.update({
+        ...cases[0].frame,
+        id: "scroll",
+        prompt: longPrompt,
+    });
+    await playing(page, "approval.webm");
+    const longCard = page.locator(".pack-approval");
+    const longMessage = longCard.getByText(longPrompt, { exact: true });
+    assert.equal(
+        await longMessage.evaluate((el) => el.scrollHeight > el.clientHeight),
+        true,
+    );
+    const longButtons = ["Allow", "Deny"].map((name) => [
+        name,
+        longCard.getByRole("button", { name, exact: true }),
+    ]);
+    await observe(
+        "Long Approval",
+        [
+            ["stage", stage],
+            ["status", heading],
+            ["message", longMessage],
+            ...longButtons,
+        ],
+        violations,
+    );
+    for (const [, button] of longButtons) await button.click({ trial: true });
     await fixture.update({ state: "connected" });
     await playing(page, "idle.webm");
     await observe(

@@ -29,17 +29,26 @@ function fitSideSlot(node: HTMLElement, slot: Slot) {
 }
 
 function fitSideCard(card: HTMLElement, controls: HTMLElement | null) {
-    for (const message of card.querySelectorAll<HTMLElement>(":scope > p")) {
+    const messages = card.querySelectorAll<HTMLElement>(":scope > p");
+    for (const message of messages) {
         message.style.fontSize = "inherit";
         message.style.margin = "0 0 8px";
     }
-    if (!controls) return;
+    if (!controls?.childElementCount) return;
+    card.style.display = "flex";
+    card.style.flexDirection = "column";
+    card.style.overflow = "hidden";
+    for (const message of messages) {
+        message.style.minHeight = "0";
+        message.style.overflowY = "auto";
+    }
     controls.style.gap = "12px";
     controls.style.flexWrap = "nowrap";
     for (const button of controls.querySelectorAll("button")) {
         button.style.flex = "1 1 0";
         button.style.minWidth = "0";
         button.style.maxWidth = "none";
+        button.style.marginBlock = "8px";
         button.style.paddingInline = "8px";
         button.style.fontSize = "20px";
     }
