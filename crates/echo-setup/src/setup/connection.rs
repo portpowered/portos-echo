@@ -12,6 +12,7 @@ pub struct InstalledConnection {
     adb: Adb,
     screen: u16,
     deadline: Instant,
+    account: super::account::AccountOwner,
 }
 
 impl InstalledConnection {
@@ -24,7 +25,12 @@ impl InstalledConnection {
             adb.select(options.serial.as_deref()).await?;
             let raw = private_read(&adb, "setup-config").await?;
             let screen = screen_port(raw.expose())?;
-            Ok(Self { adb, screen, deadline })
+            Ok(Self {
+                adb,
+                screen,
+                deadline,
+                account: super::account::AccountOwner::default(),
+            })
         })
         .await
     }
@@ -46,12 +52,26 @@ impl InstalledConnection {
     /// Poll concurrently with screen observation to present the public prompt.
     /// The absolute connection deadline also bounds the local adb child. Drop
     /// cancels that child; it does not establish remote command termination.
-    /// The guided setup owner must separately settle remote resources before
-    /// starting a competing screen/Codex owner or reporting terminal cleanup.
+    /// Cancellation/failure refuses further account commands until
+    /// `settle_account` verifies the stopped remote boundary. The guided setup
+    /// owner must await that result before claiming terminal cleanup.
     /// # Errors
     /// Fixed account/deadline categories, never account labels or command logs.
     pub async fn account(&self, command: super::AccountCommand) -> Result<()> {
-        super::account::run(&self.adb, command, self.deadline).await
+        self.account.run(&self.adb, command, self.deadline).await
+    }
+
+    /// Settle an ambiguous/cancelled account attempt through the existing stop
+    /// owner on the retained device. This deliberately stops a running bridge.
+    /// The shell must acquire its lifecycle lock and prove bridge absence; an
+    /// active remote signin, stale lock or unsafe process therefore refuses.
+    /// Use a separate bounded cleanup deadline after the setup deadline expires.
+    /// Do not start another screen/Codex owner unless this succeeds. A new
+    /// connection is not a substitute for settlement of this connection.
+    /// # Errors
+    /// Fixed busy, unsettled or deadline categories, without dependency output.
+    pub async fn settle_account(&self, deadline: Instant) -> Result<()> {
+        self.account.settle(&self.adb, deadline).await
     }
 
     /// Call after the bridge's screen owner creates its pairing file. Absence

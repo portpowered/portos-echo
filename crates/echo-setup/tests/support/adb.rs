@@ -168,6 +168,11 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
 }
 
 fn account_reply(root: &Path, command: &str) -> io::Result<bool> {
+    if command == "sh -s -- --device stop" && root.join("stop-reply").exists() {
+        notify(root, "stop-barrier", b"ready")?;
+        io::stdout().write_all(&fs::read(root.join("stop-reply"))?)?;
+        return Ok(true);
+    }
     if !["signin", "ensure-signin", "link"]
         .iter()
         .any(|verb| command == format!("sh -s -- --device {verb}"))

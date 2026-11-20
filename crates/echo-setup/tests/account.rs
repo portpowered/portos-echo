@@ -1,6 +1,6 @@
 //! T3 account transport: prebuilt native recording adb and isolated loopback
-//! barriers, with no accounts, device or provider traffic. This proves local
-//! command ownership only, not remote Android cancellation or guided CLI setup.
+//! barriers, with no accounts, device or provider traffic. Remote settlement
+//! uses the authored stop boundary; actual Android termination remains unproved.
 use echo_setup::{
     Failure,
     cli::Options,
@@ -47,6 +47,12 @@ impl Fixture {
         InstalledConnection::read(&options, end)
             .await
             .map_err(|error| diagnostic(error).into())
+    }
+
+    async fn settle(&self, connection: &InstalledConnection) -> Result {
+        fs::write(self.0.join("stop-reply"), "echo-install: stopped\r\n")?;
+        connection.settle_account(deadline()).await.map_err(diagnostic)?;
+        Ok(())
     }
 
     fn listener(&self, name: &str) -> Result<TcpListener> {
@@ -142,6 +148,7 @@ async fn t3_account_completion_refuses_dependency_failure_and_untrusted_stdout()
             .err()
             .ok_or("accepted reply")?;
         assert_eq!(diagnostic(error), "Failure(\"setup_account_failed\")");
+        fixture.settle(&connection).await?;
     }
     fs::write(fixture.0.join("account-reply"), "echo-install: signin completed\n")?;
     fs::write(fixture.0.join("account-failed"), "")?;
@@ -150,6 +157,7 @@ async fn t3_account_completion_refuses_dependency_failure_and_untrusted_stdout()
         Err(Failure("setup_account_failed"))
     );
     fs::remove_file(fixture.0.join("account-failed"))?;
+    fixture.settle(&connection).await?;
     fs::write(fixture.0.join("operation-failed"), "")?;
     assert_eq!(
         connection.account(AccountCommand::Signin).await,
@@ -201,7 +209,137 @@ async fn t3_account_deadline_and_drop_cancel_only_the_local_owned_child() -> Res
         let calls = fixture.calls()?;
         assert_eq!(calls.len(), 4);
         assert_eq!(calls[3][3], "sh -s -- --device signin");
+        fixture.settle(&connection).await?;
+        assert_eq!(
+            fixture.calls()?.last().map(|args| args[3].as_str()),
+            Some("sh -s -- --device stop")
+        );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_account_cancellation_refuses_overlap_until_verified_stop_on_original_device() -> Result {
+    let fixture = Fixture::new()?;
+    let connection = fixture.connection(deadline()).await?;
+    fs::write(fixture.0.join("account-reply"), "echo-install: signin completed\n")?;
+    let listener = fixture.listener("account-barrier")?;
+    let mut pending = Box::pin(connection.account(AccountCommand::Signin));
+    let mut child = tokio::select! {
+        biased;
+        result = &mut pending => return Err(format!("command completed before barrier: {result:?}").into()),
+        socket = ready(&listener) => socket?,
+    };
+    let before = fixture.calls()?.len();
+    assert_eq!(
+        connection.account(AccountCommand::Link).await,
+        Err(Failure("setup_account_busy"))
+    );
+    assert_eq!(
+        connection.settle_account(deadline()).await,
+        Err(Failure("setup_account_busy"))
+    );
+    assert_eq!(fixture.calls()?.len(), before);
+    drop(pending);
+    let mut byte = [0];
+    let closed = tokio::time::timeout(Duration::from_secs(5), child.read(&mut byte)).await?;
+    assert!(matches!(closed, Ok(0)) || closed.is_err());
+    assert_eq!(
+        connection.account(AccountCommand::Link).await,
+        Err(Failure("setup_account_unsettled"))
+    );
+    assert_eq!(fixture.calls()?.len(), before);
+    fs::write(fixture.0.join("devices"), "SYNTHETIC-OTHER\tdevice\n")?;
+    fixture.settle(&connection).await?;
+    let calls = fixture.calls()?;
+    assert_eq!(calls.len(), before + 1);
+    assert_eq!(
+        calls.last(),
+        Some(&vec![
+            "-s".into(),
+            "SYNTHETIC-DEVICE".into(),
+            "shell".into(),
+            "sh -s -- --device stop".into()
+        ])
+    );
+    fs::remove_file(fixture.0.join("account-barrier"))?;
+    connection.account(AccountCommand::Signin).await.map_err(diagnostic)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_account_ambiguous_stop_cannot_authorize_another_owner() -> Result {
+    let fixture = Fixture::new()?;
+    let connection = fixture.connection(deadline()).await?;
+    fs::write(fixture.0.join("account-reply"), "SYNTHETIC-TOKEN")?;
+    assert_eq!(
+        connection.account(AccountCommand::Signin).await,
+        Err(Failure("setup_account_failed"))
+    );
+    for reply in [
+        "",
+        "echo-install: stopped",
+        "echo-install: stopped\nSYNTHETIC-ACCOUNT\n",
+    ] {
+        fs::write(fixture.0.join("stop-reply"), reply)?;
+        assert_eq!(
+            connection.settle_account(deadline()).await,
+            Err(Failure("setup_account_unsettled"))
+        );
+        let before = fixture.calls()?.len();
+        assert_eq!(
+            connection.account(AccountCommand::Signin).await,
+            Err(Failure("setup_account_unsettled"))
+        );
+        assert_eq!(fixture.calls()?.len(), before);
+    }
+    fs::write(fixture.0.join("operation-failed"), "")?;
+    assert_eq!(
+        connection.settle_account(deadline()).await,
+        Err(Failure("setup_account_unsettled"))
+    );
+    fs::remove_file(fixture.0.join("operation-failed"))?;
+    fixture.settle(&connection).await?;
+    fs::write(fixture.0.join("account-reply"), "echo-install: link completed\n")?;
+    connection.account(AccountCommand::Link).await.map_err(diagnostic)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_account_cancelled_settlement_stays_unsettled_and_expired_cleanup_has_no_effects() -> Result {
+    let fixture = Fixture::new()?;
+    let connection = fixture.connection(deadline()).await?;
+    fs::write(fixture.0.join("account-reply"), "")?;
+    assert_eq!(
+        connection.account(AccountCommand::Signin).await,
+        Err(Failure("setup_account_failed"))
+    );
+    let before = fixture.calls()?.len();
+    assert_eq!(
+        connection.settle_account(Instant::now()).await,
+        Err(Failure("setup_timeout"))
+    );
+    assert_eq!(fixture.calls()?.len(), before);
+    fs::write(fixture.0.join("stop-reply"), "echo-install: stopped\n")?;
+    let listener = fixture.listener("stop-barrier")?;
+    let mut pending = Box::pin(connection.settle_account(deadline()));
+    let child = tokio::select! {
+        biased;
+        result = &mut pending => return Err(format!("stop completed before barrier: {result:?}").into()),
+        socket = ready(&listener) => socket?,
+    };
+    assert_eq!(
+        connection.account(AccountCommand::Link).await,
+        Err(Failure("setup_account_busy"))
+    );
+    drop(pending);
+    drop(child);
+    assert_eq!(
+        connection.account(AccountCommand::Link).await,
+        Err(Failure("setup_account_unsettled"))
+    );
+    fs::remove_file(fixture.0.join("stop-barrier"))?;
+    fixture.settle(&connection).await?;
     Ok(())
 }
 
