@@ -1,5 +1,147 @@
 #!/bin/sh
 # Shell-owned release bookkeeping, sourced by the lifecycle driver.
+release_stage_guard() {
+  case $1 in /data/local/tmp/echo-setup-*) ;; *) return 1 ;; esac
+  case ${1#/data/local/tmp/echo-setup-} in '' | *[!0-9-]*) return 1 ;; esac
+  [ ! -L /data/local/tmp ] && [ ! -L "$1" ] && [ -d "$1" ] &&
+    [ "$(stat -c %u:%a "$1")" = 0:700 ]
+}
+
+release_hash_valid() {
+  [ "${#1}" = 64 ] || return 1
+  case $1 in *[!0-9a-f]*) return 1 ;; esac
+}
+
+release_screen_pack() {
+  [ "$#" = 5 ] && [ "$4" = --stage ] || exit 2
+  stage=$5
+  release_stage_guard "$stage" || exit 1
+  id_file=$stage/screenpack.identity
+  [ ! -L "$id_file" ] && [ -f "$id_file" ] && [ "$(stat -c %s "$id_file")" -le 255 ] || exit 1
+  identity=$(cat "$id_file")
+  case $identity in default@* | template@*) ;; *) exit 1 ;; esac
+  release_version_valid "${identity#*@}" || exit 1
+  device=/data/local/echo-bridge
+  screens=$device/home/screens
+  tree=$stage/pack/$identity
+  destination=$screens/$identity
+  marker=.$identity.sha256
+  umask 077
+  case $1:$2 in
+    prepare-screen-pack:--sha256) screen_pack_prepare "$3" ;;
+    publish-screen-pack:--identity)
+      [ "$3" = "$identity" ] || exit 1
+      screen_pack_publish
+      ;;
+    *) exit 2 ;;
+  esac
+}
+
+screen_pack_prepare() {
+  archive=$stage/screenpack.tar.gz
+  release_hash_valid "$1" || return 1
+  [ ! -L "$archive" ] && [ -f "$archive" ] && [ "$(stat -c %s "$archive")" -le 68157440 ] || return 1
+  [ "$(sha256sum "$archive" | awk '{print $1}')" = "$1" ] || return 1
+
+  # Bound both listings before using tar's reported member sizes to admit extraction.
+  export LC_ALL=C
+  (
+    ulimit -f 128
+    tar -tzf "$archive"
+  ) >"$stage/pack.names" 2>/dev/null || return 1
+  (
+    ulimit -f 128
+    tar -tvzf "$archive"
+  ) >"$stage/pack.types" 2>/dev/null || return 1
+  awk '
+    /(^\/|\/\/|(^|\/)\.\.?($|\/)|[^A-Za-z0-9_.\/-])/ { bad=1 }
+    !/\.(json|css|png|webp|webm|mp4)$/ || seen[$0]++ { bad=1 }
+    END { exit (bad || NR > 64 || !seen["pack.json"]) }' "$stage/pack.names" || return 1
+  awk '
+    substr($0,1,1) != "-" || $3 !~ /^[0-9]+$/ { bad=1 }
+    { total+=$3 }
+    /\.(mp4|webm)$/ && $3 > 8388608 { bad=1 }
+    END { exit (bad || total > 67108864) }' "$stage/pack.types" || return 1
+  mkdir -p "$tree" || return 1
+  tar -xzf "$archive" -C "$tree" --no-same-owner --no-same-permissions 2>/dev/null || return 1
+  [ -f "$tree/pack.json" ] && [ "$(stat -c %s "$tree/pack.json")" -le 1048576 ] || return 1
+  chown -R 9999:9999 "$tree" || return 1
+  find "$tree" -type d -exec chmod 700 {} + || return 1
+  find "$tree" -type f -exec chmod 600 {} + || return 1
+  printf '%s' "$1" >"$stage/$marker" || return 1
+  chown 9999:9999 "$stage/$marker" || return 1
+  screen_pack_preflight || {
+    : >"$stage/screenpack.conflict"
+    return 1
+  }
+  cat "$tree/pack.json"
+}
+
+screen_pack_directory() {
+  [ ! -L "$1" ] || return 1
+  [ -e "$1" ] || return 0
+  [ -d "$1" ] || return 1
+  case $(stat -c %u:%g:%a "$1") in "$2:700" | "$2:755") ;; *) return 1 ;; esac
+}
+
+screen_pack_preflight() {
+  screen_pack_directory "$device" 0:0 &&
+    screen_pack_directory "$device/home" 9999:9999 &&
+    screen_pack_directory "$screens" 9999:9999 &&
+    screen_pack_directory "$destination" 9999:9999 || return 1
+  pin=$screens/$marker
+  [ ! -L "$pin" ] || return 1
+  if [ -e "$pin" ]; then
+    [ -f "$pin" ] && [ "$(stat -c %u:%g:%a "$pin")" = 9999:9999:600 ] &&
+      [ "$(stat -c %h "$pin")" = 1 ] && [ "$(stat -c %s "$pin")" = 64 ] &&
+      [ "$(cat "$pin")" = "$(cat "$stage/$marker")" ] || return 1
+  fi
+  if [ -d "$destination" ]; then
+    screen_pack_inventory "$tree" source && screen_pack_inventory "$destination" installed &&
+      [ "$(sha256sum <"$stage/source")" = "$(sha256sum <"$stage/installed")" ] || return 1
+  fi
+}
+
+screen_pack_inventory() (
+  cd "$1" || exit 1
+  find . -exec sh -c '
+    for path do
+      case $path in *[!A-Za-z0-9_./-]*) exit 1 ;; esac
+      test ! -L "$path" || exit 1
+      if test -d "$path"; then
+        case $(stat -c %u:%g:%a "$path") in 9999:9999:700 | 9999:9999:755) ;; *) exit 1 ;; esac
+        printf "directory %s\n" "$path"
+      else
+        test -f "$path" && test "$(stat -c %h "$path")" = 1 || exit 1
+        case $(stat -c %u:%g:%a "$path") in 9999:9999:600 | 9999:9999:644) ;; *) exit 1 ;; esac
+        sha256sum "$path" || exit 1
+      fi
+    done' sh {} + >"$stage/$2.raw" || exit 1
+  LC_ALL=C sort "$stage/$2.raw" >"$stage/$2"
+)
+
+screen_pack_publish() {
+  # Serialize with install/start. Pack workers run only in the bridge process.
+  lock=$device.lock
+  mkdir "$lock" || return 1
+  trap 'rmdir "$lock"' EXIT
+  trap 'exit 1' HUP INT TERM
+  processes=$(ps -A -o PID,NAME) || return 1
+  printf '%s\n' "$processes" | awk '$2 == "echo-bridge" { busy=1 } END { exit busy+0 }' || return 1
+  screen_pack_preflight || return 1
+  if [ ! -d "$screens" ]; then
+    mkdir "$screens" && chown 9999:9999 "$screens" || return 1
+  fi
+  stage_dev=$(stat -c %d "$tree") && screens_dev=$(stat -c %d "$screens") || return 1
+  [ "$stage_dev" = "$screens_dev" ] || return 1
+  if [ ! -e "$screens/$marker" ]; then
+    mv -n "$stage/$marker" "$screens/" && [ ! -e "$stage/$marker" ] || return 1
+  fi
+  if [ ! -d "$destination" ]; then
+    mv -n "$tree" "$screens/" && [ ! -e "$tree" ] || return 1
+  fi
+}
+
 release_metadata() {
   run_adb shell "if test -e '${device:?}/release.json' || test -L '${device:?}/release.json'; then
   test ! -L '${device:?}/release.json' && test -f '${device:?}/release.json' || exit 1

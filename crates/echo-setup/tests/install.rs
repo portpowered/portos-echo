@@ -19,6 +19,9 @@ mod force_config;
 mod install_setup;
 #[path = "support/screen.rs"]
 mod screen;
+#[cfg(target_os = "linux")]
+#[path = "support/release_screen_pack.rs"]
+mod t3_release_screen_pack_cases;
 
 struct Fixture(PathBuf, Option<install_setup::Service>);
 
@@ -121,11 +124,13 @@ fn server(sums: String, bytes: Vec<u8>, count: usize) -> Result<(String, thread:
                 request.push(byte[0]);
             }
             let request = String::from_utf8_lossy(&request);
-            let body = if request.starts_with("GET /v0.2.0/SHA256SUMS ") {
+            let body: &[u8] = if request.starts_with("GET /v0.2.0/SHA256SUMS ") {
                 sums.as_bytes()
-            } else {
-                assert!(request.starts_with("GET /v0.2.0/echo-0.2.0-armv7.tar.gz "));
+            } else if request.starts_with("GET /v0.2.0/echo-0.2.0-armv7.tar.gz ") {
                 &bytes
+            } else {
+                assert!(request.starts_with("GET /v0.2.0/default-0.2.0.screenpack.tar.gz "));
+                b"verified pack"
             };
             write!(
                 stream,
@@ -179,7 +184,12 @@ fn t3_device_archive_refusal_cleans_stage_without_running_bundled_script() -> Re
     let fixture = Fixture::new()?;
     fs::write(fixture.0.join("unsafe-archive"), b"")?;
     let bytes = b"controlled invalid archive".to_vec();
-    let (base, handle) = server(format!("{}  echo-0.2.0-armv7.tar.gz\n", digest(&bytes)), bytes, 2)?;
+    let sums = format!(
+        "{}  echo-0.2.0-armv7.tar.gz\n{}  default-0.2.0.screenpack.tar.gz\n",
+        digest(&bytes),
+        digest(b"verified pack")
+    );
+    let (base, handle) = server(sums, bytes, 3)?;
     let output = fixture.install().args(["--release-base", &base]).output()?;
     handle.join().map_err(|_| "server panicked")??;
     assert_eq!(output.status.code(), Some(1));

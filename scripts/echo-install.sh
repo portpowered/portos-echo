@@ -26,14 +26,9 @@ if [ "${1:-}" = --device ]; then
   if [ "${1:-}" = prepare-archive ]; then
     [ "$#" = 7 ] && [ "$2" = --archive ] && [ "$4" = --sha256 ] && [ "$6" = --stage ] || exit 2
     archive=$3 hash=$5 stage=$7
-    case $stage in /data/local/tmp/echo-setup-*) ;; *) exit 1 ;; esac
-    suffix=${stage#/data/local/tmp/echo-setup-}
-    case $suffix in '' | *[!0-9-]*) exit 1 ;; esac
+    release_stage_guard "$stage" || exit 1
     [ "$archive" = "$stage/archive.tar.gz" ] || exit 1
-    [ "${#hash}" = 64 ] || exit 1
-    case $hash in *[!0-9a-f]*) exit 1 ;; esac
-    [ ! -L /data/local/tmp ] && [ ! -L "$stage" ] && [ -d "$stage" ] || exit 1
-    [ "$(stat -c %u "$stage")" = 0 ] && [ "$(stat -c %a "$stage")" = 700 ] || exit 1
+    release_hash_valid "$hash" || exit 1
     [ ! -L "$archive" ] && [ -f "$archive" ] || exit 1
     [ "$(sha256sum "$archive" | awk '{print $1}')" = "$hash" ] || exit 1
     tar -tzf "$archive" >"$stage/names" 2>/dev/null || exit 1
@@ -52,6 +47,12 @@ if [ "${1:-}" = --device ]; then
     done
     exit 0
   fi
+  case ${1:-} in
+    prepare-screen-pack | publish-screen-pack)
+      release_screen_pack "$@"
+      exit
+      ;;
+  esac
   if [ "${1:-}" = install ] && [ "${2:-}" = --bundle ]; then
     case $# in
       5) ;;

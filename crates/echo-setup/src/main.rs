@@ -29,9 +29,21 @@ async fn run() -> i32 {
     });
     let result: Result<serde_json::Value> = match options.command.as_str() {
         "install" | "update" => echo_setup::install::install(
-            &options, |prompt| present(&options, prompt), || instruct(&options), &cancelled,
-        ).await.map(|version| {
-            serde_json::json!({"type":"result", "command":options.command, "ok":true, "version":version, "setup":"complete"})
+            &options,
+            |prompt| present(&options, prompt),
+            || instruct(&options),
+            &cancelled,
+        )
+        .await
+        .map(|installed| {
+            let mut result = serde_json::json!({
+                "type":"result", "command":options.command, "ok":true,
+                "version":installed.version, "setup":"complete"
+            });
+            if let Some(asset) = installed.screen_pack_asset {
+                result["screen_pack_asset"] = asset.into();
+            }
+            result
         }),
         "status" | "uninstall" | "rollback" => echo_setup::lifecycle::execute(&options).await,
         "doctor" => Ok(echo_setup::doctor::execute(&options).await),
@@ -109,6 +121,9 @@ fn render(options: &cli::Options, event: &serde_json::Value) {
                     io::stdout(),
                     "Echo {version} installed, linked and confirmed a fresh wake and bridge run."
                 );
+                if let Some(asset) = event["screen_pack_asset"].as_str() {
+                    let _ = writeln!(io::stdout(), "Installed screen pack {asset}.");
+                }
             }
             "status" if event.get("process").is_some() => {
                 let _ = writeln!(io::stdout(), "{event}");

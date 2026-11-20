@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 
-from test_echo_install import Sandbox, SENTINEL, fake_adb, metadata_tool, remote_tool, require, set_owner
+from test_echo_install import Sandbox, SENTINEL, fake_adb, metadata_tool, owner, remote_tool, require, set_owner
 from test_echo_install_lifecycle import configure_lifecycle
 from test_release_kit import sha
 
@@ -30,6 +30,8 @@ class DeliveryBox(Sandbox):
     def __init__(self, binary, assets, archive, release):
         super().__init__()
         self.binary, self.assets, self.archive, self.release = binary, assets, archive, release
+        self.responses = {}
+        self.requests = []
         self.env.update(PATH=str(self.tools), NO_PROXY="127.0.0.1")
         (self.root / "devices").write_text(SERIAL + "\tdevice\n")
         (self.root / "remote/tmp").mkdir()
@@ -46,12 +48,12 @@ class DeliveryBox(Sandbox):
         path.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {script} --fake {name} "$@"\n')
         path.chmod(0o755)
 
-    def invoke(self, *args):
+    def run_setup(self, *args, json_mode=True):
         completed = self.root / "last-completed"
         completed.unlink(missing_ok=True)
         try:
             result = subprocess.run([str(self.binary), args[0], "--adb", str(self.tools / "adb"),
-                                     "--json", *args[1:]], cwd=self.root, env=self.env,
+                                     *(["--json"] if json_mode else []), *args[1:]], cwd=self.root, env=self.env,
                                     capture_output=True, text=True, timeout=75)
         except subprocess.TimeoutExpired:
             stage = completed.read_text() if completed.exists() else "no-adb"
@@ -59,7 +61,11 @@ class DeliveryBox(Sandbox):
         public = result.stdout + result.stderr
         for marker in (SENTINEL, SERIAL, PAIRING, str(self.root)):
             require(marker not in public, "delivered installer disclosed private fixture data")
-        require(result.returncode == 0 and result.stderr == "", "delivered installer failed: " + public)
+        return result
+
+    def invoke(self, *args):
+        result = self.run_setup(*args)
+        require(result.returncode == 0 and result.stderr == "", "delivered installer failed: " + result.stdout)
         events = [json.loads(line) for line in result.stdout.splitlines()]
         require([event["type"] for event in events] ==
                 (["instruction", "result"] if args[0] in ("install", "update") else ["result"]),
@@ -72,8 +78,8 @@ class DeliveryBox(Sandbox):
 
 
 class ReleaseHandler(http.server.BaseHTTPRequestHandler):
-    def __init__(self, box, *args, **kwargs):
-        self.box = box
+    def __init__(self, box, release, *args, **kwargs):
+        self.box, self.release = box, release
         super().__init__(*args, **kwargs)
 
     def log_message(self, *args):
@@ -81,15 +87,22 @@ class ReleaseHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         box = self.box
+        if self.release:
+            prefix = f"/v{box.release}/"
+            leaf = self.path.removeprefix(prefix)
+            path = box.assets / leaf
+            status = box.responses.get(leaf, 200 if self.path == prefix + Path(leaf).name and path.is_file() else 404)
+            box.requests.append((self.path, status))
+            data = path.read_bytes() if status == 200 else b""
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path == "/healthz":
             data = b'{"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false}'
         elif self.path == "/settings/v1?token=" + PAIRING:
             data = b'{"version":1,"link_status":"linked"}'
-        elif self.path in (f"/v{box.release}/SHA256SUMS", f"/v{box.release}/{box.archive.name}"):
-            leaf = self.path.rsplit("/", 1)[1]
-            with (box.root / "downloads").open("a") as ledger:
-                print(leaf, file=ledger)
-            data = (box.assets / leaf).read_bytes()
         else:
             self.send_error(404)
             return
@@ -100,8 +113,8 @@ class ReleaseHandler(http.server.BaseHTTPRequestHandler):
 
 
 @contextmanager
-def local_endpoint(box):
-    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), partial(ReleaseHandler, box)) as server:
+def local_endpoint(box, release=False):
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), partial(ReleaseHandler, box, release)) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -239,6 +252,10 @@ def fake_tool(base, label, args):
                 path.chmod(0o600)
                 set_owner(base, path, "9999:9999")
             return 0
+        expected = base / "expected-pack"
+        if expected.exists():
+            identity, digest, members = json.loads(expected.read_text())
+            assert_installed_pack(base, identity, digest, {name: bytes.fromhex(data) for name, data in members.items()})
         return metadata_tool(base, label, args)
     if label == "nc":
         require(args == ["-z", "-w", "5", "chatgpt.com", "443"], "unexpected egress probe")
@@ -277,20 +294,28 @@ def public_hashes(box, manifest):
             require(sha((box.device / name).read_bytes()) == expected, "installed public bytes differ")
 
 
-def delivered_journey(binary, assets, archive, manifest):
+def delivered_journey(binary, assets, archive, manifest, *, pin_version=False):
     release = manifest["version"]
     update = "0.0.0-delivery" if release != "0.0.0-delivery" else "0.0.0-delivery.2"
     with DeliveryBox(binary, assets, archive, release) as box:
-        with local_endpoint(box) as screen, local_endpoint(box) as health:
+        with local_endpoint(box) as screen, local_endpoint(box) as health, local_endpoint(box, True) as release_port:
             (box.root / "ports.json").write_text(json.dumps({"tcp:16900": screen, "tcp:16901": health}))
-            result = box.invoke("install", "--release-base", f"http://127.0.0.1:{health}")
+            version = ("--version", release) if pin_version else ()
+            result = box.invoke("install", *version, "--release-base", f"http://127.0.0.1:{release_port}")
             require(result["version"] == release, "default install version differs")
-            require((box.root / "downloads").read_text().splitlines() == ["SHA256SUMS", archive.name],
-                    "release asset requests differ")
+            asset = f"default-{release}.screenpack.tar.gz"
+            require(result["screen_pack_asset"] == asset, "default install asset differs")
+            requests = [(f"/v{release}/{name}", 200) for name in ("SHA256SUMS", archive.name, asset)]
+            require(box.requests == requests, "release asset requests differ")
+            data = (assets / asset).read_bytes()
+            with tarfile.open(assets / asset) as pack:
+                members = {entry.name: pack.extractfile(entry).read() for entry in pack}
+            assert_installed_pack(box.root, f"default@{release}", sha(data), members)
             public_hashes(box, manifest)
             bundle, updated = offline_update(box, update)
             first_update_call = len(delivery_calls(box.root))
-            require(box.invoke("update", "--from-dir", str(bundle))["version"] == update, "update version differs")
+            result = box.invoke("update", "--from-dir", str(bundle))
+            require(result["version"] == update and "screen_pack_asset" not in result, "offline update result differs")
             pushes = [call[-1] for call in delivery_calls(box.root)[first_update_call:] if call[2:3] == ["push"]]
             require([Path(path).name for path in pushes] == ["adapter.sh", "bundle"],
                     "offline update split its verified directory into separate transfers")
@@ -308,6 +333,8 @@ def delivered_journey(binary, assets, archive, manifest):
             public_hashes(box, manifest)
             require(box.invoke("status")["versions"] == {"current": release, "previous": None},
                     "rollback did not restore previous release")
+            require(box.requests == requests, "offline lifecycle requested release assets")
+            assert_installed_pack(box.root, f"default@{release}", sha(data), members)
             require(not any((box.root / "remote/tmp").iterdir()), "staging was retained")
             require(json.loads((box.root / "forwards.json").read_text()) == {}, "owned forwards were retained")
             calls = [call[-1] for call in delivery_calls(box.root)]
@@ -316,6 +343,19 @@ def delivered_journey(binary, assets, archive, manifest):
                 require(any(primitive in call for call in calls), "shell dispatch missing " + primitive)
             box.invoke("uninstall")
     print("F33 delivered native install/setup/update/status/doctor/rollback: PASS")
+
+
+def assert_installed_pack(base, identity, digest, members):
+    screens = base / "remote/echo-bridge/home/screens"
+    root = screens / identity
+    actual = {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    require(actual == members, "installed screen pack members differ")
+    marker = screens / f".{identity}.sha256"
+    require(marker.read_text() == digest, "installed provenance differs")
+    for path in (screens, root, marker, *root.rglob("*")):
+        mode = 0o700 if path.is_dir() else 0o600
+        require(owner(base, path) == "9999:9999" and path.stat().st_mode & 0o777 == mode,
+                "pack is not readable as the bridge owner with expected modes")
 
 
 if __name__ == "__main__":
