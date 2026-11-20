@@ -2,7 +2,7 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 19
-status: in progress; configured installer implemented, selection API and renderer pending
+status: in progress; installer, catalog and selection persistence implemented; hot load and renderer pending
 ---
 
 # Screen packs
@@ -46,7 +46,8 @@ including `pack.json`, and 8 MiB per WebM/MP4 clip. Tar headers and padding have
 their own bounded decoding budget. Only json/css/png/webp/webm/mp4 files are
 accepted. Validation stages files under `screens` before an atomic directory
 rename to `<home>/screens/<name>@<version>/`; an existing conflicting identity is
-retained. Interactive status and reload events remain implementation work. Installed data does not yet activate a renderer.
+retained. Interactive status and reload events remain implementation work.
+Installed data does not yet activate a renderer.
 
 ## Authenticated pack files
 

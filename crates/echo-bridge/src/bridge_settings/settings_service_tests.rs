@@ -1,7 +1,7 @@
 //! T3: real loopback HTTP and file store, controlled service/cleanup boundaries.
 //! No configured binary or exec claim; each witness owns its home and listener.
 use super::*;
-use echo_config::BridgeConfig;
+use echo_config::{BridgeConfig, SettingsOverlay};
 use echo_contracts::secret::Secret;
 use echo_screen_contract::settings_v1::SettingsSnapshotV1;
 use echo_screen_server::{ScreenServer, serve_with_settings};
@@ -352,4 +352,72 @@ fn operational_events(path: &std::path::Path) -> Vec<Value> {
             row
         })
         .collect()
+}
+
+#[tokio::test]
+async fn t3_screen_pack_service_selection_never_requests_or_retries_voice_restart() {
+    let (mut fixture, owner, _) = Fixture::open("").await;
+    let home = fixture.root.path().join("home");
+    let pack = home.join("screens/local");
+    fs::create_dir_all(&pack).unwrap();
+    fs::write(
+        pack.join("pack.json"),
+        r#"{"format":1,"name":"local","version":"1.0.0","character":{"rest":"rest.png"}}"#,
+    )
+    .unwrap();
+    fs::write(pack.join("rest.png"), "generated-rest").unwrap();
+    let _jobs = fixture.server.install_configured_packs(home.clone(), None, vec![]);
+    let (finish, finished) = tokio::sync::oneshot::channel();
+    let edits = async {
+        assert_eq!(
+            pack_selection(&fixture, "local").await,
+            json!({"version":1,"restart_pending":false})
+        );
+        finish.send(()).unwrap();
+    };
+    let ((result, completion), ()) = tokio::join!(owner.scope(finished, || LinkStatusV1::Linked), edits);
+    assert_eq!(result, Ok(()));
+    assert!(!completion.restart_requested);
+    let owner = fixture.remount(completion.host).await;
+    let edits = async {
+        fixture.patch(json!({"agent":{"max_tool_calls":4}})).await;
+    };
+    let (((), completion), ()) = tokio::join!(
+        owner.scope(super::super::settings_restart::requested(), || LinkStatusV1::Linked),
+        edits
+    );
+    assert!(completion.restart_requested);
+    let owner = fixture.remount(completion.host).await;
+    let _jobs = fixture.server.install_configured_packs(home, None, vec![]);
+    let (finish, finished) = tokio::sync::oneshot::channel();
+    let edits = async {
+        assert_eq!(
+            pack_selection(&fixture, "").await,
+            json!({"version":1,"restart_pending":true})
+        );
+        assert!(fixture.snapshot().await.restart_pending);
+        assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 4);
+        let overlay = SettingsOverlay::from_toml_str(&fixture.overlay()).unwrap();
+        assert_eq!(overlay.screen_pack(), Some(""));
+        finish.send(()).unwrap();
+    };
+    let ((result, completion), ()) = tokio::join!(owner.scope(finished, || LinkStatusV1::Linked), edits);
+    assert_eq!(result, Ok(()));
+    assert!(
+        !completion.restart_requested,
+        "pack-only save must not retry an old voice restart"
+    );
+    fixture.server.shutdown().await.unwrap();
+}
+
+async fn pack_selection(fixture: &Fixture, selection: &str) -> Value {
+    let response = fixture
+        .client
+        .post(fixture.url("/screen-packs/v1/selection"))
+        .json(&json!({"version":1,"screen_pack":selection}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.json().await.unwrap()
 }

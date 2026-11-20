@@ -112,6 +112,7 @@ fn commit(
     operation: SettingsOperation,
     link: LinkStatusV1,
 ) -> SettingsReply {
+    let pack_only = matches!(&operation, SettingsOperation::PackSelection(..));
     let prompt = match &operation {
         SettingsOperation::Prompt(echo_screen_server::PromptKind::Voice, _) => Some("voice"),
         SettingsOperation::Prompt(echo_screen_server::PromptKind::Runner, _) => Some("runner"),
@@ -121,7 +122,7 @@ fn commit(
     let SettingsReply::Saved(saved) = &reply else {
         return reply;
     };
-    let pending = prompt.is_none() && saved.restart_pending && !restart.pending();
+    let pending = !pack_only && prompt.is_none() && saved.restart_pending && !restart.pending();
     let recorded = trace.map_or(Ok(()), |trace| {
         let (event, fields) = prompt.map_or_else(
             || {

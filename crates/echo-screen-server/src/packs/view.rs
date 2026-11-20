@@ -7,7 +7,7 @@ use crate::{
 use axum::{
     body::to_bytes,
     extract::{Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -160,13 +160,12 @@ async fn read(state: &HttpState) -> Result<PackCatalog, StatusCode> {
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
 
-async fn guard(state: &HttpState, request: &Request) -> Result<(), StatusCode> {
+async fn guard(state: &HttpState, uri: &Uri, headers: &HeaderMap) -> Result<(), StatusCode> {
     let core = state.core.lock().await;
-    if !authorized(&core, request.uri()) {
+    if !authorized(&core, uri) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    if request
-        .headers()
+    if headers
         .get("origin")
         .is_some_and(|origin| origin != state.origin.as_str())
     {
@@ -179,7 +178,7 @@ async fn guard(state: &HttpState, request: &Request) -> Result<(), StatusCode> {
 }
 
 pub(crate) async fn snapshot(State(state): State<HttpState>, request: Request) -> Response {
-    if let Err(status) = guard(&state, &request).await {
+    if let Err(status) = guard(&state, request.uri(), request.headers()).await {
         return status.into_response();
     }
     let catalog = match read(&state).await {
@@ -200,7 +199,7 @@ struct Selection {
 }
 
 pub(crate) async fn selection(State(state): State<HttpState>, request: Request) -> Response {
-    if let Err(status) = guard(&state, &request).await {
+    if let Err(status) = guard(&state, request.uri(), request.headers()).await {
         return status.into_response();
     }
     let json = request
