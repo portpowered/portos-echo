@@ -33,18 +33,20 @@ impl World {
             .and_then(|row| row["elapsed_ms"].as_u64())
             .ok_or("session: no admitted run clock")?;
         let cutoff = run + RECOVERY_MAX_SECONDS * 1000;
-        if self.media_boundary.is_some() {
+        let milliseconds = if self.media_boundary.is_some() {
             self.speak_across_cutoff(cutoff).await?;
-        }
-        let milliseconds = u64::from(self.media_boundary.is_none());
-        let before = cutoff
-            .checked_sub(self.epoch() + milliseconds)
-            .ok_or("session: stall was admitted after cutoff")?;
-        self.advance_live(before).await?;
-        self.read_trace()?;
-        if self.count("run.ended") != 0 || self.count("delegation.resolved") != 0 {
-            return Err("session: stalled delegation ended before the run cutoff".into());
-        }
+            0
+        } else {
+            let before = cutoff
+                .checked_sub(self.epoch() + 1)
+                .ok_or("session: stall was admitted after cutoff")?;
+            self.advance_live(before).await?;
+            self.read_trace()?;
+            if self.count("run.ended") != 0 || self.count("delegation.resolved") != 0 {
+                return Err("session: stalled delegation ended before the run cutoff".into());
+            }
+            1
+        };
         self.cross_cutoff(cutoff, milliseconds).await?;
         self.read_trace()?;
         let ended = self
@@ -106,7 +108,7 @@ impl World {
             .control(Control::Events(
                 "speech-start",
                 vec![json!({
-                    "type":"input_audio_buffer.speech_started","audio_start_ms":0,"item_id":"synthetic-speech"
+                    "type":"input_transcript.added","item":{"text":"That was my"}
                 })],
             ))
             .await?;

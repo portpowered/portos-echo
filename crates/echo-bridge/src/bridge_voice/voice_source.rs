@@ -174,11 +174,7 @@ impl Source {
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
     pub fn heard_user(&mut self, trigger: BargeTrigger, said: &str, whole: bool) {
-        if trigger == BargeTrigger::SpeechStarted {
-            self.user_speech = UserSpeech::Active;
-        } else if whole {
-            self.user_speech = UserSpeech::Quiet;
-        }
+        self.user_speech = if whole { UserSpeech::Quiet } else { UserSpeech::Active };
         let replying = !self.delegation.in_flight() && self.controller.speaking();
         // Nobody talks over a reply that has not sounded yet, and a reply
         // that has is not talked over by its own question.
