@@ -294,6 +294,20 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     assert.deepEqual(await f.next(), {
         action: { action: "tap", target: "primary" },
     });
+    const feedback = page.getByText("Action sent; waiting for screen update", {
+        exact: true,
+    });
+    await feedback.waitFor();
+    const statusBox = await feedback.boundingBox();
+    const clockBox = await page.locator(".pack-clock").boundingBox();
+    assert.ok(statusBox && clockBox);
+    assert.ok(
+        statusBox.x >= clockBox.x + clockBox.width ||
+            clockBox.x >= statusBox.x + statusBox.width ||
+            statusBox.y >= clockBox.y + clockBox.height ||
+            clockBox.y >= statusBox.y + statusBox.height,
+        "Ready action feedback must leave the template clock readable",
+    );
     await mkdir("test-results/screenshots", { recursive: true });
     await page.screenshot({
         path: "test-results/screenshots/template-home-960x600.png",
