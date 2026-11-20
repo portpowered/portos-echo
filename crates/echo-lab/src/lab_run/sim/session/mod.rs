@@ -1,5 +1,7 @@
 //! Persistent voice session journeys on the delivered bridge and native host:
 //! listening between replies, idle expiry, and the agent's session tools.
+#[cfg(test)]
+mod catalog_measurement_tests;
 mod duplex;
 pub(in crate::lab_run) mod goodbye;
 mod goodbye_oracle;
