@@ -6,7 +6,12 @@ impl Worker {
     pub(super) async fn notify(&self) {
         // The listener/host owns channel lifetime; retaining a strong sender in
         // Files would keep an otherwise stopped host inbox open after shutdown.
-        let Some(host) = self.files.settings.get().and_then(tokio::sync::mpsc::WeakSender::upgrade) else {
+        let Some(host) = self
+            .files
+            .settings
+            .get()
+            .and_then(tokio::sync::mpsc::WeakSender::upgrade)
+        else {
             return;
         };
         let root = self.root.clone();
