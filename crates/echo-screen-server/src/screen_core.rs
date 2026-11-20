@@ -114,23 +114,23 @@ impl Core {
         if self.draining {
             return true;
         }
-        self.broadcast(Publication { name: None, data: wire });
+        self.broadcast(&Publication { name: None, data: wire });
         true
     }
 
-    pub fn pack_reload(&mut self, active: Option<String>) -> bool {
+    pub fn pack_reload(&mut self, active: Option<&str>) -> bool {
         if !self.accepting() || self.pack_revision == 9_007_199_254_740_991 {
             return false;
         }
         self.pack_revision += 1;
-        self.broadcast(Publication {
+        self.broadcast(&Publication {
             name: Some("screen-pack-reload"),
             data: serde_json::json!({"version":1,"revision":self.pack_revision,"active":active}).to_string(),
         });
         true
     }
 
-    fn broadcast(&mut self, publication: Publication) {
+    fn broadcast(&mut self, publication: &Publication) {
         self.clients.retain(|client| {
             if client.frames.try_send(publication.clone()).is_ok() {
                 true
@@ -392,7 +392,7 @@ mod tests {
         let mut client = core.attach(watch::channel(false).0).unwrap();
         assert!(core.publish(UiState::Listening));
         assert_eq!(client.frames.recv().await.unwrap().name, None);
-        assert!(core.pack_reload(Some("local".into())));
+        assert!(core.pack_reload(Some("local")));
         let message = client.frames.recv().await.unwrap();
         assert_eq!(message.name, Some("screen-pack-reload"));
         assert_eq!(
@@ -411,7 +411,7 @@ mod tests {
         assert!(core.publish(UiState::Muted));
         assert_eq!(core.seq, 2);
         core.drain();
-        assert!(!core.pack_reload(Some("local".into())));
+        assert!(!core.pack_reload(Some("local")));
         core.revoke();
         assert!(!core.pack_reload(None));
     }

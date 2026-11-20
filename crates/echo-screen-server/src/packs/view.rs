@@ -40,8 +40,8 @@ impl PackCatalog {
         self.active.as_deref() != self.resolve(Some(selection)).map(|pack| pack.id.as_str())
     }
 
-    pub(crate) fn active(&self) -> Option<String> {
-        self.active.clone()
+    pub(crate) fn active(&self) -> Option<&str> {
+        self.active.as_deref()
     }
 
     pub(crate) fn set_revision(&mut self, revision: u64) {
