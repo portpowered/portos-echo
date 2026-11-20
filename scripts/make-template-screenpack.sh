@@ -5,6 +5,7 @@ exec python3 - "$@" <<'PY'
 import argparse
 import binascii
 import concurrent.futures
+import functools
 import gzip
 import hashlib
 import io
@@ -171,6 +172,51 @@ FACE_COUNTS = {'idle': 480, 'wake': 150, 'speaking': 71, 'thinking': 91, 'happy'
 FACE_COLORS = {**EYE_COLORS, 'speaking': PALE, 'wake': PALE}
 
 
+def half_width(t, width, height, radius):
+    """Exact half width of a rounded box (half extents width x height) at offset t."""
+    if t >= height:
+        return 0.0
+    corner = max(0.0, t - height + radius)
+    return width - radius + math.sqrt(max(0.0, radius * radius - corner * corner))
+
+
+def blend(frame, offset, color, cover):
+    """Straight-alpha "over" of color at coverage cover onto one pixel."""
+    red, green, blue, alpha = frame[offset:offset + 4]
+    below = alpha / 255 * (1 - cover)
+    total = cover + below
+    frame[offset:offset + 4] = bytes((
+        *(round((c * cover + e * below) / total) for c, e in zip(color, (red, green, blue))),
+        round(total * 255)))
+
+
+def smooth(frame, x, y, width, height, radius, color):
+    """An anti-aliased rounded box: four samples per row, exact horizontal cover."""
+    stride = FACE_SIZE[0] * 4
+    solid = bytes((*color, 255))
+    w, h, r = width + 0.5, height + 0.5, min(radius + 0.5, width + 0.5, height + 0.5)
+    for dy in range(-height - 1, height + 2):
+        halves = [half_width(abs(dy - 0.375 + k * 0.25), w, h, r) for k in range(4)]
+        outer = max(halves)
+        if outer <= 0:
+            continue
+        row = (y + dy) * stride
+        full = math.floor(min(halves) - 0.5)
+        if full >= 0:
+            frame[row + (x - full) * 4:row + (x + full + 1) * 4] = solid * (2 * full + 1)
+        for distance in range(max(0, full + 1), math.ceil(outer + 0.5)):
+            cover = sum(max(0.0, min(half, distance + 0.5) - max(-half, distance - 0.5))
+                        for half in halves) / 4
+            if cover <= 0:
+                continue
+            for column in {x - distance, x + distance}:
+                offset = row + column * 4
+                if cover >= 1:
+                    frame[offset:offset + 4] = solid
+                else:
+                    blend(frame, offset, color, cover)
+
+
 def face_glow(frame, x, y, width, height, color, arch=0, radius=None):
     radius = min(width if radius is None else radius, height)
     spread = FACE_GLOW[0][0]
@@ -179,8 +225,15 @@ def face_glow(frame, x, y, width, height, color, arch=0, radius=None):
         raise ValueError('face leaves the stage')
     for grow, strength in FACE_GLOW:
         tint = tuple(round(a + (b - a) * strength) for a, b in zip(BACKGROUND, color))
-        rounded(frame, x, y, width + grow, height + grow, radius + grow, tint + (255,), arch, FACE_SIZE)
-    rounded(frame, x, y, width, height, radius, color + (255,), arch, FACE_SIZE)
+        if arch:
+            rounded(frame, x, y, width + grow, height + grow, radius + grow, tint + (255,), arch, FACE_SIZE)
+        else:
+            smooth(frame, x, y, width + grow, height + grow, radius + grow, tint)
+    if arch:
+        rounded(frame, x, y, width, height, radius, color + (255,), arch, FACE_SIZE)
+    else:
+        # Smooth edges stay clean when the panel scales the clip up.
+        smooth(frame, x, y, width, height, radius, color)
 
 
 def face_pose(name, number, last):
@@ -213,18 +266,27 @@ def face_pose(name, number, last):
 
 
 def face(name, number, last):
-    frame = bytearray(bytes(BACKGROUND + (0,)) * math.prod(FACE_SIZE))
     width, height, dx, dy, arch = face_pose(name, number, last)
-    color = FACE_COLORS[name]
-    centers = FACE_CARD['centers'] if name in CARDS else FACE['centers']
-    for center in centers:
-        # Round eyes: a blink or a lid squashes the circle vertically.
-        face_glow(frame, center + round(dx), FACE['y'] + round(dy), width, height, color, arch)
+    mouth = None
     if name in SESSION:
         # Awake faces keep a closed mouth; only speaking opens it.
-        y, half, closed = FACE['mouth']
+        _, _, closed = FACE['mouth']
         opening = interpolate(SPEECH, number)[0] * FACE['speech'] if name == 'speaking' else 0
-        face_glow(frame, FACE_SIZE[0] // 2, y, half, max(closed, round(opening)), color)
+        mouth = max(closed, round(opening))
+    centers = FACE_CARD['centers'] if name in CARDS else FACE['centers']
+    return drawn(centers, FACE_COLORS[name], width, height, round(dx), round(dy), arch, mouth)
+
+
+@functools.lru_cache(maxsize=64)
+def drawn(centers, color, width, height, dx, dy, arch, mouth):
+    """One face frame; held poses repeat, so identical frames are drawn once."""
+    frame = bytearray(bytes(BACKGROUND + (0,)) * math.prod(FACE_SIZE))
+    for center in centers:
+        # Round eyes: a blink or a lid squashes the circle vertically.
+        face_glow(frame, center + dx, FACE['y'] + dy, width, height, color, arch)
+    if mouth is not None:
+        y, half, _ = FACE['mouth']
+        face_glow(frame, FACE_SIZE[0] // 2, y, half, mouth, color)
     return bytes(frame)
 
 
