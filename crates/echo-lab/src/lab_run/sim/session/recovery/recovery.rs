@@ -1,7 +1,7 @@
 //! Hold one runner request across the wake's cutoff, then answer a new wake.
 use super::super::RECOVERY_MAX_SECONDS;
 use super::{Control, World};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 impl World {
     pub(super) async fn abandon_stuck_turn(&mut self) -> Result<(), String> {
@@ -35,13 +35,8 @@ impl World {
         if self.count("run.ended") != 0 || self.count("delegation.resolved") != 0 {
             return Err("session: stalled delegation ended before the run cutoff".into());
         }
-        self.step(1).await?;
-        self.wait_until(
-            "session cutoff and renewed device readiness",
-            |world| world.count("bridge.ready") == 2,
-            0,
-        )
-        .await?;
+        self.cross_cutoff(cutoff).await?;
+        self.read_trace()?;
         let ended = self
             .trace
             .records
@@ -65,6 +60,25 @@ impl World {
             0,
         )
         .await
+    }
+
+    async fn cross_cutoff(&mut self, cutoff: u64) -> Result<(), String> {
+        let bridge = self.bridge.as_mut().ok_or("session: missing bridge")?;
+        // The expired voice owner drops its guarded drain receiver. Expect
+        // the plain clock receipt and then renewed bridge readiness.
+        bridge.send(&json!({"action":"advance_clock","milliseconds":1})).await?;
+        let mut advanced = false;
+        let mut ready = false;
+        while !advanced || !ready {
+            let row = bridge.line().await?;
+            match row["event"].as_str() {
+                Some("bridge.clock_advanced") if row["milliseconds"] == 1 && !advanced => advanced = true,
+                Some("bridge.ready") if !ready => ready = true,
+                event => return Err(format!("session: unexpected cutoff event {event:?}")),
+            }
+        }
+        self.clock["epoch_ms"] = json!(cutoff);
+        Ok(())
     }
 
     pub(super) async fn wait_for_call(&mut self, count: usize) -> Result<(), String> {
