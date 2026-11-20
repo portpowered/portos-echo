@@ -227,27 +227,33 @@ async fn settle_reused_wakes(
     completed: &Mutex<Vec<crate::bridge_voice::Stats>>,
     observer: &Observer,
 ) {
-    pump(work.as_mut()).await;
-    assert_eq!(observer.commands().last(), Some(&Command::Stop));
-    observer.finish(Ok(()));
-    pump(work.as_mut()).await;
+    settle_wake_reply(work.as_mut(), observer).await;
     assert_eq!(completed.lock().unwrap().len(), 1);
     tokio::time::advance(Duration::from_secs(4)).await;
     crate::bridge_voice::TEST_WAKE_TIME.with(|clock| clock.set(wake_time::t0() + Duration::from_secs(420)));
     audio.send([123; 320]).await.unwrap(); // belongs to the prior, idle reply
     wake(observer);
+    settle_wake_reply(work.as_mut(), observer).await;
+    assert_eq!(completed.lock().unwrap().len(), 2);
+    verify_renewed_idle(work, state).await;
+    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(*state.sent.lock().unwrap(), vec![[0; 320]; 2]);
+    assert_no_reply(&completed.lock().unwrap(), observer);
+}
+
+async fn settle_wake_reply(mut work: Pin<&mut impl Future<Output = Result<u64, Error>>>, observer: &Observer) {
     pump(work.as_mut()).await;
+    assert_eq!(observer.commands().last(), Some(&Command::Stop));
     observer.finish(Ok(()));
     pump(work.as_mut()).await;
-    assert_eq!(completed.lock().unwrap().len(), 2);
+}
+
+async fn verify_renewed_idle(mut work: Pin<&mut impl Future<Output = Result<u64, Error>>>, state: &State) {
     tokio::time::advance(Duration::from_secs(4)).await;
     pump(work.as_mut()).await;
     assert_eq!(state.closes.load(Ordering::SeqCst), 0);
     tokio::time::advance(Duration::from_secs(1)).await;
     assert_eq!(work.await, Ok(2));
-    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
-    assert_eq!(*state.sent.lock().unwrap(), vec![[0; 320]; 2]);
-    assert_no_reply(&completed.lock().unwrap(), observer);
 }
 
 fn reuse_notice(
