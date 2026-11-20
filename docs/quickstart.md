@@ -168,7 +168,10 @@ Status shows process identity, uptime, the sanitized hassmic link and five bridg
 It is an observation command: exit 0 alone does not mean the bridge is running.
 `link` talks to the running bridge's loopback control endpoint. The Echo shows the Port OS verification URL/code;
 approve it on a phone under the intended Port OS account and review the requested scope consent there.
-The CLI waits for the operation and reports `MCP linked` on success.
+The CLI prints `Verification URL: ...` and `User code: ...` immediately, matching the fresh code on the screen.
+Open that URL on your phone and enter the code. The CLI waits for approval and reports `MCP linked` only
+after the grant is stored. Denied or expired approval reports an error without printing success; rerun the
+same command to start a fresh link.
 Wait for the screen's linked state. A denied or expired code needs a new link attempt.
 
 Say **“Computer, what time is it?”** and check that the screen and spoken reply agree.

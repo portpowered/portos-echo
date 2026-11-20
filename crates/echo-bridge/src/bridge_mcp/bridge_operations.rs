@@ -43,6 +43,7 @@ pub(crate) struct Request {
     pub operation: Operation,
     pub reply: oneshot::Sender<Result<&'static str, AuthError>>,
     pub permit: OwnedSemaphorePermit,
+    pub progress: mpsc::Sender<UiState>,
 }
 
 pub(super) async fn serve(grant: Arc<Grant>, mut receive: mpsc::Receiver<Request>) {
@@ -50,12 +51,13 @@ pub(super) async fn serve(grant: Arc<Grant>, mut receive: mpsc::Receiver<Request
         operation,
         mut reply,
         permit,
+        progress,
     }) = receive.recv().await
     {
         let result = tokio::select! {
             biased;
             () = reply.closed() => { grant.reject(RELINK); None },
-            result = execute(&grant, operation) => Some(result),
+            result = execute(&grant, operation, progress) => Some(result),
         };
         if let Some(result) = result {
             let _ = reply.send(result);
@@ -64,13 +66,17 @@ pub(super) async fn serve(grant: Arc<Grant>, mut receive: mpsc::Receiver<Request
     }
 }
 
-async fn execute(grant: &Grant, operation: Operation) -> Result<&'static str, AuthError> {
+async fn execute(
+    grant: &Grant,
+    operation: Operation,
+    progress: mpsc::Sender<UiState>,
+) -> Result<&'static str, AuthError> {
     let id = grant.next_operation()?;
     if operation == Operation::Link {
         grant.event("mcp.link.started", json!({"operation_id":id}))?;
     }
     let result = match operation {
-        Operation::Link => link(grant).await,
+        Operation::Link => link(grant, progress).await,
         Operation::Refresh if grant.blocked() => Err(AuthError::RelinkRequired),
         Operation::Refresh => grant.client.force_refresh().await.map(|_| ()),
         Operation::Unlink => {
@@ -96,18 +102,20 @@ async fn execute(grant: &Grant, operation: Operation) -> Result<&'static str, Au
     Ok(operation.outcome())
 }
 
-async fn link(grant: &Grant) -> Result<(), AuthError> {
+async fn link(grant: &Grant, progress: mpsc::Sender<UiState>) -> Result<(), AuthError> {
     grant.rejected.store(true, Ordering::Release);
     let link = grant.client.begin_link().await?;
     let epoch = grant.now();
+    let state = UiState::LinkCode {
+        user_code: link.user_code.clone(),
+        verification_uri: link.verification_uri.clone(),
+        expires_at_unix: epoch.checked_add(link.expires_in).ok_or(AuthError::Protocol)?,
+    };
     grant
         .presentation
-        .overlay(Some(UiState::LinkCode {
-            user_code: link.user_code.clone(),
-            verification_uri: link.verification_uri.clone(),
-            expires_at_unix: epoch.checked_add(link.expires_in).ok_or(AuthError::Protocol)?,
-        }))
+        .overlay(Some(state.clone()))
         .map_err(|_| AuthError::Storage)?;
+    progress.try_send(state).map_err(|_| AuthError::Storage)?;
     grant.client.await_approval(link).await?;
     grant.reloaded.store(false, Ordering::Release);
     grant.presentation.overlay(None).map_err(|_| AuthError::Storage)?;

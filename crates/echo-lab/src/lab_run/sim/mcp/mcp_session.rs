@@ -283,7 +283,11 @@ impl Session {
             .map_err(|_| "M5: link task failed")?
             .map_err(|_| "M5: link command failed")?;
         self.pending.take();
-        mcp_wire::completion(&output, "MCP linked\n")?;
+        let issuer = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?.base();
+        mcp_wire::completion(
+            &output,
+            &format!("Verification URL: {issuer}/approve\nUser code: TEST-CODE\nMCP linked\n"),
+        )?;
         self.receive_screen().await?;
         if self.screen != json!({"state":"ready","message":"Echo Live ready"}) {
             return Err("M5: approved screen mismatch".into());
