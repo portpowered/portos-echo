@@ -89,13 +89,15 @@ async fn reply_start_rides_out_a_stall_in_the_first_second_of_a_call() {
 }
 
 /// A short answer. The session's transcript of the question comes as the
-/// answer begins, before any of it has sounded.
+/// answer begins: its first fragment before any of it has sounded, the rest
+/// 600 ms in, as on the Echo, where that held every reply for 2 s.
 async fn answered(model: &mpsc::Sender<MediaEvent>, _: &Room) {
     model.send(said("assistant", "Sure.", false)).await.unwrap();
     model.send(said("user", "what time", false)).await.unwrap();
-    speak(model, 0..5, FRAME).await;
+    speak(model, 0..30, FRAME).await;
+    model.send(said("user", " is it", false)).await.unwrap();
     model.send(said("user", "what time is it", true)).await.unwrap();
-    speak(model, 5..90, FRAME).await;
+    speak(model, 30..90, FRAME).await;
     done(model, "Sure.").await;
 }
 

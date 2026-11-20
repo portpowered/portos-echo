@@ -137,6 +137,55 @@ impl Barge {
     }
 }
 
+/// The session's transcript of the turn a reply answers. It has no identity
+/// and no fixed place: on the Echo it came as the answer began, some or all
+/// of it after the answer's first audio, and held that answer for the whole
+/// of `BARGE_WINDOW`. Each reply therefore owns the first user turn
+/// transcribed since the reply before it, through that turn's whole
+/// transcript. Only a later turn is the user talking over the reply.
+#[derive(Default)]
+pub(crate) struct Question {
+    asked: Asked,
+    /// The user's turn last heard of has been transcribed whole.
+    ended: bool,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Asked {
+    /// Nothing of the question has come: the next user turn is it.
+    #[default]
+    No,
+    /// Fragments of it have come; the rest is still the question.
+    Partly,
+    Whole,
+}
+
+impl Question {
+    /// The session transcribed a fragment of a user turn, or the `whole` of
+    /// it; `sounded` says a reply is playing. True when this is the user
+    /// talking over that reply, false when it is of a reply's question.
+    pub(crate) fn transcribed(&mut self, whole: bool, sounded: bool) -> bool {
+        self.ended = whole;
+        if sounded && self.asked == Asked::Whole {
+            return true;
+        }
+        self.asked = if whole { Asked::Whole } else { Asked::Partly };
+        false
+    }
+
+    /// The session's speech-start item: a user turn began, and its
+    /// transcript is still to come. Always a sign of the user talking.
+    pub(crate) fn speech_started(&mut self) -> bool {
+        self.ended = false;
+        true
+    }
+
+    /// The reply was cut. The turn that cut it is the next reply's question.
+    pub(crate) fn cut(&mut self) {
+        self.asked = if self.ended { Asked::Whole } else { Asked::Partly };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +280,30 @@ mod tests {
         assert_eq!(barge.fire(now, false), None);
         assert_eq!(barge.due(now, true), Some(now));
         assert_eq!(barge.fire(now, true), Some(BargeTrigger::UserTranscript));
+    }
+
+    /// T1: a reply owns the first user turn transcribed since the reply
+    /// before it, however late, and a turn that cut a reply is the next
+    /// reply's question.
+    #[test]
+    fn question_is_the_first_turn_since_the_reply_before_and_never_a_barge() {
+        // All of it trails the reply's first audio.
+        let mut question = Question::default();
+        assert!(!question.transcribed(false, true) && !question.transcribed(true, true));
+        // The next turn talks over the reply and cuts it before it is whole.
+        assert!(question.transcribed(false, true));
+        question.cut();
+        assert!(!question.transcribed(true, true) && question.transcribed(false, true));
+        // Cut after the turn was whole: nothing more of the question comes.
+        assert!(question.transcribed(true, true));
+        question.cut();
+        assert!(question.transcribed(false, true));
+        // A turn transcribed with no reply playing is the next question.
+        assert!(!question.transcribed(false, false) && !question.transcribed(false, true));
+        assert!(!question.transcribed(true, true) && question.transcribed(false, true));
+        // A speech-start is always the user, and its turn is not whole.
+        assert!(question.speech_started());
+        question.cut();
+        assert!(!question.transcribed(false, true));
     }
 }
