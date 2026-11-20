@@ -147,6 +147,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         self.transcripts('echo-ok')
                     else:
                         frame(self.connection, delegation.begin())
+                        if delegation.release is not None:
+                            observe_append(self, {
+                                'type': 'delegation.context.append',
+                                'delegation_item_id': delegation.identity,
+                                'content': [{'type': 'input_text', 'text': delegation.reply}],
+                            })
                     transcript_count += 1
         except (OSError, EOFError):
             pass
