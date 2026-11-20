@@ -3,6 +3,125 @@ use super::*;
 use crate::bridge_mcp::bridge_component::{
     TlsPeer, approve, assert_mcp_trust_refused, assert_private, assert_tool_receipts, drive,
 };
+use crate::{bridge_health::Health, bridge_mcp::bridge_operations::Operation};
+
+#[tokio::test(start_paused = true)]
+async fn t3_portos_explicit_relink_clears_one_scope_diagnosis_and_restores_control() {
+    drive(async {
+        let peer = TlsPeer::with_scopes(false, echo_config::McpConfig::default().scopes).await;
+        let screen = Screen::bind(None).await.unwrap();
+        let health = Health::bind(([127, 0, 0, 1], 0).into()).await.unwrap();
+        let path = peer.directory.path().join("trace");
+        let mut trace = Trace::open(&path, "api_key").unwrap();
+        let mut tools = Tools::new(&peer.config, Arc::new(|| 0));
+        tools.open(&peer.config, &screen, &mut trace, None).await.unwrap();
+        health.set_mcp(tools.grant()).unwrap();
+        let owner = tools.runtime.as_ref().unwrap();
+        assert_eq!(health_response(&health).await["mcp"], "unlinked");
+        relink(owner).await;
+        let host = tools.host.as_ref().unwrap();
+        let (a, b) = tokio::join!(
+            host.call_tool("control", json!({}), "1:t1:u1:a"),
+            host.call_tool("control", json!({}), "1:t1:u1:b")
+        );
+        let expected = ToolResult {
+            is_error: true,
+            content: json!([{"type":"text","text":
+            "mcp.scope_insufficient: control requires message:send. Link Echo to Port OS again to control devices."}]),
+        };
+        assert_eq!(a, Ok(expected.clone()));
+        assert_eq!(b, Ok(expected));
+        assert_eq!(health_response(&health).await["mcp"], "relink_for_scope");
+        assert_eq!(health_response(&health).await["relink_required"], true);
+        health.state.send_modify(|state| state.relink_required = true);
+        relink(owner).await;
+        assert_eq!(health_response(&health).await["mcp"], "linked");
+        assert_eq!(health_response(&health).await["relink_required"], true);
+        let action = host.call_tool("control", json!({}), "1:t1:u1:c").await.unwrap();
+        assert_eq!(action.content, json!([{"type":"text","text":"accepted"}]));
+        assert!(!action.is_error);
+        assert_eq!(
+            host.call_tool("control", json!({}), "1:t1:u1:c").await,
+            Err(ToolError::Denied)
+        );
+        let rows = scope_rows(&path);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["tool"], "control");
+        assert_eq!(rows[0]["missing_scope"], "message:send");
+        tools.close().await;
+        health.close().await;
+        assert_eq!(
+            peer.finish().await,
+            json!({"link":2,"token":2,"catalog":0,"query":0,"control":3,"effects":1})
+        );
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_portos_generic_forbidden_and_unauthorized_preserve_auth_behavior() {
+    drive(async {
+        let peer = TlsPeer::start(false).await;
+        let screen = Screen::bind(None).await.unwrap();
+        let path = peer.directory.path().join("trace");
+        let mut trace = Trace::open(&path, "api_key").unwrap();
+        let mut tools = Tools::new(&peer.config, Arc::new(|| 0));
+        tools.open(&peer.config, &screen, &mut trace, None).await.unwrap();
+        let owner = tools.runtime.as_ref().unwrap();
+        relink(owner).await;
+        let host = tools.host.as_ref().unwrap();
+        for mode in ["forbidden", "unknown", "unauthorized"] {
+            let key = format!("1:t1:u1:{mode}");
+            assert_eq!(
+                host.call_tool("control", json!({"mode":mode}), &key).await,
+                Err(ToolError::Unauthorized)
+            );
+            assert_eq!(
+                owner.grant.health_status(),
+                if mode == "unauthorized" { "unlinked" } else { "linked" }
+            );
+        }
+        assert_eq!(
+            host.call_tool("endpoint_query", json!({}), "1:t1:u1:query").await,
+            Err(ToolError::Unauthorized)
+        );
+        assert!(scope_rows(&path).is_empty());
+        tools.close().await;
+        assert_eq!(
+            peer.finish().await,
+            json!({"link":1,"token":1,"catalog":0,"query":0,"control":3})
+        );
+    })
+    .await;
+}
+
+async fn relink(owner: &bridge_mcp::Runtime) {
+    let mut receipt = owner.operator.start(Operation::Link).ok().unwrap();
+    assert!(matches!(
+        receipt.progress.recv().await,
+        Some(echo_screen_contract::UiState::LinkCode { .. })
+    ));
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(receipt.result.await.unwrap(), Ok("linked"));
+}
+
+async fn health_response(health: &Health) -> Value {
+    reqwest::get(format!("http://{}/healthz", health.address))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+fn scope_rows(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|row| row["event"] == "mcp.scope_insufficient")
+        .collect()
+}
 
 #[tokio::test(start_paused = true)]
 async fn t3_mcp_configured_https_link_catalog_query_and_reload() {

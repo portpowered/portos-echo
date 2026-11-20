@@ -81,7 +81,7 @@ fn options(scenario: &str) -> Options {
 #[ignore = "T3 requires prebuilt echo-bridge, offline Codex pin and hassmic-host"]
 async fn t3_portos_read_only_delegation_replies_to_relink_without_retry() {
     let options = options("m5-twin-room-lights");
-    let mut session = Session::new(Journey::ReadOnly);
+    let mut session = Session::default().for_journey(Journey::ReadOnly);
     let root = tempfile::tempdir().unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(24), async {
         session.start(&options, root.path()).await?;

@@ -96,17 +96,9 @@ fn scope_challenge(header: &HeaderValue) -> Option<&'static str> {
     if error != Some("insufficient_scope") {
         return None;
     }
-    [
-        "endpoint:read",
-        "endpoint:write",
-        "message:send",
-        "group:read",
-        "group:manage",
-        "subscription:read",
-        "subscription:write",
-    ]
-    .into_iter()
-    .find(|known| Some(*known) == scope)
+    echo_config::PORTOS_MCP_SCOPES
+        .into_iter()
+        .find(|known| Some(*known) == scope)
 }
 
 fn challenge_value(input: &str) -> Option<(&str, &str)> {

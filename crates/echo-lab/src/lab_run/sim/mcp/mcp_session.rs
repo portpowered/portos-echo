@@ -49,11 +49,9 @@ pub struct Session {
 }
 
 impl Session {
-    pub(super) fn new(journey: Journey) -> Self {
-        Self {
-            journey,
-            ..Self::default()
-        }
+    pub(super) fn for_journey(mut self, journey: Journey) -> Self {
+        self.journey = journey;
+        self
     }
 
     pub fn started(&self) -> bool {

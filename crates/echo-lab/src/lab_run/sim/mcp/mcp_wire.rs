@@ -3,13 +3,34 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines},
     net::TcpStream,
     process::Command,
 };
 
 pub type Screen = Lines<BufReader<TcpStream>>;
 const PAIR: &str = "synthetic-m5-screen";
+
+pub(super) async fn health(address: std::net::SocketAddr) -> Result<Value, String> {
+    let mut socket = TcpStream::connect(address)
+        .await
+        .map_err(|_| "M5: health connection failed")?;
+    socket
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: local\r\nConnection: close\r\n\r\n")
+        .await
+        .map_err(|_| "M5: health request failed")?;
+    let mut response = String::new();
+    socket
+        .take(4096)
+        .read_to_string(&mut response)
+        .await
+        .map_err(|_| "M5: health read failed")?;
+    let (headers, body) = response.split_once("\r\n\r\n").ok_or("M5: malformed health response")?;
+    if !headers.starts_with("HTTP/1.1 200 OK\r\n") {
+        return Err("M5: health observation failed".into());
+    }
+    serde_json::from_str(body).map_err(|_| "M5: invalid health".into())
+}
 
 pub fn command(binary: &Path, root: &Path) -> Command {
     let mut command = Command::new(binary);
@@ -124,18 +145,20 @@ pub fn link_command(
         .stderr(std::process::Stdio::piped());
     let (send, receive) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
         let mut child = command.spawn()?;
         let mut stdout = child
             .stdout
             .take()
             .ok_or_else(|| std::io::Error::other("missing link stdout"))?;
         let mut prefix = Vec::new();
-        while prefix.iter().filter(|byte| **byte == b'\n').count() != 2 {
+        let mut lines = 0;
+        while lines != 2 {
             if prefix.len() == 4096 {
                 return Err(std::io::Error::other("oversized link guidance"));
             }
-            prefix.push(stdout.read_u8().await?);
+            let byte = stdout.read_u8().await?;
+            lines += usize::from(byte == b'\n');
+            prefix.push(byte);
         }
         send.send(prefix.clone())
             .map_err(|_| std::io::Error::other("link observer closed"))?;

@@ -105,20 +105,7 @@ impl Session {
         if address.ip() != std::net::Ipv4Addr::LOCALHOST || address.port() == 0 {
             return Err("M5: health listener must be loopback".into());
         }
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| "M5: health client failed")?;
-        client
-            .get(url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|_| "M5: health observation failed")?
-            .json()
-            .await
-            .map_err(|_| "M5: invalid health".into())
+        super::mcp_wire::health(address).await
     }
 
     fn transcript(&self) -> Result<String, String> {

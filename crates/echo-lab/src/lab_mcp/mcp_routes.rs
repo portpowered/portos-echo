@@ -178,7 +178,7 @@ fn unavailable() -> Reply {
 }
 
 fn valid_scopes(scope: &str) -> bool {
-    let known = echo_config::McpConfig::default().scopes;
+    let known = echo_config::PORTOS_MCP_SCOPES;
     let scopes: Vec<_> = scope.split(' ').collect();
-    !scopes.is_empty() && scopes.iter().all(|scope| known.iter().any(|known| known == scope))
+    !scopes.is_empty() && scopes.iter().all(|scope| known.contains(scope))
 }

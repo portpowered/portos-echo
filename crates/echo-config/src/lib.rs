@@ -173,23 +173,24 @@ pub struct McpConfig {
     pub operator_listen: SocketAddr,
 }
 
+/// The scopes enforced by Port OS MCP, in device-authorization request order.
+pub const PORTOS_MCP_SCOPES: [&str; 7] = [
+    "endpoint:read",
+    "endpoint:write",
+    "message:send",
+    "group:read",
+    "group:manage",
+    "subscription:read",
+    "subscription:write",
+];
+
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
             server: Vec::new(),
             state_dir: None,
             client_id: "port1/systems/zero/oauth-clients/command-line-interface".into(),
-            scopes: [
-                "endpoint:read",
-                "endpoint:write",
-                "message:send",
-                "group:read",
-                "group:manage",
-                "subscription:read",
-                "subscription:write",
-            ]
-            .map(String::from)
-            .into(),
+            scopes: PORTOS_MCP_SCOPES.map(String::from).into(),
             operator_listen: (std::net::Ipv4Addr::LOCALHOST, 16902).into(),
         }
     }

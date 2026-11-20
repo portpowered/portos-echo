@@ -29,7 +29,7 @@ impl<'a> M5<'a> {
                 .enable_all()
                 .build()
                 .map_err(|_| "M5: cannot start runtime")?,
-            session: Session::new(if lights {
+            session: Session::default().for_journey(if lights {
                 mcp_lights::Journey::Twin
             } else {
                 mcp_lights::Journey::Lifecycle

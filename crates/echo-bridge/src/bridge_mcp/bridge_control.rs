@@ -278,28 +278,12 @@ mod tests {
         let mut output = Probe(send, Vec::new());
         let mut operation = Box::pin(prepared.execute(&mut output));
         let prefix = format!("Verification URL: {}/approve\nUser code: TEST-CODE\n", mock.base);
-        tokio::select! {
-            result = &mut operation => panic!("completed before approval: {result:?}"),
-            value = flushed.recv() => assert_eq!(value.unwrap(), prefix.as_bytes()),
-        }
-        let UiState::LinkCode {
-            user_code,
-            verification_uri,
-            ..
-        } = screen.recv().await.unwrap()
-        else {
-            panic!("missing code")
+        let pending = tokio::select! {
+            result = &mut operation => Err(result),
+            value = flushed.recv() => Ok(value),
         };
-        assert_eq!(user_code, "TEST-CODE");
-        assert_eq!(verification_uri, format!("{}/approve", mock.base));
-        assert!(!owner.grant.client.has_grant());
-        let competing = Prepared {
-            settings: settings(&mock, root, owner.address),
-            operation: Operation::Link,
-        };
-        let mut refused = Vec::new();
-        assert_eq!(competing.execute(&mut refused).await, Err(Error::Control));
-        assert_eq!(refused.as_slice(), b"");
+        assert_eq!(pending, Ok(Some(prefix.as_bytes().to_vec())));
+        assert_pending(&mock, root, &owner, screen.recv().await).await;
         tokio::time::advance(Duration::from_secs(5)).await;
         let result = operation.await;
         assert_outcome(result, failure, &output.1, &prefix, &owner, &mut screen).await;
@@ -309,6 +293,26 @@ mod tests {
             assert_eq!(state.requests.iter().filter(|r| r.path == "/custom/token").count(), 1);
         }
         owner.close().await;
+    }
+
+    async fn assert_pending(
+        mock: &echo_mcp_auth::mock::Mock,
+        root: &std::path::Path,
+        owner: &super::super::Runtime,
+        state: Option<echo_screen_contract::UiState>,
+    ) {
+        assert!(
+            matches!(state, Some(echo_screen_contract::UiState::LinkCode { user_code, verification_uri, .. })
+            if user_code == "TEST-CODE" && verification_uri == format!("{}/approve", mock.base))
+        );
+        assert!(!owner.grant.client.has_grant());
+        let competing = Prepared {
+            settings: settings(mock, root, owner.address),
+            operation: Operation::Link,
+        };
+        let mut refused = Vec::new();
+        assert_eq!(competing.execute(&mut refused).await, Err(Error::Control));
+        assert!(refused.is_empty());
     }
 
     async fn assert_outcome(
