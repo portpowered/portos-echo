@@ -86,6 +86,12 @@ test("settings: gear/back preserves the exact authoritative frame and focus, wit
     );
     assert.deepEqual(await calls(page), [
         {
+            url: "http://127.0.0.1:4173/settings/v2?token=synthetic-screen-pair",
+            method: "GET",
+            headers: undefined,
+            body: undefined,
+        },
+        {
             url: "http://127.0.0.1:4173/settings/v1?token=synthetic-screen-pair",
             method: "GET",
             headers: undefined,
@@ -119,7 +125,7 @@ test("settings: sparse saves preserve decimal caps and report exact validation w
         await page.locator(".settings-panel [role=status]").textContent(),
         "No settings changed",
     );
-    assert.equal((await calls(page)).length, 1);
+    assert.equal((await calls(page)).length, 2);
     await page.getByLabel("Follow-up listening", { exact: true }).uncheck();
     await response(page, { version: 1, restart_pending: true });
     await page
@@ -130,13 +136,13 @@ test("settings: sparse saves preserve decimal caps and report exact validation w
         /^Saved\./,
     );
     assert.equal(
-        (await calls(page))[1].body,
+        (await calls(page))[2].body,
         '{"version":1,"settings":{"voice":{"session_listen_enabled":false}}}',
     );
     await page
         .getByRole("button", { name: "Save settings", exact: true })
         .click();
-    assert.equal((await calls(page)).length, 2);
+    assert.equal((await calls(page)).length, 3);
     await page.getByLabel("Follow-up window (seconds)").fill("20");
     await page.getByLabel("Live voice").selectOption("cedar");
     await page.getByLabel("Daily request cap").fill("9007199254740993");
@@ -150,7 +156,7 @@ test("settings: sparse saves preserve decimal caps and report exact validation w
         await page.locator(".settings-panel [role=status]").textContent(),
         message,
     );
-    assert.deepEqual(JSON.parse((await calls(page))[2].body), {
+    assert.deepEqual(JSON.parse((await calls(page))[3].body), {
         version: 1,
         settings: {
             voice: { session_listen_seconds: 20 },
@@ -166,12 +172,12 @@ test("settings: sparse saves preserve decimal caps and report exact validation w
         "9007199254740993",
     );
     await page.clock.runFor(10000);
-    assert.equal((await calls(page)).length, 3);
+    assert.equal((await calls(page)).length, 4);
     await response(page, { version: 1, restart_pending: false });
     await page
         .getByRole("button", { name: "Save settings", exact: true })
         .click();
-    assert.equal((await calls(page)).length, 4);
+    assert.equal((await calls(page)).length, 5);
     assert.match(
         await page.locator(".settings-panel [role=status]").textContent(),
         /next conversation/,
@@ -306,7 +312,7 @@ test("settings: cancellation and unload never render a late response or resubmit
     assert.equal(await page.locator(".settings-panel").count(), 0);
     assert.equal(await page.evaluate(() => window.streams[0].closed), true);
     assert.equal(await page.evaluate(() => window.timers.size), 0);
-    assert.equal((await calls(page)).length, 3);
+    assert.equal((await calls(page)).length, 5);
 });
 
 test("settings: timed-out save stays uncertain without retry, and reopening reloads accepted values", async (t) => {
@@ -336,7 +342,7 @@ test("settings: timed-out save stays uncertain without retry, and reopening relo
         true,
     );
     await page.clock.runFor(20000);
-    assert.equal((await calls(page)).length, 2);
+    assert.equal((await calls(page)).length, 3);
     await page.getByRole("button", { name: "Back", exact: true }).click();
     await response(page, { ...snapshot, restart_pending: true });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -348,7 +354,7 @@ test("settings: timed-out save stays uncertain without retry, and reopening relo
         await page.locator(".settings-panel [role=status]").textContent(),
         "Saved settings are waiting for a bridge restart.",
     );
-    assert.equal((await calls(page)).length, 3);
+    assert.equal((await calls(page)).length, 5);
 });
 
 test("settings: invalid pairing bootstrap remains local and the state stream still updates", async (t) => {

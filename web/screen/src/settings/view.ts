@@ -1,14 +1,17 @@
 import {
     decodeSaved,
-    decodeSnapshot,
     request,
     settingsUrl,
+    type PatchV2,
     type Snapshot,
+    type SnapshotV2,
 } from "./api";
 import { element, promptForm, settingsForm } from "./forms";
 import { mountKeyboard } from "./keyboard";
 import type { UiState } from "../model";
 import { packControls } from "./packs";
+import { loadSettings, saveSettingsV2 } from "./api-v2";
+import { openAIOptions, portosForm } from "./forms-v2";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
@@ -143,8 +146,77 @@ export function mountSettings(
                 : "Saved. Changes apply to the next conversation.";
         }, "Saving…");
     }
-    function render(data: Snapshot) {
+    function render(data: Snapshot | SnapshotV2) {
         fields.replaceChildren();
+        if (data.version === 1) renderV1(data);
+        else renderV2(data);
+        for (const warning of data.warnings)
+            fields.append(element("p", warning));
+    }
+    function renderShared(data: Snapshot | SnapshotV2) {
+        fields.append(packControls(actions, perform));
+        for (const kind of ["voice", "runner"] as const)
+            fields.append(
+                promptForm(kind, data.prompts[kind], (text) => {
+                    save(`/prompts/${kind}`, { version: 1, text }, () => {
+                        data.prompts[kind] = text;
+                    });
+                }),
+            );
+    }
+    function renderV2(data: SnapshotV2) {
+        const saveV2 = (patch: PatchV2) => {
+            if (!Object.keys(patch).length) {
+                status.textContent = "No settings changed";
+                return;
+            }
+            if (patch.portos?.scopes?.length === 0) {
+                status.textContent = "Select at least one requested scope.";
+                return;
+            }
+            void perform(async (signal) => {
+                const pending = decodeSaved(
+                    await saveSettingsV2(actions, signal, patch),
+                    2,
+                );
+                if (signal.aborted) return "";
+                if (patch.voice)
+                    Object.assign(data.settings.voice, patch.voice);
+                if (patch.codex)
+                    Object.assign(data.settings.codex, patch.codex);
+                if (patch.agent)
+                    Object.assign(data.settings.agent, patch.agent);
+                if (patch.home && data.settings.home) {
+                    const groups = data.settings.home.agent_tools;
+                    groups.splice(0, groups.length, ...patch.home.agent_tools);
+                }
+                if (patch.portos && data.portos.server) {
+                    if (patch.portos.scopes)
+                        data.portos.server.requested_scopes.splice(
+                            0,
+                            data.portos.server.requested_scopes.length,
+                            ...patch.portos.scopes,
+                        );
+                    if (patch.portos.allow_tools)
+                        data.portos.server.allow_tools.splice(
+                            0,
+                            data.portos.server.allow_tools.length,
+                            ...patch.portos.allow_tools,
+                        );
+                }
+                return pending
+                    ? "Saved. The bridge will restart after the current reply finishes."
+                    : "Saved. Changes apply to the next conversation.";
+            }, "Saving�");
+        };
+        fields.append(
+            settingsForm(data, saveV2, openAIOptions(data.settings)),
+            portosForm(data.portos, saveV2),
+        );
+        renderShared(data);
+        fields.append(element("p", "Version: " + data.bridge_version));
+    }
+    function renderV1(data: Snapshot) {
         const form = settingsForm(data, (patch) => {
             if (!Object.keys(patch).length) {
                 status.textContent = "No settings changed";
@@ -159,15 +231,8 @@ export function mountSettings(
                     Object.assign(data.settings.agent, patch.agent);
             });
         });
-        fields.append(form, packControls(actions, perform));
-        for (const kind of ["voice", "runner"] as const)
-            fields.append(
-                promptForm(kind, data.prompts[kind], (text) => {
-                    save(`/prompts/${kind}`, { version: 1, text }, () => {
-                        data.prompts[kind] = text;
-                    });
-                }),
-            );
+        fields.append(form);
+        renderShared(data);
         fields.append(
             element("h2", "Bridge"),
             element("p", `Port OS: ${data.link_status.replace(/_/g, " ")}`),
@@ -186,8 +251,6 @@ export function mountSettings(
             });
         });
         fields.append(link);
-        for (const warning of data.warnings)
-            fields.append(element("p", warning));
     }
     gear.addEventListener("click", () => {
         if (disposed) return;
@@ -200,9 +263,7 @@ export function mountSettings(
         fields.replaceChildren();
         back.focus();
         void perform(async (signal) => {
-            const data = decodeSnapshot(
-                await request(settingsUrl(actions), signal),
-            );
+            const data = await loadSettings(actions, signal);
             if (signal.aborted) return "";
             render(data);
             return data.restart_pending

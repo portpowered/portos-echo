@@ -6,7 +6,9 @@ use super::{
     voice_recovery::{Round, Stage, supervise},
     voice_view::View,
 };
-use crate::bridge_settings::{SettingsCompletion, SettingsHost, SettingsService};
+use crate::bridge_settings::{
+    SettingsCompletion, SettingsHost, SettingsService, portos_permissions::PortosPermissions,
+};
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_config::{LiveMode, ScreenConfig};
 use echo_link::LinkConnector;
@@ -52,10 +54,15 @@ impl RuntimeOptions<'_> {
 struct SettingsLink<'a> {
     health: &'a Health,
     portos: bool,
+    permissions: Option<PortosPermissions>,
 }
 
 impl<'a> SettingsLink<'a> {
-    fn new(config: Option<&echo_config::BridgeConfig>, health: &'a Health) -> Self {
+    fn new(
+        config: Option<&echo_config::BridgeConfig>,
+        health: &'a Health,
+        permissions: Option<PortosPermissions>,
+    ) -> Self {
         let portos = config.is_some_and(|config| {
             config
                 .mcp
@@ -66,7 +73,11 @@ impl<'a> SettingsLink<'a> {
         if portos {
             health.state.send_modify(|state| state.mcp = "unlinked");
         }
-        Self { health, portos }
+        Self {
+            health,
+            portos,
+            permissions,
+        }
     }
 
     async fn open_tools(
@@ -80,6 +91,10 @@ impl<'a> SettingsLink<'a> {
             self.health.set_mcp(tools.grant())?;
         }
         Ok(())
+    }
+
+    async fn scopes(&self) -> Option<Vec<String>> {
+        self.health.mcp_grant()?.granted_scopes().await
     }
 
     fn status(&self) -> LinkStatusV1 {
@@ -172,12 +187,21 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     let settings_trace = trace.clone();
     let mut view = View::new(&screen, &health, &mut trace);
     let requested = Cell::new(false);
-    let link = SettingsLink::new(options.delegation, &health);
+    let link = SettingsLink::new(
+        options.delegation,
+        &health,
+        service.as_ref().map(SettingsService::permissions),
+    );
     let work = Box::pin(work(
         options, connector, &mut peer, cancelled, &mut view, &requested, &link,
     ));
     let (result, settings) = if let Some(service) = service {
-        let (result, completion) = Box::pin(service.with_trace(settings_trace).scope(work, || link.status())).await;
+        let (result, completion) = Box::pin(service.with_trace(settings_trace).scope_with_grant(
+            work,
+            || link.status(),
+            || link.scopes(),
+        ))
+        .await;
         (result, Some(completion))
     } else {
         (work.await, None)
@@ -302,7 +326,10 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
             async |io, client, stopping| {
                 let mut tools = options
                     .delegation
-                    .map(|config| super::voice_tools::Tools::new(config, options.utc_day.clone()));
+                    .map(|config| {
+                        super::voice_tools::Tools::new(config, options.utc_day.clone())
+                            .with_portos_permissions(grant.permissions.clone())
+                    });
                 let setup = grant.open_tools(view, options, &mut tools);
                 let prepared = tokio::select! {
                     biased;

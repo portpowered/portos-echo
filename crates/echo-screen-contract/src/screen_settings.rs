@@ -34,7 +34,7 @@ impl JsonSchema for SettingsVersionV1 {
 }
 
 // An omitted patch field means unchanged. Explicit null is never an omission.
-fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(decoder: D) -> Result<Option<T>, D::Error> {
+pub(crate) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(decoder: D) -> Result<Option<T>, D::Error> {
     T::deserialize(decoder).map(Some)
 }
 

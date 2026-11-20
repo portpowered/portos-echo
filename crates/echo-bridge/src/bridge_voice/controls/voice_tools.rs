@@ -7,6 +7,7 @@ use crate::{
     bridge_mcp::{self, Token},
     bridge_notes::{Local, NAMES, Notes},
     bridge_runtime::bridge_screen::Screen,
+    bridge_settings::portos_permissions::PortosPermissions,
     bridge_trace::{PortosReceipts, Trace},
 };
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
@@ -22,6 +23,7 @@ pub(super) struct Mcp {
     trace: Trace,
     receipts: Option<PortosReceipts>,
     grant: Option<Arc<bridge_mcp::Grant>>,
+    portos_permissions: Option<PortosPermissions>,
 }
 
 impl Mcp {
@@ -30,6 +32,7 @@ impl Mcp {
         trace: Trace,
         server: Option<&echo_config::McpServer>,
         grant: Option<Arc<bridge_mcp::Grant>>,
+        portos_permissions: Option<PortosPermissions>,
     ) -> Self {
         let receipts = server
             .filter(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
@@ -39,6 +42,7 @@ impl Mcp {
             trace,
             receipts,
             grant,
+            portos_permissions,
         }
     }
 
@@ -46,6 +50,14 @@ impl Mcp {
         let Some(grant) = &self.grant else {
             return client.call(name, args).await.map_err(Into::into);
         };
+        if let Some(permissions) = &self.portos_permissions
+            && permissions.managed()
+        {
+            let scopes = grant.granted_scopes().await;
+            if !permissions.permits(name, scopes.as_deref()) {
+                return Err(ToolError::Denied);
+            }
+        }
         let generation = grant.scope_generation().map_err(|_| ToolError::Transport)?;
         match client.call(name, args).await {
             Err(McpError::InsufficientScope { scope }) => {
@@ -172,6 +184,7 @@ pub(super) struct Tools {
     server: Option<String>,
     specs: Option<Vec<ToolSpec>>,
     runtime: Option<bridge_mcp::Runtime>,
+    portos_permissions: Option<PortosPermissions>,
     trace: Option<Trace>,
 }
 
@@ -189,8 +202,14 @@ impl Tools {
             specs: None,
             server: config.mcp.server.first().map(|server| server.name.clone()),
             runtime: None,
+            portos_permissions: None,
             trace: None,
         }
+    }
+
+    pub(super) fn with_portos_permissions(mut self, permissions: Option<PortosPermissions>) -> Self {
+        self.portos_permissions = permissions;
+        self
     }
 
     pub async fn open(
@@ -231,7 +250,13 @@ impl Tools {
             })
             .transpose()?;
         let host = Policy::new(
-            Mcp::new(client, trace.clone(), config.mcp.server.first(), self.grant()),
+            Mcp::new(
+                client,
+                trace.clone(),
+                config.mcp.server.first(),
+                self.grant(),
+                self.portos_permissions.clone(),
+            ),
             &self.allowed,
             &config.audit.log_dir,
             screen.approvals.clone(),

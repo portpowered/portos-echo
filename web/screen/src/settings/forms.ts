@@ -1,4 +1,4 @@
-import type { Patch, Snapshot } from "./api";
+import type { PatchV2, Snapshot, SnapshotV2 } from "./api";
 import { stepper } from "./stepper";
 
 // The largest cap the bridge can store (a TOML integer).
@@ -15,7 +15,7 @@ export function element<K extends keyof HTMLElementTagNameMap>(
 }
 // One row: the label at the left and its control at the right. `control` may
 // wrap `target` (a stepper); the label always names `target` alone.
-function field(
+export function field(
     label: string,
     control: HTMLElement,
     target: HTMLElement = control,
@@ -28,7 +28,7 @@ function field(
     row.append(name, control);
     return row;
 }
-function number(
+export function number(
     label: string,
     value: number,
     min: number,
@@ -54,8 +54,13 @@ function number(
     };
 }
 
-export function settingsForm(snapshot: Snapshot, save: (patch: Patch) => void) {
+export function settingsForm(
+    snapshot: Snapshot | SnapshotV2,
+    save: (patch: PatchV2) => void,
+    extra?: { rows: HTMLElement[]; addPatch: (patch: PatchV2) => void },
+) {
     const form = element("form");
+    if (extra) form.setAttribute("aria-label", "OpenAI");
     const values = snapshot.settings;
     const enabled = element("input");
     enabled.type = "checkbox";
@@ -90,12 +95,13 @@ export function settingsForm(snapshot: Snapshot, save: (patch: Patch) => void) {
         1n,
     );
     form.append(
-        element("h2", "Conversation"),
+        element("h2", extra ? "OpenAI" : "Conversation"),
         field("Follow-up listening", enabled),
         seconds.label,
         field("Live voice", voice),
         field("Daily request cap", stepper(cap, 0n, CAP_MAX, 10n), cap),
         tools.label,
+        ...(extra?.rows ?? []),
         element(
             "p",
             "Settings apply after the current reply finishes. Prompt edits apply to the next conversation.",
@@ -104,7 +110,7 @@ export function settingsForm(snapshot: Snapshot, save: (patch: Patch) => void) {
     );
     form.addEventListener("submit", (event) => {
         event.preventDefault();
-        const patch: Patch = {};
+        const patch: PatchV2 = {};
         if (enabled.checked !== values.voice.session_listen_enabled)
             (patch.voice ??= {}).session_listen_enabled = enabled.checked;
         if (seconds.input.valueAsNumber !== values.voice.session_listen_seconds)
@@ -116,6 +122,7 @@ export function settingsForm(snapshot: Snapshot, save: (patch: Patch) => void) {
             (patch.agent ??= {}).daily_request_cap = cap.value;
         if (tools.input.valueAsNumber !== values.agent.max_tool_calls)
             (patch.agent ??= {}).max_tool_calls = tools.input.valueAsNumber;
+        extra?.addPatch(patch);
         save(patch);
     });
     return form;

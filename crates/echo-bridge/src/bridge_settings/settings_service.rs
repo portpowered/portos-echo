@@ -1,7 +1,10 @@
 //! Runtime-owned dispatch: no detached transactions survive the voice owner.
-use super::{SettingsError, SettingsHost, settings_restart::Restart};
+use super::{SettingsError, SettingsHost, portos_permissions::PortosPermissions, settings_restart::Restart};
 use echo_config::EffectiveConfig;
-use echo_screen_contract::settings_v1::{LinkStatusV1, PromptTextsV1};
+use echo_screen_contract::{
+    settings_v1::{LinkStatusV1, PromptTextsV1, SettingsErrorV1, SettingsVersionV1},
+    settings_v2::{SettingsErrorV2, SettingsVersionV2},
+};
 use echo_screen_server::{SettingsOperation, SettingsReply, SettingsRequest, settings_channel};
 use std::future::Future;
 use tokio::sync::mpsc;
@@ -56,6 +59,10 @@ impl SettingsService {
         )
     }
 
+    pub(crate) fn permissions(&self) -> PortosPermissions {
+        self.host.permissions()
+    }
+
     pub(crate) fn with_trace(mut self, trace: crate::bridge_trace::Trace) -> Self {
         self.trace = Some(trace);
         self
@@ -69,6 +76,16 @@ impl SettingsService {
         self,
         work: impl Future<Output = T>,
         link_status: impl Fn() -> LinkStatusV1,
+    ) -> (T, SettingsCompletion) {
+        self.scope_with_grant(work, link_status, || std::future::ready(None))
+            .await
+    }
+
+    pub(crate) async fn scope_with_grant<T, F: Future<Output = Option<Vec<String>>>>(
+        self,
+        work: impl Future<Output = T>,
+        link_status: impl Fn() -> LinkStatusV1,
+        grant_scopes: impl Fn() -> F,
     ) -> (T, SettingsCompletion) {
         let Self {
             mut host,
@@ -84,9 +101,18 @@ impl SettingsService {
                         biased;
                         result = &mut work => return result,
                         Some(request) = inbox.recv() => {
-                            request.commit(|operation| {
-                                commit(&mut host, &restart, trace.as_mut(), operation, link_status())
-                            }).await;
+                            let handle = async {
+                                let scopes = if request.reads_portos() { grant_scopes().await } else { None };
+                                request.commit(|operation| {
+                                    commit(&mut host, &restart, trace.as_mut(), operation, (link_status(), scopes))
+                                }).await;
+                            };
+                            // Work may itself hold the grant lock during refresh.
+                            tokio::select! {
+                                biased;
+                                result = &mut work => return result,
+                                () = handle => {}
+                            }
                         }
                     }
                 }
@@ -110,7 +136,7 @@ fn commit(
     restart: &Restart,
     trace: Option<&mut crate::bridge_trace::Trace>,
     operation: SettingsOperation,
-    link: LinkStatusV1,
+    grant: (LinkStatusV1, Option<Vec<String>>),
 ) -> SettingsReply {
     let pack_only = matches!(&operation, SettingsOperation::PackSelection(..));
     let prompt = match &operation {
@@ -118,19 +144,16 @@ fn commit(
         SettingsOperation::Prompt(echo_screen_server::PromptKind::Runner, _) => Some("runner"),
         _ => None,
     };
-    let reply = host.transaction(operation, link);
-    let (SettingsReply::Saved(saved) | SettingsReply::PackSaved(saved, _, _)) = &reply else {
-        return reply;
+    let reply = host.transaction_with_grant(operation, grant.0, grant.1);
+    let (restart_pending, v2) = match &reply {
+        SettingsReply::Saved(saved) | SettingsReply::PackSaved(saved, _, _) => (saved.restart_pending, false),
+        SettingsReply::SavedV2(saved) => (saved.restart_pending, true),
+        _ => return reply,
     };
-    let pending = !pack_only && prompt.is_none() && saved.restart_pending && !restart.pending();
+    let pending = !pack_only && prompt.is_none() && restart_pending && !restart.pending();
     let recorded = trace.map_or(Ok(()), |trace| {
         let (event, fields) = prompt.map_or_else(
-            || {
-                (
-                    "settings.saved",
-                    serde_json::json!({"restart_pending":saved.restart_pending}),
-                )
-            },
+            || ("settings.saved", serde_json::json!({"restart_pending":restart_pending})),
             |prompt| ("prompt.saved", serde_json::json!({"prompt":prompt})),
         );
         trace.record(event, None, fields)?;
@@ -145,10 +168,18 @@ fn commit(
         restart.request();
     }
     if recorded.is_err() {
-        return SettingsReply::Persistence(echo_screen_contract::settings_v1::SettingsErrorV1 {
-            version: echo_screen_contract::settings_v1::SettingsVersionV1,
-            message: "settings: trace unavailable after commit".into(),
-        });
+        let message = "settings: trace unavailable after commit".into();
+        return if v2 {
+            SettingsReply::PersistenceV2(SettingsErrorV2 {
+                version: SettingsVersionV2,
+                message,
+            })
+        } else {
+            SettingsReply::Persistence(SettingsErrorV1 {
+                version: SettingsVersionV1,
+                message,
+            })
+        };
     }
     reply
 }

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SettingsErrorV2",
+  "type": "object",
+  "properties": {
+    "message": {
+      "type": "string"
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV2"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "message"
+  ],
+  "$defs": {
+    "SettingsVersionV2": {
+      "type": "integer",
+      "const": 2
+    }
+  }
+}
