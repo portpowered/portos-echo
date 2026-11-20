@@ -12,6 +12,7 @@ interface Manifest {
 
 export function mountPacks(
     host: HTMLElement,
+    diagnostic: HTMLElement,
     actions: string,
     stream: EventSource,
     redraw: () => void,
@@ -98,7 +99,7 @@ export function mountPacks(
             if (controller.signal.aborted || stopped) return;
             clear();
             host.classList.add("screen-pack");
-            layout = applyLayout(host, manifest.layout);
+            layout = applyLayout(host, diagnostic, manifest.layout);
             const ownedLayout = layout;
             const css = document.createElement("link");
             css.dataset.packPersistent = "";

@@ -236,6 +236,30 @@ export async function checkTemplateLayout(
         ],
         violations,
     );
+    await fixture.update({ state: "ready", message: "Ready" });
+    await playing(page, "idle.webm");
+    const begin = page.getByRole("button", { name: "Begin session" });
+    await begin.press("Enter");
+    assert.deepEqual(await fixture.next(), {
+        action: { action: "tap", target: "primary" },
+    });
+    const feedback = page.getByRole("status").filter({
+        hasText: "Action sent; waiting for screen update",
+    });
+    await observe(
+        "Ready after activation",
+        [
+            ["stage", stage],
+            ["settings", settings],
+            ["clock", page.locator(".pack-clock")],
+            ["date", page.locator(".pack-date")],
+            ["action feedback", feedback],
+        ],
+        violations,
+    );
+    await page.screenshot({
+        path: "test-results/screenshots/template-960x600-ready-feedback.png",
+    });
     assert.deepEqual(fixture.outside, []);
     assert.deepEqual(violations, []);
 }

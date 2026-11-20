@@ -139,6 +139,13 @@ button:disabled {
     background: #101827;
     pointer-events: none;
 }
+.screen-pack:is([data-ui-state="ready"], [data-ui-state="connected"])
+    + .pack-idle-feedback {
+    position: fixed;
+    inset: var(--pack-feedback-inset);
+    width: auto;
+    margin: 0;
+}
 .settings-gear {
     position: fixed;
     top: 12px;

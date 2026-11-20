@@ -56,7 +56,11 @@ function fitSideCard(card: HTMLElement, controls: HTMLElement | null) {
 
 // Content remains the canonical native controls. Position its overlays inside
 // the safe area; scroll oversized text instead of clipping approval actions.
-export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
+export function applyLayout(
+    host: HTMLElement,
+    diagnostic: HTMLElement,
+    layout: Layout | undefined,
+) {
     const clock = document.createElement("p");
     clock.className = "pack-clock";
     clock.dataset.packPersistent = "";
@@ -163,12 +167,27 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             node.style.width = `${50 * layout.stage.scale}%`;
             node.style.height = `${50 * layout.stage.scale}%`;
             node.style.backgroundColor = layout.stage.background;
+            const status = layout.slots.status;
+            if (besideStage(status)) {
+                // The live region is a sibling of the pack, so map the slot
+                // from safe-area coordinates to viewport coordinates.
+                const left = area.x + (status.x / 100) * area.width;
+                const top = area.y + (status.y / 100) * area.height;
+                const right = 100 - area.x - area.width;
+                diagnostic.style.setProperty(
+                    "--pack-feedback-inset",
+                    `${top}% calc(${right}% + 12px) auto ${left}%`,
+                );
+                diagnostic.classList.add("pack-idle-feedback");
+            }
         },
         dispose() {
             observer.disconnect();
             clearInterval(timer);
             clock.remove();
             date.remove();
+            diagnostic.classList.remove("pack-idle-feedback");
+            diagnostic.style.removeProperty("--pack-feedback-inset");
             for (const key of ["x", "y", "width", "height"])
                 host.style.removeProperty(`--pack-${key}`);
         },
