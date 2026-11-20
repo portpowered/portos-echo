@@ -14,10 +14,14 @@ import { loadSettings, restartWarning, saveSettingsV2 } from "./api-v2";
 import { openAIOptions, portosForm } from "./forms-v2";
 import { mountPortos } from "./accounts/portos";
 import { mountOpenAI } from "./accounts/openai";
+import { accountRow } from "./accounts/account-buttons";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
     "Link it from the PC with echo-bridge link. Linking on this screen is coming.";
+// A result clears itself after this long; errors and warnings stay until the
+// next action.
+const RESULT_MS = 4000;
 // What Relink can honestly promise: it never starts a sign-in from this page.
 const RELINK_RESULT: Record<Snapshot["link_status"], string> = {
     unconfigured: `Port OS is not linked yet. ${LINK_FROM_PC}`,
@@ -30,13 +34,6 @@ function settingsSection(title: string, body: HTMLElement) {
     section.className = "settings-section";
     section.append(element("summary", title), body);
     return section;
-}
-
-function accountRow(title: string) {
-    const row = element("section");
-    row.setAttribute("aria-label", title);
-    row.append(element("h3", title));
-    return row;
 }
 
 // Navigation never constructs a ScreenFrame or emits a UiAction. The existing
@@ -81,6 +78,23 @@ export function mountSettings(
     let disposed = false;
     let portos: ReturnType<typeof mountPortos> | undefined;
     let openai: ReturnType<typeof mountOpenAI> | undefined;
+    let fading: ReturnType<typeof setTimeout> | undefined;
+
+    // Every status write goes through here, so a new message, close and
+    // dispose all cancel the pending clear of a transient result.
+    function show(message: string, transient = false) {
+        clearTimeout(fading);
+        fading = undefined;
+        status.textContent = message;
+        if (transient && message)
+            fading = setTimeout(() => {
+                fading = undefined;
+                status.textContent = "";
+            }, RESULT_MS);
+    }
+    function settle() {
+        if (fading !== undefined) show("");
+    }
 
     function close() {
         panel.hidden = true;
@@ -97,6 +111,7 @@ export function mountSettings(
         openai = undefined;
         pending = undefined;
         clearTimeout(timeout);
+        settle();
         gear.focus();
     }
     function busy(value: boolean) {
@@ -109,27 +124,30 @@ export function mountSettings(
         >("input,button,select,textarea"))
             control.disabled = value;
     }
+    // A successful result is transient unless `keep` says it is information
+    // the owner still needs (a pending restart); errors always stay.
     async function perform(
         work: (signal: AbortSignal) => Promise<string>,
         message = "Loading…",
+        keep = false,
     ) {
         if (pending || disposed || panel.hidden) return;
         const controller = new AbortController();
         const focused = document.activeElement;
         pending = controller;
         busy(true);
-        status.textContent = message;
+        show(message);
         timeout = setTimeout(() => controller.abort(), 10000);
         try {
             const message = await work(controller.signal);
-            if (!controller.signal.aborted && !disposed)
-                status.textContent = message;
+            if (!controller.signal.aborted && !disposed) show(message, !keep);
         } catch (error) {
             if (!panel.hidden && !disposed && pending === controller)
-                status.textContent =
+                show(
                     controller.signal.aborted || !(error instanceof Error)
                         ? "Request could not be confirmed. Reopen Settings to check before saving again."
-                        : error.message;
+                        : error.message,
+                );
         } finally {
             if (pending === controller) {
                 clearTimeout(timeout);
@@ -189,11 +207,11 @@ export function mountSettings(
         const permissions = portosForm(data.portos, saveV2);
         function saveV2(patch: PatchV2) {
             if (!Object.keys(patch).length) {
-                status.textContent = "No settings changed";
+                show("No settings changed", true);
                 return;
             }
             if (patch.portos?.scopes?.length === 0) {
-                status.textContent = "Select at least one requested scope.";
+                show("Select at least one requested scope.");
                 return;
             }
             void perform(async (signal) => {
@@ -237,7 +255,11 @@ export function mountSettings(
         accounts.setAttribute("aria-label", "Accounts");
         const openaiRow = accountRow("OpenAI (GPT Live)");
         const portosRow = accountRow("Port OS");
-        accounts.append(element("h2", "Accounts"), openaiRow, portosRow);
+        accounts.append(
+            element("h2", "Accounts"),
+            openaiRow.section,
+            portosRow.section,
+        );
         openai = mountOpenAI(openaiRow, actions, perform);
         portos = mountPortos(
             portosRow,
@@ -245,8 +267,8 @@ export function mountSettings(
             actions,
             data,
             perform,
-            (message) => {
-                status.textContent = message;
+            (message, transient) => {
+                show(message, transient);
                 void openai?.refresh();
             },
         );
@@ -265,7 +287,7 @@ export function mountSettings(
     function renderV1(data: Snapshot) {
         const form = settingsForm(data, (patch) => {
             if (!Object.keys(patch).length) {
-                status.textContent = "No settings changed";
+                show("No settings changed", true);
                 return;
             }
             save("", { version: 1, settings: patch }, () => {
@@ -287,14 +309,18 @@ export function mountSettings(
         const link = element("button", "Relink");
         link.type = "button";
         link.addEventListener("click", () => {
-            void perform(async (signal) => {
-                relinkAsked = true;
-                relinkShown = false;
-                await relink(signal);
-                return relinkShown
-                    ? REPUBLISHED
-                    : RELINK_RESULT[data.link_status];
-            });
+            void perform(
+                async (signal) => {
+                    relinkAsked = true;
+                    relinkShown = false;
+                    await relink(signal);
+                    return relinkShown
+                        ? REPUBLISHED
+                        : RELINK_RESULT[data.link_status];
+                },
+                undefined,
+                true,
+            );
         });
         fields.append(link);
     }
@@ -308,15 +334,20 @@ export function mountSettings(
         gear.setAttribute("aria-expanded", "true");
         fields.replaceChildren();
         back.focus();
-        void perform(async (signal) => {
-            const data = await loadSettings(actions, signal);
-            if (signal.aborted) return "";
-            render(data);
-            if (data.warnings.includes(restartWarning)) return restartWarning;
-            return data.restart_pending
-                ? "Saved settings are waiting for a bridge restart."
-                : "Settings loaded";
-        });
+        void perform(
+            async (signal) => {
+                const data = await loadSettings(actions, signal);
+                if (signal.aborted) return "";
+                render(data);
+                if (data.warnings.includes(restartWarning))
+                    return restartWarning;
+                return data.restart_pending
+                    ? "Saved settings are waiting for a bridge restart."
+                    : "";
+            },
+            undefined,
+            true,
+        );
     });
     back.addEventListener("click", close);
     panel.addEventListener("keydown", (event) => {
@@ -330,7 +361,7 @@ export function mountSettings(
             if (relinkAsked && state.state === "error" && state.relink) {
                 relinkAsked = false;
                 relinkShown = true;
-                if (!pending) status.textContent = REPUBLISHED;
+                if (!pending) show(REPUBLISHED);
             }
         },
         dispose() {
@@ -339,6 +370,7 @@ export function mountSettings(
             portos?.stop();
             openai?.stop();
             clearTimeout(timeout);
+            clearTimeout(fading);
             gear.remove();
             panel.remove();
             root.classList.remove("settings-open");

@@ -93,12 +93,37 @@ test("960×600 Settings starts with both Accounts, then Presentation", async (t)
     }
     await verifyPresentation(page);
     console.log(
-        "960x600: Accounts above Presentation, one Link and confirmed Unlink per account, explicit pack save",
+        "960x600: Accounts above Presentation, one Link and a confirmed Remove beside each title, explicit pack save",
     );
 });
 
+// Remove sits on the title's line, at the row's top right, with a 64 px target.
+async function assertRemoveBesideTitle(row, remove) {
+    assert.equal(await remove.textContent(), "Remove");
+    const title = await row.getByRole("heading", { level: 3 }).boundingBox();
+    const status = await row.getByText("Linked", { exact: true }).boundingBox();
+    const button = await remove.boundingBox();
+    const box = await row.boundingBox();
+    assert.ok(button.height >= 64 && button.width >= 64, "touch target");
+    assert.ok(
+        Math.abs(title.y + title.height / 2 - (button.y + button.height / 2)) <=
+            1,
+        "Remove is centred on the title's line",
+    );
+    assert.ok(button.y + button.height <= status.y, "above the status line");
+    assert.ok(button.x > title.x + title.width, "beside the title");
+    assert.ok(
+        Math.abs(box.x + box.width - 12 - (button.x + button.width)) <= 1,
+        "right-aligned in the row",
+    );
+}
+
 async function confirmAccountUnlink(page, row, name, endpoint, setUnlinked) {
-    const unlink = row.getByRole("button", { name: "Unlink " + name });
+    const unlink = row.getByRole("button", {
+        name: "Remove " + name + " link",
+        exact: true,
+    });
+    await assertRemoveBesideTitle(row, unlink);
     const mutations = async () =>
         (await allCalls(page))
             .filter(
@@ -113,7 +138,8 @@ async function confirmAccountUnlink(page, row, name, endpoint, setUnlinked) {
     await unlink.tap();
     await response(page, { version: 2, operation: "unlink" }, 202);
     await setUnlinked();
-    await row.getByRole("button", { name: "Confirm unlink" }).tap();
+    await row.getByText("Remove the " + name + " link?").waitFor();
+    await row.getByRole("button", { name: "Remove link", exact: true }).tap();
     assert.deepEqual(await mutations(), [
         { version: 2, operation: "link" },
         { version: 2, operation: "unlink", confirm: true },
@@ -142,14 +168,19 @@ async function verifyPresentation(page) {
     await section.getByRole("button", { name: "Load screen packs" }).tap();
     const choices = section.getByRole("combobox", { name: "Screen pack" });
     assert.deepEqual(await choices.locator("option").allTextContents(), [
-        "Template eyes (default)",
+        "Default",
         "template 0.2.0",
         "layout 1.0.0",
         "Disable screen packs",
     ]);
+    // An Echo with only the pre-rename "template" pack still has a Default.
+    assert.equal(
+        await choices.locator('option[value="default"]').isDisabled(),
+        false,
+    );
     await choices.selectOption("layout");
     await page.evaluate((model) => {
-        const fetch = window.fetch;
+        const fetch = (window.fixtureFetch = window.fetch);
         window.fetch = (url, options) => {
             window.responseBody =
                 options.method === "POST"
@@ -167,4 +198,50 @@ async function verifyPresentation(page) {
         saves.map(({ method, body }) => [method, JSON.parse(body)]),
         [["POST", { version: 1, screen_pack: "layout" }]],
     );
+    await chooseDefault(page, section, catalog);
+}
+
+// With "default" installed beside the legacy "template", Default lists the
+// default packs first and saves the name "default" for the bridge to resolve.
+async function chooseDefault(page, section, catalog) {
+    const installed = [
+        {
+            name: "default",
+            id: "default@0.3.0",
+            version: "0.3.0",
+            rest_url: null,
+        },
+        ...catalog.installed,
+    ];
+    await page.evaluate(
+        (model) => {
+            window.fetch = (url, options) => {
+                window.responseBody =
+                    options.method === "POST"
+                        ? { version: 1, restart_pending: false }
+                        : model;
+                return window.fixtureFetch(url, options);
+            };
+        },
+        { ...catalog, active: "default@0.3.0", installed },
+    );
+    await section.getByRole("button", { name: "Refresh packs" }).tap();
+    const choices = section.getByRole("combobox", { name: "Screen pack" });
+    assert.deepEqual(await choices.locator("option").allTextContents(), [
+        "Default",
+        "default 0.3.0",
+        "template 0.2.0",
+        "layout 1.0.0",
+        "Disable screen packs",
+    ]);
+    assert.equal(await choices.inputValue(), "default@0.3.0");
+    await choices.selectOption({ label: "Default" });
+    await section.getByRole("button", { name: "Use screen pack" }).tap();
+    const saves = (await allCalls(page)).filter(
+        ({ url }) => new URL(url).pathname === "/screen-packs/v1/selection",
+    );
+    assert.deepEqual(JSON.parse(saves.at(-1).body), {
+        version: 1,
+        screen_pack: "default",
+    });
 }

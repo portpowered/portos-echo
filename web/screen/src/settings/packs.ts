@@ -8,6 +8,12 @@ import {
     type PackSnapshot,
 } from "./packs-api";
 
+// The default eyes ship as "default"; Echos that installed them before the
+// rename still have "template". The bridge resolves either name to the newest
+// default pack, preferring "default".
+const DEFAULT_NAMES = ["default", "template"];
+const isDefault = (name: string) => DEFAULT_NAMES.includes(name);
+
 type Perform = (
     work: (signal: AbortSignal) => Promise<string>,
     message?: string,
@@ -46,18 +52,20 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
         const label = element("label", "Screen pack");
         select.id = "screen-pack-selection";
         label.htmlFor = select.id;
-        const template = element("option", "Template eyes (default)");
-        template.value = "template";
-        template.disabled = !data.installed.some(
-            (pack) => pack.name === "template",
+        const automatic = element("option", "Default");
+        automatic.value = "default";
+        automatic.disabled = !data.installed.some((pack) =>
+            isDefault(pack.name),
         );
-        select.append(template);
+        select.append(automatic);
         const installed = [
-            ...data.installed.filter((pack) => pack.name === "template"),
-            ...data.installed.filter((pack) => pack.name !== "template"),
+            ...data.installed.filter((pack) => isDefault(pack.name)),
+            ...data.installed.filter((pack) => !isDefault(pack.name)),
         ];
         for (const pack of installed) {
-            if (pack.id !== "template") {
+            // An unversioned directory named like the default resolves as
+            // the default itself, so it gets no option of its own.
+            if (!isDefault(pack.id)) {
                 const option = element(
                     "option",
                     `${pack.name} ${pack.version}`,

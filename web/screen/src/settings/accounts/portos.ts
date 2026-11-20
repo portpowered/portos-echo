@@ -6,7 +6,11 @@ import {
 import type { SnapshotV2 } from "../api";
 import { element } from "../forms";
 import type { PortosOperationV2 } from "../model";
-import { accountButtons, accountChallenge } from "./account-buttons";
+import {
+    accountButtons,
+    accountChallenge,
+    type AccountRow,
+} from "./account-buttons";
 
 type Portos = SnapshotV2["portos"];
 type Perform = (
@@ -30,12 +34,13 @@ const operationLabels: Record<Portos["operation_state"], string> = {
 };
 
 export function mountPortos(
-    parent: HTMLElement,
+    parent: AccountRow,
     permissions: HTMLElement,
     actions: string,
     initial: SnapshotV2,
     perform: Perform,
-    updateRestart: (message: string) => void,
+    // `transient` marks a plain result; warnings and errors stay shown.
+    updateRestart: (message: string, transient?: boolean) => void,
 ) {
     let status = initial.portos;
     let waiting = initial.restart_pending;
@@ -47,8 +52,8 @@ export function mountPortos(
     operationStatus.setAttribute("aria-live", "polite");
     const granted = element("p");
     const challenge = accountChallenge();
-    const buttons = accountButtons("Port OS", start);
-    parent.append(
+    const buttons = accountButtons(parent, "Port OS", start);
+    parent.section.append(
         linkStatus,
         buttons.controls,
         operationStatus,
@@ -123,10 +128,12 @@ export function mountPortos(
                 const overlayWarning = result.warnings.find((warning) =>
                     warning.startsWith("settings.toml: ignored overlay:"),
                 );
-                updateRestart(
-                    overlayWarning ??
+                if (overlayWarning) updateRestart(overlayWarning);
+                else
+                    updateRestart(
                         "Bridge restarted. Saved settings are active.",
-                );
+                        true,
+                    );
             }
             waiting = result.restart_pending;
             render();

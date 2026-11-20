@@ -1,7 +1,11 @@
 import { operateAccount, readOpenAI } from "../api-v2";
 import { element } from "../forms";
 import type { OpenAiAccountV2, PortosOperationV2 } from "../model";
-import { accountButtons, accountChallenge } from "./account-buttons";
+import {
+    accountButtons,
+    accountChallenge,
+    type AccountRow,
+} from "./account-buttons";
 
 const linkLabels: Record<OpenAiAccountV2["link_status"], string> = {
     checking: "Checking OpenAI account…",
@@ -19,7 +23,7 @@ const operationLabels: Record<OpenAiAccountV2["operation_state"], string> = {
 };
 
 export function mountOpenAI(
-    parent: HTMLElement,
+    parent: AccountRow,
     actions: string,
     perform: (work: (signal: AbortSignal) => Promise<string>) => Promise<void>,
 ) {
@@ -27,8 +31,8 @@ export function mountOpenAI(
     const operationStatus = element("p");
     operationStatus.setAttribute("aria-live", "polite");
     const challenge = accountChallenge();
-    const buttons = accountButtons("OpenAI", start);
-    parent.append(
+    const buttons = accountButtons(parent, "OpenAI", start);
+    parent.section.append(
         linkStatus,
         buttons.controls,
         operationStatus,

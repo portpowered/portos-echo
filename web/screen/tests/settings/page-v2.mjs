@@ -105,15 +105,12 @@ const section = (page, name) =>
 
 test("settings V2 displays configured options and submits only changed requested scopes", async (t) => {
     const page = await open(t, v2Snapshot());
-    assert.equal(
-        await page.getByRole("status").textContent(),
-        "Settings loaded",
-    );
+    assert.equal(await page.getByRole("status").textContent(), "");
     const back = page.getByRole("button", { name: "Back", exact: true });
     const openai = section(page, "OpenAI");
     const portos = section(page, "Port OS permissions");
     const unlink = page.getByRole("button", {
-        name: "Unlink Port OS",
+        name: "Remove Port OS link",
         exact: true,
     });
     for (const control of [back, unlink]) {
@@ -261,6 +258,14 @@ test("settings V2 observes replacement without resending a successful save", asy
         await status.textContent(),
         "Bridge restarted. Saved settings are active.",
     );
+    // A result clears itself 4 s after it was written; a newer one restarts it.
+    await page.clock.runFor(3999);
+    assert.equal(
+        await status.textContent(),
+        "Bridge restarted. Saved settings are active.",
+    );
+    await page.clock.runFor(1);
+    assert.equal(await status.textContent(), "");
     assert.equal(await search.inputValue(), "disabled");
     assert.deepEqual(
         (await calls(page)).map(({ method }) => method),
@@ -308,7 +313,12 @@ test("settings V2 leaves a failed replacement pending when Settings reopens", as
         await page.getByRole("status").textContent(),
         data.warnings[0],
     );
-    await page.clock.runFor(2000);
+    // The restart warning is information the owner needs: it never fades.
+    await page.clock.runFor(10000);
+    assert.equal(
+        await page.getByRole("status").textContent(),
+        data.warnings[0],
+    );
     assert.deepEqual(
         (await calls(page)).map(({ method }) => method),
         ["GET"],
@@ -326,10 +336,7 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
     data.portos.link_status = "link_required";
     data.portos.server.granted_scopes = [];
     const page = await open(t, data);
-    assert.equal(
-        await page.getByRole("status").textContent(),
-        "Settings loaded",
-    );
+    assert.equal(await page.getByRole("status").textContent(), "");
     await section(page, "OpenAI").tap();
     const model = page.getByLabel("Delegated model");
     await model.fill("unsaved-local-model");
@@ -361,7 +368,9 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
     });
     await page.clock.runFor(500);
     await code.waitFor({ state: "hidden" });
-    const unlink = page.getByRole("button", { name: "Unlink Port OS" });
+    const unlink = page.getByRole("button", {
+        name: "Remove Port OS link",
+    });
     await unlink.click();
     const cancel = page.getByRole("button", { name: "Cancel", exact: true });
     assert.equal(
@@ -382,7 +391,9 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
     ]);
     await unlink.click();
     await response(page, { version: 2, operation: "unlink" }, 202);
-    await page.getByRole("button", { name: "Confirm unlink" }).click();
+    await page
+        .getByRole("button", { name: "Remove link", exact: true })
+        .click();
     await portosStatus(page, { link_status: "link_required" });
     await page.clock.runFor(500);
     await page.getByText("Link required", { exact: true }).waitFor();

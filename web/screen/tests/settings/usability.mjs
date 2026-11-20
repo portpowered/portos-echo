@@ -27,7 +27,8 @@ async function open(t, changes = {}) {
         .boundingBox();
     await response(page, { ...snapshot, ...changes });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    assert.equal(await status(page), "Settings loaded");
+    // A successful load shows no message.
+    assert.equal(await status(page), "");
     return { page, gear };
 }
 
@@ -333,7 +334,7 @@ test("settings usability: Relink says what happens for each link status and neve
         assert.equal(await page.getByText(shown, { exact: true }).count(), 1);
         // An error frame nobody asked for leaves the panel's status alone.
         await emit(page, frame(2, relinkError));
-        assert.equal(await status(page), "Settings loaded");
+        assert.equal(await status(page), "");
         await response(page, undefined, 204);
         await page.getByRole("button", { name: "Relink", exact: true }).click();
         assert.deepEqual((await calls(page)).slice(2), [
