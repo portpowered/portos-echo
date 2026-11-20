@@ -75,6 +75,15 @@ export function mountPacks(
                 (!manifest.layout && !manifest.character)
             )
                 throw new Error("Invalid pack");
+            // Keep the prior presentation until the replacement neutral image
+            // has decoded. Its loaded pixels remain underneath both videos.
+            let still: HTMLImageElement | undefined;
+            if (manifest.character) {
+                still = document.createElement("img");
+                still.referrerPolicy = "no-referrer";
+                still.src = asset(manifest.character.rest);
+                await still.decode();
+            }
             if (controller.signal.aborted || stopped) return;
             clear();
             host.classList.add("screen-pack");
@@ -93,10 +102,10 @@ export function mountPacks(
                 ownedLayout.dispose();
                 css.remove();
             };
-            if (manifest.character) {
+            if (manifest.character && still) {
                 media = mediaStage(
                     host,
-                    manifest.character.rest,
+                    still,
                     asset,
                     (ticket) => player?.ended(ticket),
                     () => {

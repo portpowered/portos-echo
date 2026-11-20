@@ -102,6 +102,7 @@ async function packPage(t, pack = manifest, vp9 = true) {
                             return this.dataset.src;
                         },
                     });
+                    HTMLImageElement.prototype.decode = () => Promise.resolve();
                     Object.defineProperty(HTMLMediaElement.prototype, "src", {
                         set(value) {
                             this.dataset.src = value;

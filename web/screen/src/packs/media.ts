@@ -2,7 +2,7 @@ import { source, type Playback } from "./player";
 
 export function mediaStage(
     host: HTMLElement,
-    rest: string,
+    still: HTMLImageElement,
     asset: (file: string) => string,
     ended: (ticket: number) => void,
     failed: () => void,
@@ -11,10 +11,7 @@ export function mediaStage(
     stage.className = "pack-stage";
     stage.dataset.packPersistent = "";
     stage.setAttribute("aria-hidden", "true");
-    const still = document.createElement("img");
     still.alt = "";
-    still.src = asset(rest);
-    still.referrerPolicy = "no-referrer";
     still.onerror = failed;
     const videos = [
         document.createElement("video"),
