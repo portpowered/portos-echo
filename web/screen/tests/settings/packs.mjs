@@ -256,3 +256,187 @@ test("packs: malformed catalog and escaping preview are inert, cancelled load ca
     );
     assert.equal(await page.evaluate(() => window.timers.size), 0);
 });
+
+test("packs: pending load disables writes, preserves keyboard focus and reports unavailable previews safely", async (t) => {
+    const page = await settingsPage(t);
+    const refresh = page.getByRole("button", {
+        name: "Load screen packs",
+        exact: true,
+    });
+    await refresh.focus();
+    await response(page, null, "pending");
+    await page.keyboard.press("Enter");
+    assert.equal(await status(page).textContent(), "Loading screen packs…");
+    assert.equal(await refresh.isDisabled(), true);
+    assert.equal(
+        await page
+            .getByRole("button", { name: "Save settings", exact: true })
+            .isDisabled(),
+        true,
+    );
+    assert.equal(
+        await page.locator(".settings-fields").getAttribute("aria-busy"),
+        "true",
+    );
+    // Observe preview failure without making any network request. Actual media
+    // decoding through the real server belongs to the generated-pack journey.
+    await page.evaluate(() => {
+        Object.defineProperty(HTMLImageElement.prototype, "src", {
+            set() {},
+        });
+    });
+    await page.evaluate(
+        (body) => window.resolvePost({ status: 200, json: async () => body }),
+        {
+            ...empty,
+            warning: "invalid_selection",
+            installed: [
+                {
+                    id: "template@1.0.0",
+                    name: "template",
+                    version: "1.0.0",
+                    rest_url: "/screen-packs/v1/template@1.0.0/rest.png",
+                },
+            ],
+        },
+    );
+    await page
+        .getByRole("button", { name: "Refresh packs", exact: true })
+        .waitFor();
+    assert.equal(await status(page).textContent(), "Screen packs loaded");
+    assert.equal(await refresh.count(), 0);
+    const updated = page.getByRole("button", {
+        name: "Refresh packs",
+        exact: true,
+    });
+    assert.equal(
+        await updated.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    assert.equal(await updated.isEnabled(), true);
+    assert.equal(
+        await page
+            .getByText(
+                "The selected pack is unavailable. Using the built-in appearance.",
+                { exact: true },
+            )
+            .count(),
+        1,
+    );
+    await page
+        .getByRole("img", { name: "template rest pose" })
+        .dispatchEvent("error");
+    assert.equal(
+        await page.getByText("Preview unavailable", { exact: true }).count(),
+        1,
+    );
+    assert.equal(await page.getByRole("img").count(), 0);
+    await page.keyboard.press("Tab");
+    assert.equal(
+        await page
+            .getByLabel("Screen pack", { exact: true })
+            .evaluate((node) => node === document.activeElement),
+        true,
+    );
+    await page.keyboard.press("Tab");
+    assert.equal(
+        await page
+            .getByRole("button", { name: "Use screen pack", exact: true })
+            .evaluate((node) => node === document.activeElement),
+        true,
+    );
+    assert.equal(
+        (await calls(page)).length,
+        2,
+        "navigation never submits a write",
+    );
+});
+
+test("packs: narrow and reference viewports retain scrollable native controls, contrast and touch targets", async (t) => {
+    const page = await settingsPage(t);
+    await load(page);
+    for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 640, height: 600 },
+    ]) {
+        await page.setViewportSize(viewport);
+        for (const control of await page
+            .locator(
+                ".settings-packs button, .settings-packs input, .settings-packs select",
+            )
+            .all()) {
+            await control.scrollIntoViewIfNeeded();
+            const box = await control.boundingBox();
+            const area = await page.locator(".settings-fields").boundingBox();
+            assert.ok(box.width >= 64 && box.height >= 64, JSON.stringify(box));
+            assert.ok(
+                box.x >= area.x && box.x + box.width <= area.x + area.width,
+                JSON.stringify(box),
+            );
+            assert.ok(
+                box.y >= area.y && box.y + box.height <= area.y + area.height,
+                JSON.stringify(box),
+            );
+        }
+        for (const control of [
+            page.getByRole("button", { name: "Back", exact: true }),
+            status(page),
+        ]) {
+            const box = await control.boundingBox();
+            assert.ok(
+                box.y >= 0 && box.y + box.height <= viewport.height,
+                JSON.stringify(box),
+            );
+        }
+        const contrasts = await page
+            .locator(".settings-packs")
+            .evaluate((root) => {
+                const luminance = (color) => {
+                    const [r, g, b] = color
+                        .match(/\d+/g)
+                        .slice(0, 3)
+                        .map(Number)
+                        .map((n) => n / 255)
+                        .map((v) =>
+                            v <= 0.04045
+                                ? v / 12.92
+                                : ((v + 0.055) / 1.055) ** 2.4,
+                        );
+                    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                };
+                return [
+                    ...root.querySelectorAll(
+                        "h2,h3,p,label,button,input,select",
+                    ),
+                ].map((node) => {
+                    let background = node;
+                    while (
+                        getComputedStyle(background).backgroundColor ===
+                            "rgba(0, 0, 0, 0)" &&
+                        background.parentElement
+                    )
+                        background = background.parentElement;
+                    const a = luminance(getComputedStyle(node).color);
+                    const b = luminance(
+                        getComputedStyle(background).backgroundColor,
+                    );
+                    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+                });
+            });
+        for (const ratio of contrasts)
+            assert.ok(ratio >= 4.5, `pack text contrast ${ratio}`);
+        assert.deepEqual(
+            await page.evaluate(() => ({
+                width: document.documentElement.scrollWidth,
+                height: document.documentElement.scrollHeight,
+            })),
+            viewport,
+        );
+        await page.screenshot({
+            path: `test-results/screenshots/packs-${viewport.width}x${viewport.height}.png`,
+        });
+        console.log(
+            `packs controls: ${viewport.width}x${viewport.height}; targets >=64px; minimum contrast ${Math.min(...contrasts).toFixed(2)}:1`,
+        );
+    }
+});
