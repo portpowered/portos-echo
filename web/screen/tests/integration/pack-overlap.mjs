@@ -92,6 +92,16 @@ export async function checkTemplateLayout(
     }
     console.log(`FACE installed ${id} archive SHA-256: ${fixture.sha256}`);
     await page.getByRole("button", { name: "Back", exact: true }).click();
+    // Both versions have a setup.webm. Wait until the installed pack owns the stage.
+    await page.waitForFunction((identity) => {
+        const rest = document.querySelector(".pack-stage img");
+        return (
+            rest &&
+            decodeURIComponent(new URL(rest.src).pathname).endsWith(
+                `/${identity}/rest.png`,
+            )
+        );
+    }, id);
     await playing(page, "setup.webm");
     await page.getByText("DEMO-CODE", { exact: true }).waitFor();
 
