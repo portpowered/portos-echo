@@ -30,6 +30,37 @@ async fn get(addr: SocketAddr, file: &str, headers: &str) -> Result<(u16, String
     Ok((code, headers, body))
 }
 
+async fn ranges(addr: SocketAddr) -> Result {
+    for (range, expected, span) in [
+        ("bytes=2-5", "2345", "2-5"),
+        ("bytes=7-", "789", "7-9"),
+        ("bytes=-3", "789", "7-9"),
+        ("bytes=8-99", "89", "8-9"),
+        ("bytes=-99", "0123456789", "0-9"),
+    ] {
+        let (status, headers, body) = get(addr, "media/clip.mp4", &format!("Range: {range}\r\n")).await?;
+        assert_eq!((status, body.as_str()), (206, expected));
+        assert!(headers.contains(&format!("content-range: bytes {span}/10\r\n")));
+        assert!(headers.contains(&format!("content-length: {}\r\n", expected.len())));
+    }
+    for range in [
+        "bytes=10-",
+        "bytes=5-2",
+        "bytes=-0",
+        "bytes=0-1,4-5",
+        "words=0-1",
+        "bytes=+1-2",
+        "bytes=0-999999999999999999999999999999",
+        "bytes=0-1\r\nRange: bytes=2-3",
+    ] {
+        let (status, headers, body) = get(addr, "rest.png", &format!("Range: {range}\r\n")).await?;
+        assert_eq!((status, body.as_str()), (416, ""));
+        assert!(headers.contains("content-range: bytes */10\r\n"));
+        assert!(headers.contains("content-length: 0\r\n"));
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn t3_screen_pack_files_auth_exact_mimes_ranges_and_revocation() -> Result {
     let home = tempfile::tempdir()?;
@@ -69,33 +100,7 @@ async fn t3_screen_pack_files_auth_exact_mimes_ranges_and_revocation() -> Result
         assert!(headers.contains("x-content-type-options: nosniff\r\n"));
         assert!(headers.contains(&format!("content-length: {}\r\n", expected.len())));
     }
-    for (range, expected, span) in [
-        ("bytes=2-5", "2345", "2-5"),
-        ("bytes=7-", "789", "7-9"),
-        ("bytes=-3", "789", "7-9"),
-        ("bytes=8-99", "89", "8-9"),
-        ("bytes=-99", "0123456789", "0-9"),
-    ] {
-        let (status, headers, body) = get(server.bound_addr, "media/clip.mp4", &format!("Range: {range}\r\n")).await?;
-        assert_eq!((status, body.as_str()), (206, expected));
-        assert!(headers.contains(&format!("content-range: bytes {span}/10\r\n")));
-        assert!(headers.contains(&format!("content-length: {}\r\n", expected.len())));
-    }
-    for range in [
-        "bytes=10-",
-        "bytes=5-2",
-        "bytes=-0",
-        "bytes=0-1,4-5",
-        "words=0-1",
-        "bytes=+1-2",
-        "bytes=0-999999999999999999999999999999",
-        "bytes=0-1\r\nRange: bytes=2-3",
-    ] {
-        let (status, headers, body) = get(server.bound_addr, "rest.png", &format!("Range: {range}\r\n")).await?;
-        assert_eq!((status, body.as_str()), (416, ""));
-        assert!(headers.contains("content-range: bytes */10\r\n"));
-        assert!(headers.contains("content-length: 0\r\n"));
-    }
+    ranges(server.bound_addr).await?;
     server.revoke_pairing().await?;
     assert_eq!(get(server.bound_addr, "rest.png", "").await?.0, 401);
     server.shutdown().await?;
