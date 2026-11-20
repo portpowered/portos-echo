@@ -17,8 +17,10 @@ async fn owner(server: &str) {
     config.mcp.server[0].name = server.into();
     for generation_number in 0..2 {
         let result = generation(&fixture, config.clone(), None).await;
-        assert_eq!(result["success"], true);
-        assert_eq!(spoof.snapshot().unwrap().calls.len(), (generation_number + 1) * 2);
+        assert_eq!(result["success"], generation_number == 0);
+        // The durable policy ledger survives generation replacement: reused
+        // external identities produce fresh diagnostic rows, never replayed MCP.
+        assert_eq!(spoof.snapshot().unwrap().calls.len(), 2);
         assert_rows(&fixture, server);
         // The first owner has fully reaped and released its home. Reusing the
         // same external IDs must start fresh state in the next generation.
