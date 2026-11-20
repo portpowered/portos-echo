@@ -56,7 +56,7 @@ class Turn:
         if self.fault == 'peer-close':
             self.diagnostic = 'model peer closed while request was pending'
             return None
-        item = self.next_item(body['input'], utterance, index)
+        item = self.next_item(body['input'], utterance)
         response = {'id': f'{self.id}-response-{index}', 'status': 'completed', 'output': [item]}
         events = [{'type': 'response.created', 'response': {**response, 'status': 'in_progress', 'output': []}},
                   {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
@@ -71,42 +71,43 @@ class Turn:
         assert matches == [self.case.utterance], 'delegation did not carry the fixed utterance'
         return matches[0]
 
-    def next_item(self, items, utterance, index):
+    def next_item(self, items, utterance):
         catalog, = [item['tools'] for item in items if item['type'] == 'additional_tools']
         visible = [(namespace, name) for namespace, name in functions(catalog) if name in self.names]
         search = [tool for tool in catalog if tool.get('type') == 'tool_search']
         if self.variant == 'deferred':
-            assert len(search) == 1 and search[0]['execution'] == 'client', 'client search is missing'
+            # This pin registers search after applying direct-only overrides.
+            # Code-mode-only then filters it out even with excluded Port OS namespaces.
+            assert not search and ('functions', 'exec') in list(custom_tools(catalog)), 'native search exposure changed'
             assert not visible, 'deferred tool leaked upfront'
-            if index == 0:
-                return {'type': 'tool_search_call', 'id': f'{self.id}-search-item', 'status': 'completed',
-                        'execution': 'client', 'call_id': f'{self.id}-search',
-                        'arguments': {'query': intent(utterance), 'limit': 1}}
-            loaded, = [item for item in items if item['type'] == 'tool_search_output']
-            assert loaded['call_id'] == f'{self.id}-search' and loaded['execution'] == 'client'
-            catalog = loaded['tools']
+            self.diagnostic = 'client tool_search hidden by code-mode-only'
+            self.answer = 'The simulated tool is unavailable.'
         else:
             assert not search, 'direct replay advertised search'
             expected = [(namespace_for(name) if self.variant == 'namespaced' else 'functions', name)
                         for name in self.names]
             assert sorted(visible) == sorted(expected), 'direct catalog differs from declared namespaces'
+            next_call = self.direct_item(items, visible, utterance)
+            if next_call:
+                return next_call
+        return {'type': 'message', 'id': f'{self.id}-answer', 'role': 'assistant', 'status': 'completed',
+                'content': [{'type': 'output_text', 'text': self.answer, 'annotations': []}]}
+
+    def direct_item(self, items, visible, utterance):
         if self.selected:
             outputs = [item['output'] for item in items if item['type'] == 'function_call_output'
                        and item['call_id'] == self.call_id]
             assert len(outputs) == 1 and f'receipt {self.call_id}' in json.dumps(outputs[0]), 'wrong MCP receipt'
             self.answer = 'The simulated tool completed.'
         else:
-            selected = [(namespace, name) for namespace, name in functions(catalog) if name == intent(utterance)]
+            selected = [(namespace, name) for namespace, name in visible if name == intent(utterance)]
             if selected:
                 self.selected, = selected
-                if self.variant == 'deferred':
-                    assert self.selected[0] == namespace_for(self.selected[1]), 'loaded tool lost its namespace'
                 return {'type': 'function_call', 'id': f'{self.id}-function', 'call_id': self.call_id,
                         'namespace': self.selected[0], 'name': self.selected[1], 'arguments': '{}', 'status': 'completed'}
             self.diagnostic = f'missing reachable candidate {intent(utterance)}'
             self.answer = 'The simulated tool is unavailable.'
-        return {'type': 'message', 'id': f'{self.id}-answer', 'role': 'assistant', 'status': 'completed',
-                'content': [{'type': 'output_text', 'text': self.answer, 'annotations': []}]}
+        return None
 
     def dispatch(self, origin, request, thread):
         assert self.fault is None and self.selected, 'unexpected dynamic tool call'
@@ -134,6 +135,11 @@ def functions(tools):
                     yield spec['name'], tool['name']
         elif spec['type'] == 'function':
             yield 'functions', spec['name']
+
+
+def custom_tools(tools):
+    return ((spec['name'], tool['name']) for spec in tools if spec['type'] == 'namespace'
+            for tool in spec['tools'] if tool['type'] == 'custom')
 
 
 class Handler(session.Handler):

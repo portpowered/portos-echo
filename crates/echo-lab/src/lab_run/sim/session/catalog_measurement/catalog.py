@@ -11,7 +11,7 @@ FILE_ENV = 'ECHO_LAB_TOOL_CATALOG_FILE'
 CAPTURE_ENV = 'ECHO_LAB_TOOL_CATALOG_CAPTURE'
 SNAPSHOT = '7b357af7fa19565d83ef32b0bbee535020b9499a5910879e4ae2baafdae27f23'
 FIELDS = {'name', 'description', 'inputSchema'}
-VARIANTS = ('flat', 'namespaced', 'deferred')
+DIRECT_VARIANTS = ('flat', 'namespaced')
 DOMAINS = {
     'endpoints': 'Discover, display, manage, and control Port OS endpoints.',
     'groups': 'Discover and manage Port OS device groups.',
@@ -159,7 +159,7 @@ def render(capture):
     print('variant case tool initial followup_additional followup_search round_trips')
     rows = json.loads((capture / 'selections.json').read_bytes())
     assert [(row['variant'], row['case'], row['tool']) for row in rows] == [
-        (variant, case.id, case.expected) for variant in VARIANTS for case in CASES
+        (variant, case.id, case.expected) for variant in DIRECT_VARIANTS for case in CASES
     ], 'incomplete or inconsistent full replay results'
     for row in rows:
         totals = [0, 0, 0]

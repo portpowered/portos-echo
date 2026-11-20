@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 
-from catalog import CASES, VARIANTS, declarations, load, render
+from catalog import CASES, DIRECT_VARIANTS, declarations, load, render
 
 
 class Rpc:
@@ -141,14 +141,15 @@ def measure(rpc, peers, home, tools, case, variant, fault=None):
     assert session.observed['external'] == 0, 'app server attempted non-fixture traffic'
     if fault:
         expected = {'missing': f'missing reachable candidate {case.expected}',
-                    'peer-close': 'model peer closed while request was pending'}
+                    'peer-close': 'model peer closed while request was pending',
+                    'unsupported': 'client tool_search hidden by code-mode-only'}
         assert turn.selected is None and turn.calls == [] and turn.diagnostic == expected[fault]
-        assert turn.appended.is_set() == (fault == 'missing')
-        print(f'{turn.id}: {turn.diagnostic}; MCP calls=0; result=diagnostic')
+        assert turn.appended.is_set() == (fault != 'peer-close') and len(turn.raw) == 1
+        print(f'{turn.id}: {turn.diagnostic}, MCP calls=0, result=diagnostic')
         return None, turn.raw
     selected = turn.selected[1] if turn.selected else None
     assert selected == case.expected and turn.calls == [case.expected], f'{turn.id}: wrong selection or call'
-    assert len(turn.raw) == (3 if variant == 'deferred' else 2), f'{turn.id}: wrong round trip count'
+    assert len(turn.raw) == 2, f'{turn.id}: wrong round trip count'
     print(f'{variant} {case.id} {selected} MCP calls=1 round_trips={len(turn.raw)}')
     return {'variant': variant, 'case': case.id, 'tool': selected, 'round_trips': len(turn.raw)}, turn.raw
 
@@ -181,7 +182,7 @@ def replay(binary):
                                       'capabilities': {'experimentalApi': True}})
             rpc.send({'method': 'initialized'})
             rows = []
-            for variant in VARIANTS:
+            for variant in DIRECT_VARIANTS:
                 for case in CASES if capture else CASES[:1]:
                     row, raw = measure(rpc, peers, home, tools, case, variant)
                     rows.append(row)
@@ -189,9 +190,11 @@ def replay(binary):
                         for index, request in enumerate(raw):
                             (capture / f'{variant}-{case.id}-{index}.json').write_bytes(request)
             missing = [tool for tool in tools if tool['name'] != CASES[0].expected]
-            for variant in VARIANTS:
+            for variant in DIRECT_VARIANTS:
                 row, _ = measure(rpc, peers, home, missing, CASES[0], variant, 'missing')
                 assert row is None
+            row, _ = measure(rpc, peers, home, tools, CASES[0], 'deferred', 'unsupported')
+            assert row is None
             measure(rpc, peers, home, tools, CASES[0], 'forced-direct')
             row, _ = measure(rpc, peers, home, tools, CASES[0], 'flat', 'peer-close')
             assert row is None

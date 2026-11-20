@@ -10,8 +10,8 @@ status: measurement pending
 The current bridge declares Port OS tools flat. The pin places them inside
 the Responses Lite `functions` namespace alongside its native wrappers.
 This replay compares that wire format with explicit domain namespaces and
-with client-side search over deferred domain namespaces. All three use the
-same tools, base instructions, model and fixed utterances.
+checks whether client-side search can load deferred domain namespaces. The
+variants use the same tools, base instructions, model and fixed utterances.
 
 ## Pin behavior
 
@@ -20,18 +20,21 @@ Source paths below are relative to `codex-rs` at the
 
 | Surface | Pin evidence |
 | --- | --- |
-| Wire admission | `app-server-protocol/src/protocol/v2/thread.rs:145–151` exposes experimental `dynamicTools`. `protocol/src/dynamic_tools.rs:13–49` describes tagged functions and namespaces, with `deferLoading` in JSON and `defer_loading` in Rust. `protocol/src/dynamic_tools.rs:90–132` normalizes compatibility forms and rejects mixed encodings. |
+| Wire admission | Generated experimental `v2/ThreadStartParams.json:362` exposes `dynamicTools`, lines 101 and 134 expose `deferLoading`, and line 189 identifies the namespace variant. `app-server-protocol/src/protocol/v2/thread.rs:145–151` wires in the normalizer. `protocol/src/dynamic_tools.rs:13–49,90–132` defines the tagged forms, accepts legacy forms and rejects mixed encodings. |
 | Native exposure | `core/src/tools/handlers/dynamic.rs:46–81,98–106` builds each callable, sets its deferred exposure, and provides its search metadata. `core/src/tools/spec_plan.rs:520–551` makes a configured direct-only namespace direct, including the stock `functions` namespace. |
 | Deferred discovery | `models-manager/models.json:178,197,337` selects Responses Lite and enables search for `gpt-6.1-sol`. `model-provider/src/provider.rs:59–68` enables namespace tools for the Responses provider. `core/src/tools/spec_plan.rs:369–404,653–664` gates `tool_search` on both capabilities and the presence of a searchable deferred tool. |
-| No-host dispatch | `core/src/tools/spec_plan.rs:808–850` exempts `excluded_tool_namespaces` from code-mode nesting. `core/src/tools/handlers/tool_search_spec.rs:99–108` declares client execution. `core/src/tools/router.rs:253–285` routes the client search and namespaced function call. `core/src/tools/handlers/tool_search.rs:226–240` returns the loaded definitions. |
+| Code-mode-only limit | `core/src/tools/spec_plan.rs:354–404` runs direct-only overrides before it adds `tool_search`. The handler inherits `Direct` exposure from `tools/src/tool_executor.rs:112–115`. The model-visible filter in `core/src/tools/spec_plan.rs:559–577,794–806` hides it because the code-mode predicate exempts only `exec` and `wait` (`code-mode-protocol/src/description.rs:259–261`). Code-mode registration also skips `ToolSpec::ToolSearch` (`core/src/tools/spec_plan.rs:808–869`). |
+| Search wire path | `core/src/tools/handlers/tool_search_spec.rs:97–108` declares client execution. `core/src/tools/router.rs:253–285` routes a client search or a namespaced function call. `core/src/tools/handlers/tool_search.rs:226–240` returns loaded definitions when invoked. |
 | Captured input | `core/src/client.rs:902–930` emits the `additional_tools` input element. The search result travels in `tool_search_output` as defined by `protocol/src/models.rs:1170–1186`. |
 
-The deferred replay groups tools under `portos_endpoints`, `portos_groups`
-and `portos_subscriptions`. It excludes them from code-mode nesting so a
-loaded tool can be called directly on an install without a code-mode host.
-The namespaced direct replay uses those same namespaces in the direct-only
-list. The replay also checks that the stock direct-only `functions`
-namespace overrides a tool's deferred declaration.
+The deferred probe excludes `portos_endpoints`, `portos_groups` and
+`portos_subscriptions` from code-mode nesting. The initial Responses Lite
+request still contains `functions.exec` and omits both the deferred
+declarations and client `tool_search`. This pin therefore offers no native
+discovery route for that variant. Keep deferral off for the no-host setup.
+The namespaced direct replay puts those domains in the direct-only list.
+The test checks that the stock direct-only `functions` namespace makes a
+tool callable directly even when it requests deferral.
 
 ## Full replay
 
@@ -41,6 +44,7 @@ authorized local backend checkout, and offline `tiktoken` 0.13.0 with its
 captures in private storage. Set `backend` to the local backend checkout.
 
 ```sh
+set -eu
 umask 077
 work=$(mktemp -d)
 catalog=$work/catalog.json
@@ -78,7 +82,9 @@ selects that tool only when visible, and waits for the correlated MCP receipt
 before replying. The routing fixture exercises tool visibility and dispatch.
 Provider billing, hosted model choices, and device behavior remain unmeasured.
 
-The full replay is required to populate the comparison and recommend a
-format. The hosted smoke uses two synthetic definitions and exercises the
+The full replay produces ten rows each for flat and direct namespaces. The
+deferred probe has no selection or comparable token count. Exact counts and
+the recommendation between the two callable formats are pending the full
+replay. The hosted smoke uses two synthetic definitions and exercises the
 same app-server boundaries, including candidate removal and a peer closing
 with a model request pending.
