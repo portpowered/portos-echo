@@ -6,7 +6,7 @@ import sys
 import tarfile
 import tomllib
 
-from test_echo_install import ROOT, require, set_owner
+from test_echo_install import ROOT, owner, require, set_owner
 from test_release_delivery import DeliveryBox, assert_installed_pack, delivered_journey, delivery_calls, local_endpoint
 from test_release_kit import PACK, sha
 
@@ -57,16 +57,16 @@ def release_fixture(box, name, *, unsafe=False, tampered=False, default_status=2
     return manifest, identity, asset, digest, members
 
 
-def owned_file(box, path, data):
+def owned_file(box, path, data, uid="9999:9999"):
     path.parent.mkdir(parents=True, exist_ok=True)
     for directory in path.parents:
         if directory == box.device:
             break
         directory.chmod(0o700)
-        set_owner(box.root, directory, "9999:9999")
+        set_owner(box.root, directory, uid)
     path.write_bytes(data)
     path.chmod(0o600)
-    set_owner(box.root, path, "9999:9999")
+    set_owner(box.root, path, uid)
 
 
 def case_install(box, name, variant, **options):
@@ -76,14 +76,15 @@ def case_install(box, name, variant, **options):
     retained = {home / "settings.toml": b'screen_pack = ""\n',
                 home / "screens/other@1.0.0/keep.png": b"other installed data",
                 box.device / "private/bridge.toml": b"# operator config\n" + SCREEN.encode()}
-    if variant in ("retained", "same", "conflict"):
+    if variant in ("retained", "same", "conflict", "migrate"):
+        uid = "0:0" if variant == "migrate" else "9999:9999"
         for path, data in retained.items():
-            owned_file(box, path, data)
+            owned_file(box, path, data, uid)
     if variant in ("same", "conflict"):
         for path, data in members.items():
             owned_file(box, root / path, data if variant == "same" else b"operator bytes")
         inode = root.stat().st_ino
-    success = variant in ("fresh", "retained", "same")
+    success = variant in ("fresh", "retained", "same", "migrate")
     if success:
         (box.root / "expected-pack").write_text(json.dumps([identity, digest, {k: v.hex() for k, v in members.items()}]))
     with local_endpoint(box) as screen, local_endpoint(box) as health, local_endpoint(box, True) as release_port:
@@ -120,8 +121,11 @@ def case_install(box, name, variant, **options):
         expected_config["screen"]["packs"] = [{"url": "https://example.invalid/extra", "sha256": "a" * 64}]
         require(config == expected_config,
                 "config seed did not remove only the authenticated release pin")
-    elif variant in ("retained", "same", "conflict"):
+    elif variant in ("retained", "same", "conflict", "migrate"):
         require(all(path.read_bytes() == data for path, data in retained.items()), "operator config or home bytes changed")
+    if variant == "migrate":
+        require(all(owner(box.root, path) == "9999:9999" for path in (home, *retained)),
+                "bundled install did not migrate legacy ownership")
     expected = [(f"/v{box.release}/default-{box.release}.screenpack.tar.gz", 404)] if name == "template" else []
     assert_requests(box, [*expected, (f"/v{box.release}/{asset}", 200)])
 

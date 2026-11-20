@@ -12,6 +12,7 @@ use std::thread;
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 static NEXT: AtomicU64 = AtomicU64::new(0);
+const RELEASE_PACK_BYTES: &[u8] = b"verified pack";
 
 #[path = "support/force_config.rs"]
 mod force_config;
@@ -130,7 +131,7 @@ fn server(sums: String, bytes: Vec<u8>, count: usize) -> Result<(String, thread:
                 &bytes
             } else {
                 assert!(request.starts_with("GET /v0.2.0/default-0.2.0.screenpack.tar.gz "));
-                b"verified pack"
+                RELEASE_PACK_BYTES
             };
             write!(
                 stream,
@@ -187,7 +188,7 @@ fn t3_device_archive_refusal_cleans_stage_without_running_bundled_script() -> Re
     let sums = format!(
         "{}  echo-0.2.0-armv7.tar.gz\n{}  default-0.2.0.screenpack.tar.gz\n",
         digest(&bytes),
-        digest(b"verified pack")
+        digest(RELEASE_PACK_BYTES)
     );
     let (base, handle) = server(sums, bytes, 3)?;
     let output = fixture.install().args(["--release-base", &base]).output()?;

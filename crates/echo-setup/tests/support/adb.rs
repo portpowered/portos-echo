@@ -146,6 +146,9 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
     {
         std::process::exit(1);
     }
+    if command.contains("--device prepare-screen-pack --sha256 ") {
+        return io::stdout().write_all(br#"{"format":1,"name":"default","version":"0.2.0"}"#);
+    }
     if command.starts_with("sh -s -- --device ") {
         let mut script = Vec::new();
         io::stdin().read_to_end(&mut script)?;

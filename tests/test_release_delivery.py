@@ -1,24 +1,14 @@
 """Consume a prebuilt installer and bundled shell against isolated device boundaries."""
 from contextlib import contextmanager
 import errno
-from functools import partial
-from hashlib import sha256
-import http.server
 import json
 import os
 from pathlib import Path
 import selectors
 import shlex
-import shutil
-import subprocess
 import sys
-import tarfile
-import tempfile
-import threading
-import time
 
 from test_echo_install import Sandbox, SENTINEL, fake_adb, metadata_tool, owner, remote_tool, require, set_owner
-from test_echo_install_lifecycle import configure_lifecycle
 
 
 DEVICE = "/data/local"
@@ -29,6 +19,9 @@ TRACE = '{"elapsed_ms":1,"event":"wyoming.run_started","provider_auth_mode":"cha
 
 class DeliveryBox(Sandbox):
     def __init__(self, binary, assets, archive, release):
+        import time
+        from test_echo_install_lifecycle import configure_lifecycle
+
         super().__init__()
         self.binary, self.assets, self.archive, self.release = binary, assets, archive, release
         self.responses = {}
@@ -51,6 +44,8 @@ class DeliveryBox(Sandbox):
         path.chmod(0o755)
 
     def run_setup(self, *args, json_mode=True):
+        import subprocess
+
         completed = self.root / "last-completed"
         completed.unlink(missing_ok=True)
         try:
@@ -79,45 +74,40 @@ class DeliveryBox(Sandbox):
         return events[-1]
 
 
-class ReleaseHandler(http.server.BaseHTTPRequestHandler):
-    def __init__(self, box, release, *args, **kwargs):
-        self.box, self.release = box, release
-        super().__init__(*args, **kwargs)
+@contextmanager
+def local_endpoint(box, release=False):
+    # The same file is the entry point for each fake adb and device-tool call.
+    # Only the fixture driver needs the HTTP server and its imports.
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
 
-    def log_message(self, *args):
-        pass
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
 
-    def do_GET(self):
-        box = self.box
-        if self.release:
-            prefix = f"/v{box.release}/"
-            leaf = self.path.removeprefix(prefix)
-            path = box.assets / leaf
-            status = box.responses.get(leaf, 200 if self.path == prefix + Path(leaf).name and path.is_file() else 404)
-            box.requests.append((self.path, status))
-            data = path.read_bytes() if status == 200 else b""
+        def do_GET(self):
+            status, data = self.response()
             self.send_response(status)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-            return
-        if self.path == "/healthz":
-            data = b'{"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false}'
-        elif self.path == "/settings/v1?token=" + PAIRING:
-            data = b'{"version":1,"link_status":"linked"}'
-        else:
-            self.send_error(404)
-            return
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
 
+        def response(self):
+            if release:
+                prefix = f"/v{box.release}/"
+                leaf = self.path.removeprefix(prefix)
+                path = box.assets / leaf
+                status = box.responses.get(leaf, 200 if self.path == prefix + Path(leaf).name and path.is_file() else 404)
+                box.requests.append((self.path, status))
+                return status, path.read_bytes() if status == 200 else b""
+            if self.path == "/healthz":
+                return 200, b'{"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false}'
+            if self.path == "/settings/v1?token=" + PAIRING:
+                return 200, b'{"version":1,"link_status":"linked"}'
+            return 404, b""
 
-@contextmanager
-def local_endpoint(box, release=False):
-    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), partial(ReleaseHandler, box, release)) as server:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         thread.start()
         try:
             yield server.server_port
@@ -151,6 +141,9 @@ def remote_path(base, value):
 
 
 def run_bundled(base, args):
+    import subprocess
+    import tempfile
+
     script = Path(remote_path(base, args[1]))
     source = script.read_text()
     if script.name == "echo-install.sh":
@@ -204,6 +197,8 @@ def dispatch_adb(base, args, selected):
     if selected[:1] == ["forward"]:
         return record_forward(base, selected[1:])
     if selected[:1] == ["push"] and Path(selected[1]).is_dir():
+        import shutil
+
         source = Path(selected[1])
         destination = Path(remote_path(base, selected[2]))
         require(destination.parent.is_dir() and destination.name == "bundle",
@@ -293,6 +288,9 @@ def fake_tool(base, label, args):
 
 
 def offline_update(box, release):
+    from hashlib import sha256
+    import tarfile
+
     bundle = box.root / "update"
     bundle.mkdir()
     with tarfile.open(box.archive) as archive:
@@ -309,12 +307,17 @@ def offline_update(box, release):
 
 
 def public_hashes(box, manifest):
+    from hashlib import sha256
+
     for name, expected in manifest["files"].items():
         if name.split("/", 1)[0] in ("bin", "apk", "scripts"):
             require(sha256((box.device / name).read_bytes()).hexdigest() == expected, "installed public bytes differ")
 
 
 def delivered_journey(binary, assets, archive, manifest, *, pin_version=False, check_maintenance=True):
+    from hashlib import sha256
+    import tarfile
+
     release = manifest["version"]
     update = "0.0.0-delivery" if release != "0.0.0-delivery" else "0.0.0-delivery.2"
     with DeliveryBox(binary, assets, archive, release) as box:

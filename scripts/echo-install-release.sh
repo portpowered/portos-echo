@@ -68,7 +68,9 @@ screen_pack_prepare() {
   find "$tree" -type f -exec chmod 600 {} + || return 1
   printf '%s' "$1" >"$stage/$marker" || return 1
   chown 9999:9999 "$stage/$marker" || return 1
-  screen_pack_preflight || {
+  # A stopped legacy install can still own its state as root. The bundled
+  # installer migrates it before publication, which rechecks the final owner.
+  screen_pack_preflight 0:0 || {
     : >"$stage/screenpack.conflict"
     return 1
   }
@@ -79,23 +81,27 @@ screen_pack_directory() {
   [ ! -L "$1" ] || return 1
   [ -e "$1" ] || return 0
   [ -d "$1" ] || return 1
-  case $(stat -c %u:%g:%a "$1") in "$2:700" | "$2:755") ;; *) return 1 ;; esac
+  case $(stat -c %u:%g:%a "$1") in
+    "$2":700 | "$2":755 | "$3":700 | "$3":755) ;;
+    *) return 1 ;;
+  esac
 }
 
 screen_pack_preflight() {
-  screen_pack_directory "$device" 0:0 &&
-    screen_pack_directory "$device/home" 9999:9999 &&
-    screen_pack_directory "$screens" 9999:9999 &&
-    screen_pack_directory "$destination" 9999:9999 || return 1
+  screen_pack_directory "$device" 0:0 '' &&
+    screen_pack_directory "$device/home" 9999:9999 "$1" &&
+    screen_pack_directory "$screens" 9999:9999 "$1" &&
+    screen_pack_directory "$destination" 9999:9999 "$1" || return 1
   pin=$screens/$marker
   [ ! -L "$pin" ] || return 1
   if [ -e "$pin" ]; then
-    [ -f "$pin" ] && [ "$(stat -c %u:%g:%a "$pin")" = 9999:9999:600 ] &&
-      [ "$(stat -c %h "$pin")" = 1 ] && [ "$(stat -c %s "$pin")" = 64 ] &&
+    [ -f "$pin" ] || return 1
+    case $(stat -c %u:%g:%a "$pin") in 9999:9999:600 | "$1":600) ;; *) return 1 ;; esac
+    [ "$(stat -c %h "$pin")" = 1 ] && [ "$(stat -c %s "$pin")" = 64 ] &&
       [ "$(cat "$pin")" = "$(cat "$stage/$marker")" ] || return 1
   fi
   if [ -d "$destination" ]; then
-    screen_pack_inventory "$tree" source && screen_pack_inventory "$destination" installed &&
+    screen_pack_inventory "$tree" source '' && screen_pack_inventory "$destination" installed "$1" &&
       [ "$(sha256sum <"$stage/source")" = "$(sha256sum <"$stage/installed")" ] || return 1
   fi
 }
@@ -103,18 +109,26 @@ screen_pack_preflight() {
 screen_pack_inventory() (
   cd "$1" || exit 1
   find . -exec sh -c '
+    legacy_owner=$1
+    shift
     for path do
       case $path in *[!A-Za-z0-9_./-]*) exit 1 ;; esac
       test ! -L "$path" || exit 1
       if test -d "$path"; then
-        case $(stat -c %u:%g:%a "$path") in 9999:9999:700 | 9999:9999:755) ;; *) exit 1 ;; esac
+        case $(stat -c %u:%g:%a "$path") in
+          9999:9999:700 | 9999:9999:755 | "$legacy_owner":700 | "$legacy_owner":755) ;;
+          *) exit 1 ;;
+        esac
         printf "directory %s\n" "$path"
       else
         test -f "$path" && test "$(stat -c %h "$path")" = 1 || exit 1
-        case $(stat -c %u:%g:%a "$path") in 9999:9999:600 | 9999:9999:644) ;; *) exit 1 ;; esac
+        case $(stat -c %u:%g:%a "$path") in
+          9999:9999:600 | 9999:9999:644 | "$legacy_owner":600 | "$legacy_owner":644) ;;
+          *) exit 1 ;;
+        esac
         sha256sum "$path" || exit 1
       fi
-    done' sh {} + >"$stage/$2.raw" || exit 1
+    done' sh "$3" {} + >"$stage/$2.raw" || exit 1
   LC_ALL=C sort "$stage/$2.raw" >"$stage/$2"
 )
 
@@ -126,7 +140,7 @@ screen_pack_publish() {
   trap 'exit 1' HUP INT TERM
   processes=$(ps -A -o PID,NAME) || return 1
   printf '%s\n' "$processes" | awk '$2 == "echo-bridge" { busy=1 } END { exit busy+0 }' || return 1
-  screen_pack_preflight || return 1
+  screen_pack_preflight '' || return 1
   if [ ! -d "$screens" ]; then
     mkdir "$screens" && chown 9999:9999 "$screens" || return 1
   fi

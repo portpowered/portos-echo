@@ -36,8 +36,12 @@ pub(super) fn assert_config_dispatch(ledger: &[Vec<String>], config: &Path, forc
 #[test]
 fn t3_verified_release_dispatches_force_and_resumes_plain_install() -> Result {
     let bytes = b"controlled archive boundary".to_vec();
-    let sums = format!("{}  echo-0.2.0-armv7.tar.gz\r\n", digest(&bytes));
-    let (base, handle) = server(sums, bytes, 4)?;
+    let sums = format!(
+        "{}  echo-0.2.0-armv7.tar.gz\r\n{}  default-0.2.0.screenpack.tar.gz\r\n",
+        digest(&bytes),
+        digest(RELEASE_PACK_BYTES)
+    );
+    let (base, handle) = server(sums, bytes, 6)?;
     for force in [true, false] {
         let fixture = Fixture::new()?;
         let config = fixture.0.join("config ü ' ; $.toml");
@@ -54,6 +58,7 @@ fn t3_verified_release_dispatches_force_and_resumes_plain_install() -> Result {
         let result = private_output(&output)?;
         assert_eq!(output.status.code(), Some(0), "{result}");
         assert_eq!(result["version"], "0.2.0");
+        assert_eq!(result["screen_pack_asset"], "default-0.2.0.screenpack.tar.gz");
         assert_eq!(result["setup"], "complete");
         let ledger = fixture.ledger()?;
         assert_eq!(ledger[0], ["devices"]);
@@ -73,7 +78,10 @@ fn assert_guided_start(ledger: &[Vec<String>], links: bool) -> Result {
         .collect();
     assert_eq!(dispatch[0], "sh -s -- --device stop");
     assert!(dispatch[1].contains("--device prepare-archive"));
-    assert!(dispatch[3].ends_with("--device screen-setup"));
+    assert!(dispatch[2].contains("--device prepare-screen-pack --sha256"));
+    assert!(dispatch[3].contains("--device install --bundle"));
+    assert!(dispatch[4].contains("--device publish-screen-pack --identity 'default@0.2.0'"));
+    assert!(dispatch[5].ends_with("--device screen-setup"));
     let start = dispatch
         .iter()
         .position(|call| call.ends_with("--device start"))

@@ -32,6 +32,11 @@ fn legacy_and_retained_settings() -> Result {
 }
 
 #[test]
+fn migrates_root_owned_home() -> Result {
+    run("migrate")
+}
+
+#[test]
 fn unsafe_member() -> Result {
     run("unsafe")
 }
