@@ -283,39 +283,57 @@ fn normalized_sdp(offer: &str) -> String {
     loopback_offer(offer);
     assert!(offer.lines().any(|line| line.starts_with("m=audio ")));
     assert!(offer.lines().any(|line| line.starts_with("m=application ")));
+    let ssrc = offer
+        .lines()
+        .find_map(|line| line.strip_prefix("a=ssrc:")?.split_once(' ').map(|(id, _)| id))
+        .unwrap();
+    assert!(ssrc.parse::<u32>().is_ok());
+    let track = format!("audio-{ssrc}");
     offer
         .lines()
-        .map(|line| {
-            if let Some((key, value)) = line.split_once(':') {
-                if matches!(key, "a=ice-ufrag" | "a=ice-pwd") {
-                    assert!(!value.is_empty());
-                    return format!("{key}:<generated>");
-                }
-                if key == "a=fingerprint" {
-                    let (algorithm, fingerprint) = value.split_once(' ').unwrap();
-                    assert!(!fingerprint.is_empty());
-                    return format!("{key}:{algorithm} <generated>");
-                }
-                if key == "a=candidate" {
-                    let mut fields: Vec<_> = value.split_whitespace().collect();
-                    assert!(fields[5].parse::<u16>().unwrap() > 0);
-                    fields[5] = "<ephemeral port>";
-                    return format!("{key}:{}", fields.join(" "));
-                }
-                if key == "a=ssrc" {
-                    let (id, attributes) = value.split_once(' ').unwrap();
-                    assert!(id.parse::<u32>().is_ok());
-                    return format!("{key}:<generated> {attributes}");
-                }
-            }
-            if let Some(origin) = line.strip_prefix("o=") {
-                let mut fields: Vec<_> = origin.split_whitespace().collect();
-                assert!(fields[1].parse::<u64>().is_ok());
-                fields[1] = "<session ID>";
-                return format!("o={}", fields.join(" "));
-            }
-            line.to_owned()
-        })
+        .map(|line| normalize_sdp_line(line, ssrc, &track))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn normalize_sdp_line(line: &str, ssrc: &str, track: &str) -> String {
+    if let Some(origin) = line.strip_prefix("o=") {
+        let mut fields: Vec<_> = origin.split_whitespace().collect();
+        assert!(fields[1].parse::<u64>().is_ok());
+        assert!(fields[2].parse::<u64>().is_ok());
+        fields[1] = "<session ID>";
+        fields[2] = "<session version>";
+        return format!("o={}", fields.join(" "));
+    }
+    let Some((key, value)) = line.split_once(':') else {
+        return line.to_owned();
+    };
+    match key {
+        "a=ice-ufrag" | "a=ice-pwd" => {
+            assert!(!value.is_empty());
+            format!("{key}:<generated>")
+        }
+        "a=fingerprint" => {
+            let (algorithm, fingerprint) = value.split_once(' ').unwrap();
+            assert!(!fingerprint.is_empty());
+            format!("{key}:{algorithm} <generated>")
+        }
+        "a=candidate" => {
+            let mut fields: Vec<_> = value.split_whitespace().collect();
+            assert!(fields[5].parse::<u16>().unwrap() > 0);
+            fields[5] = "<ephemeral port>";
+            format!("{key}:{}", fields.join(" "))
+        }
+        "a=ssrc" => {
+            let (id, attributes) = value.split_once(' ').unwrap();
+            assert_eq!(id, ssrc);
+            let attributes = attributes.replace(track, "audio-<generated>");
+            format!("{key}:<generated> {attributes}")
+        }
+        "a=msid" => {
+            assert_eq!(value, format!("realtime {track}"));
+            format!("{key}:realtime audio-<generated>")
+        }
+        _ => line.to_owned(),
+    }
 }
