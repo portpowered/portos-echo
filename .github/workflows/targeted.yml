@@ -21,8 +21,17 @@ jobs:
         env:
           ECHO_SETUP_RELEASE_VERSION: '0.1.0'
         run: |
-          export RUSTFLAGS="--remap-path-prefix=$HOME=/build/user --remap-path-prefix=$PWD=/build/echo"
-          cargo build --locked -p echo-setup --bin echo-setup
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+          sys.path.insert(0, 'tests')
+          from test_release_kit import PACK
+          with tempfile.TemporaryDirectory(prefix='echo-release-probe-', dir='/tmp') as work:
+              subprocess.run(['cargo', 'build', '--locked', '-p', 'echo-setup', '--bin', 'echo-setup'],
+                             env=PACK.build_environment(Path(work)), check=True)
+          PY
       - name: Run artifact journey with synthetic Android payload
         run: |
           python3 - <<'PY'
