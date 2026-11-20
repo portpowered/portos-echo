@@ -347,6 +347,34 @@ fn t3_on_device_m5_failed_stop_retains_owned_residue_and_preserves_installed_byt
 }
 
 #[test]
+fn t3_on_device_m5_nominated_installed_config_is_never_overwritten_or_removed() {
+    for bytes in [b"installed config sentinel\n".as_slice(), b""] {
+        let peer = Peer::new("success");
+        let remote = peer.session.0.join("remote");
+        let installed = remote.join("bridge.toml");
+        fs::write(&installed, bytes).unwrap();
+        let path = peer.session.0.join("launcher.json");
+        let mut launcher: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        launcher["config"] = json!("/data/local/echo-bridge/private/bridge.toml");
+        fs::write(path, launcher.to_string()).unwrap();
+        let output = peer.run();
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(fs::read(installed).unwrap(), bytes);
+        assert_eq!(
+            fs::read(remote.join("trace.jsonl")).unwrap(),
+            b"installed trace sentinel\n"
+        );
+        assert_eq!(peer.session.report()["link_counts"], Value::Null);
+        assert!(
+            !peer
+                .calls()
+                .iter()
+                .any(|c| c.join(" ").contains("setsid") || c.join(" ").contains("kill $(cat"))
+        );
+    }
+}
+
+#[test]
 fn t3_on_device_m5_cancellation_before_stage_after_acquisition_and_during_start_preserves_bytes() {
     for mode in ["cancel-before", "cancel-stage", "cancel-start"] {
         let peer = Peer::new(mode);
@@ -356,7 +384,15 @@ fn t3_on_device_m5_cancellation_before_stage_after_acquisition_and_during_start_
         let output = peer.run();
         assert_eq!(output.status.code(), Some(1), "{mode}");
         assert_eq!(peer.session.report()["result"], "fail");
-        assert_eq!(peer.session.report()["link_counts"], Value::Null);
+        if mode == "cancel-before" {
+            assert_eq!(
+                peer.session.report()["link_counts"],
+                json!({"link":0,"tools_list":0,"tool_call":0,
+                "forced_refresh":0,"replay_rejected":0,"relink_error":0,"restart_grant_kept":0,"unlink":0})
+            );
+        } else {
+            assert_eq!(peer.session.report()["link_counts"], Value::Null);
+        }
         let remote = peer.session.0.join("remote");
         assert_eq!(
             fs::read(remote.join("bridge.toml")).unwrap(),

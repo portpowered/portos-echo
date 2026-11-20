@@ -37,7 +37,9 @@ impl Shell for Filesystem {
             "shell" => {
                 let command = command.strip_prefix(&format!("{IDENTITY} ")).unwrap_or(command);
                 let output = Command::new("sh").args(["-c", command]).output().unwrap();
-                if !output.status.success() || (state.lost_ack && command.contains(&state.fail)) {
+                if !output.status.success()
+                    || (!state.fail.is_empty() && state.lost_ack && command.contains(&state.fail))
+                {
                     Err("shell failed or acknowledgement lost".into())
                 } else {
                     Ok(output.stdout)

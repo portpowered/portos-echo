@@ -159,12 +159,13 @@ class World:
         elif command.startswith("/data/local/hassmic/runas nobody 3990,inet "):
             fragment = command.removeprefix("/data/local/hassmic/runas nobody 3990,inet ")
             assert fragment.startswith(("mkdir ", "chmod ", "mkfifo ", "ln -T ", "sh -c ")), fragment
-            fragment = fragment.replace("/data/local/echo-bridge/private", str(self.remote))
+            fragment = fragment.replace("/data/local/echo-bridge/private", '"${ECHO_FAKE_REMOTE}"')
             if self.mode == "chmod" and fragment.startswith("chmod "):
                 raise ValueError("chmod failed")
             if self.mode == "cleanup" and self.generation == 2 and "rm -f" in fragment and "lab-bridge.toml;" in fragment:
                 raise ValueError("nominated cleanup failed")
-            subprocess.run(["sh", "-c", fragment], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["sh", "-c", fragment], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           env=os.environ | {"ECHO_FAKE_REMOTE": str(self.remote)})
             if self.mode == "cancel-stage" and fragment.startswith("ln -T ") and fragment.endswith("lab-stderr.log"):
                 (self.root / "cancel").write_text("cancel")
         else:
