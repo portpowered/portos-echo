@@ -7,7 +7,7 @@ status: current main overview; W4 deployment and in-progress changes are labelle
 
 # Architecture and conversation lifecycle
 
-## Delegation trace payload boundary (in progress)
+## Delegation trace payload boundary
 
 Delegation diagnostics use the private bridge trace. The payload boundary for
 `delegation.created`, retained `session.delegation.created`, `delegation.tool`
@@ -44,10 +44,13 @@ attempts a cancelled resolution without replacing the original runtime error.
 The native single reader records each observed `handoff_request` as
 `delegation.created`, with its task and the run active at creation. Observed
 turn completion, failure or interruption closes matching delegations once;
-an observed deadline takes precedence over the interrupt it triggers. Realtime
-requested closure and owner abandonment cancel outstanding lifetimes. An
-unsolicited closure during an active call instead fails with `realtime_closed`. Control, child EOF
-and media failures use fixed failure classes. Final agent-item text may populate
+an observed deadline takes precedence over the interrupt it triggers. A run's
+response expiry (`Deadline` or `NoResponse`) is also `timed_out` when existing
+run cleanup closes a delegation before its own timer fires. This does not add
+an interrupt or change either deadline. Requested realtime closure and owner
+abandonment cancel outstanding lifetimes. An unsolicited active-call closure
+instead fails with `realtime_closed`. Control, child EOF and media failures use
+fixed failure classes. Final agent-item text may populate
 `answer`, but never changes `handback=unobserved`. Duplicate handoffs and terminal
 notifications cannot produce additional lifetimes or resolutions.
 The native observer also writes `delegation.tool` for observed search, catalogued
@@ -76,7 +79,13 @@ answer text. Failed tasks are `failed`, with the runner's fixed `task timed out`
 failure category recorded as `timed_out`. Abandonment closes the lifetime without
 appending commentary; replaced workers receive a fresh observer generation.
 Local append failure is `handback=failed`; success is only `submitted`.
-The full native managed-exit matrix and real-pin append witness remain in progress.
+Controlled configured-owner tests cover native managed exits, actual interrupt
+acknowledgement, response expiry, duplicate/late events and isolated owners,
+turns and generations. Real-peer configured journeys compare the diagnostic
+rows against exact independently observed native append identity/content and
+zero interrupted append. That test observer adds no production delivery receipt.
+The lifetime guarantee applies to observed managed exits and successful trace
+writes; abrupt process termination and filesystem failure cannot promise a row.
 
 ## Purpose and placement
 
