@@ -440,7 +440,7 @@ async fn disable_fast_mode(fixture: &Fixture, url: &str, path: &Path) {
     assert_eq!(after["settings"]["codex"]["delegate_fast"], false);
     assert_eq!(after["settings"]["codex"]["delegate_model"], "synthetic-runner");
     assert_eq!(after["settings"]["codex"]["web_search"], "cached");
-    assert_eq!(after["settings"]["agent"]["max_tool_calls"], 6);
+    assert_eq!(after["settings"]["agent"], json!({"daily_request_cap":"6"}));
     let overlay = fs::read_to_string(path).unwrap();
     assert!(overlay.contains("delegate_fast = false\n"));
 }
