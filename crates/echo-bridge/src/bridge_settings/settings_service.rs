@@ -1,4 +1,5 @@
 //! Runtime-owned dispatch: no detached transactions survive the voice owner.
+use super::openai_account::Account;
 use super::{SettingsError, SettingsHost, portos_permissions::PortosPermissions, settings_restart::Restart};
 use crate::bridge_mcp::Grant;
 use echo_config::EffectiveConfig;
@@ -18,6 +19,7 @@ pub struct SettingsService {
     inbox: mpsc::Receiver<SettingsRequest>,
     restart: Restart,
     trace: Option<crate::bridge_trace::Trace>,
+    account: Option<Account>,
 }
 
 /// Accepted state survives resource cleanup without reopening the home. A
@@ -74,6 +76,7 @@ impl SettingsService {
                 inbox,
                 restart: Restart::default(),
                 trace: None,
+                account: None,
             },
             send,
         )
@@ -85,6 +88,11 @@ impl SettingsService {
 
     pub(crate) fn with_trace(mut self, trace: crate::bridge_trace::Trace) -> Self {
         self.trace = Some(trace);
+        self
+    }
+
+    pub(crate) fn with_account(mut self, account: Account) -> Self {
+        self.account = Some(account);
         self
     }
 
@@ -111,6 +119,7 @@ impl SettingsService {
             mut inbox,
             restart,
             mut trace,
+            account,
         } = self;
         let result = restart
             .scope(async {
@@ -124,6 +133,13 @@ impl SettingsService {
                                 let grant = current_grant();
                                 let view = GrantView::read(grant.as_deref(), request.reads_portos()).await;
                                 request.commit(|operation| {
+                                    if let Some(account) = &account {
+                                        match operation {
+                                            SettingsOperation::OpenAiSnapshot => return account.snapshot(),
+                                            SettingsOperation::OpenAiOperation(request) => return account.start(request),
+                                            _ => {}
+                                        }
+                                    }
                                     let current = current_grant();
                                     let same_owner = grant.as_ref().zip(current.as_ref())
                                         .is_some_and(|(before, now)| Arc::ptr_eq(before, now));

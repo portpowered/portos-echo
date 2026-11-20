@@ -12,7 +12,8 @@ import type { UiState } from "../model";
 import { packControls } from "./packs";
 import { loadSettings, restartWarning, saveSettingsV2 } from "./api-v2";
 import { openAIOptions, portosForm } from "./forms-v2";
-import { mountPortos } from "./portos/controls";
+import { mountPortos } from "./accounts/portos";
+import { mountOpenAI } from "./accounts/openai";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
@@ -29,6 +30,13 @@ function settingsSection(title: string, body: HTMLElement) {
     section.className = "settings-section";
     section.append(element("summary", title), body);
     return section;
+}
+
+function accountRow(title: string) {
+    const row = element("section");
+    row.setAttribute("aria-label", title);
+    row.append(element("h3", title));
+    return row;
 }
 
 // Navigation never constructs a ScreenFrame or emits a UiAction. The existing
@@ -72,6 +80,7 @@ export function mountSettings(
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
     let portos: ReturnType<typeof mountPortos> | undefined;
+    let openai: ReturnType<typeof mountOpenAI> | undefined;
 
     function close() {
         panel.hidden = true;
@@ -84,6 +93,8 @@ export function mountSettings(
         pending?.abort();
         portos?.stop();
         portos = undefined;
+        openai?.stop();
+        openai = undefined;
         pending = undefined;
         clearTimeout(timeout);
         gear.focus();
@@ -165,7 +176,6 @@ export function mountSettings(
             fields.append(element("p", warning));
     }
     function renderShared(data: Snapshot | SnapshotV2) {
-        fields.append(packControls(actions, perform));
         for (const kind of ["voice", "runner"] as const)
             fields.append(
                 promptForm(kind, data.prompts[kind], (text) => {
@@ -222,21 +232,32 @@ export function mountSettings(
                     : "Saved. Changes apply to the next conversation.";
             }, "Saving…");
         }
+        const accounts = element("section");
+        accounts.className = "settings-accounts";
+        accounts.setAttribute("aria-label", "Accounts");
+        const openaiRow = accountRow("OpenAI (GPT Live)");
+        const portosRow = accountRow("Port OS");
+        accounts.append(element("h2", "Accounts"), openaiRow, portosRow);
+        openai = mountOpenAI(openaiRow, actions, perform);
         portos = mountPortos(
-            permissions.controls,
+            portosRow,
+            permissions,
             actions,
             data,
             perform,
             (message) => {
                 status.textContent = message;
+                void openai?.refresh();
             },
         );
         fields.append(
+            accounts,
+            packControls(actions, perform),
             settingsSection(
                 "OpenAI",
                 settingsForm(data, saveV2, openAIOptions(data.settings)),
             ),
-            settingsSection("Port OS", permissions.section),
+            settingsSection("Port OS permissions", permissions),
         );
         renderShared(data);
         fields.append(element("p", "Version: " + data.bridge_version));
@@ -256,7 +277,7 @@ export function mountSettings(
                     Object.assign(data.settings.agent, patch.agent);
             });
         });
-        fields.append(form);
+        fields.append(form, packControls(actions, perform));
         renderShared(data);
         fields.append(
             element("h2", "Bridge"),
@@ -316,6 +337,7 @@ export function mountSettings(
             disposed = true;
             pending?.abort();
             portos?.stop();
+            openai?.stop();
             clearTimeout(timeout);
             gear.remove();
             panel.remove();

@@ -184,6 +184,7 @@ pub(super) struct Tools {
     server: Option<String>,
     specs: Option<Vec<ToolSpec>>,
     runtime: Option<bridge_mcp::Runtime>,
+    shared_grant: Option<Arc<bridge_mcp::Grant>>,
     portos_permissions: Option<PortosPermissions>,
     trace: Option<Trace>,
 }
@@ -202,6 +203,7 @@ impl Tools {
             specs: None,
             server: config.mcp.server.first().map(|server| server.name.clone()),
             runtime: None,
+            shared_grant: None,
             portos_permissions: None,
             trace: None,
         }
@@ -219,16 +221,8 @@ impl Tools {
         trace: &mut Trace,
         epoch: Option<u64>,
     ) -> Result<(), Error> {
-        if let Some(settings) = bridge_mcp::Settings::configured(config)? {
-            self.runtime =
-                Some(bridge_mcp::Runtime::open(settings, screen.presentation.clone(), trace.clone(), epoch).await?);
-            trace.record(
-                "mcp.operator.listening",
-                None,
-                serde_json::json!({
-                    "address": self.runtime.as_ref().ok_or(Error::Unavailable)?.address.to_string()
-                }),
-            )?;
+        if self.shared_grant.is_none() {
+            self.runtime = open_portos(config, screen, trace, epoch).await?;
         }
         let client = config
             .mcp
@@ -242,7 +236,7 @@ impl Tools {
                 };
                 McpClient::with_ca(
                     server.clone(),
-                    Token::new(server.clone(), self.runtime.as_ref().map(|r| r.grant.clone())),
+                    Token::new(server.clone(), self.grant()),
                     Duration::from_secs(config.agent.task_deadline_seconds),
                     ca_pem.as_deref(),
                 )
@@ -272,7 +266,13 @@ impl Tools {
     }
 
     pub fn grant(&self) -> Option<Arc<bridge_mcp::Grant>> {
-        self.runtime.as_ref().map(|runtime| runtime.grant.clone())
+        self.shared_grant
+            .clone()
+            .or_else(|| self.runtime.as_ref().map(|runtime| runtime.grant.clone()))
+    }
+
+    pub(super) fn share_grant(&mut self, grant: Arc<bridge_mcp::Grant>) {
+        self.shared_grant = Some(grant);
     }
 
     pub async fn catalog(&mut self) -> Result<Catalog, Error> {
@@ -303,6 +303,27 @@ impl Tools {
             runtime.close().await;
         }
     }
+}
+
+pub(super) async fn open_portos(
+    config: &BridgeConfig,
+    screen: &Screen,
+    trace: &mut Trace,
+    epoch: Option<u64>,
+) -> Result<Option<bridge_mcp::Runtime>, Error> {
+    let Some(settings) = bridge_mcp::Settings::configured(config)? else {
+        return Ok(None);
+    };
+    let mut runtime = bridge_mcp::Runtime::open(settings, screen.presentation.clone(), trace.clone(), epoch).await?;
+    if let Err(error) = trace.record(
+        "mcp.operator.listening",
+        None,
+        json!({"address":runtime.address.to_string()}),
+    ) {
+        runtime.close().await;
+        return Err(error);
+    }
+    Ok(Some(runtime))
 }
 
 /// Append both builtins after discovery. A discovered tool may neither

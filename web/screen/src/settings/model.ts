@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
-// Schema SHA-256: a86450f4daa1e3e3181cb5551b72373cf638f0e7c62fd9e3f5059ac15902ff1c
+// Schema SHA-256: e61c6f3422a6816e9741c5365a9f90f89dd42bf3ff62fceaddb79f7971633255
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -170,4 +170,12 @@ export type PortosActionV2 = "link" | "unlink";
 export type PortosOperationStartedV2 = {
     version: SettingsVersionV2;
     operation: PortosActionV2;
+};
+export type OpenAiLinkStatusV2 =
+    "checking" | "unavailable" | "link_required" | "linked";
+export type OpenAiAccountV2 = {
+    version: SettingsVersionV2;
+    link_status: OpenAiLinkStatusV2;
+    operation_state: PortosOperationStateV2;
+    challenge?: PortosChallengeV2;
 };

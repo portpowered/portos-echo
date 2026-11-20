@@ -41,7 +41,9 @@ pub(super) async fn setup(
         }
         OperatorCommand::Signin { browser } => signin(source, browser, writer).await,
         // The public dispatcher handles these before selecting the auth source.
-        OperatorCommand::Status | OperatorCommand::KillSwitch { .. } => Err(SigninError::UnsupportedMode),
+        OperatorCommand::Status | OperatorCommand::Signout | OperatorCommand::KillSwitch { .. } => {
+            Err(SigninError::UnsupportedMode)
+        }
     }
 }
 

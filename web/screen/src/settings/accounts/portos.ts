@@ -1,7 +1,12 @@
-import { operatePortos, readSettingsProgress, restartWarning } from "../api-v2";
+import {
+    operateAccount,
+    readSettingsProgress,
+    restartWarning,
+} from "../api-v2";
 import type { SnapshotV2 } from "../api";
 import { element } from "../forms";
 import type { PortosOperationV2 } from "../model";
+import { accountButtons, accountChallenge } from "./account-buttons";
 
 type Portos = SnapshotV2["portos"];
 type Perform = (
@@ -24,14 +29,9 @@ const operationLabels: Record<Portos["operation_state"], string> = {
     failed: "Port OS could not finish the operation. Check the link status before trying again.",
 };
 
-function button(label: string) {
-    const node = element("button", label);
-    node.type = "button";
-    return node;
-}
-
 export function mountPortos(
     parent: HTMLElement,
+    permissions: HTMLElement,
     actions: string,
     initial: SnapshotV2,
     perform: Perform,
@@ -46,25 +46,16 @@ export function mountPortos(
     const operationStatus = element("p");
     operationStatus.setAttribute("aria-live", "polite");
     const granted = element("p");
-    const instruction = element("p");
-    const code = element("p");
-    const link = button("Link Port OS");
-    const unlink = button("Unlink Port OS");
-    const confirmation = element("div");
-    const cancel = button("Cancel");
-    const confirm = button("Confirm unlink");
-    confirmation.hidden = true;
-    confirmation.append(element("p", "Unlink Port OS?"), cancel, confirm);
+    const challenge = accountChallenge();
+    const buttons = accountButtons("Port OS", start);
     parent.append(
         linkStatus,
-        granted,
+        buttons.controls,
         operationStatus,
-        instruction,
-        code,
-        link,
-        unlink,
-        confirmation,
+        challenge.instruction,
+        challenge.code,
     );
+    permissions.prepend(granted);
 
     function active() {
         return (
@@ -86,32 +77,17 @@ export function mountPortos(
                     : "Linking is available after the bridge restarts."
                 : "");
         operationStatus.hidden = operationStatus.textContent === "";
-        const challenge = status.challenge;
-        instruction.hidden = code.hidden = !challenge;
-        instruction.textContent = challenge
-            ? "On a phone or PC, open " + challenge.verification_uri
-            : "";
-        code.textContent = challenge
-            ? "Code: " +
-              challenge.user_code +
-              " · Expires at " +
-              new Date(challenge.expires_at_unix * 1000).toLocaleTimeString()
-            : "";
-        link.hidden =
-            !status.server ||
-            status.link_status === "linked" ||
-            status.link_waiting_for_restart ||
-            active() ||
-            !confirmation.hidden;
-        link.textContent =
-            status.link_status === "relink_for_scope"
-                ? "Relink Port OS"
-                : "Link Port OS";
-        unlink.hidden =
-            (status.link_status !== "linked" &&
-                status.link_status !== "relink_for_scope") ||
-            active() ||
-            !confirmation.hidden;
+        challenge.render(status.challenge);
+        buttons.render(
+            !!status.server &&
+                status.link_status !== "linked" &&
+                !status.link_waiting_for_restart &&
+                !active(),
+            (status.link_status === "linked" ||
+                status.link_status === "relink_for_scope") &&
+                !active(),
+            status.link_status === "relink_for_scope",
+        );
     }
 
     function stop() {
@@ -159,7 +135,7 @@ export function mountPortos(
                 read === controller &&
                 !(waiting && controller.signal.aborted)
             ) {
-                instruction.hidden = code.hidden = true;
+                challenge.render();
                 operationStatus.hidden = false;
                 operationStatus.textContent =
                     "Port OS status is unavailable. Reopen Settings to check the operation.";
@@ -182,7 +158,7 @@ export function mountPortos(
         void perform(async (signal) => {
             stop();
             try {
-                await operatePortos(actions, signal, body);
+                await operateAccount(actions, "portos", signal, body);
                 if (signal.aborted) return "";
                 status = {
                     ...status,
@@ -196,31 +172,6 @@ export function mountPortos(
             }
         });
     }
-
-    link.addEventListener("click", () =>
-        start({ version: 2, operation: "link" }),
-    );
-    unlink.addEventListener("click", () => {
-        confirmation.hidden = false;
-        render();
-        cancel.focus();
-    });
-    function dismiss() {
-        confirmation.hidden = true;
-        render();
-        unlink.focus();
-    }
-    cancel.addEventListener("click", dismiss);
-    confirmation.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") {
-            event.stopPropagation();
-            dismiss();
-        }
-    });
-    confirm.addEventListener("click", () => {
-        dismiss();
-        start({ version: 2, operation: "unlink", confirm: true });
-    });
 
     render();
     monitor();

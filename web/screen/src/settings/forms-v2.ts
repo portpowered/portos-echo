@@ -81,10 +81,8 @@ export function portosForm(
     save: (patch: PatchV2) => void,
 ) {
     const section = element("section");
-    const controls = element("div");
-    section.append(controls);
     const server = status.server;
-    if (!server) return { section, controls };
+    if (!server) return section;
     const form = element("form");
     const scopes = choices(
         "Requested scopes",
@@ -125,5 +123,5 @@ export function portosForm(
         save(Object.keys(patch).length ? { portos: patch } : {});
     });
     section.append(form);
-    return { section, controls };
+    return section;
 }

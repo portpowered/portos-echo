@@ -439,8 +439,7 @@ async fn codex_configured_service_health_bind_failure_releases_only_acquired_scr
     assert_eq!(client.local_addr().unwrap(), server.peer_addr().unwrap());
 }
 
-// This uses the delivered CLI and SSE endpoint, with the existing controlled
-// account child and loopback Wyoming. A new fixture isolates each rejected file.
+// Exercise each rejected file through the delivered CLI, paired SSE and loopback peers.
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge and local Python"]
 async fn t3_settings_overlay_invalid_startup_reports_and_ignores_entire_file() {

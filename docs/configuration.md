@@ -49,21 +49,22 @@ optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leave
 - The root `screen_pack` selects installed screen packs.
 
 Missing leaves retain base values. The Port OS server identity and URL are read-only in the panel.
-Open the Settings gear and expand OpenAI or Port OS. The Port OS section shows the requested scopes separately
-from the current grant. Link or Relink starts the
-bridge's Port OS authorization flow. Open the displayed verification URL on a phone or PC and enter the
-code before it expires. After saving scopes, wait for Settings to report that the saved values are active
-before starting a new link. Unlink asks for confirmation and revokes the current grant.
+Open the Settings gear. Accounts shows OpenAI (GPT Live) and Port OS. To link either account, open the displayed
+verification URL on a phone or PC and enter the code before it expires. Confirm Unlink to remove the selected
+account's stored sign-in. OpenAI account changes wait for the current conversation to settle, then update the
+running bridge. If the bridge uses an API key, manage that credential in the host configuration.
+Port OS permissions shows the requested scopes next to the current grant. After saving scopes, wait for Settings
+to report that the saved values are active before linking again. Presentation lists the installed screen packs
+and puts Template eyes first. Omitting `screen_pack` uses the installed template.
 Unknown keys, bad types, unreadable/oversized files or invalid effective values reject the **whole overlay**;
 the validated base remains active and a warning is presented. An invalid base remains a startup error.
 The operator account/link commands load base directly; the voice runtime loads the effective configuration.
 
-Settings edits persist first, then request replacement at an idle/between-call boundary.
+Settings edits persist first, then request replacement at an idle boundary between calls.
 Withdrawing Port OS scopes or tools also denies affected calls in the running bridge as soon as the save succeeds.
 Adding permissions takes effect after restart and still requires the applicable grant scopes.
-They do not interrupt an active conversation. Screen-pack selection saves use the same atomic writer
-and never request or retry replacement. Catalog and selection persistence are implemented; visible
-pack playback and hot reload remain pending (see [screen packs](screen-packs.md)).
+Settings edits let active conversations finish. Presentation saves use the same atomic writer and update the
+screen without restarting the bridge. See [screen packs](screen-packs.md).
 Pending/applied and failed-restart state are shown on screen. After replacement failure,
 the old active configuration remains usable; a later explicit stop/start loads the saved overlay.
 Other base edits need restart. To remove an override, stop and edit/remove the corresponding overlay entry;

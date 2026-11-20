@@ -7,7 +7,8 @@ use super::{
     voice_view::View,
 };
 use crate::bridge_settings::{
-    SettingsCompletion, SettingsHost, SettingsService, portos_permissions::PortosPermissions,
+    SettingsCompletion, SettingsHost, SettingsService, openai_account::Account, portos_permissions::PortosPermissions,
+    settings_restart::replacement_pending,
 };
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_config::{LiveMode, ScreenConfig};
@@ -16,7 +17,10 @@ use echo_media::MediaPeer;
 use echo_screen_contract::settings_v1::LinkStatusV1;
 use echo_screen_server::SettingsRequest;
 use std::{cell::Cell, future::Future, net::SocketAddr, path::Path, pin::Pin};
-use tokio::{sync::watch, time::Instant};
+use tokio::{
+    sync::{OnceCell, watch},
+    time::Instant,
+};
 
 pub struct RuntimeOptions<'a> {
     pub host: HostOptions<'a>,
@@ -55,6 +59,8 @@ struct SettingsLink<'a> {
     health: &'a Health,
     portos: bool,
     permissions: Option<PortosPermissions>,
+    account: Option<Account>,
+    retained: OnceCell<Option<crate::bridge_mcp::Runtime>>,
 }
 
 impl<'a> SettingsLink<'a> {
@@ -62,6 +68,7 @@ impl<'a> SettingsLink<'a> {
         config: Option<&echo_config::BridgeConfig>,
         health: &'a Health,
         permissions: Option<PortosPermissions>,
+        account: Option<Account>,
     ) -> Self {
         let portos = config.is_some_and(|config| {
             config
@@ -77,7 +84,26 @@ impl<'a> SettingsLink<'a> {
             health,
             portos,
             permissions,
+            account,
+            retained: OnceCell::new(),
         }
+    }
+
+    async fn retain_portos(
+        &self,
+        view: &mut View<'_>,
+        options: &RuntimeOptions<'_>,
+    ) -> Result<Option<std::sync::Arc<crate::bridge_mcp::Grant>>, Error> {
+        let Some(config) = options.delegation.filter(|_| self.portos && self.account.is_some()) else {
+            return Ok(None);
+        };
+        let runtime = self
+            .retained
+            .get_or_try_init(|| view.open_portos(config, options.mcp_epoch))
+            .await?;
+        let grant = runtime.as_ref().map(|runtime| runtime.grant.clone());
+        self.health.set_mcp(grant.clone())?;
+        Ok(grant)
     }
 
     async fn open_tools(
@@ -87,8 +113,18 @@ impl<'a> SettingsLink<'a> {
         tools: &mut Option<super::voice_tools::Tools>,
     ) -> Result<(), Error> {
         if let (Some(config), Some(tools)) = (options.delegation, tools) {
+            if let Some(grant) = self.retain_portos(view, options).await? {
+                tools.share_grant(grant);
+            }
             view.open_tools(tools, config, options.mcp_epoch).await?;
             self.health.set_mcp(tools.grant())?;
+        }
+        Ok(())
+    }
+
+    fn release_unretained(&self) -> Result<(), Error> {
+        if self.retained.get().is_none() {
+            self.health.set_mcp(None)?;
         }
         Ok(())
     }
@@ -181,27 +217,34 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     };
     screen.supervise_actions(health.state.subscribe());
     let settings_trace = trace.clone();
-    let mut view = View::new(&screen, &health, &mut trace);
+    let mut view = View::new(&screen, &health, &mut trace)
+        .with_screen_account(service.is_some() && options.host.mode == LiveMode::Chatgpt);
     let requested = Cell::new(false);
-    let link = SettingsLink::new(
+    let account = service.as_ref().map(|_| Account::new(options.host.mode));
+    let mut link = SettingsLink::new(
         options.delegation,
         &health,
         service.as_ref().map(SettingsService::permissions),
+        account.clone(),
     );
     let work = Box::pin(work(
         options, connector, &mut peer, cancelled, &mut view, &requested, &link,
     ));
-    let (result, settings) = if let Some(service) = service {
-        let (result, completion) = Box::pin(service.with_trace(settings_trace).scope_with_grant(
-            work,
-            || link.status(),
-            || link.health.mcp_grant(),
-        ))
+    let (result, settings) = if let Some((service, account)) = service.zip(account) {
+        let (result, completion) = Box::pin(
+            service
+                .with_trace(settings_trace)
+                .with_account(account)
+                .scope_with_grant(work, || link.status(), || link.health.mcp_grant()),
+        )
         .await;
         (result, Some(completion))
     } else {
         (work.await, None)
     };
+    if let Some(Some(mut portos)) = link.retained.take() {
+        portos.close().await;
+    }
     finish(screen, health, trace, result, settings, requested.get()).await
 }
 
@@ -276,19 +319,42 @@ async fn work<C: LinkConnector, P: MediaPeer>(
         requested,
         grant,
     };
-    // Every generation has awaited its call/media and process shutdown; the
-    // supervisor has closed the device link.
-    let result = supervise(&mut stage, &link, cancelled.as_mut()).await;
-    let view = stage.view;
-    match result {
-        Err(error) => {
-            view.failed(&error).await?;
-            if error == Error::Authorization && !requested.get() {
-                cancelled.await;
-            }
-            Err(error)
+    let Some(account) = &grant.account else {
+        let result = supervise(&mut stage, &link, cancelled.as_mut()).await;
+        settled(stage.view, &result, requested.get()).await?;
+        if result == Err(Error::Authorization) && !requested.get() {
+            cancelled.await;
         }
-        Ok(()) => view.closed(if requested.get() { "shutdown" } else { "stopped" }),
+        return result;
+    };
+    loop {
+        let result = account.scope(supervise(&mut stage, &link, cancelled.as_mut())).await;
+        settled(stage.view, &result, requested.get()).await?;
+        let signed_out = result == Err(Error::Authorization);
+        if signed_out {
+            // Settings can still operate the same Port OS owner while Live is signed out.
+            let _ = grant.retain_portos(stage.view, &stage.options).await;
+        } else if result.is_err() {
+            return result;
+        }
+        if requested.get()
+            || !account
+                .handoff(&stage.options.host, cancelled.as_mut(), signed_out)
+                .await
+        {
+            return if replacement_pending() && !requested.get() {
+                Ok(())
+            } else {
+                result
+            };
+        }
+    }
+}
+
+async fn settled(view: &mut View<'_>, result: &Result<(), Error>, requested: bool) -> Result<(), Error> {
+    match result {
+        Err(error) => view.failed(error).await,
+        Ok(()) => view.closed(if requested { "shutdown" } else { "stopped" }),
     }
 }
 
@@ -350,7 +416,7 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                 if let Some(tools) = &mut tools {
                     tools.close().await;
                 }
-                result.and(grant.health.set_mcp(None))
+                result.and(grant.release_unretained())
             },
         )
         .await;

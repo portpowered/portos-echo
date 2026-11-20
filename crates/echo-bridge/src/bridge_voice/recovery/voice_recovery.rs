@@ -110,6 +110,7 @@ pub(super) async fn supervise<C: LinkConnector>(
         let stopped = tokio::select! {
             biased;
             () = cancelled.as_mut() => true,
+            () = crate::bridge_settings::openai_account::requested() => true,
             () = link.rest(delay, |event| stage.device(event)) => false,
         };
         if stopped {

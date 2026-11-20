@@ -3,6 +3,8 @@
 use echo_config::{BridgeConfig, ConfigError, SettingsOverlay};
 use std::path::PathBuf;
 
+#[path = "settings_host/openai_account.rs"]
+pub(crate) mod openai_account;
 #[path = "settings_host/portos_permissions.rs"]
 pub(crate) mod portos_permissions;
 mod settings_atomic;

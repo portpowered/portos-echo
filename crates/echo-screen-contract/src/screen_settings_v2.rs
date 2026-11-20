@@ -448,3 +448,23 @@ pub struct PortosOperationStartedV2 {
     pub version: SettingsVersionV2,
     pub operation: PortosActionV2,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiLinkStatusV2 {
+    Checking,
+    Unavailable,
+    LinkRequired,
+    Linked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenAiAccountV2 {
+    pub version: SettingsVersionV2,
+    pub link_status: OpenAiLinkStatusV2,
+    pub operation_state: PortosOperationStateV2,
+    #[schemars(with = "PortosChallengeV2")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub challenge: Option<PortosChallengeV2>,
+}

@@ -4,6 +4,7 @@ use echo_config::BridgeConfig;
 use echo_signin::OperatorCommand;
 pub(crate) mod codex_host;
 mod codex_operator;
+pub(crate) use codex_operator::screen_account;
 mod codex_routes;
 pub use codex_routes::LocalRoutes;
 use std::{io::Write, path::PathBuf};
@@ -153,7 +154,7 @@ mod tests {
                     assert_eq!(path, PathBuf::from("explicit"));
                 }
                 OperatorCommand::Status => assert_eq!(expected, "status"),
-                OperatorCommand::KillSwitch { .. } => unreachable!(),
+                OperatorCommand::Signout | OperatorCommand::KillSwitch { .. } => unreachable!(),
             }
         }
         assert!(parse(&args("--help"), false).unwrap().is_none());

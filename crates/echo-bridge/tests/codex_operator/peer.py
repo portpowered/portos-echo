@@ -157,6 +157,11 @@ for line in sys.stdin:
             home.joinpath("auth.json").write_bytes(b'{"synthetic":"local-only"}\n')
         emit({"method": "account/login/completed", "params": {
             "loginId": "local-login", "success": success, "error": "synthetic private error"}})
+    elif method == "account/logout":
+        assert request.get("params") is None
+        assert home.joinpath("mode").read_text() == "screen-account"
+        home.joinpath("auth.json").unlink()
+        emit({"id": request["id"], "result": {}})
     elif method == "account/read":
         assert request["params"] == {"refreshToken": False}
         mode = home.joinpath("mode").read_text()
@@ -191,7 +196,7 @@ for line in sys.stdin:
             continue
         account = {"type": "apiKey"} if mode == "api_key" else {
             "type": "chatgpt", "email": "synthetic@example.invalid", "planType": "synthetic"}
-        if mode == "signed-out":
+        if mode == "signed-out" or (mode == "screen-account" and not home.joinpath("auth.json").is_file()):
             account = None
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     elif method == "thread/start":

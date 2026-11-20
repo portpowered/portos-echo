@@ -128,6 +128,14 @@ export async function pageFor(
                 body: options.body,
             });
             if (
+                new URL(url).pathname === "/settings/v2/openai" &&
+                options.method === "GET"
+            )
+                return Promise.resolve({
+                    status: window.openAIAccount ? 200 : 404,
+                    json: async () => window.openAIAccount,
+                });
+            if (
                 new URL(url).pathname === "/settings/v2" &&
                 options.method === "GET" &&
                 window.settingsV2Status === undefined

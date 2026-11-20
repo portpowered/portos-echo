@@ -79,10 +79,11 @@ pub async fn with_host_options<T>(
     };
     codex_host::run(supervisor, cancelled, deadline, async |supervisor| {
         let io = supervisor.io().map_err(codex_host::process_error)?;
-        timeout_at(deadline, signin_codex::authenticate(io, mode, api_key))
+        let account = timeout_at(deadline, signin_codex::authenticate(io, mode, api_key))
             .await
-            .map_err(|_| Error::Deadline)?
-            .map_err(account_error)?;
+            .map_err(|_| Error::Deadline)?;
+        crate::bridge_settings::openai_account::observed(account);
+        account.map_err(account_error)?;
         session(io).await
     })
     .await

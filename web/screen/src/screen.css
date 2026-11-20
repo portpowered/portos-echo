@@ -319,6 +319,30 @@ main.settings-open {
     outline: 4px solid #ffdb70;
     outline-offset: 2px;
 }
+.settings-accounts > section {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 16px;
+    padding: 4px 12px;
+    margin-bottom: 8px;
+}
+.settings-accounts > section > h3,
+.settings-accounts > section > p {
+    grid-column: 1;
+    margin: 0;
+}
+.settings-accounts > section > div {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+}
+.settings-accounts button {
+    margin: 4px 0;
+}
+.settings-accounts > section > p:nth-last-child(-n + 3) {
+    grid-column: 1 / -1;
+    overflow-wrap: anywhere;
+}
 .settings-packs img {
     display: block;
     width: 160px;

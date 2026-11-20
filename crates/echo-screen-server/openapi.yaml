@@ -249,6 +249,40 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SettingsErrorV2' }
         '503': { description: Settings host absent, stopping or saturated; no queued retry }
+  /settings/v2/openai:
+    get:
+      security: [{ pairingToken: [] }]
+      description: Read the OpenAI account state and any active public device-code challenge. No credential or account identity is returned.
+      responses:
+        '200':
+          description: Account state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OpenAiAccountV2' }
+        '401': { description: Pairing token refused }
+        '403': { description: Foreign Origin refused }
+        '503': { description: Settings owner unavailable }
+    post:
+      security: [{ pairingToken: [] }]
+      description: Start one OpenAI link or confirmed unlink through the existing Codex owner. The current voice session settles before the account operation runs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PortosOperationV2' }
+      responses:
+        '202':
+          description: Operation accepted. Read the account state for completion.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortosOperationStartedV2' }
+        '400': { description: Invalid operation or missing unlink confirmation }
+        '401': { description: Pairing token refused }
+        '403': { description: Foreign Origin refused }
+        '409': { description: Operation conflicts with current account state }
+        '413': { description: Request too large }
+        '415': { description: JSON required }
+        '503': { description: Settings owner unavailable }
   /settings/v2/portos:
     post:
       security: [{ pairingToken: [] }]
@@ -486,6 +520,8 @@ components:
       $ref: ../../schemas/screen/portos_operation_v2.json
     PortosOperationStartedV2:
       $ref: ../../schemas/screen/portos_operation_started_v2.json
+    OpenAiAccountV2:
+      $ref: ../../schemas/screen/openai_account_v2.json
   responses:
     PackUnauthorized: { description: Missing, wrong, empty, duplicate or revoked token; empty body, no effect }
     PackForeignOrigin: { description: Supplied Origin differs from server origin; empty body, no effect }

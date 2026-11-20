@@ -109,6 +109,7 @@ for (const name of [
     "settings_error_v2",
     "portos_operation_v2",
     "portos_operation_started_v2",
+    "openai_account_v2",
 ]) {
     const schema = JSON.parse(
         await readFile(new URL(`${name}.json`, root), "utf8"),

@@ -20,6 +20,7 @@ pub(super) struct View<'a> {
     pending_connected: bool,
     mouth_paused: bool,
     startup: Startup,
+    account_relink: Option<&'static str>,
 }
 
 impl<'a> View<'a> {
@@ -34,6 +35,14 @@ impl<'a> View<'a> {
         epoch: Option<u64>,
     ) -> Result<(), Error> {
         tools.open(config, self.screen, self.trace, epoch).await
+    }
+
+    pub(super) async fn open_portos(
+        &mut self,
+        config: &echo_config::BridgeConfig,
+        epoch: Option<u64>,
+    ) -> Result<Option<crate::bridge_mcp::Runtime>, Error> {
+        super::voice_tools::open_portos(config, self.screen, self.trace, epoch).await
     }
 
     pub fn startup(&mut self) -> Result<(), Error> {
@@ -60,6 +69,23 @@ impl<'a> View<'a> {
             pending_connected: false,
             mouth_paused: false,
             startup: Startup::Pending,
+            account_relink: None,
+        }
+    }
+
+    pub(super) fn with_screen_account(mut self, enabled: bool) -> Self {
+        self.account_relink = enabled.then_some("Open Settings and link OpenAI under Accounts.");
+        self
+    }
+
+    fn failure_state(&self, relink: bool) -> UiState {
+        if relink && let Some(message) = self.account_relink {
+            UiState::Error {
+                message: message.into(),
+                relink: true,
+            }
+        } else {
+            crate::bridge_runtime::bridge_screen::failure_state(relink)
         }
     }
 
@@ -301,7 +327,7 @@ impl<'a> View<'a> {
                 state.wyoming = "connecting";
             }
         });
-        let state = crate::bridge_runtime::bridge_screen::failure_state(relink);
+        let state = self.failure_state(relink);
         if relink {
             self.screen.presentation.overlay(Some(state))?;
         } else {
@@ -322,7 +348,7 @@ impl<'a> View<'a> {
             state.relink_required = relink;
             state.startup_waiting_reason = None;
         });
-        let state = crate::bridge_runtime::bridge_screen::failure_state(relink);
+        let state = self.failure_state(relink);
         if relink {
             self.screen.presentation.overlay(Some(state))?;
             self.screen.flush().await?;

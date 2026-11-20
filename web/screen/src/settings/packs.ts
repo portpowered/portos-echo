@@ -16,12 +16,13 @@ type Perform = (
 // Uses the settings panel's one pending request, cancellation and focus owner.
 // Explicit refresh avoids an unbounded polling task when settings are hidden.
 export function packControls(actions: string, perform: Perform): HTMLElement {
-    const section = element("div");
+    const section = element("section");
     section.className = "settings-packs";
+    section.setAttribute("aria-label", "Presentation");
     const catalog = element("div");
     const refresh = element("button", "Load screen packs");
     refresh.type = "button";
-    section.append(element("h2", "Screen packs"), refresh, catalog);
+    section.append(element("h2", "Presentation"), refresh, catalog);
     const load = async (signal: AbortSignal) => {
         const data = decodePacks(
             await packRequest(actions, "", signal),
@@ -45,13 +46,25 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
         const label = element("label", "Screen pack");
         select.id = "screen-pack-selection";
         label.htmlFor = select.id;
-        const builtin = element("option", "Built-in appearance");
-        builtin.value = "";
-        select.append(builtin);
-        for (const pack of data.installed) {
-            const option = element("option", `${pack.name} ${pack.version}`);
-            option.value = pack.id;
-            select.append(option);
+        const template = element("option", "Template eyes (default)");
+        template.value = "template";
+        template.disabled = !data.installed.some(
+            (pack) => pack.name === "template",
+        );
+        select.append(template);
+        const installed = [
+            ...data.installed.filter((pack) => pack.name === "template"),
+            ...data.installed.filter((pack) => pack.name !== "template"),
+        ];
+        for (const pack of installed) {
+            if (pack.id !== "template") {
+                const option = element(
+                    "option",
+                    `${pack.name} ${pack.version}`,
+                );
+                option.value = pack.id;
+                select.append(option);
+            }
             const item = element("div");
             item.append(element("p", `${pack.name} ${pack.version}`));
             if (pack.rest_url) {
@@ -72,6 +85,9 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
                 item.append(element("p", "Layout only — no character preview"));
             catalog.append(item);
         }
+        const disable = element("option", "Disable screen packs");
+        disable.value = "";
+        select.append(disable);
         select.value = data.active ?? "";
         const save = element("button", "Use screen pack");
         const form = element("form");
@@ -79,6 +95,7 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
         form.addEventListener("submit", (event) => {
             event.preventDefault();
             const selection = select.value;
+            if (select.selectedOptions[0]?.disabled) return;
             void perform(async (signal) => {
                 decodeSaved(
                     await packRequest(actions, "/selection", signal, {

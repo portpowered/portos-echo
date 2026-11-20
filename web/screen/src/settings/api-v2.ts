@@ -13,7 +13,7 @@ import {
     type Snapshot,
     type SnapshotV2,
 } from "./api";
-import type { PortosOperationV2 } from "./model";
+import type { OpenAiAccountV2, PortosOperationV2 } from "./model";
 
 export async function loadSettings(
     actions: string,
@@ -57,13 +57,14 @@ export async function readSettingsProgress(
     return decodeV2(await readResponse(response, 2));
 }
 
-export async function operatePortos(
+export async function operateAccount(
     actions: string,
+    account: "openai" | "portos",
     signal: AbortSignal,
     body: PortosOperationV2,
 ) {
     const response = await send(
-        settingsUrl(actions, "/portos", 2),
+        settingsUrl(actions, "/" + account, 2),
         signal,
         "POST",
         body,
@@ -76,6 +77,31 @@ export async function operatePortos(
     assertShape(receipt, ["version", "operation"]);
     if (receipt.version !== 2 || receipt.operation !== body.operation)
         invalid();
+}
+
+export async function readOpenAI(actions: string, signal: AbortSignal) {
+    const response = await send(
+        settingsUrl(actions, "/openai", 2),
+        signal,
+        "GET",
+    );
+    if (response.status === 404) return undefined;
+    const data = record(await readResponse(response, 2));
+    assertShape(
+        data,
+        ["version", "link_status", "operation_state"],
+        ["challenge"],
+    );
+    if (
+        data.version !== 2 ||
+        !["checking", "unavailable", "link_required", "linked"].some(
+            (status) => status === data.link_status,
+        ) ||
+        !operationState(data.operation_state)
+    )
+        invalid();
+    if ("challenge" in data) validateChallenge(data.challenge);
+    return data as OpenAiAccountV2;
 }
 
 function invalid(): never {
@@ -142,9 +168,7 @@ function validatePortos(value: unknown) {
         !["unconfigured", "link_required", "linked", "relink_for_scope"].some(
             (state) => state === status.link_status,
         ) ||
-        !["idle", "linking", "unlinking", "expired", "denied", "failed"].some(
-            (state) => state === status.operation_state,
-        ) ||
+        !operationState(status.operation_state) ||
         typeof status.link_waiting_for_restart !== "boolean" ||
         !strings(status.scope_choices) ||
         !strings(status.tool_choices)
@@ -168,18 +192,26 @@ function validatePortos(value: unknown) {
         )
             invalid();
     }
-    if ("challenge" in status) {
-        const challenge = record(status.challenge);
-        assertShape(challenge, [
-            "verification_uri",
-            "user_code",
-            "expires_at_unix",
-        ]);
-        if (
-            typeof challenge.verification_uri !== "string" ||
-            typeof challenge.user_code !== "string" ||
-            !Number.isSafeInteger(challenge.expires_at_unix)
-        )
-            invalid();
-    }
+    if ("challenge" in status) validateChallenge(status.challenge);
+}
+
+function operationState(value: unknown) {
+    return ["idle", "linking", "unlinking", "expired", "denied", "failed"].some(
+        (state) => state === value,
+    );
+}
+
+function validateChallenge(value: unknown) {
+    const challenge = record(value);
+    assertShape(challenge, [
+        "verification_uri",
+        "user_code",
+        "expires_at_unix",
+    ]);
+    if (
+        typeof challenge.verification_uri !== "string" ||
+        typeof challenge.user_code !== "string" ||
+        !Number.isSafeInteger(challenge.expires_at_unix)
+    )
+        invalid();
 }

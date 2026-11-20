@@ -91,6 +91,9 @@ impl SettingsHost {
                     .unwrap_or_else(|error| error_reply_v2(&error));
             }
             SettingsOperation::PortosV2(request) => return self.portos_operation(request, None),
+            SettingsOperation::OpenAiSnapshot | SettingsOperation::OpenAiOperation(_) => {
+                return SettingsReply::Unavailable;
+            }
             SettingsOperation::Save(patch) => self.save(patch.settings).map(saved),
             SettingsOperation::Prompt(kind, prompt) => {
                 let kind = match kind {

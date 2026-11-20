@@ -3,7 +3,8 @@ use echo_screen_contract::settings_v1::{
     PromptSaveV1, SaveResultV1, SettingsErrorV1, SettingsPatchV1, SettingsSnapshotV1,
 };
 use echo_screen_contract::settings_v2::{
-    PortosOperationStartedV2, PortosOperationV2, SaveResultV2, SettingsErrorV2, SettingsPatchV2, SettingsSnapshotV2,
+    OpenAiAccountV2, PortosOperationStartedV2, PortosOperationV2, SaveResultV2, SettingsErrorV2, SettingsPatchV2,
+    SettingsSnapshotV2,
 };
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use schemars::{JsonSchema, schema_for};
@@ -53,7 +54,8 @@ fn settings_v2_schema_snapshots() -> Result<(), Box<dyn Error>> {
     snapshot::<SaveResultV2>("save_result_v2")?;
     snapshot::<SettingsErrorV2>("settings_error_v2")?;
     snapshot::<PortosOperationV2>("portos_operation_v2")?;
-    snapshot::<PortosOperationStartedV2>("portos_operation_started_v2")
+    snapshot::<PortosOperationStartedV2>("portos_operation_started_v2")?;
+    snapshot::<OpenAiAccountV2>("openai_account_v2")
 }
 
 #[test]

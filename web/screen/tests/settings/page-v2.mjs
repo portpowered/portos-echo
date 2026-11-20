@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { calls, pageFor } from "../browser.mjs";
+import { calls as allCalls, pageFor } from "../browser.mjs";
 import { response, snapshot } from "./page.mjs";
 import { snapshot as pixelSnapshot } from "../support/snapshot.mjs";
 
@@ -29,7 +29,7 @@ const tools = [
     "subscription_label_edit",
 ];
 
-function v2Snapshot() {
+export function v2Snapshot() {
     const { link_status: linkStatus, ...base } = snapshot;
     return {
         ...base,
@@ -70,18 +70,31 @@ function v2Snapshot() {
     };
 }
 
-async function open(t, settingsV2Body, settingsV2Status = 200) {
+async function calls(page) {
+    return (await allCalls(page)).filter(
+        ({ url }) => new URL(url).pathname !== "/settings/v2/openai",
+    );
+}
+
+export async function open(
+    t,
+    settingsV2Body,
+    settingsV2Status = 200,
+    options = {},
+) {
     const page = await pageFor(t, query, true, undefined, {
         viewport: { width: 960, height: 480 },
         hasTouch: true,
+        ...options.context,
     });
     await response(page, snapshot);
     await page.evaluate(
-        ({ settingsV2Body, settingsV2Status }) => {
+        ({ settingsV2Body, settingsV2Status, openAIAccount }) => {
             window.settingsV2Body = settingsV2Body;
             window.settingsV2Status = settingsV2Status;
+            window.openAIAccount = openAIAccount;
         },
-        { settingsV2Body, settingsV2Status },
+        { settingsV2Body, settingsV2Status, openAIAccount: options.openAI },
     );
     await page.getByRole("button", { name: "Settings", exact: true }).tap();
     return page;
@@ -98,13 +111,23 @@ test("settings V2 displays configured options and submits only changed requested
     );
     const back = page.getByRole("button", { name: "Back", exact: true });
     const openai = section(page, "OpenAI");
-    const portos = section(page, "Port OS");
-    for (const control of [back, openai, portos]) {
+    const portos = section(page, "Port OS permissions");
+    const unlink = page.getByRole("button", {
+        name: "Unlink Port OS",
+        exact: true,
+    });
+    for (const control of [back, unlink]) {
         const { y, height } = await control.boundingBox();
         assert.ok(height >= 64 && y + height <= 480);
     }
     await pixelSnapshot(page, "settings-v2-960x480");
     await back.press("Tab");
+    assert.equal(
+        await unlink.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    await unlink.press("Tab");
+    await page.getByRole("button", { name: "Load screen packs" }).press("Tab");
     assert.equal(
         await openai.evaluate((node) => node === document.activeElement),
         true,
@@ -292,7 +315,7 @@ test("settings V2 leaves a failed replacement pending when Settings reopens", as
     );
 });
 
-async function portosStatus(page, updates) {
+export async function portosStatus(page, updates) {
     await page.evaluate((updates) => {
         Object.assign(window.settingsV2Body.portos, updates);
     }, updates);
@@ -310,7 +333,6 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
     await section(page, "OpenAI").tap();
     const model = page.getByLabel("Delegated model");
     await model.fill("unsaved-local-model");
-    await section(page, "Port OS").tap();
     await response(page, { version: 2, operation: "link" }, 202);
     await page
         .getByRole("button", { name: "Link Port OS", exact: true })

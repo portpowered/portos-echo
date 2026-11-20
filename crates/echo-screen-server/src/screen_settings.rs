@@ -13,7 +13,8 @@ use echo_screen_contract::settings_v1::{
     PromptSaveV1, SaveResultV1, SettingsErrorV1, SettingsPatchV1, SettingsSnapshotV1,
 };
 use echo_screen_contract::settings_v2::{
-    PortosOperationStartedV2, PortosOperationV2, SaveResultV2, SettingsErrorV2, SettingsPatchV2, SettingsSnapshotV2,
+    OpenAiAccountV2, PortosOperationStartedV2, PortosOperationV2, SaveResultV2, SettingsErrorV2, SettingsPatchV2,
+    SettingsSnapshotV2,
 };
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
@@ -38,6 +39,8 @@ pub enum SettingsOperation {
     Save(SettingsPatchV1),
     SaveV2(SettingsPatchV2),
     PortosV2(PortosOperationV2),
+    OpenAiSnapshot,
+    OpenAiOperation(PortosOperationV2),
     Prompt(PromptKind, PromptSaveV1),
 }
 
@@ -48,9 +51,10 @@ pub enum SettingsReply {
     SavedV2(SaveResultV2),
     InvalidV2(SettingsErrorV2),
     PersistenceV2(SettingsErrorV2),
-    PortosStarted(PortosOperationStartedV2),
-    PortosConflict(SettingsErrorV2),
-    PortosUnavailable,
+    OpenAiSnapshot(OpenAiAccountV2),
+    AccountStarted(PortosOperationStartedV2),
+    AccountConflict(SettingsErrorV2),
+    Unavailable,
     Packs(crate::PackCatalog),
     InvalidPackSelection,
     Saved(SaveResultV1),
@@ -75,9 +79,10 @@ impl SettingsReply {
             Self::SavedV2(value) => Json(value).into_response(),
             Self::InvalidV2(value) => (StatusCode::UNPROCESSABLE_ENTITY, Json(value)).into_response(),
             Self::PersistenceV2(value) => (StatusCode::INTERNAL_SERVER_ERROR, Json(value)).into_response(),
-            Self::PortosStarted(value) => (StatusCode::ACCEPTED, Json(value)).into_response(),
-            Self::PortosConflict(value) => (StatusCode::CONFLICT, Json(value)).into_response(),
-            Self::PortosUnavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            Self::OpenAiSnapshot(value) => Json(value).into_response(),
+            Self::AccountStarted(value) => (StatusCode::ACCEPTED, Json(value)).into_response(),
+            Self::AccountConflict(value) => (StatusCode::CONFLICT, Json(value)).into_response(),
+            Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
             Self::Saved(value) | Self::PackSaved(value, _, _) => Json(value).into_response(),
             Self::Invalid(value) => (StatusCode::UNPROCESSABLE_ENTITY, Json(value)).into_response(),
             Self::Persistence(value) => (StatusCode::INTERNAL_SERVER_ERROR, Json(value)).into_response(),

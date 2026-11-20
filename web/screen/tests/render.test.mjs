@@ -7,6 +7,7 @@ import { states, frame } from "./fixtures.mjs";
 import "./settings/usability.mjs";
 import "./settings/page.mjs";
 import "./settings/page-v2.mjs";
+import "./settings/accounts.mjs";
 import "./settings/packs.mjs";
 import "./packs/player.mjs";
 import "./packs/page.mjs";

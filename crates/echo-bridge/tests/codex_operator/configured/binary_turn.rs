@@ -74,8 +74,8 @@ async fn exercise(finish: Finish, delegated: bool) {
     ]);
     let mut process = Process::spawn(&mut command);
     let pid = process.child.id().unwrap();
-    let identity = process_identity(pid);
     let mut satellite = binary_ready(&listener, &mut process).await;
+    let identity = process_identity(pid);
     let control = fixture.control().await;
     wake(&mut satellite).await;
     let mut signal = BufReader::new(control);

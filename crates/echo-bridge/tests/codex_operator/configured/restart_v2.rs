@@ -156,3 +156,151 @@ session_listen_seconds = 4"#,
         assert!(!name.to_string_lossy().starts_with(".screen-save-"));
     }
 }
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt Linux echo-bridge, local Python and echo-lab OAuth"]
+async fn t3_settings_account_changes_reuse_the_credential_owners() {
+    let fixture = Fixture::new("chatgpt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let epoch = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+    let mock = MockPortos::bind(epoch).await.unwrap();
+    let base = configure(&fixture, listener.local_addr().unwrap().port(), mock.base());
+    let base = String::from_utf8(base).unwrap().replace(
+        r#"scopes = ["endpoint:read", "message:send"]"#,
+        r#"scopes = ["endpoint:read"]"#,
+    );
+    std::fs::write(fixture.directory.path().join("bridge.toml"), base).unwrap();
+    std::fs::write(fixture.home.join("mode"), "screen-account").unwrap();
+    std::fs::write(fixture.home.join("auth.json"), "synthetic-private-openai-value").unwrap();
+    let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
+    let mut first = restart::binary_ready(&listener, &mut process).await;
+    let url = settings_runtime_url(&fixture, "/settings/v2/openai");
+    let client = reqwest::Client::new();
+    assert_eq!(
+        snapshot(&client, &url).await,
+        json!({"version":2,"link_status":"linked","operation_state":"idle"})
+    );
+    unlink_openai(&client, &url).await;
+    let signed_out = wait_account(&client, &url, |state| state["link_status"] == "link_required").await;
+    assert_eq!(
+        signed_out,
+        json!({"version":2,"link_status":"link_required","operation_state":"idle"})
+    );
+    assert!(!fixture.home.join("auth.json").exists());
+    tokio::time::timeout(OBSERVATION_TIMEOUT, first.read_to_end(&mut vec![]))
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(
+        OBSERVATION_TIMEOUT,
+        super::super::settings_link::replacement_grant(&fixture, &mock, epoch),
+    )
+    .await
+    .unwrap();
+    link_openai(&fixture, &client, &url).await;
+    let second = restart::binary_ready(&listener, &mut process).await;
+    assert_eq!(
+        snapshot(&client, &url).await,
+        json!({"version":2,"link_status":"linked","operation_state":"idle"})
+    );
+    assert!(fixture.home.join("auth.json").is_file());
+    drop(process.input.take());
+    process.collect(0).await;
+    assert_eq!(process.stderr().await, "");
+    drop(second);
+    super::super::host::released(&fixture).await;
+    mock.shutdown().await.unwrap();
+    assert_account_owner_receipts(&fixture);
+}
+
+fn assert_account_owner_receipts(fixture: &Fixture) {
+    let methods = std::fs::read_to_string(fixture.home.join("methods")).unwrap();
+    let operations: Vec<_> = methods
+        .lines()
+        .filter(|method| matches!(*method, "account/logout" | "account/login/start"))
+        .collect();
+    assert_eq!(operations, ["account/logout", "account/login/start"]);
+    let rows = trace(&fixture.directory.path().join("trace"));
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["event"] == "mcp.operator.listening")
+            .count(),
+        1
+    );
+    let trace = serde_json::to_string(&rows).unwrap();
+    for private in [
+        "synthetic-private-openai-value",
+        "synthetic@example.invalid",
+        "local-login",
+        "TEST-CODE",
+    ] {
+        assert!(!trace.contains(private));
+    }
+    writeln!(std::io::stdout().lock(),
+        "OpenAI: linked -> link_required -> linked, logout=1 login=1, Wyoming generations=2; Port OS link/revoke while OpenAI signed out, one grant owner"
+    ).unwrap();
+}
+
+async fn unlink_openai(client: &reqwest::Client, url: &reqwest::Url) {
+    let unlink = |confirm| {
+        client
+            .post(url.clone())
+            .json(&json!({"version":2,"operation":"unlink","confirm":confirm}))
+    };
+    assert_eq!(
+        unlink(false).send().await.unwrap().status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        unlink(true)
+            .header("origin", "https://example.invalid")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    let receipt = unlink(true).send().await.unwrap();
+    assert_eq!(receipt.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(
+        receipt.json::<Value>().await.unwrap(),
+        json!({"version":2,"operation":"unlink"})
+    );
+}
+
+async fn link_openai(fixture: &Fixture, client: &reqwest::Client, url: &reqwest::Url) {
+    let start = || client.post(url.clone()).json(&json!({"version":2,"operation":"link"}));
+    let receipt = start().send().await.unwrap();
+    assert_eq!(receipt.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(
+        receipt.json::<Value>().await.unwrap(),
+        json!({"version":2,"operation":"link"})
+    );
+    let value = wait_account(client, url, |state| state.get("challenge").is_some()).await;
+    assert_eq!(value["operation_state"], "linking");
+    let expires = value["challenge"]["expires_at_unix"].as_u64().unwrap();
+    assert!((295..=300).contains(&(expires - std::time::UNIX_EPOCH.elapsed().unwrap().as_secs())));
+    assert_eq!(
+        value["challenge"],
+        json!({
+            "verification_uri":"http://127.0.0.1:12345/verify","user_code":"TEST-CODE","expires_at_unix":expires
+        })
+    );
+    assert_eq!(start().send().await.unwrap().status(), reqwest::StatusCode::CONFLICT);
+    fixture.control().await.write_all(b"success").await.unwrap();
+}
+
+async fn wait_account(client: &reqwest::Client, url: &reqwest::Url, ready: impl Fn(&Value) -> bool) -> Value {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        let mut interval = tokio::time::interval(crate::POLL_INTERVAL);
+        loop {
+            interval.tick().await;
+            let value = snapshot(client, url).await;
+            if ready(&value) {
+                return value;
+            }
+        }
+    })
+    .await
+    .unwrap()
+}

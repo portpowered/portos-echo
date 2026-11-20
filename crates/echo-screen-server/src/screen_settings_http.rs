@@ -73,6 +73,19 @@ pub(super) async fn portos_v2(State(state): State<HttpState>, request: Request) 
     .await
 }
 
+pub(super) async fn openai_v2(State(state): State<HttpState>, request: Request) -> Response {
+    read(state, request, SettingsOperation::OpenAiSnapshot).await
+}
+
+pub(super) async fn openai_operation_v2(State(state): State<HttpState>, request: Request) -> Response {
+    submit(state, request, 1024, |bytes| {
+        serde_json::from_slice(bytes)
+            .ok()
+            .map(SettingsOperation::OpenAiOperation)
+    })
+    .await
+}
+
 pub(super) async fn prompt(State(state): State<HttpState>, Path(kind): Path<String>, request: Request) -> Response {
     if let Err(status) = guard(&state, request.uri(), request.headers()).await {
         return status.into_response();

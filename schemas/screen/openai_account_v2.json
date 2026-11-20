@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenAiAccountV2",
+  "type": "object",
+  "properties": {
+    "challenge": {
+      "$ref": "#/$defs/PortosChallengeV2"
+    },
+    "link_status": {
+      "$ref": "#/$defs/OpenAiLinkStatusV2"
+    },
+    "operation_state": {
+      "$ref": "#/$defs/PortosOperationStateV2"
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV2"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "link_status",
+    "operation_state"
+  ],
+  "$defs": {
+    "OpenAiLinkStatusV2": {
+      "type": "string",
+      "enum": [
+        "checking",
+        "unavailable",
+        "link_required",
+        "linked"
+      ]
+    },
+    "PortosChallengeV2": {
+      "type": "object",
+      "properties": {
+        "expires_at_unix": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "user_code": {
+          "type": "string"
+        },
+        "verification_uri": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "verification_uri",
+        "user_code",
+        "expires_at_unix"
+      ]
+    },
+    "PortosOperationStateV2": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "linking",
+        "unlinking",
+        "expired",
+        "denied",
+        "failed"
+      ]
+    },
+    "SettingsVersionV2": {
+      "type": "integer",
+      "const": 2
+    }
+  }
+}

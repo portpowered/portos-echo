@@ -28,26 +28,26 @@ impl SettingsHost {
             return SettingsReply::InvalidV2(operation_error("Port OS is unconfigured."));
         }
         let Some(grant) = grant else {
-            return SettingsReply::PortosUnavailable;
+            return SettingsReply::Unavailable;
         };
         let (operation, action) = match request {
             PortosOperationV2::Link { .. } => (Operation::Link, PortosActionV2::Link),
             PortosOperationV2::Unlink { .. } => (Operation::Unlink, PortosActionV2::Unlink),
         };
         if operation == Operation::Link && config.mcp.scopes != self.launch_scopes {
-            return SettingsReply::PortosConflict(operation_error(
+            return SettingsReply::AccountConflict(operation_error(
                 "Port OS linking is waiting for the bridge restart.",
             ));
         }
         match grant.start_screen_operation(operation) {
-            Ok(()) => SettingsReply::PortosStarted(PortosOperationStartedV2 {
+            Ok(()) => SettingsReply::AccountStarted(PortosOperationStartedV2 {
                 version: SettingsVersionV2,
                 operation: action,
             }),
             Err(StartError::Busy) => {
-                SettingsReply::PortosConflict(operation_error("A Port OS operation is already in progress."))
+                SettingsReply::AccountConflict(operation_error("A Port OS operation is already in progress."))
             }
-            Err(StartError::Closed) => SettingsReply::PortosUnavailable,
+            Err(StartError::Closed) => SettingsReply::Unavailable,
         }
     }
 
