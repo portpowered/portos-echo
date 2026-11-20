@@ -1,9 +1,11 @@
 //! Persistent voice session journeys on the delivered bridge and native host:
 //! listening between replies, idle expiry, and the agent's session tools.
+mod duplex;
 pub(in crate::lab_run) mod goodbye;
 mod goodbye_oracle;
 mod oracle;
 mod provider;
+pub(in crate::lab_run) mod time_answers;
 mod world;
 use super::{controlled, selectors};
 use crate::lab_run::{Driver, Step, run_options::Options, run_report::Artifacts};

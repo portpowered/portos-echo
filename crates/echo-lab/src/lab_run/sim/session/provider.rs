@@ -14,6 +14,7 @@ pub(super) enum Control {
     Audio(std::ops::Range<u16>),
     Transcripts(usize),
     Events(&'static str, Vec<Value>),
+    TimeQuestion(&'static str),
     ReleaseGoodbye,
     Quiesce(oneshot::Sender<()>),
     Close,
@@ -43,7 +44,7 @@ impl Provider {
         let (commands, receiver) = mpsc::channel(2);
         let (ticks, clock) = mpsc::channel(1);
         let (observe, observed) = watch::channel(
-            json!({"delegations":[],"appends":[],"models":[],"requests":[],"events_sent":[],"waiting":[]}),
+            json!({"delegations":[],"appends":[],"models":[],"requests":[],"events_sent":[],"waiting":[],"time_turns":[]}),
         );
         let task = tokio::spawn(owned(process, receiver, ticks, observe));
         Ok(Self {
@@ -186,6 +187,7 @@ async fn conversation(
             Some(Control::Delegate(turn)) => process.send(&json!({"delegate":turn})).await?,
             Some(Control::Transcripts(turn)) => process.send(&json!({"transcripts":turn})).await?,
             Some(Control::Events(tag, events)) => process.send(&json!({"tag":tag,"events":events})).await?,
+            Some(Control::TimeQuestion(text)) => process.send(&json!({"time_question":text})).await?,
             Some(Control::ReleaseGoodbye) => process.send(&json!({"release_goodbye":true})).await?,
             Some(Control::Audio(indices)) => sequence.send(peer, indices).await?,
             Some(Control::Quiesce(done)) => {
@@ -218,6 +220,7 @@ fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), Str
         Some("provider.transcripts" | "provider.heard") => return Ok(()),
         Some("provider.events_sent") => ("events_sent", value["tag"].clone()),
         Some("provider.waiting") => ("waiting", value["turn"].clone()),
+        Some("provider.time_turn") => ("time_turns", value.clone()),
         _ => return Err("session: provider contract failure".into()),
     };
     observed.send_modify(|state| {

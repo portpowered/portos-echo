@@ -1,23 +1,9 @@
 //! Live-originated goodbye through the shipped bridge and pinned app server.
 mod home;
-mod satellite;
-
-use super::provider::{Control, Provider};
-use crate::lab_run::{
-    Driver, Step,
-    run_options::Options,
-    run_report::Artifacts,
-    sim::{
-        controlled,
-        m2::codex::{collect_playout_for, config::Root},
-        process::Process,
-        production::{self, Screen},
-        trace::Trace,
-    },
-};
-use satellite::Satellite;
+use super::{duplex::World, provider::Control};
+use crate::lab_run::{Driver, Step, run_options::Options, run_report::Artifacts, sim::controlled};
 use serde_json::{Value, json};
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 use tokio::time::Instant;
 
 pub(super) const GOODBYE: &str = "okay thanks, bye";
@@ -136,7 +122,15 @@ impl Driver for Goodbye<'_> {
                 match step {
                     Step::SayText(text) if journey.utterances().get(self.turns) == Some(&text.as_str()) => {
                         if self.world.is_none() {
-                            self.world = Some(World::start(self.options, &artifacts.root, journey).await?);
+                            self.world = Some(
+                                World::start(
+                                    self.options,
+                                    artifacts.root.join("goodbye.private"),
+                                    &journey.script(),
+                                    |root| home::installed(root, journey.model()),
+                                )
+                                .await?,
+                            );
                         }
                         let world = self.world.as_mut().ok_or("goodbye: missing started world")?;
                         if let Some(result) = world.turn(journey, self.turns, text).await? {
@@ -160,7 +154,7 @@ impl Driver for Goodbye<'_> {
 
     fn close(&mut self, artifacts: &mut Artifacts) -> Result<(), String> {
         let world = self.world.take().ok_or("goodbye: world was not started")?;
-        let snapshot = self.runtime.block_on(world.close())?;
+        let (snapshot, _) = self.runtime.block_on(world.close())?;
         if self.turns != 2 || snapshot["calls"] != 1 || snapshot["sidebands"] != 1 || snapshot["external"] != 0 {
             return Err("goodbye: expected two scripted turns through one local Live call".into());
         }
@@ -173,54 +167,7 @@ impl Driver for Goodbye<'_> {
     }
 }
 
-struct World {
-    bridge: Process,
-    satellite: Satellite,
-    provider: Provider,
-    screen: Screen,
-    root: Root,
-    clock: Value,
-    trace: Trace,
-    run_id: &'static str,
-}
-
 impl World {
-    async fn start(options: &Options, output: &Path, journey: Journey) -> Result<Self, String> {
-        let bridge = options
-            .bridge
-            .as_deref()
-            .filter(|path| production::selected(path))
-            .ok_or("goodbye: requires the prebuilt production bridge")?;
-        let root = Root::create(output.join("goodbye.private"))?;
-        let satellite = Satellite::bind().await?;
-        let provider = Provider::start(&options.python, &journey.script()).await?;
-        let mut command = tokio::process::Command::new(bridge);
-        crate::lab_run::sim::m3::configure(&mut command, &root.0, satellite.address.port(), &provider.origin)?;
-        home::installed(&root.0, journey.model())?;
-        let mut bridge = Process::start(&mut command)?;
-        bridge.expect("bridge.ready").await?;
-        let trace = read_trace(&root.0)?;
-        let screen_address = trace
-            .records
-            .iter()
-            .find(|row| row["event"] == "screen.listening")
-            .and_then(|row| row["address"].as_str())
-            .ok_or("goodbye: missing paired screen")?
-            .parse()
-            .map_err(|_| "goodbye: invalid screen address")?;
-        let screen = Screen::connect(screen_address, true).await?;
-        Ok(Self {
-            bridge,
-            satellite,
-            provider,
-            screen,
-            root,
-            clock: Value::Null,
-            trace,
-            run_id: "run-1",
-        })
-    }
-
     async fn turn(&mut self, journey: Journey, index: usize, text: &str) -> Result<Option<Value>, String> {
         match journey {
             Journey::Goodbye | Journey::Native => self.wake_and_farewell(index, text).await.map(Some),
@@ -263,19 +210,6 @@ impl World {
         .await?;
         self.reply("It is noon.", 0, None).await?;
         self.farewell(1, false, endpoint).await.map(Some)
-    }
-
-    async fn connected(&mut self) -> Result<(), String> {
-        self.wait(
-            "Live connection",
-            |world| {
-                world.clock["states"]
-                    .as_array()
-                    .is_some_and(|states| states.iter().any(|row| row["state"]["state"] == "connected"))
-            },
-            20,
-        )
-        .await
     }
 
     async fn farewell(&mut self, turn: usize, late: bool, endpoint: u64) -> Result<Value, String> {
@@ -358,23 +292,8 @@ impl World {
     }
 
     async fn reply(&mut self, text: &'static str, index: usize, goodbye: Option<(usize, bool)>) -> Result<(), String> {
-        let start_bytes = self.satellite.observed.borrow().played;
         self.transcript("reply-delta", "assistant", text, false).await?;
-        // Control and RTP travel independently. Wait for the device's
-        // audio-start before sending the finite audio burst.
-        self.wait(
-            "Wyoming reply start",
-            |world| world.satellite.observed.borrow().reply_frames().len() == index + 1,
-            0,
-        )
-        .await?;
-        self.provider.control(Control::Audio(0..5)).await?;
-        self.wait(
-            "first reply PCM",
-            |world| world.satellite.observed.borrow().played >= start_bytes + 2_880,
-            0,
-        )
-        .await?;
+        let start_bytes = self.start_pcm(index).await?;
         if let Some((turn, false)) = goodbye {
             self.provider.control(Control::Delegate(turn)).await?;
             self.wait(
@@ -384,13 +303,7 @@ impl World {
             )
             .await?;
         }
-        self.provider.control(Control::Audio(5..11)).await?;
-        self.wait(
-            "farewell PCM tail",
-            |world| world.satellite.observed.borrow().played >= start_bytes + 8_640,
-            0,
-        )
-        .await?;
+        self.tail_pcm(start_bytes).await?;
         if let Some((_, false)) = goodbye {
             self.wait(
                 "early session receipt",
@@ -399,88 +312,6 @@ impl World {
             )
             .await?;
         }
-        let played = self.count("reply.played");
-        self.transcript("reply-done", "assistant", text, true).await?;
-        self.wait(
-            "device and bridge Played",
-            |world| {
-                world.count("reply.played") == played + 1
-                    && world.satellite.observed.borrow().replies_played() == index + 1
-            },
-            20,
-        )
-        .await
+        self.played(index, text).await
     }
-
-    async fn transcript(&self, tag: &'static str, role: &str, text: &str, done: bool) -> Result<(), String> {
-        let kind = if role == "user" {
-            "input_transcript.added"
-        } else {
-            "output_transcript.added"
-        };
-        let event = if done {
-            json!({"type":"turn.done","turn":{"role":role,"transcript":text}})
-        } else {
-            json!({"type":kind,"item":{"text":text}})
-        };
-        self.provider.control(Control::Events(tag, vec![event])).await
-    }
-
-    fn count(&self, event: &str) -> usize {
-        self.trace
-            .records
-            .iter()
-            .filter(|row| row["run_id"] == self.run_id && row["event"] == event)
-            .count()
-    }
-
-    fn epoch(&self) -> u64 {
-        self.clock["epoch_ms"].as_u64().unwrap_or(0)
-    }
-
-    async fn ready(&mut self) -> Result<(), String> {
-        self.screen.expect(&json!({"state":"speaking"})).await?;
-        self.screen.next().await?;
-        self.screen
-            .expect(&json!({"state":"ready","message":"Echo Live ready"}))
-            .await
-    }
-
-    async fn step(&mut self, milliseconds: u64) -> Result<(), String> {
-        collect_playout_for(&mut self.bridge, &mut self.clock, milliseconds, self.run_id).await?;
-        self.trace = read_trace(&self.root.0)?;
-        Ok(())
-    }
-
-    async fn wait(&mut self, phase: &str, done: impl Fn(&Self) -> bool, milliseconds: u64) -> Result<(), String> {
-        let expires = Instant::now() + Duration::from_secs(8);
-        while !done(self) {
-            if Instant::now() >= expires {
-                let events: Vec<_> = self.trace.records.iter().map(|row| &row["event"]).collect();
-                return Err(format!("goodbye: {phase} stalled; trace events={events:?}"));
-            }
-            self.provider
-                .tick()
-                .await
-                .map_err(|error| format!("goodbye: {phase}: {error}"))?;
-            self.step(milliseconds).await?;
-        }
-        Ok(())
-    }
-
-    async fn close(mut self) -> Result<Value, String> {
-        let quiet = self.provider.quiesce().await;
-        let bridge = self.bridge.close().await;
-        let satellite = self.satellite.close().await;
-        let provider = self.provider.close().await;
-        let snapshot = bridge.and(satellite).and(provider)?;
-        quiet.map(|()| snapshot)
-    }
-}
-
-fn read_trace(root: &Path) -> Result<Trace, String> {
-    let bytes = std::fs::read(root.join("bridge.private.jsonl")).map_err(|_| "goodbye: missing bridge trace")?;
-    let mut trace = Trace::default();
-    trace.append(&bytes)?;
-    Ok(trace)
 }

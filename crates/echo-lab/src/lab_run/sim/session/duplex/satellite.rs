@@ -13,7 +13,7 @@ use tokio::{
 
 type Input = (bool, oneshot::Sender<Result<(), String>>);
 
-pub(super) struct Satellite {
+pub(in crate::lab_run::sim::session) struct Satellite {
     pub address: SocketAddr,
     pub observed: watch::Receiver<Timing>,
     inputs: mpsc::Sender<Input>,
@@ -24,12 +24,12 @@ impl Satellite {
     pub async fn bind() -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .map_err(|_| "goodbye: Wyoming bind failed")?;
-        let address = listener.local_addr().map_err(|_| "goodbye: missing Wyoming address")?;
+            .map_err(|_| "duplex: Wyoming bind failed")?;
+        let address = listener.local_addr().map_err(|_| "duplex: missing Wyoming address")?;
         let (observe, observed) = watch::channel(Timing::default());
         let (inputs, receive) = mpsc::channel(1);
         let task = tokio::spawn(async move {
-            let (peer, _) = listener.accept().await.map_err(|_| "goodbye: Wyoming accept failed")?;
+            let (peer, _) = listener.accept().await.map_err(|_| "duplex: Wyoming accept failed")?;
             serve(peer, receive, observe).await
         });
         Ok(Self {
@@ -45,8 +45,8 @@ impl Satellite {
         self.inputs
             .send((wake, sent))
             .await
-            .map_err(|_| "goodbye: Wyoming peer ended")?;
-        received.await.map_err(|_| "goodbye: missing capture receipt")?
+            .map_err(|_| "duplex: Wyoming peer ended")?;
+        received.await.map_err(|_| "duplex: missing capture receipt")?
     }
 
     pub async fn close(&mut self) -> Result<(), String> {
@@ -54,7 +54,7 @@ impl Satellite {
         match (&mut self.task).await {
             Ok(result) => result,
             Err(error) if error.is_cancelled() => Ok(()),
-            Err(_) => Err("goodbye: Wyoming peer failed".into()),
+            Err(_) => Err("duplex: Wyoming peer failed".into()),
         }
     }
 }
@@ -158,6 +158,6 @@ async fn send(
     write
         .write_all(&encode(&event))
         .await
-        .map_err(|_| "goodbye: Wyoming write failed")?;
+        .map_err(|_| "duplex: Wyoming write failed")?;
     Ok(event)
 }

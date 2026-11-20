@@ -5,16 +5,19 @@ calls, then one spoken answer. Tool outputs are observed exactly as the pinned
 engine returns them, so the driver can check the bridge's own results.
 """
 import base64
+from datetime import datetime, timezone
 import hashlib
 import http.server
 import json
 from pathlib import Path
 import queue
+import re
 import select
 import socket
 import struct
 import sys
 import threading
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'm4' / 'codex'))
 from tools_provider import function_tools, read_frame
@@ -25,8 +28,13 @@ heard = threading.Event()
 release_goodbye = threading.Event()
 wake_read, wake_write = socket.socketpair()
 output_lock = threading.Lock()
-observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'models': [], 'delegations': [], 'appends': []}
+observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'models': [], 'delegations': [], 'appends': [],
+            'model_requests': 0}
 script = None
+TIME_RULE = ('Always answer time, date, and day-of-week questions directly '
+             'from the call-start context and never hand them off.')
+UTC_CAVEAT = "When no operator time zone is configured, UTC does not establish the user's local time zone."
+SEARCH_GUIDANCE = 'When current facts need a lookup, the background agent can search the web'
 
 
 def emit(value):
@@ -48,6 +56,7 @@ class Script:
     def __init__(self, turns):
         self.turns = turns
         self.step = 0
+        self.instructions = ''
 
     def turn(self):
         return len(observed['delegations']) - 1
@@ -130,7 +139,7 @@ class Script:
             'bridge tools are not direct declarations: ' + json.dumps(names)
         return blocks[0][0]['tools'][len(wrappers):] + function_tools([])[-1:]
 
-    def begin(self, turn):
+    def begin(self, turn, request=None):
         assert turn == len(observed['delegations']), 'unexpected delegation identity'
         if turn:
             assert self.step == len(self.turns[turn - 1]), 'overlapping delegation'
@@ -141,7 +150,8 @@ class Script:
         observed['delegations'].append(name)
         return {'type': 'delegation.created', 'item': {
             'type': 'delegation', 'target': 'client', 'id': name,
-            'content': [{'type': 'input_text', 'text': self.turns[turn][0].get('request', f'Answer session turn {turn}.')}]}}
+            'content': [{'type': 'input_text', 'text': request or self.turns[turn][0].get(
+                'request', f'Answer session turn {turn}.')}]}}
 
     def append(self, value):
         turn = self.turn()
@@ -158,6 +168,52 @@ class Script:
             values.append({'type': kind + '_transcript.added', 'item': {'text': text}})
             values.append({'type': 'turn.done', 'turn': {'role': role, 'transcript': text}})
         return values
+
+
+def time_reply(instructions, question):
+    """Model the direct path from the last context line of the actual call POST."""
+    base, _, context = instructions.rpartition('\n')
+    match = re.fullmatch(r'\[Call-start context: (\d{4}-\d{2}-\d{2}) ([A-Za-z]+) '
+                         r'(\d{2}:\d{2}:\d{2}) UTC\+00:00; (.+)\]', context)
+    assert match, 'missing or malformed call-start context'
+    date, weekday, time, suffix = match.groups()
+    utc = datetime.fromisoformat(f'{date}T{time}').replace(tzinfo=timezone.utc)
+    assert utc.strftime('%A') == weekday, 'wrong UTC weekday'
+    zone = 'America/Los_Angeles'
+    if suffix == f'operator time zone: {zone}; answer time questions in {zone}':
+        local = utc.astimezone(ZoneInfo(zone))
+        replies = {
+            'What time is it?': local.strftime('%H:%M'),
+            "What is today's date?": local.date().isoformat(),
+            'What day of the week is it?': local.strftime('%A'),
+        }
+        assert SEARCH_GUIDANCE in base, 'expected the installed-style example voice prompt'
+    else:
+        assert suffix == 'local offset unavailable', 'unexpected time zone context'
+        assert SEARCH_GUIDANCE not in base, 'expected the built-in voice prompt'
+        replies = {'What time is it in my time zone?':
+                   f"{utc:%H:%M} UTC. I don't know your local time zone."}
+    assert question in replies, 'unexpected question for the received time context'
+    if TIME_RULE not in base:
+        return context, None
+    assert UTC_CAVEAT in base, 'missing conditional UTC caveat'
+    return context, replies[question]
+
+
+def send_delegation(connection, value):
+    frame(connection, value)
+    emit({'event': 'provider.delegation', 'delegation_id': value['item']['id'],
+          'request': value['item']['content'][0]['text']})
+
+
+def answer_time(connection, question):
+    context, answer = time_reply(script.instructions, question)
+    frame(connection, {'type': 'turn.done', 'turn': {'role': 'user', 'transcript': question}})
+    if answer is None:
+        send_delegation(connection, script.begin(0, question))
+    else:
+        frame(connection, {'type': 'output_transcript.added', 'item': {'text': answer}})
+    emit({'event': 'provider.time_turn', 'question': question, 'context': context, 'answer': answer})
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -183,6 +239,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         if self.path == '/v1/responses' and script is not None:
+            observed['model_requests'] += 1
             try:
                 self.respond(200, script.respond(body), 'text/event-stream')
             except AssertionError as error:
@@ -193,8 +250,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             observed['external'] += 1
             self.respond(403, b'{}')
             return
+        script.instructions = body.get('session', {}).get('instructions', '')
         if script and any('request' in turn[0] for turn in script.turns):
-            if 'hand off once so the background agent ends the session' not in body['session'].get('instructions', ''):
+            if 'hand off once so the background agent ends the session' not in script.instructions:
                 emit({'event': 'provider.failure', 'failure': 'missing goodbye Live prompt'})
         observed['calls'] += 1
         emit({'event': 'provider.offer', 'offer': body['sdp']})
@@ -235,10 +293,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     assert wake_read.recv(1) == b'e'
                     command = commands.get_nowait()
                     if 'delegate' in command:
-                        value = script.begin(command['delegate'])
-                        frame(self.connection, value)
-                        emit({'event': 'provider.delegation', 'delegation_id': value['item']['id'],
-                              'request': value['item']['content'][0]['text']})
+                        send_delegation(self.connection, script.begin(command['delegate']))
+                    elif 'time_question' in command:
+                        answer_time(self.connection, command['time_question'])
                     elif 'events' in command:
                         for value in command['events']:
                             frame(self.connection, value)
@@ -255,6 +312,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         emit({'event': 'provider.transcripts', 'turn': command['transcripts']})
         except (OSError, EOFError):
             pass
+        except (AssertionError, ValueError) as error:
+            emit({'event': 'provider.failure', 'failure': str(error)})
         self.close_connection = True
 
 
@@ -270,7 +329,7 @@ try:
         elif 'script' in command:
             assert script is None
             script = Script(command['script'])
-        elif 'delegate' in command or 'transcripts' in command or 'events' in command:
+        elif any(key in command for key in ('delegate', 'transcripts', 'events', 'time_question')):
             commands.put(command)
             wake_write.sendall(b'e')
         elif command == {'release_goodbye': True}:
