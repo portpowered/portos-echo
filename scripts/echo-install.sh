@@ -88,7 +88,6 @@ Linux only; requires adb on PATH and exactly one ready device with hassmic.
 --force: replace bridge.toml only; existing prompts are always retained.
 --purge: also remove private/ and home/ after a verified stop.
 Device root: /data/local/echo-bridge
-Artifacts: bin/echo-bridge, bin/codex-app-server, bin/cacert.pem
 Config: private/bridge.toml (0600); private/ and home/ are 0700.
 Config must select [codex] launch = "standalone",
 binary = "/data/local/echo-bridge/bin/codex-app-server",
@@ -266,9 +265,9 @@ for p in launch.sh bridge.log bridge.toml bridge.trace; do test ! -L '$device/pr
 if test -d '$device/private/run'; then
   for p in stdin control stop finished deadline log-inode log-prefix; do test ! -L '$device/private/run/'\$p || exit 1; done
 fi"
-release_guard
 release_metadata
 versions=$(cat "$log")
+release_guard
 if [ "$command_name" = status ]; then
   [ -z "$versions" ] || printf '%s\n' "$versions"
   # Read-only observation. Optional unsupported/missing proc data is explicit.
@@ -318,9 +317,9 @@ run_adb shell "umask 077; mkdir '$lock'"
 locked=true
 # Reobserve after locking: a competing start may have completed during validation.
 process_state
-release_guard
 release_metadata
 versions=$(cat "$log")
+release_guard
 case $command_name in install | start) [ "$running" = 0 ] || fail 'bridge is already running; stop first' ;; esac
 stop_bridge() {
   run_adb shell "$close_stdin"
@@ -439,7 +438,8 @@ while test \"\$(date +%s)\" -lt \"\$end\"; do
   test \"\$(stat -c %i /data/local/hassmic/boot.log)\" = \"\$inode\" || exit 1
   prefix=\$(head -c \"\$bytes\" /data/local/hassmic/boot.log | cksum)
   test \"\$prefix\" = \"\$checksum \$bytes\" || exit 1
-  if ps -A -o PID,NAME | awk '\$2 == \"echo-bridge\" { found=1 } END { exit !found }' &&
+  users=\$(ps -A -o PID,USER,NAME)
+  if printf '%s\\n' \"\$users\" | awk '\$3 == \"echo-bridge\" { count++; if (\$2 != \"nobody\" && \$2 != 9999) bad=1 } END { exit count != 1 || bad }' &&
     tail -c +\$((bytes + 1)) /data/local/hassmic/boot.log | grep -q 'client connected'; then
     test \"\$(date +%s)\" -lt \"\$end\" || exit 1
     exit 0

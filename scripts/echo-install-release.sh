@@ -42,6 +42,12 @@ release_guard() {
       test -d \"\$p\" || test \"\$(stat -c %h \"\$p\")\" = 1 || exit 1
     done' sh {} + || exit 1
 done
+for name in pending metadata observed; do
+  test ! -e '${device:?}/releases/'\$name || test -f '${device:?}/releases/'\$name || exit 1
+done
+for name in previous stage retired; do
+  test ! -e '${device:?}/releases/'\$name || test -d '${device:?}/releases/'\$name || exit 1
+done
 test ! -L '${device:?}/MANIFEST'
 test ! -e '${device:?}/MANIFEST' || test -f '${device:?}/MANIFEST'"
   case ${command_name:?} in install | rollback | stop | uninstall) return ;; esac

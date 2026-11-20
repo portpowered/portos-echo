@@ -276,6 +276,15 @@ def lifecycle_cases():
         require((box.device / "private/bridge.toml").exists(), "failed stop removed private state")
         require(not any(call[0] == "push" or "kill " in " ".join(call)
                         for call in box.calls()[before:]), "persistent child replaced or signalled")
+    for user in ("root", "0", "unknown"):
+        with Sandbox() as box:
+            prepare_lifecycle(box)
+            (box.root / "process-user").write_text(user)
+            index = len(box.calls())
+            box.run(["start"], 1)
+            require(not any("kill " in " ".join(call) for call in box.calls()[index:]),
+                    "unsafe startup identity signalled a process")
+            box.run(["stop"])
     concurrent_cases()
     interrupted_cases()
     print("F09 F10 F11 F12 F14 F15 F16: PASS")
