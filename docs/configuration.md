@@ -46,10 +46,9 @@ the validated base remains active and a warning is presented. An invalid base re
 The operator account/link commands load base directly; the voice runtime loads the effective configuration.
 
 Voice and cap edits persist first, then request replacement at an idle/between-call boundary.
-Screen-pack selection saves use the same atomic writer and never request or retry replacement.
-Catalog and selection persistence are implemented; visible pack playback and hot reload remain pending
-(see [screen packs](screen-packs.md)). They do not interrupt
-an active conversation. Pending/applied and failed-restart state are shown on screen. After replacement failure,
+They do not interrupt an active conversation. Screen-pack selection saves use the same atomic writer
+and never request or retry replacement. Catalog and selection persistence are implemented; visible
+pack playback and hot reload remain pending (see [screen packs](screen-packs.md)). Pending/applied and failed-restart state are shown on screen. After replacement failure,
 the old active configuration remains usable; a later explicit stop/start loads the saved overlay.
 Other base edits need restart. To remove an override, stop and edit/remove the corresponding overlay entry;
 changing the base alone does not win over a saved screen value.
@@ -178,8 +177,8 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `screen` | Required screen transport table. | restart / no |
 | `screen.listen` | Socket address; decoder defaults to all IPv4 interfaces on port 16900. Runtime device config must use 127.0.0.1:16900. | restart / no |
 | `screen.pairing_token_file` | Required literal private token-file path. | restart / no |
-| `screen.packs` | Optional pinned screen archive list, default `[]`; each entry has exactly HTTPS `url` and 64-hex `sha256`. Requires home when nonempty; background installation uses only `codex.ca_file` roots. See [screen packs](screen-packs.md). |
-| `screen_pack` | Sparse settings.toml root only: omitted chooses highest installed template, empty string disables packs, exact local name or name@version selects installed data. Never triggers a voice restart. |
+| `screen.packs` | Optional pinned screen archive list, default `[]`; each entry has exactly HTTPS `url` and 64-hex `sha256`. Requires home when nonempty; background installation uses only `codex.ca_file` roots. See [screen packs](screen-packs.md). | restart / no |
+| `screen_pack` | Sparse settings.toml root only: omitted chooses highest installed template, empty string disables packs, exact local name or name@version selects installed data. Never triggers a voice restart. | selection save / no |
 | `audit` | Required audit table. | restart / no |
 | `audit.log_dir` | Required literal directory path; runtime creates private audit files. | restart / no |
 | `trace` | Optional private delegation trace table; omitted or empty uses defaults. Remove before restoring an older binary. | restart / no |
