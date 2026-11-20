@@ -324,6 +324,7 @@ fn shared_sim_provisioning_requires_each_exact_host_step() {
         "    - name: Host build dependencies\n",
         "        path: .cache/apt-archives\n",
         "        sudo apt-get update\n",
+        "        if ! { sudo apt-get install -y ./.cache/apt-archives/*.deb && dpkg -s libopus-dev zlib1g-dev >/dev/null; }; then\n",
         "        sudo apt-get install -y -o Dir::Cache::archives=\"$PWD/.cache/apt-archives\" -o APT::Keep-Downloaded-Packages=true libopus-dev zlib1g-dev\n",
         "        path: .cache/hassmic-host\n",
         "        key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n",
@@ -357,4 +358,25 @@ fn shared_sim_provisioning_requires_each_exact_host_step() {
         let error = shared::check_setup(&sim, &changed).unwrap_err();
         assert!(error.contains("unsupported shared simulation caller"), "{error}");
     }
+}
+#[test]
+fn deferred_gates_still_run_after_any_result_of_their_anchor() {
+    let (_, workflow) = fixture();
+    for name in shards::DEFERRED {
+        let block = job(name, GATES.iter().find(|(gate, _)| *gate == name).unwrap().1);
+        for (from, to) in [
+            ("    if: ${{ !cancelled() }}\n", ""),
+            ("${{ !cancelled() }}", "success()"),
+            ("[build-host-workspace]", "[test-unit]"),
+            ("    needs: [build-host-workspace]\n", ""),
+        ] {
+            assert_job_rejected(&workflow, &block, &block.replace(from, to), name);
+        }
+    }
+    let lint = job("lint-rust", "lint-rust");
+    let deferred = lint.replace(
+        "    runs-on:",
+        "    needs: [build-host-workspace]\n    if: ${{ !cancelled() }}\n    runs-on:",
+    );
+    assert_job_rejected(&workflow, &lint, &deferred, "lint-rust");
 }

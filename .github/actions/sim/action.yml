@@ -11,8 +11,10 @@ runs:
       shell: sh
       run: |
         mkdir -p .cache/apt-archives/partial
-        sudo apt-get update
-        sudo apt-get install -y -o Dir::Cache::archives="$PWD/.cache/apt-archives" -o APT::Keep-Downloaded-Packages=true libopus-dev zlib1g-dev
+        if ! { sudo apt-get install -y ./.cache/apt-archives/*.deb && dpkg -s libopus-dev zlib1g-dev >/dev/null; }; then
+          sudo apt-get update
+          sudo apt-get install -y -o Dir::Cache::archives="$PWD/.cache/apt-archives" -o APT::Keep-Downloaded-Packages=true libopus-dev zlib1g-dev
+        fi
         sudo chown -R "$(id -u):$(id -g)" .cache/apt-archives
     - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:

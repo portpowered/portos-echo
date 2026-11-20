@@ -22,14 +22,15 @@ pub const GATES: &[(&str, &str)] = &[
 ];
 const PREFIX: &str = "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\npermissions:\n  contents: read\ndefaults:\n  run:\n    shell: sh\njobs:\n";
 // Only the reviewed job grammar is accepted; aliases, matrices and conditional gates are not
-// equivalent. The split gates in `shards` are the one reviewed exception.
+// equivalent. The split and deferred gates in `shards` are the reviewed exceptions.
 fn job(name: &str, target: &str) -> String {
     if let Some(parts) = shards::parts(name) {
         return shards::gate(name, parts);
     }
     let timeout = if name == "lint-self-tests" { 20 } else { 10 };
     let mut block = format!(
-        "  {name}:\n    name: {name}\n    runs-on: ubuntu-latest\n    timeout-minutes: {timeout}\n    steps:\n{}      - name: {name}\n        run: make {target}\n",
+        "  {name}:\n    name: {name}\n{}    runs-on: ubuntu-latest\n    timeout-minutes: {timeout}\n    steps:\n{}      - name: {name}\n        run: make {target}\n",
+        shards::deferral(name),
         shards::setup(target, false)
     );
     let step = format!("      - name: {name}\n");

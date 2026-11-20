@@ -40,7 +40,9 @@ part jobs, which split their Make target into prerequisite targets or nextest an
 partitions; the job named after the gate passes only when every part passed. The part jobs
 (`test-unit-rust K/4`, `test-unit-screen`, `test-sim-scenarios K/2`, `test-sim-bridge`,
 `test-sim-components`, `test-sim-host K/3`, `build-host-workspace`, `test-echo-install K/2`)
-are not required checks themselves.
+are not required checks themselves. The free plan runs at most 20 jobs at once, so seven short
+gates (`format`, `lint-shape`, `lint-rules`, `lint-scripts-web`, `lint-ci-parity`, `test-contract`,
+`test-concurrency`) start when `build-host-workspace` ends, whatever its result.
 `make lint` also runs parity and both existing lint self-tests.
 Local execution needs the tools pinned in `.github/actions/setup/action.yml`, GNU Make,
 POSIX sh, Python 3.12, Node 24 and the stable compiler in `rust-toolchain.toml`.

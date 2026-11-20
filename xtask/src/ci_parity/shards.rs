@@ -6,8 +6,9 @@
 pub(super) const CHECKOUT: &str = "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n        with:\n          fetch-depth: 0\n          persist-credentials: false\n";
 pub(super) const SCREEN: &str = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: |\n            ~/.npm\n            ~/.cache/ms-playwright\n          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}\n      - name: Provision locked screen npm cache\n        run: npm --prefix web/screen ci --offline=false\n";
 pub(super) const CHROMIUM: &str = "      - name: Provision pinned screen Chromium\n        run: cd web/screen && npx --offline playwright install --with-deps chromium\n";
-// The host packages' .deb files are cached: some apt mirror downloads crawl at about 50 kB/s.
-pub(super) const HOST: &str = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/apt-archives\n          key: sim-apt-${{ runner.os }}-v1\n      - name: Host build dependencies\n        run: |\n          mkdir -p .cache/apt-archives/partial\n          sudo apt-get update\n          sudo apt-get install -y -o Dir::Cache::archives=\"$PWD/.cache/apt-archives\" -o APT::Keep-Downloaded-Packages=true libopus-dev zlib1g-dev\n          sudo chown -R \"$(id -u):$(id -g)\" .cache/apt-archives\n      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/hassmic-host\n          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n      - name: Build pinned hassmic-host\n        run: make hassmic-host\n";
+// The host packages' .deb files are cached and installed without the mirrors, which sometimes
+// crawl at about 50 kB/s; a missing or stale cache falls back to the mirrors.
+pub(super) const HOST: &str = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/apt-archives\n          key: sim-apt-${{ runner.os }}-v1\n      - name: Host build dependencies\n        run: |\n          mkdir -p .cache/apt-archives/partial\n          if ! { sudo apt-get install -y ./.cache/apt-archives/*.deb && dpkg -s libopus-dev zlib1g-dev >/dev/null; }; then\n            sudo apt-get update\n            sudo apt-get install -y -o Dir::Cache::archives=\"$PWD/.cache/apt-archives\" -o APT::Keep-Downloaded-Packages=true libopus-dev zlib1g-dev\n          fi\n          sudo chown -R \"$(id -u):$(id -g)\" .cache/apt-archives\n      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: .cache/hassmic-host\n          key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n      - name: Build pinned hassmic-host\n        run: make hassmic-host\n";
 pub(super) const CODEX: &str = "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n        with:\n          path: ~/.cache/portos-echo/codex\n          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}\n      - name: Provision verified pinned Codex\n        run: sh scripts/codex-app-server.sh\n";
 pub(super) const NAMESPACE: &str = "      - name: Enable isolated Codex network namespace\n        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n";
 const SANDBOX: &str = "      - name: Chromium sandbox user namespaces\n        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n";
@@ -38,6 +39,26 @@ pub(super) const SPLIT: [(&str, &[&str]); 4] = [
     ("test-sim-host", &["test-sim-host-shards"]),
     ("build-host", &["build-host-workspace", "test-echo-install-parts"]),
 ];
+
+// The free plan runs at most 20 jobs at once. The 15 part jobs and the five longest single gates
+// start first; these short gates start when `build-host-workspace` ends, whatever its result.
+pub(super) const DEFERRED: [&str; 7] = [
+    "format",
+    "lint-shape",
+    "lint-rules",
+    "lint-scripts-web",
+    "lint-ci-parity",
+    "test-contract",
+    "test-concurrency",
+];
+
+pub(super) fn deferral(name: &str) -> &'static str {
+    if DEFERRED.contains(&name) {
+        "    needs: [build-host-workspace]\n    if: ${{ !cancelled() }}\n"
+    } else {
+        ""
+    }
+}
 
 pub(super) fn parts(gate: &str) -> Option<&'static [&'static str]> {
     SPLIT.iter().find(|(name, _)| *name == gate).map(|(_, parts)| *parts)

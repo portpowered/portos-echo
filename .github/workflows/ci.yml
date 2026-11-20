@@ -162,6 +162,8 @@ jobs:
         run: make test-echo-install ECHO_INSTALL_PART=${{ matrix.shard }}/2
   format:
     name: format
+    needs: [build-host-workspace]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -198,6 +200,8 @@ jobs:
         run: make lint-rust
   lint-shape:
     name: lint-shape
+    needs: [build-host-workspace]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -226,6 +230,8 @@ jobs:
         run: make lint-deps
   lint-rules:
     name: lint-rules
+    needs: [build-host-workspace]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -240,6 +246,8 @@ jobs:
         run: make lint-rules
   lint-scripts-web:
     name: lint-scripts-web
+    needs: [build-host-workspace]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -276,6 +284,8 @@ jobs:
         run: make lint-docs
   lint-ci-parity:
     name: lint-ci-parity
+    needs: [build-host-workspace]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -313,6 +323,8 @@ jobs:
         run: test '${{ needs.test-unit-rust.result }}' = success && test '${{ needs.test-unit-screen.result }}' = success
   test-contract:
     name: test-contract
+    needs: [build-host-workspace]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -345,6 +357,8 @@ jobs:
         run: test '${{ needs.test-sim-host-shards.result }}' = success
   test-concurrency:
     name: test-concurrency
+    needs: [build-host-workspace]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

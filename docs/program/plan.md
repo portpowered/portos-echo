@@ -674,7 +674,8 @@ Nobody merges this repository with `--admin`: a red required check means the pul
 Every job calls a make target, and the make target is what an agent runs locally. `make ci` runs the same list in
 the same order. `xtask ci-parity` fails when `.github/workflows/ci.yml` and the `ci` target name different jobs.
 The four slowest gates run as parallel part jobs (nextest `--partition`, `echo-lab run --all --partition`, or one
-job per prerequisite target), and the check named after the gate fails unless every part passed.
+job per prerequisite target), and the check named after the gate fails unless every part passed. Seven short
+gates start after `build-host-workspace`, whatever its result, so the first wave fits the free plan's 20 jobs.
 
 Required on every pull request:
 
