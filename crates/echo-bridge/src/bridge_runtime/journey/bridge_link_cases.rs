@@ -62,16 +62,8 @@ async fn bridge_link_cancel_discards_backlog_once_excluding_evictions_and_tail()
         run,
         &mut live,
         &mut trace_writer,
-        "run-1",
-        (
-            false,
-            200,
-            0,
-            &fixture.screen,
-            &mut fixture.host,
-            &kill,
-            Instant::now() + Duration::from_secs(600),
-        ),
+        ("run-1", Instant::now() + Duration::from_secs(600)),
+        (false, 200, 0, &fixture.screen, &mut fixture.host, &kill),
     ));
     pending(journey.as_mut()).await;
     assert_eq!(frames(&observer).len(), 10);
@@ -121,16 +113,8 @@ async fn bridge_link_empty_and_one_frame_replies_require_actual_acknowledgment()
             run,
             &mut live,
             &mut trace_writer,
-            "run-1",
-            (
-                false,
-                200,
-                0,
-                &fixture.screen,
-                &mut fixture.host,
-                &kill,
-                Instant::now() + Duration::from_secs(600),
-            ),
+            ("run-1", Instant::now() + Duration::from_secs(600)),
+            (false, 200, 0, &fixture.screen, &mut fixture.host, &kill),
         ));
         pending(journey.as_mut()).await;
         assert_eq!(frames(&observer), vec![vec![0; 960]; usize::from(count)]);
@@ -182,16 +166,8 @@ async fn bridge_link_transport_protocol_and_timeout_never_claim_played() {
             run,
             &mut live,
             &mut trace_writer,
-            "run-1",
-            (
-                false,
-                200,
-                0,
-                &fixture.screen,
-                &mut fixture.host,
-                &kill,
-                Instant::now() + Duration::from_secs(600),
-            ),
+            ("run-1", Instant::now() + Duration::from_secs(600)),
+            (false, 200, 0, &fixture.screen, &mut fixture.host, &kill),
         ));
         pending(journey.as_mut()).await;
         if let Some(error) = failure {
@@ -272,16 +248,8 @@ async fn bridge_link_reused_call_isolates_different_and_empty_run_totals() {
             run,
             &mut live,
             &mut writer,
-            &id,
-            (
-                false,
-                200,
-                base,
-                &fixture.screen,
-                &mut fixture.host,
-                &kill,
-                Instant::now() + Duration::from_secs(600),
-            ),
+            (&id, Instant::now() + Duration::from_secs(600)),
+            (false, 200, base, &fixture.screen, &mut fixture.host, &kill),
         ));
         pending(journey.as_mut()).await;
         assert!(
@@ -335,16 +303,8 @@ async fn bridge_link_partial_send_failure_never_claims_completed() {
             run,
             &mut live,
             &mut writer,
-            "run-1",
-            (
-                true,
-                200,
-                0,
-                &fixture.screen,
-                &mut fixture.host,
-                &kill,
-                Instant::now() + Duration::from_secs(600)
-            )
+            ("run-1", Instant::now() + Duration::from_secs(600)),
+            (true, 200, 0, &fixture.screen, &mut fixture.host, &kill)
         )
         .await,
         Err(Error::Unavailable)

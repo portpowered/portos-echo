@@ -12,7 +12,7 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
     mut run: <L::Events as LinkEvents>::Run,
     call: &mut impl LivePort,
     trace: &mut Trace,
-    id: &str,
+    (id, cutoff): (&str, Instant),
     options: (
         bool,
         u16,
@@ -20,7 +20,6 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         &super::super::bridge_screen::Screen,
         &mut super::super::bridge_delegation::Host,
         &super::super::bridge_kill::Kill<'_>,
-        Instant,
     ),
 ) -> Result<(u64, bool), Error> {
     let mut source = Source::new()?;
@@ -37,7 +36,7 @@ pub(in crate::bridge_runtime) async fn run<L: EchoLink>(
         played: false,
         cancellation: Cancellation::Response,
         cut: None,
-        wait: bridge_timing::Wait::new(options.6),
+        wait: bridge_timing::Wait::new(cutoff),
         delegation: options.4,
         kill: options.5,
     };

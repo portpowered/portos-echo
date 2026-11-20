@@ -323,7 +323,7 @@ async fn turn<L: EchoLink>(
         run,
         call,
         trace,
-        id,
+        (id, cutoff),
         (
             options.lab,
             options.reply_lead_ms,
@@ -331,7 +331,6 @@ async fn turn<L: EchoLink>(
             screen,
             &mut *delegation,
             kill,
-            cutoff,
         ),
     )
     .await;

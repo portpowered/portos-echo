@@ -148,16 +148,8 @@ async fn bridge_link_wake_mic_paced_echo_acknowledgment_and_fresh_run() {
             run,
             &mut live,
             &mut trace_writer,
-            "run-1",
-            (
-                true,
-                200,
-                0,
-                &screen,
-                &mut host,
-                &kill,
-                Instant::now() + Duration::from_secs(600),
-            ),
+            ("run-1", Instant::now() + Duration::from_secs(600)),
+            (true, 200, 0, &screen, &mut host, &kill),
         ));
         pending(journey.as_mut()).await;
         assert_eq!(frames(&observer).len() - base, 10);
