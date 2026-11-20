@@ -99,7 +99,7 @@ impl Shell for Fake {
             return Err("synthetic staging failure".into());
         }
         if command.starts_with(IDENTITY)
-            && (command.contains("chmod ") || command.contains("stat -c"))
+            && (command.contains("chmod ") || command.contains("stat -c %u") || command.contains("stat -c %a"))
             && command.contains("bridge.toml")
             && world.owner != OWNER
         {
