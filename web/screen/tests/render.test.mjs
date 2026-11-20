@@ -6,6 +6,7 @@ import { pageFor, emit, calls, bounds } from "./browser.mjs";
 import { states, frame } from "./fixtures.mjs";
 import "./settings/usability.mjs";
 import "./settings/page.mjs";
+import "./settings/page-v2.mjs";
 import "./settings/packs.mjs";
 import "./packs/player.mjs";
 import "./packs/page.mjs";

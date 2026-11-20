@@ -66,6 +66,15 @@ impl Grant {
         }
     }
 
+    /// Project only the usable grant scopes from the existing owner.
+    pub(crate) async fn granted_scopes(&self) -> Option<Vec<String>> {
+        if self.blocked() {
+            return None;
+        }
+        let scopes = self.client.granted_scopes().await;
+        if self.blocked() { None } else { scopes }
+    }
+
     pub fn blocked(&self) -> bool {
         self.rejected.load(Ordering::Acquire)
     }

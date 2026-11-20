@@ -47,6 +47,10 @@ pub(crate) fn router(
         .route("/actions", post(actions_post))
         .route("/settings/v1", get(settings_http::snapshot).post(settings_http::save))
         .route("/settings/v1/prompts/{kind}", post(settings_http::prompt))
+        .route(
+            "/settings/v2",
+            get(settings_http::snapshot_v2).patch(settings_http::save_v2),
+        )
         .route("/screen-packs/v1", get(crate::packs::view::snapshot))
         .route("/screen-packs/v1/install", post(crate::packs::jobs::install))
         .route("/screen-packs/v1/selection", post(crate::packs::view::selection))

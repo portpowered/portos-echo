@@ -336,7 +336,7 @@ test("settings usability: Relink says what happens for each link status and neve
         assert.equal(await status(page), "Settings loaded");
         await response(page, undefined, 204);
         await page.getByRole("button", { name: "Relink", exact: true }).click();
-        assert.deepEqual((await calls(page)).slice(1), [
+        assert.deepEqual((await calls(page)).slice(2), [
             {
                 url: "http://127.0.0.1:4173/actions?token=synthetic-screen-pair",
                 method: "POST",

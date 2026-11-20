@@ -127,6 +127,20 @@ export async function pageFor(
                 headers: options.headers,
                 body: options.body,
             });
+            if (
+                new URL(url).pathname === "/settings/v2" &&
+                options.method === "GET" &&
+                window.settingsV2Status === undefined
+            )
+                return Promise.resolve({ status: 404 });
+            if (
+                new URL(url).pathname === "/settings/v2" &&
+                options.method === "GET"
+            )
+                return Promise.resolve({
+                    status: window.settingsV2Status,
+                    json: async () => window.settingsV2Body,
+                });
             if (window.postStatus === "reject")
                 return Promise.reject(new Error("controlled"));
             if (window.postStatus === "pending")

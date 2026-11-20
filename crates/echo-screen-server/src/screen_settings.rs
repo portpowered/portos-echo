@@ -12,6 +12,7 @@ use axum::{
 use echo_screen_contract::settings_v1::{
     PromptSaveV1, SaveResultV1, SettingsErrorV1, SettingsPatchV1, SettingsSnapshotV1,
 };
+use echo_screen_contract::settings_v2::{SaveResultV2, SettingsErrorV2, SettingsPatchV2, SettingsSnapshotV2};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
@@ -25,6 +26,7 @@ pub enum PromptKind {
 /// Decoded input, with no arbitrary key/path or executable surface.
 pub enum SettingsOperation {
     Snapshot,
+    SnapshotV2,
     PackCatalog(crate::PackCatalog),
     /// Settled local files, resolved by the same accepted settings owner.
     PackWatch(crate::PackCatalog, u64),
@@ -32,12 +34,17 @@ pub enum SettingsOperation {
     /// Settled fixed-home file read; the host rechecks its identity at commit.
     PackRefresh(crate::PackCatalog, crate::PackSettings),
     Save(SettingsPatchV1),
+    SaveV2(SettingsPatchV2),
     Prompt(PromptKind, PromptSaveV1),
 }
 
 /// Host diagnostics must contain only trusted field names and fixed categories.
 pub enum SettingsReply {
     Snapshot(SettingsSnapshotV1),
+    SnapshotV2(Box<SettingsSnapshotV2>),
+    SavedV2(SaveResultV2),
+    InvalidV2(SettingsErrorV2),
+    PersistenceV2(SettingsErrorV2),
     Packs(crate::PackCatalog),
     InvalidPackSelection,
     Saved(SaveResultV1),
@@ -58,6 +65,10 @@ impl SettingsReply {
             )
                 .into_response(),
             Self::Snapshot(value) => Json(value).into_response(),
+            Self::SnapshotV2(value) => Json(value).into_response(),
+            Self::SavedV2(value) => Json(value).into_response(),
+            Self::InvalidV2(value) => (StatusCode::UNPROCESSABLE_ENTITY, Json(value)).into_response(),
+            Self::PersistenceV2(value) => (StatusCode::INTERNAL_SERVER_ERROR, Json(value)).into_response(),
             Self::Saved(value) | Self::PackSaved(value, _, _) => Json(value).into_response(),
             Self::Invalid(value) => (StatusCode::UNPROCESSABLE_ENTITY, Json(value)).into_response(),
             Self::Persistence(value) => (StatusCode::INTERNAL_SERVER_ERROR, Json(value)).into_response(),
@@ -78,6 +89,12 @@ pub struct SettingsRequest {
 }
 
 impl SettingsRequest {
+    /// Only a V2 snapshot uses the passive current grant projection.
+    #[must_use]
+    pub fn reads_portos(&self) -> bool {
+        matches!(self.operation, SettingsOperation::SnapshotV2)
+    }
+
     /// Run one synchronous transaction while revocation and shutdown admission
     /// are serialized. The host must not schedule work outside this closure.
     /// A failed precommit check invokes no host code; there is no queued retry.

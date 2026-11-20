@@ -3,6 +3,8 @@
 use echo_config::{BridgeConfig, ConfigError, SettingsOverlay};
 use std::path::PathBuf;
 
+#[path = "settings_host/portos_permissions.rs"]
+pub(crate) mod portos_permissions;
 mod settings_atomic;
 mod settings_host;
 pub mod settings_process;
@@ -142,6 +144,12 @@ fn same_values(first: &BridgeConfig, second: &BridgeConfig) -> bool {
         && first.codex_voice() == second.codex_voice()
         && first.agent.daily_request_cap == second.agent.daily_request_cap
         && first.agent.max_tool_calls == second.agent.max_tool_calls
+        && first.codex.web_search == second.codex.web_search
+        && first.codex_model() == second.codex_model()
+        && first.codex.delegate_effort == second.codex.delegate_effort
+        && first.agent.task_deadline_seconds == second.agent.task_deadline_seconds
+        && first.home == second.home
+        && first.mcp == second.mcp
 }
 
 #[cfg(test)]

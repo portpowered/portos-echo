@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SettingsSnapshotV2",
+  "type": "object",
+  "properties": {
+    "allowed_voices": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bridge_version": {
+      "type": "string"
+    },
+    "portos": {
+      "$ref": "#/$defs/PortosStatusV2"
+    },
+    "prompts": {
+      "$ref": "#/$defs/PromptTextsV1"
+    },
+    "restart_pending": {
+      "type": "boolean"
+    },
+    "settings": {
+      "$ref": "#/$defs/SettingsValuesV2"
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV2"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "settings",
+    "allowed_voices",
+    "prompts",
+    "portos",
+    "bridge_version",
+    "restart_pending",
+    "warnings"
+  ],
+  "$defs": {
+    "AgentValuesV2": {
+      "type": "object",
+      "properties": {
+        "daily_request_cap": {
+          "$ref": "#/$defs/DailyCapV1"
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 32,
+          "minimum": 1
+        },
+        "task_deadline_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 600,
+          "minimum": 5
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "daily_request_cap",
+        "max_tool_calls",
+        "task_deadline_seconds"
+      ]
+    },
+    "CodexValuesV2": {
+      "type": "object",
+      "properties": {
+        "delegate_effort": {
+          "type": "string"
+        },
+        "delegate_model": {
+          "type": "string"
+        },
+        "voice": {
+          "type": "string"
+        },
+        "web_search": {
+          "$ref": "#/$defs/WebSearchV2"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "voice",
+        "web_search",
+        "delegate_model",
+        "delegate_effort"
+      ]
+    },
+    "DailyCapV1": {
+      "type": "string",
+      "maxLength": 19,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "HomeSettingsV2": {
+      "type": "object",
+      "properties": {
+        "agent_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HomeToolGroupV2"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "agent_tools"
+      ]
+    },
+    "HomeToolGroupV2": {
+      "type": "string",
+      "enum": [
+        "notes",
+        "prompts"
+      ]
+    },
+    "LinkStatusV2": {
+      "type": "string",
+      "enum": [
+        "unconfigured",
+        "link_required",
+        "linked",
+        "relink_for_scope"
+      ]
+    },
+    "PortosChallengeV2": {
+      "type": "object",
+      "properties": {
+        "expires_at_unix": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "user_code": {
+          "type": "string"
+        },
+        "verification_uri": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "verification_uri",
+        "user_code",
+        "expires_at_unix"
+      ]
+    },
+    "PortosOperationStateV2": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "linking",
+        "unlinking",
+        "expired",
+        "denied",
+        "failed"
+      ]
+    },
+    "PortosScopeV2": {
+      "type": "string",
+      "enum": [
+        "endpoint:read",
+        "endpoint:write",
+        "message:send",
+        "group:read",
+        "group:manage",
+        "subscription:read",
+        "subscription:write"
+      ]
+    },
+    "PortosServerV2": {
+      "type": "object",
+      "properties": {
+        "allow_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "granted_scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "requested_scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "url",
+        "requested_scopes",
+        "granted_scopes",
+        "allow_tools"
+      ]
+    },
+    "PortosStatusV2": {
+      "type": "object",
+      "properties": {
+        "challenge": {
+          "$ref": "#/$defs/PortosChallengeV2"
+        },
+        "link_status": {
+          "$ref": "#/$defs/LinkStatusV2"
+        },
+        "link_waiting_for_restart": {
+          "type": "boolean"
+        },
+        "operation_state": {
+          "$ref": "#/$defs/PortosOperationStateV2"
+        },
+        "scope_choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PortosScopeV2"
+          }
+        },
+        "server": {
+          "$ref": "#/$defs/PortosServerV2"
+        },
+        "tool_choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PortosToolV2"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "link_status",
+        "operation_state",
+        "link_waiting_for_restart",
+        "scope_choices",
+        "tool_choices"
+      ]
+    },
+    "PortosToolV2": {
+      "type": "string",
+      "enum": [
+        "control",
+        "endpoint_query",
+        "endpoint_show",
+        "endpoint_manage",
+        "group_query",
+        "group_manage",
+        "guide",
+        "subscription_list",
+        "subscription_inspect",
+        "subscription_cancel",
+        "subscription_label_edit"
+      ]
+    },
+    "PromptTextsV1": {
+      "type": "object",
+      "properties": {
+        "runner": {
+          "type": "string"
+        },
+        "voice": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "voice",
+        "runner"
+      ]
+    },
+    "SettingsValuesV2": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentValuesV2"
+        },
+        "codex": {
+          "$ref": "#/$defs/CodexValuesV2"
+        },
+        "home": {
+          "$ref": "#/$defs/HomeSettingsV2"
+        },
+        "voice": {
+          "$ref": "#/$defs/VoiceValuesV1"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "voice",
+        "codex",
+        "agent"
+      ]
+    },
+    "SettingsVersionV2": {
+      "type": "integer",
+      "const": 2
+    },
+    "VoiceValuesV1": {
+      "type": "object",
+      "properties": {
+        "session_listen_enabled": {
+          "type": "boolean"
+        },
+        "session_listen_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_listen_enabled",
+        "session_listen_seconds"
+      ]
+    },
+    "WebSearchV2": {
+      "type": "string",
+      "enum": [
+        "live",
+        "cached",
+        "disabled"
+      ]
+    }
+  }
+}

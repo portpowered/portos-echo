@@ -206,6 +206,49 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SettingsErrorV1' }
         '503': { description: Settings host absent, stopping, saturated or closed before commit; no queued retry }
+  /settings/v2:
+    get:
+      security: [{ pairingToken: [] }]
+      description: Accepted non-secret settings plus a passive Port OS projection and pending restart state. Success is no-store.
+      responses:
+        '200':
+          description: Version 2 settings snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsSnapshotV2' }
+        '401': { description: Invalid or revoked pairing token; empty body }
+        '403': { description: Supplied foreign Origin; empty body }
+        '503': { description: Settings host absent, stopping or saturated; empty body }
+    patch:
+      security: [{ pairingToken: [] }]
+      description: Sparse save with auth checked before decoding and again at commit. Successful permission withdrawals apply before the receipt. Uses the existing atomic 0600 settings.toml writer and idle restart gate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsPatchV2' }
+      responses:
+        '200':
+          description: Accepted save; restart_pending reports the pending boundary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SaveResultV2' }
+        '400': { description: Malformed JSON, wrong version, empty patch or section, unknown key or nonconforming shape; nothing written }
+        '401': { description: Invalid or revoked pairing token; empty body }
+        '403': { description: Supplied foreign Origin; empty body }
+        '413': { description: JSON body exceeds 65536 bytes; nothing written }
+        '415': { description: Content-Type is not application/json; nothing written }
+        '422':
+          description: Effective candidate rejected; previous accepted config retained
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV2' }
+        '500':
+          description: Fixed persistence error; uncertainty disclosed if rename already occurred
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV2' }
+        '503': { description: Settings host absent, stopping or saturated; no queued retry }
   /settings/v1/prompts/{kind}:
     post:
       security: [{ pairingToken: [] }]
@@ -400,6 +443,14 @@ components:
       properties:
         version: { type: integer, const: 1 }
         message: { type: string, description: Trusted field/file name and fixed category only; never submitted values or absolute paths }
+    SettingsSnapshotV2:
+      $ref: ../../schemas/screen/settings_snapshot_v2.json
+    SettingsPatchV2:
+      $ref: ../../schemas/screen/settings_patch_v2.json
+    SaveResultV2:
+      $ref: ../../schemas/screen/save_result_v2.json
+    SettingsErrorV2:
+      $ref: ../../schemas/screen/settings_error_v2.json
   responses:
     PackUnauthorized: { description: Missing, wrong, empty, duplicate or revoked token; empty body, no effect }
     PackForeignOrigin: { description: Supplied Origin differs from server origin; empty body, no effect }

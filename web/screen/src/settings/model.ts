@@ -1,5 +1,5 @@
-// Generated from schemas/screen/*_v1.json by tools/screen-schema.mjs.
-// Schema SHA-256: 9ac5c185d924a33e682e69333f6c2f1686623249c3cfcfd937c1f8f381aa4765
+// Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
+// Schema SHA-256: a2375ff7a2bee9aef6d79486f5022f4e145bfdbe28cb9327781886d8e2b8e183
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -51,3 +51,110 @@ export type SaveResultV1 = {
     restart_pending: boolean;
 };
 export type SettingsErrorV1 = { version: SettingsVersionV1; message: string };
+export type AgentValuesV2 = {
+    daily_request_cap: DailyCapV1;
+    max_tool_calls: number;
+    task_deadline_seconds: number;
+};
+export type CodexValuesV2 = {
+    voice: string;
+    web_search: WebSearchV2;
+    delegate_model: string;
+    delegate_effort: string;
+};
+export type HomeSettingsV2 = { agent_tools: Array<HomeToolGroupV2> };
+export type HomeToolGroupV2 = "notes" | "prompts";
+export type LinkStatusV2 =
+    "unconfigured" | "link_required" | "linked" | "relink_for_scope";
+export type PortosChallengeV2 = {
+    verification_uri: string;
+    user_code: string;
+    expires_at_unix: number;
+};
+export type PortosOperationStateV2 =
+    "idle" | "linking" | "unlinking" | "expired" | "denied" | "failed";
+export type PortosScopeV2 =
+    | "endpoint:read"
+    | "endpoint:write"
+    | "message:send"
+    | "group:read"
+    | "group:manage"
+    | "subscription:read"
+    | "subscription:write";
+export type PortosServerV2 = {
+    name: string;
+    url: string;
+    requested_scopes: Array<string>;
+    granted_scopes: Array<string>;
+    allow_tools: Array<string>;
+};
+export type PortosStatusV2 = {
+    link_status: LinkStatusV2;
+    operation_state: PortosOperationStateV2;
+    link_waiting_for_restart: boolean;
+    scope_choices: Array<PortosScopeV2>;
+    tool_choices: Array<PortosToolV2>;
+    challenge?: PortosChallengeV2;
+    server?: PortosServerV2;
+};
+export type PortosToolV2 =
+    | "control"
+    | "endpoint_query"
+    | "endpoint_show"
+    | "endpoint_manage"
+    | "group_query"
+    | "group_manage"
+    | "guide"
+    | "subscription_list"
+    | "subscription_inspect"
+    | "subscription_cancel"
+    | "subscription_label_edit";
+export type SettingsValuesV2 = {
+    voice: VoiceValuesV1;
+    codex: CodexValuesV2;
+    agent: AgentValuesV2;
+    home?: HomeSettingsV2;
+};
+export type SettingsVersionV2 = 2;
+export type WebSearchV2 = "live" | "cached" | "disabled";
+export type SettingsSnapshotV2 = {
+    version: SettingsVersionV2;
+    settings: SettingsValuesV2;
+    allowed_voices: Array<string>;
+    prompts: PromptTextsV1;
+    portos: PortosStatusV2;
+    bridge_version: string;
+    restart_pending: boolean;
+    warnings: Array<string>;
+};
+export type AgentPatchV2 = {
+    daily_request_cap?: DailyCapV1;
+    max_tool_calls?: number;
+    task_deadline_seconds?: number;
+};
+export type CodexPatchV2 = {
+    delegate_effort?: string;
+    delegate_model?: string;
+    voice?: string;
+    web_search?: WebSearchV2;
+};
+export type PortosPermissionsPatchV2 = {
+    allow_tools?: Array<PortosToolV2>;
+    scopes?: Array<PortosScopeV2>;
+};
+export type SettingsFieldsV2 = {
+    agent?: AgentPatchV2;
+    codex?: CodexPatchV2;
+    home?: HomeSettingsV2;
+    portos?: PortosPermissionsPatchV2;
+    voice?: VoicePatchV1;
+};
+export type SettingsPatchV2 = {
+    version: SettingsVersionV2;
+    settings: SettingsFieldsV2;
+};
+export type SaveResultV2 = {
+    version: SettingsVersionV2;
+    restart_pending: boolean;
+};
+export type SettingsErrorV2 = { version: SettingsVersionV2; message: string };

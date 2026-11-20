@@ -91,6 +91,36 @@ fn screen_settings_voices_preserve_precedence_and_the_pinned_default() {
 }
 
 #[test]
+fn screen_settings_empty_model_and_effort_select_pin_defaults_over_legacy_aliases() {
+    let mut base = BridgeConfig::from_toml_str(MINIMAL).unwrap();
+    base.agent.model = Some("agent-alias".into());
+    base.codex.model = Some("codex-alias".into());
+    base.codex.delegate_effort = Some("low".into());
+
+    let untouched = overlay("[agent]\nmax_tool_calls=4").apply_to(&base).unwrap();
+    assert_eq!(untouched.codex_model(), Some("codex-alias"));
+    assert_eq!(untouched.codex.delegate_effort.as_deref(), Some("low"));
+
+    let cleared = overlay("[codex]\ndelegate_model=''\ndelegate_effort=''");
+    let effective = cleared.apply_to(&base).unwrap();
+    assert_eq!(effective.codex_model(), None);
+    assert_eq!(effective.codex.delegate_effort, None);
+    assert_eq!(overlay(&cleared.to_toml_string().unwrap()), cleared);
+    assert_eq!(base.codex_model(), Some("codex-alias"));
+    assert_eq!(base.agent.model.as_deref(), Some("agent-alias"));
+}
+
+#[test]
+fn screen_settings_sparse_merge_cannot_encode_an_overlay_that_startup_would_refuse() {
+    let model = overlay(&format!("[codex]\ndelegate_model='{}'", "m".repeat(33_000)));
+    let effort = overlay(&format!("[codex]\ndelegate_effort='{}'", "e".repeat(33_000)));
+    assert_eq!(overlay(&model.to_toml_string().unwrap()), model);
+    assert_eq!(overlay(&effort.to_toml_string().unwrap()), effort);
+    let error = model.merge(&effort).to_toml_string().unwrap_err();
+    assert_eq!(error.to_string(), "settings.toml: overlay exceeds 65536 bytes");
+}
+
+#[test]
 fn screen_settings_range_boundaries_and_cross_field_validation_use_real_config() {
     let base = BridgeConfig::from_toml_str(MINIMAL).unwrap();
     for (setting, expected) in [
@@ -141,8 +171,7 @@ const INVALID_SETTINGS: &[(&str, &str)] = &[
     ("[SYNTHETIC_VALUE]\nkey='SYNTHETIC_VALUE'", "config: unknown field"),
     ("[voice]\nsession_max_seconds=600", "voice: unknown field"),
     ("[codex]\ninstructions='SYNTHETIC_VALUE'", "codex: unknown field"),
-    ("[agent]\ntask_deadline_seconds=30", "agent: unknown field"),
-    ("[home]\ndir='SYNTHETIC_VALUE'", "config: unknown field"),
+    ("[home]\ndir='SYNTHETIC_VALUE'", "home: unknown field"),
     ("[live]\nvoice='alloy'", "config: unknown field"),
     ("[screen]\nlisten='SYNTHETIC_VALUE'", "config: unknown field"),
     ("voice=[]", "voice: expected table"),
@@ -241,7 +270,7 @@ fn screen_settings_invalid_overlay_is_ignored_as_a_whole_with_safe_warning() {
         ),
         (
             b"[agent]\nmax_tool_calls=4\n[home]\ndir='SYNTHETIC_VALUE'".to_vec(),
-            "config: unknown field",
+            "home: unknown field",
         ),
         (vec![255], "settings.toml: expected UTF-8 overlay"),
         (vec![b' '; 65_537], "settings.toml: overlay exceeds 65536 bytes"),

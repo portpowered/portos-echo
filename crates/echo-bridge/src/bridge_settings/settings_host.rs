@@ -1,11 +1,14 @@
 //! Typed transactions for the bridge's single settings owner. No task or exec here.
-use super::{PromptKind, SettingsError, SettingsStore};
+use super::{PromptKind, SettingsError, SettingsStore, portos_permissions::PortosPermissions};
+#[path = "settings_host/settings_v2.rs"]
+mod settings_v2;
 use echo_config::{BridgeConfig, SettingsOverlay};
 use echo_screen_contract::settings_v1::{
     AgentValuesV1, CodexPatchV1, DailyCapV1, LinkStatusV1, PromptTextsV1, SaveResultV1, SettingsErrorV1,
     SettingsFieldsV1, SettingsSnapshotV1, SettingsValuesV1, SettingsVersionV1, VoiceValuesV1,
 };
 use echo_screen_server::{SettingsOperation, SettingsReply};
+use settings_v2::error_reply_v2;
 
 /// Serialized by the runtime's inbox. Construct with the original validated base,
 /// accepted startup overlay and admitted prompt texts, never the effective base.
@@ -14,6 +17,8 @@ pub struct SettingsHost {
     prompts: PromptTextsV1,
     warnings: Vec<String>,
     restart_pending: bool,
+    launch_scopes: Vec<String>,
+    permissions: PortosPermissions,
 }
 
 impl SettingsHost {
@@ -38,40 +43,53 @@ impl SettingsHost {
     ) -> Result<Self, SettingsError> {
         PromptKind::Voice.validate(&prompts.voice)?;
         PromptKind::Runner.validate(&prompts.runner)?;
+        let store = SettingsStore::open(base, overlay)?;
+        let launch_scopes = store.effective().mcp.scopes.clone();
+        let permissions = PortosPermissions::new(store.effective(), store.overlay.manages_portos());
         Ok(Self {
-            store: SettingsStore::open(base, overlay)?,
+            store,
+            launch_scopes,
+            permissions,
             prompts,
             warnings,
             restart_pending: false,
         })
     }
 
+    pub(super) fn permissions(&self) -> PortosPermissions {
+        self.permissions.clone()
+    }
+
     /// Call only inside `SettingsRequest::commit`; no detached work or retries.
     /// The returned pending flag records a request, not proof of an actual exec.
     pub fn transaction(&mut self, operation: SettingsOperation, link: LinkStatusV1) -> SettingsReply {
+        self.transaction_with_grant(operation, link, None)
+    }
+
+    pub(super) fn transaction_with_grant(
+        &mut self,
+        operation: SettingsOperation,
+        link: LinkStatusV1,
+        scopes: Option<Vec<String>>,
+    ) -> SettingsReply {
         let result = match operation {
             SettingsOperation::PackCatalog(catalog) | SettingsOperation::PackWatch(catalog, _) => Ok(
                 SettingsReply::Packs(catalog.with_selection(self.store.overlay.screen_pack())),
             ),
             SettingsOperation::PackRefresh(catalog, snapshot) => self.refresh_pack(catalog, &snapshot),
-            SettingsOperation::PackSelection(catalog, selection) => {
-                if !catalog.accepts(&selection) {
-                    return SettingsReply::InvalidPackSelection;
-                }
-                let catalog = catalog.with_selection(self.store.overlay.screen_pack());
-                let changed = catalog.selection_changes(&selection);
-                SettingsOverlay::from_toml_str(&format!("screen_pack='{selection}'"))
-                    .map_err(SettingsError::from)
-                    .and_then(|patch| self.store.save(&patch))
-                    .map(|_| {
-                        SettingsReply::PackSaved(
-                            save_result(self.restart_pending),
-                            catalog.with_selection(Some(&selection)),
-                            changed,
-                        )
-                    })
-            }
+            SettingsOperation::PackSelection(catalog, selection) => self.select_pack(catalog, &selection),
             SettingsOperation::Snapshot => self.snapshot(link).map(SettingsReply::Snapshot),
+            SettingsOperation::SnapshotV2 => {
+                return self.snapshot_v2(link, scopes).map_or_else(
+                    |error| error_reply_v2(&error),
+                    |snapshot| SettingsReply::SnapshotV2(Box::new(snapshot)),
+                );
+            }
+            SettingsOperation::SaveV2(patch) => {
+                return self
+                    .save_v2(patch.settings)
+                    .unwrap_or_else(|error| error_reply_v2(&error));
+            }
             SettingsOperation::Save(patch) => self.save(patch.settings).map(saved),
             SettingsOperation::Prompt(kind, prompt) => {
                 let kind = match kind {
@@ -90,6 +108,25 @@ impl SettingsHost {
         result.unwrap_or_else(|error| error_reply(&error))
     }
 
+    fn select_pack(
+        &mut self,
+        catalog: echo_screen_server::PackCatalog,
+        selection: &str,
+    ) -> Result<SettingsReply, SettingsError> {
+        if !catalog.accepts(selection) {
+            return Ok(SettingsReply::InvalidPackSelection);
+        }
+        let catalog = catalog.with_selection(self.store.overlay.screen_pack());
+        let changed = catalog.selection_changes(selection);
+        let patch = SettingsOverlay::from_toml_str(&format!("screen_pack='{selection}'"))?;
+        self.persist(&patch)?;
+        Ok(SettingsReply::PackSaved(
+            save_result(self.restart_pending),
+            catalog.with_selection(Some(selection)),
+            changed,
+        ))
+    }
+
     fn refresh_pack(
         &mut self,
         catalog: echo_screen_server::PackCatalog,
@@ -104,6 +141,9 @@ impl SettingsHost {
         let changed = catalog.selection_changes(overlay.screen_pack().unwrap_or("template"));
         // Adopt pending editable values without changing the running config,
         // writing settings, requesting exec or clearing durability uncertainty.
+        if overlay.manages_portos() {
+            self.permissions.narrow(&effective);
+        }
         self.store.overlay = overlay;
         self.store.effective = effective;
         Ok(SettingsReply::PackRefreshed(
@@ -130,8 +170,26 @@ impl SettingsHost {
             daily_cap,
             agent.max_tool_calls,
         );
-        self.restart_pending |= self.store.save(&patch)?;
+        self.restart_pending |= self.persist(&patch)?;
         Ok(self.restart_pending)
+    }
+
+    fn persist(&mut self, patch: &SettingsOverlay) -> Result<bool, SettingsError> {
+        self.persist_with(patch, SettingsStore::save)
+    }
+
+    fn persist_with(
+        &mut self,
+        patch: &SettingsOverlay,
+        write: impl FnOnce(&mut SettingsStore, &SettingsOverlay) -> Result<bool, SettingsError>,
+    ) -> Result<bool, SettingsError> {
+        let saved = write(&mut self.store, patch);
+        if matches!(saved, Err(SettingsError::Durability)) {
+            self.permissions.fail_closed();
+        } else if saved.is_ok() && patch.manages_portos() {
+            self.permissions.narrow(self.store.effective());
+        }
+        saved
     }
 
     fn snapshot(&self, link_status: LinkStatusV1) -> Result<SettingsSnapshotV1, SettingsError> {
@@ -187,5 +245,76 @@ fn error_reply(error: &SettingsError) -> SettingsReply {
         SettingsReply::Persistence(error)
     } else {
         SettingsReply::Invalid(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge_settings::settings_atomic::Stage;
+    use echo_config::{AgentTools, HomeConfig, McpAuth, McpServer};
+    use std::io::Write as _;
+
+    #[test]
+    fn screen_settings_store_uncertain_portos_save_denies_pending_effects() {
+        let root = tempfile::tempdir().unwrap();
+        let mut base =
+            BridgeConfig::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bridge.echo.toml")).unwrap();
+        base.home = Some(HomeConfig {
+            dir: root.path().join("home"),
+            agent_tools: AgentTools::default(),
+        });
+        base.mcp.server[0] = McpServer {
+            name: "portos".into(),
+            url: "https://127.0.0.1/mcp".into(),
+            auth: McpAuth::PortosDeviceCode,
+            bearer_file: None,
+            allow_tools: vec!["control".into(), "endpoint_query".into()],
+        };
+        let mut host = SettingsHost::open(
+            base,
+            SettingsOverlay::default(),
+            PromptTextsV1 {
+                voice: "Synthetic voice".into(),
+                runner: "Synthetic runner".into(),
+            },
+            Vec::new(),
+        )
+        .unwrap();
+        let grant = ["endpoint:read".into(), "message:send".into()];
+        assert!(host.permissions().permits("endpoint_query", Some(&grant)));
+        let patch = SettingsOverlay::from_toml_str("[mcp]\nscopes=['endpoint:read']").unwrap();
+        let err = host
+            .persist_with(&patch, |store, patch| {
+                store.save_with(patch, |stage| {
+                    if stage == Stage::DirectorySync {
+                        Err(std::io::Error::other("injected sync failure"))
+                    } else {
+                        Ok(())
+                    }
+                })
+            })
+            .unwrap_err();
+        let SettingsReply::PersistenceV2(body) = error_reply_v2(&err) else {
+            unreachable!("expected V2 persistence reply");
+        };
+        assert_eq!(
+            body.message,
+            "File replaced but durability is uncertain; reload before saving again"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("home/settings.toml")).unwrap(),
+            "[mcp]\nscopes = [\"endpoint:read\"]\n"
+        );
+        assert!(!host.restart_pending);
+        assert!(host.permissions().managed());
+        assert!(!host.permissions().permits("endpoint_query", Some(&grant)));
+        assert!(!host.permissions().permits("control", Some(&grant)));
+        writeln!(
+            std::io::stdout().lock(),
+            "{}; control and endpoint_query denied",
+            body.message
+        )
+        .unwrap();
     }
 }

@@ -58,7 +58,7 @@ test("packs: explicit empty catalog, queued install, safe failure and pairing st
     await page
         .getByRole("button", { name: "Download pack", exact: true })
         .click();
-    assert.equal((await calls(page)).length, 2, "invalid digest stays local");
+    assert.equal((await calls(page)).length, 3, "invalid digest stays local");
     await sha.fill("A".repeat(64));
     await response(
         page,
@@ -362,7 +362,7 @@ test("packs: pending load disables writes, preserves keyboard focus and reports 
     );
     assert.equal(
         (await calls(page)).length,
-        2,
+        3,
         "navigation never submits a write",
     );
 });
