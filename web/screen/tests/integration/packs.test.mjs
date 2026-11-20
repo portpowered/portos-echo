@@ -17,7 +17,7 @@ const id = "template@0.1.0";
 const generated = process.env.SCREEN_PACK_FIXTURE;
 assert.ok(generated, "suite owner must prepare generated assets");
 
-async function open(t, { prepare, beforeNavigate } = {}) {
+async function open(t, { prepare, beforeNavigate, initialState } = {}) {
     const root = await mkdtemp(join(tmpdir(), "screen-pack-journey-"));
     const home = join(root, "home");
     await mkdir(home);
@@ -104,6 +104,10 @@ async function open(t, { prepare, beforeNavigate } = {}) {
     });
     command({ home, ca: join(root, "ca.pem") });
     const { ready } = await next();
+    if (initialState) {
+        command({ state: initialState });
+        assert.deepEqual(await next(), { sent: true });
+    }
     const origin = `http://127.0.0.1:${ready}`;
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },

@@ -12,6 +12,7 @@ export async function concurrentResources(t, open, playing, refresh) {
     const paired = new Set();
     let background;
     const f = await open(t, {
+        initialState: { state: "ready", message: "Ready" },
         async prepare(home, generated) {
             await mkdir(join(home, "screens"));
             for (const name of ["template", "sample"]) {
