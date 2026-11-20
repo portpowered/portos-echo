@@ -120,7 +120,10 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             const status = heading && slot(heading, "status");
             if (heading) {
                 heading.dataset.packSlot = "";
-                if (status && besideStage(status)) fitSideSlot(heading, status);
+                if (status && besideStage(status)) {
+                    fitSideSlot(heading, status);
+                    heading.style.lineHeight = "1.4";
+                }
             }
             if (
                 details &&
