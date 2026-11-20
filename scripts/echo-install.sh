@@ -1,14 +1,80 @@
 #!/bin/sh
 # Manual Linux operator command. Hardware use belongs to the coordinator.
 set -eu
-
+# shellcheck source=scripts/echo-install-release.sh
+if ! command -v release_metadata >/dev/null 2>&1; then
+  . "$(dirname -- "$0")/echo-install-release.sh"
+fi
+# shellcheck source=scripts/echo-install-setup.sh
+if ! command -v setup_operator >/dev/null 2>&1; then
+  . "$(dirname -- "$0")/echo-install-setup.sh"
+fi
+release_bundle='' release_version=null device_mode=false
+# Native host adapter: retain one lifecycle implementation behind two transports.
+# Only the trusted, embedded copy accepts an archive; the validated bundle owns install.
+if [ "${1:-}" = --device ]; then
+  shift
+  device_mode=true
+  setup_observation "$@"
+  adb() {
+    case $1 in
+      devices) printf 'List of devices attached\nlocal\tdevice\n' ;;
+      shell) sh -c "$2" ;;
+      push) cp "$2" "$3" ;;
+      *) return 1 ;;
+    esac
+  }
+  if [ "${1:-}" = prepare-archive ]; then
+    [ "$#" = 7 ] && [ "$2" = --archive ] && [ "$4" = --sha256 ] && [ "$6" = --stage ] || exit 2
+    archive=$3 hash=$5 stage=$7
+    case $stage in /data/local/tmp/echo-setup-*) ;; *) exit 1 ;; esac
+    suffix=${stage#/data/local/tmp/echo-setup-}
+    case $suffix in '' | *[!0-9-]*) exit 1 ;; esac
+    [ "$archive" = "$stage/archive.tar.gz" ] || exit 1
+    [ "${#hash}" = 64 ] || exit 1
+    case $hash in *[!0-9a-f]*) exit 1 ;; esac
+    [ ! -L /data/local/tmp ] && [ ! -L "$stage" ] && [ -d "$stage" ] || exit 1
+    [ "$(stat -c %u "$stage")" = 0 ] && [ "$(stat -c %a "$stage")" = 700 ] || exit 1
+    [ ! -L "$archive" ] && [ -f "$archive" ] || exit 1
+    [ "$(sha256sum "$archive" | awk '{print $1}')" = "$hash" ] || exit 1
+    tar -tzf "$archive" >"$stage/names" 2>/dev/null || exit 1
+    awk '
+      /(^\/|(^|\/)\.\.?($|\/)|[^A-Za-z0-9_.\/-])/ { bad=1 }
+      !/^(MANIFEST|LICENSE|NOTICE|bin\/(echo-bridge|codex-app-server|cacert.pem)|apk\/echo-screen.apk|scripts\/echo-install(-(release|setup))?.sh|examples\/(bridge.echo.toml|prompts\/(voice|runner).md)|licenses\/[A-Za-z0-9_.\/-]+)$/ { bad=1 }
+      { if (seen[$0]++) bad=1 }
+      END { exit bad }' "$stage/names" || exit 1
+    tar -tvzf "$archive" >"$stage/types" 2>/dev/null || exit 1
+    awk 'substr($0,1,1) != "-" { bad=1 } END { exit bad }' "$stage/types" || exit 1
+    umask 077
+    mkdir "$stage/bundle" || exit 1
+    tar -xzf "$archive" -C "$stage/bundle" --no-same-owner --no-same-permissions 2>/dev/null || exit 1
+    for member in MANIFEST LICENSE NOTICE bin/echo-bridge bin/codex-app-server bin/cacert.pem apk/echo-screen.apk scripts/echo-install.sh scripts/echo-install-release.sh scripts/echo-install-setup.sh examples/bridge.echo.toml examples/prompts/voice.md examples/prompts/runner.md licenses/codex/LICENSE licenses/codex/NOTICE licenses/ca/MPL-2.0.txt licenses/ca/NOTICE; do
+      [ -f "$stage/bundle/$member" ] || exit 1
+    done
+    exit 0
+  fi
+  if [ "${1:-}" = install ] && [ "${2:-}" = --bundle ]; then
+    [ "$#" = 5 ] || { [ "$#" = 7 ] && [ "$6" = --config ]; } || exit 2
+    [ "$4" = --release-version ] || exit 2
+    release_version=$5
+    release_version_valid "$release_version" || exit 2
+    bundle=$3
+    case $bundle in /data/local/tmp/echo-setup-*/bundle) ;; *) exit 1 ;; esac
+    suffix=${bundle#/data/local/tmp/echo-setup-}
+    suffix=${suffix%/bundle}
+    case $suffix in '' | *[!0-9-]*) exit 1 ;; esac
+    release_bundle=$bundle
+    config=${7:-$bundle/examples/bridge.echo.toml}
+    case $config in "$bundle/examples/bridge.echo.toml" | "${bundle%/bundle}/config") ;; *) exit 1 ;; esac
+    set -- install --config "$config" --bridge "$bundle/bin/echo-bridge" --codex "$bundle/bin/codex-app-server" --ca "$bundle/bin/cacert.pem"
+  fi
+fi
 # Fixed product identity, never a caller override or evaluated shell fragment.
 ECHO_RUN_AS='nobody 3990,inet'
 ECHO_RUN_OWNER='9999:9999'
 readonly ECHO_RUN_AS ECHO_RUN_OWNER
 run_user=${ECHO_RUN_AS%% *}
 run_groups=${ECHO_RUN_AS#* }
-
 help() {
   cat <<'HELP'
 Usage: sh scripts/echo-install.sh --help
@@ -16,8 +82,9 @@ Usage: sh scripts/echo-install.sh --help
        sh scripts/echo-install.sh start
        sh scripts/echo-install.sh stop
        sh scripts/echo-install.sh status
+       sh scripts/echo-install.sh doctor
+       sh scripts/echo-install.sh rollback
        sh scripts/echo-install.sh uninstall [--purge]
-
 Linux only; requires adb on PATH and exactly one ready device with hassmic.
 --config FILE: required readable operator config; never printed or rewritten.
 --bridge FILE: default ${CARGO_TARGET_DIR:-target}/armv7-linux-androideabi/release/echo-bridge
@@ -26,18 +93,13 @@ Linux only; requires adb on PATH and exactly one ready device with hassmic.
 --ca FILE: default $CODEX_ARMV7_OUTPUT_DIR/cacert.pem; otherwise required.
 --force: replace bridge.toml only; existing prompts are always retained.
 --purge: also remove private/ and home/ after a verified stop.
-
 Device root: /data/local/echo-bridge
-Artifacts: bin/echo-bridge, bin/codex-app-server, bin/cacert.pem
 Config: private/bridge.toml (0600); private/ and home/ are 0700.
-Config must select [codex] launch = "standalone",
-binary = "/data/local/echo-bridge/bin/codex-app-server",
-ca_file = "/data/local/echo-bridge/bin/cacert.pem".
+Config must select [codex] launch = "standalone", binary = "/data/local/echo-bridge/bin/codex-app-server", ca_file = "/data/local/echo-bridge/bin/cacert.pem".
 W5 shared-home config: [home] dir = "/data/local/echo-bridge/home";
 all secrets and codex.home stay in private/.
 Supply config compatible with the bridge build; TOML is not validated or rewritten.
 Prompt defaults: examples/prompts/*.md; seed missing home/prompts files only.
-Absent defaults are skipped with a note.
 Launch: setsid, /data/local/hassmic/runas nobody 3990,inet, held stdin; the hassmic fork repeats it at boot.
 start requires exact echo-bridge NAME from ps -A -o PID,NAME and a new
 hassmic boot.log client connected line within 20 seconds.
@@ -46,6 +108,7 @@ private/ and home/: owner 9999:9999, directories 0700, data files 0600.
 bin/: owner 0:0, directory and binaries 0755; cacert.pem 0644.
 install and start migrate retained root-owned state.
 status shows process, process user, uptime seconds, sanitized hassmic link and five bridge.log lines.
+doctor emits read-only hassmic/egress/clock/disk_free/process_user probes for echo-setup.
 Status fields: process=running|stopped; process_user=USER|unavailable;
 uptime_seconds=INTEGER|unavailable;
 hassmic_link=SANITIZED_LINE|unavailable
@@ -66,7 +129,6 @@ usage() {
   printf '%s\n' 'echo-install: invalid usage; see --help' >&2
   exit 2
 }
-
 [ "$#" -gt 0 ] || usage
 if [ "$1" = --help ]; then
   [ "$#" = 1 ] || usage
@@ -75,7 +137,9 @@ if [ "$1" = --help ]; then
 fi
 command_name=$1
 shift
-case $command_name in install | start | stop | status | uninstall) ;; *) usage ;; esac
+case $command_name in signin | ensure-signin | link | screen-setup) [ "$device_mode" = true ] || usage ;;
+esac
+case $command_name in install | start | stop | status | uninstall | doctor | rollback | signin | ensure-signin | link | screen-setup) ;; *) usage ;; esac
 config='' bridge='' codex='' ca='' force=false purge=false seen=' '
 while [ "$#" -gt 0 ]; do
   flag=$1
@@ -173,6 +237,11 @@ run_adb devices
 selection=$(awk 'NR > 1 && NF { count++; if ($2 == "device") ready++ }
   END { print (count == 1 && ready == 1) ? "ready" : "refuse" }' "$log")
 [ "$selection" = ready ] || fail 'exactly one ready adb device is required'
+if [ "$command_name" = doctor ]; then
+  setup_doctor
+  cat "$log"
+  exit 0
+fi
 run_adb shell "test -x /data/local/hassmic/runas"
 process_state() {
   run_adb shell "ps -A -o PID,NAME"
@@ -187,7 +256,10 @@ for p in launch.sh bridge.log bridge.toml bridge.trace; do test ! -L '$device/pr
 if test -d '$device/private/run'; then
   for p in stdin control stop finished deadline log-inode log-prefix; do test ! -L '$device/private/run/'\$p || exit 1; done
 fi"
+release_metadata
+versions=$(cat "$log")
 if [ "$command_name" = status ]; then
+  release_guard
   # Read-only observation. Optional unsupported/missing proc data is explicit.
   run_adb shell "observed=\$(ps -A -o PID,NAME)
 pid=\$(printf '%s\\n' \"\$observed\" | awk '\$2 == \"echo-bridge\" { print \$1; exit }')
@@ -224,6 +296,7 @@ else printf 'unavailable\\n'; fi"
       }
       if (secret) print "[masked]"; else print
     }' "$log") || fail 'status filter failed'
+  [ -z "$versions" ] || printf '%s\n' "$versions"
   printf '%s\n' "$sanitized"
   case $sanitized in
     *'process_user=root'* | *'process_user=0'*) fail 'echo-bridge is running as root; stop and reinstall before starting' ;;
@@ -235,6 +308,9 @@ run_adb shell "umask 077; mkdir '$lock'"
 locked=true
 # Reobserve after locking: a competing start may have completed during validation.
 process_state
+release_metadata
+versions=$(cat "$log")
+release_guard
 case $command_name in install | start) [ "$running" = 0 ] || fail 'bridge is already running; stop first' ;; esac
 stop_bridge() {
   run_adb shell "$close_stdin"
@@ -247,9 +323,19 @@ if [ "$command_name" = stop ]; then
   printf '%s\n' 'echo-install: stopped'
   exit 0
 fi
+if [ "$command_name" = rollback ]; then
+  release_verify_previous
+  saved_version=$(cat "$log")
+  [ "$saved_version" = null ] || release_version_valid "$saved_version" || fail 'invalid previous release'
+  stop_bridge
+  release_restore
+  printf '%s\n' 'echo-install: rolled back'
+  exit 0
+fi
 if [ "$command_name" = uninstall ]; then
   stop_bridge
-  run_adb shell "rm -rf '$device/bin'
+  run_adb shell "rm -rf '$device/bin' '$device/apk' '$device/scripts' '$device/releases'
+rm -f '$device/MANIFEST' '$device/release.json'
 rm -f '$device/private/launch.sh'"
   if [ "$purge" = true ]; then
     run_adb shell "rm -rf '$device/private' '$device/home'"
@@ -284,6 +370,11 @@ for root in '$device/private' '$device/home'; do
     done' sh {} + || exit 1
 done"
 }
+case $command_name in signin | ensure-signin | link | screen-setup)
+  setup_operator
+  exit 0
+  ;;
+esac
 write_launcher() {
   run_adb shell "test ! -L '$device/private/launch.sh'
 test ! -L '$device/private/bridge.log'
@@ -343,7 +434,8 @@ while test \"\$(date +%s)\" -lt \"\$end\"; do
   test \"\$(stat -c %i /data/local/hassmic/boot.log)\" = \"\$inode\" || exit 1
   prefix=\$(head -c \"\$bytes\" /data/local/hassmic/boot.log | cksum)
   test \"\$prefix\" = \"\$checksum \$bytes\" || exit 1
-  if ps -A -o PID,NAME | awk '\$2 == \"echo-bridge\" { found=1 } END { exit !found }' &&
+  users=\$(ps -A -o PID,USER,NAME)
+  if printf '%s\\n' \"\$users\" | awk '\$3 == \"echo-bridge\" { count++; if (\$2 != \"nobody\" && \$2 != 9999) bad=1 } END { exit count != 1 || bad }' &&
     tail -c +\$((bytes + 1)) /data/local/hassmic/boot.log | grep -q 'client connected'; then
     test \"\$(date +%s)\" -lt \"\$end\" || exit 1
     exit 0
@@ -366,7 +458,8 @@ chown 0:0 '$device' '$device/bin' &&
 chmod 755 '$device' '$device/bin'"
 safe_paths=true
 migrate_state
-
+release_recover
+release_snapshot
 # Each copy is staged privately; failed transfers never replace an existing file.
 # The destination leaf is fixed or a restricted prompt basename, never shell input.
 copy_file() {
@@ -397,6 +490,7 @@ for prompt in "$checkout"/examples/prompts/*.md; do
   copy_file "$prompt" "$device/home/prompts/$name" 600 false
   prompts=true
 done
+release_publish
 write_launcher
 [ "$prompts" = true ] || printf '%s\n' 'echo-install: prompt defaults absent; skipped'
 printf '%s\n' 'echo-install: installed'

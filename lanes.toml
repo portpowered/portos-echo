@@ -1,5 +1,10 @@
 # A crate joins this list in the change that creates it.
 [[crate]]
+name = "echo-setup"
+path = "crates/echo-setup"
+kind = "bin"
+
+[[crate]]
 name = "echo-bridge"
 path = "crates/echo-bridge"
 kind = "bin"

@@ -81,7 +81,7 @@ def decode(path, frames, alpha=False):
     return subprocess.check_output(command, stderr=subprocess.PIPE, timeout=15)
 
 
-def independent_bundle(assets, pack):
+def independent_bundle(assets, pack, asset_names):
     archive = next(assets.glob('echo-*-armv7.tar.gz'))
     with tarfile.open(archive) as bundle:
         members = bundle.getmembers()
@@ -96,11 +96,11 @@ def independent_bundle(assets, pack):
     template = assets / ('template-' + manifest['version'] + '.screenpack.tar.gz')
     art = independent_template(template)
     require(all(data not in files['bin/echo-bridge'] for data in art.values()), 'art embedded in bridge')
-    expected = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                for path in (archive, assets / 'install.sh', template)}
-    hashes = {name: value for value, name in
-              (line.split() for line in (assets / 'SHA256SUMS').read_text().splitlines())}
-    require(hashes == expected, 'asset hashes differ')
+    expected = {name: hashlib.sha256((assets / name).read_bytes()).hexdigest()
+                for name in asset_names(manifest['version'])}
+    lines = (assets / 'SHA256SUMS').read_text().splitlines()
+    require(len(lines) == len(expected) and set(lines) == {
+        value + '  ' + name for name, value in expected.items()}, 'asset hashes differ')
     config = pack.tomllib.loads(files['examples/bridge.echo.toml'].decode())
     require(config['screen']['packs'] == [{
         'url': f"https://github.com/portpowered/portos-echo/releases/download/v{manifest['version']}/{template.name}",
@@ -108,6 +108,7 @@ def independent_bundle(assets, pack):
     require(manifest['components']['ca_bundle']['sha256'] == hashlib.sha256(files['bin/cacert.pem']).hexdigest(),
             'CA provenance differs')
     pack.verify(archive, assets / 'SHA256SUMS')
+    return manifest
 
 
 def exclusion_cases(archive, pack):

@@ -1,0 +1,28 @@
+[package]
+name = "echo-setup"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "echo-setup-test-adb"
+path = "tests/support/adb.rs"
+test = false
+bench = false
+
+[lints]
+workspace = true
+
+[dependencies]
+echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
+echo-screen-contract = { version = "0.1.0", path = "../echo-screen-contract" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+toml = "0.9"
+tokio = { version = "1", features = ["rt", "time", "macros", "process", "io-util", "sync", "signal"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "net"] }

@@ -1,0 +1,43 @@
+name: Echo setup
+on:
+  pull_request:
+    paths:
+      - 'crates/echo-setup/**'
+      - 'scripts/echo-install*.sh'
+      - 'scripts/package-dist.py'
+      - 'scripts/install.sh'
+      - 'scripts/install.ps1'
+      - 'tests/test_release*.py'
+      - 'tests/test_echo_install*.py'
+      - 'Cargo.lock'
+      - '.github/actions/screen-media/**'
+      - '.github/workflows/echo-setup.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    name: echo-setup (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Native installer tests
+        run: cargo test --locked -p echo-setup
+      - name: Provision FFmpeg for screen-pack generation
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/screen-media
+      - name: Existing Linux release regression
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: |
+          python3 tests/test_release_kit.py
+          python3 tests/test_release_redirects.py
+      - name: Existing Linux installer regression
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: python3 tests/test_echo_install.py

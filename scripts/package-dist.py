@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?"
 REQUIRED = {
     "bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem", "apk/echo-screen.apk",
-    "scripts/echo-install.sh", "examples/bridge.echo.toml", "examples/prompts/voice.md",
+    "scripts/echo-install.sh", "scripts/echo-install-release.sh", "scripts/echo-install-setup.sh", "examples/bridge.echo.toml", "examples/prompts/voice.md",
     "examples/prompts/runner.md", "LICENSE", "NOTICE", "licenses/codex/LICENSE",
     "licenses/codex/NOTICE", "licenses/ca/MPL-2.0.txt", "licenses/ca/NOTICE",
 }
@@ -130,7 +130,17 @@ def exclude_template(files, binaries):
             raise BundleError("template data embedded in executable or JavaScript")
 
 
-def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses):
+def installer_names(release):
+    return (f"echo-setup-{release}-linux-x86_64", f"echo-setup-{release}-windows-x86_64.exe")
+
+
+def checksum_assets(archive):
+    release = archive.name.removeprefix("echo-").removesuffix("-armv7.tar.gz")
+    return (archive.name, *installer_names(release), "install.sh", "install.ps1",
+            f"template-{release}.screenpack.tar.gz")
+
+
+def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, installers):
     """Only explicit runtime inputs and license texts can enter the archive."""
     version(release)
     template = out / f"template-{release}.screenpack.tar.gz"
@@ -141,6 +151,8 @@ def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses):
         "bin/codex-app-server": (codex / "codex-app-server").read_bytes(),
         "bin/cacert.pem": (codex / "cacert.pem").read_bytes(),
         "apk/echo-screen.apk": apk.read_bytes(),
+        "scripts/echo-install-setup.sh": (ROOT / "scripts/echo-install-setup.sh").read_bytes(),
+        "scripts/echo-install-release.sh": (ROOT / "scripts/echo-install-release.sh").read_bytes(),
         "scripts/echo-install.sh": (ROOT / "scripts/echo-install.sh").read_bytes(),
         "examples/bridge.echo.toml": config_projection((ROOT / "examples/bridge.echo.toml").read_bytes(), release, digest(template.read_bytes())),
         "examples/prompts/voice.md": (ROOT / "examples/prompts/voice.md").read_bytes(),
@@ -168,9 +180,14 @@ def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses):
             info.size = len(data)
             info.mode = 0o755 if name in ("bin/echo-bridge", "bin/codex-app-server", "scripts/echo-install.sh") else 0o644
             target.addfile(info, io.BytesIO(data))
-    wrapper = (ROOT / "scripts/install.sh").read_bytes().replace(b"@ECHO_VERSION@", release.encode())
-    (out / "install.sh").write_bytes(wrapper)
-    (out / "SHA256SUMS").write_text("".join(f"{digest(path.read_bytes())}  {path.name}\n" for path in (archive, out / "install.sh", template)))
+    for name, binary in zip(installer_names(release), installers, strict=True):
+        shutil.copyfile(binary, out / name)
+        (out / name).chmod(0o755)
+    for name in ("install.sh", "install.ps1"):
+        wrapper = (ROOT / "scripts" / name).read_bytes().replace(b"@ECHO_VERSION@", release.encode())
+        (out / name).write_bytes(wrapper)
+    (out / "SHA256SUMS").write_text("".join(
+        f"{digest((out / name).read_bytes())}  {name}\n" for name in checksum_assets(archive)))
     verify(archive, out / "SHA256SUMS")
 
 
@@ -213,10 +230,11 @@ def verify(archive, checksums):
         if not binary:
             if re.search(rb'(?:Bearer\s+[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,})', data):
                 raise BundleError("credential-shaped payload")
+    expected = {name: digest(path.read_bytes()) for name in checksum_assets(archive)
+                for path in (archive if name == archive.name else checksums.parent / name,)}
     template = checksums.parent / f"template-{release}.screenpack.tar.gz"
     art = template_payload(template, release)
     exclude_template(art, (payload["bin/echo-bridge"],))
-    expected = {path.name: digest(path.read_bytes()) for path in (archive, checksums.parent / "install.sh", template)}
     config = tomllib.loads(payload["examples/bridge.echo.toml"].decode())
     if config["screen"]["packs"] != [{"url": f"https://github.com/portpowered/portos-echo/releases/download/v{release}/{template.name}", "sha256": expected[template.name]}]:
         raise BundleError("template config pin mismatch")
@@ -228,8 +246,14 @@ def verify(archive, checksums):
         actual[match[2]] = match[1]
     if actual != expected:
         raise BundleError("asset checksum mismatch")
-    if PRIVATE.search((checksums.parent / "install.sh").read_bytes()):
-        raise BundleError("private path in installer")
+    for name in ("install.sh", "install.ps1"):
+        if PRIVATE.search((checksums.parent / name).read_bytes()):
+            raise BundleError("private path in installer")
+    for name in installer_names(release):
+        data = (checksums.parent / name).read_bytes()
+        if PERSONAL.search(data):
+            print("release-kit: rejected path categories " + json.dumps(private_path_counts(data), sort_keys=True), file=sys.stderr)
+            raise BundleError("private path in " + name)
     print("release-kit: verified binary paths checkout=0 current_home=0", flush=True)
     return manifest
 
@@ -320,6 +344,19 @@ def screen_proof():
     print("release-kit: developer_screen=PASS embedded_screen_http_outside_checkout=PASS", flush=True)
 
 
+def build_installers(work, release, env):
+    target = work / "setup-target"
+    setup_env = dict(env, ECHO_SETUP_RELEASE_VERSION=release, CARGO_TARGET_DIR=str(target),
+                     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="x86_64-w64-mingw32-gcc")
+    artifacts = []
+    for triple, name in (("x86_64-unknown-linux-gnu", "echo-setup"),
+                         ("x86_64-pc-windows-gnu", "echo-setup.exe")):
+        subprocess.run(["cargo", "+1.100.0", "build", "--locked", "--release", "-p", "echo-setup",
+                        "--bin", "echo-setup", "--target", triple], cwd=ROOT, env=setup_env, check=True)
+        artifacts.append(target / triple / "release" / name)
+    return artifacts
+
+
 def build(args):
     if sys.platform != "linux":
         raise BundleError("Linux is required")
@@ -332,6 +369,7 @@ def build(args):
     with tempfile.TemporaryDirectory(prefix="echo-release-", dir="/tmp") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
         work = Path(work)
         env = build_environment(work)
+        installers = build_installers(work, args.version, env)
         generated = work / "template"
         subprocess.run(["sh", "scripts/make-template-screenpack.sh", "--version", args.version,
                         "--out", str(generated)], cwd=ROOT, env=env, check=True)
@@ -356,7 +394,7 @@ def build(args):
         print("release-kit: assembling and verifying bundle", flush=True)
         assemble(Path(stage), args.version, source, identity[0], work / "codex-out",
                  target / "armv7-linux-androideabi/release/echo-bridge", ROOT / "target/echo-screen/echo-screen.apk",
-                 licenses)
+                 licenses, installers)
         os.rename(stage, out)
         # TemporaryDirectory tolerates the moved stage on exit.
 

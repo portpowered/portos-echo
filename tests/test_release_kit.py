@@ -1,6 +1,7 @@
 """T1/T2 packaging and T3 shell journeys; closed PATH, synthetic adb only."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import hashlib
 import importlib.util
 import io
@@ -11,6 +12,7 @@ import re
 import signal
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -18,14 +20,12 @@ import tempfile
 from unittest.mock import patch
 
 from test_echo_install import Sandbox, fake_adb, require, SENTINEL
-from test_echo_install_lifecycle import configure_lifecycle, release_started, release_stop
 from test_screen_pack_assets import exclusion_cases, generate, independent_bundle, push_cases
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("package_dist", ROOT / "scripts/package-dist.py")
 PACK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PACK)
-TEMPLATE = None
 
 
 def sha(data):
@@ -51,30 +51,14 @@ def fake_boundary():
         require(url.startswith("https://github.com/portpowered/portos-echo/releases/download/v"), "unexpected download")
         shutil.copyfile(base / "assets" / url.rsplit("/", 1)[1], destination)
         return 0
-    intercepted = False
-    code = 0
-    if args[:3] == ["shell", "pm", "list"]:
-        if (base / "screen-present").exists():
-            print("package:org.portos.echoscreen")
-        intercepted = True
-    elif args[:2] == ["install", "-r"]:
-        code = 1 if (base / "screen-fails").exists() else 0
-        if code == 0:
-            (base / "screen-present").touch()
-        intercepted = True
-    elif args[:2] == ["shell", "am"]:
-        intercepted = True
-        code = 1 if (base / "launch-fails").exists() else 0
-    elif args[0] == "shell" and len(args) == 2:
-        command = args[1]
-        if "screen_home" in command:
-            intercepted = True
-            code = 1 if (base / "home-fails").exists() else 0
-    if intercepted:
-        with (base / "ledger").open("a") as output:
-            print(json.dumps(args), file=output)
-        print(SENTINEL, file=sys.stderr)
-        return code
+    if kind == "installer":
+        (base / "installer-args.json").write_text(json.dumps(args))
+        print("synthetic installer executed")
+        status = base / "installer-exit"
+        if status.exists():
+            print("synthetic installer needs resume", file=sys.stderr)
+            return int(status.read_text())
+        return 0
     sys.argv = [sys.argv[0], "--fake-adb", *args]
     return fake_adb()
 
@@ -85,75 +69,117 @@ def executable(path, command):
 
 
 class ReleaseBox(Sandbox):
-    def __init__(self, wget=False, assets=None):
+    def __init__(self, wget=False, template=None):
         super().__init__()
-        configure_lifecycle(self, bridge=self.root / "synthetic-bridge")
         self.assets = self.root / "assets"
         self.assets.mkdir()
-        if assets is not None:
-            for path in assets.iterdir():
-                if path.is_file():
-                    shutil.copyfile(path, self.assets / path.name)
-        else:
-            codex = self.root / "codex"
-            codex.mkdir()
-            for name in ("codex-app-server", "cacert.pem", "LICENSE", "NOTICE"):
-                (codex / name).write_text("synthetic public " + name)
-            shutil.copyfile(TEMPLATE, self.assets / TEMPLATE.name)
-            PACK.assemble(self.assets, "0.1.0", "a" * 40, "b" * 40, codex, self.files["bridge"], self.files["ca"],
-                          {"licenses/ca/MPL-2.0.txt": b"synthetic license", "licenses/ca/NOTICE": b"CA attribution"})
-        self.archive = next(self.assets.glob("echo-*-armv7.tar.gz"))
-        self.version = self.archive.name.removeprefix("echo-").removesuffix("-armv7.tar.gz")
+        self.version = "0.1.0"
+        self.archive = self.assets / f"echo-{self.version}-armv7.tar.gz"
+        self.installer = self.assets / f"echo-setup-{self.version}-linux-x86_64"
         self.wrapper = self.assets / "install.sh"
-        for name in ("sh", "tar", "gzip", "sha256sum", "mkdir"):
-            executable(self.tools / name, shlex.quote(shutil.which(name)))
+        payload = self.root / "installer"
         entry = shlex.quote(sys.executable) + " " + shlex.quote(str(Path(__file__).resolve())) + " --fake "
-        for name in ("adb", "wget" if wget else "curl"):
-            executable(self.tools / name, entry + name)
+        executable(payload, 'python3 "$ECHO_SETUP_TEST_DRIVER" --fake installer')
+        self.env["ECHO_SETUP_TEST_DRIVER"] = str(Path(__file__).resolve())
+        if template is None:
+            shutil.copyfile(payload, self.installer)
+            self.wrapper.write_bytes((ROOT / "scripts/install.sh").read_bytes()
+                                     .replace(b"@ECHO_VERSION@", self.version.encode()))
+            (self.assets / "SHA256SUMS").write_text(f"{sha(payload.read_bytes())}  {self.installer.name}\n")
+        else:
+            assemble_fixture(self.assets, self.files["bridge"], self.files["ca"], (payload, payload), template)
+        for name in ("sha256sum", "chmod", "python3"):
+            executable(self.tools / name, shlex.quote(shutil.which(name)))
+        executable(self.tools / ("wget" if wget else "curl"), entry + ("wget" if wget else "curl"))
         self.env["TMPDIR"] = str(self.root / "tmp")
         (self.root / "tmp").mkdir()
 
     def invoke(self, args=(), code=0, pipe=False):
-        command = ["/bin/sh", *([] if pipe else [str(self.wrapper)]), *args]
+        command = ["/bin/sh", *(["-s", "--"] if pipe else [str(self.wrapper)]), *args]
         result = subprocess.run(command, input=self.wrapper.read_text() if pipe else None,
                                 env=self.env, cwd=self.root, capture_output=True, text=True, timeout=20)
         require(result.returncode == code, f"wrapper expected {code}, got {result.returncode}: " + result.stderr)
         require(SENTINEL not in result.stdout + result.stderr, "private diagnostic leaked")
         require(str(self.root) not in result.stdout + result.stderr, "local path leaked")
         require(not list((self.root / "tmp").iterdir()), "private temporary data leaked")
-        if code:
-            require("Echo installed and started" not in result.stdout, "false success")
         return result
 
+    def installer_args(self):
+        ledger = self.root / "installer-args.json"
+        return json.loads(ledger.read_text()) if ledger.exists() else None
+
     def rehash(self):
-        (self.assets / "SHA256SUMS").write_text("".join(f"{sha(p.read_bytes())}  {p.name}\n" for p in (self.archive, self.wrapper, next(self.assets.glob("template-*.screenpack.tar.gz")))))
+        (self.assets / "SHA256SUMS").write_text("".join(
+            f"{sha((self.assets / name).read_bytes())}  {name}\n" for name in asset_names(self.version)))
+
+
+def asset_names(version):
+    return (f"echo-{version}-armv7.tar.gz", f"echo-setup-{version}-linux-x86_64",
+            f"echo-setup-{version}-windows-x86_64.exe", "install.sh", "install.ps1",
+            f"template-{version}.screenpack.tar.gz")
+
+
+def assemble_fixture(assets, bridge, apk, installers, template, private_binary=None):
+    shutil.copyfile(template, assets / template.name)
+    codex = assets.parent / "codex"
+    codex.mkdir()
+    for name in ("codex-app-server", "cacert.pem", "LICENSE", "NOTICE"):
+        (codex / name).write_text("synthetic public " + name)
+    if private_binary:
+        (codex / "codex-app-server").write_bytes(private_binary)
+    PACK.assemble(assets, "0.1.0", "a" * 40, "b" * 40, codex, bridge, apk,
+                  {"licenses/ca/MPL-2.0.txt": b"synthetic license", "licenses/ca/NOTICE": b"CA attribution"},
+                  installers)
+
+
+def verify_delivered_assets(assets):
+    from test_release_delivery import delivered_journey
+
+    manifest = independent_bundle(assets, PACK, asset_names)
+    release = manifest["version"]
+    _, linux_name, windows_name, *_ = asset_names(release)
+    require({path.name for path in assets.iterdir()} == {*asset_names(release), "SHA256SUMS"},
+            "release asset inventory differs")
+    linux = assets / linux_name
+    # Artifact archives do not necessarily preserve executable permission.
+    with tempfile.TemporaryDirectory(prefix="release-setup-") as directory:
+        executable = Path(directory) / linux_name
+        shutil.copyfile(linux, executable)
+        executable.chmod(0o700)
+        header = linux.read_bytes()[:64]
+        require(header[:6] == b"\x7fELF\x02\x01" and header[18:20] == b"\x3e\x00", "installer is not x86_64 ELF")
+        pe = (assets / windows_name).read_bytes()
+        require(pe.startswith(b"MZ") and len(pe) >= 64, "installer missing DOS header")
+        address, = struct.unpack_from("<I", pe, 60)
+        require(pe[address:address + 6] == b"PE\x00\x00\x64\x86", "installer is not x86_64 PE")
+        result = subprocess.run([str(executable), "--version"], capture_output=True, text=True, timeout=5)
+        require((result.returncode, result.stdout, result.stderr) == (0, f"echo-setup {release}\n", ""),
+                "embedded installer version differs")
+        delivered_journey(executable, assets, assets / f"echo-{release}-armv7.tar.gz", manifest)
+    print("release-kit: manifest=PASS checksums=PASS ELF-x86_64=PASS PE-x86_64=PASS embedded-version=PASS")
 
 
 def happy_cases():
-    for wget, pipe in ((False, False), (True, False), (False, True)):
+    for wget, pipe, child_exit in ((False, False, 0), (True, False, 0), (False, True, 3)):
         with ReleaseBox(wget) as box:
-            happy_case(box, wget, pipe)
-    print("F01 F03 F16 F17: PASS")
-
-
-def happy_case(box, wget=False, pipe=False):
-    independent_bundle(box.assets, PACK)
-    result = box.invoke(pipe=pipe)
-    require("ChatGPT sign-in" in result.stdout and "Port OS link" in result.stdout, "next steps absent")
-    calls = box.calls()
-    pushes = [c for c in calls if c[0] == "push"]
-    require(len(pushes) == 6, "required payload not installed")
-    with tarfile.open(box.archive) as bundle:
-        require((box.device / "bin/echo-bridge").read_bytes() == bundle.extractfile("bin/echo-bridge").read(),
-                "bridge bytes differ from packaged input")
-    release_started(box)
-    install = next(i for i, c in enumerate(calls) if c[:2] == ["install", "-r"])
-    start = next(i for i, c in enumerate(calls) if "setsid /data/local/hassmic/runas" in " ".join(c))
-    require(start < install and sum(c[:2] == ["install", "-r"] for c in calls) == 1, "screen order/count differs")
-    downloads = [json.loads(line) for line in (box.root / "downloads").read_text().splitlines()]
-    require([c[-1] for c in downloads] == [f"https://github.com/portpowered/portos-echo/releases/download/v{box.version}/{name}" for name in (box.archive.name, "SHA256SUMS")], "version/download mismatch")
-    require(all(("--https-only" in c if wget else "--proto-redir" in c) for c in downloads), "HTTPS restriction missing")
-    release_stop(box)
+            config = box.root / "config ' $(touch escaped).toml"
+            config.write_text(SENTINEL)
+            if child_exit:
+                (box.root / "installer-exit").write_text(str(child_exit))
+            result = box.invoke(["--config", str(config)], code=child_exit, pipe=pipe)
+            require(result.stdout == "synthetic installer executed\n", "installer output differs")
+            require(result.stderr == ("synthetic installer needs resume\n" if child_exit else ""),
+                    "installer stderr differs")
+            require(box.installer_args() == ["install", "--version", box.version, "--config", str(config)],
+                    "installer arguments differ")
+            require(box.calls() == [] and not (box.root / "escaped").exists(), "unexpected bootstrap effect")
+            downloads = [json.loads(line) for line in (box.root / "downloads").read_text().splitlines()]
+            base = f"https://github.com/portpowered/portos-echo/releases/download/v{box.version}"
+            require([c[-1] for c in downloads] == [f"{base}/{name}" for name in (box.installer.name, "SHA256SUMS")],
+                    "version/download mismatch")
+            require(all(("--https-only" in call if wget else "--proto-redir" in call)
+                        for call in downloads), "HTTPS restriction missing")
+    print("F28 Linux bootstrap: verified child, exact argv, cleanup and exit propagation=PASS")
 
 
 def integrity_cases():
@@ -161,101 +187,35 @@ def integrity_cases():
         with ReleaseBox() as box:
             sums = box.assets / "SHA256SUMS"
             if fault == "tamper":
-                box.archive.write_bytes(box.archive.read_bytes() + b"changed")
+                with box.installer.open("ab") as binary:
+                    binary.write(b"changed")
             elif fault == "missing":
                 sums.write_text("")
             elif fault == "duplicate":
                 sums.write_text(sums.read_text() * 2)
             elif fault == "malformed":
-                sums.write_text("invalid  " + box.archive.name + "\n")
+                sums.write_text("invalid  " + box.installer.name + "\n")
             else:
                 (box.root / "download-fails").touch()
-            box.invoke(code=1)
-            require(box.calls() == [], "integrity/download failure touched adb")
-    for name, kind in (("../outside", tarfile.REGTYPE), ("/absolute", tarfile.REGTYPE),
-                       ("bin/echo-bridge", tarfile.SYMTYPE), ("bin/echo-bridge", tarfile.FIFOTYPE)):
-        with ReleaseBox() as box:
-            with tarfile.open(box.archive, "w:gz") as bundle:
-                member = tarfile.TarInfo(name)
-                member.type = kind
-                member.linkname = "outside" if kind == tarfile.SYMTYPE else ""
-                bundle.addfile(member, io.BytesIO())
-            box.rehash()
             result = box.invoke(code=1)
-            require("unsafe archive" in result.stderr and box.calls() == [], "unsafe archive accepted")
-    print("F04 F05 F06 F07: PASS")
+            expected = {"tamper": "installer checksum mismatch", "download": "download failed"}
+            require(result.stderr == "echo-release: " + expected.get(fault, "invalid installer checksum") + "\n",
+                    "integrity failure diagnostic differs")
+            require(result.stdout == "" and box.installer_args() is None and box.calls() == [],
+                    "integrity/download failure ran installer or adb")
+    print("F30 F32 Linux bootstrap: integrity/download installer_exec_count=0 adb=0")
 
 
-def failure_cases():
-    for fault, diagnostic in (("hassmic", "hassmic must"), ("install", "install failed"),
-                               ("start", "start failed"), ("prepare", "start failed"),
-                               ("ownership", "start failed"), ("spawn", "start failed"), ("screen", "bridge already started"),
-                               ("home", "bridge already started"), ("launch", "bridge already started")):
-        with ReleaseBox() as box:
-            if fault == "hassmic":
-                (box.root / "remote/hassmic/runas").unlink()
-            elif fault in ("install", "prepare", "ownership", "spawn"):
-                point = {"install": "push", "prepare": "mkfifo", "ownership": "chown -R", "spawn": "setsid"}[fault]
-                (box.root / "fault").write_text(point)
-            elif fault == "start":
-                (box.root / "mode").write_text("stale")
-            else:
-                (box.root / (fault + "-fails")).touch()
-            result = box.invoke(code=1)
-            require(diagnostic in result.stderr, "failure diagnostic differs")
-            if fault in ("hassmic", "install", "start", "prepare", "ownership", "spawn"):
-                require(not any(c[:2] == ["install", "-r"] for c in box.calls()), "failure continued to screen")
-            if fault in ("prepare", "ownership", "spawn", "start"):
-                require((box.device / "bin/echo-bridge").is_file(), "start failure lost installed files")
-                require(not (box.device / "private/run").exists(), "start failure leaked run state")
-                require(not (box.root / "remote/echo-bridge.lock").exists(), "start failure leaked lock")
-            if fault in ("prepare", "ownership"):
-                require(not any("setsid " in " ".join(c) for c in box.calls()), "preparation failure launched")
-            if fault in ("screen", "home", "launch"):
-                release_started(box)
-                release_stop(box)
-            if fault == "hassmic":
-                require(not any(c[0] == "push" for c in box.calls()), "absent hassmic mutated state")
-    for devices in ("", "fixture\toffline\n", "a\tdevice\nb\tdevice\n"):
-        with ReleaseBox() as box:
-            (box.root / "devices").write_text(devices)
-            box.invoke(code=1)
-            require(box.calls() == [["devices"]], "bad selection caused effects")
-    with ReleaseBox() as box:
-        (box.tools / "adb").unlink()
-        box.invoke(code=1)
-        require(not (box.root / "downloads").exists(), "missing adb downloaded")
-    print("F08 F09 F10 F11 F12: PASS")
-
-
-def retention_cases():
-    with ReleaseBox() as box:
-        override = box.root / "config ' $(touch escaped).toml"
-        override.write_text(SENTINEL)
-        box.invoke(["--version", "v" + box.version, "--config", str(override)])
-        require((box.device / "private/bridge.toml").read_text() == SENTINEL, "config bytes changed")
-        prompt = box.device / "home/prompts/voice.md"
-        prompt.write_text("edited voice")
-        release_started(box)
-        release_stop(box)
-        override.write_text("replacement")
-        box.invoke(["--config", str(override)])
-        release_started(box, starts=2)
-        require(prompt.read_text() == "edited voice", "prompt edit lost")
-        require((box.device / "private/bridge.toml").read_text() == SENTINEL, "existing config lost")
-        require(sum(c[:2] == ["install", "-r"] for c in box.calls()) == 1, "existing APK reinstalled")
-        require(not (box.root / "escaped").exists(), "filename executed")
-        release_stop(box)
-    with ReleaseBox() as box:
-        (box.root / "remote/echo-bridge.lock").mkdir()
-        box.invoke(code=1)
-        require((box.root / "remote/echo-bridge.lock").is_dir() and not box.device.exists(), "competing install mutated state")
+def usage_cases():
     for args, code in ((["--version", "$(touch escaped)"], 2), (["--config", "missing"], 1),
-                        (["--version", "0.1.0\ninvalid"], 2), (["--unknown"], 2)):
+                        (["--version", "0.1.0\ninvalid"], 2), (["--unknown"], 2), ([], 2)):
         with ReleaseBox() as box:
+            if not args:
+                box.wrapper.write_bytes((ROOT / "scripts/install.sh").read_bytes())
             box.invoke(args, code=code)
-            require(box.calls() == [] and not (box.root / "downloads").exists(), "invalid CLI caused effects")
-    print("F02 F13 F14 F15: PASS")
+            require(box.installer_args() is None and box.calls() == [] and not (box.root / "downloads").exists(),
+                    "invalid CLI caused effects")
+    print("F32 Linux bootstrap: source version and usage refusals=PASS")
 
 
 def interruption_case():
@@ -274,19 +234,20 @@ def interruption_case():
             os.read(fd, 100)
             os.killpg(child.pid, signal.SIGTERM)
             stdout, stderr = child.communicate(timeout=10)
-            require(child.returncode != 0 and b"Echo installed" not in stdout, "interruption reported success")
+            require(child.returncode != 0 and b"synthetic installer executed" not in stdout, "interruption reported success")
             require(SENTINEL.encode() not in stdout + stderr, "interruption leaked private data")
-            require(box.calls() == [] and not list((box.root / "tmp").iterdir()), "interruption leaked state")
+            require(box.installer_args() is None and box.calls() == [] and not list((box.root / "tmp").iterdir()),
+                    "interruption leaked state")
         finally:
             os.close(fd)
             if child.poll() is None:
                 os.killpg(child.pid, signal.SIGKILL)
                 child.communicate()
-    print("F14 cancellation: PASS")
+    print("F32 Linux bootstrap: interruption cleanup=PASS")
 
 
-def package_cases():
-    path_diagnostic_cases()
+def package_cases(template):
+    path_diagnostic_cases(template)
     native_flags_cases()
     for value in ("0.1.0", "0.0.0-dev.abc123"):
         require(PACK.version(value) == value, "version changed")
@@ -296,8 +257,9 @@ def package_cases():
             raise AssertionError("invalid version accepted")
         except ValueError:
             pass
-    with ReleaseBox() as box:
-        independent_bundle(box.assets, PACK)
+    with ReleaseBox(template=template) as box:
+        independent_bundle(box.assets, PACK, asset_names)
+        checksum_set_cases(box)
         for marker in (b"/home/example/private/file", b"C:\\Users\\example\\private", b"-----BEGIN PRIVATE KEY-----"):
             require(PACK.PRIVATE.search(marker) is not None, "private marker missed")
         for name in ("../escape", "licenses/token.txt", "credentials.json", "/absolute", "licenses/../escape"):
@@ -313,7 +275,7 @@ def package_cases():
     for name, content, update in (("licenses/extra.txt", b"/home/example/private/file", True),
                                   ("licenses/secret.txt", b"seed", True),
                                   ("bin/cacert.pem", b"changed", False)):
-        with ReleaseBox() as box:
+        with ReleaseBox(template=template) as box:
             with tarfile.open(box.archive) as bundle:
                 files = {m.name: bundle.extractfile(m).read() for m in bundle.getmembers()}
             files[name] = content
@@ -343,7 +305,21 @@ def package_cases():
     print("U-PACK I-BUNDLE: PASS")
 
 
-def path_diagnostic_cases():
+def checksum_set_cases(box):
+    sums = box.assets / "SHA256SUMS"
+    rows = sums.read_text().splitlines()
+    for invalid in (rows[:-1], [*rows, rows[0]], [*rows, "0" * 64 + "  unexpected"],
+                    [*rows[:-1], rows[-1].replace("  ", " ", 1)]):
+        sums.write_text("\n".join(invalid) + "\n")
+        try:
+            PACK.verify(box.archive, sums)
+        except PACK.BundleError:
+            pass
+        else:
+            raise AssertionError("invalid asset checksum set accepted")
+
+
+def path_diagnostic_cases(template):
     paths = (b'/home/example/.cargo/registry/src/index/public-1.0/src/lib.rs',
              b'/Users/example/.rustup/toolchains/stable/lib/source.rs',
              b'C:\\Users\\example\\private\\file')
@@ -363,17 +339,12 @@ def path_diagnostic_cases():
         require(mapped["checkout"] == 2 and mapped["other"] == 2 and mapped["current_home"] == 4
                 and mapped["external"] == 0, "remap arguments misclassified as external paths")
     with tempfile.TemporaryDirectory() as temporary:
-        assets = Path(temporary)
-        codex = assets / "codex"
-        codex.mkdir()
-        for name in ("codex-app-server", "cacert.pem", "LICENSE", "NOTICE"):
-            (codex / name).write_bytes(b"synthetic public input")
-        (codex / "codex-app-server").write_bytes(b'\x00'.join(paths))
-        shutil.copyfile(TEMPLATE, assets / TEMPLATE.name)
+        assets = Path(temporary) / "assets"
+        assets.mkdir()
+        fixture = assets.parent / "public"
+        fixture.write_bytes(b"synthetic public input")
         try:
-            PACK.assemble(assets, "0.1.0", "a" * 40, "b" * 40, codex,
-                          codex / "LICENSE", codex / "NOTICE",
-                          {"licenses/ca/MPL-2.0.txt": b"license", "licenses/ca/NOTICE": b"notice"})
+            assemble_fixture(assets, fixture, fixture, (fixture, fixture), template, b'\x00'.join(paths))
             raise AssertionError("private binary accepted")
         except PACK.BundleError:
             pass
@@ -462,7 +433,6 @@ def configure_native():
 
 
 def main():
-    global TEMPLATE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path)
     parser.add_argument("--configure-native", action="store_true")
@@ -471,27 +441,19 @@ def main():
     if args.configure_native:
         configure_native()
         return
-    if args.assets is not None:
-        # The fixture suite already runs the fault matrix against the same installer scripts.
-        with ReleaseBox(assets=args.assets.resolve()) as box:
-            happy_case(box)
-        print("release-kit: bundle=PASS manifest=PASS privacy=PASS install=PASS")
+    if args.assets:
+        verify_delivered_assets(args.assets.resolve())
         return
     with tempfile.TemporaryDirectory(prefix="template-witness-") as temporary:
         generated = Path(temporary) / "generated"
         generate(generated)
         push_cases(generated)
-        TEMPLATE = generated / "template-0.1.0.screenpack.tar.gz"
-        run_cases()
-
-
-def run_cases():
-    exclusion_cases(TEMPLATE, PACK)
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda function: function(), (package_cases, happy_cases, integrity_cases, failure_cases, retention_cases, interruption_case)))
-    from test_release_redirects import redirect_cases
-    redirect_cases(ReleaseBox)
-    print("release-kit tests: integrity=PASS install=PASS failures=PASS retention=PASS privacy=PASS")
+        template = generated / "template-0.1.0.screenpack.tar.gz"
+        exclusion_cases(template, PACK)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            cases = (partial(package_cases, template), happy_cases, integrity_cases, usage_cases, interruption_case)
+            list(pool.map(lambda function: function(), cases))
+    print("release-kit tests: integrity=PASS bootstrap=PASS privacy=PASS")
 
 
 if __name__ == "__main__":

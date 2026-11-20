@@ -1,4 +1,5 @@
 """Held-stdin lifecycle witness through the delivered CLI and controlled adb."""
+import contextlib
 import json
 import os
 import selectors
@@ -10,8 +11,37 @@ import sys
 from pathlib import Path
 import subprocess
 from unittest.mock import patch
-
 from test_echo_install import Sandbox, prepare_lifecycle, require, owner, set_owner
+
+def ownership_lifetime_case():
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="echo-owner-") as directory:
+        base = Path(directory)
+        path = base / "stage"
+        path.touch()
+        set_owner(base, path, "9999:9999")
+        deleted = path.stat()
+        path.unlink()
+        path.touch()
+        # Deterministically model inode recycling; never wait for an allocator.
+        with patch.object(Path, "stat", return_value=deleted):
+            require(owner(base, path) == "0:0", "recycled inode inherited deleted ownership")
+        set_owner(base, path, "9999:3990")
+        published = base / "published"
+        path.rename(published)
+        os.link(published, path)
+        require(owner(base, published) == owner(base, path) == "9999:3990",
+                "publication or hardlink lost ownership")
+        published.write_text("retained bytes")
+        require(owner(base, path) == "9999:3990", "writing retained data reset ownership")
+        fifo = base / "stdin"
+        os.mkfifo(fifo, 0o600)
+        set_owner(base, fifo, "9999:3990")
+        require(owner(base, fifo) == "9999:3990", "FIFO ownership transfer lost")
+        fifo.unlink()
+        os.mkfifo(fifo, 0o600)
+        require(owner(base, fifo) == "0:0", "recreated FIFO inherited deleted ownership")
+    print("NR ownership-lifetime=PASS")
 
 
 def recovered_metadata(box):
@@ -27,8 +57,6 @@ def recovered_metadata(box):
         path = box.device / name
         require(owner(box.root, path) == "0:0", "recovery executable owner differs")
         require(path.stat().st_mode & 0o777 == mode, "recovery executable mode differs")
-
-
 def recreate_root_data(box):
     # Control only the deleted object's inode identity, preserving other tests'
     # real stat observations even while their sandboxes run in parallel.
@@ -38,15 +66,11 @@ def recreate_root_data(box):
     deleted.touch()
     recycled_info = recycled.stat()
     real_stat = type(deleted).stat
-
     def observed_stat(path, *args, **kwargs):
         return recycled_info if path == deleted else real_stat(path, *args, **kwargs)
-
     with patch.object(type(deleted), "stat", observed_stat):
         set_owner(box.root, deleted, "9999:3990")
     deleted.unlink()
-
-
 def recovery_case(box, fault):
     box.prompt("voice.md", "default voice")
     prepare_lifecycle(box)
@@ -87,31 +111,32 @@ def recovery_case(box, fault):
     box.run(["stop"])
     require((box.root / "eof").read_text() == "EOF", "recovered child did not see EOF")
     require(not (box.device / "private/run").exists(), "recovered stop leaked run state")
-
-
 def paused_start(box, point):
     for name in ("paused", "release"):
         os.mkfifo(box.root / name)
     (box.root / "pause").write_text(point)
-    fd = os.open(box.root / "paused", os.O_RDWR | os.O_NONBLOCK)
     child = subprocess.Popen(["/bin/sh", str(box.script), "start"], cwd=box.root,
-                             env=box.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    with selectors.DefaultSelector() as selector:
-        selector.register(fd, selectors.EVENT_READ)
-        require(bool(selector.select(5)), "start did not reach controlled barrier")
-        os.read(fd, 100)
-    os.close(fd)
-    return child
-
-
+                             env=box.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, start_new_session=True)
+    with os.fdopen(os.open(box.root / "paused", os.O_RDWR | os.O_NONBLOCK), "rb") as ready:
+        with selectors.DefaultSelector() as selector:
+            selector.register(ready, selectors.EVENT_READ)
+            if selector.select(5) and ready.read(6) == b"paused":
+                return child
+    status = child.poll()
+    observed = {name: (box.root / name).exists() for name in ("pause", "runas-user", "child-pid")}
+    stage = box.root / "failed-stage"
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(child.pid, signal.SIGKILL)
+    child.communicate(timeout=5)
+    raise AssertionError(f"start did not reach controlled barrier: exit={status}, "
+                         f"markers={observed}, failed stage={stage.read_text() if stage.exists() else '-'}")
 def release_start(box, child, code):
     with (box.root / "release").open("w") as release:
         release.write("released")
     out, err = child.communicate(timeout=10)
     require(child.returncode == code, "paused start exit differs: " + err)
     require(not out if code else out == "echo-install: started (hassmic connected)\n", "paused start result differs")
-
-
 def concurrent_cases():
     for rival in ("start", "install", "uninstall"):
         with Sandbox() as box:
@@ -129,8 +154,6 @@ def concurrent_cases():
                     "concurrent launch count differs")
             box.run(["stop"])
     print("F13: PASS (start/start, start/install and start/uninstall)")
-
-
 def interrupted_cases():
     for point in ("setsid", "read -r end <"):
         with Sandbox() as box:
@@ -149,8 +172,6 @@ def interrupted_cases():
         box.run(["start"])
         box.run(["stop"])
     print("F17: PASS")
-
-
 def lifecycle_cases():
     with Sandbox() as box:
         prepare_lifecycle(box)
@@ -215,11 +236,17 @@ def lifecycle_cases():
         require((box.device / "private/bridge.toml").exists(), "failed stop removed private state")
         require(not any(call[0] == "push" or "kill " in " ".join(call)
                         for call in box.calls()[before:]), "persistent child replaced or signalled")
+    for user in ("root", "0", "unknown"):
+        with Sandbox() as box:
+            prepare_lifecycle(box)
+            (box.root / "process-user").write_text(user)
+            box.run(["start"], 1)
+            require((box.root / "eof").read_text() == "EOF",
+                    "unsafe startup identity did not close owned stdin")
+            box.run(["stop"])
     concurrent_cases()
     interrupted_cases()
     print("F09 F10 F11 F12 F14 F15 F16: PASS")
-
-
 def nonroot_cases():
     # Runtime ownership is modeled, never changed on the worker host.
     for trigger in ("install", "start"):
@@ -285,8 +312,6 @@ def nonroot_cases():
                 require(path.read_text() == "retained bytes" and outside.read_text() == "outside bytes", "migration escaped")
                 require(not (box.root / "remote/echo-bridge.lock").exists(), "migration leaked lock")
     print("NR install=PASS ownership=PASS migration=PASS launch=PASS status=PASS")
-
-
 def configure_lifecycle(box, mode="ready", bridge=None):
     os.mkfifo(box.root / "ready")
     (box.root / "remote/hassmic/boot.log").write_text("old client connected\n")
@@ -315,15 +340,12 @@ if mode != 'exit':
     bridge = bridge or box.files["bridge"]
     bridge.write_text("#!" + sys.executable + "\n" + fixture)
     (box.root / "mode").write_text(mode)
-    for name in ("ps", "date", "sleep"):
+    for name in ("date", "sleep"):
         wrapper = box.root / "remote-tools" / name
-        wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+        wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " -S "
                            + shlex.quote(str(Path(__file__).with_name("test_echo_install.py").resolve())) + " --tool " + name + ' "$@"\n')
         wrapper.chmod(0o755)
     bridge.chmod(0o755)
-
-
-
 def prepared_run(base):
     """Observe real preparation before the launcher's atomic gate is consumed."""
     run = base / "remote/echo-bridge/private/run"
@@ -341,8 +363,6 @@ def prepared_run(base):
     with log.open("rb") as source:
         expected = subprocess.check_output([shutil.which("cksum")], stdin=source)
     require((run / "log-prefix").read_bytes() == expected, "log prefix not captured")
-
-
 def release_started(box, starts=1):
     calls = box.calls()
     launches = [c for c in calls if "setsid " in " ".join(c)]
@@ -356,11 +376,102 @@ def release_started(box, starts=1):
     require(json.loads((box.root / "child-args").read_text()) ==
             ["--config", str(box.device / "private/bridge.toml"),
              "--trace", str(box.device / "private/bridge.trace")], "release child arguments differ")
-
-
 def release_stop(box):
     box.run(["stop"])
     require((box.root / "eof").read_text() == "EOF", "release stop did not close stdin")
     require(not (box.device / "private/run").exists(), "release stop leaked state")
     # A later start must prove its own held stdin rather than inherit this marker.
     (box.root / "eof").unlink()
+
+
+def setup_operator_cases():
+    private_connection_cases()
+    # Real authored shell; substitute only Android filesystem/tools and bridge process.
+    cases = (("signin", "stopped", 0), ("signin", "signed-in", 0), ("link", "nobody", 0), ("link", "9999", 0),
+             ("ensure-signin", "stopped", 0), ("ensure-signin", "signed-in", 0),
+             ("ensure-signin", "nobody", 1), ("ensure-signin", "locked", 1),
+             ("ensure-signin", "dependency", 1), ("ensure-signin", "redirected", 1),
+             ("signin", "nobody", 1), ("link", "stopped", 1), ("link", "root", 1),
+             ("link", "unavailable", 1), ("signin", "locked", 1),
+             ("signin", "dependency", 1), ("signin", "redirected", 1))
+    for verb, state, code in cases:
+        with Sandbox() as box:
+            box.install()
+            box.run([verb], 2)  # Private operations never grow the Linux host CLI.
+            for name in ("echo-install.sh", "echo-install-release.sh", "echo-install-setup.sh"):
+                path = box.script.with_name(name)
+                path.write_text(path.read_text().replace("/data/local", str(box.root / "remote")))
+            bridge = box.device / "bin/echo-bridge"
+            bridge.write_text("#!" + sys.executable + "\n" + """
+import json, os, sys
+from pathlib import Path
+root = Path(os.environ['FAKE_ROOT'])
+with (root / 'operator-argv').open('a') as ledger: ledger.write(json.dumps(sys.argv[1:]) + '\\n')
+(root / 'operator-user').write_text(os.environ.get('FAKE_UID', 'root'))
+assert not sys.stdin.buffer.read(), 'operator stdin was not closed'
+print('synthetic-private-content-do-not-print')
+print('synthetic-private-content-do-not-print', file=sys.stderr)
+sys.exit(1 if (root / 'operator-fails').exists() or
+         (sys.argv[1] == 'status' and not (root / 'signed-in').exists()) else 0)
+""")
+            config = box.device / "private/bridge.toml"
+            original = config.read_bytes()
+            if state in ("nobody", "9999", "root", "unavailable"):
+                (box.root / "running").touch()
+                (box.root / "process-user").write_text(state)
+            if state == "locked":
+                (box.root / "remote/echo-bridge.lock").mkdir()
+            if state == "dependency":
+                (box.root / "operator-fails").touch()
+            if state == "signed-in":
+                (box.root / "signed-in").touch()
+            if state == "redirected":
+                config.unlink()
+                config.symlink_to(box.files["config"])
+            box.env["PATH"] = str(box.root / "remote-tools") + ":/usr/bin:/bin"
+            result = box.run(["--device", verb], code)
+            called = box.root / "operator-argv"
+            require(called.exists() == (code == 0 or state == "dependency"), "operator admission differs")
+            if called.exists():
+                verbs = ["status"] if verb == "ensure-signin" else [verb]
+                if verb == "ensure-signin" and state != "signed-in":
+                    verbs.append("signin")
+                require([json.loads(line) for line in called.read_text().splitlines()] ==
+                        [[step, "--config", str(config)] for step in verbs], "operator argv/count differs")
+                require((box.root / "operator-user").read_text() == "9999", "operator ran as root")
+            require(not list(box.root.glob("holder-pid")), "operator started the runtime")
+            require((box.root / "remote/echo-bridge.lock").exists() == (state == "locked"), "operator lock leaked")
+            if state != "redirected":
+                require(config.read_bytes() == original, "operator changed config bytes")
+            require(result.stdout == ("echo-install: " + verb + " completed\n" if code == 0 else ""),
+                    "operator success/privacy differs")
+    print("echo-install setup: signin=PASS resume=PASS link=PASS identity=PASS lock=PASS privacy=PASS")
+
+def private_connection_cases():
+    for verb, name in (("setup-config", "bridge.toml"), ("setup-pairing", "screen-pairing.txt")):
+        for fault in ("none", "missing", "empty", "oversize", "owner", "mode", "hardlink", "symlink", "parent", "root", "args"):
+            with Sandbox() as box:
+                for script in box.script.parent.glob("echo-install*.sh"):
+                    script.write_text(script.read_text().replace("/data/local", str(box.root / "remote")))
+                box.env["PATH"] = str(box.root / "remote-tools") + ":/usr/bin:/bin"
+                private = box.device / "private"
+                private.mkdir(parents=True); private.chmod(0o700); set_owner(box.root, private, "9999:9999")
+                target = private / name
+                target.write_text("SYNTHETIC-PRIVATE-PAIR\n"); target.chmod(0o600); set_owner(box.root, target, "9999:9999")
+                if fault == "missing": target.unlink()
+                elif fault == "empty": target.write_text("")
+                elif fault == "oversize": target.write_bytes(b"x" * (1048577 if verb == "setup-config" else 16385))
+                elif fault == "owner": set_owner(box.root, target, "0:0")
+                elif fault == "mode": target.chmod(0o644)
+                elif fault == "hardlink": os.link(target, private / "alias")
+                elif fault in ("symlink", "parent", "root"):
+                    path = target if fault == "symlink" else private if fault == "parent" else box.device
+                    saved = path.with_name(path.name + "-saved")
+                    path.rename(saved); path.symlink_to(saved, target_is_directory=fault != "symlink")
+                args = ["--device", verb] + (["ignored"] if fault == "args" else [])
+                result = box.run(args, 0 if fault == "none" else 1)
+                require(result.stdout == ("SYNTHETIC-PRIVATE-PAIR\n" if fault == "none" else "") and not result.stderr,
+                        "private connection admission/privacy differs: " + verb + "/" + fault)
+                require(not box.calls(), "private device reads invoked host adb")
+                require(not (box.root / "remote/echo-bridge.lock").exists(), "read acquired lifecycle lock")
+    print("echo-install private connection: reads=PASS unsafe=REFUSED account-files=UNREAD")
