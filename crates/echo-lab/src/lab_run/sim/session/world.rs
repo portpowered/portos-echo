@@ -13,6 +13,7 @@ use crate::lab_run::sim::{
     production,
     trace::Trace,
 };
+use recovery::MediaBoundary;
 use serde_json::{Value, json};
 use std::{
     fmt::Write as _,
@@ -45,6 +46,7 @@ pub(super) struct World {
     pub endpoints: Vec<std::net::SocketAddr>,
     wait_for_long_answer: bool,
     recovery: bool,
+    media_boundary: Option<MediaBoundary>,
 }
 
 impl World {
@@ -61,7 +63,8 @@ impl World {
         }
         self.private = Some(Root::create(root.into())?);
         self.root = root.into();
-        self.recovery = journey == super::Journey::Recovery;
+        self.recovery = journey.recovers();
+        self.media_boundary = (journey == super::Journey::ActiveMedia).then_some(MediaBoundary::Waiting);
         let address = self.start_device(python, journey).await?;
         let provider = Provider::start(python, script).await?;
         let mut command = tokio::process::Command::new(bridge);
@@ -152,6 +155,9 @@ impl World {
                 self.abandon_stuck_turn().await?;
             } else {
                 self.wait_for_call(2).await?;
+                if self.media_boundary.is_some() {
+                    self.prepare_playback().await?;
+                }
                 self.settle(index, 0).await?;
             }
         } else {
@@ -177,9 +183,14 @@ impl World {
 
     async fn settle(&mut self, index: usize, replies: usize) -> Result<(), String> {
         let mut gates = Gates::new(index, replies);
+        if self.playback_pending() {
+            gates.phase = Phase::Delegated;
+        }
         let mut started = self.epoch();
         loop {
             let timing = self.timing()?;
+            self.cross_playback(&timing).await?;
+            let playback_pending = self.playback_pending();
             let provider = self.provider.as_mut().ok_or("session: missing provider")?;
             // RTP and transcript gates follow the media cadence; once the reply
             // is received only the bridge's own clock remains.
@@ -187,7 +198,7 @@ impl World {
                 provider.tick().await?;
             }
             let admitted = index > 0 || (connected(&self.clock) && timing.endpoint_seen());
-            let milliseconds = gates.advance(provider, &timing, admitted).await?;
+            let milliseconds = gates.advance(provider, &timing, admitted, playback_pending).await?;
             if self.wait_for_long_answer {
                 self.release_long_answer().await?;
                 if !self.wait_for_long_answer {
@@ -424,7 +435,13 @@ impl Gates {
 
     /// Open the next gate when its condition holds and return the next clock
     /// step: zero while the released reply flows, else one media frame.
-    async fn advance(&mut self, provider: &Provider, timing: &Timing, admitted: bool) -> Result<u64, String> {
+    async fn advance(
+        &mut self,
+        provider: &Provider,
+        timing: &Timing,
+        admitted: bool,
+        playback_pending: bool,
+    ) -> Result<u64, String> {
         let played = timing.played;
         let (control, next) = match self.phase {
             Phase::Admitting if admitted => (Control::Delegate(self.index), Phase::Delegated),
@@ -437,8 +454,18 @@ impl Gates {
             }
             Phase::Released if played >= self.base + 2880 => (Control::Audio(5..11), Phase::Tail),
             Phase::Tail if played >= self.base + 8640 => (Control::Transcripts(self.index), Phase::Spoken),
-            _ => return Ok(self.clock(timing)),
+            _ => return Ok(if playback_pending { 0 } else { self.clock(timing) }),
         };
+        if playback_pending && next == Phase::Released {
+            provider
+                .control(Control::Events(
+                    "active-playback",
+                    vec![json!({
+                        "type":"output_transcript.added","item":{"text":"The new wake was answered."}
+                    })],
+                ))
+                .await?;
+        }
         provider.control(control).await?;
         self.phase = next;
         Ok(self.clock(timing))

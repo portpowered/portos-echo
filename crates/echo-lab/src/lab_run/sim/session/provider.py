@@ -97,6 +97,7 @@ class Script:
         if step.get('wait_for_release'):
             emit({'event': 'provider.waiting', 'turn': turn})
             assert release_goodbye.wait(20), 'runner was not released at the scripted boundary'
+            release_goodbye.clear()
         if 'call' in step:
             item = {'type': 'function_call', 'id': f'fc-{turn}-{self.step}', 'call_id': f'session-{turn}-{self.step}',
                     'name': step['call'], 'arguments': json.dumps(step['arguments']), 'status': 'completed'}

@@ -24,9 +24,10 @@ pub(super) enum Journey {
     Dispatch,
     Limits,
     Recovery,
+    ActiveMedia,
 }
 
-const JOURNEYS: [(&str, Journey); 8] = [
+const JOURNEYS: [(&str, Journey); 9] = [
     ("session-two-turns", Journey::Turns),
     ("session-idle-timeout", Journey::Idle),
     ("session-extend-capped", Journey::Extend),
@@ -35,6 +36,7 @@ const JOURNEYS: [(&str, Journey); 8] = [
     ("session-dispatch-waits", Journey::Dispatch),
     ("session-delegation-limits", Journey::Limits),
     ("session-delegation-recovery", Journey::Recovery),
+    ("session-delegation-media-ceiling", Journey::ActiveMedia),
 ];
 
 const LONG_ANSWER: &str = "The twelve checks are complete.";
@@ -79,9 +81,9 @@ impl Journey {
                 steps.push(json!({"say":LONG_ANSWER,"wait_for_release":true}));
                 json!([steps])
             }
-            Self::Recovery => json!([
+            Self::Recovery | Self::ActiveMedia => json!([
                 [{"say":"This stale answer must never play.","wait_for_release":true,"abandoned":true}],
-                [{"say":"The new wake was answered."}]
+                [{"say":"The new wake was answered.","wait_for_release":self == Self::ActiveMedia}]
             ]),
         }
     }
@@ -92,7 +94,7 @@ impl Journey {
             Self::Extend => Some(12),
             Self::LongWait => Some(60),
             Self::Limits => Some(90),
-            Self::Recovery => Some(RECOVERY_MAX_SECONDS),
+            Self::Recovery | Self::ActiveMedia => Some(RECOVERY_MAX_SECONDS),
             _ => None,
         }
     }
@@ -105,15 +107,15 @@ impl Journey {
     }
 
     fn utterances(self) -> usize {
-        if matches!(self, Self::Turns | Self::Recovery) {
-            2
-        } else {
-            1
-        }
+        if self == Self::Turns || self.recovers() { 2 } else { 1 }
+    }
+
+    fn recovers(self) -> bool {
+        matches!(self, Self::Recovery | Self::ActiveMedia)
     }
 
     fn trace_run(self) -> Option<&'static str> {
-        (self != Self::Recovery).then_some("run-1")
+        (!self.recovers()).then_some("run-1")
     }
 }
 

@@ -1,7 +1,13 @@
 //! Hold one runner request across the wake's cutoff, then answer a new wake.
 use super::super::RECOVERY_MAX_SECONDS;
-use super::{Control, World};
+use super::{Control, Timing, World};
 use serde_json::{Value, json};
+
+pub(super) enum MediaBoundary {
+    Waiting,
+    Playback(u64),
+    Crossed,
+}
 
 impl World {
     pub(super) async fn abandon_stuck_turn(&mut self) -> Result<(), String> {
@@ -27,15 +33,19 @@ impl World {
             .and_then(|row| row["elapsed_ms"].as_u64())
             .ok_or("session: no admitted run clock")?;
         let cutoff = run + RECOVERY_MAX_SECONDS * 1000;
+        if self.media_boundary.is_some() {
+            self.speak_across_cutoff(cutoff).await?;
+        }
+        let milliseconds = u64::from(self.media_boundary.is_none());
         let before = cutoff
-            .checked_sub(self.epoch() + 1)
+            .checked_sub(self.epoch() + milliseconds)
             .ok_or("session: stall was admitted after cutoff")?;
         self.advance_live(before).await?;
         self.read_trace()?;
         if self.count("run.ended") != 0 || self.count("delegation.resolved") != 0 {
             return Err("session: stalled delegation ended before the run cutoff".into());
         }
-        self.cross_cutoff(cutoff).await?;
+        self.cross_cutoff(cutoff, milliseconds).await?;
         self.read_trace()?;
         let ended = self
             .trace
@@ -62,22 +72,116 @@ impl World {
         .await
     }
 
-    async fn cross_cutoff(&mut self, cutoff: u64) -> Result<(), String> {
+    async fn cross_cutoff(&mut self, cutoff: u64, milliseconds: u64) -> Result<(), String> {
         let bridge = self.bridge.as_mut().ok_or("session: missing bridge")?;
         // The expired voice owner drops its guarded drain receiver. Expect
         // the plain clock receipt and then renewed bridge readiness.
-        bridge.send(&json!({"action":"advance_clock","milliseconds":1})).await?;
+        bridge
+            .send(&json!({"action":"advance_clock","milliseconds":milliseconds}))
+            .await?;
         let mut advanced = false;
         let mut ready = false;
         while !advanced || !ready {
             let row = bridge.line().await?;
             match row["event"].as_str() {
-                Some("bridge.clock_advanced") if row["milliseconds"] == 1 && !advanced => advanced = true,
+                Some("bridge.clock_advanced") if row["milliseconds"] == milliseconds && !advanced => advanced = true,
                 Some("bridge.ready") if !ready => ready = true,
                 event => return Err(format!("session: unexpected cutoff event {event:?}")),
             }
         }
         self.clock["epoch_ms"] = json!(cutoff);
+        Ok(())
+    }
+
+    async fn seek_before(&mut self, cutoff: u64) -> Result<(), String> {
+        let distance = cutoff
+            .checked_sub(self.epoch() + 500)
+            .ok_or("session: missed media lead-in")?;
+        self.advance_live(distance).await
+    }
+
+    async fn speak_across_cutoff(&mut self, cutoff: u64) -> Result<(), String> {
+        self.seek_before(cutoff).await?;
+        self.provider()?
+            .control(Control::Events(
+                "speech-start",
+                vec![json!({
+                    "type":"input_audio_buffer.speech_started","audio_start_ms":0,"item_id":"synthetic-speech"
+                })],
+            ))
+            .await?;
+        self.satellite
+            .as_ref()
+            .ok_or("session: missing satellite")?
+            .speak(false)
+            .await?;
+        self.wait_until(
+            "speech notification",
+            |world| {
+                world
+                    .provider
+                    .as_ref()
+                    .is_some_and(|provider| provider.count("events_sent") == 1)
+            },
+            0,
+        )
+        .await?;
+        self.advance_live(cutoff - self.epoch()).await?;
+        self.read_trace()?;
+        if self.count("run.ended") != 0 || self.count("delegation.resolved") != 0 {
+            return Err("session: run cutoff interrupted active speech".into());
+        }
+        self.provider()?
+            .control(Control::Events(
+                "speech-finish",
+                vec![json!({
+                    "type":"turn.done","turn":{"role":"user","transcript":"That was my full question."}
+                })],
+            ))
+            .await
+    }
+
+    pub(super) async fn prepare_playback(&mut self) -> Result<(), String> {
+        self.provider()?.control(Control::Delegate(1)).await?;
+        self.wait_until(
+            "second runner request",
+            |world| {
+                world
+                    .provider
+                    .as_ref()
+                    .is_some_and(|provider| provider.count("waiting") == 2)
+            },
+            20,
+        )
+        .await?;
+        let run = self
+            .trace
+            .records
+            .iter()
+            .find(|row| row["event"] == "run.started" && row["run_id"] == "run-2")
+            .and_then(|row| row["elapsed_ms"].as_u64())
+            .ok_or("session: no second run clock")?;
+        let cutoff = run + RECOVERY_MAX_SECONDS * 1000;
+        self.seek_before(cutoff).await?;
+        self.provider()?.control(Control::ReleaseGoodbye).await?;
+        self.media_boundary = Some(MediaBoundary::Playback(cutoff));
+        Ok(())
+    }
+
+    pub(super) fn playback_pending(&self) -> bool {
+        matches!(self.media_boundary, Some(MediaBoundary::Playback(_)))
+    }
+
+    pub(super) async fn cross_playback(&mut self, timing: &Timing) -> Result<(), String> {
+        if let Some(MediaBoundary::Playback(cutoff)) = self.media_boundary
+            && timing.played >= 2880
+        {
+            if timing.replies_played() != 0 || self.epoch() >= cutoff {
+                return Err("session: expected open reply PCM before the cutoff".into());
+            }
+            self.step(cutoff - self.epoch() + 1).await?;
+            self.media_boundary = Some(MediaBoundary::Crossed);
+        }
         Ok(())
     }
 

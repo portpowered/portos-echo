@@ -1,0 +1,16 @@
+id: session-delegation-media-ceiling
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - say: "Computer, what day is it?"
+  - expect_trace:
+      - "run.ended {reason: session_ceiling}"
+  - expect_trace:
+      - "reply.played {outcome: played}"
+      - wyoming.run_ended
+budgets:
+  session_listen_seconds: 3
+  session_max_seconds: 90
+negative: []

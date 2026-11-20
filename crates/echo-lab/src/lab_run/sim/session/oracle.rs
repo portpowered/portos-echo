@@ -18,8 +18,12 @@ pub(super) struct Evidence<'a> {
 }
 
 pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, String> {
-    if journey == Journey::Recovery {
-        return recovery(evidence);
+    if journey.recovers() {
+        let mut summary = recovery(evidence)?;
+        if journey == Journey::ActiveMedia {
+            media_ceiling(evidence, &mut summary)?;
+        }
+        return Ok(summary);
     }
     let summary = common(evidence)?;
     let detail = match journey {
@@ -30,9 +34,28 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
         Journey::LongWait => long_wait(evidence, &summary)?,
         Journey::End => end(evidence, &summary)?,
         Journey::Limits => limits(evidence, &summary)?,
-        Journey::Recovery => return Err("session: invalid recovery dispatch".into()),
+        Journey::Recovery | Journey::ActiveMedia => return Err("session: invalid recovery dispatch".into()),
     };
     Ok(json!({"timeline":summary,"journey":detail}))
+}
+
+fn media_ceiling(evidence: &Evidence, summary: &mut Value) -> Result<(), String> {
+    let event_time = |event: &str| {
+        evidence
+            .records
+            .iter()
+            .find(|row| row["run_id"] == "run-2" && row["event"] == event)
+            .and_then(|row| row["elapsed_ms"].as_u64())
+    };
+    let opened = event_time("run.started").ok_or("session: missing second wake timing")?;
+    let played = event_time("reply.played").ok_or("session: missing second Played timing")?;
+    let cutoff = opened + super::RECOVERY_MAX_SECONDS * 1000;
+    if played <= cutoff {
+        return Err("session: playback did not cross the run ceiling".into());
+    }
+    summary["playback_cutoff_ms"] = cutoff.into();
+    summary["playback_played_ms"] = played.into();
+    Ok(())
 }
 
 fn recovery(evidence: &Evidence) -> Result<Value, String> {
