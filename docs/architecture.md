@@ -371,10 +371,12 @@ selects `"live"`. Live search allows external web access; cached search sets pro
 is not exposed. Conventional models receive one hosted `web_search` declaration. Responses Lite models,
 including `gpt-6.1-sol`, receive the pin's standalone `web.run` extension instead, using the authenticated
 provider search API. Neither form adds local fetch, process, browser or file authority.
-The complete bridge dynamic catalog and nested `exec` callables remain unchanged; native direct tools
-add exactly `web.run` when enabled. Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
-Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["web"]` so search
-remains direct. The local-fake provider opts into `supports_standalone_web_search` to reproduce
+The complete bridge dynamic catalog remains unchanged; native direct tools are that catalog plus exactly
+`web.run` when enabled. Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
+Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["web","functions"]`
+so search and the bridge's own tools are direct declarations. Every catalog model is code-mode-only, and
+`exec` needs `codex-code-mode-host`, which the Echo does not have: a tool that is only an `exec` callable
+cannot be called there. The local-fake provider opts into `supports_standalone_web_search` to reproduce
 production support.
 
 Invalid types or values stop startup with exit 2, empty stdout and exactly
