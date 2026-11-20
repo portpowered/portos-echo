@@ -124,7 +124,6 @@ An existing grant keeps its granted permissions until you explicitly link again.
 subscription permissions but do not start an event subscription consumer. Real-light control is authorized for
 installed use; factory validation uses local synthetic devices and never acts on real lamps.
 
-
 For source builds, from the checkout:
 
 ```sh

@@ -61,7 +61,7 @@ async fn link(Extract(shared): Extract<Shared>, headers: HeaderMap, Form(form): 
     if !proof(&mut state, &headers, LINK, true) {
         return fail("invalid_dpop_proof");
     }
-    state.scopes = form["scope"].clone();
+    state.scopes.clone_from(&form["scope"]);
     state.device += 1;
     state.deadline = state.now.saturating_add(1800);
     state.bound = form.contains_key("resource");
