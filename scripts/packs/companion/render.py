@@ -18,7 +18,6 @@ POSE_SCALE = POSE_HEIGHT / 292
 # screen and the middle of the left two thirds at 1280 × 748.
 HOME_CENTER = 506
 CARD_CENTER = 252
-CARD_ROLES = {"setup", "approval", "error"}
 
 # Artwork rectangles (x, y, w, h), with atlas gutters removed. Keep the head
 # crown and waist aligned when changing poses.
@@ -48,7 +47,7 @@ SPEECH = (("idle", 9), ("half", 5), ("open", 8), ("half", 4), ("idle", 10),
           ("open", 5), ("half", 8), ("idle", 4), ("half", 4), ("open", 10),
           ("idle", 12))
 FRAMES = {"idle": 126, "connecting": 72, "listening": 48, "thinking": 72,
-          "speaking": 100, "muted": 30, "setup": 60, "approval": 60,
+          "speaking": 100, "muted": 30, "setup": 60, "setup-enter": 16, "approval": 60,
           "error": 60, "happy": 45}
 TRANSITION = 10
 
@@ -124,7 +123,7 @@ def timeline(role, frames):
     length = FRAMES[role]
     speech = tuple(pose for pose, run_length in SPEECH for _ in range(run_length))
     for index in range(length):
-        if role == "muted" or index in (0, length - 1):
+        if role in ("muted", "setup-enter") or index in (0, length - 1):
             yield frames["rest"]
             continue
         cycle = math.tau * index / (length - 1)
@@ -151,13 +150,19 @@ def ease_in_out(frame, count):
 
 
 def card_pan(role, count):
-    if role not in CARD_ROLES:
+    if role == "setup-enter":
+        amount = f"(1-cos(PI*n/{count - 1}))/2"
+    elif role == "setup":
+        amount = "1"
+    elif role in ("approval", "error"):
+        amount = ease_in_out("n", count)
+    else:
         return ""
-    # Translate the composited art as one silhouette, preserving the common
-    # neutral first and last frames. Padding keeps the revealed area clear.
+    # Move the neutral pose once on entry and hold card registration on replay.
+    # Padding keeps the area revealed by the translation clear.
     shift = HOME_CENTER - CARD_CENTER
     return (f",pad={WIDTH + shift}:{HEIGHT}:0:0:color=black@0,"
-            f"crop={SIZE.replace('x', ':')}:x='{shift}*({ease_in_out('n', count)})':y=0:exact=1")
+            f"crop={SIZE.replace('x', ':')}:x='{shift}*({amount})':y=0:exact=1")
 
 
 def encode(pack, raw, role, count):

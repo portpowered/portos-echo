@@ -1,24 +1,25 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
-import { activeVideo, open, playing, refresh } from "./pack-session.mjs";
+import { activeVideo, playing } from "./pack-session.mjs";
 
 const id = "companion@0.2.0";
-const viewport = { width: 1280, height: 748 };
+export const viewport = { width: 1280, height: 748 };
 const ready = { state: "ready", message: "Ready" };
+const thinking = { state: "thinking" };
+const link = {
+    frame: {
+        state: "link_code",
+        user_code: "TEST-CODE",
+        verification_uri: "https://127.0.0.1/activate",
+        expires_at_unix: 1795187160,
+    },
+    clip: "setup",
+    text: ["TEST-CODE", "https://127.0.0.1/activate", "Expires in 2 min"],
+};
 const presentations = [
     { frame: ready, clip: "idle" },
-    { frame: { state: "thinking" }, clip: "thinking" },
+    link,
     { frame: { state: "speaking" }, clip: "speaking" },
-    {
-        frame: {
-            state: "link_code",
-            user_code: "TEST-CODE",
-            verification_uri: "https://127.0.0.1/activate",
-            expires_at_unix: 1795187160,
-        },
-        clip: "setup",
-        text: ["TEST-CODE", "https://127.0.0.1/activate", "Expires in 2 min"],
-    },
     {
         frame: {
             state: "approval",
@@ -39,26 +40,6 @@ const presentations = [
     },
 ];
 
-async function selectCompanion(f) {
-    const button = (name) => f.page.getByRole("button", { name, exact: true });
-    await button("Settings").click();
-    await refresh(f.page);
-    await f.page.getByLabel("Pack HTTPS URL", { exact: true }).fill(f.peer.url);
-    await f.page.getByLabel("Pack SHA-256", { exact: true }).fill(f.sha256);
-    await button("Download pack").click();
-    await f.page.waitForFunction(() => window.packRevision === 1);
-    await refresh(f.page);
-    await f.page.getByLabel("Screen pack", { exact: true }).selectOption(id);
-    await button("Use screen pack").click();
-    await f.page
-        .getByText(
-            "Screen pack saved. Appearance updates without restarting the bridge.",
-            { exact: true },
-        )
-        .waitFor();
-    await button("Back").click();
-}
-
 async function settledArt(page) {
     await page.waitForFunction((selector) => {
         const video = document.querySelector(selector);
@@ -67,149 +48,453 @@ async function settledArt(page) {
             !document.querySelector(".pack-stage video[data-leaving]")
         );
     }, activeVideo);
-    const [art] = await visibleCharacterBoxes(page);
-    return art;
-}
-
-export async function visibleCharacterBoxes(page) {
-    return page.locator(".screen-pack .pack-stage").evaluate((stage) => {
-        // Project decoded VP9 art through object-fit: contain into CSS pixels.
-        // Intersect with the stage and its host before taking the bounding box.
-        const stageBox = stage.getBoundingClientRect();
-        const host = stage.closest(".screen-pack").getBoundingClientRect();
-        const leftEdge = Math.max(stageBox.left, host.left, 0);
-        const topEdge = Math.max(stageBox.top, host.top, 0);
-        const rightEdge = Math.min(stageBox.right, host.right, innerWidth);
-        const bottomEdge = Math.min(stageBox.bottom, host.bottom, innerHeight);
-        const boxes = [];
-        for (const video of stage.querySelectorAll("video:not([hidden])")) {
-            const box = video.getBoundingClientRect();
-            const { videoWidth: width, videoHeight: height } = video;
-            const scale = Math.min(box.width / width, box.height / height);
-            const x = box.x + (box.width - width * scale) / 2;
-            const y = box.y + (box.height - height * scale) / 2;
-            const minX = Math.max(0, Math.floor((leftEdge - x) / scale));
-            const minY = Math.max(0, Math.floor((topEdge - y) / scale));
-            const maxX = Math.min(width, Math.ceil((rightEdge - x) / scale));
-            const maxY = Math.min(height, Math.ceil((bottomEdge - y) / scale));
-            const canvas = document.createElement("canvas");
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext("2d");
-            ctx.drawImage(video, 0, 0);
-            const { data } = ctx.getImageData(0, 0, width, height);
-            const opacity = Number(getComputedStyle(video).opacity);
-            let left = width,
-                top = height,
-                right = 0,
-                bottom = 0;
-            for (let row = minY; row < maxY; row++) {
-                for (let column = minX; column < maxX; column++) {
-                    const alpha = data[(row * width + column) * 4 + 3];
-                    if (alpha * opacity < 16) continue;
-                    left = Math.min(left, column);
-                    top = Math.min(top, row);
-                    right = Math.max(right, column + 1);
-                    bottom = Math.max(bottom, row + 1);
-                }
-            }
-            if (right <= left || bottom <= top) continue;
-            boxes.push({
-                left: Math.max(leftEdge, x + left * scale),
-                top: Math.max(topEdge, y + top * scale),
-                right: Math.min(rightEdge, x + right * scale),
-                bottom: Math.min(bottomEdge, y + bottom * scale),
-            });
-        }
-        return boxes;
+    return page.locator(".screen-pack .pack-stage").evaluate(captureStage, {
+        active: true,
     });
 }
 
-const overlaps = (a, b) =>
-    a.left < b.right &&
-    b.left < a.right &&
-    a.top < b.bottom &&
-    b.top < a.bottom;
+export async function visibleCharacterBoxes(page) {
+    return page.locator(".screen-pack .pack-stage").evaluate(captureStage);
+}
 
-async function checkGeometry(page, { frame, text, buttons }, art) {
+function captureStage(stage, { active, clips, handoffs } = {}) {
+    const host = stage.closest(".screen-pack");
+    const videos = [...stage.querySelectorAll("video")];
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const visible = (video) => !video.hidden && video.readyState >= 2;
+    const front = (video) =>
+        visible(video) && !video.hasAttribute("data-leaving");
+    const basename = (video) => new URL(video.src).pathname.split("/").at(-1);
+
+    function bounds(video, clip) {
+        // Project decoded VP9 art through object-fit: contain into CSS pixels.
+        // Intersect with the stage and its host before taking the bounding box.
+        const stageBox = stage.getBoundingClientRect();
+        const hostBox = host.getBoundingClientRect();
+        const leftEdge = Math.max(stageBox.left, hostBox.left, 0);
+        const topEdge = Math.max(stageBox.top, hostBox.top, 0);
+        const rightEdge = Math.min(stageBox.right, hostBox.right, innerWidth);
+        const bottomEdge = Math.min(
+            stageBox.bottom,
+            hostBox.bottom,
+            innerHeight,
+        );
+        const box = video.getBoundingClientRect();
+        const { videoWidth: width, videoHeight: height } = video;
+        const scale = Math.min(box.width / width, box.height / height);
+        const x = box.x + (box.width - width * scale) / 2;
+        const y = box.y + (box.height - height * scale) / 2;
+        const minX = Math.max(0, Math.floor((leftEdge - x) / scale));
+        const minY = Math.max(0, Math.floor((topEdge - y) / scale));
+        const maxX = Math.min(width, Math.ceil((rightEdge - x) / scale));
+        const maxY = Math.min(height, Math.ceil((bottomEdge - y) / scale));
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== height) canvas.height = height;
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(video, 0, 0);
+        const { data } = ctx.getImageData(0, 0, width, height);
+        const opacity = Number(getComputedStyle(video).opacity);
+        let left = width,
+            top = height,
+            right = 0,
+            bottom = 0;
+        for (let row = minY; row < maxY; row++) {
+            for (let column = minX; column < maxX; column++) {
+                const pixel = (row * width + column) * 4;
+                // H.264 paints the same stage color into the transparent area.
+                const alpha = clip.endsWith(".mp4")
+                    ? Math.abs(data[pixel] - 16) >= 24
+                        ? 255
+                        : 0
+                    : data[pixel + 3];
+                if (alpha * opacity < 16) continue;
+                left = Math.min(left, column);
+                top = Math.min(top, row);
+                right = Math.max(right, column + 1);
+                bottom = Math.max(bottom, row + 1);
+            }
+        }
+        if (right <= left || bottom <= top) return null;
+        return {
+            left: Math.max(leftEdge, x + left * scale),
+            top: Math.max(topEdge, y + top * scale),
+            right: Math.min(rightEdge, x + right * scale),
+            bottom: Math.min(bottomEdge, y + bottom * scale),
+        };
+    }
+
+    function sample(video, timing, replay) {
+        const clip = basename(video);
+        const art = bounds(video, clip);
+        const slots = Object.fromEntries(
+            Object.entries({
+                clock: ".pack-clock",
+                date: ".pack-date",
+                status: ".pack-status",
+                card: ".details[data-pack-slot]",
+            }).map(([key, selector]) => {
+                const node = host.querySelector(selector);
+                const box = node?.getBoundingClientRect();
+                return [
+                    key,
+                    box?.width && box.height
+                        ? {
+                              text: node.textContent.trim(),
+                              ...box.toJSON(),
+                          }
+                        : null,
+                ];
+            }),
+        );
+        const intersections = Object.fromEntries(
+            Object.entries(slots).map(([key, box]) => [
+                key,
+                art && box
+                    ? Math.max(
+                          0,
+                          Math.min(art.right, box.right) -
+                              Math.max(art.left, box.left),
+                      ) *
+                      Math.max(
+                          0,
+                          Math.min(art.bottom, box.bottom) -
+                              Math.max(art.top, box.top),
+                      )
+                    : 0,
+            ]),
+        );
+        return {
+            clip,
+            element: videos.indexOf(video),
+            replay,
+            mediaTime: timing.mediaTime,
+            observedAt: performance.now(),
+            duration: video.duration,
+            art,
+            heightPercent: art
+                ? (100 * (art.bottom - art.top)) / innerHeight
+                : 0,
+            center: art ? (art.left + art.right) / 2 : null,
+            seq: host.closest("[data-seq]")?.dataset.seq,
+            slots,
+            intersections,
+        };
+    }
+
+    if (!clips) {
+        if (!active)
+            return videos
+                .filter(visible)
+                .map((video) => bounds(video, basename(video)))
+                .filter(Boolean);
+        const video = videos.find(front);
+        return sample(video, { mediaTime: video.currentTime }, 0);
+    }
+
+    const frames = new Map();
+    const callbacks = new Map();
+    const listeners = new AbortController();
+    const seen = [];
+    const rows = [];
+    const samples = [];
+    let previous, latest, lastPrinted;
+    let replay = -1;
+    const { promise: done, resolve, reject } = Promise.withResolvers();
+    // Keep a rejected observer handled even if a test fails before it reads done.
+    void done.catch(() => {});
+    const mutations = new MutationObserver(() => videos.forEach(record));
+    const deadline = setTimeout(() => {
+        stop();
+        reject(
+            new Error(
+                `Timed out observing ${clips.join(", ")}: ${JSON.stringify(rows)}`,
+            ),
+        );
+    }, 12000);
+
+    function stop() {
+        clearTimeout(deadline);
+        mutations.disconnect();
+        listeners.abort();
+        for (const [video, callback] of callbacks)
+            video.cancelVideoFrameCallback(callback);
+    }
+
+    function record(video) {
+        const timing = frames.get(video);
+        if (!timing || !front(video)) return;
+        const clip = basename(video);
+        if (seen.at(-1) !== clip) seen.push(clip);
+        if (!clips.includes(clip)) return;
+        const head = previous !== video;
+        if (!head && timing.mediaTime <= latest.mediaTime) return;
+        if (head) {
+            // Keep the last decoded visible sample from the outgoing element.
+            if (latest)
+                rows.push({
+                    ...latest,
+                    boundary: "tail",
+                    ended: previous.ended,
+                });
+            previous = video;
+            replay++;
+        }
+        latest = sample(video, timing, replay);
+        samples.push(latest);
+        if (head || latest.mediaTime - lastPrinted >= 0.2) {
+            rows.push({ ...latest, boundary: head ? "head" : "playing" });
+            lastPrinted = latest.mediaTime;
+        }
+        if (replay === handoffs) {
+            stop();
+            resolve({ rows, samples, seen });
+        }
+    }
+
+    function watch(video) {
+        callbacks.set(
+            video,
+            video.requestVideoFrameCallback((_, timing) => {
+                frames.set(video, timing);
+                watch(video);
+                record(video);
+            }),
+        );
+    }
+
+    mutations.observe(stage, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["hidden", "data-leaving"],
+    });
+    for (const video of videos) {
+        video.addEventListener("loadstart", () => frames.delete(video), {
+            signal: listeners.signal,
+        });
+        watch(video);
+    }
+    return { done };
+}
+
+export function armPlayback(page, clips, handoffs) {
+    return page
+        .locator(".screen-pack .pack-stage")
+        .evaluateHandle(captureStage, { clips, handoffs });
+}
+
+export async function playbackTrace(observer) {
+    try {
+        return await observer.evaluate(({ done }) => done);
+    } finally {
+        await observer.dispose();
+    }
+}
+
+function diagnostic(row) {
+    return JSON.stringify(row, (key, value) =>
+        key === "slots" ? undefined : value,
+    );
+}
+
+function checkGeometry(sample, expectedCenter, card) {
     const { width, height } = viewport;
-    const artHeight = art.bottom - art.top;
-    const center = (art.right + art.left) / 2;
-    const expectedCenter = width / (text ? 3 : 2);
+    const { art, center, heightPercent, slots, intersections } = sample;
     assert.ok(
-        artHeight >= 0.75 * height && artHeight <= 0.85 * height,
-        `${frame.state} height=${artHeight}`,
+        art && heightPercent >= 75 && heightPercent <= 85,
+        diagnostic(sample),
     );
     assert.ok(
-        Math.abs(center - expectedCenter) <= 0.05 * (width / 2),
-        `${frame.state} center=${center}, expected ${expectedCenter}`,
+        Math.abs(center - expectedCenter) <= 32,
+        `center=${center}, expected ${expectedCenter} ±32 CSS px: ${diagnostic(sample)}`,
     );
     assert.ok(art.right > art.left && art.left >= 0 && art.top >= 0);
     assert.ok(art.right <= width && art.bottom <= height);
-    const slots = await page
-        .locator(".screen-pack [data-pack-slot]")
-        .evaluateAll((nodes) =>
-            nodes.map((node) => ({
-                slot: node.className,
-                text: node.textContent.trim(),
-                ...node.getBoundingClientRect().toJSON(),
-            })),
-        );
-    assert.equal(
-        slots.find((slot) => slot.slot === "pack-clock")?.text,
-        "03:04 PM",
-    );
-    assert.equal(
-        slots.find((slot) => slot.slot === "pack-date")?.text,
-        "11/20/2026",
-    );
-    assert.equal(slots.length, text ? 4 : 2);
-    for (const slot of slots) {
-        assert.ok(slot.text && slot.width > 0 && slot.height > 0, slot.slot);
-        assert.ok(slot.left >= 0 && slot.top >= 0, slot.slot);
-        assert.ok(slot.right <= width && slot.bottom <= height, slot.slot);
-        assert.ok(
-            !overlaps(art, slot),
-            `${frame.state}: art overlaps ${slot.slot}`,
-        );
+    assert.equal(slots.clock?.text, "03:04 PM");
+    assert.equal(slots.date?.text, "11/20/2026");
+    assert.equal(Boolean(slots.status), card);
+    assert.equal(Boolean(slots.card), card);
+    for (const [name, slot] of Object.entries(slots)) {
+        assert.equal(intersections[name], 0, `${name}: ${diagnostic(sample)}`);
+        if (!slot) continue;
+        assert.ok(slot.text && slot.width > 0 && slot.height > 0, name);
+        assert.ok(slot.left >= 0 && slot.top >= 0, name);
+        assert.ok(slot.right <= width && slot.bottom <= height, name);
     }
+}
+
+async function checkNative(page, { text, buttons }) {
     for (const label of text ?? [])
-        assert.equal(
-            await page.getByText(label, { exact: true }).isVisible(),
-            true,
-        );
+        await page.getByText(label, { exact: true }).waitFor();
     for (const name of buttons ?? [])
         await page
             .getByRole("button", { name, exact: true })
             .click({ trial: true });
-    console.log(
-        `B6 viewport=1280x748 state=${frame.state} art=${JSON.stringify(art)} height=${artHeight.toFixed(1)} center=${center.toFixed(1)} overlap=0`,
-    );
 }
 
-export async function checkCompanionDisplay(t) {
-    const archivePath = process.env.SCREEN_COMPANION_ARCHIVE;
-    assert.ok(archivePath, "suite owner must supply a Companion archive");
-    const f = await open(t, {
-        archivePath,
-        template: "template@0.1.0",
-        viewport,
-        initialState: ready,
+export function checkHandoffs(rows, expectedClips) {
+    const heads = rows.filter(({ boundary }) => boundary === "head");
+    const tails = rows.filter(({ boundary }) => boundary === "tail");
+    assert.deepEqual(
+        heads.map(({ clip }) => clip),
+        expectedClips,
+    );
+    assert.equal(tails.length, heads.length - 1);
+    for (const [index, tail] of tails.entries()) {
+        const head = heads[index + 1];
+        assert.equal(tail.replay, index);
+        assert.notEqual(tail.element, head.element);
+        assert.ok(
+            tail.ended && tail.duration - tail.mediaTime <= 0.12,
+            diagnostic(tail),
+        );
+        assert.ok(
+            head.mediaTime <= 0.1 && head.observedAt > tail.observedAt,
+            diagnostic(head),
+        );
+        assert.ok(
+            rows.some(
+                (row) =>
+                    row.replay === index &&
+                    row.boundary === "playing" &&
+                    row.mediaTime > tail.duration / 3 &&
+                    row.mediaTime < (2 * tail.duration) / 3,
+            ),
+        );
+    }
+}
+
+export async function checkHeldLinkCode(f) {
+    const { page } = f;
+    const observer = await armPlayback(page, ["setup.webm"], 3);
+    await f.update(link.frame);
+    const presentation = page.getByRole("region", {
+        name: "Screen presentation",
     });
-    await selectCompanion(f);
+    const seq = await presentation.getAttribute("data-seq");
+    const url = page.url();
+    const { rows, samples } = await playbackTrace(observer);
+    for (const row of rows) console.log(`LINK_REPLAY ${diagnostic(row)}`);
+    checkHandoffs(rows, Array(4).fill("setup.webm"));
+    assert.ok(seq);
+    assert.equal(await presentation.getAttribute("data-seq"), seq);
+    assert.equal(page.url(), url);
+    for (const sample of samples) {
+        assert.equal(sample.seq, seq);
+        for (const text of link.text)
+            assert.ok(sample.slots.card?.text.includes(text), text);
+    }
+    await checkNative(page, link);
+    assert.deepEqual(f.outside, []);
+    // Collect both complete replay traces before reporting a center excursion.
+    const excursions = rows.filter(
+        ({ center }) => Math.abs(center - viewport.width / 3) > 32,
+    );
+    assert.equal(
+        excursions.length,
+        0,
+        `held Link Code center excursions beyond 426.67 ±32 CSS px: ${excursions.map(({ replay, center }) => `${replay}/${center?.toFixed(2)}`).join(", ")}`,
+    );
+    for (const sample of samples)
+        checkGeometry(sample, viewport.width / 3, true);
+}
+
+async function checkEntry(f, frame) {
+    const { page } = f;
+    const entry = await armPlayback(
+        page,
+        ["setup-enter.webm", "setup.webm"],
+        1,
+    );
+    await f.update(frame);
+    const { rows, samples } = await playbackTrace(entry);
+    for (const row of rows) console.log(`LINK_ENTRY ${diagnostic(row)}`);
+    checkHandoffs(rows, ["setup-enter.webm", "setup.webm"]);
+    checkGeometry(rows.at(-2), viewport.width / 3, true);
+    checkGeometry(rows.at(-1), viewport.width / 3, true);
+    assert.ok(
+        Math.abs(rows[0].center - viewport.width / 2) <= 32,
+        diagnostic(rows[0]),
+    );
+    assert.ok(samples.some(({ center }) => center > 480 && center < 590));
+}
+
+async function checkReturnHome(f, screenshots) {
+    const { page } = f;
+    const returning = await armPlayback(page, ["thinking.webm"], 1);
+    await f.update(thinking);
+    const { rows } = await playbackTrace(returning);
+    console.log(`LINK_DEPARTURE ${diagnostic(rows[0])}`);
+    assert.ok(rows[0].center < viewport.width / 2 - 32, diagnostic(rows[0]));
+    const settled = await settledArt(page);
+    console.log(`B6 state=thinking ${diagnostic(settled)}`);
+    checkGeometry(settled, viewport.width / 2, false);
+    await page.screenshot({
+        path: `${screenshots}/companion-thinking-1280x748.png`,
+    });
+}
+
+async function checkInterruptedEntry(f) {
+    const { page } = f;
+    const entry = (url) => url.pathname.endsWith("/setup-enter.webm");
+    const pending = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const complete = Promise.withResolvers();
+    void complete.promise.catch(() => {});
+    await page.route(
+        entry,
+        async (route) => {
+            pending.resolve();
+            await release.promise;
+            complete.resolve(route.continue());
+        },
+        { times: 1 },
+    );
+    try {
+        await f.update(link.frame);
+        await pending.promise;
+        await f.update(thinking);
+        await playing(page, "thinking.webm", id);
+        const observer = await armPlayback(page, ["thinking.webm"], 1);
+        release.resolve();
+        await complete.promise;
+        const { seen } = await playbackTrace(observer);
+        assert.deepEqual(seen, ["thinking.webm"]);
+        assert.equal(
+            await page.getByText("TEST-CODE", { exact: true }).isVisible(),
+            false,
+        );
+        console.log(
+            "LINK_INTERRUPTED pending=setup-enter.webm replacement=thinking.webm replay=thinking.webm",
+        );
+    } finally {
+        release.resolve();
+    }
+}
+
+export async function checkCompanionDisplay(f) {
     const screenshots = "test-results/screenshots";
     await mkdir(screenshots, { recursive: true });
     for (const presentation of presentations) {
         const { frame, clip } = presentation;
-        await f.update(frame);
+        if (presentation === link) await checkEntry(f, frame);
+        else await f.update(frame);
         await playing(f.page, `${clip}.webm`, id);
         const art = await settledArt(f.page);
-        await checkGeometry(f.page, presentation, art);
+        console.log(`B6 state=${frame.state} ${diagnostic(art)}`);
+        checkGeometry(
+            art,
+            viewport.width / (presentation.text ? 3 : 2),
+            Boolean(presentation.text),
+        );
+        await checkNative(f.page, presentation);
         if (!["approval", "error"].includes(frame.state)) {
             await f.page.screenshot({
                 path: `${screenshots}/companion-${frame.state}-1280x748.png`,
             });
         }
+        if (presentation === link) await checkReturnHome(f, screenshots);
     }
+    await checkInterruptedEntry(f);
     assert.deepEqual(f.outside, []);
 }

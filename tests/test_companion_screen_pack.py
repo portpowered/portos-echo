@@ -28,6 +28,7 @@ FRAME_BYTES = WIDTH * HEIGHT * 4
 EYES = (.5735, .2233, .7520, .2709)
 MOUTH = (.6193, .3174, .6852, .3609)
 BACKGROUND = (16, 24, 39)
+HOME_CENTER, CARD_CENTER = 506, 252
 
 
 def invoke(out, *, env=None):
@@ -50,6 +51,7 @@ def decode(path, extension):
     codec = "vp9" if extension == "webm" else "h264"
     assert len(re.findall(r"Stream #0:", header)) == 1, header
     assert f"Video: {codec}" in header, header
+    assert re.search(r"\b768x720\b", header), header
     assert re.search(r"\b30 fps\b", header), header
     assert len(result.stdout) % FRAME_BYTES == 0, header
     if extension == "webm":
@@ -87,6 +89,31 @@ def classify(frame, region, references, shifts):
         delta(crop(frame, region, shift), references[key]) for shift in shifts))
 
 
+def card_reference(rest):
+    offset = (HOME_CENTER - CARD_CENTER) * 4
+    stride = WIDTH * 4
+    matte = bytes((*BACKGROUND, 255)) * (HOME_CENTER - CARD_CENTER)
+    return b"".join(rest[start + offset:start + stride] + matte
+                    for start in range(0, len(rest), stride))
+
+
+def visible_center(frame, with_alpha):
+    # Sample the silhouette every four pixels. The fallback's matte is
+    # uniform, so use red-channel contrast to ignore minor codec variation.
+    threshold = bytes(int(value >= 16 if with_alpha else abs(value - BACKGROUND[0]) >= 24)
+                      for value in range(256))
+    left, right = WIDTH, -1
+    channel = 3 if with_alpha else 0
+    for start in range(0, FRAME_BYTES, WIDTH * 4 * 4):
+        row = bytes(frame[start + channel:start + WIDTH * 4:16]).translate(threshold)
+        first = row.find(b"\x01")
+        if first != -1:
+            left = min(left, first * 4)
+            right = max(right, row.rfind(b"\x01") * 4)
+    assert left < right, "decoded silhouette is empty"
+    return (left + right) / 2
+
+
 class CompanionPack(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -113,7 +140,7 @@ class CompanionPack(unittest.TestCase):
             self.assertEqual((folder / (ARCHIVE + ".sha256")).read_bytes(),
                              f"{checksum}  {ARCHIVE}\n".encode())
         expected = {"pack.json", "rest.png",
-                    *(f"{role}.{ext}" for role in ROLES for ext in ("webm", "mp4"))}
+                    *(f"{role}.{ext}" for role in (*ROLES, "setup-enter") for ext in ("webm", "mp4"))}
         with tarfile.open(self.archive) as bundle:
             members = bundle.getmembers()
             self.assertEqual(sorted(m.name for m in members), sorted(expected))
@@ -131,9 +158,12 @@ class CompanionPack(unittest.TestCase):
                          (1, "companion", "0.2.0"))
         character = manifest["character"]
         self.assertEqual(character["rest"], "rest.png")
-        self.assertEqual(character["states"], {
+        states = {
             role: {"clip": {"mode": "loop", "webm": f"{role}.webm", "mp4": f"{role}.mp4"}}
-            for role in ROLES if role != "happy"})
+            for role in ROLES if role != "happy"}
+        states["setup"]["enter"] = {
+            "mode": "once", "webm": "setup-enter.webm", "mp4": "setup-enter.mp4"}
+        self.assertEqual(character["states"], states)
         self.assertEqual(character["emotes"], {
             "happy": {"mode": "once", "webm": "happy.webm", "mp4": "happy.mp4"}})
         print(f"PACK identity=companion@0.2.0 files={len(expected)} sha256={checksum} "
@@ -176,14 +206,18 @@ class CompanionPack(unittest.TestCase):
     def check_media(self, ext, rest, eyes, mouths):
         with_alpha = ext == "webm"
         rest = visual(rest, True)
+        card_rest = card_reference(rest)
         representatives = {}
         for role in ROLES:
             frames = decode(self.extracted / f"{role}.{ext}", ext)
             first, last = (visual(frame, with_alpha) for frame in (frames[0], frames[-1]))
-            self.assertLess(delta(first, rest), 4, (ext, role, "start"))
-            self.assertLess(delta(last, rest), 4, (ext, role, "end"))
+            neutral = card_rest if role == "setup" else rest
+            self.assertLess(delta(first, neutral), 4, (ext, role, "start"))
+            self.assertLess(delta(last, neutral), 4, (ext, role, "end"))
             self.assertLess(delta(first, last), 1.5, (ext, role, "join"))
             representatives[role] = visual(frames[len(frames) // 2], with_alpha)
+            if role == "setup":
+                self.check_setup(ext, rest, card_rest, frames, first)
             if role == "idle":
                 blink = [classify(frame, EYES, eyes, (0,)) for frame in frames[57:70]]
                 self.assertEqual(blink, ["idle"] * 5 + ["blink"] * 4 + ["idle"] * 4)
@@ -197,7 +231,8 @@ class CompanionPack(unittest.TestCase):
                 self.assertEqual(len({hashlib.sha256(frame).digest() for frame in frames}), 1)
             if with_alpha:
                 self.assertLess(frames[0][3], 16)
-                self.assertGreater(frames[0][(229 * WIDTH + 506) * 4 + 3], 240)
+                center = CARD_CENTER if role == "setup" else HOME_CENTER
+                self.assertGreater(frames[0][(229 * WIDTH + center) * 4 + 3], 240)
         pairs = tuple(itertools.combinations(representatives, 2))
         differences = [delta(representatives[a], representatives[b]) for a, b in pairs]
         self.assertEqual(sum(value > 1.5 for value in differences), 45,
@@ -205,6 +240,26 @@ class CompanionPack(unittest.TestCase):
         print(f"MEDIA codec={ext} fps=30 distinct_pairs=45/45 neutral_endpoints=20/20 "
               f"blink_frames={blink.count('blink')} mouth_classes={len(set(speech))} "
               "shorter_period=none muted_unique=1", flush=True)
+
+    def check_setup(self, ext, rest, card_rest, held, held_first):
+        with_alpha = ext == "webm"
+        entry = decode(self.extracted / f"setup-enter.{ext}", ext)
+        first, last = (visual(frame, with_alpha) for frame in (entry[0], entry[-1]))
+        self.assertLess(delta(first, rest), 4, (ext, "setup-enter", "start"))
+        self.assertLess(delta(last, card_rest), 4, (ext, "setup-enter", "end"))
+        seam = delta(last, held_first)
+        self.assertLess(seam, 1.5, (ext, "setup-enter to setup"))
+        entry_centers = [visible_center(frame, with_alpha) for frame in entry]
+        held_centers = [visible_center(frame, with_alpha) for frame in held]
+        self.assertAlmostEqual(entry_centers[0], HOME_CENTER, delta=12)
+        self.assertAlmostEqual(entry_centers[-1], CARD_CENTER, delta=12)
+        self.assertTrue(all(right <= left + 4 for left, right in itertools.pairwise(entry_centers)),
+                        entry_centers)
+        self.assertTrue(all(abs(center - CARD_CENTER) <= 32 for center in held_centers),
+                        held_centers)
+        print(f"SETUP codec={ext} entry={entry_centers[0]}->{entry_centers[-1]} "
+              f"held_frames={len(held)} held_center={min(held_centers)}..{max(held_centers)} "
+              f"entry_join_delta={seam:.3f}", flush=True)
 
 
 if __name__ == "__main__":

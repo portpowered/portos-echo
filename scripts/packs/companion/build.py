@@ -23,6 +23,9 @@ def clip(name, mode):
 
 
 def manifest(version):
+    states = {role: {"clip": clip(role, "loop")}
+              for role in FRAMES if role not in ("happy", "setup-enter")}
+    states["setup"]["enter"] = clip("setup-enter", "once")
     return {
         "format": 1,
         "name": "companion",
@@ -42,7 +45,7 @@ def manifest(version):
         },
         "character": {
             "rest": "rest.png",
-            "states": {role: {"clip": clip(role, "loop")} for role in FRAMES if role != "happy"},
+            "states": states,
             "emotes": {"happy": clip("happy", "once")},
         },
     }
