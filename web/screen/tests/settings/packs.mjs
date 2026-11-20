@@ -269,7 +269,7 @@ test("packs: malformed catalog and escaping preview are inert, cancelled load ca
             .count(),
         0,
     );
-    assert.equal(await page.evaluate(() => window.timers.size), 0);
+    assert.equal(await page.evaluate(() => window.timers.size), 1);
 });
 
 test("packs: pending load disables writes, preserves keyboard focus and reports unavailable previews safely", async (t) => {

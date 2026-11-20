@@ -187,7 +187,7 @@ export async function bounds(page, scrollText = false) {
         assert.ok(ratio >= 4.5, `text contrast ${ratio}`);
     const measurements = await page.evaluate(() =>
         [...document.querySelectorAll("h1, p, button")]
-            .filter((node) => node.textContent)
+            .filter((node) => node.textContent || node.matches(".home-tap"))
             .map((node) => {
                 const box = node.getBoundingClientRect();
                 let clipped = false;

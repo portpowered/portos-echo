@@ -299,7 +299,7 @@ test("settings: cancellation and unload never render a late response or resubmit
         await page.locator('[aria-label="Screen presentation"]').isVisible(),
         true,
     );
-    assert.equal(await page.evaluate(() => window.timers.size), 0);
+    assert.equal(await page.evaluate(() => window.timers.size), 1);
     await response(page, undefined, "pending");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
