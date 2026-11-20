@@ -370,21 +370,48 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
     const installed = await installedBytes(home);
     await settings(page).click();
     await refresh(page);
-    await download(f, "0".repeat(64));
-    await page.waitForFunction(async (token) => {
-        const response = await fetch(`/screen-packs/v1?token=${token}`);
-        return (
-            response.ok &&
-            (await response.json()).jobs.some(
-                (job) =>
-                    job.status === "failed" &&
-                    job.reason === "checksum_mismatch",
-            )
-        );
-    }, token);
+    const [queued] = await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                new URL(response.url()).pathname ===
+                    "/screen-packs/v1/install" &&
+                response.request().method() === "POST",
+        ),
+        download(f, "0".repeat(64)),
+    ]);
+    assert.equal(queued.status(), 202);
+    const { job: jobId } = await queued.json();
+    const result = await page.evaluate(
+        async ({ token, jobId }) => {
+            const signal = AbortSignal.timeout(5000);
+            for (;;) {
+                const response = await fetch(
+                    `/screen-packs/v1?token=${token}`,
+                    {
+                        cache: "no-store",
+                        signal,
+                    },
+                );
+                if (!response.ok)
+                    throw new Error(`Pack catalog returned ${response.status}`);
+                const { jobs } = await response.json();
+                const job = jobs.find(({ id }) => id === jobId);
+                if (job?.status === "failed" || job?.status === "installed")
+                    return job;
+                await new Promise((resolve) => requestAnimationFrame(resolve));
+            }
+        },
+        { token, jobId },
+    );
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason, "checksum_mismatch");
     await refresh(page);
     // The panel exposes the refusal as a job, independently of the active pack.
-    await page.getByText(/failed \(checksum mismatch\)/).waitFor();
+    await page
+        .getByText(`Download ${jobId}: failed (checksum mismatch)`, {
+            exact: true,
+        })
+        .waitFor();
     const catalog = await f.api("/screen-packs/v1");
     assert.equal(catalog.active, id);
     assert.equal(
