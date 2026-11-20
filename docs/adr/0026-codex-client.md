@@ -1159,3 +1159,16 @@ The reserved `web_search` alias prevents a dynamic tool from shadowing hosted se
 effects stay disabled, environments stay empty and app-server MCP stays `{}`. This adds no local fetch,
 browser, process or file authority. The earlier evidence remains historical; real hosted results and
 spoken attribution require a later operator-started T5 run.
+
+## Native search amendment (owner, 2026-11-19)
+
+Binding answer B extends the single search exception to the pin's standalone `web.run` extension
+(namespace `web`, tool `run`, `codex-rs/ext/web-search`) for Responses Lite models. This supersedes the
+native absence limitation above. Production OpenAI providers already support it; the loopback fake
+opts into `supports_standalone_web_search`. No pin, model metadata or schema changes are needed.
+Live and cached add exactly `web.run` to the previous direct native catalog, leaving nested `exec`
+callables unchanged; disabled preserves the previous catalog. Conventional models retain exactly the
+hosted declaration when enabled. The exact-list oracle rejects every other widening, including image
+generation. Both forms use provider search; cached sets `external_web_access` false and live sets it true.
+No local fetch, browser, process or file authority is added. Real results and spoken source attribution
+remain operator T5 proof.

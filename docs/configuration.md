@@ -89,7 +89,8 @@ The voice model answers conversation, explanations and general knowledge directl
 needs an effect or unavailable live/personal data. The runner gets bridge-declared tools, with native shell,
 unified execution and independent Codex MCP discovery disabled. Hosted read-only web search is the sole
 exception: `codex.web_search` defaults to `live`, accepts `cached` or `disabled`, and adds no local authority.
-The pin omits hosted tools for native `gpt-6.1-sol` Responses Lite; that path has no search in this change.
+Conventional models use hosted search; native Responses Lite models use the pin's provider-backed `web.run`.
+Cached sets `external_web_access` false for both forms; disabled omits search.
 A read-only runner sandbox does not prevent effects through explicitly granted MCP tools. Prompt instructions
 guide behavior; allowlists and caps enforce the available effect surface.
 
@@ -188,7 +189,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.binary` | Default unset (pinned host helper resolves multi-tool); if set absolute path. Device must name installed standalone app server. | restart / no |
 | `codex.launch` | `subcommand` default (`app-server --listen stdio://`) or `standalone` (`--listen stdio://`); standalone requires binary. | restart / no |
 | `codex.ca_file` | Default unset; absolute PEM path, child SSL_CERT_FILE and bridge Port OS OAuth/MCP additional trust roots. | restart / no |
-| `codex.web_search` | `live` default (also with table/key omitted), `cached` or `disabled`. Hosted search only; all other tool restrictions stay intact. Invalid type/value: `codex.web_search: invalid type or value`, exit 2 before runtime effects. Set disabled and restart to turn off; remove key before restoring an older binary. | restart / no |
+| `codex.web_search` | `live` default (also with table/key omitted), `cached` or `disabled`. Provider-backed search only (hosted or native `web.run`); all other tool restrictions stay intact. Invalid type/value: `codex.web_search: invalid type or value`, exit 2 before runtime effects. Set disabled and restart to turn off; remove key before restoring an older binary. | restart / no |
 | `codex.voice` | Default unset; overrides live.voice. `default` omits outgoing field; other choices below, nonblank. | boundary / yes |
 | `codex.model` | Optional nonblank legacy runner-model alias; overrides agent.model. | restart / no |
 | `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. Unset leaves app-server default. | restart / no |

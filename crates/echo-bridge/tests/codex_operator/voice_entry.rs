@@ -356,6 +356,7 @@ fn assert_local_routes(observed: &Value, live: &str, model: &str, search: &str) 
         "model_provider":"local",
         "model_providers.local":{"name":"local", "base_url":format!("{model}/v1"),
             "wire_api":"responses", "requires_openai_auth":true,
+            "supports_standalone_web_search":true,
             "experimental_bearer_token":"dummy-local-only"},
         "experimental_realtime_webrtc_call_base_url":format!("{live}/backend-api/codex"),
         "experimental_realtime_ws_base_url":format!("{live}/v1"),

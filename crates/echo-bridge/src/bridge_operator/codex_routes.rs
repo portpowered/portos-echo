@@ -26,6 +26,7 @@ impl LocalRoutes {
                 "model_providers.local",
                 json!({"name":"local", "base_url":format!("{}/v1", self.model),
                 "wire_api":"responses", "requires_openai_auth":true,
+                "supports_standalone_web_search":true,
                 "experimental_bearer_token":"dummy-local-only"}),
             ),
             (

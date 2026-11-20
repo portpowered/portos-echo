@@ -109,9 +109,8 @@ class Delegation:
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
         namespaces = blocks[0]
-        # Pin spec_plan::hosted_model_tool_specs returns no hosted specs for
-        # Responses Lite, regardless of mode. Keep exact native authority here;
-        # the packet's required native hosted declaration is an operator blocker.
+        # Responses Lite uses the pin's direct provider-backed web.run extension.
+        # It never becomes an exec nested callable or a hosted declaration.
         names = [namespace['name'] + '.' + tool['name']
                  for namespace in namespaces for tool in namespace['tools']]
         description = namespaces[0]['tools'][0]['description']
@@ -121,7 +120,10 @@ class Delegation:
         # metadata independently of tools.experimental_request_user_input.enabled.
         # :1225-1251 registers clock from that metadata and default sleep_tool.
         # The binding amendment permits these exact extras, not synchronous input.
-        assert names == ['functions.exec', 'functions.wait', 'functions.request_user_input_async', 'clock.sleep'], names
+        expected_names = ['functions.exec', 'functions.wait', 'functions.request_user_input_async', 'clock.sleep']
+        if self.web_search != 'disabled':
+            expected_names += ['web.run']
+        assert names == expected_names, names
         assert nested == sorted(tool['name'] for tool in self.tools) + ['clock__curr_time'], nested
         for tool, fields in zip(self.tools, ['text: string;', 'ms: number;', '', 'name: string;']):
             declaration = 'declare const tools: { ' + tool['name'] + '(args: { ' + fields + ' }): Promise<unknown>; };'

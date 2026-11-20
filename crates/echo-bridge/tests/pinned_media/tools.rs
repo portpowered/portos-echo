@@ -193,7 +193,7 @@ async fn exercise_search(
     );
     remote.close();
     assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
-    snapshot(&mut input, &mut output, exhausted, model).await;
+    snapshot(&mut input, &mut output, exhausted, model, web_search).await;
     check_mcp(&spoof, exhausted);
     drop(input);
     assert!(provider.wait().await.unwrap().success());
@@ -388,10 +388,11 @@ async fn snapshot(
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     exhausted: bool,
     model: &str,
+    web_search: echo_config::WebSearch,
 ) {
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let value: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    let names = if model == "gpt-5.4" {
+    let mut names = if model == "gpt-5.4" {
         json!(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"])
     } else {
         json!([
@@ -401,6 +402,9 @@ async fn snapshot(
             "clock.sleep"
         ])
     };
+    if model != "gpt-5.4" && web_search != echo_config::WebSearch::Disabled {
+        names.as_array_mut().unwrap().push(json!("web.run"));
+    }
     if exhausted {
         // rust-v0.160.0: release exactly one request before bridge polling.
         // This is the pre-notification window, not a universal zero-work claim.

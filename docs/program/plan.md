@@ -78,7 +78,7 @@ Echo Show (stock firmware + hassmic)            echo-bridge (Rust, operator's PC
 | --- | --- | --- | --- |
 | `hassmic` (our fork of echo-dot-assist, `portpowered/echo-dot-assist`, pinned) | The Echo | Nothing of ours | Wake word, echo canceller, capture and playback, mute latch, keys, light band. `PROTO=wyoming`, `ARGS` with `-D`. Installed by echo-dot-assist's `scripts/install-system.sh` |
 | `echo-screen` | The Echo, as hassmic's home app | A pairing token for the bridge's screen page | Shows the bridge's screen page full screen; touches go back to the bridge as `UiAction`s |
-| `echo-bridge` and its crates | The operator's PC first (section 6) | The Port OS grant (DPoP key, refresh token, access token); the app server's `CODEX_HOME` | Wyoming client; the media peer; the app server's client and supervisor; the tool host behind the delegated turns' `dynamicTools`; every MCP call; hosted read-only search via the app server (`codex.web_search`: live default, cached or disabled); the screen server; caps, audit log, kill switch |
+| `echo-bridge` and its crates | The operator's PC first (section 6) | The Port OS grant (DPoP key, refresh token, access token); the app server's `CODEX_HOME` | Wyoming client; the media peer; the app server's client and supervisor; the tool host behind the delegated turns' `dynamicTools`; every MCP call; provider-backed read-only search via the app server (`codex.web_search`: live default, cached or disabled); the screen server; caps, audit log, kill switch |
 | `codex app-server` (OpenAI Codex, pinned release, Apache-2.0) | Beside the bridge, its child process over `stdio://` | The ChatGPT sign-in (`$CODEX_HOME/auth.json`) | Sign-in and refresh, Live call creation, the sideband control channel, delegated Codex turns with only the bridge's tools (section 3.3) |
 | `echo-lab` | The operator's workstation and CI | Bench session leases (never committed) | Runs scenario files with the `sim`, `cloud` or `device` driver and writes reports |
 | `echo-spoof-mcp` | CI and the bench | Nothing secret | Deterministic MCP server: `test.echo`, `test.wait`, `test.requires_approval`, `ui.show_emotion` |
@@ -198,7 +198,9 @@ need, since the Echo's disk is small.
   tools: `dynamicTools` on `thread/start`, each call arriving as an `item/tool/call` request the bridge answers.
   Owner amendment (2026-11-19): hosted read-only web search is the sole exception, with
   `[codex] web_search` selecting `live` (default), `cached` or `disabled`; enabled adds exactly one hosted
-  declaration, disabled none. Exact dynamic catalogs, native wrappers and nested callables remain required.
+  declaration for conventional models or exactly the pin's standalone `web.run` for Responses Lite models;
+  disabled adds neither. Both use provider search with no local fetch, process or file authority. Exact dynamic
+  catalogs, native wrappers and nested callables remain required, with only that direct search exception.
   Every other built-in effect stays off. Codex's local tools are off: `features.shell_tool=false`,
   `features.unified_exec=false`, empty `environments`, no MCP
   servers in Codex's config, `approvalPolicy: never` with a read-only sandbox. The result goes back as
