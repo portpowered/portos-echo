@@ -292,30 +292,50 @@ async fn seed_config(
         .shell(&format!("head -c 1048577 '{stage}/bundle/examples/bridge.echo.toml'"))
         .await
         .map_err(|_| Failure("config_unreadable"))?;
-    let Ok(mut config) = sample.parse::<toml::Value>() else {
-        return Ok(None);
-    };
-    let Some(pins) = config
-        .get_mut("screen")
-        .and_then(|screen| screen.get_mut("packs"))
-        .and_then(toml::Value::as_array_mut)
-    else {
-        return Ok(None);
-    };
     let url = format!(
         "https://github.com/portpowered/portos-echo/releases/download/v{version}/{}",
         pack.asset
     );
-    let before = pins.len();
-    pins.retain(|pin| {
-        pin.get("url").and_then(toml::Value::as_str) != Some(url.as_str())
-            || pin.get("sha256").and_then(toml::Value::as_str) != Some(pack.digest.as_str())
-    });
-    if pins.len() == before {
+    let Some(config) = remove_satisfied_pin(&sample, &url, &pack.digest) else {
         return Ok(None);
-    }
+    };
     let path = scratch.0.join("config");
     let seed = toml::to_string(&config).map_err(|_| Failure("config_unreadable"))?;
     fs::write(&path, seed).map_err(|_| Failure("temporary_files_failed"))?;
     Ok(Some(path))
+}
+
+fn remove_satisfied_pin(sample: &str, url: &str, digest: &str) -> Option<toml::Value> {
+    let mut config: toml::Value = toml::from_str(sample).ok()?;
+    let pins = config
+        .get_mut("screen")
+        .and_then(|screen| screen.get_mut("packs"))
+        .and_then(toml::Value::as_array_mut)?;
+    let before = pins.len();
+    pins.retain(|pin| {
+        pin.get("url").and_then(toml::Value::as_str) != Some(url)
+            || pin.get("sha256").and_then(toml::Value::as_str) != Some(digest)
+    });
+    (pins.len() != before).then_some(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_seed_removes_only_the_satisfied_pin() -> Result<()> {
+        let sample = r#"
+[screen]
+listen = "127.0.0.1:16900"
+packs = [{ url = "verified", sha256 = "match" }, { url = "verified", sha256 = "different" }]
+[voice]
+session_listen_enabled = true
+"#;
+        let expected: toml::Value = toml::from_str(&sample.replace(r#"{ url = "verified", sha256 = "match" }, "#, ""))
+            .map_err(|_| Failure("invalid_fixture"))?;
+        assert_eq!(remove_satisfied_pin(sample, "verified", "match"), Some(expected));
+        assert_eq!(remove_satisfied_pin(sample, "different", "match"), None);
+        Ok(())
+    }
 }

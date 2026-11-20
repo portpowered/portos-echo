@@ -174,7 +174,7 @@ def main(binary, case):
     elif case == "offline":
         with Fixture(binary) as box:
             manifest, *_ = release_fixture(box, "default")
-            delivered_journey(binary, box.assets, box.archive, manifest, pin_version=True)
+            delivered_journey(binary, box.assets, box.archive, manifest, pin_version=True, check_maintenance=False)
     else:
         legacy = case == "retained"
         with Fixture(binary, "0.2.0" if legacy else "0.3.0") as box:

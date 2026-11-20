@@ -1,6 +1,8 @@
 """Consume a prebuilt installer and bundled shell against isolated device boundaries."""
 from contextlib import contextmanager
+import errno
 from functools import partial
+from hashlib import sha256
 import http.server
 import json
 import os
@@ -17,7 +19,6 @@ import time
 
 from test_echo_install import Sandbox, SENTINEL, fake_adb, metadata_tool, owner, remote_tool, require, set_owner
 from test_echo_install_lifecycle import configure_lifecycle
-from test_release_kit import sha
 
 
 DEVICE = "/data/local"
@@ -38,14 +39,15 @@ class DeliveryBox(Sandbox):
         (self.root / "remote/hassmic/state").mkdir()
         (self.root / "clock").write_text(str(int(time.time())))
         configure_lifecycle(self, bridge=self.root / "synthetic-bridge")
+        os.mkfifo(self.root / "stop-ready")
         self.tool(self.tools / "adb", "adb")
-        for name in ("pm", "am", "nc", "df", "date"):
+        for name in ("pm", "am", "nc", "df", "date", "sleep"):
             self.tool(self.root / "remote-tools" / name, name)
         self.tool(self.root / "remote/hassmic/runas", "runas")
 
     def tool(self, path, name):
         script = shlex.quote(str(Path(__file__).resolve()))
-        path.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {script} --fake {name} "$@"\n')
+        path.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S {script} --fake {name} "$@"\n')
         path.chmod(0o755)
 
     def run_setup(self, *args, json_mode=True):
@@ -239,7 +241,25 @@ def wait_for_launch(base):
 
 
 def fake_tool(base, label, args):
+    stop = base / "remote/echo-bridge/private/run/stop"
+    notification = base / "stop-ready"
+    if label == "sleep":
+        if os.environ.get("FAKE_UID") == "9999":
+            with open(notification, "rb+", buffering=0) as fifo, selectors.DefaultSelector() as selector:
+                if not stop.exists():
+                    selector.register(fifo, selectors.EVENT_READ)
+                    require(bool(selector.select(20)), "delivered bridge did not receive stop")
+                    fifo.read(1)
+        return remote_tool()
     if label == "date":
+        if stop.exists():
+            try:
+                descriptor = os.open(notification, os.O_WRONLY | os.O_NONBLOCK)
+                with os.fdopen(descriptor, "wb") as fifo:
+                    fifo.write(b"s")
+            except OSError as error:
+                if error.errno not in (errno.ENXIO, errno.EPIPE):
+                    raise
         wait_for_launch(base)
         return remote_tool()
     if label == "runas":
@@ -283,7 +303,7 @@ def offline_update(box, release):
     manifest_path = bundle / "MANIFEST"
     manifest = json.loads(manifest_path.read_text())
     manifest["version"] = release
-    manifest["files"]["bin/echo-bridge"] = sha(path.read_bytes())
+    manifest["files"]["bin/echo-bridge"] = sha256(path.read_bytes()).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
     return bundle, manifest
 
@@ -291,10 +311,10 @@ def offline_update(box, release):
 def public_hashes(box, manifest):
     for name, expected in manifest["files"].items():
         if name.split("/", 1)[0] in ("bin", "apk", "scripts"):
-            require(sha((box.device / name).read_bytes()) == expected, "installed public bytes differ")
+            require(sha256((box.device / name).read_bytes()).hexdigest() == expected, "installed public bytes differ")
 
 
-def delivered_journey(binary, assets, archive, manifest, *, pin_version=False):
+def delivered_journey(binary, assets, archive, manifest, *, pin_version=False, check_maintenance=True):
     release = manifest["version"]
     update = "0.0.0-delivery" if release != "0.0.0-delivery" else "0.0.0-delivery.2"
     with DeliveryBox(binary, assets, archive, release) as box:
@@ -307,10 +327,10 @@ def delivered_journey(binary, assets, archive, manifest, *, pin_version=False):
             require(result["screen_pack_asset"] == asset, "default install asset differs")
             requests = [(f"/v{release}/{name}", 200) for name in ("SHA256SUMS", archive.name, asset)]
             require(box.requests == requests, "release asset requests differ")
-            data = (assets / asset).read_bytes()
+            digest = sha256((assets / asset).read_bytes()).hexdigest()
             with tarfile.open(assets / asset) as pack:
                 members = {entry.name: pack.extractfile(entry).read() for entry in pack}
-            assert_installed_pack(box.root, f"default@{release}", sha(data), members)
+            assert_installed_pack(box.root, f"default@{release}", digest, members)
             public_hashes(box, manifest)
             bundle, updated = offline_update(box, update)
             first_update_call = len(delivery_calls(box.root))
@@ -326,23 +346,26 @@ def delivered_journey(binary, assets, archive, manifest, *, pin_version=False):
             require(status["versions"] == {"current": update, "previous": release}
                     and status["process_user"] == "nobody" and status["hassmic_link"] == "connected",
                     "updated status differs")
-            require(box.invoke("doctor")["checks"] == [{"name": name, "ok": True, "fix": None} for name in
-                    ("adb", "device", "hassmic", "egress", "clock", "disk_free", "process_user")],
-                    "delivered doctor observation differs")
+            if check_maintenance:
+                require(box.invoke("doctor")["checks"] == [{"name": name, "ok": True, "fix": None} for name in
+                        ("adb", "device", "hassmic", "egress", "clock", "disk_free", "process_user")],
+                        "delivered doctor observation differs")
             box.invoke("rollback")
             public_hashes(box, manifest)
             require(box.invoke("status")["versions"] == {"current": release, "previous": None},
                     "rollback did not restore previous release")
             require(box.requests == requests, "offline lifecycle requested release assets")
-            assert_installed_pack(box.root, f"default@{release}", sha(data), members)
+            assert_installed_pack(box.root, f"default@{release}", digest, members)
             require(not any((box.root / "remote/tmp").iterdir()), "staging was retained")
             require(json.loads((box.root / "forwards.json").read_text()) == {}, "owned forwards were retained")
             calls = [call[-1] for call in delivery_calls(box.root)]
             for primitive in ("prepare-archive", "--device install --bundle", "--device screen-setup",
                               "--device start", "--device rollback"):
                 require(any(primitive in call for call in calls), "shell dispatch missing " + primitive)
-            box.invoke("uninstall")
-    print("F33 delivered native install/setup/update/status/doctor/rollback: PASS")
+            if check_maintenance:
+                box.invoke("uninstall")
+    operations = "install/setup/update/status/doctor/rollback" if check_maintenance else "install/setup/update/status/rollback"
+    print(f"F33 delivered native {operations}: PASS")
 
 
 def assert_installed_pack(base, identity, digest, members):
