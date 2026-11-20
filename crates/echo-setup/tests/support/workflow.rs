@@ -46,13 +46,9 @@ async fn health_settings_server(
             accepted = listener.accept() => accepted?,
             accepted = screen.accept() => accepted?,
         };
-        let mut request = Vec::new();
-        while !request.ends_with(b"\r\n\r\n") {
-            let mut byte = [0];
-            socket.read_exact(&mut byte).await?;
-            request.push(byte[0]);
-        }
-        let request = String::from_utf8(request)?;
+        let Some(request) = setup_request(&mut socket).await? else {
+            continue;
+        };
         let settings = request.starts_with("GET /settings/v1?token=SYNTHETIC-PAIR ");
         let body = if settings {
             serde_json::json!({"version":1,"link_status":link_state,"ignored":"SYNTHETIC-TOKEN"}).to_string()
@@ -75,6 +71,29 @@ async fn health_settings_server(
         }
     }
     Ok(())
+}
+
+async fn setup_request(socket: &mut TcpStream) -> Result<Option<String>> {
+    let mut request = Vec::new();
+    while !request.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        if socket.read_exact(&mut byte).await.is_err() {
+            // An existing account can finish and cancel its observer before
+            // the HTTP request is complete. That must not kill the fixture.
+            return Ok(None);
+        }
+        request.push(byte[0]);
+    }
+    let request = String::from_utf8(request)?;
+    if request.starts_with("GET /events?token=SYNTHETIC-PAIR ") {
+        let _ = socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+            .await;
+        let mut byte = [0];
+        let _ = socket.read(&mut byte).await;
+        return Ok(None);
+    }
+    Ok(Some(request))
 }
 
 fn operations(fixture: &Fixture) -> Result<Vec<String>> {

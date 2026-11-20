@@ -85,6 +85,7 @@ pub(super) async fn guide(
     now_unix: u64,
     mut present: impl FnMut(&super::Prompt) -> Result<()>,
 ) -> Result<()> {
+    let started = Instant::now();
     let forwards = connection.forward().await?;
     let result = {
         let provider = match command {
@@ -92,7 +93,14 @@ pub(super) async fn guide(
             AccountCommand::Link => super::Provider::Portos,
         };
         let pending = connection.account(command);
-        let prompts = observe(connection, &forwards, provider, deadline, now_unix, &mut present);
+        let prompts = observe(
+            connection,
+            &forwards,
+            provider,
+            deadline,
+            (started, now_unix),
+            &mut present,
+        );
         tokio::pin!(pending, prompts);
         tokio::select! {
             biased;
@@ -113,10 +121,10 @@ async fn observe(
     forwards: &super::ForwardSession,
     provider: super::Provider,
     deadline: Instant,
-    now_unix: u64,
+    clock: (Instant, u64),
     present: &mut impl FnMut(&super::Prompt) -> Result<()>,
 ) -> Result<()> {
-    let started = Instant::now();
+    let (started, now_unix) = clock;
     let mut events = bounded(deadline, async {
         loop {
             let connected = match connection.pairing().await {
@@ -136,9 +144,22 @@ async fn observe(
         }
     })
     .await?;
+    let mut expiry = deadline;
     loop {
         let now = now_unix.saturating_add(started.elapsed().as_secs());
-        let prompt = events.next_prompt(provider, now).await?;
+        let prompt = tokio::time::timeout_at(expiry, events.next_prompt(provider, now))
+            .await
+            .map_err(|_| {
+                Failure(if expiry < deadline {
+                    "setup_code_expired"
+                } else {
+                    "setup_timeout"
+                })
+            })??;
+        expiry = prompt.expiry(started, now_unix).unwrap_or(deadline).min(deadline);
+        if Instant::now() >= expiry {
+            return Err(Failure("setup_code_expired"));
+        }
         present(&prompt)?;
         events.presented(prompt);
     }
@@ -156,6 +177,16 @@ pub enum AccountCommand {
 }
 
 impl AccountCommand {
+    pub(super) fn context(self, error: Failure) -> Failure {
+        match (self, error.0) {
+            (Self::EnsureSignin | Self::Signin, "setup_timeout") => Failure("setup_chatgpt_timeout"),
+            (Self::Link, "setup_timeout") => Failure("setup_portos_timeout"),
+            (Self::EnsureSignin | Self::Signin, "setup_code_expired") => Failure("setup_chatgpt_code_expired"),
+            (Self::Link, "setup_code_expired") => Failure("setup_portos_code_expired"),
+            _ => error,
+        }
+    }
+
     fn operation(self) -> &'static str {
         match self {
             Self::EnsureSignin => "ensure-signin",

@@ -207,15 +207,30 @@ async fn t3_guided_observation_and_output_failures_settle_before_returning() -> 
 
 #[tokio::test]
 async fn t3_guided_timeout_has_independent_settlement_and_forward_cleanup() -> Result {
+    timed_out_account(false, 100, 11, "setup_chatgpt_timeout").await?;
+    timed_out_account(true, 100, 11, "setup_portos_timeout").await
+}
+
+#[tokio::test]
+async fn t3_presented_portos_code_expires_without_another_screen_frame() -> Result {
+    timed_out_account(true, 9998, 2, "setup_portos_code_expired").await
+}
+
+async fn timed_out_account(portos: bool, now_unix: u64, advance: u64, expected: &'static str) -> Result {
     let fixture = Fixture::new()?;
     let connection = fixture.connection(deadline()).await?;
     let screen = TcpListener::bind("127.0.0.1:0").await?;
-    prepare(&fixture, screen.local_addr()?.port(), "signin")?;
+    let (command, verb) = if portos {
+        (AccountCommand::Link, "link")
+    } else {
+        (AccountCommand::Signin, "signin")
+    };
+    prepare(&fixture, screen.local_addr()?.port(), verb)?;
     let barrier = fixture.listener("account-barrier")?;
-    let server = tokio::spawn(stream(screen, frame(false)));
+    let server = tokio::spawn(stream(screen, frame(portos)));
     let (sent, received) = oneshot::channel();
     let mut sent = Some(sent);
-    let mut guided = Box::pin(connection.guide_account(AccountCommand::Signin, 100, |_| {
+    let mut guided = Box::pin(connection.guide_account(command, now_unix, |_| {
         if let Some(sent) = sent.take() {
             let _ = sent.send(());
         }
@@ -230,11 +245,11 @@ async fn t3_guided_timeout_has_independent_settlement_and_forward_cleanup() -> R
         result = received => result?,
     }
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(11)).await;
+    tokio::time::advance(Duration::from_secs(advance)).await;
     // Resume before subprocess cleanup: its OS work is observed through actual
     // pipe readiness, while only the setup deadline was advanced artificially.
     tokio::time::resume();
-    assert_eq!(guided.await, Err(Failure("setup_timeout")));
+    assert_eq!(guided.await, Err(Failure(expected)));
     drop(child);
     server.await??;
     cleaned(&fixture, true)?;
@@ -317,5 +332,32 @@ async fn t3_guided_drop_releases_forwards_but_requires_explicit_remote_settlemen
     fs::remove_file(fixture.0.join("account-barrier"))?;
     fs::write(fixture.0.join("account-reply"), "echo-install: link completed\n")?;
     connection.account(AccountCommand::Link).await.map_err(diagnostic)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_guided_expired_settlement_is_cleanup_refusal_not_provider_timeout() -> Result {
+    let fixture = Fixture::new()?;
+    let connection = fixture.connection(deadline()).await?;
+    prepare(&fixture, 41001, "signin")?;
+    fs::write(fixture.0.join("account-reply"), "SYNTHETIC-TOKEN")?;
+    let barrier = fixture.listener("stop-barrier")?;
+    let mut guided = Box::pin(connection.guide_account(AccountCommand::Signin, 100, |_| Ok(())));
+    let child = tokio::select! {
+        result = &mut guided => return Err(format!("early result: {result:?}").into()),
+        socket = ready(&barrier) => socket?,
+    };
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(11)).await;
+    tokio::time::resume();
+    assert_eq!(guided.await, Err(Failure("setup_account_unsettled")));
+    drop(child);
+    cleaned(&fixture, true)?;
+    let before = fixture.calls()?.len();
+    assert_eq!(
+        connection.account(AccountCommand::Link).await,
+        Err(Failure("setup_timeout"))
+    );
+    assert_eq!(fixture.calls()?.len(), before);
     Ok(())
 }

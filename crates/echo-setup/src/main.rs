@@ -40,7 +40,16 @@ async fn run() -> i32 {
 }
 
 fn exit_code(event: &serde_json::Value) -> i32 {
-    if event["error"] == "setup_timeout" {
+    if matches!(
+        event["error"].as_str(),
+        Some(
+            "setup_timeout"
+                | "setup_chatgpt_timeout"
+                | "setup_portos_timeout"
+                | "setup_chatgpt_code_expired"
+                | "setup_portos_code_expired"
+        )
+    ) {
         3
     } else {
         i32::from(event["ok"] != true)
@@ -141,6 +150,12 @@ fn fix(error: &str) -> &'static str {
             "The running bridge identity is unsafe. Run status and doctor before retrying; no process was signalled."
         }
         "setup_timeout" => "Setup timed out. Run install again to resume setup.",
+        "setup_chatgpt_timeout" | "setup_chatgpt_code_expired" => {
+            "ChatGPT sign-in did not complete before its deadline. Installed files remain. Run install again for a fresh ChatGPT code."
+        }
+        "setup_portos_timeout" | "setup_portos_code_expired" => {
+            "Port OS linking did not complete before its deadline. Installed files remain. Run install again for a fresh Port OS code."
+        }
         "setup_relink_required" => "ChatGPT still requires sign-in. Run install again to resume setup.",
         "setup_kill_switch" => "The bridge kill switch is active. Inspect status before resuming setup.",
         "setup_account_unsettled" => "Account cleanup could not be confirmed. Inspect status before resuming setup.",
@@ -156,6 +171,10 @@ mod tests {
         for (ok, error, code) in [
             (true, "", 0),
             (false, "setup_timeout", 3),
+            (false, "setup_chatgpt_timeout", 3),
+            (false, "setup_portos_timeout", 3),
+            (false, "setup_chatgpt_code_expired", 3),
+            (false, "setup_portos_code_expired", 3),
             (false, "setup_account_unsettled", 1),
         ] {
             assert_eq!(super::exit_code(&serde_json::json!({"ok":ok,"error":error})), code);

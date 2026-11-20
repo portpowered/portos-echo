@@ -99,13 +99,21 @@ impl InstalledConnection {
         now_unix: u64,
         present: impl FnMut(&super::Prompt) -> Result<()>,
     ) -> Result<()> {
-        super::account::guide(self, command, self.deadline, now_unix, present).await
+        super::account::guide(self, command, self.deadline, now_unix, present)
+            .await
+            .map_err(|error| command.context(error))
     }
 
     pub(super) async fn recover_account(&self) -> Result<()> {
         if self.account.unsettled() {
             let cleanup = Instant::now() + std::time::Duration::from_secs(10);
-            self.settle_account(cleanup).await?;
+            self.settle_account(cleanup).await.map_err(|error| {
+                if error == Failure("setup_timeout") {
+                    Failure("setup_account_unsettled")
+                } else {
+                    error
+                }
+            })?;
         }
         Ok(())
     }

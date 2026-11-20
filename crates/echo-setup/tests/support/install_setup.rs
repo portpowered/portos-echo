@@ -1,6 +1,8 @@
 //! Isolated native CLI fixture. Real loopback HTTP, no internet or device tools.
 use super::*;
 
+type CliLines = tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>;
+
 pub struct Service {
     address: std::net::SocketAddr,
     screen_address: std::net::SocketAddr,
@@ -138,7 +140,7 @@ async fn settings_reply(listener: &tokio::net::TcpListener) -> Result {
     Ok(())
 }
 
-async fn screen_prompt(listener: &tokio::net::TcpListener, portos: bool) -> Result {
+async fn screen_prompt(listener: &tokio::net::TcpListener, portos: bool, expired: bool) -> Result {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (mut socket, _) = listener.accept().await?;
     let mut request = Vec::new();
@@ -152,7 +154,7 @@ async fn screen_prompt(listener: &tokio::net::TcpListener, portos: bool) -> Resu
         Some("GET /events?token=SYNTHETIC-PAIR HTTP/1.1")
     );
     let state = if portos {
-        serde_json::json!({"state":"link_code", "user_code":"TEST-LINK", "verification_uri":"https://auth.portoperatingsystem.com/device", "expires_at_unix":u64::MAX}) // lint-rules: allow-literal inert public prompt fixture
+        serde_json::json!({"state":"link_code", "user_code":"TEST-LINK", "verification_uri":"https://auth.portoperatingsystem.com/device", "expires_at_unix":if expired { 1 } else { u64::MAX }}) // lint-rules: allow-literal inert public prompt fixture
     } else {
         serde_json::json!({"state":"ready", "message":"code: TEST-CODE\nurl: https://auth.openai.com/codex/device\n"}) // lint-rules: allow-literal inert public prompt fixture
     };
@@ -269,7 +271,7 @@ async fn both_prompts(
         assert_eq!(&ready, b"ready");
         let listener = screen.clone();
         let server = tokio::task::spawn_local(async move {
-            screen_prompt(&listener, portos)
+            screen_prompt(&listener, portos, false)
                 .await
                 .map_err(|error| error.to_string())
         });
@@ -382,5 +384,104 @@ fn t3_linked_update_cli_preserves_grant_and_completes_after_fresh_confirmation()
     assert!(operations.iter().any(|call| call.contains("--device confirm-check '")));
     let remaining: Vec<String> = serde_json::from_slice(&fs::read(fixture.0.join("forwards.json"))?)?;
     assert_eq!(remaining, Vec::<String>::new());
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_expired_link_cli_reports_exit_three_guidance_and_drained_cleanup() -> Result {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for json in [false, true] {
+                tokio::time::timeout(std::time::Duration::from_secs(10), expired_cli(json)).await??;
+            }
+            Ok(())
+        })
+        .await
+}
+
+async fn expired_cli(json: bool) -> Result {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    let fixture = Fixture::new()?;
+    let (mut child, screen, barrier) = start_prompted(&fixture, json).await?;
+    let mut lines = tokio::io::BufReader::new(child.stdout.take().ok_or("missing stdout")?).lines();
+    finish_signin(&mut lines, &screen, &barrier, json).await?;
+    settings_reply(&screen).await?;
+    let (mut link, _) = barrier.accept().await?;
+    let mut ready = [0; 5];
+    link.read_exact(&mut ready).await?;
+    assert_eq!(&ready, b"ready");
+    screen_prompt(&screen, true, true).await?;
+    let result = lines.next_line().await?;
+    expired_result(result.as_deref(), json)?;
+    assert_eq!(lines.next_line().await?, None);
+    let output = child.wait_with_output().await?;
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert_public(&stderr);
+    assert_eq!(stderr.contains("fresh Port OS code"), !json);
+    expired_cleanup(&fixture)
+}
+
+async fn finish_signin(
+    lines: &mut CliLines,
+    screen: &std::sync::Arc<tokio::net::TcpListener>,
+    barrier: &tokio::net::TcpListener,
+    json: bool,
+) -> Result {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = screen.clone();
+    let server = tokio::task::spawn_local(async move {
+        screen_prompt(&listener, false, false)
+            .await
+            .map_err(|error| error.to_string())
+    });
+    let (mut account, _) = barrier.accept().await?;
+    let mut ready = [0; 5];
+    account.read_exact(&mut ready).await?;
+    assert_eq!(&ready, b"ready");
+    check_prompt(&lines.next_line().await?.ok_or("missing signin prompt")?, json, false)?;
+    account.write_all(&[1]).await?;
+    server.await?.map_err(io::Error::other)?;
+    Ok(())
+}
+
+fn expired_result(result: Option<&str>, json: bool) -> Result {
+    if json {
+        let value: serde_json::Value = serde_json::from_str(result.ok_or("missing failure")?)?;
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"], "setup_portos_code_expired");
+        assert!(value["setup"].is_null());
+        assert!(
+            value["fix"]
+                .as_str()
+                .is_some_and(|fix| fix.contains("fresh Port OS code"))
+        );
+        assert_public(&value.to_string());
+    } else {
+        assert_eq!(result, None);
+    }
+    Ok(())
+}
+
+fn expired_cleanup(fixture: &Fixture) -> Result {
+    let calls = fixture.ledger()?;
+    let operations: Vec<_> = calls.iter().filter_map(|args| args.last()).collect();
+    assert_eq!(
+        operations.iter().filter(|call| call.ends_with("--device stop")).count(),
+        3
+    );
+    assert!(
+        !operations
+            .iter()
+            .any(|call| call.contains("--device uninstall") || call.contains("confirm-cursor"))
+    );
+    assert!(
+        operations
+            .last()
+            .is_some_and(|call| call.starts_with("rm -rf '/data/local/tmp/echo-setup-"))
+    );
+    let remaining: Vec<String> = serde_json::from_slice(&fs::read(fixture.0.join("forwards.json"))?)?;
+    assert_eq!(remaining, Vec::<String>::new());
+    assert!(fixture.0.join("process-user").exists());
     Ok(())
 }

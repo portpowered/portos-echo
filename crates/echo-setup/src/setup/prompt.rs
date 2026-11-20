@@ -19,9 +19,12 @@ pub struct Prompt {
     provider: Provider,
     user_code: String,
     verification_uri: String,
+    #[serde(skip)]
+    expires_at_unix: Option<u64>,
 }
 
 pub(super) fn project(frame: ScreenFrame, provider: Provider, now: u64) -> Result<Option<Prompt>> {
+    let mut expiry = None;
     let fields = match (provider, frame.state) {
         (Provider::Chatgpt, UiState::Ready { message }) => {
             // echo-signin::Prompt::message is the existing presentation contract.
@@ -43,15 +46,26 @@ pub(super) fn project(frame: ScreenFrame, provider: Provider, now: u64) -> Resul
             if expires_at_unix <= now {
                 return Err(Failure("setup_code_expired"));
             }
+            expiry = Some(expires_at_unix);
             Some((user_code, verification_uri))
         }
         (_, UiState::Error { .. }) => return Err(Failure("setup_provider_failed")),
         _ => None,
     };
-    fields.map(|(code, url)| validated(provider, code, url)).transpose()
+    fields
+        .map(|(code, url)| validated(provider, code, url, expiry))
+        .transpose()
 }
 
-fn validated(provider: Provider, code: String, url: String) -> Result<Prompt> {
+impl Prompt {
+    pub(super) fn expiry(&self, started: tokio::time::Instant, now_unix: u64) -> Option<tokio::time::Instant> {
+        started.checked_add(std::time::Duration::from_secs(
+            self.expires_at_unix?.saturating_sub(now_unix),
+        ))
+    }
+}
+
+fn validated(provider: Provider, code: String, url: String, expires_at_unix: Option<u64>) -> Result<Prompt> {
     // Device user codes are printable identifiers, never terminal control input.
     if code.is_empty() || code.len() > 128 || !code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err(Failure("setup_screen_invalid"));
@@ -81,5 +95,6 @@ fn validated(provider: Provider, code: String, url: String) -> Result<Prompt> {
         provider,
         user_code: code,
         verification_uri: url,
+        expires_at_unix,
     })
 }
