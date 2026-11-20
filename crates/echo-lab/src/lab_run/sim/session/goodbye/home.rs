@@ -1,10 +1,13 @@
 //! The agent home of an installed Echo, for the goodbye journeys.
 use std::path::Path;
 
+/// The runner model every other journey configures (`m3::configure`).
+pub(super) const MODEL: &str = "gpt-5.4";
+
 /// An installed Echo: the installer seeded the home's prompt files once from
 /// `examples/prompts` and never rewrites them. They replace the built-in base
 /// prompts and say nothing about ending a session.
-pub(super) fn installed(root: &Path) -> Result<(), String> {
+pub(super) fn installed(root: &Path, model: &str) -> Result<(), String> {
     let home = root.join("agent-home");
     std::fs::create_dir_all(home.join("prompts")).map_err(|_| "goodbye: cannot create the agent home")?;
     for (name, text) in [
@@ -24,6 +27,11 @@ pub(super) fn installed(root: &Path) -> Result<(), String> {
     }
     let path = root.join("configured.private/bridge.toml");
     let text = std::fs::read_to_string(&path).map_err(|_| "goodbye: missing configuration")?;
+    let configured = format!("delegate_model = '{MODEL}'");
+    if text.matches(&configured).count() != 1 {
+        return Err("goodbye: expected one configured runner model".into());
+    }
+    let text = text.replace(&configured, &format!("delegate_model = '{model}'"));
     // Only the prompt files matter here: the notes and prompt tools stay off
     // so the delegated catalog is the session tools alone.
     let table = format!("{text}\n[home]\ndir = '{}'\nagent_tools = false\n", home.display());

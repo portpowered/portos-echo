@@ -70,7 +70,7 @@ class Delegation:
                 tool['parameters']['properties']['seconds'].pop('minimum')
         names = self.check_tools(body, expected)
         assert body['model'] == self.model, 'wrong delegated model'
-        outputs = [item for item in body['input'] if item.get('type') == ('custom_tool_call_output' if self.native else 'function_call_output')]
+        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
         assert outputs[:len(self.history)] == self.history, 'prior tool outputs changed across turns'
         outputs = outputs[len(self.history):]
         index = len(self.models)
@@ -80,9 +80,9 @@ class Delegation:
             item = {'type': 'function_call', 'id': 'fc-local', 'call_id': self.call_id,
                     'name': 'test_echo', 'arguments': '{"text":"delegated echo"}', 'status': 'completed'}
             if self.native:
-                item = {'type': 'custom_tool_call', 'id': 'fc-local', 'call_id': self.call_id,
-                        'name': 'exec', 'namespace': 'functions',
-                        'input': 'text(await tools.test_echo({text: "delegated echo"}));', 'status': 'completed'}
+                # A code-mode-only model calls the bridge's tool directly; `exec`
+                # needs a code-mode host, which the Echo does not have.
+                item['namespace'] = 'functions'
         else:
             assert len(outputs) == 1 and outputs[0]['call_id'] == self.call_id, 'tool identity mismatch'
             # The pinned engine encodes dynamic-tool content as a JSON text value.
@@ -122,29 +122,19 @@ class Delegation:
         # metadata independently of tools.experimental_request_user_input.enabled.
         # :1225-1251 registers clock from that metadata and default sleep_tool.
         # The binding amendment permits these exact extras, not synchronous input.
-        expected_names = ['functions.exec', 'functions.wait', 'functions.request_user_input_async', 'clock.sleep']
+        wrappers = ['functions.exec', 'functions.wait', 'functions.request_user_input_async']
+        expected_names = wrappers + ['functions.' + tool['name'] for tool in expected] + ['clock.sleep']
         if self.web_search != 'disabled':
             expected_names += ['web.run']
         assert names == expected_names, names
-        assert nested == sorted(tool['name'] for tool in self.tools) + ['clock__curr_time'], nested
-        for tool, fields in zip(self.tools, ['text: string;', 'ms: number;', '', 'name: string;']):
-            declaration = 'declare const tools: { ' + tool['name'] + '(args: { ' + fields + ' }): Promise<unknown>; };'
-            if not fields:
-                declaration = declaration.replace('{  }', '{}')
-            assert declaration in description, 'native schema mismatch: ' + declaration
-            assert tool['description'] in description, 'native description changed'
+        # The bridge's tools are direct declarations, exactly as a conventional
+        # model sees them: `exec` needs a code-mode host the Echo does not have.
+        assert namespaces[0]['name'] == 'functions' and namespaces[0]['tools'][len(wrappers):] == expected, \
+            'native direct catalog mismatch: ' + json.dumps(namespaces[0]['tools'][len(wrappers):])
+        assert nested == ['clock__curr_time'], nested
         return names
 
     def check_output(self, output):
-        if self.native:
-            # Observe the entire synthetic result before decoding, including a
-            # runtime failure or unexpected platform-specific representation.
-            print(json.dumps({'native_raw_output': output}), file=sys.stderr, flush=True)
-            assert isinstance(output, list) and len(output) == 2, 'native output content count mismatch: ' + repr(output)
-            assert output[0]['type'] == 'input_text'
-            assert re.fullmatch(r'Script completed\nWall time [0-9.]+ seconds\nOutput:\n', output[0]['text']), 'native execution did not complete'
-            assert output[1]['type'] == 'input_text'
-            output = output[1]['text']
         if self.native:
             print(json.dumps({'native_tool_output': output}), file=sys.stderr, flush=True)
         if self.negative:

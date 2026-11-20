@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 18
+last modified: 2026, november, 20
 status: implementation in progress
 ---
 
@@ -1174,3 +1174,24 @@ hosted declaration when enabled. The exact-list oracle rejects every other widen
 generation. Both forms use provider search; cached sets `external_web_access` false and live sets it true.
 No local fetch, browser, process or file authority is added. Real results and spoken source attribution
 remain operator T5 proof.
+
+## Direct bridge tools for code-mode-only models (2026-11-20)
+
+Every model in the pin's catalog has `tool_mode = code_mode_only`. Under that mode the pin hides each
+dynamic tool behind `functions.exec`, and `exec` runs in the separate `codex-code-mode-host` process (V8).
+The Echo's armv7 install is `codex-app-server` alone (`scripts/build-codex-armv7.sh`), so there `exec`
+fails closed and no bridge tool could be called: across the Echo's whole trace, delegated turns completed
+searches (`web.run`, already direct) and no dynamic tool call ever reached the bridge. The goodbye turn
+called `exec` once, got no `end_session` result and finished with the empty reply its guidance asks for,
+so the run did not end.
+
+Both configuration paths now set `features.code_mode.direct_only_tool_namespaces=["web","functions"]`.
+A dynamic tool without a namespace is in the pin's default `functions` namespace, so the bridge's whole
+catalog becomes direct declarations with the same name, description and closed schema a conventional
+model receives, and a call arrives as the same `item/tool/call`. The pin's own `functions.exec`,
+`functions.wait`, `functions.request_user_input_async` and `clock.sleep` stay declared; inside `exec` the
+only callable is `clock__curr_time`. The effect surface is unchanged: the bridge's declared tools and
+search. No pin, model metadata or wire schema changes are needed, and the code-mode host is not built for
+the Echo. T3 asserts the exact direct catalog for `gpt-6.1-sol`, calls a bridge tool with no code-mode
+host beside the app server, and runs the Live goodbye with that model
+(`tests/scenarios/session-live-goodbye-native.yaml`).

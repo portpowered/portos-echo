@@ -361,7 +361,7 @@ fn assert_local_routes(observed: &Value, live: &str, model: &str, search: &str) 
         "experimental_realtime_webrtc_call_base_url":format!("{live}/backend-api/codex"),
         "experimental_realtime_ws_base_url":format!("{live}/v1"),
         "features.skip_host_skill_discovery":true, "web_search":search,
-        "features.code_mode.direct_only_tool_namespaces":["web"],
+        "features.code_mode.direct_only_tool_namespaces":["web","functions"],
         "mcp_servers":{}, "cli_auth_credentials_store":"file"
     });
     for key in [

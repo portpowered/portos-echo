@@ -31,7 +31,7 @@ async fn t3_pinned_tools_report_mcp_failure_without_retry_or_false_success() {
 }
 
 #[tokio::test]
-async fn t3_pinned_tools_native_code_mode_executes_original_mcp() {
+async fn t3_pinned_tools_native_direct_call_executes_original_mcp() {
     tokio::time::timeout(
         Duration::from_secs(25),
         Box::pin(exercise_mode(false, false, ToolBudget::new(1, || Ok(7)), "gpt-6.1-sol")),
@@ -41,13 +41,29 @@ async fn t3_pinned_tools_native_code_mode_executes_original_mcp() {
 }
 
 #[tokio::test]
-async fn t3_pinned_tools_native_code_mode_reports_mcp_failure() {
+async fn t3_pinned_tools_native_direct_call_reports_mcp_failure() {
     tokio::time::timeout(
         Duration::from_secs(25),
         Box::pin(exercise_mode(true, false, ToolBudget::new(1, || Ok(7)), "gpt-6.1-sol")),
     )
     .await
     .unwrap();
+}
+
+/// The Echo's armv7 install is the app server alone. Every catalog model is
+/// code-mode-only, so a bridge tool that is only an `exec` callable cannot be
+/// called there at all: `exec` fails closed without `codex-code-mode-host`.
+#[tokio::test]
+async fn t3_pinned_tools_native_direct_call_needs_no_code_mode_host() {
+    let directory = tempfile::tempdir().unwrap();
+    let alone = directory.path().join("codex-app-server");
+    if std::fs::hard_link(binary(), &alone).is_err() {
+        std::fs::copy(binary(), &alone).unwrap();
+    }
+    assert!(!directory.path().join("codex-code-mode-host").exists());
+    let (budget, search) = (ToolBudget::new(1, || Ok(7)), echo_config::WebSearch::Live);
+    let run = Box::pin(exercise_engine(alone, (false, false), budget, "gpt-6.1-sol", search));
+    tokio::time::timeout(Duration::from_secs(25), run).await.unwrap();
 }
 
 #[tokio::test]
@@ -153,11 +169,22 @@ async fn exercise_search(
     model: &str,
     web_search: echo_config::WebSearch,
 ) {
+    let flags = (negative, exhausted);
+    Box::pin(exercise_engine(binary(), flags, budget, model, web_search)).await;
+}
+
+async fn exercise_engine(
+    engine: std::path::PathBuf,
+    (negative, exhausted): (bool, bool),
+    budget: ToolBudget,
+    model: &str,
+    web_search: echo_config::WebSearch,
+) {
     let directory = tempfile::tempdir().unwrap();
 
     let config = CodexConfig {
         web_search,
-        binary: Some(binary()),
+        binary: Some(engine),
         home: Some(directory.path().join("home")),
         ..CodexConfig::default()
     };
@@ -401,6 +428,10 @@ async fn snapshot(
             "functions.exec",
             "functions.wait",
             "functions.request_user_input_async",
+            "functions.test_echo",
+            "functions.test_wait",
+            "functions.test_requires_approval",
+            "functions.ui_show_emotion",
             "clock.sleep"
         ])
     };

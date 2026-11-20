@@ -50,7 +50,10 @@ impl ThreadSettings {
                 "features.goals": false,
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
-                "features.code_mode.direct_only_tool_namespaces": ["web"],
+                // Every catalog model is code-mode-only. `functions` is the pin's
+                // namespace for the caller's tools: declared directly they need no
+                // code-mode host, which the Echo's install does not have.
+                "features.code_mode.direct_only_tool_namespaces": ["web", "functions"],
                 "web_search": "live",
                 "mcp_servers": {},
             }),
@@ -109,7 +112,7 @@ mod tests {
                 "features.goals": false,
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
-                "features.code_mode.direct_only_tool_namespaces": ["web"],
+                "features.code_mode.direct_only_tool_namespaces": ["web", "functions"],
                 "web_search": "live",
                 "mcp_servers": {},
             })

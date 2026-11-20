@@ -28,6 +28,9 @@ const FAREWELL: &str = "Goodbye.";
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Journey {
     Goodbye,
+    /// The same goodbye with the runner the Echo really uses: a code-mode-only
+    /// model, which reaches the bridge's tools only as direct declarations.
+    Native,
     Pending,
     Question,
 }
@@ -36,6 +39,7 @@ impl Journey {
     fn from_id(id: &str) -> Option<Self> {
         match id {
             "session-live-goodbye" => Some(Self::Goodbye),
+            "session-live-goodbye-native" => Some(Self::Native),
             "session-live-goodbye-pending" => Some(Self::Pending),
             "session-live-thanks-question" => Some(Self::Question),
             _ => None,
@@ -44,7 +48,7 @@ impl Journey {
 
     fn utterances(self) -> [&'static str; 2] {
         match self {
-            Self::Goodbye => [GOODBYE, GOODBYE],
+            Self::Goodbye | Self::Native => [GOODBYE, GOODBYE],
             Self::Pending => ["what time is it?", GOODBYE],
             Self::Question => [QUESTION, FOLLOWUP],
         }
@@ -55,14 +59,23 @@ impl Journey {
         // scripted runner stands in for the model that reads them.
         let end = |wait_for_release| {
             json!([
-                {"request":GOODBYE,"call":"end_session","arguments":{},"wait_for_release":wait_for_release},
+                {"request":GOODBYE,"model":self.model(),"call":"end_session","arguments":{},
+                 "wait_for_release":wait_for_release},
                 {"silent":true}
             ])
         };
         match self {
-            Self::Goodbye => json!([end(false), end(true)]),
+            Self::Goodbye | Self::Native => json!([end(false), end(true)]),
             Self::Pending => json!([[{"say":"It is noon.","wait_for_release":true}], end(false)]),
             Self::Question => json!([]),
+        }
+    }
+
+    fn model(self) -> &'static str {
+        if self == Self::Native {
+            "gpt-6.1-sol"
+        } else {
+            home::MODEL
         }
     }
 }
@@ -123,7 +136,7 @@ impl Driver for Goodbye<'_> {
                 match step {
                     Step::SayText(text) if journey.utterances().get(self.turns) == Some(&text.as_str()) => {
                         if self.world.is_none() {
-                            self.world = Some(World::start(self.options, &artifacts.root, &journey.script()).await?);
+                            self.world = Some(World::start(self.options, &artifacts.root, journey).await?);
                         }
                         let world = self.world.as_mut().ok_or("goodbye: missing started world")?;
                         if let Some(result) = world.turn(journey, self.turns, text).await? {
@@ -172,7 +185,7 @@ struct World {
 }
 
 impl World {
-    async fn start(options: &Options, output: &Path, script: &Value) -> Result<Self, String> {
+    async fn start(options: &Options, output: &Path, journey: Journey) -> Result<Self, String> {
         let bridge = options
             .bridge
             .as_deref()
@@ -180,10 +193,10 @@ impl World {
             .ok_or("goodbye: requires the prebuilt production bridge")?;
         let root = Root::create(output.join("goodbye.private"))?;
         let satellite = Satellite::bind().await?;
-        let provider = Provider::start(&options.python, script).await?;
+        let provider = Provider::start(&options.python, &journey.script()).await?;
         let mut command = tokio::process::Command::new(bridge);
         crate::lab_run::sim::m3::configure(&mut command, &root.0, satellite.address.port(), &provider.origin)?;
-        home::installed(&root.0)?;
+        home::installed(&root.0, journey.model())?;
         let mut bridge = Process::start(&mut command)?;
         bridge.expect("bridge.ready").await?;
         let trace = read_trace(&root.0)?;
@@ -210,7 +223,7 @@ impl World {
 
     async fn turn(&mut self, journey: Journey, index: usize, text: &str) -> Result<Option<Value>, String> {
         match journey {
-            Journey::Goodbye => self.wake_and_farewell(index, text).await.map(Some),
+            Journey::Goodbye | Journey::Native => self.wake_and_farewell(index, text).await.map(Some),
             Journey::Pending => self.pending(index, text).await,
             Journey::Question => self.question(index, text).await,
         }

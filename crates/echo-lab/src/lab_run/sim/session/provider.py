@@ -53,11 +53,13 @@ class Script:
         return len(observed['delegations']) - 1
 
     def respond(self, body):
-        assert body['tools'] == function_tools([]), 'session catalog mismatch'
-        assert body['model'] == 'gpt-5.4', 'wrong delegated model'
         turn = self.turn()
         assert 0 <= turn < len(self.turns), 'model outside a delegated turn'
         steps = self.turns[turn]
+        native = steps[0].get('model', 'gpt-5.4') != 'gpt-5.4'
+        assert body['model'] == steps[0].get('model', 'gpt-5.4'), 'wrong delegated model'
+        tools = self.native_tools(body) if native else body['tools']
+        assert tools == function_tools([]), 'session catalog mismatch'
         assert self.step < len(steps), 'unexpected model retry'
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
         mine = [item for item in outputs if item['call_id'].startswith(f'session-{turn}-')]
@@ -69,10 +71,16 @@ class Script:
             # The pinned app server gives the runner the user's words and the
             # transcript, never a request the voice model wrote.
             request = steps[0]['request']
-            assert ('If those latest words only say the user is finished' in body.get('instructions', '')
-                    and 'immediately call end_session with {} once' in body['instructions']), \
+            instructions, delegated = body.get('instructions', ''), json.dumps(body['input'])
+            if native:
+                # Responses Lite: the base instructions are the first developer
+                # message and the hand-off is the last user message.
+                messages = [item for item in body['input'] if item.get('type') == 'message']
+                assert [messages[0]['role'], messages[-1]['role']] == ['developer', 'user'], 'native input shape'
+                instructions, delegated = messages[0]['content'][0]['text'], json.dumps(messages[-1])
+            assert ('If those latest words only say the user is finished' in instructions
+                    and 'immediately call end_session with {} once' in instructions), \
                 'missing goodbye runner instructions'
-            delegated = json.dumps(body['input'])
             assert f'<input>{request}</input>' in delegated and f'user: {request}' in delegated, \
                 'runner did not receive the user words'
             assert 'end the session' not in delegated, 'synthetic end request reached the runner'
@@ -82,6 +90,8 @@ class Script:
         if 'call' in step:
             item = {'type': 'function_call', 'id': f'fc-{turn}-{self.step}', 'call_id': f'session-{turn}-{self.step}',
                     'name': step['call'], 'arguments': json.dumps(step['arguments']), 'status': 'completed'}
+            if native:
+                item['namespace'] = 'functions'
         elif 'say' in step:
             item = {'type': 'message', 'id': f'msg-{turn}', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': step['say'], 'annotations': []}]}
@@ -94,7 +104,7 @@ class Script:
             commands.put({'heard': step['heard']})
             wake_write.sendall(b'e')
             assert heard.wait(20), 'sideband did not deliver the overlapping speech'
-        observed['models'].append({'turn': turn, 'tools': [tool['name'] for tool in body['tools'][:-1]]})
+        observed['models'].append({'turn': turn, 'tools': [tool['name'] for tool in tools[:-1]]})
         emit({'event': 'provider.model', 'turn': turn, 'outputs': [item['output'] for item in mine]})
         response = {'id': f'response-{turn}-{self.step}', 'status': 'completed', 'output': [item] if item else []}
         events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}}]
@@ -102,6 +112,23 @@ class Script:
             events.append({'type': 'response.output_item.done', 'output_index': 0, 'item': item})
         events.append({'type': 'response.completed', 'response': response})
         return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
+
+    @staticmethod
+    def native_tools(body):
+        """The session catalog a code-mode-only model can call without `exec`.
+
+        The Echo has no code-mode host, so a tool that is only an `exec`
+        callable cannot be called there. Responses Lite carries declarations
+        as one input block of namespaces; search is the pin's `web.run`."""
+        assert 'tools' not in body, 'unexpected conventional tools field'
+        blocks = [item['tools'] for item in body['input'] if 'tools' in item]
+        assert len(blocks) == 1, 'missing or repeated native tool block'
+        names = [namespace['name'] + '.' + tool['name'] for namespace in blocks[0] for tool in namespace['tools']]
+        wrappers = ['functions.exec', 'functions.wait', 'functions.request_user_input_async']
+        direct = function_tools([])[:-1]
+        assert names == wrappers + ['functions.' + tool['name'] for tool in direct] + ['clock.sleep', 'web.run'], \
+            'bridge tools are not direct declarations: ' + json.dumps(names)
+        return blocks[0][0]['tools'][len(wrappers):] + function_tools([])[-1:]
 
     def begin(self, turn):
         assert turn == len(observed['delegations']), 'unexpected delegation identity'
