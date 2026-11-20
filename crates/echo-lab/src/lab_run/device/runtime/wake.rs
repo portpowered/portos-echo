@@ -118,6 +118,109 @@ impl Runtime {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::{io::Write, path::Path};
+
+    async fn complete_row(path: &Path, at: tokio::time::Instant) {
+        tokio::time::sleep_until(at).await;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"\n")
+            .unwrap();
+    }
+
+    #[test]
+    fn m1_live_trace_partial_preserves_the_arm_and_replay_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("trace");
+        std::fs::write(&path, "").unwrap();
+        let mut state = Runtime {
+            trace_path: path.clone(),
+            ..Runtime::default()
+        };
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .unwrap();
+        let options = crate::lab_run::run_options::parse(&[
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/scenarios/m1-hassmic-bridge.yaml"
+            )
+            .into(),
+            "--driver".into(),
+            "sim".into(),
+            "--bridge".into(),
+            std::env::current_exe().unwrap().to_str().unwrap().into(),
+            "--out".into(),
+            root.path().join("out").to_str().unwrap().into(),
+        ])
+        .unwrap();
+        let mut observer = Observer::new(&mut state, &executor, &options);
+        for (id, expected) in [
+            ("before-arm", Ok(())),
+            (
+                "late-first",
+                Err("device: wake observed before replay; replay refused".into()),
+            ),
+        ] {
+            let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            write!(
+                file,
+                "{}",
+                json!({"event":"wyoming.run_started","run_id":id,"elapsed_ms":1})
+            )
+            .unwrap();
+            let path = path.clone();
+            executor.spawn(async move {
+                complete_row(&path, tokio::time::Instant::now() + Duration::from_millis(20)).await;
+            });
+            assert_eq!(observer.arm(), expected);
+            assert_eq!(observer.state.wake_offset, 1);
+            assert_eq!(observer.poll(), Ok(expected.is_err()));
+            assert_eq!(observer.state.trace.records.last().unwrap()["run_id"], id);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn m1_live_trace_partial_validates_the_tail_before_early_success() {
+        for (event, expected) in [
+            ("run.started", Ok(true)),
+            (
+                "wyoming.run_started",
+                Err("device: duplicate wake in one attempt".into()),
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("trace");
+            std::fs::write(&path, "").unwrap();
+            let mut state = Runtime {
+                trace_path: path.clone(),
+                ..Runtime::default()
+            };
+            state.arm_wake().unwrap();
+            std::fs::write(
+                &path,
+                format!(
+                    "{}\n{}",
+                    json!({"event":"wyoming.run_started","run_id":"current","elapsed_ms":1}),
+                    json!({"event":event,"run_id":"current","elapsed_ms":2})
+                ),
+            )
+            .unwrap();
+            let began = tokio::time::Instant::now();
+            let delay = Duration::from_millis(20);
+            let ((), result) = tokio::join!(biased;
+                complete_row(&path, began + delay),
+                state.wake_until(began + Duration::from_secs(6), None),
+            );
+            assert_eq!(result, expected);
+            assert_eq!(began.elapsed(), delay);
+            assert_eq!(state.trace.records.len(), 2);
+        }
+    }
 
     #[tokio::test(start_paused = true)]
     async fn ring_replay_wake_accepts_late_and_exact_six_second_receipts_without_extra_wait() {
