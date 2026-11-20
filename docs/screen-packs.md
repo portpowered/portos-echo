@@ -55,7 +55,7 @@ An installed template activates automatically when selection is omitted.
 Open Settings and choose **Load screen packs**. This explicit request keeps a
 pack-hosting failure independent of conversation settings. The panel lists valid
 installed identities and their authenticated rest previews (layout-only packs have
-no preview). Select **Built-in appearance** to disable packs or an installed pack,
+no preview). Select **Disable screen packs** or an installed pack,
 then **Use screen pack** to save through the existing settings owner. Pack saves
 require no restart and update the page without navigation.
 While Settings covers the presentation, its catalog and preview reads take
@@ -382,10 +382,35 @@ For a local installation without device access, place the generated
 `template@0.2.0` directory under a fresh bridge home's `screens/` directory, then
 start the bridge with that home and open its paired page. With both versions
 installed, omitted selection activates 0.2.0. Select `template@0.1.0` or
-**Built-in appearance** to roll back without deleting either pack or restarting
+**Disable screen packs** to roll back without deleting either pack or restarting
 the bridge. A download test must serve the generated archive from a
 local HTTPS peer trusted exclusively by the configured CA; never use public
 release downloads in tests.
+
+## Companion pack
+
+Companion 0.1.0 is an optional cel-shaded character with poses for Echo's screen
+states and a happy emote. Codex image generation produced an original reference
+sheet and edited it into the pose sheets. The checked-in PNGs and their
+[generation prompts](../scripts/packs/companion/prompts.md) are the source for
+the offline video build.
+
+On Linux with Python 3 and ffmpeg (libvpx-vp9 and libx264 enabled):
+
+```sh
+pack_root=$(mktemp -d)
+sh scripts/make-companion-screenpack.sh --version 0.1.0 --out "$pack_root/generated"
+cd "$pack_root/generated"
+sha256sum --check companion-0.1.0.screenpack.tar.gz.sha256
+```
+
+For a released build, use the HTTPS URL for
+`companion-0.1.0.screenpack.tar.gz` and that file's digest from the same
+release's `SHA256SUMS`. Enter both in **Settings > Load screen packs**. After
+installation, select **companion 0.1.0**, choose **Use screen pack**, then
+choose **Back** to see the new appearance. The release example pins template as
+the default. To roll back, select the installed template or **Disable screen packs**,
+save with **Use screen pack**, and choose **Back**.
 
 ## Local push
 
@@ -431,7 +456,7 @@ Other stderr is redacted to protect serial numbers and paths. Cleanup errors
 appear separately after any original failure. Push does not write settings or
 restart the bridge. Select the installed identity from the paired Settings page. Omitted
 selection automatically adopts an installed template; an explicitly empty
-selection keeps the built-in appearance. Select **Built-in appearance** to roll
+selection keeps the built-in appearance. Select **Disable screen packs** to roll
 back without deleting downloaded data.
 
 ## Device-free verification
@@ -450,7 +475,7 @@ once in a fresh temporary directory. The integration journey consumes those
 prebuilt artifacts, a fresh home and a local HTTPS archive peer. It follows the
 paired controls above: download with the generated digest, refresh, disable,
 select the template, refuse a wrong digest, observe a touched clip, and roll back
-to **Built-in appearance**. It checks the atomic selection file and native SSE,
+to **Disable screen packs**. It checks the atomic selection file and native SSE,
 fetch and decoded video frames; only the incoming voice states and external
 archive peer are controlled. The production settings service reports whether a
 restart was requested when the fixture shuts down.
