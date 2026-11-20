@@ -95,6 +95,43 @@ async fn t3_portos_generic_forbidden_and_unauthorized_preserve_auth_behavior() {
     .await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn t3_portos_unlinked_catalog_omits_server_tools_then_discovers_after_link() {
+    drive(async {
+        let peer = TlsPeer::start(false).await;
+        let screen = Screen::bind(None).await.unwrap();
+        let path = peer.directory.path().join("trace");
+        let mut trace = Trace::open(&path, "api_key").unwrap();
+        let mut tools = Tools::new(&peer.config, Arc::new(|| 0));
+        tools.allowed = vec!["endpoint_query".into()];
+        tools.open(&peer.config, &screen, &mut trace, None).await.unwrap();
+        // No grant: the call still gets its session tools, and nothing is cached.
+        for _ in 0..2 {
+            let catalog = tools.catalog().await.unwrap();
+            assert_eq!(catalog.resolve("endpoint_query"), None);
+            assert_eq!(catalog.resolve(END), Some(END));
+        }
+        let rows: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|row| row["event"] == "mcp.tools_list.unavailable")
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["server"], peer.config.mcp.server[0].name.as_str());
+        assert_eq!(rows[0]["reason"], "unlinked");
+        // No token was requested, so the grant is not rejected and one link suffices.
+        let owner = tools.runtime.as_ref().unwrap();
+        assert!(!owner.grant.blocked());
+        approve(owner).await;
+        let catalog = tools.catalog().await.unwrap();
+        assert_eq!(catalog.resolve("endpoint_query"), Some("endpoint_query"));
+        tools.close().await;
+        assert_eq!(peer.finish().await, json!({"link":1,"token":1,"catalog":1,"query":0}));
+    })
+    .await;
+}
+
 async fn relink(owner: &bridge_mcp::Runtime) {
     let mut receipt = owner.operator.start(Operation::Link).ok().unwrap();
     assert!(matches!(

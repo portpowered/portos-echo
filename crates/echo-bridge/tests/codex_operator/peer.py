@@ -201,7 +201,7 @@ for line in sys.stdin:
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     elif method == "thread/start":
         assert home.joinpath("mode").read_text().startswith("tool-")
-        expected = ["extend_session", "end_session"] if home.joinpath("mode").read_text() == "tool-binary-reply" else ["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion", "extend_session", "end_session"]
+        expected = ["extend_session", "end_session"] if home.joinpath("mode").read_text() in ("tool-binary-reply", "tool-unlinked-reply") else ["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion", "extend_session", "end_session"]
         assert [tool["name"] for tool in request["params"]["dynamicTools"]] == expected
         home.joinpath("thread-config").write_text(json.dumps(request["params"]))
         emit({"id": request["id"], "result": {"thread": {"id": "fixture-thread"}}})
@@ -224,7 +224,7 @@ for line in sys.stdin:
             emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
         if binary_reply:
             assert signaling.readline() == b"reply\n"
-        if binary_reply or home.joinpath("mode").read_text() == "tool-reply":
+        if binary_reply or home.joinpath("mode").read_text() in ("tool-reply", "tool-unlinked-reply"):
             for _ in range(2 if delegated else 1):
                 if delegated:
                     emit({"method": "thread/realtime/transcript/delta", "params": {
