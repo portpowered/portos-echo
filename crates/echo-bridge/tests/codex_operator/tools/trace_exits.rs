@@ -101,30 +101,44 @@ async fn inspect(
         "shutdown" => stop.take().unwrap().send(()).unwrap(),
         "media" => lost.notify_one(),
         "kill" => std::fs::write(fixture.directory.path().join("audit/bridge-kill"), []).unwrap(),
-        "timeout" => {
-            while bridge_wire_screen::state(&mut screen).await["state"] != "approval" {}
-            let clock = bridge_short::ReadyClock::new();
-            tokio::time::pause();
-            tokio::time::advance(Duration::from_secs(1)).await;
-            wait(fixture, "delegation.resolved").await;
-            tokio::time::resume();
-            drop(clock);
-        }
+        "timeout" => expire(fixture, &mut screen).await,
         _ => (),
     }
     wait(fixture, "delegation.resolved").await;
-    if matches!(cause, "child" | "error" | "closed" | "malformed" | "media" | "timeout") {
-        // Let the existing failure and cleanup enter recovery before asking
-        // for shutdown. A racing stop preserves the original failure instead.
+    settle(fixture, cause, observer, stop).await;
+}
+
+async fn settle(fixture: &Fixture, cause: &str, observer: &Observer, stop: Option<tokio::sync::oneshot::Sender<()>>) {
+    let recovering = matches!(cause, "child" | "error" | "closed" | "malformed" | "media" | "timeout");
+    if recovering {
+        // Release the fake playback/capture before awaiting real recovery.
+        observer.finish(Ok(()));
         wait(fixture, "bridge.recovering").await;
     }
     if let Some(stop) = stop {
         let _ = stop.send(());
     }
-    while observer.commands().last() != Some(&echo_link::fake::Command::Close) {
-        tokio::task::yield_now().await;
+    if !recovering {
+        while !observer.commands().iter().any(|command| {
+            matches!(
+                command,
+                echo_link::fake::Command::Cut(_) | echo_link::fake::Command::Close
+            )
+        }) {
+            tokio::task::yield_now().await;
+        }
+        observer.finish(Ok(()));
     }
-    observer.finish(Ok(()));
+}
+
+async fn expire(fixture: &Fixture, screen: &mut Lines<BufReader<tokio::net::TcpStream>>) {
+    while bridge_wire_screen::state(screen).await["state"] != "approval" {}
+    let clock = bridge_short::ReadyClock::new();
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    wait(fixture, "delegation.resolved").await;
+    tokio::time::resume();
+    drop(clock);
 }
 
 async fn wait(fixture: &Fixture, event: &str) {
