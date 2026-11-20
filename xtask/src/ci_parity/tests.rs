@@ -103,6 +103,12 @@ fn shards_cover_every_partition_exactly_once() {
             "hash:${{ matrix.shard }}/3",
         ),
         ("test-sim-suites-parts", ", test-sim-components]", "]"),
+        ("test-sim-scenarios-shards", "shard: [1, 2]", "shard: [1]"),
+        (
+            "test-sim-scenarios-shards",
+            "SCENARIO_PARTITION=${{ matrix.shard }}/2",
+            "SCENARIO_PARTITION=${{ matrix.shard }}/3",
+        ),
         (
             "test-sim-suites-parts",
             "make ${{ matrix.part }}",
@@ -132,7 +138,7 @@ fn shards_cover_every_partition_exactly_once() {
 fn make_targets_of_split_gates_equal_their_parts() {
     let (makefile, workflow) = fixture();
     for rule in shards::MAKE_SPLITS {
-        let unsharded = rule.replace(" $(NEXTEST_SHARD)", "");
+        let unsharded = rule.replace(" $(NEXTEST_SHARD)", "").replace(" $(SCENARIO_SHARD)", "");
         for changed in [String::new(), format!("{rule}{rule}"), unsharded]
             .into_iter()
             .filter(|changed| changed != rule)
@@ -178,7 +184,11 @@ fn codex_provisioning_cannot_be_removed_or_made_optional() {
             "test-unit-rust",
         );
     }
-    for part in ["test-sim-suites-parts", "test-sim-host-shards"] {
+    for part in [
+        "test-sim-scenarios-shards",
+        "test-sim-suites-parts",
+        "test-sim-host-shards",
+    ] {
         let block = shards::part(part);
         assert_job_rejected(&workflow, &block, &block.replace("          sim: 'true'\n", ""), part);
     }
@@ -309,7 +319,9 @@ fn shared_sim_provisioning_requires_each_exact_host_step() {
     assert_eq!(shared::check_setup(&sim, setup), Ok(()));
     for fragment in [
         "    - name: Host build dependencies\n",
-        "      run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n",
+        "        path: .cache/apt-archives\n",
+        "        sudo apt-get update\n",
+        "        sudo apt-get install -y -o Dir::Cache::archives=\"$PWD/.cache/apt-archives\" -o APT::Keep-Downloaded-Packages=true libopus-dev zlib1g-dev\n",
         "        path: .cache/hassmic-host\n",
         "        key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n",
         "    - name: Build pinned hassmic-host\n",

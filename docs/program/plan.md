@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 18
+last modified: 2026, november, 20
 status: active; the program plan. It wins over the drafts in docs/design/
 ---
 
@@ -673,6 +673,8 @@ Nobody merges this repository with `--admin`: a red required check means the pul
 
 Every job calls a make target, and the make target is what an agent runs locally. `make ci` runs the same list in
 the same order. `xtask ci-parity` fails when `.github/workflows/ci.yml` and the `ci` target name different jobs.
+The four slowest gates run as parallel part jobs (nextest `--partition`, `echo-lab run --all --partition`, or one
+job per prerequisite target), and the check named after the gate fails unless every part passed.
 
 Required on every pull request:
 

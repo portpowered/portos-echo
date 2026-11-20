@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 18
+last modified: 2026, november, 20
 status: owner action requested after the CI pull request merges
 ---
 
@@ -33,8 +33,14 @@ Review verifies the observed check names against this list before owner applicat
 The owner proves that a red required check prevents merging after protection is applied.
 This document requests settings; it does not apply them.
 
-Each job in `.github/workflows/ci.yml` invokes one corresponding Make target.
+Each required check in `.github/workflows/ci.yml` has one corresponding Make target.
 `make ci` executes all 16 targets in the same order, enforced by `cargo xtask ci-parity`.
+Four slow gates (`test-unit`, `test-sim-suites`, `test-sim-host`, `build-host`) run as parallel
+part jobs, which split their Make target into prerequisite targets or nextest and scenario
+partitions; the job named after the gate passes only when every part passed. The part jobs
+(`test-unit-rust K/4`, `test-unit-screen`, `test-sim-scenarios K/2`, `test-sim-bridge`,
+`test-sim-components`, `test-sim-host K/3`, `build-host-workspace`, `test-echo-install`)
+are not required checks themselves.
 `make lint` also runs parity and both existing lint self-tests.
 Local execution needs the tools pinned in `.github/actions/setup/action.yml`, GNU Make,
 POSIX sh, Python 3.12, Node 24 and the stable compiler in `rust-toolchain.toml`.

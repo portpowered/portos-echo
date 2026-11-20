@@ -71,6 +71,25 @@ jobs:
             web/screen/test-results/screenshots/**
             web/screen/test-results/summary.txt
           if-no-files-found: error
+  test-sim-scenarios-shards:
+    name: test-sim-scenarios ${{ matrix.shard }}/2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-sim-suites
+          sim: 'true'
+      - name: test-sim-suites
+        run: make test-sim-scenarios SCENARIO_PARTITION=${{ matrix.shard }}/2
   test-sim-suites-parts:
     name: ${{ matrix.part }}
     runs-on: ubuntu-latest
@@ -78,7 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [test-sim-scenarios, test-sim-bridge, test-sim-components]
+        part: [test-sim-bridge, test-sim-components]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -304,13 +323,13 @@ jobs:
         run: make test-contract
   test-sim-suites:
     name: test-sim-suites
-    needs: [test-sim-suites-parts]
+    needs: [test-sim-scenarios-shards, test-sim-suites-parts]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: test-sim-suites
-        run: test '${{ needs.test-sim-suites-parts.result }}' = success
+        run: test '${{ needs.test-sim-scenarios-shards.result }}' = success && test '${{ needs.test-sim-suites-parts.result }}' = success
   test-sim-host:
     name: test-sim-host
     needs: [test-sim-host-shards]

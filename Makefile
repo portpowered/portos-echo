@@ -47,6 +47,9 @@ lint-self-tests:
 # NEXTEST_PARTITION=count:K/N; the shards together run every test. Unset, a target runs all of them.
 NEXTEST_PARTITION ?=
 NEXTEST_SHARD = $(if $(NEXTEST_PARTITION),--partition $(NEXTEST_PARTITION) --no-tests=pass)
+# SCENARIO_PARTITION=K/N runs every Nth T3 scenario of `run --all`; the shards together run each once.
+SCENARIO_PARTITION ?=
+SCENARIO_SHARD = $(if $(SCENARIO_PARTITION),--partition $(SCENARIO_PARTITION))
 
 .PHONY: test-unit-rust test-unit-python test-unit-screen
 test-unit: test-unit-rust test-unit-python test-unit-screen
@@ -85,7 +88,7 @@ test-sim-suites: test-sim-scenarios test-sim-bridge test-sim-components
 
 test-sim-scenarios: sim-prereqs
 	cargo run --locked -p echo-lab -- validate
-	python -c "import resource,subprocess,sys,time; t=time.time(); r=subprocess.run(['cargo','run','--locked','-p','echo-lab','--','run','--all','--driver','sim']); u=resource.getrusage(resource.RUSAGE_CHILDREN); print(f'TIMING wall={time.time()-t:.1f} user={u.ru_utime:.1f} sys={u.ru_stime:.1f}'); sys.exit(r.returncode)"
+	cargo run --locked -p echo-lab -- run --all --driver sim $(SCENARIO_SHARD)
 
 test-sim-bridge: sim-prereqs
 	cargo nextest run -p echo-bridge --test bridge_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
@@ -151,7 +154,7 @@ build-host-workspace:
 
 .PHONY: test-echo-install
 test-echo-install:
-	python -c "import resource,subprocess,sys,time; t=time.time(); r=subprocess.run([sys.executable,'tests/test_echo_install.py']); u=resource.getrusage(resource.RUSAGE_CHILDREN); print(f'TIMING wall={time.time()-t:.1f} user={u.ru_utime:.1f} sys={u.ru_stime:.1f} cpus={__import__(\"os\").cpu_count()}'); sys.exit(r.returncode)"
+	python tests/test_echo_install.py
 
 .PHONY: build-echo-screen test-echo-screen-jvm test-echo-screen-url
 build-echo-screen:
