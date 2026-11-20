@@ -11,14 +11,17 @@ const MINIMAL: &str = "[echo]\nhost='echo.example.invalid'\n[live]\ncredential_f
 #[test]
 fn runner_skills_selection_defaults_empty_and_decodes_without_opening_directories() {
     for input in [MINIMAL, EXAMPLE, include_str!("../../../examples/bridge.echo.toml")] {
-        assert!(BridgeConfig::from_toml_str(input).unwrap().codex.skills.is_empty());
+        assert_eq!(
+            BridgeConfig::from_toml_str(input).unwrap().codex.skills,
+            Vec::<String>::new()
+        );
     }
     let parse = |selection| {
         BridgeConfig::from_toml_str(&format!(
             "{MINIMAL}\n[home]\ndir='/absent/agent-home'\n[codex]\nhome='/absent/private'\nskills={selection}"
         ))
     };
-    assert!(parse("[]").unwrap().codex.skills.is_empty());
+    assert_eq!(parse("[]").unwrap().codex.skills, Vec::<String>::new());
     assert_eq!(parse("['brief','another']").unwrap().codex.skills, ["brief", "another"]);
     for (value, message) in [
         ("'brief'", "codex.skills: invalid type or value"),
