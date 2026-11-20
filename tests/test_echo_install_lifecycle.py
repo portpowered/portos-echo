@@ -3,6 +3,11 @@ import json
 import os
 import selectors
 import signal
+import shlex
+import shutil
+import stat
+import sys
+from pathlib import Path
 import subprocess
 import hashlib
 import io
@@ -356,99 +361,81 @@ def nonroot_cases():
     print("NR install=PASS ownership=PASS migration=PASS launch=PASS status=PASS")
 
 
-def public_bytes(box):
-    return {str(path.relative_to(box.device)): path.read_bytes()
-            for name in ("bin", "apk", "scripts", "MANIFEST")
-            for path in ([box.device / name] if (box.device / name).is_file()
-                         else (box.device / name).rglob("*")) if path.is_file()}
+def configure_lifecycle(box, mode="ready", bridge=None):
+    os.mkfifo(box.root / "ready")
+    (box.root / "remote/hassmic/boot.log").write_text("old client connected\n")
+    fixture = """import os, sys, signal, json
+from pathlib import Path
+base = Path(os.environ['FAKE_ROOT'])
+(base / 'child-pid').write_text(str(os.getpid()))
+(base / 'holder-pid').write_text(str(os.getppid()))
+(base / 'child-args').write_text(json.dumps(sys.argv[1:]))
+(base / 'child-session').write_text(str(os.getsid(0)))
+mode = (base / 'mode').read_text()
+log = base / 'remote/hassmic/boot.log'
+if mode in ('ready', 'hidden', 'deadline', 'stubborn'):
+    with log.open('a') as output: output.write('client connected / satellite: running\\n')
+elif mode == 'rotate':
+    log.rename(log.with_suffix('.old'))
+    log.write_text('client connected\\n')
+elif mode == 'truncate':
+    log.write_text('client connected\\n')
+with (base / 'ready').open('w') as ready: ready.write('ready')
+if mode != 'exit':
+    sys.stdin.buffer.read()
+    (base / 'eof').write_text('EOF')
+    if mode == 'stubborn': signal.pause()
+"""
+    bridge = bridge or box.files["bridge"]
+    bridge.write_text("#!" + sys.executable + "\n" + fixture)
+    (box.root / "mode").write_text(mode)
+    for name in ("ps", "date", "sleep"):
+        wrapper = box.root / "remote-tools" / name
+        wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                           + shlex.quote(str(Path(__file__).with_name("test_echo_install.py").resolve())) + " --tool " + name + ' "$@"\n')
+        wrapper.chmod(0o755)
+    bridge.chmod(0o755)
 
 
-def release_cases():
-    # Run both the actual bundle device entry and ordinary Linux operator CLI.
-    with Sandbox() as box:
-        stage, archive = device_archive(box, "valid")
-        env = dict(box.env, PATH=str(box.root / "remote-tools") + ":/usr/bin:/bin")
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        result = subprocess.run(["/bin/sh", str(box.script), "--device", "prepare-archive",
-                                 "--archive", str(archive), "--sha256", digest, "--stage", str(stage)],
-                                env=env, capture_output=True, timeout=5)
-        require(result.returncode == 0, "release archive preparation failed")
-        bundle = stage / "bundle"
 
-        def install(version):
-            result = subprocess.run(["/bin/sh", str(bundle / "scripts/echo-install.sh"),
-                                     "--device", "install", "--bundle", str(bundle),
-                                     "--release-version", version], env=env,
-                                    capture_output=True, timeout=15)
-            require(result.returncode == 0, "release install failed: " + result.stderr.decode())
+def prepared_run(base):
+    """Observe real preparation before the launcher's atomic gate is consumed."""
+    run = base / "remote/echo-bridge/private/run"
+    for name, mode in (("", 0o700), ("control", 0o700), ("stdin", 0o600),
+                       ("deadline", 0o600), ("log-inode", 0o600), ("log-prefix", 0o600)):
+        path = run / name
+        require(owner(base, path) == "9999:9999", "run ownership differs before launch")
+        require(stat.S_IMODE(path.stat().st_mode) == mode, "run mode differs before launch")
+    require(run.is_dir() and (run / "control").is_dir(), "launch gate missing")
+    require(stat.S_ISFIFO((run / "stdin").stat().st_mode), "stdin is not a FIFO")
+    require(int((run / "deadline").read_text()) == int((base / "clock").read_text()) + 19,
+            "preparation deadline differs")
+    log = base / "remote/hassmic/boot.log"
+    require((run / "log-inode").read_text().strip() == str(log.stat().st_ino), "log inode not captured")
+    with log.open("rb") as source:
+        expected = subprocess.check_output([shutil.which("cksum")], stdin=source)
+    require((run / "log-prefix").read_bytes() == expected, "log prefix not captured")
 
-        install("0.1.0")
-        original = public_bytes(box)
-        box.run(["rollback"], 1)
-        require(public_bytes(box) == original, "first rollback changed active release")
-        private = {"private/bridge.toml": "edited config", "home/notes.md": "retained notes"}
-        for name, value in private.items():
-            path = box.device / name
-            path.write_text(value)
-            set_owner(box.root, path, "9999:9999")
-        for name in ("bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem", "apk/echo-screen.apk", "MANIFEST"):
-            (bundle / name).write_text("version B: " + name)
-        install("0.2.0")
-        current = public_bytes(box)
-        require(json.loads((box.device / "release.json").read_text()) ==
-                {"format": 1, "current": "0.2.0", "previous": "0.1.0"}, "release metadata differs")
-        previous = box.device / "releases/previous"
-        require({str(path.relative_to(previous)): path.read_bytes()
-                 for path in previous.rglob("*") if path.is_file() and path.name not in ("version", "SHA256SUMS")}
-                == original, "previous payload differs")
-        require(not (previous / "private").exists() and not (previous / "home").exists(),
-                "snapshot contains private data")
-        saved = (previous / "bin/echo-bridge").read_bytes()
-        (previous / "bin/echo-bridge").write_bytes(b"tampered")
-        box.run(["rollback"], 1)
-        require(public_bytes(box) == current, "tampered rollback changed active files")
-        (previous / "bin/echo-bridge").write_bytes(saved)
-        box.run(["rollback"])
-        require(public_bytes(box) == original, "rollback did not restore every public file")
-        require(json.loads((box.device / "release.json").read_text()) ==
-                {"format": 1, "current": "0.1.0", "previous": None}, "rollback version differs")
-        for name, value in private.items():
-            require((box.device / name).read_text() == value, "rollback changed private/home bytes")
-        box.run(["rollback"], 1)
-        require(not (box.root / "remote/echo-bridge.lock").exists(), "rollback leaked lock")
-        box.run(["uninstall"])
-        require(not (box.device / "releases").exists(), "uninstall retained release binaries")
-    with Sandbox() as box:
-        box.install()
-        original = public_bytes(box)
-        box.files["bridge"].write_text("version B")
-        (box.root / "fault").write_text("push")
-        box.install(code=1)
-        require((box.device / "releases/pending").is_file(), "partial install is not marked")
-        box.run(["status"], 1)
-        box.run(["start"], 1)
-        box.run(["rollback"])
-        require(public_bytes(box) == original, "failed update lost recoverable files")
-        box.files["bridge"].write_text("version C")
-        box.install()
-        require((box.device / "bin/echo-bridge").read_text() == "version C", "recovery did not install")
-    for kind in ("symlink", "hardlink", "fifo", "owner", "mode"):
-        with Sandbox() as box:
-            box.install()
-            box.install()
-            original = public_bytes(box)
-            target = box.device / "releases/previous/bin/echo-bridge"
-            outside = box.root / "outside"
-            outside.write_text("outside bytes")
-            if kind in ("symlink", "hardlink", "fifo"):
-                target.unlink()
-                if kind == "symlink": target.symlink_to(outside)
-                elif kind == "hardlink": os.link(outside, target)
-                else: os.mkfifo(target)
-            elif kind == "owner": set_owner(box.root, target, "9999:9999")
-            else: target.chmod(0o666)
-            box.run(["rollback"], 1)
-            require(public_bytes(box) == original and outside.read_text() == "outside bytes",
-                    "unsafe snapshot changed active or outside bytes")
-            require(not (box.root / "remote/echo-bridge.lock").exists(), "unsafe snapshot took lock")
-    print("echo-install releases: snapshot=PASS rollback=PASS partial=PASS retention=PASS")
+
+def release_started(box, starts=1):
+    calls = box.calls()
+    launches = [c for c in calls if "setsid " in " ".join(c)]
+    expected = ('setsid /data/local/hassmic/runas "nobody" "3990,inet" '
+                "/system/bin/sh '/data/local/echo-bridge/private/launch.sh'")
+    require(len(launches) == starts and all(expected in c[1] for c in launches), "launch argv/count differs")
+    require((box.root / "runas-user").read_text() == "nobody", "release identity differs")
+    require((box.root / "child-session").read_text() == (box.root / "holder-pid").read_text(),
+            "release launcher did not detach")
+    require(not (box.root / "eof").exists(), "release stdin closed before stop")
+    require(json.loads((box.root / "child-args").read_text()) ==
+            ["--config", str(box.device / "private/bridge.toml"),
+             "--trace", str(box.device / "private/bridge.trace")], "release child arguments differ")
+
+
+def release_stop(box):
+    box.run(["stop"])
+    require((box.root / "eof").read_text() == "EOF", "release stop did not close stdin")
+    require(not (box.device / "private/run").exists(), "release stop leaked state")
+    # A later start must prove its own held stdin rather than inherit this marker.
+    (box.root / "eof").unlink()
+
