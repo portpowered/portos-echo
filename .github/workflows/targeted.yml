@@ -17,6 +17,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-unit
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
         with:
           tool: shellcheck@0.11.0,shfmt@3.14.0
@@ -28,14 +31,17 @@ jobs:
           command -v ffprobe || { sudo apt-get update && sudo apt-get install -y ffmpeg; }
           shellcheck scripts/make-template-screenpack.sh scripts/echo-screen-pack.sh
           shfmt -d scripts/make-template-screenpack.sh scripts/echo-screen-pack.sh
-          python3 tests/test_release_kit.py
           python3 tests/test_screen_pack_assets.py --template-witness "$RUNNER_TEMP/generated"
           (cd "$RUNNER_TEMP/generated" && sha256sum --check template-0.2.0.screenpack.tar.gz.sha256 && cat template-0.2.0.screenpack.tar.gz.sha256)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: template-0.2.0-contact
-          path: ${{ runner.temp }}/generated/contact.png
+          path: |
+            ${{ runner.temp }}/generated/contact.png
           if-no-files-found: error
+      - name: Run existing release-kit regression cases
+        run: python3 tests/test_release_kit.py
+        if: always()
       - name: Targeted result
         if: always()
         run: |
