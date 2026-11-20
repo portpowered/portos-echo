@@ -31,6 +31,12 @@ struct Writer {
     cancel: watch::Sender<bool>,
 }
 
+#[derive(PartialEq, Eq)]
+pub(crate) enum PackObservation {
+    Unobserved,
+    Current(Option<(String, [u8; 32])>),
+}
+
 pub(crate) struct Core {
     digest: Secret<[u8; 32]>,
     revoked: bool,
@@ -38,7 +44,7 @@ pub(crate) struct Core {
     seq: u64,
     pub pack_revision: u64,
     pub pack_publication: Option<([u8; 32], Option<String>)>,
-    pub pack_identity: Option<Option<(String, [u8; 32])>>,
+    pub pack_identity: PackObservation,
     current: Option<String>,
     clients: Vec<Writer>,
 }
@@ -51,7 +57,7 @@ impl Core {
             draining: false,
             seq: 0,
             pack_revision: 0,
-            pack_identity: None,
+            pack_identity: PackObservation::Unobserved,
             pack_publication: None,
             current: None,
             clients: Vec::new(),

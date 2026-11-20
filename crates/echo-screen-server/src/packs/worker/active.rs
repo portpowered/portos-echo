@@ -67,7 +67,10 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SettingsOperation, SettingsReply, screen_core::Core};
+    use crate::{
+        SettingsOperation, SettingsReply,
+        screen_core::{Core, PackObservation},
+    };
     use echo_contracts::secret::Secret;
     use std::sync::Arc;
     use tokio::sync::{Mutex, mpsc, watch};
@@ -82,7 +85,7 @@ mod tests {
             let home = tempfile::tempdir().unwrap();
             let core = Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-pair".into()))));
             // A prior empty observation establishes the built-in baseline.
-            core.lock().await.pack_identity = Some(None);
+            core.lock().await.pack_identity = PackObservation::Current(None);
             let pack = home.path().join("template");
             std::fs::create_dir(&pack).unwrap();
             std::fs::write(

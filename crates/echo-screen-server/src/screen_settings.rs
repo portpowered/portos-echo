@@ -1,5 +1,9 @@
 //! Bounded typed dispatch. The bridge owns validation, persistence and restart.
-use crate::{cancelled, screen_core::Core, screen_http::authorized};
+use crate::{
+    cancelled,
+    screen_core::{Core, PackObservation},
+    screen_http::authorized,
+};
 use axum::{
     Json,
     http::{StatusCode, Uri},
@@ -113,21 +117,21 @@ fn publish_reply(core: &mut Core, reply: &mut SettingsReply, installed: bool, wa
                 core.pack_reload(catalog.active());
                 core.pack_publication = Some((catalog.signature(), catalog.active().map(str::to_owned)));
             }
-            if *changed || core.pack_identity.is_none() {
-                core.pack_identity = Some(catalog.identity());
+            if *changed || core.pack_identity == PackObservation::Unobserved {
+                core.pack_identity = PackObservation::Current(catalog.identity());
             }
             catalog.set_revision(core.pack_revision);
         }
         SettingsReply::Packs(catalog) => {
             let identity = catalog.identity();
-            let changed = watching && core.pack_identity.as_ref().is_some_and(|old| *old != identity);
+            let changed = watching && matches!(&core.pack_identity, PackObservation::Current(old) if *old != identity);
             let publication = (catalog.signature(), catalog.active().map(str::to_owned));
             if (installed || changed) && core.pack_publication.as_ref() != Some(&publication) {
                 core.pack_reload(catalog.active());
                 core.pack_publication = Some(publication);
             }
-            if installed || watching || core.pack_identity.is_none() {
-                core.pack_identity = Some(identity);
+            if installed || watching || core.pack_identity == PackObservation::Unobserved {
+                core.pack_identity = PackObservation::Current(identity);
             }
             catalog.set_revision(core.pack_revision);
         }
