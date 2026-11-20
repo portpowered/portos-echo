@@ -118,7 +118,7 @@ class ReleaseBox(Sandbox):
 def asset_names(version):
     return (f"echo-{version}-armv7.tar.gz", f"echo-setup-{version}-linux-x86_64",
             f"echo-setup-{version}-windows-x86_64.exe", "install.sh", "install.ps1",
-            f"default-{version}.screenpack.tar.gz", "companion-0.1.0.screenpack.tar.gz")
+            f"default-{version}.screenpack.tar.gz", "companion-0.2.0.screenpack.tar.gz")
 
 
 def assemble_fixture(assets, bridge, apk, installers, default_pack, companion, private_binary=None, *, version="0.1.0"):
@@ -138,7 +138,7 @@ def assemble_fixture(assets, bridge, apk, installers, default_pack, companion, p
 def verify_delivered_assets(assets):
     from test_release_delivery import delivered_journey
 
-    require((assets / "companion-0.1.0.screenpack.tar.gz").is_file(), "current dist requires Companion")
+    require((assets / "companion-0.2.0.screenpack.tar.gz").is_file(), "current dist requires Companion")
     manifest = independent_bundle(assets, PACK, asset_names)
     release = manifest["version"]
     _, linux_name, windows_name, *_ = asset_names(release)
