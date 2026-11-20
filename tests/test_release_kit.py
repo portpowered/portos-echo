@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from test_echo_install import Sandbox, fake_adb, require, SENTINEL
 from test_echo_install_lifecycle import configure_lifecycle, release_started, release_stop
-from test_screen_pack_assets import exclusion_cases, generate, independent_bundle
+from test_screen_pack_assets import exclusion_cases, generate, independent_bundle, push_cases
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("package_dist", ROOT / "scripts/package-dist.py")
@@ -472,6 +472,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="template-witness-") as temporary:
         generated = Path(temporary) / "generated"
         generate(generated)
+        push_cases(generated)
         TEMPLATE = generated / "template-0.1.0.screenpack.tar.gz"
         run_cases()
 

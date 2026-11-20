@@ -343,6 +343,47 @@ revert immediately. A download test must serve the generated archive from a
 local HTTPS peer trusted exclusively by the configured CA; never use public
 release downloads in tests.
 
-The local-push helper and the assembled production download/browser journey remain
-pending. Controlled media-event tests do not establish physical WebView behavior.
-Device playback remains coordinator-owned T5 proof.
+## Local push
+
+On a Linux authoring host with Python 3 and adb:
+
+```sh
+sh scripts/echo-screen-pack.sh push "$pack_root/generated/template@0.1.0"
+```
+
+Physical device operations belong to the coordinator's authorized T5 procedure.
+Worker tests put a recording fake adb on PATH; they never contact a device. The
+helper uses adb's existing device selection and never prints its diagnostics or
+device identity. It targets the installed bridge home only:
+`/data/local/echo-bridge/home/screens/<name>@<version>/`. A custom bridge home
+requires copying validated local data into that home's `screens/` directory
+through the operator's own file procedure.
+
+Before any adb call, the helper snapshots bounded regular files and checks the
+format-1 schema, references, layout, file caps and the same restricted CSS grammar
+documented above. Links, special files and executables are refused. The source
+directory must be stable while it is read; transfers consume the private snapshot.
+The bridge independently revalidates local data when discovering or serving it.
+
+A private hidden directory under `screens/` holds transfers. An exclusive hidden
+lock refuses concurrent helper runs; a no-clobber atomic rename publishes the
+complete identity. Existing identities are refused, including a competing
+publication during transfer. Use a new version for replacement. Direct active-file
+editing remains available through the settled watcher described above.
+Directories are private (0700), files are 0600, and ownership matches the installed
+bridge (9999:9999). Symlinked destination ancestors are refused. Transfer and
+publication failures remove this helper's staging and lock when adb remains
+reachable; if transport is lost during cleanup, the operator must inspect the
+hidden `.push-*` entry before removing it and retrying. Never remove another
+in-progress helper's lock.
+
+Success prints `screen-pack: pushed <name>@<version>`. Failure prints a fixed
+sanitized reason and exits nonzero. Push does not write settings or restart the
+bridge. Select the installed identity from the paired Settings page. Omitted
+selection automatically adopts an installed template; an explicitly empty
+selection keeps the built-in appearance. Select **Built-in appearance** to roll
+back without deleting downloaded data.
+
+The assembled production download/browser journey remains pending. Controlled
+media-event tests do not establish physical WebView behavior. Device playback
+remains coordinator-owned T5 proof.

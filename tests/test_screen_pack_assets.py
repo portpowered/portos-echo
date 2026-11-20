@@ -1,11 +1,16 @@
 """T3 artifact witness: original generated media, local processes, no network/device."""
 import hashlib
 import json
+import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
+import sys
 import tarfile
+import tempfile
 
-from test_echo_install import require
+from test_echo_install import require, SENTINEL
 
 ROOT = Path(__file__).resolve().parents[1]
 STATES = {'idle', 'connecting', 'listening', 'thinking', 'speaking', 'muted',
@@ -151,3 +156,199 @@ def media_cases(pack):
                         'MP4 fallback stage background differs')
                 require(sum(abs(a - b) for a, b in zip(first, last)) / size < 1,
                         'H264 loop boundary differs from neutral')
+
+
+REMOTE = '/data/local/echo-bridge/home/screens'
+
+
+def push_adb():
+    """T3 boundary: execute real shell/filesystem operations in an isolated fake device."""
+    base = Path(os.environ['PACK_FAKE_ROOT'])
+    args = sys.argv[2:]
+    with (base / 'ledger').open('a') as ledger:
+        ledger.write(json.dumps(args) + '\n')
+    # A failed transport must never disclose remote stdout/stderr or a local path.
+    print(SENTINEL)
+    print(SENTINEL, file=sys.stderr)
+    remote = base / 'device/data/local/echo-bridge/home/screens'
+    if args[0] == 'push':
+        count = int((base / 'pushes').read_text()) + 1
+        (base / 'pushes').write_text(str(count))
+        if count == int(os.environ.get('PACK_FAIL_PUSH', '0')):
+            return 1
+        target = base / ('device' + args[2])
+        require(str(target).startswith(str(remote) + '/.push-'), 'transfer escaped private stage')
+        shutil.copyfile(args[1], target)
+        return 0
+    require(args[0] == 'shell' and len(args) == 2, 'unexpected adb authority')
+    command = args[1]
+    if 'mv -T -n' in command:
+        visible = sorted(p.name for p in remote.iterdir() if not p.name.startswith('.'))
+        (base / 'visible-before-commit').write_text(json.dumps(visible))
+        if os.environ.get('PACK_RACE'):
+            (remote / 'template@0.1.0').mkdir()
+            (remote / 'template@0.1.0/prior.png').write_bytes(b'concurrent publication')
+        if os.environ.get('PACK_FAIL_COMMIT'):
+            return 1
+    command = command.replace('/data', str(base / 'device/data'))
+    completed = subprocess.run(['sh', '-c', command], capture_output=True, timeout=10,
+                               env=dict(os.environ, PATH=str(base / 'tools') + ':/usr/bin:/bin'))
+    return completed.returncode
+
+
+class PushBox:
+    def __enter__(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='pack-push-')
+        self.base = Path(self.temporary.name)
+        self.remote = self.base / ('device' + REMOTE)
+        self.remote.parent.mkdir(parents=True)
+        self.tools = self.base / 'tools'
+        self.tools.mkdir()
+        # This is the only adb discoverable by the helper, never a real device.
+        adb = self.tools / 'adb'
+        adb.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' '
+                       + shlex.quote(str(Path(__file__).resolve())) + ' --fake-adb "$@"\n')
+        adb.chmod(0o700)
+        chown = self.tools / 'chown'
+        chown.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$PACK_FAKE_ROOT/owners"\n')
+        chown.chmod(0o700)
+        (self.base / 'pushes').write_text('0')
+        self.env = dict(os.environ, PACK_FAKE_ROOT=str(self.base),
+                        PATH=str(self.tools) + ':/usr/bin:/bin')
+        self.pack = self.base / 'source with spaces'
+        self.pack.mkdir()
+        self.manifest = {'format': 1, 'name': 'template', 'version': '0.1.0',
+                         'character': {'rest': 'nested/rest.png'}}
+        (self.pack / 'nested').mkdir()
+        (self.pack / 'nested/rest.png').write_bytes(b'synthetic-still')
+        self.write_manifest()
+        return self
+
+    def write_manifest(self):
+        (self.pack / 'pack.json').write_text(json.dumps(self.manifest))
+
+    def run(self, okay=True):
+        result = subprocess.run(['sh', str(ROOT / 'scripts/echo-screen-pack.sh'),
+                                 'push', str(self.pack)], env=self.env,
+                                capture_output=True, text=True, timeout=30)
+        if okay:
+            require(result.returncode == 0 and result.stdout == 'screen-pack: pushed template@0.1.0\n'
+                    and result.stderr == '', 'push success diagnostic differs: ' + result.stderr)
+        else:
+            require(result.returncode == 1 and result.stdout == ''
+                    and result.stderr.startswith('screen-pack: '), 'push failure diagnostic differs')
+            require(SENTINEL not in result.stderr and str(self.base) not in result.stderr,
+                    'push leaked private diagnostic')
+        return result
+
+    def ledger(self):
+        path = self.base / 'ledger'
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def settled(self, expected):
+        require(sorted(path.name for path in self.remote.iterdir()) == expected,
+                'staging/lock leaked or prior pack changed')
+
+    def __exit__(self, *exception):
+        self.temporary.cleanup()
+
+
+def push_cases(generated):
+    with PushBox() as box:
+        shutil.rmtree(box.pack)
+        shutil.copytree(generated / 'template@0.1.0', box.pack)
+        box.run()
+        target = box.remote / 'template@0.1.0'
+        expected = {p.relative_to(box.pack).as_posix(): p.read_bytes() for p in box.pack.rglob('*') if p.is_file()}
+        actual = {p.relative_to(target).as_posix(): p.read_bytes() for p in target.rglob('*') if p.is_file()}
+        require(actual == expected and len(actual) == 22, 'published generated bytes differ')
+        require(json.loads((box.base / 'visible-before-commit').read_text()) == [], 'partial pack was visible')
+        require(all(p.stat().st_mode & 0o777 == (0o700 if p.is_dir() else 0o600)
+                    for p in [target, *target.rglob('*')]), 'private pack permissions differ')
+        require(all('9999:9999' in line for line in (box.base / 'owners').read_text().splitlines()),
+                'pack ownership differs from bridge home owner')
+        box.run(okay=False)
+        require({p.name: p.read_bytes() for p in target.iterdir()} == actual,
+                'duplicate publication replaced original pack')
+        box.settled(['template@0.1.0'])
+    for fault in ('PACK_FAIL_PUSH', 'PACK_FAIL_COMMIT', 'PACK_RACE'):
+        with PushBox() as box:
+            box.remote.mkdir()
+            prior = box.remote / 'prior@1.0.0'
+            prior.mkdir()
+            (prior / 'rest.png').write_bytes(b'prior-active-data')
+            box.env[fault] = '2' if fault == 'PACK_FAIL_PUSH' else '1'
+            box.run(okay=False)
+            box.settled(['prior@1.0.0', 'template@0.1.0'] if fault == 'PACK_RACE' else ['prior@1.0.0'])
+            require((prior / 'rest.png').read_bytes() == b'prior-active-data', 'failed push changed active data')
+            if fault == 'PACK_RACE':
+                require((box.remote / 'template@0.1.0/prior.png').read_bytes() == b'concurrent publication',
+                        'no-clobber publication lost a racing identity')
+    for ancestor in ('screens', 'home'):
+        with PushBox() as box:
+            escape = box.base / 'outside'
+            escape.mkdir()
+            victim = box.remote if ancestor == 'screens' else box.remote.parent
+            if victim.exists():
+                victim.rmdir()
+            victim.symlink_to(escape, target_is_directory=True)
+            box.run(okay=False)
+            require(list(escape.iterdir()) == [], 'remote symlink escape was written')
+            require(not any(call[0] == 'push' for call in box.ledger()), 'symlink refusal happened after transfer')
+    with PushBox() as box:
+        box.remote.mkdir()
+        (box.remote / '.push-lock').mkdir()
+        box.run(okay=False)
+        box.settled(['.push-lock'])
+    invalid_push_cases()
+    print('F24 local push: generated_bytes=PASS atomic=PASS duplicate=REFUSED failure_retention=PASS cleanup=PASS symlinks=REFUSED')
+
+
+def invalid_push_cases():
+    mutations = {
+        'name': lambda b: b.manifest.update(name="bad'; touch /tmp/escape"),
+        'version': lambda b: b.manifest.update(version='../escape'),
+        'format': lambda b: b.manifest.update(format=True),
+        'unknown': lambda b: b.manifest.update(script='run'),
+        'null': lambda b: b.manifest.update(character=None),
+        'reference': lambda b: b.manifest['character'].update(rest='../rest.png'),
+        'missing': lambda b: b.manifest['character'].update(rest='absent.png'),
+        'state': lambda b: b.manifest['character'].update(states={'unknown': {}}),
+        'clip': lambda b: b.manifest['character'].update(emotes={'happy': {'mode': 'loop'}}),
+        'symlink': lambda b: (b.pack / 'link.png').symlink_to(b.pack / 'nested/rest.png'),
+        'hardlink': lambda b: os.link(b.pack / 'nested/rest.png', b.pack / 'link.png'),
+        'fifo': lambda b: os.mkfifo(b.pack / 'pipe.png'),
+        'type': lambda b: (b.pack / 'code.sh').write_text('exit 0'),
+        'css-remote': lambda b: (b.pack / 'style.css').write_text('.pack-stage {background-image:url(https://invalid.test/rest.png)}'),
+        'css-import': lambda b: (b.pack / 'style.css').write_text('@import "x";'),
+        'css-expression': lambda b: (b.pack / 'style.css').write_text('.pack-stage {opacity:expression(1)}'),
+        'css-escape': lambda b: (b.pack / 'style.css').write_text('.pack-stage {background-image:u\\72l(x)}'),
+    }
+    for mutation in mutations.values():
+        with PushBox() as box:
+            mutation(box)
+            box.write_manifest()
+            box.run(okay=False)
+            require(box.ledger() == [], 'invalid pack reached adb')
+    for cap in ('clip', 'count', 'expanded'):
+        with PushBox() as box:
+            count = 65 if cap == 'count' else 1
+            for index in range(count):
+                path = box.pack / (str(index) + ('.webm' if cap == 'clip' else '.png'))
+                with path.open('wb') as file:
+                    file.truncate(8 * 1024**2 + 1 if cap == 'clip' else 64 * 1024**2 + 1 if cap == 'expanded' else 0)
+            box.run(okay=False)
+            require(box.ledger() == [], 'over-limit pack reached adb')
+    with PushBox() as box:
+        (box.pack / 'pack.json').write_text('{malformed')
+        box.run(okay=False)
+        require(box.ledger() == [], 'malformed JSON reached adb')
+    with PushBox() as box:
+        (box.pack / 'style.css').write_text('.pack-stage { background-image: url("nested/rest.png"); opacity: 0.5; }')
+        box.run()
+        box.settled(['template@0.1.0'])
+    print('F24 preflight: identity=PASS schema=PASS references=PASS limits=PASS inert_CSS=PASS invalid_adb_calls=0')
+
+
+if __name__ == '__main__' and sys.argv[1:2] == ['--fake-adb']:
+    sys.exit(push_adb())
