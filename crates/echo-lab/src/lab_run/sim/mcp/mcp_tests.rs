@@ -91,14 +91,24 @@ async fn t3_portos_read_only_delegation_replies_to_relink_without_retry() {
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge, offline Codex pin and hassmic-host"]
 async fn t3_portos_missing_or_ambiguous_rooms_do_not_dispatch_control() {
-    for (fault, reply) in [
-        (HomeFault::NoRoom, "I could not find Twin room."),
-        (HomeFault::AmbiguousRoom, "Which Twin room did you mean?"),
-    ] {
-        let observed = portos_journey(Journey::Twin, Some(fault)).await;
-        assert_eq!(observed["reply"], reply);
-        assert_eq!(observed["home"]["calls"].as_array().unwrap().len(), 1);
-    }
+    let (missing, ambiguous) = tokio::join!(
+        no_room_control(HomeFault::NoRoom, "I could not find Twin room."),
+        no_room_control(HomeFault::AmbiguousRoom, "Which Twin room did you mean?"),
+    );
+    assert_eq!(missing, Ok(()));
+    assert_eq!(ambiguous, Ok(()));
+}
+
+async fn no_room_control(fault: HomeFault, reply: &str) -> Result<(), String> {
+    let observed = run_portos_journey(Journey::Twin, Some(fault)).await?;
+    assert_eq!(observed["reply"], reply);
+    assert_eq!(observed["home"]["calls"].as_array().unwrap().len(), 1);
+    writeln!(
+        std::io::stdout(),
+        "{fault:?}: {reply} 1 lookup, 0 controls, 4 owners collected"
+    )
+    .unwrap();
+    Ok(())
 }
 
 #[tokio::test]
@@ -127,21 +137,38 @@ async fn t3_portos_pending_light_control_reports_submission_once() {
 }
 
 async fn portos_journey(journey: Journey, fault: Option<HomeFault>) -> Value {
+    run_portos_journey(journey, fault).await.unwrap()
+}
+
+async fn run_portos_journey(journey: Journey, fault: Option<HomeFault>) -> Result<Value, String> {
     let options = options("m5-twin-room-lights");
     let mut session = Session::default().for_journey(journey);
     session.home_fault = fault;
     let root = tempfile::tempdir().unwrap();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(24), async {
+    let phase = std::cell::Cell::new("bridge, host and provider startup");
+    // Each independent world has its own ceiling and leaves time under the
+    // existing nextest deadline to collect its children.
+    let result = tokio::time::timeout(std::time::Duration::from_secs(18), async {
         session.start(&options, root.path()).await?;
+        phase.set("link code");
         session.link().await?;
+        phase.set("grant approval");
         session.approve().await?;
+        phase.set("wake, delegation and playback");
         session.lights("Computer, turn off twin room lights").await
     })
-    .await;
+    .await
+    .unwrap_or_else(|_| Err("deadline expired".into()));
     let cleanup = session.close().await;
-    assert_eq!(cleanup, Ok(()), "Port OS journey {result:?}");
+    let observed = result
+        .map_err(|cause| format!("{fault:?} during {}: {cause}", phase.get()))
+        .map_err(|cause| match &cleanup {
+            Ok(()) => cause,
+            Err(cleanup) => format!("{cause}; cleanup: {cleanup}"),
+        })?;
+    cleanup?;
     assert_eq!(session.released, ["bridge", "provider", "authorization", "host"]);
-    result.expect("Port OS control journey timed out").unwrap()
+    Ok(observed)
 }
 
 fn assert_closed(session: &Session) {

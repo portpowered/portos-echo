@@ -52,7 +52,7 @@ impl Session {
 
 pub struct Peers {
     pub origin: String,
-    pub events: mpsc::Sender<()>,
+    pub(super) events: mpsc::Sender<Control>,
     pub observed: watch::Receiver<Value>,
     clock: tokio::time::Interval,
     stop: mpsc::Sender<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -60,6 +60,21 @@ pub struct Peers {
     journey: Journey,
     fault: Option<HomeFault>,
 }
+
+pub(super) enum Control {
+    Delegate,
+    ReleaseModel,
+}
+
+impl Control {
+    const fn command(self) -> &'static str {
+        match self {
+            Self::Delegate => "transcripts",
+            Self::ReleaseModel => "release_model",
+        }
+    }
+}
+
 impl Peers {
     pub async fn bind(python: &str, journey: Journey, fault: Option<HomeFault>) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
@@ -68,7 +83,11 @@ impl Peers {
             .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m4/codex/provider.py"));
         let mut process = Process::start_observed(&mut command)?;
         let ready = process.expect("provider.ready").await?;
-        process.send(&provider_configuration(journey)).await?;
+        let mut configuration = provider_configuration(journey);
+        if holds_model(fault) {
+            configuration["hold_model"] = json!(true);
+        }
+        process.send(&configuration).await?;
         let origin = ready["origin"]
             .as_str()
             .ok_or("M5: missing provider origin")?
@@ -94,6 +113,28 @@ impl Peers {
         self.clock.tick().await;
         Ok(())
     }
+    pub(super) async fn wait_home_append(&self) -> Result<(), String> {
+        let mut observed = self.observed.clone();
+        if holds_model(self.fault) {
+            let held = observed
+                .wait_for(|state| state["model_held"] == true)
+                .await
+                .map_err(|_| "M5: provider ended before the held room model request")?;
+            if held["delegations"] != json!(["m5-home"]) || held["appends"] != json!([]) {
+                return Err("M5: unexpected handback before release of the held room model".into());
+            }
+            drop(held);
+            self.events
+                .send(Control::ReleaseModel)
+                .await
+                .map_err(|_| "M5: held room model release failed")?;
+        }
+        observed
+            .wait_for(|state| state["appends"] == json!(["m5-home"]))
+            .await
+            .map_err(|_| "M5: provider ended before home append")?;
+        Ok(())
+    }
     pub async fn shutdown(mut self) -> Result<Value, String> {
         let _ = self.stop.send(None).await;
         let value = self
@@ -117,6 +158,10 @@ impl Peers {
             .map_err(|_| "M5: provider control ended")?;
         finished.await.map_err(|_| "M5: media did not quiesce".into())
     }
+}
+
+fn holds_model(fault: Option<HomeFault>) -> bool {
+    matches!(fault, Some(HomeFault::NoRoom | HomeFault::AmbiguousRoom))
 }
 
 fn provider_configuration(journey: Journey) -> Value {
@@ -190,7 +235,7 @@ impl Drop for Peers {
 }
 async fn owned(
     mut process: Process,
-    mut events: mpsc::Receiver<()>,
+    mut events: mpsc::Receiver<Control>,
     mut stop: mpsc::Receiver<Option<tokio::sync::oneshot::Sender<()>>>,
     observe: watch::Sender<Value>,
     journey: Journey,
@@ -208,7 +253,7 @@ async fn owned(
 }
 async fn drive(
     process: &mut Process,
-    events: &mut mpsc::Receiver<()>,
+    events: &mut mpsc::Receiver<Control>,
     stop: &mut mpsc::Receiver<Option<tokio::sync::oneshot::Sender<()>>>,
     observe: &watch::Sender<Value>,
     peer: &mut Option<LivePeer>,
@@ -254,32 +299,36 @@ async fn drive(
 }
 async fn conversation(
     process: &mut Process,
-    events: &mut mpsc::Receiver<()>,
+    events: &mut mpsc::Receiver<Control>,
     stop: &mut mpsc::Receiver<Option<tokio::sync::oneshot::Sender<()>>>,
     observe: &watch::Sender<Value>,
     peer: &mut LivePeer,
     journey: Journey,
 ) -> Result<(), String> {
     let mut quiesced = false;
+    let mut media_ready = false;
     let mut reply = None;
     let mut cadence = tokio::time::interval(std::time::Duration::from_millis(20));
     cadence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         // Keep partial JSONL intact across remote-media ticks and controls.
-        let mut delegate = false;
+        let mut command = "complete";
         let value = {
             let line = process.line();
             tokio::pin!(line);
             loop {
                 tokio::select! {
                     value = &mut line => break Some(value?),
-                    result = drive_media(peer), if !quiesced => result?,
+                    result = drive_media(peer, observe, &mut media_ready), if !quiesced => result?,
                     _ = cadence.tick(), if reply.is_some() && !quiesced => {
                         if !reply_packet(peer, &mut reply).await? {
                             break None;
                         }
                     },
-                    event = events.recv() => { event.ok_or("M5: delegation channel closed")?; delegate = true; break None; },
+                    event = events.recv() => {
+                        command = event.ok_or("M5: delegation channel closed")?.command();
+                        break None;
+                    },
                     control = stop.recv() => match control {
                         Some(Some(done)) => { quiesced = true; let _ = done.send(()); },
                         Some(None) | None => return Ok(()),
@@ -288,7 +337,6 @@ async fn conversation(
             }
         };
         let Some(value) = value else {
-            let command = if delegate { "transcripts" } else { "complete" };
             process.send(&json!({(command):true})).await?;
             continue;
         };
@@ -312,6 +360,10 @@ async fn reply_packet(peer: &mut LivePeer, sequence: &mut Option<u16>) -> Result
     Ok(true)
 }
 fn observation(observe: &watch::Sender<Value>, value: &Value) -> Result<(), String> {
+    if value["event"] == "provider.model_held" {
+        observe.send_modify(|state| state["model_held"] = json!(true));
+        return Ok(());
+    }
     let (key, item) = match value["event"].as_str() {
         Some("provider.delegation") => ("delegations", value["delegation_id"].clone()),
         Some("provider.append") => ("appends", value["delegation_id"].clone()),
@@ -327,7 +379,7 @@ fn observation(observe: &watch::Sender<Value>, value: &Value) -> Result<(), Stri
     });
     Ok(())
 }
-async fn drive_media(peer: &mut LivePeer) -> Result<(), String> {
+async fn drive_media(peer: &mut LivePeer, observe: &watch::Sender<Value>, ready: &mut bool) -> Result<(), String> {
     while peer.pop_audio().is_some() {}
     let deadline = peer.flush().await.map_err(|_| "M5: media flush")?;
     tokio::select! {
@@ -336,6 +388,10 @@ async fn drive_media(peer: &mut LivePeer) -> Result<(), String> {
             peer.receive(Instant::now().into_std()).await.map_err(|_| "M5: media receive")?;
         }
         () = tokio::time::sleep_until(deadline.into()) => peer.timeout(Instant::now().into_std()).await.map_err(|_| "M5: media timeout")?,
+    }
+    if !*ready && peer.ready() {
+        *ready = true;
+        observe.send_modify(|state| state["media_ready"] = json!(true));
     }
     Ok(())
 }
