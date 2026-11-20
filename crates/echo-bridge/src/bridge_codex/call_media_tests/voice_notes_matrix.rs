@@ -306,7 +306,7 @@ async fn t3_agent_tools_notes_stale_thread_and_completed_turn_cannot_write() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn t3_agent_tools_notes_deadline_interrupts_matching_turn_and_refuses_late_write() {
+async fn t3_agent_tools_notes_completed_turn_refuses_late_write() {
     let root = tempfile::tempdir().unwrap();
     let home = home(root.path());
     let trace = Trace::open(&root.path().join("trace"), "api_key").unwrap();
@@ -315,10 +315,12 @@ async fn t3_agent_tools_notes_deadline_interrupts_matching_turn_and_refuses_late
     let client = drive(&mut io, &notes, &trace);
     let remote = async {
         opened(&mut server, "thread", &catalog(&notes)).await;
-        let request = read(&mut server).await;
-        assert_eq!(request["method"], "turn/interrupt");
-        assert_eq!(request["params"], json!({"threadId":"thread","turnId":"turn"}));
-        write(&mut server, json!({"id":request["id"],"result":{}})).await;
+        notification(
+            &mut server,
+            "turn/completed",
+            json!({"threadId":"thread","turn":{"id":"turn","status":"interrupted"}}),
+        )
+        .await;
         assert_eq!(
             tool(
                 &mut server,

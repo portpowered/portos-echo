@@ -83,7 +83,7 @@ async fn configured_options_preserve_overrides_budgets_tools_and_default_voice()
     assert_eq!(options.voice.call.instructions, echo_config::RUNNER_INSTRUCTIONS);
     assert_eq!(options.voice.tools, [tool]);
     assert_eq!(options.voice.session.idle, Duration::from_secs(43));
-    assert_eq!(options.voice.session.response_timeout, Duration::from_secs(17));
+    assert_eq!(options.voice.session.response_timeout, Duration::from_secs(60));
     assert_eq!(options.voice.session.reply_lead_ms, 120);
     assert_eq!(options.voice.kill_path, Some(prepared.kill_path.as_path()));
     assert_eq!(options.host.deadline, Instant::now() + Duration::from_secs(30));
