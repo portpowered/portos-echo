@@ -19,6 +19,12 @@ use voice_mouth::{FRAME, OUTPUT_DELAY};
 /// Thirty seconds of 20 ms frames: above the setup capture's own bound.
 const UPLINK_BACKLOG: usize = 1500;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum UserSpeech {
+    Quiet,
+    Active,
+}
+
 pub(super) struct Source {
     pub microphone: Option<CaptureAudio>,
     pub muted: bool,
@@ -35,7 +41,7 @@ pub(super) struct Source {
     uplink: VecDeque<PcmFrame>,
     /// The device was told a dispatch is running in silence.
     thinking: bool,
-    pub user_speaking: bool,
+    pub user_speech: UserSpeech,
     pub run_ceiling: Option<Instant>,
     /// User speech heard during the reply, until the model yields to it.
     barge: Barge,
@@ -149,7 +155,7 @@ impl Source {
             delegation: Delegation::default(),
             mouth: Mouth::default(),
             thinking: false,
-            user_speaking: false,
+            user_speech: UserSpeech::Quiet,
             run_ceiling: None,
             meter: meter(),
             stats: Stats::default(),
@@ -169,8 +175,10 @@ impl Source {
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
     pub fn heard_user(&mut self, trigger: BargeTrigger, said: &str, whole: bool) {
-        if trigger == BargeTrigger::SpeechStarted || whole {
-            self.user_speaking = !whole;
+        if trigger == BargeTrigger::SpeechStarted {
+            self.user_speech = UserSpeech::Active;
+        } else if whole {
+            self.user_speech = UserSpeech::Quiet;
         }
         let replying = !self.delegation.in_flight() && self.controller.speaking();
         // Nobody talks over a reply that has not sounded yet, and a reply
@@ -227,7 +235,7 @@ impl Source {
     pub fn capture(&mut self, frame: Option<MicFrame>, port: &impl VoicePort) -> Result<bool, Error> {
         let Some(frame) = frame else {
             self.controller.microphone_ended();
-            self.user_speaking = false;
+            self.user_speech = UserSpeech::Quiet;
             if let Some(microphone) = &mut self.microphone {
                 let frames = microphone.finish()?;
                 self.stats.microphone_tail = microphone.tail_samples();

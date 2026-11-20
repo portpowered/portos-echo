@@ -1,5 +1,5 @@
 //! Delegated response timing belongs to the admitted Wyoming run.
-use super::{Error, Options, Source};
+use super::{Error, Options, Source, UserSpeech};
 use tokio::time::Instant;
 
 pub(super) fn deadline(source: &Source, options: &Options, played: Option<Instant>) -> (Option<Instant>, Error) {
@@ -7,7 +7,8 @@ pub(super) fn deadline(source: &Source, options: &Options, played: Option<Instan
         return (played, Error::Deadline);
     }
     if source.delegation.waiting() {
-        let active = source.user_speaking || (source.controller.speaking() && !source.delegation.held());
+        let active =
+            source.user_speech == UserSpeech::Active || (source.controller.speaking() && !source.delegation.held());
         return (source.run_ceiling.filter(|_| !active), Error::SessionCeiling);
     }
     (Some(options.response_deadline), Error::NoResponse)
@@ -31,18 +32,29 @@ enum Utterance {
     Answer,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Answer {
+    #[default]
+    None,
+    Pending,
+    Delivered,
+}
+
 #[derive(Default)]
 pub struct Delegation {
     turns: usize,
     armed: bool,
     utterance: Utterance,
     held: bool,
-    answer_pending: bool,
+    answer: Answer,
 }
 
 impl Delegation {
     pub fn started(&mut self) {
         self.turns += 1;
+        if self.answer == Answer::Delivered {
+            self.answer = Answer::None;
+        }
         if self.utterance == Utterance::Answer {
             self.utterance = Utterance::Filler;
         } else {
@@ -67,11 +79,13 @@ impl Delegation {
     }
 
     pub fn waiting(&self) -> bool {
-        self.in_flight() || self.held || self.answer_pending
+        self.in_flight() || self.held || self.answer == Answer::Pending
     }
 
     pub fn expect_answer(&mut self, answered: bool) {
-        self.answer_pending |= answered;
+        if answered && self.answer == Answer::None {
+            self.answer = Answer::Pending;
+        }
     }
 
     /// The next reply starts clean but still owes each running turn its
@@ -79,7 +93,7 @@ impl Delegation {
     pub(super) fn carried(&self) -> Self {
         Self {
             turns: self.turns,
-            answer_pending: self.answer_pending,
+            answer: self.answer,
             ..Self::default()
         }
     }
@@ -100,7 +114,7 @@ impl Delegation {
         let utterance = std::mem::take(&mut self.utterance);
         self.held = matches!(utterance, Utterance::Filler | Utterance::Settled);
         if !self.held {
-            self.answer_pending = false;
+            self.answer = Answer::Delivered;
         }
         !self.held
     }
@@ -124,6 +138,19 @@ impl Delegation {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn delegated_completion_does_not_reopen_a_finished_reply() {
+        let mut delegation = Delegation::default();
+        delegation.started();
+        delegation.spoke();
+        assert!(!delegation.answered()); // Filler.
+        delegation.spoke();
+        assert!(delegation.answered());
+        delegation.completed();
+        delegation.expect_answer(true);
+        assert!(!delegation.waiting());
+    }
 
     #[tokio::test(start_paused = true)]
     async fn delegated_wait_keeps_its_admission_ceiling_through_speech_and_playback() {
@@ -151,10 +178,10 @@ mod tests {
         );
         source.delegation.completed();
         source.delegation.started();
-        source.user_speaking = true;
+        source.user_speech = UserSpeech::Active;
         tokio::time::advance(Duration::from_secs(30)).await;
         assert_eq!(deadline(&source, &options, None).0, None);
-        source.user_speaking = false;
+        source.user_speech = UserSpeech::Quiet;
         source.spoke();
         assert_eq!(deadline(&source, &options, None).0, None);
         assert!(!source.delegation.answered());

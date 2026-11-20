@@ -1,5 +1,5 @@
 //! Keep capture and the run owned while a settled reply waits for activity.
-use super::{Error, Event, MediaEvent, Notice, Options, Source, VoicePort};
+use super::{Error, Event, MediaEvent, Notice, Options, Source, UserSpeech, VoicePort};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
 use std::{future::Future, time::Duration};
 use tokio::time::Instant;
@@ -244,7 +244,7 @@ async fn listen<E: LinkEvents>(
         let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
         let delegated = source.delegation.waiting();
         let deadline = if delegated {
-            source.run_ceiling.filter(|_| !source.user_speaking)
+            source.run_ceiling.filter(|_| source.user_speech == UserSpeech::Quiet)
         } else {
             Some(idle)
         };
@@ -322,7 +322,7 @@ async fn listening_step<E: LinkEvents>(
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
                 MediaEvent::Control(Event::TurnCompleted { answered, .. }) => source.dispatch_completed(answered),
-                MediaEvent::Control(Event::SpeechStopped) => source.user_speaking = false,
+                MediaEvent::Control(Event::SpeechStopped) => source.user_speech = UserSpeech::Quiet,
                 // Continuous RTP and stale done frames cannot renew listening.
                 MediaEvent::Control(_) | MediaEvent::Audio(_) => (),
             }

@@ -56,7 +56,7 @@ use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PlayOutcome, Rep
 use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
 use tokio::time::{Instant, timeout};
-use voice_source::Source;
+use voice_source::{Source, UserSpeech};
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
@@ -487,7 +487,7 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStopped) => {
-            source.user_speaking = false;
+            source.user_speech = UserSpeech::Quiet;
             Ok(())
         }
         MediaEvent::Control(Event::Session(request)) => {

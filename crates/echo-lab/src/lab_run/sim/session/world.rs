@@ -76,22 +76,7 @@ impl World {
         self.wait_for_long_answer = journey == super::Journey::Limits;
         self.recovery = journey == super::Journey::Recovery;
         if let Some(max) = journey.max() {
-            let path = root.join("configured.private/bridge.toml");
-            let text = std::fs::read_to_string(&path).map_err(|_| "session: missing configuration")?;
-            if !text.contains("session_max_seconds = 600 ") {
-                return Err("session: missing example run cap".into());
-            }
-            let mut text = text.replace("session_max_seconds = 600 ", &format!("session_max_seconds = {max} "));
-            if self.wait_for_long_answer {
-                let home = root.join("agent-home");
-                std::fs::create_dir(&home).map_err(|_| "session: cannot create settings home")?;
-                std::fs::write(home.join("settings.toml"), "[agent]\nmax_tool_calls = 4\n")
-                    .map_err(|_| "session: cannot seed V1 settings overlay")?;
-                use std::fmt::Write as _;
-                write!(text, "\n[home]\ndir = '{}'\nagent_tools = false\n", home.display())
-                    .map_err(|_| "session: cannot configure settings home")?;
-            }
-            std::fs::write(path, text).map_err(|_| "session: cannot configure run cap")?;
+            configure_run(root, max, self.wait_for_long_answer)?;
         }
         self.relay = Some(relay);
         self.provider = Some(provider);
@@ -351,6 +336,25 @@ impl World {
         .map(|_| ())
         .map_err(|_| "session: cannot retain payload-free bridge trace".into())
     }
+}
+
+fn configure_run(root: &Path, max: u64, seed_v1: bool) -> Result<(), String> {
+    let path = root.join("configured.private/bridge.toml");
+    let text = std::fs::read_to_string(&path).map_err(|_| "session: missing configuration")?;
+    if !text.contains("session_max_seconds = 600 ") {
+        return Err("session: missing example run cap".into());
+    }
+    let mut text = text.replace("session_max_seconds = 600 ", &format!("session_max_seconds = {max} "));
+    if seed_v1 {
+        let home = root.join("agent-home");
+        std::fs::create_dir(&home).map_err(|_| "session: cannot create settings home")?;
+        std::fs::write(home.join("settings.toml"), "[agent]\nmax_tool_calls = 4\n")
+            .map_err(|_| "session: cannot seed V1 settings overlay")?;
+        use std::fmt::Write as _;
+        write!(text, "\n[home]\ndir = '{}'\nagent_tools = false\n", home.display())
+            .map_err(|_| "session: cannot configure settings home")?;
+    }
+    std::fs::write(path, text).map_err(|_| "session: cannot configure run cap".into())
 }
 
 /// Provider gates for one delegated reply, keyed to forwarded device bytes.

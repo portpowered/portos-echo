@@ -4,7 +4,7 @@ tiers: [T3]
 setup: {}
 steps:
   - say: "Computer, what time is it?"
-  - say: "What day is it?"
+  - say: "Computer, what day is it?"
   - expect_trace:
       - "run.ended {reason: session_ceiling}"
       - "reply.played {outcome: played}"
