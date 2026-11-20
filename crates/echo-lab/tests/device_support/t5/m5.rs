@@ -362,12 +362,8 @@ fn refuses_collision(name: &str) {
                 .output()
                 .unwrap();
             assert_eq!(refusal.status.code(), Some(1));
-            assert!(refusal.stdout.is_empty());
-            assert!(
-                refusal.stderr.is_empty(),
-                "{}",
-                String::from_utf8_lossy(&refusal.stderr)
-            );
+            assert_eq!(refusal.stdout, b"");
+            assert_eq!(refusal.stderr, b"", "{}", String::from_utf8_lossy(&refusal.stderr));
         }
         let output = peer.run();
         assert_eq!(output.status.code(), Some(1), "{name}");

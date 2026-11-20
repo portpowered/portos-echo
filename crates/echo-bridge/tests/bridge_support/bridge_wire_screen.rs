@@ -86,18 +86,16 @@ impl ScreenEvents {
                 self.pending.drain(..end + 2);
                 return Ok(Some(frame));
             }
-            match self
+            let Some(chunk) = self
                 .response
                 .chunk()
                 .await
                 .map_err(|error| format!("{phase}: HTTP body read failed: {error:?}"))?
-            {
-                Some(chunk) => self.pending.extend_from_slice(&chunk),
-                None => {
-                    assert!(self.pending.is_empty(), "{phase}: HTTP body ended inside an SSE record");
-                    return Ok(None);
-                }
-            }
+            else {
+                assert!(self.pending.is_empty(), "{phase}: HTTP body ended inside an SSE record");
+                return Ok(None);
+            };
+            self.pending.extend_from_slice(&chunk);
         }
     }
 }
