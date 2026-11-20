@@ -131,7 +131,8 @@ def layout_cases(pack):
 
     # Reserve space for the clock/date and for each mutually exclusive prompt.
     status = slot('status', 208, 42)
-    groups = [[region, status, slot('clock', 120, 44), slot('date', 120, 28)]]
+    groups = [[region, status, slot('clock', 120, 44), slot('date', 120, 28),
+               (12, 43, 864, 74), (12, 158, 180, 72)]]
     groups.extend([region, status, slot(state, 540, 174)] for state in ('link_code', 'approval', 'error'))
     for group in groups:
         for i, (x, y, w, h) in enumerate(group):
