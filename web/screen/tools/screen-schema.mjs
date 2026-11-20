@@ -107,6 +107,8 @@ for (const name of [
     "settings_patch_v2",
     "save_result_v2",
     "settings_error_v2",
+    "portos_operation_v2",
+    "portos_operation_started_v2",
 ]) {
     const schema = JSON.parse(
         await readFile(new URL(`${name}.json`, root), "utf8"),
