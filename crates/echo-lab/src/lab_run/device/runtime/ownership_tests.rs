@@ -33,7 +33,7 @@ impl Shell for Filesystem {
                 Ok(vec![])
             }
             "shell" if command.starts_with("chown ") => Ok(vec![]),
-            "shell" if command.contains("stat -c %u:%g:%a") => Ok(b"9999:9999:600".to_vec()),
+            "shell" if command.contains("stat -c %u:%g:%a") => Ok(format!("{}:{}:{}", 9999, 9999, 600).into_bytes()),
             "shell" => {
                 let command = command.strip_prefix(&format!("{IDENTITY} ")).unwrap_or(command);
                 let output = Command::new("sh").args(["-c", command]).output().unwrap();

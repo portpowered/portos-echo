@@ -66,7 +66,7 @@ impl World {
         } else if command.contains("wc -c") {
             return format!("{} log\n", self.log.len());
         } else if command.contains("stat -c %d:%i") {
-            return self.directory_identity.clone().unwrap_or_else(|| "1:2\n".into());
+            return self.directory_identity.clone().unwrap_or_else(|| format!("{OWNER}\n"));
         } else if command.contains("stat -c %a") && command.ends_with("/portos") {
             return "700\n".into();
         } else if command.contains("stat -c %a") {
@@ -423,7 +423,7 @@ fn t1_on_device_incomplete_acquisition_cannot_launch_and_release_consumes_author
 
 #[test]
 fn t1_on_device_malformed_directory_identity_retains_uncertain_residue_without_launch() {
-    for identity in ["", "1:2:3", "1:bad", "1:2;rm", ":2"] {
+    for identity in ["", "invalid:identity:shape", "1:bad", "1:2;rm", ":2"] {
         let root = tempfile::tempdir().unwrap();
         let local = root.path().join("config");
         std::fs::write(&local, "derived").unwrap();
