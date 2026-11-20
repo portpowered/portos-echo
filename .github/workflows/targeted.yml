@@ -53,6 +53,7 @@ jobs:
           TARGETED_IGNORED: ${{ inputs.ignored }}
         run: |
           python - <<'PY'
+          import json
           import os
           import re
           import subprocess
@@ -93,8 +94,39 @@ jobs:
                   parent = report_root / ("repeat-" + str(number))
                   parent.mkdir(parents=True, exist_ok=True)
                   destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
+                  command = ["target/debug/echo-lab", "run", str(path),
+                             "--driver", "sim", "--out", str(destination)]
+                  if path.stem == "session-live-time-answers":
+                      cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+                      cache = os.environ.get("ECHO_CODEX_CACHE_DIR", str(cache / "portos-echo/codex"))
+                      with tempfile.TemporaryDirectory(prefix="time-isolation-", dir=os.environ["RUNNER_TEMP"]) as temp:
+                          scratch = Path(temp)
+                          home = scratch / "home"
+                          home.mkdir(mode=0o700)
+                          runtime = {"PATH": os.environ["PATH"], "LC_ALL": "C.UTF-8",
+                                     "HOME": str(home), "USERPROFILE": str(home),
+                                     "ECHO_CODEX_CACHE_DIR": cache}
+                          print(f"TIME_WITNESS HOME={home} USERPROFILE={home}", flush=True)
+                          result = subprocess.run(command, env=runtime).returncode
+                          if result == 0:
+                              missing = scratch / "session-live-time-answers.yaml"
+                              source = path.read_text()
+                              line = '  - say: "What time is it in my time zone?"\n'
+                              assert source.count(line) == 1
+                              missing.write_text(source.replace(line, "", 1))
+                              omitted = destination.with_name("missing-no-zone")
+                              negative = command.copy()
+                              negative[2], negative[-1] = str(missing), str(omitted)
+                              omitted_exit = subprocess.run(negative, env=runtime).returncode
+                              report = json.loads((omitted / "report.json").read_text())
+                              assert omitted_exit == 1 and report["result"] == "fail", report
+                              assert report["checks"]["live_time_answers"] is False, report
+                              assert report["limitations"][0] == (
+                                  'time answers: completed 3 of 4 questions; missing "What time is it in my time zone?"'
+                              ), report
+                              print(f"TIME_WITNESS missing_no_zone_exit={omitted_exit}: {report['limitations'][0]}", flush=True)
+                  else:
+                      result = subprocess.run(command).returncode
                   if result and not code:
                       code = result
               print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
