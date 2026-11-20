@@ -154,12 +154,12 @@ const loaded = (page) =>
 const end = (page) =>
     page.evaluate(() =>
         document
-            .querySelector("video:not([hidden])")
+            .querySelector("video:not([hidden]):not([data-leaving])")
             .dispatchEvent(new Event("ended")),
     );
 const visible = (page) =>
     page
-        .locator("video:not([hidden])")
+        .locator("video:not([hidden]):not([data-leaving])")
         .evaluate((node) => new URL(node.src).pathname.split("/").at(-1));
 const reload = (page, revision) =>
     page.evaluate((revision) => {
@@ -315,7 +315,7 @@ test("pack page: MP4 capability fallback, idle/rest, character-only, and reduced
     });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.evaluate(() => window.motionSettled.then(() => undefined));
-    assert.equal(await page.locator("video:not([hidden])").count(), 0);
+    assert.equal(await page.locator("video:not([hidden]):not([data-leaving])").count(), 0);
     await send(page, 2, { state: "speaking" });
     assert.equal(await page.locator(".pack-stage img").isVisible(), true);
     await page.evaluate(() => {
@@ -325,7 +325,7 @@ test("pack page: MP4 capability fallback, idle/rest, character-only, and reduced
     await page.waitForFunction(() => window.packRequests.length === 4);
     await send(page, 3, { state: "ready", message: "Rest only" });
     assert.equal(await page.locator(".pack-stage img").isVisible(), true);
-    assert.equal(await page.locator("video:not([hidden])").count(), 0);
+    assert.equal(await page.locator("video:not([hidden]):not([data-leaving])").count(), 0);
 });
 
 test("pack page: layout clock/link coordinates, safe-area approval containment and no-pack reset", async (t) => {

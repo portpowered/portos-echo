@@ -116,6 +116,7 @@ export function mediaStage(
         const { x, y } = offset(from, to);
         const timing = { duration: GLIDE_MS, easing: "ease-out" };
         from.style.zIndex = "1";
+        from.dataset.leaving = "";
         const incoming = to.animate(
             [{ transform: `translate(${x}px, ${y}px)` }, { transform: "none" }],
             timing,
@@ -134,6 +135,7 @@ export function mediaStage(
             outgoing.cancel();
             from.hidden = true;
             from.style.zIndex = "";
+            delete from.dataset.leaving;
         };
         settle = done;
         outgoing.onfinish = done;
