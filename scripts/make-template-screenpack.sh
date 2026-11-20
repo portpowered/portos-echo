@@ -222,7 +222,7 @@ def generate(stage, work, version):
             'clock': {'x': 45, 'y': 86.5, 'font_scale': 1.1},
             'date': {'x': 44.8, 'y': 94, 'font_scale': 0.7},
             'status': {'x': 75, 'y': 17, 'font_scale': 0.9},
-            **{state: {'x': 75, 'y': 24.5, 'font_scale': 0.8}
+            **{state: {'x': 75, 'y': 24.5, 'font_scale': 0.7}
                for state in ('link_code', 'approval', 'error')},
         }
         manifest['layout']['stage'] = {
