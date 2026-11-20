@@ -39,6 +39,18 @@ pub trait TraceSink: Send + Sync {
     /// Observe an actual tool response without changing its backend value.
     /// Implementations must not block or log tool content or credentials.
     fn tool_result(&self, _name: &str, _content: &Value, _is_error: bool) {}
+    /// Observe the actual terminal event before unchanged commentary preparation.
+    fn task_terminal(&self, _event: &TaskEvent) {}
+    /// Observe one completed invocation, including transport failures. Hosts must
+    /// redact and bound payloads before persisting; this never changes the result.
+    fn tool_completed(
+        &self,
+        _name: &str,
+        _arguments: &Value,
+        _result: &Result<ToolResult, ToolError>,
+        _duration: std::time::Duration,
+    ) {
+    }
 }
 
 struct TracingHost<P, S> {
@@ -51,9 +63,13 @@ impl<P: TokenProvider, S: TraceSink> ToolHost for TracingHost<P, S> {
     }
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
         self.sink.record(TraceEvent::ToolCall { name: name.into() });
-        let result = self.host.call_tool(name, args, key).await?;
-        self.sink.tool_result(name, &result.content, result.is_error);
-        Ok(result)
+        let started = tokio::time::Instant::now();
+        let result = self.host.call_tool(name, args.clone(), key).await;
+        self.sink.tool_completed(name, &args, &result, started.elapsed());
+        if let Ok(result) = &result {
+            self.sink.tool_result(name, &result.content, result.is_error);
+        }
+        result
     }
 }
 
@@ -137,6 +153,9 @@ async fn execute(
     });
     let id = backend.submit(task).await.map_err(|_| DelegationError::Submission)?;
     while let Some(event) = backend.next_event(&id).await {
+        if !matches!(event, TaskEvent::Progress { .. }) {
+            sink.task_terminal(&event);
+        }
         let text = match event {
             TaskEvent::Completed { summary, .. } => summary,
             TaskEvent::Failed { message, .. } => message,
@@ -273,7 +292,18 @@ mod delegation_tests {
                             extra: std::collections::BTreeMap::default()
                         }))
                     );
-                    assert_eq!(sink.0.lock().unwrap()[1].name(), "session.commentary.append");
+                    assert_eq!(
+                        *sink.0.lock().unwrap(),
+                        vec![
+                            TraceEvent::DelegationCreated {
+                                delegation_id: DelegationId::new("d-unit").unwrap()
+                            },
+                            TraceEvent::CommentaryAppend {
+                                delegation_id: DelegationId::new("d-unit").unwrap()
+                            },
+                        ],
+                        "default observation callbacks preserve the legacy event stream exactly"
+                    );
                 }
                 None => assert_eq!(result, Err(DelegationError::MissingTerminal)),
             }

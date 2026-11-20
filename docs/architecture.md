@@ -62,8 +62,20 @@ missing starts do not imply zero duration. Search result counts are included onl
 when the item reports results. RPC results and item completion for the same turn
 and item share one receipt and count. Wrappers do not imply nested tool calls.
 Native counts describe emitted rows, not an assertion that no other tool ran.
-The retained Client, full managed-exit matrix and real-pin append witness remain
-in progress.
+The retained Client observes the existing runner through default no-op
+`TraceSink::task_terminal` and `TraceSink::tool_completed` callbacks, implemented
+only by its bridge sink. Existing trace events, tool results/errors and prepared
+commentary are unchanged for other sinks. Its creation records the task; each
+completed MCP invocation records original name, configured server, arguments,
+result or error and monotonic duration. Failed transport and `is_error` results
+are `failed`; a dispatch denial is `declined`. Counts describe observed completed
+invocations, including failures. Thread/turn/item IDs unavailable to this legacy
+runner are omitted. An actual completed task is `completed` regardless of its
+answer text. Failed tasks are `failed`, with the runner's fixed `task timed out`
+failure category recorded as `timed_out`. Abandonment closes the lifetime without
+appending commentary; replaced workers receive a fresh observer generation.
+Local append failure is `handback=failed`; success is only `submitted`.
+The full native managed-exit matrix and real-pin append witness remain in progress.
 
 ## Purpose and placement
 

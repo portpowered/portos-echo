@@ -7,6 +7,8 @@ use tokio::sync::oneshot;
 
 #[path = "runtime/emotion.rs"]
 mod emotion;
+#[path = "runtime/trace_checks.rs"]
+mod trace_checks;
 
 struct Application {
     directory: tempfile::TempDir,
@@ -42,6 +44,10 @@ impl Application {
     }
 
     async fn idle_with_emotion(cap: u64, deadline: u64, emotion: bool) -> Self {
+        Self::idle_options(cap, deadline, emotion, true).await
+    }
+
+    async fn idle_options(cap: u64, deadline: u64, emotion: bool, payloads: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let model = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -56,6 +62,8 @@ impl Application {
         .await;
         let live = bridge_peer::Live::bind_frames(0).await;
         let mut settings = settings(directory.path(), &live.url, model.local_addr().unwrap().port());
+        settings.config = Some(echo_config::BridgeConfig::load(directory.path().join("bridge.toml")).unwrap());
+        settings.config.as_mut().unwrap().trace.payloads = payloads;
         if emotion {
             settings.delegation.as_mut().unwrap().1.allow_tools = vec!["ui.show_emotion".into()];
         }
@@ -152,9 +160,13 @@ impl Application {
     }
 
     async fn finish(self) {
+        self.finish_with_calls(0).await;
+    }
+
+    async fn finish_with_calls(self, calls: usize) {
         self.stop.send(true).unwrap();
         assert_eq!(self.worker.await.unwrap(), Ok(()));
-        assert_eq!(self.spoof.snapshot().unwrap().calls.len(), 0);
+        assert_eq!(self.spoof.snapshot().unwrap().calls.len(), calls);
         self.spoof.shutdown().await.unwrap();
     }
 }
@@ -225,6 +237,7 @@ async fn bridge_wire_runtime_deadline_stops_model_without_tool_or_replay() {
             .count(),
         1
     );
+    trace_checks::resolved(&app.path(), "deadline", "timed_out", "submitted");
     app.finish().await;
 }
 
@@ -260,6 +273,9 @@ async fn bridge_wire_runtime_abandon_replacement_retains_budget_and_discards_lat
     );
     assert_eq!(app.live.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
     assert_no_request(&app.model).await;
+    trace_checks::resolved(&app.path(), "old", "cancelled", "unobserved");
+    trace_checks::resolved(&app.path(), "limited", "failed", "submitted");
+    trace_checks::resolved(&app.path(), "fresh", "completed", "submitted");
     app.finish().await;
 }
 
@@ -288,11 +304,9 @@ async fn bridge_wire_runtime_failed_commentary_append_cuts_and_closes_without_su
         assert_eq!(entries.iter().filter(|e| e["event"] == event).count(), 0);
     }
     assert_eq!(entries.iter().filter(|e| e["event"] == "live.closed").count(), 1);
-    assert!(
-        !std::fs::read_to_string(app.path())
-            .unwrap()
-            .contains("private provider text")
-    );
+    let resolved = trace_checks::resolved(&app.path(), "oversize", "failed", "failed");
+    assert_eq!(resolved["reason_class"], "append_failed");
+    assert_eq!(resolved["answer"]["text"], "private provider text".repeat(900));
     assert!(app.live.commentary.try_recv().is_err());
     assert_no_request(&app.model).await;
     app.wake().await;
@@ -413,6 +427,7 @@ async fn bridge_wire_runtime_long_delegation_kill_abandons_and_shutdown_remains_
             .count(),
         0
     );
+    trace_checks::resolved(&app.path(), "killed", "cancelled", "unobserved");
     assert!(app.live.commentary.try_recv().is_err());
     tokio::time::timeout(Duration::from_secs(1), app.finish())
         .await

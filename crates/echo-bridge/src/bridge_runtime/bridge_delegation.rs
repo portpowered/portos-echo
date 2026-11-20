@@ -1,4 +1,5 @@
 //! The active call owner alone delivers prepared commentary. Workers own no Live socket.
+mod bridge_client_trace;
 mod bridge_host;
 mod bridge_muse_host;
 mod bridge_muse_work;
@@ -35,12 +36,15 @@ enum Observation {
 struct Sink {
     send: mpsc::Sender<Observation>,
     overflow: AtomicBool,
+    trace: bridge_client_trace::ClientTrace,
 }
 impl TraceSink for Sink {
     fn record(&self, event: TraceEvent) {
         // This event observes preparation only, never delivery to Live.
-        if !matches!(event, TraceEvent::CommentaryAppend { .. })
-            && self.send.try_send(Observation::Trace(event)).is_err()
+        if !matches!(
+            event,
+            TraceEvent::CommentaryAppend { .. } | TraceEvent::DelegationCreated { .. }
+        ) && self.send.try_send(Observation::Trace(event)).is_err()
         {
             self.overflow.store(true, Ordering::Relaxed);
         }
@@ -51,6 +55,18 @@ impl TraceSink for Sink {
         {
             self.overflow.store(true, Ordering::Relaxed);
         }
+    }
+    fn task_terminal(&self, event: &echo_contracts::task::TaskEvent) {
+        self.trace.terminal(event);
+    }
+    fn tool_completed(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+        result: &Result<echo_agent_api::ToolResult, echo_agent_api::ToolError>,
+        duration: Duration,
+    ) {
+        self.trace.tool(name, arguments, result, duration);
     }
 }
 
@@ -99,6 +115,7 @@ impl Client {
             sink: Arc::new(Sink {
                 send,
                 overflow: AtomicBool::new(false),
+                trace: bridge_client_trace::ClientTrace::default(),
             }),
             receive,
             observed: None,
@@ -123,6 +140,7 @@ impl Client {
         self.sink = Arc::new(Sink {
             send,
             overflow: AtomicBool::new(false),
+            trace: bridge_client_trace::ClientTrace::default(),
         });
         self.receive = receive;
         let (config, server, providers) = self.config.as_ref().ok_or(Error::Input)?;
@@ -182,7 +200,7 @@ impl Client {
             )?;
             return Ok(false);
         }
-        let mut runner = match self.runner.take() {
+        let runner = match self.runner.take() {
             Some(runner) => runner,
             None => self.build()?,
         };
@@ -190,7 +208,20 @@ impl Client {
             credentials.limited.store(false, Ordering::Relaxed);
             credentials.authorization_failed.store(false, Ordering::Relaxed);
         }
+        let server = &self.config.as_ref().ok_or(Error::Input)?.1.name;
+        self.sink.trace.begin(
+            trace,
+            run,
+            &id,
+            &serde_json::to_value(&event).map_err(|_| Error::Decode)?,
+            server,
+        )?;
         self.active = Some((run.into(), id));
+        self.start(runner, event);
+        Ok(true)
+    }
+
+    fn start(&mut self, mut runner: Runner, event: LiveEvent) {
         self.pending = Some(tokio::spawn(async move {
             let output = runner
                 .run(
@@ -200,7 +231,6 @@ impl Client {
                 .await;
             (runner, output)
         }));
-        Ok(true)
     }
 
     /// Await worker completion without requiring another Live, device or timer event.
@@ -231,6 +261,20 @@ impl Client {
         let Some(completed) = self.completed.take() else {
             return Ok(());
         };
+        let result = self.complete(completed, call, trace, screen).await;
+        if result.is_err() {
+            let _ = self.sink.trace.finish(Some("worker_failed"), "unobserved", None);
+        }
+        result
+    }
+
+    async fn complete(
+        &mut self,
+        completed: Result<Completion, tokio::task::JoinError>,
+        call: &mut impl LivePort,
+        trace: &mut Trace,
+        screen: &super::bridge_screen::Screen,
+    ) -> Result<(), Error> {
         let (runner, result) = completed.map_err(|_| Error::Unavailable)?;
         self.runner = Some(runner);
         self.flush(trace, screen)?;
@@ -263,11 +307,18 @@ impl Client {
         {
             text = "daily request limit reached".into();
         }
-        call.append_commentary(delegation_id, text).await?;
-        trace.record("session.commentary.append", Some(&run), json!({"delegation_id":id}))
+        if let Err(error) = call.append_commentary(delegation_id, text.clone()).await {
+            let _ = self.sink.trace.finish(Some("append_failed"), "failed", Some(&text));
+            return Err(error.into());
+        }
+        let receipt = trace.record("session.commentary.append", Some(&run), json!({"delegation_id":id}));
+        let terminal = self.sink.trace.finish(None, "submitted", Some(&text));
+        receipt?;
+        terminal
     }
 
     fn flush(&mut self, trace: &mut Trace, screen: &super::bridge_screen::Screen) -> Result<(), Error> {
+        self.sink.trace.check()?;
         if self.sink.overflow.load(Ordering::Relaxed) {
             return Err(Error::Trace);
         }
@@ -306,6 +357,7 @@ impl Client {
         }
         // A retained completed runner keeps its backend accounting. A cancelled
         // runner is rebuilt with the host's still-retained request reservations.
+        let _ = self.sink.trace.finish(None, "unobserved", None);
         self.active = None;
         self.observed = None;
         while self.receive.try_recv().is_ok() {}

@@ -18,6 +18,7 @@ pub(super) struct Resolution {
     started: Instant,
     resolved: bool,
     observed: Outcome,
+    counts: std::collections::BTreeMap<String, u64>,
 }
 
 impl Resolution {
@@ -35,7 +36,19 @@ impl Resolution {
             started: Instant::now(),
             resolved: false,
             observed: Outcome::Cancelled,
+            counts: std::collections::BTreeMap::new(),
         })
+    }
+
+    pub fn tool(&mut self, mut fields: Value) -> Result<(), Error> {
+        if self.resolved {
+            return Ok(());
+        }
+        fields["delegation_id"] = self.id.clone().into();
+        let kind = fields["kind"].as_str().ok_or(Error::Trace)?.to_owned();
+        self.trace.record("delegation.tool", Some(&self.run), fields)?;
+        *self.counts.entry(kind).or_default() += 1;
+        Ok(())
     }
 
     pub fn observed(&mut self, outcome: Outcome) {
@@ -55,7 +68,7 @@ impl Resolution {
         let mut fields = json!({
             "delegation_id":self.id,"outcome":outcome,"handback":handback,
             "duration_ms":u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            "tool_counts":{}
+            "tool_counts":self.counts
         });
         if let Some(reason) = reason {
             fields["reason_class"] = reason.into();
