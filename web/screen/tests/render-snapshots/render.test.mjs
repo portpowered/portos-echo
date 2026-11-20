@@ -41,7 +41,7 @@ const STATES = [
             state: "link_code",
             user_code: "DEMO-CODE",
             verification_uri: "https://example.invalid/verify",
-            expires_at_unix: 1700000000,
+            expires_at_unix: Date.parse("2026-11-21T09:50:00Z") / 1000,
         },
         "setup",
         0,
@@ -112,6 +112,16 @@ async function renderStates(t, pack, label) {
     for (const [name, state, clip, frame] of STATES) {
         await emit(page, state);
         await hold(page, `${clip}.webm`, frame);
+        if (state.state === "link_code") {
+            const details = page.locator(".details");
+            assert.deepEqual(await details.locator("p").allTextContents(), [
+                state.user_code,
+                state.verification_uri,
+                "Expires in 9 min",
+            ]);
+            assert.doesNotMatch(await details.innerText(), /\d{10}/);
+            assert.equal(await details.locator("a").count(), 0);
+        }
         const faces = await checkState(page, name, label);
         if (name === "ready") rest = faces;
         renders.push(await shoot(page, `${label}-${name}`));

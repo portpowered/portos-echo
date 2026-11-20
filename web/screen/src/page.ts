@@ -1,7 +1,8 @@
-import type { ScreenFrame, UiAction } from "./model";
+import type { ScreenFrame, UiAction, UiState } from "./model";
 import { Presentation } from "./state";
 import { endpoints, postAction } from "./transport";
 import { animate } from "./emotion";
+import { formatExpiry } from "./expiry";
 import { mountSettings } from "./settings/view";
 import { mountPacks } from "./packs/view";
 
@@ -31,6 +32,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     let cancelPending: (() => void) | undefined;
     let stopAnimation: (() => void) | undefined;
     let clockTimer: ReturnType<typeof setTimeout> | undefined;
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     let settings: ReturnType<typeof mountSettings> | undefined;
     let packs: ReturnType<typeof mountPacks> | undefined;
     async function send(action: UiAction, frame: ScreenFrame): Promise<void> {
@@ -99,11 +101,36 @@ export function startPage(root: HTMLElement, href: string): () => void {
         date.textContent = now.toLocaleDateString();
         clockTimer = setTimeout(refreshClock, 60000 - (now.getTime() % 60000));
     }
+    function renderLinkCode(
+        details: HTMLElement,
+        state: Extract<UiState, { state: "link_code" }>,
+    ): void {
+        const expiry = text("p", "");
+        details.append(
+            text("p", state.user_code),
+            text("p", state.verification_uri),
+            expiry,
+        );
+        function refresh(): void {
+            const { label, refreshInMs } = formatExpiry(
+                state.expires_at_unix,
+                "countdown",
+            );
+            expiry.textContent = label;
+            expiryTimer =
+                refreshInMs === undefined
+                    ? undefined
+                    : setTimeout(refresh, refreshInMs);
+        }
+        refresh();
+    }
     function render(frame: ScreenFrame): void {
         settings?.update(frame.state);
         stopAnimation?.();
         cancelPending?.();
         clearTimeout(clockTimer);
+        clearTimeout(expiryTimer);
+        expiryTimer = undefined;
         const state = frame.state;
         const idle = state.state === "ready" || state.state === "connected";
         const retained = content.querySelectorAll(
@@ -141,11 +168,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 break;
             }
             case "link_code":
-                details.append(
-                    text("p", state.user_code),
-                    text("p", state.verification_uri),
-                    text("p", state.expires_at_unix.toString()),
-                );
+                renderLinkCode(details, state);
                 break;
             case "approval":
                 details.append(text("p", state.prompt));
@@ -245,6 +268,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         disposed = true;
         stopAnimation?.();
         clearTimeout(clockTimer);
+        clearTimeout(expiryTimer);
         settings?.dispose();
         packs?.dispose();
         stream.close();

@@ -4,7 +4,7 @@
   "connecting": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"connecting\" [level=1]\n  - status\n",
   "error-false": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"error\" [level=1]\n    - paragraph: Please relink\n    - button \"Dismiss\"\n  - status\n",
   "error-true": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"error\" [level=1]\n    - paragraph: Please relink\n    - button \"Relink\"\n    - button \"Dismiss\"\n  - status\n",
-  "link_code": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"link code\" [level=1]\n    - paragraph: DEMO-CODE\n    - paragraph: https://example.invalid/verify\n    - paragraph: \"1700000000\"\n  - status\n",
+  "link_code": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"link code\" [level=1]\n    - paragraph: DEMO-CODE\n    - paragraph: https://example.invalid/verify\n    - paragraph: Expires in 9 min\n  - status\n",
   "listening": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"listening\" [level=1]\n  - status\n",
   "muted": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - heading \"muted\" [level=1]\n  - status\n",
   "ready": "- main \"Echo screen\":\n  - region \"Screen presentation\":\n    - paragraph: 12:00 AM\n    - paragraph: 1/1/1970\n    - button \"Begin session\"\n  - status\n",

@@ -17,7 +17,7 @@ test("F14 F15: exact long Unicode, quotes, markup and u64 expiry; scrolling leav
         assert.deepEqual(await page.locator("section p").allTextContents(), [
             long,
             long,
-            expiry,
+            expiry === "0" ? "Expired" : "Expiry unavailable",
         ]);
         await page.locator("section p").last().scrollIntoViewIfNeeded();
         assert.equal(await page.locator("section p").last().isVisible(), true);

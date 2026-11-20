@@ -17,8 +17,12 @@ test("F01 F02 F11: exact state, link and error values, semantic snapshots and re
     const golden = new URL("goldens/states.json", import.meta.url);
     const snapshots = JSON.parse(await readFile(golden, "utf8"));
     for (const [index, wire] of states.entries()) {
-        await emit(page, frame(index + 1, wire));
         const state = JSON.parse(wire);
+        if (state.state === "link_code")
+            await page.clock.setSystemTime(
+                state.expires_at_unix * 1000 - 540000,
+            );
+        await emit(page, frame(index + 1, wire));
         const presentation = page.getByRole("region", {
             name: "Screen presentation",
         });
@@ -38,14 +42,12 @@ test("F01 F02 F11: exact state, link and error values, semantic snapshots and re
             await page.locator("section").getAttribute("data-seq"),
             `${index + 1}`,
         );
-        for (const key of [
-            "message",
-            "user_code",
-            "verification_uri",
-            "expires_at_unix",
-            "prompt",
-            "name",
-        ])
+        if (state.state === "link_code")
+            assert.deepEqual(
+                await page.locator(".details p").allTextContents(),
+                [state.user_code, state.verification_uri, "Expires in 9 min"],
+            );
+        for (const key of ["message", "prompt", "name"])
             if (key in state && state.state !== "ready")
                 assert.equal(
                     await page
@@ -117,11 +119,7 @@ test("home at 960x600: bottom clock rolls over, prompts have space, and Settings
         assert.deepEqual(
             await card.locator("p").allTextContents(),
             state.state === "link_code"
-                ? [
-                      state.user_code,
-                      state.verification_uri,
-                      state.expires_at_unix.toString(),
-                  ]
+                ? [state.user_code, state.verification_uri, "Expired"]
                 : [state.prompt],
         );
         if (state.state === "approval") {
@@ -145,6 +143,75 @@ test("home at 960x600: bottom clock rolls over, prompts have space, and Settings
         "960x600 home: zero redundant labels, bottom clock/date, top-right Settings, minute and midnight rollover, prompts above the clock area",
     );
 });
+test("Link Code refreshes in place at minute boundaries and expires at the deadline", async (t) => {
+    const page = await pageFor(t);
+    const state = JSON.parse(states[7]);
+    const deadline = state.expires_at_unix * 1000;
+    await page.clock.setSystemTime(deadline - 540000);
+    await emit(page, frame(1, states[7]));
+
+    const details = page.locator(".details");
+    const lines = details.locator("p");
+    const expiry = await lines.last().elementHandle();
+    assert.deepEqual(await lines.allTextContents(), [
+        state.user_code,
+        state.verification_uri,
+        "Expires in 9 min",
+    ]);
+    assert.doesNotMatch(await details.innerText(), /\d{10}/);
+    assert.equal(await details.locator("a").count(), 0);
+    await page.clock.runFor(60000);
+    assert.equal(await expiry.textContent(), "Expires in 8 min");
+    assert.equal(await expiry.evaluate((node) => node.isConnected), true);
+    await page.clock.runFor(480000 - 1);
+    assert.equal(await expiry.textContent(), "Expires in 1 min");
+    await page.clock.runFor(1);
+    assert.equal(await expiry.textContent(), "Expired");
+    assert.equal(await page.evaluate(() => window.timers.size), 0);
+
+    await page.clock.runFor(1000);
+    await emit(page, frame(2, states[7]));
+    await page.clock.runFor(60000);
+    assert.deepEqual(await lines.allTextContents(), [
+        state.user_code,
+        state.verification_uri,
+        "Expired",
+    ]);
+    assert.equal(await page.evaluate(() => window.timers.size), 0);
+    assert.deepEqual(await calls(page), []);
+});
+
+test("Link Code cancels its refresh on replacement and page disposal", async (t) => {
+    const deadline = JSON.parse(states[7]).expires_at_unix * 1000;
+    const page = await pageFor(t);
+    await page.clock.setSystemTime(deadline - 540000);
+    await emit(page, frame(1, states[7]));
+    const expiry = await page.locator(".details p").last().elementHandle();
+    assert.equal(await page.evaluate(() => window.timers.size), 1);
+    await emit(page, frame(2));
+    assert.equal(await page.evaluate(() => window.timers.size), 1);
+    await page.clock.runFor(600000);
+    assert.equal(await expiry.textContent(), "Expires in 9 min");
+    assert.deepEqual(await page.locator(".home-clock p").allTextContents(), [
+        "10:14 PM",
+        "11/14/2023",
+    ]);
+    assert.deepEqual(await calls(page), []);
+
+    const unloaded = await pageFor(t);
+    await unloaded.clock.setSystemTime(deadline - 540000);
+    await emit(unloaded, frame(1, states[7]));
+    assert.equal(await unloaded.evaluate(() => window.timers.size), 1);
+    await unloaded.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+    assert.equal(await unloaded.evaluate(() => window.timers.size), 0);
+    await unloaded.clock.runFor(600000);
+    assert.equal(
+        await unloaded.locator(".details p").last().textContent(),
+        "Expires in 9 min",
+    );
+    assert.deepEqual(await calls(unloaded), []);
+});
+
 test("F06 F07: lossless monotonic rendering, invalid update recovery and inert HTML", async (t) => {
     const page = await pageFor(t);
     await emit(page, frame(9007199254740993n));
