@@ -20,7 +20,9 @@ jobs:
       - name: Build the prebuilt Linux installer
         env:
           ECHO_SETUP_RELEASE_VERSION: '0.1.0'
-        run: cargo build --locked -p echo-setup --bin echo-setup
+        run: |
+          export RUSTFLAGS="--remap-path-prefix=$HOME=/build/user --remap-path-prefix=$PWD=/build/echo"
+          cargo build --locked -p echo-setup --bin echo-setup
       - name: Run artifact journey with synthetic Android payload
         run: |
           python3 - <<'PY'
