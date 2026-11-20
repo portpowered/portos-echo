@@ -127,6 +127,9 @@ main.settings-open {
     min-height: 0;
     padding: 8px;
 }
+.settings-fields > section {
+    max-height: none;
+}
 .settings-fields form {
     border-bottom: 1px solid #c4d5ff;
     padding-bottom: 16px;

@@ -105,10 +105,10 @@ struct PairedGrant<'a> {
 }
 
 impl PairedGrant<'_> {
-    fn post(&self, body: Value) -> reqwest::RequestBuilder {
+    fn post(&self, body: &Value) -> reqwest::RequestBuilder {
         self.client
             .post(configured::settings_runtime_url(self.fixture, "/settings/v2/portos"))
-            .json(&body)
+            .json(body)
     }
 
     async fn capture(&mut self, request: reqwest::RequestBuilder, status: u16) -> Value {
@@ -131,7 +131,7 @@ impl PairedGrant<'_> {
 
     async fn begin(&mut self, epoch: u64) {
         assert_eq!(
-            self.capture(self.post(json!({"version":2,"operation":"link"})), 202)
+            self.capture(self.post(&json!({"version":2,"operation":"link"})), 202)
                 .await,
             json!({"version":2,"operation":"link"})
         );
@@ -237,21 +237,40 @@ async fn failed_link(journey: &mut PairedGrant<'_>, epoch: u64, state: &str) {
 }
 
 async fn complete_link_unlink(journey: &mut PairedGrant<'_>, path: &std::path::Path, epoch: u64) {
-    use echo_lab::lab_mcp::Approval;
+    refuse_unpaired_link(journey).await;
+    approve_paired_link(journey, path, epoch).await;
+    let grant_path = journey.fixture.directory.path().join("grant/grant.json");
+    let grant: Value = serde_json::from_slice(&std::fs::read(&grant_path).unwrap()).unwrap();
+    unlink_paired_grant(journey).await;
+    let stored: Value = serde_json::from_slice(&std::fs::read(&grant_path).unwrap()).unwrap();
+    assert_eq!(stored["grant"], Value::Null);
+    assert_private(journey, path, &grant);
+    writeln!(
+        std::io::stdout().lock(),
+        "Port OS: scopes=[endpoint:read] links=1 revokes=1 shared_slot=409 credential_matches=0 grant_present=false"
+    )
+    .unwrap();
+}
+
+async fn refuse_unpaired_link(journey: &mut PairedGrant<'_>) {
     let status = journey.portos().await;
     assert_eq!(status["link_status"], "link_required");
     assert_eq!(status["server"]["requested_scopes"], json!(["endpoint:read"]));
     let link = json!({"version":2,"operation":"link"});
-    journey
-        .capture(journey.post(link.clone()).header("Origin", "null"), 403)
-        .await;
+    journey.capture(journey.post(&link).header("Origin", "null"), 403).await;
     let url = configured::settings_runtime_url(journey.fixture, "/settings/v2/portos");
     journey
         .capture(journey.client.post(url).query(&[("token", "wrong")]).json(&link), 401)
         .await;
     assert_eq!(journey.mock.counts().unwrap().links, 0);
+}
+
+async fn approve_paired_link(journey: &mut PairedGrant<'_>, path: &std::path::Path, epoch: u64) {
+    use echo_lab::lab_mcp::Approval;
     journey.begin(epoch).await;
-    let duplicate = journey.capture(journey.post(link), 409).await;
+    let duplicate = journey
+        .capture(journey.post(&json!({"version":2,"operation":"link"})), 409)
+        .await;
     assert_eq!(
         duplicate,
         json!({"version":2,"message":"A Port OS operation is already in progress."})
@@ -268,12 +287,13 @@ async fn complete_link_unlink(journey: &mut PairedGrant<'_>, path: &std::path::P
     let linked = journey.outcome("linking", "idle").await;
     assert_eq!(linked["link_status"], "linked");
     assert_eq!(linked["server"]["granted_scopes"], json!(["endpoint:read"]));
-    let grant_path = journey.fixture.directory.path().join("grant/grant.json");
-    let grant: Value = serde_json::from_slice(&std::fs::read(&grant_path).unwrap()).unwrap();
-    let unconfirmed = journey.post(json!({"version":2,"operation":"unlink","confirm":false}));
+}
+
+async fn unlink_paired_grant(journey: &mut PairedGrant<'_>) {
+    let unconfirmed = journey.post(&json!({"version":2,"operation":"unlink","confirm":false}));
     journey.capture(unconfirmed, 400).await;
     assert_eq!(journey.mock.counts().unwrap().revokes, 0);
-    let request = journey.post(json!({"version":2,"operation":"unlink","confirm":true}));
+    let request = journey.post(&json!({"version":2,"operation":"unlink","confirm":true}));
     assert_eq!(
         journey.capture(request, 202).await,
         json!({"version":2,"operation":"unlink"})
@@ -283,14 +303,6 @@ async fn complete_link_unlink(journey: &mut PairedGrant<'_>, path: &std::path::P
     assert_eq!(unlinked["server"]["granted_scopes"], json!([]));
     let counts = journey.mock.counts().unwrap();
     assert_eq!((counts.links, counts.revokes), (1, 1));
-    let stored: Value = serde_json::from_slice(&std::fs::read(&grant_path).unwrap()).unwrap();
-    assert_eq!(stored["grant"], Value::Null);
-    assert_private(journey, path, &grant);
-    writeln!(
-        std::io::stdout().lock(),
-        "Port OS: scopes=[endpoint:read] links=1 revokes=1 shared_slot=409 credential_matches=0 grant_present=false"
-    )
-    .unwrap();
 }
 
 fn assert_private(journey: &PairedGrant<'_>, path: &std::path::Path, stored: &Value) {

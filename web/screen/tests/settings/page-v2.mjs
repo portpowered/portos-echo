@@ -71,7 +71,6 @@ function v2Snapshot() {
 
 async function open(t, settingsV2Body, settingsV2Status = 200) {
     const page = await pageFor(t, query, true);
-    page.setDefaultTimeout(5000);
     await page.setViewportSize({ width: 960, height: 480 });
     await response(page, snapshot);
     await page.evaluate(
