@@ -8,7 +8,7 @@ mod screen_settings;
 mod screen_url;
 
 pub use packs::PackSettings;
-pub use packs::view::PackCatalog;
+pub use packs::view::{DEFAULT as DEFAULT_PACK, PackCatalog};
 pub use screen_settings::{PromptKind, SettingsOperation, SettingsReply, SettingsRequest, settings_channel};
 pub use screen_url::page_url;
 

@@ -151,7 +151,7 @@ impl SettingsHost {
             return Err(SettingsError::Unavailable);
         }
         let catalog = catalog.with_selection(self.store.overlay.screen_pack());
-        let changed = catalog.selection_changes(overlay.screen_pack().unwrap_or("template"));
+        let changed = catalog.selection_changes(overlay.screen_pack().unwrap_or(echo_screen_server::DEFAULT_PACK));
         // Adopt pending editable values without changing the running config,
         // writing settings, requesting exec or clearing durability uncertainty.
         if overlay.manages_portos() {

@@ -39,7 +39,7 @@ async fn select(fixture: &Fixture, selection: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn t3_screen_pack_catalog_resolves_valid_templates_and_filters_bad_local_data() {
+async fn t3_screen_pack_catalog_resolves_valid_defaults_and_filters_bad_local_data() {
     let mut fixture = Fixture::open().await;
     let _jobs = fixture.server.install_configured_packs(fixture.path(""), None, vec![]);
     assert_eq!(
@@ -49,9 +49,9 @@ async fn t3_screen_pack_catalog_resolves_valid_templates_and_filters_bad_local_d
         })
     );
     for (id, name, version) in [
-        ("template", "template", "2.0.0"),
-        ("template@10.0.0-beta.2", "template", "10.0.0-beta.2"),
-        ("template@10.0.0-beta.10", "template", "10.0.0-beta.10"),
+        ("default", "default", "2.0.0"),
+        ("default@10.0.0-beta.2", "default", "10.0.0-beta.2"),
+        ("default@10.0.0-beta.10", "default", "10.0.0-beta.10"),
         ("local", "local", "0.1.0"),
         ("wrong", "another", "1.0.0"),
     ] {
@@ -62,22 +62,22 @@ async fn t3_screen_pack_catalog_resolves_valid_templates_and_filters_bad_local_d
     pack(&fixture, "broken", "broken", "1.0.0");
     fs::write(fixture.path("screens/broken/pack.json"), "malformed").unwrap();
     let value = catalog(&fixture).await;
-    assert_eq!(value["active"], "template@10.0.0-beta.10");
+    assert_eq!(value["active"], "default@10.0.0-beta.10");
     assert_eq!(
         value["installed"],
         json!([
+            {"id":"default","name":"default","version":"2.0.0",
+             "manifest_url":"/screen-packs/v1/default/pack.json","rest_url":"/screen-packs/v1/default/rest.png"},
+            {"id":"default@10.0.0-beta.10","name":"default","version":"10.0.0-beta.10",
+             "manifest_url":"/screen-packs/v1/default@10.0.0-beta.10/pack.json","rest_url":"/screen-packs/v1/default@10.0.0-beta.10/rest.png"},
+            {"id":"default@10.0.0-beta.2","name":"default","version":"10.0.0-beta.2",
+             "manifest_url":"/screen-packs/v1/default@10.0.0-beta.2/pack.json","rest_url":"/screen-packs/v1/default@10.0.0-beta.2/rest.png"},
             {"id":"local","name":"local","version":"0.1.0",
-             "manifest_url":"/screen-packs/v1/local/pack.json","rest_url":"/screen-packs/v1/local/rest.png"},
-            {"id":"template","name":"template","version":"2.0.0",
-             "manifest_url":"/screen-packs/v1/template/pack.json","rest_url":"/screen-packs/v1/template/rest.png"},
-            {"id":"template@10.0.0-beta.10","name":"template","version":"10.0.0-beta.10",
-             "manifest_url":"/screen-packs/v1/template@10.0.0-beta.10/pack.json","rest_url":"/screen-packs/v1/template@10.0.0-beta.10/rest.png"},
-            {"id":"template@10.0.0-beta.2","name":"template","version":"10.0.0-beta.2",
-             "manifest_url":"/screen-packs/v1/template@10.0.0-beta.2/pack.json","rest_url":"/screen-packs/v1/template@10.0.0-beta.2/rest.png"}
+             "manifest_url":"/screen-packs/v1/local/pack.json","rest_url":"/screen-packs/v1/local/rest.png"}
         ])
     );
-    pack(&fixture, "template@10.0.0", "template", "10.0.0");
-    assert_eq!(catalog(&fixture).await["active"], "template@10.0.0");
+    pack(&fixture, "default@10.0.0", "default", "10.0.0");
+    assert_eq!(catalog(&fixture).await["active"], "default@10.0.0");
     assert_eq!(
         select(&fixture, "local").await,
         (StatusCode::OK, json!({"version":1,"restart_pending":false}))
@@ -348,7 +348,7 @@ async fn external_settings(fixture: &Fixture, text: &str, calls: u32) {
 #[tokio::test]
 async fn t3_screen_pack_external_settings_hot_selection_no_echo_or_restart() {
     let mut fixture = Fixture::open().await;
-    pack(&fixture, "template@1.0.0", "template", "1.0.0");
+    pack(&fixture, "default@1.0.0", "default", "1.0.0");
     pack(&fixture, "local", "local", "1.0.0");
     let _jobs = fixture.server.install_configured_packs(fixture.path(""), None, vec![]);
     let mut events = Events::open(&fixture).await;
@@ -359,7 +359,7 @@ async fn t3_screen_pack_external_settings_hot_selection_no_echo_or_restart() {
     external_settings(&fixture, "screen_pack=''\n[agent]\nmax_tool_calls=6\n", 6).await;
     events.reload(2, Value::Null).await;
     fs::remove_file(fixture.path("settings.toml")).unwrap();
-    events.reload(3, json!("template@1.0.0")).await;
+    events.reload(3, json!("default@1.0.0")).await;
     assert_eq!(catalog(&fixture).await["revision"], 3);
     // An HTTP selection followed by the watcher observing that same write
     // still produces one publication; subsequent external adoption is a barrier.
@@ -375,12 +375,12 @@ async fn t3_screen_pack_external_settings_hot_selection_no_echo_or_restart() {
 #[tokio::test]
 async fn t3_screen_pack_selection_reload_once_noop_alias_failure_and_reconnect() {
     let mut fixture = Fixture::open().await;
-    pack(&fixture, "template@1.0.0", "template", "1.0.0");
+    pack(&fixture, "default@1.0.0", "default", "1.0.0");
     pack(&fixture, "local", "local", "1.0.0");
     let _jobs = fixture.server.install_configured_packs(fixture.path(""), None, vec![]);
     let mut events = Events::open(&fixture).await;
     assert_eq!(catalog(&fixture).await["revision"], 0);
-    assert_eq!(select(&fixture, "template@1.0.0").await.0, StatusCode::OK);
+    assert_eq!(select(&fixture, "default@1.0.0").await.0, StatusCode::OK);
     frame_barrier(&fixture, &mut events, 1).await;
     assert_eq!(select(&fixture, "local").await.0, StatusCode::OK);
     events.reload(1, json!("local")).await;
@@ -388,9 +388,9 @@ async fn t3_screen_pack_selection_reload_once_noop_alias_failure_and_reconnect()
     assert_eq!(select(&fixture, "local").await.0, StatusCode::OK);
     assert_eq!(select(&fixture, "missing").await.0, StatusCode::UNPROCESSABLE_ENTITY);
     frame_barrier(&fixture, &mut events, 2).await;
-    assert_eq!(select(&fixture, "template").await.0, StatusCode::OK);
-    events.reload(2, json!("template@1.0.0")).await;
-    assert_eq!(select(&fixture, "template@1.0.0").await.0, StatusCode::OK);
+    assert_eq!(select(&fixture, "default").await.0, StatusCode::OK);
+    events.reload(2, json!("default@1.0.0")).await;
+    assert_eq!(select(&fixture, "default@1.0.0").await.0, StatusCode::OK);
     frame_barrier(&fixture, &mut events, 3).await;
     assert_eq!(select(&fixture, "").await.0, StatusCode::OK);
     events.reload(3, Value::Null).await;
