@@ -18,11 +18,7 @@ use echo_screen_contract::{
 use echo_screen_server::SettingsReply;
 
 impl SettingsHost {
-    pub(in crate::bridge_settings) fn portos_operation(
-        &self,
-        request: PortosOperationV2,
-        grant: Option<&Grant>,
-    ) -> SettingsReply {
+    pub(super) fn portos_operation(&self, request: PortosOperationV2, grant: Option<&Grant>) -> SettingsReply {
         let config = self.store.effective();
         if portos_server(config).is_none() {
             return SettingsReply::InvalidV2(operation_error("Port OS is unconfigured."));
@@ -44,9 +40,7 @@ impl SettingsHost {
                 version: SettingsVersionV2,
                 operation: action,
             }),
-            Err(StartError::Busy) => {
-                SettingsReply::AccountConflict(operation_error("A Port OS operation is already in progress."))
-            }
+            Err(StartError::Busy) => portos_busy(),
             Err(StartError::Closed) => SettingsReply::Unavailable,
         }
     }
@@ -154,6 +148,10 @@ impl SettingsHost {
             warnings: accepted.warnings,
         })
     }
+}
+
+pub(super) fn portos_busy() -> SettingsReply {
+    SettingsReply::AccountConflict(operation_error("A Port OS operation is already in progress."))
 }
 
 fn operation_error(message: &str) -> SettingsErrorV2 {

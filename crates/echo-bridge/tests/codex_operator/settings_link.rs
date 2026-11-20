@@ -129,7 +129,7 @@ impl PairedGrant<'_> {
         self.capture(self.client.get(url), 200).await["portos"].clone()
     }
 
-    async fn begin(&mut self, epoch: u64) {
+    async fn begin(&mut self) -> u64 {
         assert_eq!(
             self.capture(self.post(&json!({"version":2,"operation":"link"})), 202)
                 .await,
@@ -142,14 +142,13 @@ impl PairedGrant<'_> {
                 continue;
             };
             let expires = challenge["expires_at_unix"].as_u64().unwrap();
-            assert!((epoch + 1800..=epoch + 1802).contains(&expires));
             assert_eq!(
                 challenge,
                 &json!({"user_code":"TEST-CODE","verification_uri":format!("{}/approve",self.mock.base()),
                     "expires_at_unix":expires})
             );
             writeln!(std::io::stdout().lock(), "paired Port OS challenge: {challenge}").unwrap();
-            break;
+            return expires;
         }
     }
 
@@ -171,7 +170,12 @@ async fn paired_grant_journey(fixture: &Fixture, expected: &str) {
     let mock = MockPortos::bind(epoch).await.unwrap();
     let mut startup = portos_startup(fixture, mock.base(), "echo-lab");
     startup.base.mcp.scopes = vec!["endpoint:read".into()];
-    startup.config = startup.base.clone();
+    let home = &startup.base.home.as_ref().unwrap().dir;
+    std::fs::create_dir(home).unwrap();
+    let initial_overlay = "[voice]\nsession_listen_seconds = 4\n";
+    std::fs::write(home.join("settings.toml"), initial_overlay).unwrap();
+    startup.overlay = echo_config::SettingsOverlay::from_toml_str(initial_overlay).unwrap();
+    startup.config = startup.overlay.apply_to(&startup.base).unwrap();
     let path = fixture.directory.path().join("paired-portos-trace");
     let prepared = Configured::from_effective(startup, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
     let (stop, stopping) = tokio::sync::oneshot::channel();
@@ -216,7 +220,7 @@ async fn paired_grant_journey(fixture: &Fixture, expected: &str) {
 
 async fn failed_link(journey: &mut PairedGrant<'_>, epoch: u64, state: &str) {
     use echo_lab::lab_mcp::Approval;
-    journey.begin(epoch).await;
+    assert!((epoch + 1800..=epoch + 1802).contains(&journey.begin().await));
     let seconds = if state == "denied" {
         journey.mock.approve(Approval::Denied).unwrap();
         5
@@ -227,7 +231,8 @@ async fn failed_link(journey: &mut PairedGrant<'_>, epoch: u64, state: &str) {
     tokio::time::advance(Duration::from_secs(seconds)).await;
     let refused = journey.outcome("linking", state).await;
     assert_eq!(refused["link_status"], "link_required");
-    journey.begin(epoch + seconds).await;
+    let expected_expiry = epoch + seconds + 1800;
+    assert!((expected_expiry..=expected_expiry + 2).contains(&journey.begin().await));
     assert_eq!(journey.mock.counts().unwrap().links, 2);
     writeln!(
         std::io::stdout().lock(),
@@ -247,7 +252,7 @@ async fn complete_link_unlink(journey: &mut PairedGrant<'_>, path: &std::path::P
     assert_private(journey, path, &grant);
     writeln!(
         std::io::stdout().lock(),
-        "Port OS: scopes=[endpoint:read] links=1 revokes=1 shared_slot=409 credential_matches=0 grant_present=false"
+        "Port OS: scopes=[endpoint:read] links=1 revokes=1 shared_slot=409 permission_save=409 overlay_unchanged=true restart_pending=false credential_matches=0 grant_present=false"
     )
     .unwrap();
 }
@@ -267,7 +272,8 @@ async fn refuse_unpaired_link(journey: &mut PairedGrant<'_>) {
 
 async fn approve_paired_link(journey: &mut PairedGrant<'_>, path: &std::path::Path, epoch: u64) {
     use echo_lab::lab_mcp::Approval;
-    journey.begin(epoch).await;
+    assert!((epoch + 1800..=epoch + 1802).contains(&journey.begin().await));
+    refuse_permission_save(journey).await;
     let duplicate = journey
         .capture(journey.post(&json!({"version":2,"operation":"link"})), 409)
         .await;
@@ -287,6 +293,25 @@ async fn approve_paired_link(journey: &mut PairedGrant<'_>, path: &std::path::Pa
     let linked = journey.outcome("linking", "idle").await;
     assert_eq!(linked["link_status"], "linked");
     assert_eq!(linked["server"]["granted_scopes"], json!(["endpoint:read"]));
+}
+
+async fn refuse_permission_save(journey: &mut PairedGrant<'_>) {
+    let overlay = journey.fixture.directory.path().join("agent-home/settings.toml");
+    let bytes = std::fs::read(&overlay).unwrap();
+    let url = configured::settings_runtime_url(journey.fixture, "/settings/v2");
+    let before = journey.capture(journey.client.get(url.clone()), 200).await;
+    let save = journey.client.patch(url.clone()).json(&json!({
+        "version":2,"settings":{"portos":{"scopes":["endpoint:write"],"allow_tools":["control"]}}
+    }));
+    assert_eq!(
+        journey.capture(save, 409).await,
+        json!({"version":2,"message":"A Port OS operation is already in progress."})
+    );
+    let after = journey.capture(journey.client.get(url), 200).await;
+    assert_eq!(after, before);
+    assert_eq!(after["portos"]["operation_state"], "linking");
+    assert_eq!(after["restart_pending"], false);
+    assert_eq!(std::fs::read(overlay).unwrap(), bytes);
 }
 
 async fn unlink_paired_grant(journey: &mut PairedGrant<'_>) {
@@ -309,8 +334,36 @@ pub(super) async fn replacement_grant(fixture: &Fixture, mock: &echo_lab::lab_mc
     tokio::select! {
         biased;
         () = follow_subprocess_clock(mock, epoch) => unreachable!("the fixture clock runs until the grant journey ends"),
-        () = replacement_journey(fixture, mock) => {}
+        () = replacement_journey(fixture, mock, async |expires| {
+            // The normal process takes its clock origin after the mock was started.
+            let now = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+            assert!((epoch + 1800..=now + 1800).contains(&expires));
+        }) => {}
     }
+}
+
+pub(super) async fn controlled_grant(
+    fixture: &Fixture,
+    mock: &echo_lab::lab_mcp::Fixture,
+    epoch: u64,
+    process: &mut Process,
+) {
+    replacement_journey(fixture, mock, async |expires| {
+        assert_eq!(expires, epoch + 1800);
+        mock.advance(5).unwrap();
+        process
+            .input
+            .as_mut()
+            .unwrap()
+            .write_all(b"{\"action\":\"advance_clock\",\"milliseconds\":5000}\n")
+            .await
+            .unwrap();
+        assert_eq!(
+            process.line().await,
+            r#"{"event":"bridge.clock_advanced","milliseconds":5000}"#
+        );
+    })
+    .await;
 }
 
 async fn follow_subprocess_clock(mock: &echo_lab::lab_mcp::Fixture, mut epoch: u64) {
@@ -327,7 +380,11 @@ async fn follow_subprocess_clock(mock: &echo_lab::lab_mcp::Fixture, mut epoch: u
     }
 }
 
-async fn replacement_journey(fixture: &Fixture, mock: &echo_lab::lab_mcp::Fixture) {
+async fn replacement_journey(
+    fixture: &Fixture,
+    mock: &echo_lab::lab_mcp::Fixture,
+    observe_expiry: impl AsyncFnOnce(u64),
+) {
     let mut journey = PairedGrant {
         fixture,
         mock,
@@ -338,8 +395,9 @@ async fn replacement_journey(fixture: &Fixture, mock: &echo_lab::lab_mcp::Fixtur
     assert_eq!(status["link_status"], "link_required");
     assert_eq!(status["link_waiting_for_restart"], false);
     assert_eq!(status["server"]["requested_scopes"], json!(["endpoint:read"]));
-    journey.begin(std::time::UNIX_EPOCH.elapsed().unwrap().as_secs()).await;
+    let expires = journey.begin().await;
     mock.approve(echo_lab::lab_mcp::Approval::Approved).unwrap();
+    observe_expiry(expires).await;
     let mut reads = tokio::time::interval(Duration::from_millis(50));
     loop {
         reads.tick().await;

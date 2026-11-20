@@ -162,7 +162,7 @@ session_listen_seconds = 4"#,
 async fn t3_settings_account_changes_reuse_the_credential_owners() {
     let fixture = Fixture::new("chatgpt");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let epoch = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+    let epoch = 1_800_000_000;
     let mock = MockPortos::bind(epoch).await.unwrap();
     let base = configure(&fixture, listener.local_addr().unwrap().port(), mock.base());
     let base = String::from_utf8(base).unwrap().replace(
@@ -172,7 +172,7 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
     std::fs::write(fixture.directory.path().join("bridge.toml"), base).unwrap();
     std::fs::write(fixture.home.join("mode"), "screen-account").unwrap();
     std::fs::write(fixture.home.join("auth.json"), "synthetic-private-openai-value").unwrap();
-    let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
+    let mut process = account_process(&fixture, &mock, epoch);
     let mut first = restart::binary_ready(&listener, &mut process).await;
     let url = settings_runtime_url(&fixture, "/settings/v2/openai");
     let client = reqwest::Client::new();
@@ -180,7 +180,7 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
         snapshot(&client, &url).await,
         json!({"version":2,"link_status":"linked","operation_state":"idle"})
     );
-    unlink_openai(&client, &url).await;
+    unlink_openai(&client, &url, listener.local_addr().unwrap().port()).await;
     let signed_out = wait_account(&client, &url, |state| state["link_status"] == "link_required").await;
     assert_eq!(
         signed_out,
@@ -193,7 +193,7 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
         .unwrap();
     tokio::time::timeout(
         OBSERVATION_TIMEOUT,
-        super::super::settings_link::replacement_grant(&fixture, &mock, epoch),
+        super::super::settings_link::controlled_grant(&fixture, &mock, epoch, &mut process),
     )
     .await
     .unwrap();
@@ -211,6 +211,18 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
     super::super::host::released(&fixture).await;
     mock.shutdown().await.unwrap();
     assert_account_owner_receipts(&fixture);
+}
+
+fn account_process(fixture: &Fixture, mock: &MockPortos, epoch: u64) -> Process {
+    Process::spawn(super::super::voice_entry::command(fixture).args([
+        "--live-loopback",
+        mock.base(),
+        "--model-loopback",
+        mock.base(),
+        "--sim-clock",
+        "--sim-epoch",
+        &epoch.to_string(),
+    ]))
 }
 
 fn assert_account_owner_receipts(fixture: &Fixture) {
@@ -241,7 +253,7 @@ fn assert_account_owner_receipts(fixture: &Fixture) {
     ).unwrap();
 }
 
-async fn unlink_openai(client: &reqwest::Client, url: &reqwest::Url) {
+async fn unlink_openai(client: &reqwest::Client, url: &reqwest::Url, wyoming_port: u16) {
     let unlink = |confirm| {
         client
             .post(url.clone())
@@ -251,9 +263,12 @@ async fn unlink_openai(client: &reqwest::Client, url: &reqwest::Url) {
         unlink(false).send().await.unwrap().status(),
         reqwest::StatusCode::BAD_REQUEST
     );
+    let mut foreign = url.clone();
+    foreign.set_port(Some(wyoming_port)).unwrap();
+    assert_ne!(foreign.origin(), url.origin());
     assert_eq!(
         unlink(true)
-            .header("origin", "https://example.invalid")
+            .header("origin", foreign.origin().ascii_serialization())
             .send()
             .await
             .unwrap()

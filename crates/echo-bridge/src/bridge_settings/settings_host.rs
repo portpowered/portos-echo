@@ -1,5 +1,6 @@
 //! Typed transactions for the bridge's single settings owner. No task or exec here.
 use super::{PromptKind, SettingsError, SettingsStore, portos_permissions::PortosPermissions};
+use crate::bridge_mcp::Grant;
 #[path = "settings_host/settings_v2.rs"]
 mod settings_v2;
 use echo_config::{BridgeConfig, SettingsOverlay};
@@ -63,7 +64,7 @@ impl SettingsHost {
     /// Call only inside `SettingsRequest::commit`; no detached work or retries.
     /// The returned pending flag records a request, not proof of an actual exec.
     pub fn transaction(&mut self, operation: SettingsOperation, link: LinkStatusV1) -> SettingsReply {
-        self.transaction_with_grant(operation, link, None)
+        self.transaction_with_grant(operation, link, None, None)
     }
 
     pub(super) fn transaction_with_grant(
@@ -71,6 +72,7 @@ impl SettingsHost {
         operation: SettingsOperation,
         link: LinkStatusV1,
         scopes: Option<Vec<String>>,
+        owner: Option<&Grant>,
     ) -> SettingsReply {
         let result = match operation {
             SettingsOperation::PackCatalog(catalog) | SettingsOperation::PackWatch(catalog, _) => Ok(
@@ -86,11 +88,14 @@ impl SettingsHost {
                 );
             }
             SettingsOperation::SaveV2(patch) => {
+                if patch.settings.portos.is_some() && owner.is_some_and(Grant::screen_operation_active) {
+                    return settings_v2::portos_busy();
+                }
                 return self
                     .save_v2(patch.settings)
                     .unwrap_or_else(|error| error_reply_v2(&error));
             }
-            SettingsOperation::PortosV2(request) => return self.portos_operation(request, None),
+            SettingsOperation::PortosV2(request) => return self.portos_operation(request, owner),
             SettingsOperation::OpenAiSnapshot | SettingsOperation::OpenAiOperation(_) => {
                 return SettingsReply::Unavailable;
             }

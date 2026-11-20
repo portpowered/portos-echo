@@ -109,6 +109,13 @@ impl Grant {
             }
         }
     }
+
+    pub(crate) fn screen_operation_active(&self) -> bool {
+        matches!(
+            self.screen_operation().0,
+            PortosOperationStateV2::Linking | PortosOperationStateV2::Unlinking
+        )
+    }
 }
 
 impl ScreenOperation {

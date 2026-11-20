@@ -179,16 +179,13 @@ fn commit(
     grant: (LinkStatusV1, GrantView, Option<&Grant>),
 ) -> SettingsReply {
     let (link, view, owner) = grant;
-    if let SettingsOperation::PortosV2(request) = operation {
-        return host.portos_operation(request, owner);
-    }
     let pack_only = matches!(&operation, SettingsOperation::PackSelection(..));
     let prompt = match &operation {
         SettingsOperation::Prompt(echo_screen_server::PromptKind::Voice, _) => Some("voice"),
         SettingsOperation::Prompt(echo_screen_server::PromptKind::Runner, _) => Some("runner"),
         _ => None,
     };
-    let mut reply = host.transaction_with_grant(operation, link, view.scopes);
+    let mut reply = host.transaction_with_grant(operation, link, view.scopes, owner);
     if let (SettingsReply::SnapshotV2(snapshot), Some((state, challenge))) = (&mut reply, view.operation) {
         snapshot.portos.operation_state = state;
         snapshot.portos.challenge = challenge;

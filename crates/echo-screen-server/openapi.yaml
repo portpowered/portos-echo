@@ -236,6 +236,11 @@ paths:
         '400': { description: Malformed JSON, wrong version, empty patch or section, unknown key or nonconforming shape; nothing written }
         '401': { description: Invalid or revoked pairing token; empty body }
         '403': { description: Supplied foreign Origin; empty body }
+        '409':
+          description: Port OS permission change during an admitted screen grant operation. Keeps accepted settings and restart state unchanged.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV2' }
         '413': { description: JSON body exceeds 65536 bytes; nothing written }
         '415': { description: Content-Type is not application/json; nothing written }
         '422':
@@ -252,19 +257,19 @@ paths:
   /settings/v2/openai:
     get:
       security: [{ pairingToken: [] }]
-      description: Read the OpenAI account state and any active public device-code challenge. No credential or account identity is returned.
+      description: Read the OpenAI account state and any active public device-code challenge. Success is no-store. No credential or account identity is returned.
       responses:
         '200':
           description: Account state
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OpenAiAccountV2' }
-        '401': { description: Pairing token refused }
-        '403': { description: Foreign Origin refused }
-        '503': { description: Settings owner unavailable }
+        '401': { description: Invalid or revoked pairing token. Empty body. }
+        '403': { description: Supplied foreign Origin. Empty body. }
+        '503': { description: 'Settings owner unavailable, stopping or saturated. Empty body.' }
     post:
       security: [{ pairingToken: [] }]
-      description: Start one OpenAI link or confirmed unlink through the existing Codex owner. The current voice session settles before the account operation runs.
+      description: Check pairing and Origin before decoding and pairing again at commit. Admit one OpenAI link or confirmed unlink through the existing Codex owner. The current voice session settles before the account operation runs.
       requestBody:
         required: true
         content:
@@ -276,13 +281,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PortosOperationStartedV2' }
-        '400': { description: Invalid operation or missing unlink confirmation }
-        '401': { description: Pairing token refused }
-        '403': { description: Foreign Origin refused }
-        '409': { description: Operation conflicts with current account state }
-        '413': { description: Request too large }
-        '415': { description: JSON required }
-        '503': { description: Settings owner unavailable }
+        '400': { description: 'Malformed JSON, wrong version, unknown key, invalid operation or missing true unlink confirmation. Empty body.' }
+        '401': { description: Invalid or revoked pairing token. Empty body. }
+        '403': { description: Supplied foreign Origin. Empty body. }
+        '409':
+          description: Account already busy or operation unavailable for the current link status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV2' }
+        '413': { description: JSON body exceeds 1024 bytes. Empty body. }
+        '415': { description: Content-Type requires application/json. Empty body. }
+        '503': { description: 'Settings owner unavailable, stopping or saturated. Empty body.' }
   /settings/v2/portos:
     post:
       security: [{ pairingToken: [] }]
