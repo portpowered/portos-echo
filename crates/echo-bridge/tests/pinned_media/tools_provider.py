@@ -179,13 +179,13 @@ class Delegation:
 
 
 class RunnerSkills(Delegation):
-    names = ('brief', 'unused', 'unlisted')
+    names = ('brief', 'unused', 'unlisted', 'malformed')
     expected = ({'body': 'Summarize the answer in one sentence.\n'},
-                {'error': 'skill_not_enabled'}, {'error': 'skill_not_enabled'})
+                {'error': 'skill_not_enabled'}, {'error': 'skill_not_enabled'}, {'error': 'invalid_arguments'})
 
     def __init__(self, tools):
         super().__init__(tools, False, model='gpt-6.1-sol', web_search='disabled', identity='runner-skills')
-        self.prompt = 'Fixture delegation runner-skills. Call read_skill for brief, unused, and unlisted.'
+        self.prompt = 'Fixture delegation runner-skills. Check brief, unused, unlisted, and malformed arguments.'
         self.reply = 'Finished checking the enabled skill.'
 
     def respond(self, body):
@@ -203,8 +203,9 @@ class RunnerSkills(Delegation):
         self.outputs = outputs
         if index < len(self.names):
             name = self.names[index]
+            arguments = [] if name == 'malformed' else {'name': name}
             item = {'type': 'function_call', 'id': f'fc-{name}', 'call_id': f'skill-{name}',
-                    'namespace': 'functions', 'name': 'read_skill', 'arguments': json.dumps({'name': name}),
+                    'namespace': 'functions', 'name': 'read_skill', 'arguments': json.dumps(arguments),
                     'status': 'completed'}
         else:
             item = {'type': 'message', 'id': 'msg-skills', 'role': 'assistant', 'status': 'completed',
@@ -217,7 +218,7 @@ class RunnerSkills(Delegation):
         return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
 
     def append(self, value):
-        assert not self.appends and len(self.models) == 4, 'unexpected skill append'
+        assert not self.appends and len(self.models) == len(self.names) + 1, 'unexpected skill append'
         assert value['delegation_item_id'] == self.identity
         assert value['content'] == [{'type': 'input_text', 'text': self.reply}]
         self.appends.append(self.identity)

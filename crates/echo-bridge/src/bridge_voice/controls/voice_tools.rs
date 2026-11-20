@@ -22,6 +22,7 @@ use tokio::sync::{mpsc, oneshot};
 mod runner_skills;
 use runner_skills::READ_SKILL;
 pub use runner_skills::RunnerSkills;
+pub(crate) use runner_skills::normalize_skill_arguments;
 
 /// Bounds Port OS catalog discovery well inside the call's connect deadline.
 const DISCOVERY: Duration = Duration::from_secs(5);

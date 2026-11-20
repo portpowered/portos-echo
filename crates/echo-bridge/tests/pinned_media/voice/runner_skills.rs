@@ -77,8 +77,15 @@ async fn configured_journey(selection: Option<&str>, enabled: bool) {
         assert_eq!(read_json(&mut observed).await, json!({"initialized":"runner-skills"}));
     }
     let mut bridge = launch(root, ready["origin"].as_str().unwrap());
-    let (mut satellite, stdin, mut peer) =
-        admit_journey(root, &listener, &config, &mut bridge, &mut control, &mut observed).await;
+    let (mut satellite, stdin, mut peer) = Box::pin(admit_journey(
+        root,
+        &listener,
+        &config,
+        &mut bridge,
+        &mut control,
+        &mut observed,
+    ))
+    .await;
     observe_journey(root, &tools, enabled, &mut peer, &mut control, &mut observed).await;
     drop(stdin);
     acknowledge_cut(&mut satellite).await;
@@ -328,15 +335,16 @@ fn check_thread(observed: &Value, context: &str, tools: &[Value], enabled: bool)
 }
 
 fn check_skill_results(rows: &[Value], provider: &Value) {
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     assert_eq!(provider["external"], 0);
     assert_eq!(provider["appends"], json!(["runner-skills"]));
     let output = provider["skill_outputs"].as_array().unwrap();
-    assert_eq!(output.len(), 3);
+    assert_eq!(output.len(), 4);
     for (index, (name, payload)) in [
         ("brief", json!({"body":BODY})),
         ("unused", json!({"error":"skill_not_enabled"})),
         ("unlisted", json!({"error":"skill_not_enabled"})),
+        ("malformed", json!({"error":"invalid_arguments"})),
     ]
     .into_iter()
     .enumerate()
