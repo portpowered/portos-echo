@@ -20,7 +20,7 @@ jobs:
           target: lint-contracts
       - run: UPDATE_SCHEMAS=1 cargo test --offline --locked -p echo-screen-contract --test screen_schema settings_v2_schema_snapshots
       - run: cargo test --offline --locked -p echo-screen-contract --test screen_schema settings_v2_schema_snapshots
-      - run: npm --prefix web/screen ci --ignore-scripts
+      - run: npm --prefix web/screen ci --ignore-scripts --offline=false
       - run: npm --prefix web/screen run generate:schema
       - run: npm --prefix web/screen run check:schema
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
