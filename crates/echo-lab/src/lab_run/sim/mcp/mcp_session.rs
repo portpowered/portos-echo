@@ -4,8 +4,8 @@ use std::{
 };
 
 use echo_contracts::secret::Secret;
-use echo_lab::lab_mcp::{Approval, Fixture, LinkCounts, Observations};
-use echo_spoof_mcp::{Options as SpoofOptions, Spoof};
+use echo_lab::lab_mcp::{Approval, Fixture, HomeFault, LinkCounts, Observations};
+use echo_spoof_mcp::Spoof;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -14,6 +14,7 @@ use super::{
         process::{self, Process},
         trace::Trace,
     },
+    mcp_lights::Journey,
     mcp_wire::{self, endpoint},
 };
 use crate::lab_run::run_options::Options;
@@ -23,6 +24,8 @@ pub(super) const EPOCH: u64 = 1_800_000_000;
 
 #[derive(Default)]
 pub struct Session {
+    pub(super) journey: Journey,
+    pub(super) home_fault: Option<HomeFault>,
     pub(super) host: Option<Process>,
     pub(super) bridge: Option<Process>,
     pub(super) fixture: Option<Fixture>,
@@ -47,6 +50,11 @@ pub struct Session {
 }
 
 impl Session {
+    pub(super) fn for_journey(mut self, journey: Journey) -> Self {
+        self.journey = journey;
+        self
+    }
+
     pub fn started(&self) -> bool {
         !self.directory.as_os_str().is_empty()
     }
@@ -178,31 +186,6 @@ impl Session {
         Ok(())
     }
 
-    async fn start_peers(&mut self, address: SocketAddr, python: &str) -> Result<String, String> {
-        self.fixture = Some(
-            Fixture::bind(EPOCH)
-                .await
-                .map_err(|_| "M5: authorization startup failed")?,
-        );
-        let fixture = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?;
-        self.spoof = Some(
-            Spoof::start_authorized(SpoofOptions::default(), Some(fixture.validator()))
-                .await
-                .map_err(|_| "M5: resource startup failed")?,
-        );
-        let spoof = self.spoof.as_ref().ok_or("M5: missing resource")?;
-        fixture
-            .set_resource(spoof.url())
-            .map_err(|_| "M5: resource binding failed")?;
-        self.endpoints.push(endpoint(fixture.base())?);
-        self.endpoints.push(endpoint(spoof.url())?);
-        self.live = Some(super::mcp_peers::Peers::bind(python).await?);
-        let origin = self.live.as_ref().ok_or("M5: missing Live fixture")?.origin.clone();
-        self.endpoints.push(endpoint(&origin)?);
-        mcp_wire::configure(&self.directory, address, spoof.url())?;
-        Ok(origin.trim_end_matches('/').into())
-    }
-
     fn address(&self, event: &str) -> Result<String, String> {
         let address = self
             .trace
@@ -245,21 +228,22 @@ impl Session {
         .map_err(|_| "M5: cannot bind operator config".into())
     }
 
-    fn invoke(&self, verb: &str) -> Pending {
-        let mut command = mcp_wire::command(&self.binary, &self.directory);
-        command.args([verb, "--config", "bridge.toml"]);
-        tokio::spawn(async move { command.output().await })
-    }
-
     pub async fn link(&mut self) -> Result<(), String> {
         if self.pending.is_some() {
             return Err("M5: link already pending".into());
         }
-        self.pending = Some(self.invoke("link"));
+        let (pending, guidance) = mcp_wire::link_command(&self.binary, &self.directory);
+        self.pending = Some(pending);
+        let guidance = guidance.await.map_err(|_| "M5: missing pre-approval stdout")?;
         self.receive_screen().await?;
         let fixture = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?;
         if self.screen != mcp_wire::link_code(EPOCH, fixture.base()) {
             return Err("M5: link code mismatch".into());
+        }
+        if guidance != format!("Verification URL: {}/approve\nUser code: TEST-CODE\n", fixture.base()).as_bytes()
+            || !self.grant()?.expose()["grant"].is_null()
+        {
+            return Err("M5: pre-approval guidance/grant mismatch".into());
         }
         Ok(())
     }
@@ -283,7 +267,11 @@ impl Session {
             .map_err(|_| "M5: link task failed")?
             .map_err(|_| "M5: link command failed")?;
         self.pending.take();
-        mcp_wire::completion(&output, "MCP linked\n")?;
+        let issuer = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?.base();
+        mcp_wire::completion(
+            &output,
+            &format!("Verification URL: {issuer}/approve\nUser code: TEST-CODE\nMCP linked\n"),
+        )?;
         self.receive_screen().await?;
         if self.screen != json!({"state":"ready","message":"Echo Live ready"}) {
             return Err("M5: approved screen mismatch".into());

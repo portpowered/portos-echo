@@ -54,6 +54,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "live",
             "voice",
             "audio",
+            "clock",
             "agent",
             "muse",
             "mcp",
@@ -64,6 +65,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         ],
         "home" => &["dir"],
         "audio" => &["reply_lead_ms"],
+        "clock" => &["servers", "interval_seconds"],
         "voice" => &[
             "session_listen_enabled",
             "session_listen_seconds",
@@ -82,7 +84,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         ],
         "muse" => &["url", "ca_file", "credential_file"],
         "mcp" => &["server", "state_dir", "client_id", "scopes", "operator_listen"],
-        "screen" => &["listen", "pairing_token_file"],
+        "screen" => &["listen", "pairing_token_file", "packs"],
         "audit" => &["log_dir"],
         p if p.starts_with("mcp.server[") && p.ends_with(']') => &["name", "url", "auth", "bearer_file", "allow_tools"],
         _ => &[],
@@ -104,12 +106,14 @@ fn forbidden_key(value: &toml::de::DeValue<'_>) -> Option<&'static str> {
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
+    crate::config_screen::validate(config)?;
     config.voice.validate()?;
     crate::config_codex::validate(&config.codex)?;
     crate::config_codex::validate_voice(config)?;
     crate::config_muse::validate(config)?;
     config.chatgpt_auth.validate()?;
     validate_mcp(&config.mcp)?;
+    crate::config_clock::validate(&config.clock)?;
     if config.audio.reply_lead_ms == 0 || !config.audio.reply_lead_ms.is_multiple_of(20) {
         return Err(ConfigError::new(
             "audio.reply_lead_ms",

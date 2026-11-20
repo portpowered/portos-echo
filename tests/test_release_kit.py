@@ -1,6 +1,7 @@
 """T1/T2 packaging and T3 shell journeys; closed PATH, synthetic adb only."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import hashlib
 import importlib.util
 import io
@@ -19,6 +20,7 @@ import tempfile
 from unittest.mock import patch
 
 from test_echo_install import Sandbox, fake_adb, require, SENTINEL
+from test_screen_pack_assets import exclusion_cases, generate, independent_bundle, push_cases
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("package_dist", ROOT / "scripts/package-dist.py")
@@ -67,7 +69,7 @@ def executable(path, command):
 
 
 class ReleaseBox(Sandbox):
-    def __init__(self, wget=False):
+    def __init__(self, wget=False, template=None):
         super().__init__()
         self.assets = self.root / "assets"
         self.assets.mkdir()
@@ -79,7 +81,13 @@ class ReleaseBox(Sandbox):
         entry = shlex.quote(sys.executable) + " " + shlex.quote(str(Path(__file__).resolve())) + " --fake "
         executable(payload, 'python3 "$ECHO_SETUP_TEST_DRIVER" --fake installer')
         self.env["ECHO_SETUP_TEST_DRIVER"] = str(Path(__file__).resolve())
-        assemble_fixture(self.assets, self.files["bridge"], self.files["ca"], (payload, payload))
+        if template is None:
+            shutil.copyfile(payload, self.installer)
+            self.wrapper.write_bytes((ROOT / "scripts/install.sh").read_bytes()
+                                     .replace(b"@ECHO_VERSION@", self.version.encode()))
+            (self.assets / "SHA256SUMS").write_text(f"{sha(payload.read_bytes())}  {self.installer.name}\n")
+        else:
+            assemble_fixture(self.assets, self.files["bridge"], self.files["ca"], (payload, payload), template)
         for name in ("sha256sum", "chmod", "python3"):
             executable(self.tools / name, shlex.quote(shutil.which(name)))
         executable(self.tools / ("wget" if wget else "curl"), entry + ("wget" if wget else "curl"))
@@ -107,10 +115,12 @@ class ReleaseBox(Sandbox):
 
 def asset_names(version):
     return (f"echo-{version}-armv7.tar.gz", f"echo-setup-{version}-linux-x86_64",
-            f"echo-setup-{version}-windows-x86_64.exe", "install.sh", "install.ps1")
+            f"echo-setup-{version}-windows-x86_64.exe", "install.sh", "install.ps1",
+            f"template-{version}.screenpack.tar.gz")
 
 
-def assemble_fixture(assets, bridge, apk, installers, private_binary=None):
+def assemble_fixture(assets, bridge, apk, installers, template, private_binary=None):
+    shutil.copyfile(template, assets / template.name)
     codex = assets.parent / "codex"
     codex.mkdir()
     for name in ("codex-app-server", "cacert.pem", "LICENSE", "NOTICE"):
@@ -122,30 +132,10 @@ def assemble_fixture(assets, bridge, apk, installers, private_binary=None):
                   installers)
 
 
-def independent_bundle(assets):
-    archive = next(assets.glob("echo-*-armv7.tar.gz"))
-    with tarfile.open(archive) as bundle:
-        members = bundle.getmembers()
-        require(all(m.isfile() for m in members), "non-file payload")
-        files = {m.name: bundle.extractfile(m).read() for m in members}
-        require(len(files) == len(members), "duplicate member")
-    manifest = json.loads(files.pop("MANIFEST"))
-    require(set(files) == set(manifest["files"]), "manifest membership differs")
-    for name, content in files.items():
-        require(sha(content) == manifest["files"][name], "payload hash differs")
-        require(PACK.safe_name(name), "forbidden member")
-    lines = (assets / "SHA256SUMS").read_text().splitlines()
-    expected = {sha((assets / name).read_bytes()) + "  " + name for name in asset_names(manifest["version"])}
-    require(len(lines) == len(expected) and set(lines) == expected, "asset hashes differ")
-    require(manifest["components"]["ca_bundle"]["sha256"] == sha(files["bin/cacert.pem"]), "CA provenance differs")
-    PACK.verify(archive, assets / "SHA256SUMS")
-    return manifest
-
-
 def verify_delivered_assets(assets):
     from test_release_delivery import delivered_journey
 
-    manifest = independent_bundle(assets)
+    manifest = independent_bundle(assets, PACK, asset_names)
     release = manifest["version"]
     _, linux_name, windows_name, *_ = asset_names(release)
     require({path.name for path in assets.iterdir()} == {*asset_names(release), "SHA256SUMS"},
@@ -187,6 +177,8 @@ def happy_cases():
             base = f"https://github.com/portpowered/portos-echo/releases/download/v{box.version}"
             require([c[-1] for c in downloads] == [f"{base}/{name}" for name in (box.installer.name, "SHA256SUMS")],
                     "version/download mismatch")
+            require(all(("--https-only" in call if wget else "--proto-redir" in call)
+                        for call in downloads), "HTTPS restriction missing")
     print("F28 Linux bootstrap: verified child, exact argv, cleanup and exit propagation=PASS")
 
 
@@ -254,8 +246,8 @@ def interruption_case():
     print("F32 Linux bootstrap: interruption cleanup=PASS")
 
 
-def package_cases():
-    path_diagnostic_cases()
+def package_cases(template):
+    path_diagnostic_cases(template)
     native_flags_cases()
     for value in ("0.1.0", "0.0.0-dev.abc123"):
         require(PACK.version(value) == value, "version changed")
@@ -265,8 +257,8 @@ def package_cases():
             raise AssertionError("invalid version accepted")
         except ValueError:
             pass
-    with ReleaseBox() as box:
-        independent_bundle(box.assets)
+    with ReleaseBox(template=template) as box:
+        independent_bundle(box.assets, PACK, asset_names)
         checksum_set_cases(box)
         for marker in (b"/home/example/private/file", b"C:\\Users\\example\\private", b"-----BEGIN PRIVATE KEY-----"):
             require(PACK.PRIVATE.search(marker) is not None, "private marker missed")
@@ -278,11 +270,12 @@ def package_cases():
         original = PACK.tomllib.loads((ROOT / "examples/bridge.echo.toml").read_text())
         original["codex"]["binary"] = "/data/local/echo-bridge/bin/codex-app-server"
         original["codex"]["ca_file"] = "/data/local/echo-bridge/bin/cacert.pem"
+        original["screen"]["packs"] = parsed["screen"]["packs"]
         require(parsed == original, "projection changed unrelated config")
     for name, content, update in (("licenses/extra.txt", b"/home/example/private/file", True),
                                   ("licenses/secret.txt", b"seed", True),
                                   ("bin/cacert.pem", b"changed", False)):
-        with ReleaseBox() as box:
+        with ReleaseBox(template=template) as box:
             with tarfile.open(box.archive) as bundle:
                 files = {m.name: bundle.extractfile(m).read() for m in bundle.getmembers()}
             files[name] = content
@@ -326,7 +319,7 @@ def checksum_set_cases(box):
             raise AssertionError("invalid asset checksum set accepted")
 
 
-def path_diagnostic_cases():
+def path_diagnostic_cases(template):
     paths = (b'/home/example/.cargo/registry/src/index/public-1.0/src/lib.rs',
              b'/Users/example/.rustup/toolchains/stable/lib/source.rs',
              b'C:\\Users\\example\\private\\file')
@@ -351,7 +344,7 @@ def path_diagnostic_cases():
         fixture = assets.parent / "public"
         fixture.write_bytes(b"synthetic public input")
         try:
-            assemble_fixture(assets, fixture, fixture, (fixture, fixture), b'\x00'.join(paths))
+            assemble_fixture(assets, fixture, fixture, (fixture, fixture), template, b'\x00'.join(paths))
             raise AssertionError("private binary accepted")
         except PACK.BundleError:
             pass
@@ -451,8 +444,15 @@ def main():
     if args.assets:
         verify_delivered_assets(args.assets.resolve())
         return
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda function: function(), (package_cases, happy_cases, integrity_cases, usage_cases, interruption_case)))
+    with tempfile.TemporaryDirectory(prefix="template-witness-") as temporary:
+        generated = Path(temporary) / "generated"
+        generate(generated)
+        push_cases(generated)
+        template = generated / "template-0.1.0.screenpack.tar.gz"
+        exclusion_cases(template, PACK)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            cases = (partial(package_cases, template), happy_cases, integrity_cases, usage_cases, interruption_case)
+            list(pool.map(lambda function: function(), cases))
     print("release-kit tests: integrity=PASS bootstrap=PASS privacy=PASS")
 
 

@@ -154,7 +154,7 @@ async fn assert_killed(path: &Path) {
     assert_eq!(
         body,
         json!({"status":"running","wyoming":"connected","live":"error",
-        "relink_required":false,"kill_switch":true})
+        "relink_required":false,"kill_switch":true,"mcp":"disabled"})
     );
     let mut events = screen(path).await;
     assert_eq!(

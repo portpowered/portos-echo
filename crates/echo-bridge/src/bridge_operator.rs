@@ -15,7 +15,8 @@ echo-bridge status --config PATH\n\
 echo-bridge kill --config PATH [--clear]\n\
 echo-bridge link --config PATH\n\
 echo-bridge --refresh-now --config PATH\n\
-echo-bridge unlink --config PATH";
+echo-bridge unlink --config PATH\n\
+echo-bridge clock check|sync [--config PATH] [--threshold-ms N]";
 
 pub struct Command {
     config: PathBuf,

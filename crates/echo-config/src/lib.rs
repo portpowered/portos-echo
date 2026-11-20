@@ -2,15 +2,19 @@
 //! credential paths remain literal and are never opened or expanded.
 
 mod config_auth;
+mod config_clock;
 mod config_codex;
 mod config_decode;
 mod config_muse;
+mod config_screen;
 mod config_settings;
 mod config_validate;
 mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
+pub use config_clock::{ClockConfig, DEFAULT_TIME_SERVERS};
 pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS, WebSearch, realtime_voices};
 pub use config_muse::{AgentBackend, MuseConfig};
+pub use config_screen::ScreenPackDownload;
 pub use config_settings::{EffectiveConfig, SettingsOverlay};
 pub use config_voice::VoiceConfig;
 
@@ -79,6 +83,7 @@ pub struct BridgeConfig {
     pub live: LiveConfig,
     pub voice: VoiceConfig,
     pub audio: AudioConfig,
+    pub clock: ClockConfig,
     pub agent: AgentConfig,
     pub agent_backend: AgentBackend,
     pub muse: Option<MuseConfig>,
@@ -173,13 +178,24 @@ pub struct McpConfig {
     pub operator_listen: SocketAddr,
 }
 
+/// The scopes enforced by Port OS MCP, in device-authorization request order.
+pub const PORTOS_MCP_SCOPES: [&str; 7] = [
+    "endpoint:read",
+    "endpoint:write",
+    "message:send",
+    "group:read",
+    "group:manage",
+    "subscription:read",
+    "subscription:write",
+];
+
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
             server: Vec::new(),
             state_dir: None,
             client_id: "port1/systems/zero/oauth-clients/command-line-interface".into(),
-            scopes: vec!["endpoint:read".into()],
+            scopes: PORTOS_MCP_SCOPES.map(String::from).into(),
             operator_listen: (std::net::Ipv4Addr::LOCALHOST, 16902).into(),
         }
     }
@@ -202,10 +218,35 @@ pub enum McpAuth {
     BearerFile,
 }
 
+impl McpAuth {
+    pub(crate) fn default_tools(self) -> Vec<String> {
+        if self != Self::PortosDeviceCode {
+            return Vec::new();
+        }
+        [
+            "control",
+            "endpoint_query",
+            "endpoint_show",
+            "endpoint_manage",
+            "group_query",
+            "group_manage",
+            "guide",
+            "subscription_list",
+            "subscription_inspect",
+            "subscription_cancel",
+            "subscription_label_edit",
+        ]
+        .map(String::from)
+        .into()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenConfig {
     pub listen: SocketAddr,
     pub pairing_token_file: PathBuf,
+    /// Verified downloads, scheduled by the screen owner outside the voice path.
+    pub packs: Vec<ScreenPackDownload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

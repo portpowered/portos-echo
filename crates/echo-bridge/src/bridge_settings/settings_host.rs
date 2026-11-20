@@ -50,6 +50,27 @@ impl SettingsHost {
     /// The returned pending flag records a request, not proof of an actual exec.
     pub fn transaction(&mut self, operation: SettingsOperation, link: LinkStatusV1) -> SettingsReply {
         let result = match operation {
+            SettingsOperation::PackCatalog(catalog) | SettingsOperation::PackWatch(catalog, _) => Ok(
+                SettingsReply::Packs(catalog.with_selection(self.store.overlay.screen_pack())),
+            ),
+            SettingsOperation::PackRefresh(catalog, snapshot) => self.refresh_pack(catalog, &snapshot),
+            SettingsOperation::PackSelection(catalog, selection) => {
+                if !catalog.accepts(&selection) {
+                    return SettingsReply::InvalidPackSelection;
+                }
+                let catalog = catalog.with_selection(self.store.overlay.screen_pack());
+                let changed = catalog.selection_changes(&selection);
+                SettingsOverlay::from_toml_str(&format!("screen_pack='{selection}'"))
+                    .map_err(SettingsError::from)
+                    .and_then(|patch| self.store.save(&patch))
+                    .map(|_| {
+                        SettingsReply::PackSaved(
+                            save_result(self.restart_pending),
+                            catalog.with_selection(Some(&selection)),
+                            changed,
+                        )
+                    })
+            }
             SettingsOperation::Snapshot => self.snapshot(link).map(SettingsReply::Snapshot),
             SettingsOperation::Save(patch) => self.save(patch.settings).map(saved),
             SettingsOperation::Prompt(kind, prompt) => {
@@ -67,6 +88,28 @@ impl SettingsHost {
             }
         };
         result.unwrap_or_else(|error| error_reply(&error))
+    }
+
+    fn refresh_pack(
+        &mut self,
+        catalog: echo_screen_server::PackCatalog,
+        snapshot: &echo_screen_server::PackSettings,
+    ) -> Result<SettingsReply, SettingsError> {
+        let overlay = SettingsOverlay::from_toml_str(snapshot.text())?;
+        let effective = overlay.apply_to(&self.store.base)?;
+        if !snapshot.is_current(&self.store.home) {
+            return Err(SettingsError::Unavailable);
+        }
+        let catalog = catalog.with_selection(self.store.overlay.screen_pack());
+        let changed = catalog.selection_changes(overlay.screen_pack().unwrap_or("template"));
+        // Adopt pending editable values without changing the running config,
+        // writing settings, requesting exec or clearing durability uncertainty.
+        self.store.overlay = overlay;
+        self.store.effective = effective;
+        Ok(SettingsReply::PackRefreshed(
+            catalog.with_selection(self.store.overlay.screen_pack()),
+            changed,
+        ))
     }
 
     fn save(&mut self, fields: SettingsFieldsV1) -> Result<bool, SettingsError> {
@@ -121,10 +164,14 @@ impl SettingsHost {
 }
 
 fn saved(restart_pending: bool) -> SettingsReply {
-    SettingsReply::Saved(SaveResultV1 {
+    SettingsReply::Saved(save_result(restart_pending))
+}
+
+fn save_result(restart_pending: bool) -> SaveResultV1 {
+    SaveResultV1 {
         version: SettingsVersionV1,
         restart_pending,
-    })
+    }
 }
 
 fn error_reply(error: &SettingsError) -> SettingsReply {

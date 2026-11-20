@@ -6,7 +6,19 @@ import {
     type Snapshot,
 } from "./api";
 import { element, promptForm, settingsForm } from "./forms";
+import { mountKeyboard } from "./keyboard";
 import type { UiState } from "../model";
+import { packControls } from "./packs";
+
+const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
+const LINK_FROM_PC =
+    "Link it from the PC with echo-bridge link. Linking on this screen is coming.";
+// What Relink can honestly promise: it never starts a sign-in from this page.
+const RELINK_RESULT: Record<Snapshot["link_status"], string> = {
+    unconfigured: `Port OS is not linked yet. ${LINK_FROM_PC}`,
+    link_required: `Port OS needs linking again. ${LINK_FROM_PC}`,
+    linked: "Port OS is already linked. Nothing changed.",
+};
 
 // Navigation never constructs a ScreenFrame or emits a UiAction. The existing
 // presentation continues to accept authoritative SSE updates behind this view.
@@ -28,20 +40,32 @@ export function mountSettings(
     panel.setAttribute("aria-label", "Settings");
     const back = element("button", "Back");
     back.type = "button";
+    back.className = "settings-back";
+    // The title sits at the left; Back takes the gear's corner at the top right.
+    const header = element("div");
+    header.className = "settings-header";
+    header.append(element("h1", "Settings"), back);
     const status = element("p");
     status.setAttribute("role", "status");
     const muted = element("p", "Microphone muted");
     muted.hidden = true;
     const fields = element("div");
     fields.className = "settings-fields";
-    panel.append(back, element("h1", "Settings"), muted, status, fields);
+    panel.append(header, muted, status, fields);
     root.append(gear, panel);
+    const keyboard = mountKeyboard(panel, fields);
+    // Set by Relink until the bridge answers with its relink error frame.
+    let relinkAsked = false;
+    let relinkShown = false;
     let pending: AbortController | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
 
     function close() {
         panel.hidden = true;
+        root.classList.remove("settings-open");
+        keyboard.close();
+        relinkAsked = false;
         content.hidden = diagnostic.hidden = false;
         gear.hidden = false;
         gear.setAttribute("aria-expanded", "false");
@@ -93,6 +117,17 @@ export function mountSettings(
                     focused.isConnected
                 )
                     focused.focus();
+                else if (
+                    !disposed &&
+                    !panel.hidden &&
+                    focused instanceof HTMLElement &&
+                    !focused.isConnected
+                )
+                    fields
+                        .querySelector<HTMLButtonElement>(
+                            ".settings-packs > button",
+                        )
+                        ?.focus();
             }
         }
     }
@@ -124,7 +159,7 @@ export function mountSettings(
                     Object.assign(data.settings.agent, patch.agent);
             });
         });
-        fields.append(form);
+        fields.append(form, packControls(actions, perform));
         for (const kind of ["voice", "runner"] as const)
             fields.append(
                 promptForm(kind, data.prompts[kind], (text) => {
@@ -142,8 +177,12 @@ export function mountSettings(
         link.type = "button";
         link.addEventListener("click", () => {
             void perform(async (signal) => {
+                relinkAsked = true;
+                relinkShown = false;
                 await relink(signal);
-                return "Relink requested. Return to the screen for instructions.";
+                return relinkShown
+                    ? REPUBLISHED
+                    : RELINK_RESULT[data.link_status];
             });
         });
         fields.append(link);
@@ -153,6 +192,8 @@ export function mountSettings(
     gear.addEventListener("click", () => {
         if (disposed) return;
         panel.hidden = false;
+        root.classList.add("settings-open");
+        keyboard.close();
         content.hidden = diagnostic.hidden = true;
         gear.hidden = true;
         gear.setAttribute("aria-expanded", "true");
@@ -176,6 +217,13 @@ export function mountSettings(
     return {
         update(state: UiState) {
             muted.hidden = state.state !== "muted";
+            // The bridge republishes its relink error only when a relink is
+            // really required; that frame is the one honest "it happened".
+            if (relinkAsked && state.state === "error" && state.relink) {
+                relinkAsked = false;
+                relinkShown = true;
+                if (!pending) status.textContent = REPUBLISHED;
+            }
         },
         dispose() {
             disposed = true;
@@ -183,6 +231,7 @@ export function mountSettings(
             clearTimeout(timeout);
             gear.remove();
             panel.remove();
+            root.classList.remove("settings-open");
             content.hidden = diagnostic.hidden = false;
         },
     };

@@ -113,6 +113,7 @@ pub async fn execute_controlled<C: LinkConnector>(
     )?
     .with_payloads(settings.config.as_ref().is_none_or(|config| config.trace.payloads));
     let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
+    screen.download_packs(settings.config.as_ref(), &trace);
     screen.settings_warning(settings.settings_warning.as_deref(), &mut trace)?;
     let health = Health::bind(settings.health).await?;
     screen.supervise_actions(health.state.subscribe());

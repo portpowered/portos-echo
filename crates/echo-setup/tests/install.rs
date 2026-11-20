@@ -59,11 +59,11 @@ impl Fixture {
     fn bundle(&self) -> Result<PathBuf> {
         let root = self.0.join("bundle ü ' ; $");
         let mut files = BTreeMap::new();
-        for name in REQUIRED {
+        for name in REQUIRED.iter().copied().chain(["licenses/dependencies/example/NOTICE"]) {
             let path = root.join(name);
             fs::create_dir_all(path.parent().ok_or("missing parent")?)?;
             fs::write(&path, b"synthetic public release bytes")?;
-            files.insert(*name, digest(b"synthetic public release bytes"));
+            files.insert(name, digest(b"synthetic public release bytes"));
         }
         fs::write(
             root.join("MANIFEST"),
@@ -325,9 +325,19 @@ fn t3_offline_install_transfers_verified_bytes_after_source_changes() -> Result 
         .ok_or("config push absent")?;
     assert_eq!(config_push.len(), 5);
     assert!(config_push[4].ends_with("/config"));
+    let pushes: Vec<_> = ledger
+        .iter()
+        .filter(|args| args.get(2).is_some_and(|v| v == "push"))
+        .collect();
+    assert_eq!(pushes.len(), 3); // adapter, complete bundle directory, explicit configuration
+    assert!(pushes[1][4].ends_with("/bundle"));
     assert_eq!(fs::read(bundle.join("MANIFEST"))?, b"changed after verification");
     assert_eq!(fs::read(fixture.0.join("manifest"))?, manifest);
     assert_eq!(fs::read(fixture.0.join("script"))?, b"synthetic public release bytes");
+    assert_eq!(
+        fs::read(fixture.0.join("attribution"))?,
+        b"synthetic public release bytes"
+    );
     Ok(())
 }
 

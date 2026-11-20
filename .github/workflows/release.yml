@@ -25,6 +25,8 @@ jobs:
           persist-credentials: false
       - name: Focused wrapper and packaging tests
         run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           python3 tests/test_release_kit.py
           python3 tests/test_release_redirects.py
       - uses: ./.github/actions/setup
@@ -61,6 +63,7 @@ jobs:
           name: echo-release-${{ github.sha }}
           path: |
             dist/echo-*-armv7.tar.gz
+            dist/template-*.screenpack.tar.gz
             dist/echo-setup-*-linux-x86_64
             dist/echo-setup-*-windows-x86_64.exe
             dist/install.sh
@@ -90,6 +93,6 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$RELEASE_TAG" dist/echo-*-armv7.tar.gz \
+          gh release create "$RELEASE_TAG" dist/echo-*-armv7.tar.gz dist/template-*.screenpack.tar.gz \
             dist/echo-setup-*-linux-x86_64 dist/echo-setup-*-windows-x86_64.exe \
             dist/install.sh dist/install.ps1 dist/SHA256SUMS --verify-tag --notes-from-tag

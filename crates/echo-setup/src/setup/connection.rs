@@ -188,6 +188,9 @@ struct Screen {
     #[serde(default = "default_listen")]
     listen: std::net::SocketAddr,
     pairing_token_file: String,
+    // The bridge owns optional screen packs. Setup only needs the local listener and pairing path.
+    #[serde(rename = "packs", default)]
+    _packs: serde::de::IgnoredAny,
 }
 
 fn default_listen() -> std::net::SocketAddr {

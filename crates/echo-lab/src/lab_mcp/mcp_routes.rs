@@ -21,6 +21,7 @@ pub(super) fn router(state: Shared) -> Router {
         .route(LINK, post(link))
         .route(TOKEN, post(token))
         .route(REVOKE, post(revoke))
+        .route("/mcp", post(super::mcp_home::request))
         .with_state(state)
 }
 
@@ -55,12 +56,13 @@ async fn link(Extract(shared): Extract<Shared>, headers: HeaderMap, Form(form): 
     if form.get("resource").is_some_and(|resource| resource != &state.resource) {
         return fail("invalid_target");
     }
-    if !client(&form) || form.get("scope").map(String::as_str) != Some("endpoint:read") {
+    if !client(&form) || !form.get("scope").is_some_and(|scope| valid_scopes(scope)) {
         return fail("invalid_request");
     }
     if !proof(&mut state, &headers, LINK, true) {
         return fail("invalid_dpop_proof");
     }
+    state.scopes.clone_from(&form["scope"]);
     state.device += 1;
     state.deadline = state.now.saturating_add(1800);
     state.bound = form.contains_key("resource");
@@ -173,4 +175,10 @@ fn fail(error: &str) -> Reply {
 }
 fn unavailable() -> Reply {
     (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error":"unavailable"})))
+}
+
+fn valid_scopes(scope: &str) -> bool {
+    let known = echo_config::PORTOS_MCP_SCOPES;
+    let scopes: Vec<_> = scope.split(' ').collect();
+    !scopes.is_empty() && scopes.iter().all(|scope| known.contains(scope))
 }

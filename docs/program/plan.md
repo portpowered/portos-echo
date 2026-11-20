@@ -77,7 +77,7 @@ Echo Show (stock firmware + hassmic)            echo-bridge (Rust, operator's PC
 | Component | Runs on | Holds | Does |
 | --- | --- | --- | --- |
 | `hassmic` (our fork of echo-dot-assist, `portpowered/echo-dot-assist`, pinned) | The Echo | Nothing of ours | Wake word, echo canceller, capture and playback, mute latch, keys, light band. `PROTO=wyoming`, `ARGS` with `-D`. Installed by echo-dot-assist's `scripts/install-system.sh` |
-| `echo-screen` | The Echo, as hassmic's home app | A pairing token for the bridge's screen page | Shows the bridge's screen page full screen; touches go back to the bridge as `UiAction`s |
+| `echo-screen` | The Echo, as hassmic's home app | A pairing token for the bridge's screen page | Shows the bridge's screen page full screen; the bridge renders layouts and characters from downloadable screen-pack data; touches go back as `UiAction`s |
 | `echo-bridge` and its crates | The operator's PC first (section 6) | The Port OS grant (DPoP key, refresh token, access token); the app server's `CODEX_HOME` | Wyoming client; the media peer; the app server's client and supervisor; the tool host behind the delegated turns' `dynamicTools`; every MCP call; provider-backed read-only search via the app server (`codex.web_search`: live default, cached or disabled); the screen server; caps, audit log, kill switch |
 | `codex app-server` (OpenAI Codex, pinned release, Apache-2.0) | Beside the bridge, its child process over `stdio://` | The ChatGPT sign-in (`$CODEX_HOME/auth.json`) | Sign-in and refresh, Live call creation, the sideband control channel, delegated Codex turns with only the bridge's tools (section 3.3) |
 | `echo-lab` | The operator's workstation and CI | Bench session leases (never committed) | Runs scenario files with the `sim`, `cloud` or `device` driver and writes reports |
@@ -400,6 +400,21 @@ Coordinator device runs use Linux pe-ci with the existing T5 safeguards.
   stream), `echo-delegation` (the agent turn) and `echo-signin` (the operator commands and credential modes) are
   libraries that `echo-bridge` hosts; the binary only wires them together.
 
+### Screen packs
+
+Owner direction (2026-11-19): "we want the hassmic side to be mostly a dumb pipe".
+hassmic owns wake word, echo cancellation, capture and playback, mute latch, keys,
+light band and hosting the screen app. The bridge's screen page decides and renders
+everything the user sees while connected. hassmic's native procedural face remains
+the disconnected fallback; screen packs require no hassmic or APK change.
+
+Layouts and characters are downloadable data, separate from the bridge binary.
+The first character format uses WebM/MP4 clips with a required rest pose, without VRM.
+The bridge owns verified background installation under `<home>/screens/`, selection
+through its existing settings writer, and hot rendering without a voice restart.
+[Screen-pack documentation](../screen-packs.md) records the format and implementation
+status; configuration support alone does not establish installation or playback.
+
 ## 7. Muse: a wrapper around the gadget SDK
 
 Owner decision (2026-11-13). The Muse gadget SDK turns a Linux box into a gadget Muse can call. It gives two
@@ -502,7 +517,7 @@ Milestones accumulate: the installed image still demonstrates every earlier one.
 | **M2** GPT-Live connects | The bridge creates and closes a Live call in the `chatgpt` mode, through the app server from W2d on; the screen shows "Connected"; an invalid or expired credential shows a relink error instead of pretending | T3, T4, T5 | Section 4 |
 | **M3** full-duplex voice | "Alexa, what time is it?" is answered through the Echo speaker; talking over the reply cuts it within the S2 budget and the new question is answered; mute stops outbound audio (hassmic's log and the bridge's counter both show zero frames) | T3, T5 | M1, M2, S1, S2 |
 | **M4** spoof MCP tool call | "Call the test tool and tell me its result": exactly one correlated delegation → `item/tool/call` → `tools/call` → result (V3 `delegation.created` and `delegation.context.append` from W2d on); the answer is spoken; an MCP error gives an honest fallback | T3, T4, T5 | Agent loop, spoof MCP |
-| **M5** Port OS link | The bridge starts the device-code grant; the Show displays the code; the phone approves `endpoint:read`; `tools/list` and one `endpoint_query` on the "Echo test light" simulator succeed; refresh needs a proof from the same key; a replayed refresh token is rejected; a bridge restart keeps the grant; revoke forces a relink. Until portos-backend's change lands, T4 runs the same scenario with an authorization code + PKCE token | T4, T5 | Section 9 |
+| **M5** Port OS link | The bridge starts the device-code grant; the Show displays the code; the phone approves the requested MCP scopes (all seven by default); `tools/list` and one `endpoint_query` on the "Echo test light" simulator succeed; refresh needs a proof from the same key; a replayed refresh token is rejected; a bridge restart keeps the grant; revoke forces a relink. Until portos-backend's change lands, T4 runs the same scenario with an authorization code + PKCE token | T4, T5 | Section 9 |
 | **M6** MCP drives an animation | "Show me a happy face": the spoof MCP's `ui.show_emotion` makes the screen play an animated face (frames, not a still), then clear; audio stays usable. Spoof MCP only: Port OS does not grow an equivalent | T3, T5 | M4, `echo-screen` |
 | **M7** Muse delegation | "Ask Muse to run the test job": correlated `delegation_id → task_id → Muse session → result`, spoken; a timeout gives a safe voice response | T4, T5 | Muse bridge (section 7) |
 
@@ -577,7 +592,14 @@ device login.
 | PB-3 | A client that allows the `device_code` and `refresh_token` grants | Nothing to build: the built-in public CLI client `port1/systems/zero/oauth-clients/command-line-interface` already allows both. A dedicated `echo` client is optional, a management registration (public, auth method `none`) with no code change | M5 |
 | PB-4 | DPoP proof checks (`typ`, `htu`, `htm`, `iat`, `jti` and the signature) at device authorization and at the token endpoint | Merged (portos-monolith PR 2735); on the pilot since 2026-11-15 | M5 hardening, not the first M5 run |
 | PB-5 | Refresh rotation and revoke for device grants | Merged (PR 2731); on the pilot since 2026-11-15 | M5 revoke step |
-| PB-6 | The "Echo test light" simulator, so M5 never touches a real lamp | Done: a LIGHT simulator on the owner's pilot account, visible through MCP. A dedicated test principal needs the owner's approval and does not exist | M5 |
+| PB-6 | The "Echo test light" simulator for synthetic validation; installed-product real-light control is owner-authorized (2026-11-19), with actual lamps remaining coordinator T5 proof | Done: a LIGHT simulator on the owner's pilot account, visible through MCP. A dedicated test principal needs the owner's approval and does not exist | M5 |
+
+Owner decision (2026-11-19): installed-product control may act on real lights. Device-code links default to
+`endpoint:read endpoint:write message:send group:read group:manage subscription:read subscription:write`,
+and the Port OS tool allowlist defaults to all eleven MCP tools. Explicit narrower scope/tool lists stay exact;
+existing grants require explicit relink to expand permissions. Non-MCP scopes are excluded. Requesting subscription
+scopes does not add an event subscription consumer. Worker tests remain synthetic loopback; real model reasoning,
+lamps and acoustic replies remain coordinator-owned T5 validation.
 
 What PR 2731 gives the bridge, once it is deployed:
 

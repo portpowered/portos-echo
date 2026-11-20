@@ -126,7 +126,7 @@ where
                 &mut peer,
                 gate.cancel(cancelled.as_mut(), &killed),
                 &mut observe,
-                (tools.as_deref_mut(), std::time::SystemTime::now, trace.clone()),
+                (tools.as_deref_mut(), crate::bridge_time::now, trace.clone()),
             ))
             .await;
             if killed.get()

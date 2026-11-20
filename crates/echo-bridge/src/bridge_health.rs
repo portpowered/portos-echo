@@ -1,7 +1,8 @@
 //! One bounded, read-only request at a time; no task per connection.
-use crate::Error;
+use crate::{Error, bridge_mcp::Grant};
 use std::{
     net::{Ipv4Addr, SocketAddr},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::{
@@ -17,6 +18,7 @@ pub struct Links {
     pub live: &'static str,
     pub relink_required: bool,
     pub kill_switch: bool,
+    pub mcp: &'static str,
     /// Present during pre-Ready dependency recovery; absent after Ready/auth rejection.
     pub startup_waiting_reason: Option<&'static str>,
 }
@@ -28,6 +30,7 @@ impl Default for Links {
             live: "idle",
             relink_required: false,
             kill_switch: false,
+            mcp: "disabled",
             startup_waiting_reason: None,
         }
     }
@@ -36,6 +39,7 @@ impl Default for Links {
 pub struct Health {
     pub address: SocketAddr,
     pub state: watch::Sender<Links>,
+    mcp: Arc<Mutex<Option<Arc<Grant>>>>,
     task: JoinHandle<()>,
 }
 
@@ -45,6 +49,7 @@ impl Health {
         Self {
             address: ([127, 0, 0, 1], 0).into(),
             state: watch::channel(Links::default()).0,
+            mcp: Arc::default(),
             task: tokio::spawn(async {}),
         }
     }
@@ -58,12 +63,28 @@ impl Health {
         let listener = TcpListener::bind(address).await.map_err(|_| Error::Health)?;
         let address = listener.local_addr().map_err(|_| Error::Health)?;
         let (state, receive) = watch::channel(Links::default());
+        let mcp = Arc::<Mutex<Option<Arc<Grant>>>>::default();
+        let grant = mcp.clone();
         let task = tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
-                let _ = tokio::time::timeout(Duration::from_secs(1), serve(&mut stream, &receive)).await;
+                let _ = tokio::time::timeout(Duration::from_secs(1), serve(&mut stream, &receive, &grant)).await;
             }
         });
-        Ok(Self { address, state, task })
+        Ok(Self {
+            address,
+            state,
+            mcp,
+            task,
+        })
+    }
+
+    pub(crate) fn set_mcp(&self, grant: Option<Arc<Grant>>) -> Result<(), Error> {
+        *self.mcp.lock().map_err(|_| Error::Control)? = grant;
+        Ok(())
+    }
+
+    pub(crate) fn mcp_grant(&self) -> Option<Arc<Grant>> {
+        self.mcp.lock().ok()?.clone()
     }
 
     pub async fn close(self) {
@@ -80,7 +101,11 @@ impl Drop for Health {
     }
 }
 
-async fn serve(stream: &mut TcpStream, links: &watch::Receiver<Links>) -> std::io::Result<()> {
+async fn serve(
+    stream: &mut TcpStream,
+    links: &watch::Receiver<Links>,
+    grant: &Mutex<Option<Arc<Grant>>>,
+) -> std::io::Result<()> {
     let mut buffer = [0; 4096];
     let mut used = 0;
     loop {
@@ -96,7 +121,10 @@ async fn serve(stream: &mut TcpStream, links: &watch::Receiver<Links>) -> std::i
             return Ok(());
         }
     }
-    let state = *links.borrow();
+    let mut state = *links.borrow();
+    if let Some(grant) = grant.lock().ok().and_then(|grant| grant.clone()) {
+        state.mcp = grant.health_status();
+    }
     let response = response(&buffer[..used], state);
     stream.write_all(response.as_bytes()).await?;
     stream.shutdown().await
@@ -127,7 +155,8 @@ pub fn response(request: &[u8], links: Links) -> String {
 
 fn health_body(links: Links) -> String {
     let mut body = serde_json::json!({"status":"running", "wyoming":links.wyoming,"live":links.live,
-                "relink_required":links.relink_required,"kill_switch":links.kill_switch});
+        "relink_required":links.relink_required || links.mcp == "relink_for_scope",
+        "kill_switch":links.kill_switch,"mcp":links.mcp});
     if let Some(reason) = links.startup_waiting_reason {
         body["startup_waiting_reason"] = reason.into();
     }

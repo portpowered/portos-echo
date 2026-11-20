@@ -301,6 +301,23 @@ set `codex.binary` and `codex.ca_file` under `bin/` as its help requires.
    exiting within a minute. A bridge stopped with installer `stop` stays stopped until installer `start`, the
    fork's `bridge.sh start` or a reboot; `uninstall` removes the launcher and with it the boot start. No init
    service, `.rc`, partition, SELinux or firewall change: the supervisor rides hassmic's existing service.
+9. **Nothing on the Echo sets its clock, so the bridge measures it** (coordinator decision 2026-11-19,
+   [decisions](program/decisions.md)). hassmic's firewall drops everything that is not gid 3990, Android's own
+   network time included (`BestClock: Missing NTP fix`), so the device runs on whatever its clock held: 17.5 h
+   behind when measured. The bridge asks the `[clock] servers` by SNTP at startup, before it admits the device,
+   and then every `clock.interval_seconds`. One answer per server counts, only from a synchronized server (leap
+   indicator not 3, stratum 1 to 15) that echoes the request; the answers within 1 s of their median must be a
+   majority and at least two, and their mean is the offset. While the system clock is more than 2 s from the
+   measured time, the call-start time both models are told and the UTC day of the daily request cap use the
+   measured time, carried on the monotonic clock; once the system clock is right it is used again. Each
+   measurement is traced as `clock.offset` (`synced`, `offset_ms` as network time minus system clock, `hosts`,
+   `servers`, `corrected`; no names or addresses); servers that are unreachable or disagree change nothing and
+   are traced once as `synced: false` with a `reason`. This needs no root. TLS certificate checks and file
+   times still read the system clock: `echo-bridge clock sync`, run as root with gid 3990, sets it when it is
+   off by a second or more and prints one line (`clock: offset_ms=N hosts=N action=set|none|denied`);
+   `clock check` only measures. The simulator's `bridge.clock_advanced` is unrelated: it steps the paused
+   test clock of `--sim-clock` runs and never looks at the wall clock. A run with `--model-loopback` measures
+   only against servers its configuration names.
 
 #### Why we need it — echo-bridge
 
@@ -968,15 +985,26 @@ is still talking after the 2 s was not interrupted: the held audio plays, late b
 given back in the reply's silent frames. The times are constants in
 [reply_barge.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_barge.rs).
 
-The session's transcript of the user is its earliest sign of speech at the pin, and it comes some hundred
-milliseconds after the speech. The bridge therefore also listens to the microphone frames it forwards
-([reply_ear.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_ear.rs)): a level three times
-above what the reply audio written in the last 700 ms can explain, for 80 ms, is speech. How much of the
-reply the microphone hears is learned per call, from the reply's first half second and from every frame not
-taken for speech. Speech at the microphone holds the reply for 800 ms; the transcript that follows extends
-the hold as before. A hold the session does not bear out is released with nothing lost, and the ear raises
-its estimate of the echo. The ear never cuts a reply by itself: without the model's yield there is no cut.
-Its calibration on the Echo is unmeasured; `reply.quality` `mic` reports what it heard.
+The Live session alone judges a barge-in (owner, 2026-11-19). The bridge runs no speech detector of its
+own and never gates or alters the microphone audio it forwards. The session's transcript of the user is its
+earliest sign of speech at the pin: the V3 session forwards no speech-start, no voice-activity event and no
+notice that a response was interrupted. That transcript comes some hundred milliseconds after the speech,
+and that delay is the session's. From the sign the Echo plays out only the lead it holds
+(`audio.reply_lead_ms`, 200 ms by default; 180 ms on the scripted timeline). `reply.quality` `cuts` reports
+it per cut: `silent_ms` from the sign to the last reply frame the Echo played, `cut_ms` from the sign to the
+cut, and `text`, the transcript the session gave, which shows whether it heard the user or the Echo's own
+speaker. The bridge still measures the microphone under each reply
+([reply_ear.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_ear.rs)) and reports it in
+`reply.quality` `mic`; the measurement decides nothing.
+
+The pinned session's turn detection and noise reduction cannot be set by a client. The V3 session update
+carries the instructions, the voice, the delegation mode and the initial items, and `thread/realtime/start`
+has no field for either. The Echo's microphone path has no echo cancellation, so the session hears the
+Echo's speaker and can interrupt its own reply.
+
+A transcript of the user that comes before any audio of the reply has been written to the Echo arms
+nothing: it is of the turn the reply answers. A call's first reply starts on a 300 ms jitter cushion, the
+one every measured call came to need in its first reply, not on the 100 ms floor.
 
 #### Why — Barge-in
 

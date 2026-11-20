@@ -86,7 +86,7 @@ impl Harness {
         self.fixture.advance(5).unwrap();
         tokio::time::advance(Duration::from_secs(5)).await;
         faults::advance_with_probes(session).await;
-        completed(&pending.await.unwrap(), 0, "MCP linked\n", "");
+        completed(&pending.await.unwrap(), 0, &linked_output(self.fixture.base()), "");
         assert_eq!(
             bridge_wire_screen::state(&mut session.screen).await,
             json!({"state":"ready","message":"Echo Live ready"})

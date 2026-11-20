@@ -1,33 +1,32 @@
 //! Bounded HTTP parser and sessions; browser origins cannot operate the grant.
-use super::bridge_operations::{Operation, Request};
+use super::bridge_operations::{Operation, Operator, StartError};
 use echo_contracts::secret::Secret;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{Semaphore, mpsc, oneshot},
+    sync::{mpsc, oneshot},
     task::JoinSet,
 };
 
-pub(super) async fn serve(listener: TcpListener, token: Secret<String>, send: mpsc::Sender<Request>) {
+pub(super) async fn serve(listener: TcpListener, token: Secret<String>, operator: Operator) {
     let token = Arc::new(token);
-    let slot = Arc::new(Semaphore::new(1));
     let mut sessions = JoinSet::new();
     loop {
         tokio::select! {
             result = listener.accept(), if sessions.len() < 16 => {
                 let Ok((stream, _)) = result else { break };
-                sessions.spawn(session(stream, token.clone(), send.clone(), slot.clone()));
+                sessions.spawn(session(stream, token.clone(), operator.clone()));
             }
             _ = sessions.join_next(), if !sessions.is_empty() => (),
         }
     }
 }
 
-async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, send: mpsc::Sender<Request>, slot: Arc<Semaphore>) {
+async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, operator: Operator) {
     let read = tokio::time::timeout(Duration::from_secs(1), read(&mut stream, token.expose())).await;
-    let operation = match read {
+    let (operation, streaming) = match read {
         Ok(Ok(operation)) => operation,
         Ok(Err(code)) => {
             let _ = respond(&mut stream, code, Value::Null).await;
@@ -35,36 +34,64 @@ async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, send: mpsc::
         }
         Err(_) => return,
     };
-    let Ok(permit) = slot.try_acquire_owned() else {
-        let _ = respond(&mut stream, 409, Value::Null).await;
-        return;
+    let receipt = match operator.start(operation) {
+        Ok(receipt) => receipt,
+        Err(StartError::Busy) => {
+            let _ = respond(&mut stream, 409, Value::Null).await;
+            return;
+        }
+        Err(StartError::Closed) => return,
     };
-    let (reply, receive) = oneshot::channel();
-    if send
-        .try_send(Request {
-            operation,
-            reply,
-            permit,
-        })
-        .is_err()
-    {
-        return;
-    }
-    let mut byte = [0];
-    let result = tokio::select! {
-        biased;
-        _ = stream.read(&mut byte) => return,
-        result = receive => result,
-    };
+    let result = completion(&mut stream, receipt.result, receipt.progress, streaming).await;
     let (code, body) = match result {
         Ok(Ok(outcome)) => (200, json!({"outcome":outcome})),
         Ok(Err(error)) => (422, json!({"error":super::category(&error)})),
-        Err(_) => return,
+        Err(()) => return,
     };
-    let _ = tokio::time::timeout(Duration::from_secs(1), respond(&mut stream, code, body)).await;
+    if streaming {
+        let _ = event(&mut stream, body).await;
+    } else {
+        let _ = tokio::time::timeout(Duration::from_secs(1), respond(&mut stream, code, body)).await;
+    }
 }
 
-async fn read(stream: &mut TcpStream, token: &str) -> Result<Operation, u16> {
+async fn completion(
+    stream: &mut TcpStream,
+    mut receive: oneshot::Receiver<Result<&'static str, echo_mcp_auth::AuthError>>,
+    mut updates: mpsc::Receiver<echo_screen_contract::UiState>,
+    streaming: bool,
+) -> Result<Result<&'static str, echo_mcp_auth::AuthError>, ()> {
+    if streaming {
+        tokio::time::timeout(Duration::from_secs(1), stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        )).await.map_err(|_| ())?.map_err(|_| ())?;
+    }
+    let mut byte = [0];
+    loop {
+        tokio::select! {
+            biased;
+            _ = stream.read(&mut byte) => return Err(()),
+            state = updates.recv(), if !updates.is_closed() || !updates.is_empty() => {
+                if streaming && let Some(state) = state {
+                    event(stream, json!({"state":state})).await?;
+                }
+            }
+            result = &mut receive => return result.map_err(|_| ()),
+        }
+    }
+}
+
+async fn event(stream: &mut TcpStream, value: Value) -> Result<(), ()> {
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        stream.write_all(format!("data: {value}\n\n").as_bytes()),
+    )
+    .await
+    .map_err(|_| ())?
+    .map_err(|_| ())
+}
+
+async fn read(stream: &mut TcpStream, token: &str) -> Result<(Operation, bool), u16> {
     let mut bytes = [0; 4096];
     let mut used = 0;
     let end = loop {
@@ -82,6 +109,9 @@ async fn read(stream: &mut TcpStream, token: &str) -> Result<Operation, u16> {
     };
     let text = std::str::from_utf8(&bytes[..end]).map_err(|_| 400_u16)?;
     let length = headers(text, token)?;
+    let streaming = text
+        .split("\r\n")
+        .any(|line| line.eq_ignore_ascii_case("Accept: text/event-stream"));
     if length > bytes.len() - end || used > end + length {
         return Err(400);
     }
@@ -89,7 +119,7 @@ async fn read(stream: &mut TcpStream, token: &str) -> Result<Operation, u16> {
         .read_exact(&mut bytes[used..end + length])
         .await
         .map_err(|_| 400_u16)?;
-    operation(&bytes[end..end + length])
+    operation(&bytes[end..end + length]).map(|operation| (operation, streaming))
 }
 
 fn headers(text: &str, token: &str) -> Result<usize, u16> {

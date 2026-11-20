@@ -129,11 +129,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
 
     def transcripts(self, reply):
-        for role, text in [('user', 'ping'), ('assistant', reply)]:
+        portos = isinstance(delegation, tools_provider.PortosDelegation)
+        for role, text in [('user', delegation.utterance if portos else 'ping'), ('assistant', reply)]:
             kind = 'input' if role == 'user' else 'output'
             frame(self.connection, {'type': kind + '_transcript.added', 'item': {'text': text}})
             frame(self.connection, {'type': 'turn.done', 'turn': {'role': role, 'transcript': text}})
             observed['transcripts'].append({'role': role, 'text': text})
+            if portos:
+                emit({'event': 'provider.transcript', 'role': role, 'text': text})
 
 
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -147,8 +150,13 @@ try:
             answers.put(command['answer'])
         elif 'tools' in command:
             assert delegation is None
-            delegation = (tools_provider.McpDelegation(command['tools']) if command.get('mcp') else
-                          tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False), command.get('emotion', False)))
+            if 'portos' in command:
+                delegation = tools_provider.PortosDelegation(command['tools'], command['portos'] == 'readonly')
+            elif command.get('mcp'):
+                delegation = tools_provider.McpDelegation(command['tools'])
+            else:
+                delegation = tools_provider.Delegation(command['tools'], command['negative'],
+                                                       command.get('exhausted', False), command.get('emotion', False))
         elif command == {'complete': True}:
             transcript_output.sendall(b'c')
         elif command == {'transcripts': True}:

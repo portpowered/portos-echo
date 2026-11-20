@@ -24,6 +24,8 @@ mod bridge_latency;
 mod bridge_lifecycle;
 #[path = "bridge_support/bridge_peer.rs"]
 mod bridge_peer;
+#[path = "bridge_observer/bridge_reply_start.rs"]
+mod bridge_reply_start;
 #[path = "bridge_support/bridge_short.rs"]
 mod bridge_short;
 #[path = "bridge_support/bridge_spine_edges.rs"]
@@ -86,7 +88,8 @@ async fn assert_health(address: &str) {
     let response = health(address, "GET", "/healthz").await;
     assert_eq!(
         serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap(),
-        json!({"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false})
+        json!({"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false,
+            "mcp":"disabled"})
     );
     assert!(
         health(address, "POST", "/healthz")

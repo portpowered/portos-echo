@@ -1,5 +1,6 @@
 //! Strict section-9 authorization counterpart for isolated T3 M5 sessions.
 //! The scenario owns approval and fake UTC; no real principal or service exists.
+mod mcp_home;
 mod mcp_observations;
 mod mcp_proof;
 mod mcp_routes;
@@ -33,12 +34,22 @@ pub enum Approval {
     Denied,
 }
 
+/// Controlled alternatives at the synthetic home service boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HomeFault {
+    NoRoom,
+    AmbiguousRoom,
+    ControlUnavailable,
+    ControlPending,
+}
+
 struct State {
     issuer: String,
     resource: String,
     now: u64,
     key: Secret<SigningKey>,
     device_key: Option<Value>,
+    scopes: String,
     jtis: BTreeSet<String>,
     approval: Approval,
     device: u64,
@@ -48,6 +59,7 @@ struct State {
     revoked: bool,
     used_refreshes: BTreeSet<String>,
     counts: Counts,
+    home: mcp_home::Home,
     #[cfg(test)]
     token_reply: Option<Arc<tokio::sync::Notify>>,
 }
@@ -67,6 +79,12 @@ fn invalid() -> std::io::Error {
 }
 
 impl Fixture {
+    /// The synthetic MCP definitions exposed to the native model fixture.
+    #[must_use]
+    pub fn home_catalog() -> Vec<Value> {
+        mcp_home::catalog()
+    }
+
     /// # Errors
     /// Returns a fixed local bind category without endpoint or credential data.
     pub async fn bind(epoch: u64) -> std::io::Result<Self> {
@@ -80,6 +98,7 @@ impl Fixture {
             now: epoch,
             key: Secret::new(SigningKey::generate()),
             device_key: None,
+            scopes: String::new(),
             jtis: BTreeSet::new(),
             approval: Approval::Pending,
             device: 0,
@@ -89,6 +108,7 @@ impl Fixture {
             revoked: true,
             used_refreshes: BTreeSet::new(),
             counts: Counts::default(),
+            home: mcp_home::Home::default(),
             #[cfg(test)]
             token_reply: None,
         }));
@@ -160,9 +180,35 @@ impl Fixture {
         Ok(self.shared.lock().map_err(|_| invalid())?.counts)
     }
 
+    /// Scope-denied attempts are counted separately from admitted home calls.
+    /// # Errors
+    /// A poisoned fixture returns a fixed local error.
+    pub fn scope_denials(&self) -> std::io::Result<Vec<Value>> {
+        Ok(self.shared.lock().map_err(|_| invalid())?.home.scope_denials.clone())
+    }
+
+    /// Select the home fixture response before device authorization.
+    /// # Errors
+    /// Rejects changes after a link attempt.
+    pub fn set_home_fault(&self, fault: HomeFault) -> std::io::Result<()> {
+        let mut state = self.shared.lock().map_err(|_| invalid())?;
+        if state.device != 0 {
+            return Err(invalid());
+        }
+        state.home.fault = Some(fault);
+        Ok(())
+    }
+
     #[must_use]
     pub fn validator(&self) -> Arc<dyn BearerValidator> {
         Arc::new(mcp_tokens::Admission(self.shared.clone()))
+    }
+
+    /// Synthetic room state and admitted calls; never includes credentials.
+    /// # Errors
+    /// A poisoned fixture returns a fixed local error.
+    pub fn home_snapshot(&self) -> std::io::Result<Value> {
+        Ok(self.shared.lock().map_err(|_| invalid())?.home.snapshot())
     }
 
     /// Close and join the scenario-owned listener.

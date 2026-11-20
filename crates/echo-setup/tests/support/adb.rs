@@ -53,14 +53,13 @@ fn main() -> io::Result<()> {
     } else if args.first().is_some_and(|v| v == "forward") {
         forward(&root, &args[1..])?;
     } else if args.first().is_some_and(|v| v == "push") {
-        if root.join("offline-source").is_file() {
-            for (suffix, captured) in [
-                ("/bundle/scripts/echo-install.sh", "script"),
-                ("/bundle/MANIFEST", "manifest"),
+        if root.join("offline-source").is_file() && args[2].to_string_lossy().ends_with("/bundle") {
+            for (member, captured) in [
+                ("scripts/echo-install.sh", "script"),
+                ("MANIFEST", "manifest"),
+                ("licenses/dependencies/example/NOTICE", "attribution"),
             ] {
-                if args[2].to_string_lossy().ends_with(suffix) {
-                    fs::copy(&args[1], root.join(captured))?;
-                }
+                fs::copy(Path::new(&args[1]).join(member), root.join(captured))?;
             }
         }
     } else {

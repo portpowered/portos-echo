@@ -72,7 +72,8 @@ class ConfigCoverageTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         keys = lint.accepted_config_keys(root)
         self.assertTrue({"wake_earcon", "home.agent_tools", "codex.delegate_effort",
-                         "mcp.server[]", "mcp.server[].allow_tools"} <= keys)
+                         "mcp.server[]", "mcp.server[].allow_tools", "screen.packs",
+                         "screen_pack"} <= keys)
         self.assertFalse({"codex.instructions", "codex.live_instructions"} & keys)
         source = 'let mut f = Fields::new(value, "voice")?; f.optional("future")?; f.finish()?;'
         self.assertEqual(lint.decoder_keys(source, "synthetic"), {"voice", "voice.future"})
@@ -80,7 +81,10 @@ class ConfigCoverageTests(unittest.TestCase):
             temp = Path(directory)
             (temp / "docs").mkdir()
             inputs = config_fixture(temp)
-            (inputs / "config_decode.rs").write_text(source, encoding="utf-8")
+            (inputs / "config_decode.rs").unlink()
+            decoder = inputs / "config_decode/mod.rs"
+            decoder.parent.mkdir()
+            decoder.write_text(source, encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "keys: voice.future$"):
                 lint.config_coverage(temp)
             with (temp / "docs/configuration.md").open("a", encoding="utf-8") as page:

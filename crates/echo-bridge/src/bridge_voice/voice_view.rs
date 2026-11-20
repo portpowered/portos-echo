@@ -216,7 +216,7 @@ impl<'a> View<'a> {
 
     fn reply_completed(&mut self, stats: &Stats) -> Result<(), Error> {
         let id = self.run.as_deref().ok_or(Error::Unavailable)?;
-        let quality = &stats.quality;
+        let (quality, cut) = (&stats.quality, stats.cut.as_deref());
         self.trace.record(
             "reply.played",
             Some(id),
@@ -238,10 +238,11 @@ impl<'a> View<'a> {
                 "reprimes":quality.reprimes, "concealment_ms":quality.concealment_ms,
                 "fade_ins":quality.fade_ins, "drained_frames":quality.drained_frames,
                 "cuts":{"count":quality.cuts, "trigger":quality.cut_trigger.map(BargeTrigger::name),
-                    "holds":quality.holds, "hold_ms":quality.hold_ms},
-                "mic":{"onsets":quality.mic.onsets, "mistakes":quality.mic.mistakes,
-                    "lead_ms":quality.mic_lead_ms, "echo_max":quality.mic.echo_max,
-                    "level_max":quality.mic.level_max, "coupling":quality.mic.coupling}
+                    "holds":quality.holds, "hold_ms":quality.hold_ms, "silent_ms":cut.map(|cut| cut.silent_ms),
+                    "cut_ms":cut.map(|cut| cut.yield_ms), "text":cut.map(|cut| cut.text.as_str())},
+                "mic":{"onsets":quality.mic.onsets, "echo_max":quality.mic.echo_max,
+                    "level_max":quality.mic.level_max, "coupling":quality.mic.coupling,
+                    "echo_mean":quality.mic.echo_mean, "noise":quality.mic.noise}
             }),
         )?;
         let Some(first) = quality.first_audio else {

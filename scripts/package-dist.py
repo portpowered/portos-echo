@@ -76,7 +76,7 @@ def safe_name(name):
             and not re.search(r"token|secret|credential|auth\.json|hassmic", name, re.I))
 
 
-def config_projection(data):
+def config_projection(data, release, template_sha):
     text = data.decode()
     parsed = tomllib.loads(text)
     for key, leaf in (("binary", "codex-app-server"), ("ca_file", "cacert.pem")):
@@ -91,7 +91,43 @@ def config_projection(data):
         if count != 1:
             raise BundleError("ambiguous config projection")
         text = text[:table.start()] + changed + text[table.end():]
-    return text.encode()
+    table = re.search(r"(?ms)^\[screen\]\n.*?(?=^\[|\Z)", text)
+    if table is None:
+        raise BundleError("missing screen config")
+    pin = {"url": f"https://github.com/portpowered/portos-echo/releases/download/v{release}/template-{release}.screenpack.tar.gz",
+           "sha256": template_sha}
+    value = 'packs = [{ url = ' + json.dumps(pin["url"]) + ', sha256 = ' + json.dumps(pin["sha256"]) + ' }]'
+    changed, count = re.subn(r"(?m)^packs\s*=.*$", value, table[0])
+    if count != 1:
+        raise BundleError("ambiguous screen config projection")
+    return (text[:table.start()] + changed + text[table.end():]).encode()
+
+
+def template_payload(archive, release):
+    """Read the separate generated asset without extracting it into the bundle."""
+    if archive.name != f"template-{release}.screenpack.tar.gz" or archive.stat().st_size > 65 * 1024**2:
+        raise BundleError("invalid template archive")
+    with tarfile.open(archive, "r:gz") as source:
+        members = source.getmembers()
+        if (len(members) > 64 or sum(m.size for m in members) > 64 * 1024**2
+                or any(not m.isfile() or m.name != PurePosixPath(m.name).name
+                       or not re.fullmatch(r"[a-z][a-z0-9-]*\.(?:json|png|webm|mp4)", m.name)
+                       or m.size > 8 * 1024**2 for m in members)):
+            raise BundleError("invalid template members")
+        files = {m.name: source.extractfile(m).read() for m in members}
+    if len(files) != len(members):
+        raise BundleError("duplicate template member")
+    manifest = json.loads(files["pack.json"])
+    if (manifest.get("format") != 1 or manifest.get("name") != "template"
+            or manifest.get("version") != release or manifest["character"]["rest"] != "rest.png"):
+        raise BundleError("invalid template identity")
+    return files
+
+
+def exclude_template(files, binaries):
+    for data in files.values():
+        if any(data in binary for binary in binaries):
+            raise BundleError("template data embedded in executable or JavaScript")
 
 
 def installer_names(release):
@@ -99,13 +135,17 @@ def installer_names(release):
 
 
 def checksum_assets(archive):
-    return (archive.name, *installer_names(archive.name.removeprefix("echo-").removesuffix("-armv7.tar.gz")),
-            "install.sh", "install.ps1")
+    release = archive.name.removeprefix("echo-").removesuffix("-armv7.tar.gz")
+    return (archive.name, *installer_names(release), "install.sh", "install.ps1",
+            f"template-{release}.screenpack.tar.gz")
 
 
 def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, installers):
     """Only explicit runtime inputs and license texts can enter the archive."""
     version(release)
+    template = out / f"template-{release}.screenpack.tar.gz"
+    art = template_payload(template, release)
+    exclude_template(art, (bridge.read_bytes(),))
     payload = {
         "bin/echo-bridge": bridge.read_bytes(),
         "bin/codex-app-server": (codex / "codex-app-server").read_bytes(),
@@ -114,7 +154,7 @@ def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, i
         "scripts/echo-install-setup.sh": (ROOT / "scripts/echo-install-setup.sh").read_bytes(),
         "scripts/echo-install-release.sh": (ROOT / "scripts/echo-install-release.sh").read_bytes(),
         "scripts/echo-install.sh": (ROOT / "scripts/echo-install.sh").read_bytes(),
-        "examples/bridge.echo.toml": config_projection((ROOT / "examples/bridge.echo.toml").read_bytes()),
+        "examples/bridge.echo.toml": config_projection((ROOT / "examples/bridge.echo.toml").read_bytes(), release, digest(template.read_bytes())),
         "examples/prompts/voice.md": (ROOT / "examples/prompts/voice.md").read_bytes(),
         "examples/prompts/runner.md": (ROOT / "examples/prompts/runner.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(), "NOTICE": (ROOT / "NOTICE").read_bytes(),
@@ -192,6 +232,12 @@ def verify(archive, checksums):
                 raise BundleError("credential-shaped payload")
     expected = {name: digest(path.read_bytes()) for name in checksum_assets(archive)
                 for path in (archive if name == archive.name else checksums.parent / name,)}
+    template = checksums.parent / f"template-{release}.screenpack.tar.gz"
+    art = template_payload(template, release)
+    exclude_template(art, (payload["bin/echo-bridge"],))
+    config = tomllib.loads(payload["examples/bridge.echo.toml"].decode())
+    if config["screen"]["packs"] != [{"url": f"https://github.com/portpowered/portos-echo/releases/download/v{release}/{template.name}", "sha256": expected[template.name]}]:
+        raise BundleError("template config pin mismatch")
     actual = {}
     for line in checksums.read_text().splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
@@ -324,7 +370,13 @@ def build(args):
         work = Path(work)
         env = build_environment(work)
         installers = build_installers(work, args.version, env)
+        generated = work / "template"
+        subprocess.run(["sh", "scripts/make-template-screenpack.sh", "--version", args.version,
+                        "--out", str(generated)], cwd=ROOT, env=env, check=True)
+        template = generated / f"template-{args.version}.screenpack.tar.gz"
+        shutil.copyfile(template, Path(stage) / template.name)
         screen_bundle(env)
+        exclude_template(template_payload(template, args.version), ((ROOT / "web/screen/dist/screen.js").read_bytes(),))
         # build-echo deliberately builds offline. Provision this fresh cache,
         # rather than relying on CI setup's separate default Cargo home.
         subprocess.run(["cargo", "+1.100.0", "fetch", "--locked"], cwd=ROOT, env=env, check=True)

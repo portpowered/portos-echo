@@ -237,7 +237,7 @@ async fn t3_settings_absent_closed_host_and_capability_are_explicit() -> Result 
         enabled.1,
         original.1.replacen(
             "<head>",
-            "<head>\n    <meta name=\"echo-settings\" content=\"v1\" />",
+            "<head>\n    <meta name=\"echo-settings\" content=\"v1\" />\n    <meta name=\"echo-packs\" content=\"v1\" />",
             1
         )
     );

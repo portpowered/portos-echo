@@ -1,6 +1,6 @@
 //! The bridge owns screen lifetime and publishes bounded activity updates.
 use crate::bridge_mcp::bridge_presentation::Presentation;
-use crate::{Error, bridge_input::loopback};
+use crate::{Error, bridge_input::loopback, bridge_trace::Trace};
 use echo_config::ScreenConfig;
 use echo_contracts::secret::Secret;
 use echo_screen_contract::UiState;
@@ -17,6 +17,7 @@ pub(crate) struct Screen {
     settings_warning: Option<String>,
     server: Option<Arc<ScreenServer>>,
     actions: Option<tokio::task::JoinHandle<()>>,
+    pack_results: Option<tokio::task::JoinHandle<()>>,
     pub(crate) presentation: Presentation,
     pub(crate) approvals: approval::Approvals,
 }
@@ -48,6 +49,7 @@ impl Screen {
                 settings_warning: None,
                 server: None,
                 actions: None,
+                pack_results: None,
                 presentation: Presentation::new(None),
                 approvals: approval::Approvals::default(),
             });
@@ -77,9 +79,38 @@ impl Screen {
             server: Some(Arc::new(server)),
             presentation: Presentation::new(Some(states.clone())),
             actions: None,
+            pack_results: None,
             approvals: approval::Approvals::default(),
         };
         Ok(screen)
+    }
+
+    pub(crate) fn download_packs(&mut self, config: Option<&echo_config::BridgeConfig>, trace: &Trace) {
+        let Some(config) = config else {
+            return;
+        };
+        let Some(home) = &config.home else {
+            return;
+        };
+        let Some(server) = self.server.as_mut().and_then(Arc::get_mut) else {
+            return;
+        };
+        let pins = config
+            .screen
+            .packs
+            .iter()
+            .map(|p| (p.url.clone(), p.sha256.clone()))
+            .collect();
+        let mut results = server.install_configured_packs(home.dir.clone(), config.codex.ca_file.clone(), pins);
+        let mut trace = trace.clone();
+        self.pack_results = Some(tokio::spawn(async move {
+            while let Some(result) = results.recv().await {
+                let fields = serde_json::json!({"installed": result.installed, "reason": result.reason});
+                if trace.record("screen.pack_download", None, fields).is_err() {
+                    break;
+                }
+            }
+        }));
     }
 
     pub fn publish(&self, state: UiState) -> Result<(), Error> {
@@ -236,6 +267,10 @@ impl Screen {
     }
 
     async fn close_with_mode(&mut self, graceful: bool) -> Result<usize, Error> {
+        if let Some(task) = self.pack_results.take() {
+            task.abort();
+            let _ = task.await;
+        }
         if let Some(task) = self.actions.take() {
             task.abort();
             let _ = task.await;
@@ -254,6 +289,9 @@ impl Screen {
 
 impl Drop for Screen {
     fn drop(&mut self) {
+        if let Some(task) = &self.pack_results {
+            task.abort();
+        }
         if let Some(task) = &self.actions {
             task.abort();
         }
@@ -276,6 +314,100 @@ pub(crate) fn failure_state(relink: bool) -> UiState {
 mod tests {
     use super::*;
 
+    fn pack_config(home: &tempfile::TempDir, packs: Vec<echo_config::ScreenPackDownload>) -> echo_config::BridgeConfig {
+        let base = echo_config::BridgeConfig::from_toml_str(
+            "[echo]\nhost='127.0.0.1'\n[live]\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n",
+        ).unwrap();
+        let pairing = home.path().join("pairing.txt");
+        std::fs::write(&pairing, "synthetic-screen-pair").unwrap();
+        echo_config::BridgeConfig {
+            home: Some(echo_config::HomeConfig {
+                dir: home.path().into(),
+                agent_tools: echo_config::AgentTools::default(),
+            }),
+            screen: ScreenConfig {
+                listen: ([127, 0, 0, 1], 0).into(),
+                pairing_token_file: pairing,
+                packs,
+            },
+            ..base
+        }
+    }
+
+    /// T3: configured pack failure is isolated from the real screen listener.
+    #[tokio::test]
+    async fn t3_screen_pack_missing_ca_reports_safely_and_keeps_screen_serving() {
+        let home = tempfile::tempdir().unwrap();
+        let config = pack_config(
+            &home,
+            vec![echo_config::ScreenPackDownload {
+                url: "https://127.0.0.1/pack".into(),
+                sha256: "0".repeat(64),
+            }],
+        );
+        let path = home.path().join("trace.jsonl");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        let mut screen = Screen::bind(Some(&config.screen)).await.unwrap();
+        screen.download_packs(Some(&config), &trace);
+        screen.pack_results.take().unwrap().await.unwrap();
+        let row: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(row["event"], "screen.pack_download");
+        assert_eq!(row["installed"], serde_json::Value::Null);
+        assert_eq!(row["reason"], "configured CA bundle unavailable");
+        screen.ready().unwrap();
+        screen.flush().await.unwrap();
+        let base = "http://127.0.0.1";
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("{base}:{}/screen.css", screen.address().unwrap().port()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        screen.close().await.unwrap();
+        assert!(!home.path().join("screens").exists());
+    }
+
+    /// T3: locally installed data is available without configuring a download.
+    #[tokio::test]
+    async fn t3_screen_pack_empty_pins_mount_local_files_without_downloads() {
+        let home = tempfile::tempdir().unwrap();
+        let config = pack_config(&home, vec![]);
+        let pack = home.path().join("screens/local");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            pack.join("pack.json"),
+            br#"{"format":1,"name":"local","version":"0.1.0","character":{"rest":"rest.png"}}"#,
+        )
+        .unwrap();
+        std::fs::write(pack.join("rest.png"), "synthetic-local-rest").unwrap();
+        let path = home.path().join("trace.jsonl");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        let mut screen = Screen::bind(Some(&config.screen)).await.unwrap();
+        screen.download_packs(Some(&config), &trace);
+        screen.pack_results.take().unwrap().await.unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"");
+        let base = "http://127.0.0.1";
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!(
+                "{base}:{}/screen-packs/v1/local/rest.png?token=synthetic-screen-pair",
+                screen.address().unwrap().port()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), "synthetic-local-rest");
+        screen.ready().unwrap();
+        screen.flush().await.unwrap();
+        screen.close().await.unwrap();
+    }
+
     #[tokio::test]
     async fn bridge_relink_confirmed_publication_keeps_projection_and_queue_failure() {
         let (send, mut receive) = mpsc::channel(1);
@@ -284,6 +416,7 @@ mod tests {
             settings_warning: None,
             server: None,
             actions: None,
+            pack_results: None,
             presentation: Presentation::new(Some(send)),
             approvals: approval::Approvals::default(),
         };

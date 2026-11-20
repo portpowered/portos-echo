@@ -154,13 +154,9 @@ async fn stage_install(
             options.version.clone()
         }
         Input::Offline(input) => {
-            adb.shell(&format!("mkdir '{bundle}'")).await?;
-            for name in &input.files {
-                let remote = format!("{bundle}/{name}");
-                let parent = remote.rsplit_once('/').ok_or(Failure("invalid_bundle"))?.0;
-                adb.shell(&format!("mkdir -p '{parent}'")).await?;
-                adb.push(&input.root.join(name), &remote).await?;
-            }
+            // The destination is new under the private stage. Transfer the verified
+            // snapshot recursively in one sync session, including the attribution tree.
+            adb.push(&input.root, &bundle).await?;
             input.version.clone()
         }
     };

@@ -47,6 +47,10 @@ impl Harness {
     }
 
     async fn new() -> Self {
+        Self::with_scopes(vec!["endpoint:read".into()]).await
+    }
+
+    async fn with_scopes(scopes: Vec<String>) -> Self {
         let epoch = 1_800_000_000;
         let fixture = Fixture::bind(epoch).await.unwrap();
         let spoof = Spoof::start_authorized(Options::default(), Some(fixture.validator()))
@@ -57,7 +61,7 @@ impl Harness {
         let options = AuthOptions {
             resource_url: spoof.url().into(),
             client_id: "echo-lab".into(),
-            scopes: vec!["endpoint:read".into()],
+            scopes,
             storage_dir: dir.path().into(),
             request_timeout: Duration::from_secs(2),
         };
@@ -479,3 +483,6 @@ async fn t3_m5_cancelled_approval_never_reports_readiness_or_publishes_grant() {
     assert_eq!(h.record()["grant"], Value::Null);
     h.close().await;
 }
+
+#[path = "mcp_scope_tests.rs"]
+mod scopes;

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import selectors
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -46,9 +47,15 @@ class DeliveryBox(Sandbox):
         path.chmod(0o755)
 
     def invoke(self, *args):
-        result = subprocess.run([str(self.binary), args[0], "--adb", str(self.tools / "adb"),
-                                 "--json", *args[1:]], cwd=self.root, env=self.env,
-                                capture_output=True, text=True, timeout=75)
+        completed = self.root / "last-completed"
+        completed.unlink(missing_ok=True)
+        try:
+            result = subprocess.run([str(self.binary), args[0], "--adb", str(self.tools / "adb"),
+                                     "--json", *args[1:]], cwd=self.root, env=self.env,
+                                    capture_output=True, text=True, timeout=75)
+        except subprocess.TimeoutExpired:
+            stage = completed.read_text() if completed.exists() else "no-adb"
+            raise AssertionError(f"delivered {args[0]} exceeded 75s; last successful adb stage={stage}") from None
         public = result.stdout + result.stderr
         for marker in (SENTINEL, SERIAL, PAIRING, str(self.root)):
             require(marker not in public, "delivered installer disclosed private fixture data")
@@ -151,12 +158,43 @@ def append_wake(base):
         output.write(TRACE)
 
 
+def delivery_calls(base):
+    path = base / "delivery-ledger"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def adb_stage(selected):
+    if selected[0] == "push":
+        return "push-" + (Path(selected[2]).name if Path(selected[2]).name in
+                          ("bundle", "archive.tar.gz", "adapter.sh", "config") else "member")
+    if selected[0] != "shell":
+        return selected[0]
+    command = shlex.split(selected[1])
+    if "--device" in command:
+        return command[command.index("--device") + 1]
+    return "stage-directory" if command[:1] == ["test"] else "shell"
+
+
 def recording_adb(base, args):
     with (base / "delivery-ledger").open("a") as ledger:
         print(json.dumps(args), file=ledger)
     selected = args[2:] if args[:2] == ["-s", SERIAL] else args
+    code = dispatch_adb(base, args, selected)
+    if code == 0:
+        (base / "last-completed").write_text(adb_stage(selected))
+    return code
+
+
+def dispatch_adb(base, args, selected):
     if selected[:1] == ["forward"]:
         return record_forward(base, selected[1:])
+    if selected[:1] == ["push"] and Path(selected[1]).is_dir():
+        source = Path(selected[1])
+        destination = Path(remote_path(base, selected[2]))
+        require(destination.parent.is_dir() and destination.name == "bundle",
+                "offline directory push did not target the owned stage")
+        shutil.copytree(source, destination / source.name if destination.is_dir() else destination)
+        return 0
     if selected[:1] == ["shell"]:
         command = shlex.split(selected[1])
         if command[:4] == ["sh", "-s", "--", "--device"]:
@@ -251,7 +289,13 @@ def delivered_journey(binary, assets, archive, manifest):
                     "release asset requests differ")
             public_hashes(box, manifest)
             bundle, updated = offline_update(box, update)
+            first_update_call = len(delivery_calls(box.root))
             require(box.invoke("update", "--from-dir", str(bundle))["version"] == update, "update version differs")
+            pushes = [call[-1] for call in delivery_calls(box.root)[first_update_call:] if call[2:3] == ["push"]]
+            require([Path(path).name for path in pushes] == ["adapter.sh", "bundle"],
+                    "offline update split its verified directory into separate transfers")
+            print(f"F33 offline update: members={len(updated['files']) + 1} directory_pushes=1 stage=complete",
+                  flush=True)
             public_hashes(box, updated)
             status = box.invoke("status")
             require(status["versions"] == {"current": update, "previous": release}
@@ -266,7 +310,7 @@ def delivered_journey(binary, assets, archive, manifest):
                     "rollback did not restore previous release")
             require(not any((box.root / "remote/tmp").iterdir()), "staging was retained")
             require(json.loads((box.root / "forwards.json").read_text()) == {}, "owned forwards were retained")
-            calls = [json.loads(line)[-1] for line in (box.root / "delivery-ledger").read_text().splitlines()]
+            calls = [call[-1] for call in delivery_calls(box.root)]
             for primitive in ("prepare-archive", "--device install --bundle", "--device screen-setup",
                               "--device start", "--device rollback"):
                 require(any(primitive in call for call in calls), "shell dispatch missing " + primitive)

@@ -1,5 +1,9 @@
 //! Bounded typed dispatch. The bridge owns validation, persistence and restart.
-use crate::{cancelled, screen_core::Core, screen_http::authorized};
+use crate::{
+    cancelled,
+    screen_core::{Core, PackObservation},
+    screen_http::authorized,
+};
 use axum::{
     Json,
     http::{StatusCode, Uri},
@@ -21,6 +25,12 @@ pub enum PromptKind {
 /// Decoded input, with no arbitrary key/path or executable surface.
 pub enum SettingsOperation {
     Snapshot,
+    PackCatalog(crate::PackCatalog),
+    /// Settled local files, resolved by the same accepted settings owner.
+    PackWatch(crate::PackCatalog, u64),
+    PackSelection(crate::PackCatalog, String),
+    /// Settled fixed-home file read; the host rechecks its identity at commit.
+    PackRefresh(crate::PackCatalog, crate::PackSettings),
     Save(SettingsPatchV1),
     Prompt(PromptKind, PromptSaveV1),
 }
@@ -28,7 +38,12 @@ pub enum SettingsOperation {
 /// Host diagnostics must contain only trusted field names and fixed categories.
 pub enum SettingsReply {
     Snapshot(SettingsSnapshotV1),
+    Packs(crate::PackCatalog),
+    InvalidPackSelection,
     Saved(SaveResultV1),
+    /// Durable pack-only save, resolved against the same validated catalog.
+    PackSaved(SaveResultV1, crate::PackCatalog, bool),
+    PackRefreshed(crate::PackCatalog, bool),
     Invalid(SettingsErrorV1),
     Persistence(SettingsErrorV1),
 }
@@ -36,8 +51,14 @@ pub enum SettingsReply {
 impl SettingsReply {
     fn into_response(self) -> Response {
         match self {
+            Self::Packs(value) | Self::PackRefreshed(value, _) => Json(value).into_response(),
+            Self::InvalidPackSelection => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({"version":1,"reason":"invalid_selection"})),
+            )
+                .into_response(),
             Self::Snapshot(value) => Json(value).into_response(),
-            Self::Saved(value) => Json(value).into_response(),
+            Self::Saved(value) | Self::PackSaved(value, _, _) => Json(value).into_response(),
             Self::Invalid(value) => (StatusCode::UNPROCESSABLE_ENTITY, Json(value)).into_response(),
             Self::Persistence(value) => (StatusCode::INTERNAL_SERVER_ERROR, Json(value)).into_response(),
         }
@@ -48,7 +69,8 @@ impl SettingsReply {
 /// Dropping the HTTP future cancels requests not yet admitted by `commit`.
 pub struct SettingsRequest {
     operation: SettingsOperation,
-    uri: Uri,
+    uri: Option<Uri>,
+    installed: bool,
     core: Arc<Mutex<Core>>,
     stop: watch::Receiver<bool>,
     drain: watch::Receiver<Option<tokio::time::Instant>>,
@@ -60,18 +82,60 @@ impl SettingsRequest {
     /// are serialized. The host must not schedule work outside this closure.
     /// A failed precommit check invokes no host code; there is no queued retry.
     pub async fn commit(self, transaction: impl FnOnce(SettingsOperation) -> SettingsReply) {
-        let core = self.core.lock().await;
+        let mut core = self.core.lock().await;
         if self.reply.is_closed() {
             return;
         }
-        let response = if !authorized(&core, &self.uri) {
+        let response = if self.uri.as_ref().is_some_and(|uri| !authorized(&core, uri)) {
             StatusCode::UNAUTHORIZED.into_response()
-        } else if *self.stop.borrow() || self.drain.borrow().is_some() || !core.accepting() {
+        } else if *self.stop.borrow()
+            || self.drain.borrow().is_some()
+            || !core.accepting()
+            || matches!(&self.operation, SettingsOperation::PackWatch(_, revision) if *revision != core.pack_revision)
+            || (matches!(
+                &self.operation,
+                SettingsOperation::PackSelection(..) | SettingsOperation::PackRefresh(..)
+            ) && core.pack_revision == 9_007_199_254_740_991)
+        {
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         } else {
-            transaction(self.operation).into_response()
+            let watching = matches!(&self.operation, SettingsOperation::PackWatch(..));
+            let mut reply = transaction(self.operation);
+            publish_reply(&mut core, &mut reply, self.installed, watching);
+            reply.into_response()
         };
         let _ = self.reply.send(response);
+    }
+}
+
+// Selection, install completion and watching observe one publication identity.
+// A scan racing atomic install publication therefore cannot emit a second event.
+fn publish_reply(core: &mut Core, reply: &mut SettingsReply, installed: bool, watching: bool) {
+    match reply {
+        SettingsReply::PackSaved(_, catalog, changed) | SettingsReply::PackRefreshed(catalog, changed) => {
+            if *changed {
+                core.pack_reload(catalog.active());
+                core.pack_publication = Some((catalog.signature(), catalog.active().map(str::to_owned)));
+            }
+            if *changed || core.pack_identity == PackObservation::Unobserved {
+                core.pack_identity = PackObservation::Current(catalog.identity());
+            }
+            catalog.set_revision(core.pack_revision);
+        }
+        SettingsReply::Packs(catalog) => {
+            let identity = catalog.identity();
+            let changed = watching && matches!(&core.pack_identity, PackObservation::Current(old) if *old != identity);
+            let publication = (catalog.signature(), catalog.active().map(str::to_owned));
+            if (installed || changed) && core.pack_publication.as_ref() != Some(&publication) {
+                core.pack_reload(catalog.active());
+                core.pack_publication = Some(publication);
+            }
+            if installed || watching || core.pack_identity == PackObservation::Unobserved {
+                core.pack_identity = PackObservation::Current(identity);
+            }
+            catalog.set_revision(core.pack_revision);
+        }
+        _ => {}
     }
 }
 
@@ -91,8 +155,36 @@ pub(crate) struct SettingsDispatch {
 
 impl SettingsDispatch {
     pub async fn send(self, uri: Uri, operation: SettingsOperation) -> Response {
+        self.dispatch(Some(uri), operation, false).await
+    }
+
+    // Only the lifetime-owned installer can create this notification. It reads
+    // the accepted selection through the existing host, never through TOML or a
+    // retained browser credential. Commit still serializes revocation/shutdown.
+    pub(crate) async fn installed(self, catalog: crate::PackCatalog) {
+        let _ = self.dispatch(None, SettingsOperation::PackCatalog(catalog), true).await;
+    }
+
+    pub(crate) async fn refresh(self, catalog: crate::PackCatalog, settings: crate::PackSettings) -> bool {
+        let status = self
+            .dispatch(None, SettingsOperation::PackRefresh(catalog, settings), false)
+            .await
+            .status();
+        // A malformed settled file is observed once. Capacity/stale-read
+        // refusal retries on the next poll, without an unbounded queued task.
+        status.is_success() || status == StatusCode::UNPROCESSABLE_ENTITY
+    }
+
+    pub(crate) async fn watched(self, catalog: crate::PackCatalog, revision: u64) -> bool {
+        self.dispatch(None, SettingsOperation::PackWatch(catalog, revision), false)
+            .await
+            .status()
+            .is_success()
+    }
+
+    async fn dispatch(self, uri: Option<Uri>, operation: SettingsOperation, installed: bool) -> Response {
         let core = self.core.lock().await;
-        if !authorized(&core, &uri) {
+        if uri.as_ref().is_some_and(|uri| !authorized(&core, uri)) {
             return StatusCode::UNAUTHORIZED.into_response();
         }
         if *self.stop.borrow() || self.drain.borrow().is_some() || !core.accepting() {
@@ -105,15 +197,23 @@ impl SettingsDispatch {
         let request = SettingsRequest {
             operation,
             uri,
+            installed,
             core: self.core.clone(),
             stop: self.stop.clone(),
             drain: self.drain.clone(),
             reply,
         };
-        if host.try_send(request).is_err() {
+        drop(core);
+        if installed {
+            tokio::select! {
+                biased;
+                () = cancelled(self.stop.clone()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                () = crate::draining(self.drain.clone()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                result = host.send(request) => if result.is_err() { return StatusCode::SERVICE_UNAVAILABLE.into_response(); },
+            }
+        } else if host.try_send(request).is_err() {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
-        drop(core);
         tokio::select! {
             biased;
             () = cancelled(self.stop) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -213,5 +313,71 @@ mod tests {
             request.commit(|_| unreachable!("stopped work ran")).await;
             assert_eq!(sending.await.status(), StatusCode::SERVICE_UNAVAILABLE);
         }
+    }
+
+    #[tokio::test]
+    async fn settings_installer_notification_rechecks_lifetime_before_host_commit() {
+        for signal in 0..3 {
+            let mut fixture = fixture();
+            let sending = fixture
+                .dispatch
+                .clone()
+                .dispatch(None, SettingsOperation::Snapshot, true);
+            tokio::pin!(sending);
+            assert!(std::future::poll_fn(|cx| Poll::Ready(sending.as_mut().poll(cx).is_pending())).await);
+            let request = fixture.inbox.recv().await.unwrap();
+            match signal {
+                0 => {
+                    fixture.stop.send_replace(true);
+                }
+                1 => {
+                    fixture.drain.send_replace(Some(tokio::time::Instant::now()));
+                }
+                _ => fixture.dispatch.core.lock().await.revoke(),
+            }
+            request
+                .commit(|_| unreachable!("cancelled installer notification reached host"))
+                .await;
+            assert_eq!(sending.await.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(fixture.dispatch.core.lock().await.pack_revision, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn settings_installer_notification_waits_for_bounded_host_capacity() {
+        let mut fixture = fixture();
+        let first = fixture
+            .dispatch
+            .clone()
+            .send(URI.parse().unwrap(), SettingsOperation::Snapshot);
+        tokio::pin!(first);
+        assert!(std::future::poll_fn(|cx| Poll::Ready(first.as_mut().poll(cx).is_pending())).await);
+        let installed = fixture
+            .dispatch
+            .clone()
+            .dispatch(None, SettingsOperation::Snapshot, true);
+        tokio::pin!(installed);
+        assert!(std::future::poll_fn(|cx| Poll::Ready(installed.as_mut().poll(cx).is_pending())).await);
+        fixture
+            .inbox
+            .recv()
+            .await
+            .unwrap()
+            .commit(|_| SettingsReply::InvalidPackSelection)
+            .await;
+        assert_eq!(first.await.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(std::future::poll_fn(|cx| Poll::Ready(installed.as_mut().poll(cx).is_pending())).await);
+        fixture
+            .inbox
+            .recv()
+            .await
+            .unwrap()
+            .commit(|_| SettingsReply::InvalidPackSelection)
+            .await;
+        assert_eq!(installed.await.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(matches!(
+            fixture.inbox.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
     }
 }

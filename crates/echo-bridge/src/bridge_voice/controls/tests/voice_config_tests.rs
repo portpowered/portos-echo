@@ -99,7 +99,7 @@ fn configured_capture_watchdog_covers_wait_work_and_playback_with_saturation() {
 #[tokio::test(start_paused = true)]
 async fn configured_call_options_include_context_and_preserve_policy() {
     let prepared = configured().with_mcp_epoch(Some(123));
-    assert_eq!(echo_config::RUNNER_INSTRUCTIONS, "Client audio bridge");
+    assert!(echo_config::RUNNER_INSTRUCTIONS.contains("Lights need no extra confirmation."));
     let tool = DynamicTool {
         name: "test.echo".into(),
         description: "Echo".into(),

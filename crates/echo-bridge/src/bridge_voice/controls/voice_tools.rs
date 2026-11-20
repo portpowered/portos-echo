@@ -12,7 +12,7 @@ use crate::{
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::{AgentConfig, BridgeConfig};
 use echo_delegation::codex_dispatch::Catalog;
-use echo_mcp_client::McpClient;
+use echo_mcp_client::{McpClient, McpError};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
@@ -21,10 +21,16 @@ pub(super) struct Mcp {
     client: Option<McpClient<Token>>,
     trace: Trace,
     receipts: Option<PortosReceipts>,
+    grant: Option<Arc<bridge_mcp::Grant>>,
 }
 
 impl Mcp {
-    fn new(client: Option<McpClient<Token>>, trace: Trace, server: Option<&echo_config::McpServer>) -> Self {
+    fn new(
+        client: Option<McpClient<Token>>,
+        trace: Trace,
+        server: Option<&echo_config::McpServer>,
+        grant: Option<Arc<bridge_mcp::Grant>>,
+    ) -> Self {
         let receipts = server
             .filter(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
             .map(|server| PortosReceipts::new(trace.clone(), server.name.clone()));
@@ -32,6 +38,28 @@ impl Mcp {
             client,
             trace,
             receipts,
+            grant,
+        }
+    }
+
+    async fn call(&self, client: &McpClient<Token>, name: &str, args: Value) -> Result<ToolResult, ToolError> {
+        let Some(grant) = &self.grant else {
+            return client.call(name, args).await.map_err(Into::into);
+        };
+        let generation = grant.scope_generation().map_err(|_| ToolError::Transport)?;
+        match client.call(name, args).await {
+            Err(McpError::InsufficientScope { scope }) => {
+                grant
+                    .scope_denied(generation, name, scope)
+                    .map_err(|_| ToolError::Transport)?;
+                Ok(ToolResult {
+                    content: json!([{"type":"text","text": format!(
+                        "mcp.scope_insufficient: {name} requires {scope}. Link Echo to Port OS again to control devices."
+                    )}]),
+                    is_error: true,
+                })
+            }
+            result => result.map_err(Into::into),
         }
     }
 }
@@ -60,7 +88,7 @@ impl ToolHost for Mcp {
                 .map_err(|_| ToolError::Transport)?;
             0
         };
-        let result = client.call_tool(name, args, key).await;
+        let result = self.call(client, name, args).await;
         if let Some(receipts) = &self.receipts {
             receipts
                 .complete(name, ordinal, result.as_ref().is_ok_and(|result| !result.is_error))
@@ -203,7 +231,7 @@ impl Tools {
             })
             .transpose()?;
         let host = Policy::new(
-            Mcp::new(client, trace.clone(), config.mcp.server.first()),
+            Mcp::new(client, trace.clone(), config.mcp.server.first(), self.grant()),
             &self.allowed,
             &config.audit.log_dir,
             screen.approvals.clone(),

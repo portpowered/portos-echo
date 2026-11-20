@@ -109,8 +109,8 @@ pub(super) async fn assert_surfaces(path: &Path, relink: bool) -> String {
     if relink {
         relink_instruction(&screen, &mut frames, &state).await;
     }
-    let expected =
-        json!({"status":"running","wyoming":"connected","live":"error","relink_required":relink,"kill_switch":false});
+    let expected = json!({"status":"running","wyoming":"connected","live":"error","relink_required":relink,"kill_switch":false,
+            "mcp":"disabled"});
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
             let response = health(entries[0]["health_addr"].as_str().unwrap(), "GET", "/healthz").await;

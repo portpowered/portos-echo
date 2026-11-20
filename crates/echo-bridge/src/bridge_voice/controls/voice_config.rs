@@ -21,6 +21,7 @@ pub struct Configured {
     mcp_epoch: Option<u64>,
     settings_warning: Option<String>,
     startup: Option<Box<EffectiveConfig>>,
+    time_servers: Vec<String>,
 }
 
 impl Configured {
@@ -36,6 +37,8 @@ impl Configured {
         }
         Ok(Self {
             kill_path: config.audit.log_dir.join("bridge-kill"),
+            // Only servers the operator named: the executable adds the public defaults.
+            time_servers: config.clock.servers.clone().unwrap_or_default(),
             config,
             trace,
             health,
@@ -44,7 +47,7 @@ impl Configured {
             settings_warning: None,
             startup: None,
             utc_day: std::sync::Arc::new(|| {
-                std::time::SystemTime::now()
+                crate::bridge_time::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |duration| duration.as_secs() / 86_400)
             }),
@@ -82,6 +85,27 @@ impl Configured {
         self
     }
 
+    /// Measure against the public default servers unless `[clock] servers` names its own.
+    pub(super) fn with_default_time_servers(mut self) -> Self {
+        self.time_servers = self.config.clock.effective_servers();
+        self
+    }
+
+    // Held for a generation: the first measurement is in before the device is admitted.
+    async fn watch_time(&self) -> crate::bridge_time::Watch {
+        let mode = match self.config.live.mode {
+            LiveMode::Chatgpt => "chatgpt",
+            LiveMode::ApiKey => "api_key",
+        };
+        let trace = if self.time_servers.is_empty() {
+            None
+        } else {
+            crate::bridge_trace::Trace::open(&self.trace, mode).ok()
+        };
+        let interval = Duration::from_secs(u64::from(self.config.clock.interval_seconds));
+        crate::bridge_time::start(self.time_servers.clone(), interval, trace).await
+    }
+
     pub(crate) fn with_mcp_epoch(mut self, epoch: Option<u64>) -> Self {
         self.mcp_epoch = epoch;
         self
@@ -103,6 +127,7 @@ impl Configured {
             self.config.home.as_ref().map(|home| home.dir.as_path()),
             async {
                 let api_key = self.api_key()?;
+                let _time = self.watch_time().await;
                 let options = self.options(api_key.as_ref(), tools);
                 super::execute(options, connector, peer, cancelled).await
             },
@@ -148,6 +173,7 @@ impl Configured {
             prompts,
             async {
                 let api_key = self.api_key()?;
+                let _time = self.watch_time().await;
                 let settings = if let Some(host) = retained {
                     Some(crate::bridge_settings::SettingsService::resume(host))
                 } else {

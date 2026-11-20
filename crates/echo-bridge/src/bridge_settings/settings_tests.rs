@@ -300,3 +300,58 @@ fn screen_settings_store_requires_configured_home_and_validates_adopted_overlay(
     assert_eq!(store.effective().agent.max_tool_calls, 4);
     assert_eq!(files(&store.home), [] as [&str; 0]);
 }
+
+#[test]
+fn screen_pack_store_persists_selection_without_voice_restart_and_preserves_siblings() {
+    let (_root, mut store) = setup();
+    assert!(store.save(&patch("[agent]\nmax_tool_calls=4")).unwrap());
+    let before = store.effective().clone();
+    for selection in ["template@0.1.0", "local-pack", ""] {
+        let overlay = patch(&format!("screen_pack='{selection}'"));
+        assert!(!store.save(&overlay).unwrap());
+        assert_eq!(*store.effective(), before);
+        let persisted = fs::read_to_string(store.home.join("settings.toml")).unwrap();
+        let restored = patch(&persisted);
+        assert_eq!(restored.screen_pack(), Some(selection));
+        assert_eq!(restored.apply_to(&store.base).unwrap().agent.max_tool_calls, 4);
+        assert!(!store.save(&overlay).unwrap());
+        assert_eq!(fs::read_to_string(store.home.join("settings.toml")).unwrap(), persisted);
+    }
+    assert!(store.save(&patch("[voice]\nsession_listen_enabled=false")).unwrap());
+    let restored = patch(&fs::read_to_string(store.home.join("settings.toml")).unwrap());
+    assert_eq!(restored.screen_pack(), Some(""));
+    assert!(!restored.apply_to(&store.base).unwrap().voice.session_listen_enabled);
+    assert_eq!(files(&store.home), ["settings.toml"]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(store.home.join("settings.toml"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn screen_pack_store_failed_selection_save_retains_previous_file_and_accepted_choice() {
+    let (_root, mut store) = setup();
+    assert!(!store.save(&patch("screen_pack='template@0.1.0'")).unwrap());
+    let before = fs::read(store.home.join("settings.toml")).unwrap();
+    for stage in [Stage::Create, Stage::Write, Stage::FileSync, Stage::Rename] {
+        let error = store.save_with(&patch("screen_pack=''"), |current| {
+            if current == stage {
+                Err(std::io::Error::other("synthetic persistence failure"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(error, Err(SettingsError::Persistence)));
+        assert_eq!(store.overlay.screen_pack(), Some("template@0.1.0"));
+        assert_eq!(fs::read(store.home.join("settings.toml")).unwrap(), before);
+        assert_eq!(files(&store.home), ["settings.toml"]);
+    }
+}

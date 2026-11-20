@@ -13,13 +13,7 @@ use echo_link::LinkConnector;
 use echo_media::MediaPeer;
 use echo_screen_contract::settings_v1::LinkStatusV1;
 use echo_screen_server::SettingsRequest;
-use std::{
-    cell::{Cell, RefCell},
-    future::Future,
-    net::SocketAddr,
-    path::Path,
-    pin::Pin,
-};
+use std::{cell::Cell, future::Future, net::SocketAddr, path::Path, pin::Pin};
 use tokio::{sync::watch, time::Instant};
 
 pub struct RuntimeOptions<'a> {
@@ -55,23 +49,24 @@ impl RuntimeOptions<'_> {
     }
 }
 
-struct SettingsLink {
+struct SettingsLink<'a> {
+    health: &'a Health,
     portos: bool,
-    grant: RefCell<Option<std::sync::Arc<crate::bridge_mcp::Grant>>>,
 }
 
-impl SettingsLink {
-    fn new(config: Option<&echo_config::BridgeConfig>) -> Self {
-        Self {
-            portos: config.is_some_and(|config| {
-                config
-                    .mcp
-                    .server
-                    .first()
-                    .is_some_and(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
-            }),
-            grant: RefCell::new(None),
+impl<'a> SettingsLink<'a> {
+    fn new(config: Option<&echo_config::BridgeConfig>, health: &'a Health) -> Self {
+        let portos = config.is_some_and(|config| {
+            config
+                .mcp
+                .server
+                .first()
+                .is_some_and(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
+        });
+        if portos {
+            health.state.send_modify(|state| state.mcp = "unlinked");
         }
+        Self { health, portos }
     }
 
     async fn open_tools(
@@ -82,16 +77,15 @@ impl SettingsLink {
     ) -> Result<(), Error> {
         if let (Some(config), Some(tools)) = (options.delegation, tools) {
             view.open_tools(tools, config, options.mcp_epoch).await?;
-            *self.grant.borrow_mut() = tools.grant();
+            self.health.set_mcp(tools.grant())?;
         }
         Ok(())
     }
 
     fn status(&self) -> LinkStatusV1 {
         if self.portos {
-            self.grant
-                .borrow()
-                .as_ref()
+            self.health
+                .mcp_grant()
                 .map_or(LinkStatusV1::LinkRequired, |grant| grant.link_status())
         } else {
             LinkStatusV1::Unconfigured
@@ -165,6 +159,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     super::prompts::publish(&mut trace)?;
     let (service, send) = settings.map_or((None, None), |(service, send)| (Some(service), Some(send)));
     let mut screen = Screen::bind_with_settings(options.screen, send).await?;
+    screen.download_packs(options.delegation, &trace);
     screen.settings_warning(options.settings_warning, &mut trace)?;
     let health = match Health::bind(options.health).await {
         Ok(health) => health,
@@ -177,7 +172,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     let settings_trace = trace.clone();
     let mut view = View::new(&screen, &health, &mut trace);
     let requested = Cell::new(false);
-    let link = SettingsLink::new(options.delegation);
+    let link = SettingsLink::new(options.delegation, &health);
     let work = Box::pin(work(
         options, connector, &mut peer, cancelled, &mut view, &requested, &link,
     ));
@@ -244,7 +239,7 @@ async fn work<C: LinkConnector, P: MediaPeer>(
     cancelled: impl Future<Output = ()>,
     view: &mut View<'_>,
     requested: &Cell<bool>,
-    grant: &SettingsLink,
+    grant: &SettingsLink<'_>,
 ) -> Result<(), Error> {
     view.startup()?;
     let cancelled = async {
@@ -284,7 +279,7 @@ struct Live<'a, 'v, 'w, F> {
     peer: F,
     view: &'v mut View<'w>,
     requested: &'v Cell<bool>,
-    grant: &'v SettingsLink,
+    grant: &'v SettingsLink<'v>,
     /// Startup allowance, granted afresh to every generation.
     budget: std::time::Duration,
 }
@@ -332,8 +327,7 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                 if let Some(tools) = &mut tools {
                     tools.close().await;
                 }
-                *grant.grant.borrow_mut() = None;
-                result
+                result.and(grant.health.set_mcp(None))
             },
         )
         .await;

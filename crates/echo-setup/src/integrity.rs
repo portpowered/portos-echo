@@ -72,7 +72,6 @@ struct Manifest {
 pub struct OfflineBundle {
     pub root: PathBuf,
     pub version: String,
-    pub files: Vec<String>,
 }
 
 /// Validate and snapshot the entire tree before any device effect.
@@ -96,13 +95,10 @@ pub fn offline(directory: &Path, snapshot: PathBuf) -> Result<OfflineBundle> {
     if observed != manifest.files {
         return Err(Failure("manifest_mismatch"));
     }
-    let mut files: Vec<_> = observed.into_keys().collect();
     write_member(&snapshot.join("MANIFEST"), &encoded)?;
-    files.push("MANIFEST".to_owned());
     Ok(OfflineBundle {
         root: snapshot,
         version,
-        files,
     })
 }
 
