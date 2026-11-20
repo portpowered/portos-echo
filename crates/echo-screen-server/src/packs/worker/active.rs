@@ -92,10 +92,12 @@ mod tests {
             .unwrap();
             std::fs::write(pack.join("rest.png"), "generated-rest").unwrap();
             let (host, mut inbox) = mpsc::channel::<crate::SettingsRequest>(1);
+            let (_stop, stop) = watch::channel(false);
+            let (_drain, drain) = watch::channel(None);
             let dispatch = SettingsDispatch {
                 core: core.clone(),
-                stop: watch::channel(false).1,
-                drain: watch::channel(None).1,
+                stop,
+                drain,
                 host: Some(host),
             };
             let owner = tokio::spawn(async move {
