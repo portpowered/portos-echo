@@ -87,21 +87,23 @@ fn plain() -> String {
 }
 
 #[test]
-fn echo_cancel_defaults_on_switches_off_and_bounds_its_hint() {
+fn echo_cancel_defaults_off_switches_on_and_bounds_its_hint() {
     let plain = plain();
     let audio = |table: &str| BridgeConfig::from_toml_str(&format!("{plain}\n{table}")).map(|config| config.audio);
     // The example names the defaults; an absent or empty table gives the same.
     let shown = BridgeConfig::from_toml_str(EXAMPLE).unwrap().audio;
     assert_eq!(
         (shown.echo_cancel, shown.echo_delay_ms, shown.echo_delay()),
-        (true, 240, Some(240))
+        (false, 240, None)
     );
     assert_eq!(audio("").unwrap(), shown);
     assert_eq!(audio("[audio]\n").unwrap(), shown);
     let off = audio("[audio]\necho_cancel=false\necho_delay_ms=300\n").unwrap();
     assert_eq!((off.echo_delay_ms, off.echo_delay()), (300, None));
+    let on = audio("[audio]\necho_cancel=true\n").unwrap();
+    assert_eq!((on.echo_delay_ms, on.echo_delay()), (240, Some(240)));
     for value in [0, 320, 800] {
-        let read = audio(&format!("[audio]\necho_delay_ms={value}\n")).unwrap();
+        let read = audio(&format!("[audio]\necho_cancel=true\necho_delay_ms={value}\n")).unwrap();
         assert_eq!(read.echo_delay(), Some(value));
     }
     for value in ["801", "65535", "65536", "-1", "1.5", "true", "'SYNTHETIC_VALUE'"] {

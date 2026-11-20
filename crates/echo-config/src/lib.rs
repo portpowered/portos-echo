@@ -145,6 +145,7 @@ pub struct AudioConfig {
     /// Maximum reply audio sent ahead of playback, in complete 20 ms frames.
     pub reply_lead_ms: u16,
     /// Take the reply's own echo out of the microphone before it goes upstream.
+    /// Off unless asked for: the Echo's own capture path is the first canceller.
     pub echo_cancel: bool,
     /// Where the canceller looks for that echo first, after the reply frame
     /// was written to the Echo. It finds the real delay by itself.
@@ -163,7 +164,7 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             reply_lead_ms: 200,
-            echo_cancel: true,
+            echo_cancel: false,
             echo_delay_ms: 240,
         }
     }

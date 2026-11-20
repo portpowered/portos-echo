@@ -179,8 +179,8 @@ capture in the same run when a client explicitly cuts playback.
 In the pinned fork, `audio_mixer.c` opens `MIXER_REC_ASR` (`micAsr`) and plays through
 `MIXER_PLAY_TTS`, preserving Amazon's reference path. **`-D` enables duplex capture; it is not an AEC
 implementation.** The [baselines](program/baselines.md#the-device) establish installed duplex operation and
-local wake detection, and that the microphone audio hassmic sends carries the reply's echo uncancelled.
-The bridge cancels it ([Echo cancellation](#echo-cancellation)).
+local wake detection, and that the microphone audio hassmic sends on its present source carries the
+reply's echo uncancelled. The bridge can cancel it ([Echo cancellation](#echo-cancellation)).
 
 #### Language — hassmic
 
@@ -245,7 +245,8 @@ from pinned Codex `voice-host`, using webrtc/rtc 0.21.1, Opus and Rubato (see [A
 - Own bounded audio queues, call/run lifetimes, media readiness, health, traces, screen and kill controls.
 - Hold the Port OS grant and exclusive private Codex-home lease; execute admitted dynamic tools.
 - Enforce configured tool-count/deadline/daily caps and correlate interruption with the delegated turn.
-- Take the reply's own echo out of the microphone before it goes upstream ([Echo cancellation](#echo-cancellation)).
+- When `audio.echo_cancel` is on, take the reply's own echo out of the microphone before it goes upstream
+  ([Echo cancellation](#echo-cancellation)).
 - It does not detect “Computer” or parse the native Live sideband delegation protocol.
 
 #### Where it runs — echo-bridge
@@ -787,8 +788,9 @@ playback can happen together; hassmic's `-D` enables that overlap and is **not**
 #### How we use it — AEC and duplex capture
 
 hassmic reads `MIXER_REC_ASR` and plays through `MIXER_PLAY_TTS`. With `-D`, microphone chunks continue
-during a reply so user speech can reach Live while it speaks. The Echo's own path cancels nothing
-([baselines](program/baselines.md#the-device)): the bridge does, as the next section describes.
+during a reply so user speech can reach Live while it speaks. On hassmic's present capture source the
+Echo's own path cancels nothing ([baselines](program/baselines.md#the-device)). The bridge has its own
+canceller as the fallback, as the next section describes.
 
 #### Why — AEC and duplex capture
 
@@ -803,15 +805,19 @@ control from device acoustics.
 
 #### Limits and plans — AEC and duplex capture
 
-The vendor's "voice communication" capture source mutes the speaker instead of cancelling, so hassmic keeps
-its present source. File-audio hassmic-host tests have no acoustic path at all.
+The owner's plan (2026-11-19) is the Echo's call-mode canceller, with hassmic capturing on the vendor's
+"voice communication" source; the one measurement so far found that source muting the speaker instead of
+cancelling ([baselines](program/baselines.md#the-device)). File-audio hassmic-host tests have no acoustic
+path at all.
 
 ### Echo cancellation
 
 #### What it is — Echo cancellation
 
 WebRTC's AEC3, from the pure Rust `sonora` crate ([ADR 0029](adr/0029-echo-cancel.md)), running in the
-bridge. It is given what the speaker plays (the far end) and what the microphone hears, finds the delay
+bridge. It is the fallback for a microphone path that does not cancel: off by default
+(`audio.echo_cancel = false`), so that it never runs after a canceller on the Echo. It is given what the
+speaker plays (the far end) and what the microphone hears, finds the delay
 between them, models the room with an adaptive filter and subtracts the echo. Only the canceller and its
 high-pass filter run; noise suppression and gain control are off.
 
@@ -841,7 +847,7 @@ Live session --reply, 24 kHz--> pacing --20 ms frames--> hassmic --> speaker
   estimator finds it, searching up to 800 ms; `audio.echo_delay_ms` says where to look first.
 - **A cut.** When a barge-in flushes the Echo, the reply frames whose playout had not begun are dropped
   from the far end as well.
-- **Pass-through.** With `audio.echo_cancel = false`, and until the run's first reply frame, microphone
+- **Pass-through.** With `audio.echo_cancel = false` (the default), and until the run's first reply frame, microphone
   frames go upstream byte for byte: there is nothing to cancel, and a request is never filtered.
 - **Lifetime.** A canceller lives for one run. A new run converges again, within about a quarter of a second
   of the reply's first echo.
@@ -1064,9 +1070,9 @@ speaker. The bridge still measures the microphone under each reply
 
 The pinned session's turn detection and noise reduction cannot be set by a client. The V3 session update
 carries the instructions, the voice, the delegation mode and the initial items, and `thread/realtime/start`
-has no field for either. The Echo's microphone path has no echo cancellation of its own, so the bridge
-takes the reply out of the microphone before the session hears it ([Echo cancellation](#echo-cancellation));
-what is left of the reply can still interrupt it.
+has no field for either. Where the microphone path does not cancel the reply's echo, the session hears the
+Echo's speaker and can interrupt its own reply; the bridge's canceller
+([Echo cancellation](#echo-cancellation)) is the fallback for that.
 
 A transcript of the user that comes before any audio of the reply has been written to the Echo arms
 nothing: it is of the turn the reply answers. A call's first reply starts on a 300 ms jitter cushion, the

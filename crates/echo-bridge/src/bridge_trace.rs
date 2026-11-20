@@ -32,7 +32,7 @@
 //! `echo_mean`, the mean of that ratio over this reply's loud frames, and
 //! `noise`, the room's RMS with the speaker silent.
 //! Its `aec` is what the echo canceller measured under the reply, or null
-//! with `audio.echo_cancel` off: `delay_ms`, the delay AEC3 found from a
+//! with `audio.echo_cancel` off (the default): `delay_ms`, the delay AEC3 found from a
 //! reply frame's modelled playout to its echo at the microphone, `erle_db`,
 //! the microphone's energy over the uplink's while reply audio could be
 //! heard, and `converged`, true once that reduction reached 15 dB.

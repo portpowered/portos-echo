@@ -2,7 +2,7 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 19
-status: accepted; echo cancellation in the bridge
+status: accepted; fallback echo cancellation in the bridge, off by default
 ---
 
 # WebRTC echo canceller in the bridge
@@ -14,8 +14,10 @@ The Echo's microphone path gives no echo cancellation
 equals the raw microphone, and the vendor's "voice communication" source
 mutes the speaker instead of cancelling. The Live session therefore hears
 the Echo's own reply and can interrupt it. The owner decided on 2026-11-19
-to use WebRTC's standard canceller in the bridge
-([decisions](../program/decisions.md)).
+to use WebRTC's standard canceller in the bridge, and later that day to
+try the Echo's call-mode canceller first and keep this one as the fallback
+([decisions](../program/decisions.md)). `audio.echo_cancel` is therefore
+false by default.
 
 ## Decision
 
