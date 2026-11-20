@@ -37,15 +37,25 @@ The installer does not rewrite the old binary/CA paths in the Echo example; use 
 the quickstart. It rejects unsafe paths and migrates retained private state to the fixed non-root owner.
 
 The base must validate first. If `[home]` is configured, `BridgeConfig::load_effective` then reads that home's
-optional `settings.toml` (maximum 65,536 bytes). Only these leaves override base:
-`voice.session_listen_enabled`, `voice.session_listen_seconds`, `codex.voice`,
-`agent.daily_request_cap`, `agent.max_tool_calls`. The separate root `screen_pack`
-selects installed screen data; it does not override a base voice setting. Missing leaves retain base values.
+optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leaves:
+
+- Voice and OpenAI: `voice.session_listen_enabled`, `voice.session_listen_seconds`,
+  `codex.voice`, `codex.web_search`, `codex.delegate_model` and `codex.delegate_effort`.
+  An empty delegated model or effort selects the pinned app server's default.
+- Agent: `agent.daily_request_cap`, `agent.max_tool_calls`, `agent.task_deadline_seconds`
+  and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
+- Port OS: `mcp.scopes` and the `allow_tools` list under `[[mcp.server]]`, bound to the configured
+  Port OS server by its `name`. An empty tool list disables all Port OS tools.
+- Screen data: the root `screen_pack` selects installed packs.
+
+Missing leaves retain base values. The Port OS server identity and URL are read-only in the panel.
 Unknown keys, bad types, unreadable/oversized files or invalid effective values reject the **whole overlay**;
 the validated base remains active and a warning is presented. An invalid base remains a startup error.
 The operator account/link commands load base directly; the voice runtime loads the effective configuration.
 
-Voice and cap edits persist first, then request replacement at an idle/between-call boundary.
+Settings edits persist first, then request replacement at an idle/between-call boundary.
+Withdrawing Port OS scopes or tools also denies affected calls in the running bridge as soon as the save succeeds.
+Adding permissions takes effect after restart and still requires the applicable grant scopes.
 They do not interrupt an active conversation. Screen-pack selection saves use the same atomic writer
 and never request or retry replacement. Catalog and selection persistence are implemented; visible
 pack playback and hot reload remain pending (see [screen packs](screen-packs.md)).

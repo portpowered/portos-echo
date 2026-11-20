@@ -1,5 +1,5 @@
 //! The screen's sparse, non-secret overlay. Never rewrites the operator's base.
-use crate::{BridgeConfig, ConfigError, config_decode::Fields};
+use crate::{AgentTools, BridgeConfig, ConfigError, McpAuth, WebSearch, config_decode::Fields};
 use std::{collections::BTreeMap, io::Read, path::Path};
 
 const MAX_OVERLAY_BYTES: u64 = 65_536;
@@ -14,6 +14,27 @@ pub struct SettingsOverlay {
     voice: Option<String>,
     daily_cap: Option<u64>,
     tool_cap: Option<u32>,
+    options: SettingsOptions,
+}
+
+/// Additional sparse leaves admitted by Settings V2.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SettingsOptions {
+    pub web_search: Option<WebSearch>,
+    pub delegate_model: Option<String>,
+    pub delegate_effort: Option<String>,
+    pub task_deadline_seconds: Option<u64>,
+    pub agent_tools: Option<Vec<String>>,
+    pub scopes: Option<Vec<String>>,
+    pub server: Option<SettingsServerTools>,
+}
+
+/// Only the active Port OS server's tool allowlist is editable.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsServerTools {
+    pub name: String,
+    pub allow_tools: Vec<String>,
 }
 
 /// Effective startup configuration with an optional safe, reportable warning.
@@ -45,7 +66,20 @@ impl SettingsOverlay {
             voice,
             daily_cap,
             tool_cap,
+            options: SettingsOptions::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_options(mut self, options: SettingsOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Whether the overlay manages Port OS permissions in this generation.
+    #[must_use]
+    pub fn manages_portos(&self) -> bool {
+        self.options.scopes.is_some() || self.options.server.is_some()
     }
 
     /// Decode only editable keys. Validation against the base is separate.
@@ -71,13 +105,18 @@ impl SettingsOverlay {
         }
         if let Some(mut codex) = fields.section("codex")? {
             result.voice = codex.optional("voice")?;
+            result.options.web_search = codex.optional("web_search")?;
+            result.options.delegate_model = codex.optional("delegate_model")?;
+            result.options.delegate_effort = codex.optional("delegate_effort")?;
             codex.finish()?;
         }
         if let Some(mut agent) = fields.section("agent")? {
             result.daily_cap = agent.optional("daily_request_cap")?;
             result.tool_cap = agent.optional("max_tool_calls")?;
+            result.options.task_deadline_seconds = agent.optional("task_deadline_seconds")?;
             agent.finish()?;
         }
+        result.options.decode_sections(&mut fields)?;
         fields.finish()?;
         if let Some(value) = result.daily_cap {
             i64::try_from(value).map_err(|_| ConfigError::new("agent.daily_request_cap", "must fit a TOML integer"))?;
@@ -110,6 +149,7 @@ impl SettingsOverlay {
         if let Some(value) = self.tool_cap {
             config.agent.max_tool_calls = value;
         }
+        self.options.apply_to(&mut config)?;
         crate::config_validate::validate(&config)?;
         Ok(config)
     }
@@ -124,6 +164,7 @@ impl SettingsOverlay {
             voice: patch.voice.clone().or_else(|| self.voice.clone()),
             daily_cap: patch.daily_cap.or(self.daily_cap),
             tool_cap: patch.tool_cap.or(self.tool_cap),
+            options: self.options.merge(&patch.options),
         }
     }
 
@@ -162,6 +203,7 @@ impl SettingsOverlay {
                 .or_default()
                 .insert("max_tool_calls", value.into());
         }
+        self.options.encode(&mut tables)?;
         let mut root: BTreeMap<&str, toml::Value> = tables
             .into_iter()
             .map(|(key, table)| {
@@ -183,6 +225,134 @@ impl SettingsOverlay {
     pub fn screen_pack(&self) -> Option<&str> {
         self.screen_pack.as_deref()
     }
+}
+
+impl SettingsOptions {
+    fn decode_sections(&mut self, fields: &mut Fields<'_>) -> Result<(), ConfigError> {
+        if let Some(mut home) = fields.section("home")? {
+            self.agent_tools = home.optional("agent_tools")?;
+            home.finish()?;
+        }
+        if let Some(mut mcp) = fields.section("mcp")? {
+            self.scopes = mcp.optional("scopes")?;
+            if let Some(mut servers) = mcp.optional::<Vec<SettingsServerTools>>("server")? {
+                if servers.len() != 1 {
+                    return Err(ConfigError::new("mcp.server", "expected one Port OS server override"));
+                }
+                self.server = servers.pop();
+            }
+            mcp.finish()?;
+        }
+        Ok(())
+    }
+
+    fn apply_to(&self, config: &mut BridgeConfig) -> Result<(), ConfigError> {
+        if let Some(mode) = self.web_search {
+            config.codex.web_search = mode;
+        }
+        if let Some(model) = &self.delegate_model {
+            config.codex.delegate_model = nonempty_override(model);
+        }
+        if let Some(effort) = &self.delegate_effort {
+            config.codex.delegate_effort = nonempty_override(effort);
+        }
+        if let Some(deadline) = self.task_deadline_seconds {
+            config.agent.task_deadline_seconds = deadline;
+        }
+        if let Some(groups) = &self.agent_tools {
+            let home = config
+                .home
+                .as_mut()
+                .ok_or(ConfigError::new("home.agent_tools", "requires configured home"))?;
+            home.agent_tools = home_tools(groups)?;
+        }
+        self.apply_portos(config)
+    }
+
+    fn apply_portos(&self, config: &mut BridgeConfig) -> Result<(), ConfigError> {
+        if self.scopes.is_none() && self.server.is_none() {
+            return Ok(());
+        }
+        let server = config
+            .mcp
+            .server
+            .first_mut()
+            .filter(|server| server.auth == McpAuth::PortosDeviceCode)
+            .ok_or(ConfigError::new("mcp.server", "expected active Port OS server"))?;
+        if let Some(tools) = &self.server {
+            if tools.name != server.name {
+                return Err(ConfigError::new("mcp.server", "Port OS server name does not match"));
+            }
+            server.allow_tools.clone_from(&tools.allow_tools);
+        }
+        if let Some(scopes) = &self.scopes {
+            config.mcp.scopes.clone_from(scopes);
+        }
+        Ok(())
+    }
+
+    fn merge(&self, patch: &Self) -> Self {
+        Self {
+            web_search: patch.web_search.or(self.web_search),
+            delegate_model: patch.delegate_model.clone().or_else(|| self.delegate_model.clone()),
+            delegate_effort: patch.delegate_effort.clone().or_else(|| self.delegate_effort.clone()),
+            task_deadline_seconds: patch.task_deadline_seconds.or(self.task_deadline_seconds),
+            agent_tools: patch.agent_tools.clone().or_else(|| self.agent_tools.clone()),
+            scopes: patch.scopes.clone().or_else(|| self.scopes.clone()),
+            server: patch.server.clone().or_else(|| self.server.clone()),
+        }
+    }
+
+    fn encode(&self, tables: &mut BTreeMap<&str, BTreeMap<&str, toml::Value>>) -> Result<(), ConfigError> {
+        let mut leaf = |table, key, value| {
+            if let Some(value) = value {
+                tables.entry(table).or_default().insert(key, value);
+            }
+        };
+        leaf("codex", "web_search", self.web_search.map(|mode| mode.as_str().into()));
+        leaf("codex", "delegate_model", self.delegate_model.clone().map(Into::into));
+        leaf("codex", "delegate_effort", self.delegate_effort.clone().map(Into::into));
+        let deadline = self
+            .task_deadline_seconds
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| ConfigError::new("agent.task_deadline_seconds", "must fit a TOML integer"))?;
+        leaf("agent", "task_deadline_seconds", deadline.map(Into::into));
+        leaf("home", "agent_tools", self.agent_tools.clone().map(toml_array));
+        leaf("mcp", "scopes", self.scopes.clone().map(toml_array));
+        if let Some(server) = &self.server {
+            let value =
+                toml::Value::try_from(server).map_err(|_| ConfigError::new("mcp.server", "cannot encode overlay"))?;
+            leaf("mcp", "server", Some(toml::Value::Array(vec![value])));
+        }
+        Ok(())
+    }
+}
+
+fn nonempty_override(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn home_tools(groups: &[String]) -> Result<AgentTools, ConfigError> {
+    let mut tools = AgentTools {
+        notes: false,
+        prompts: false,
+    };
+    for group in groups {
+        let enabled = match group.as_str() {
+            "notes" => &mut tools.notes,
+            "prompts" => &mut tools.prompts,
+            _ => return Err(ConfigError::new("home.agent_tools", "unsupported group")),
+        };
+        if std::mem::replace(enabled, true) {
+            return Err(ConfigError::new("home.agent_tools", "duplicate group"));
+        }
+    }
+    Ok(tools)
+}
+
+fn toml_array(values: Vec<String>) -> toml::Value {
+    toml::Value::Array(values.into_iter().map(Into::into).collect())
 }
 
 impl BridgeConfig {
