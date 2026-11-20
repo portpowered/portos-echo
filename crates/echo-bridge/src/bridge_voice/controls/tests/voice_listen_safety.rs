@@ -341,3 +341,153 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
         assert_eq!(port.1.borrow().len(), 0);
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn voice_listen_goodbye_settles_without_arming_idle_in_either_tool_order() {
+    for order in [GoodbyeOrder::Early, GoodbyeOrder::LateTool] {
+        goodbye_with_end(order).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_listen_goodbye_handoff_after_played_uses_the_settled_reply() {
+    for turn_first in [false, true] {
+        goodbye_with_end(GoodbyeOrder::LateHandoff { turn_first }).await;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GoodbyeOrder {
+    Early,
+    LateTool,
+    LateHandoff { turn_first: bool },
+}
+
+async fn goodbye_with_end(order: GoodbyeOrder) {
+    let device = Observer::default();
+    let mut client = FakeConnector::new(device.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    device.wake("Computer", vec![]);
+    let Some(LinkEvent::Wake(mut microphone)) = events.recv().await.unwrap() else {
+        unreachable!()
+    };
+    let (tx, rx) = mpsc::channel(64);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let mut source = Source::new(200, false).unwrap();
+    let options = Options {
+        listen_timeout: Some(Duration::from_secs(3)),
+        session_max: Duration::from_secs(60),
+        response_deadline: Instant::now() + Duration::from_secs(10),
+        played_timeout: Duration::from_secs(1),
+        reply_lead_ms: 200,
+        muted: false,
+    };
+    source.session = super::super::session_tools::Grants::new(options.listen_timeout, options.session_max);
+    source.controller.admit_response(options.response_deadline).unwrap();
+    let (end, answer) = session_request(
+        crate::bridge_codex::SessionCommand::End,
+        &source.session.run,
+        "farewell",
+    );
+    let played = tokio::sync::Notify::new();
+    let stopped = tokio::sync::Notify::new();
+    let mut receipts = Vec::new();
+    let mut observe = |notice| {
+        match notice {
+            Notice::SessionTool(receipt) => receipts.push(receipt.outcome),
+            Notice::ReplyPlayed => played.notify_one(),
+            _ => (),
+        }
+        Ok(())
+    };
+    let mut drain = None;
+    let answer = goodbye_run(
+        replies(
+            &client,
+            (&mut events, &mut microphone),
+            &mut port,
+            (&mut source, &mut drain),
+            &options,
+            std::future::pending(),
+            &mut observe,
+        ),
+        &device,
+        &stopped,
+        goodbye_inputs(&device, &tx, (&stopped, &played), (end, answer), order),
+    )
+    .await;
+    assert_eq!(answer.content, serde_json::json!({"ending_after_reply": true}));
+    assert_eq!(receipts, ["applied"]);
+    if !matches!(order, GoodbyeOrder::LateHandoff { .. }) {
+        assert_eq!(source.controller.idle_deadline(), None);
+    }
+    assert!(source.controller.ready_to_close(true, true));
+    assert_eq!(source.stats.reply_sent, 12);
+    let commands = device.commands();
+    assert_eq!(
+        commands.iter().filter(|cmd| matches!(cmd, Command::Start(..))).count(),
+        1
+    );
+    assert!(!commands.iter().any(|cmd| matches!(cmd, Command::Cut(_))));
+}
+
+async fn goodbye_run<T>(
+    run: impl Future<Output = Result<(), Error>>,
+    device: &Observer,
+    stopped: &tokio::sync::Notify,
+    inputs: impl Future<Output = T>,
+) -> T {
+    tokio::pin!(run);
+    let mut stop_seen = false;
+    let run = poll_fn(|cx| {
+        let result = run.as_mut().poll(cx);
+        if !stop_seen && device.commands().last() == Some(&Command::Stop) {
+            stop_seen = true;
+            stopped.notify_one();
+        }
+        result.map(|result| result.unwrap())
+    });
+    let (_, answer) = tokio::join!(run, inputs);
+    answer
+}
+
+async fn goodbye_inputs(
+    device: &Observer,
+    tx: &mpsc::Sender<MediaEvent>,
+    (stopped, played): (&tokio::sync::Notify, &tokio::sync::Notify),
+    (end, answer): (Event, tokio::sync::oneshot::Receiver<echo_agent_api::ToolResult>),
+    order: GoodbyeOrder,
+) -> echo_agent_api::ToolResult {
+    let mut end = Some(end);
+    if !matches!(order, GoodbyeOrder::LateHandoff { .. }) {
+        handoff(tx, true).await;
+    }
+    if matches!(order, GoodbyeOrder::Early) {
+        tx.send(MediaEvent::Control(end.take().unwrap())).await.unwrap();
+    }
+    reply(tx, 5000).await;
+    stopped.notified().await;
+    assert_eq!(device.commands().last(), Some(&Command::Stop));
+    device.finish(Ok(()));
+    played.notified().await;
+    if let GoodbyeOrder::LateHandoff { turn_first } = order {
+        handoff(tx, turn_first).await;
+    }
+    if let Some(end) = end {
+        tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+        tx.send(MediaEvent::Control(end)).await.unwrap();
+    }
+    answer.await.unwrap()
+}
+
+async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {
+    let turn = Event::TurnStarted {
+        thread: "thread".into(),
+        turn: "turn".into(),
+    };
+    let marker = Event::GoodbyeHandoff;
+    let events = if turn_first { [turn, marker] } else { [marker, turn] };
+    for event in events {
+        tx.send(MediaEvent::Control(event)).await.unwrap();
+    }
+}

@@ -37,6 +37,7 @@ pub(super) struct Grants {
 pub(super) enum Goodbye {
     Pending,
     Finished,
+    Ending,
 }
 
 impl Grants {
@@ -49,9 +50,9 @@ impl Grants {
         }
     }
 
-    /// Sticky after-play end requested by the agent.
+    /// The run ends at the playback boundary unless a goodbye is cut.
     pub fn ending(&self) -> bool {
-        self.ending
+        self.ending || self.goodbye == Some(Goodbye::Ending)
     }
 
     /// The configured listen window after a reply.
@@ -150,15 +151,23 @@ fn decide(
     match command {
         SessionCommand::Invalid { .. } => refuse("invalid_arguments"),
         SessionCommand::End => {
-            let outcome = if grants.ending { "duplicate" } else { "applied" };
-            grants.ending = true;
+            let outcome = if grants.ending() {
+                "duplicate"
+            } else {
+                if grants.goodbye.is_some() {
+                    grants.goodbye = Some(Goodbye::Ending);
+                } else {
+                    grants.ending = true;
+                }
+                "applied"
+            };
             let result = ToolResult {
                 content: json!({"ending_after_reply": true}),
                 is_error: false,
             };
             (result, receipt(tool, outcome))
         }
-        SessionCommand::Extend(_) if grants.ending => refuse("session_closing"),
+        SessionCommand::Extend(_) if grants.ending() => refuse("session_closing"),
         SessionCommand::Extend(seconds) => {
             // During playback the base is the projected post-play deadline.
             let now = Instant::now();

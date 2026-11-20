@@ -269,6 +269,11 @@ impl World {
             if self.count("session.tool_receipt") != 0 || self.count("wyoming.run_ended") != 0 {
                 return Err("goodbye: end or receipt before the held runner was released".into());
             }
+            // Advance the guarded clock so the hand-off is observably later than Played.
+            self.step(20).await?;
+            self.provider.control(Control::Delegate(turn)).await?;
+            self.wait("late native goodbye", |world| world.provider.count("waiting") == 1, 0)
+                .await?;
             self.transcript("canary", "user", FOLLOWUP, true).await?;
             self.transcript("canary-reply", "assistant", "Unexpected follow-up.", false)
                 .await?;
@@ -347,7 +352,7 @@ impl World {
             0,
         )
         .await?;
-        if let Some((turn, _)) = goodbye {
+        if let Some((turn, false)) = goodbye {
             self.provider.control(Control::Delegate(turn)).await?;
             self.wait(
                 "native goodbye",

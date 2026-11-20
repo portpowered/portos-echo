@@ -72,6 +72,8 @@ fn settle_cut(
     followup: bool,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<bool, Error> {
+    // An interrupted farewell cannot end the replacement reply's run.
+    // A separate delegated end stays armed.
     if source.session.goodbye.take().is_some() && !source.session.ending() {
         retire_goodbye(source, port);
     }
@@ -144,10 +146,10 @@ pub(super) fn goodbye_handoff(source: &mut Source) {
 }
 
 pub(super) fn complete_turn(source: &mut Source) {
-    if source.session.goodbye.is_some() {
-        source.session.goodbye = Some(Goodbye::Finished);
-    } else {
-        source.delegation.completed();
+    match source.session.goodbye {
+        Some(Goodbye::Pending) => source.session.goodbye = Some(Goodbye::Finished),
+        Some(_) => {}
+        None => source.delegation.completed(),
     }
 }
 
@@ -310,6 +312,20 @@ async fn listen<E: LinkEvents>(
     loop {
         // A granted extension moves the deadline; a requested end closes now.
         let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
+        if source.session.goodbye == Some(Goodbye::Pending) && !source.session.ending() {
+            wait_goodbye(
+                (events, microphone),
+                port,
+                (source, drain),
+                idle.max(hold.unwrap_or(idle)),
+                cancelled.as_mut(),
+                observe,
+            )
+            .await?;
+            if !source.session.ending() {
+                source.session.goodbye = None;
+            }
+        }
         let deadline = match hold {
             Some(hold) if source.delegation.in_flight() => idle.max(hold),
             _ => idle,
@@ -353,6 +369,14 @@ async fn listening_step<E: LinkEvents>(
         },
         event = port.next() => {
             let event = event?;
+            // Neither the native hand-off nor a turn starting after Played
+            // owns new playback. The turn can precede its hand-off marker.
+            if matches!(event, MediaEvent::Control(Event::GoodbyeHandoff))
+                || (!source.stale() && matches!(event, MediaEvent::Control(Event::TurnStarted { .. })))
+            {
+                super::media(event, port, source, observe).await?;
+                return Ok(false);
+            }
             if activity(&event) {
                 // After a barge-in only the model's answer opens a reply.
                 // More of the user's speech keeps the run listening for it.
@@ -382,7 +406,7 @@ async fn listening_step<E: LinkEvents>(
 fn activity(event: &MediaEvent) -> bool {
     matches!(
         event,
-        MediaEvent::Control(Event::SpeechStarted | Event::TurnStarted { .. } | Event::GoodbyeHandoff)
+        MediaEvent::Control(Event::SpeechStarted | Event::TurnStarted { .. })
     ) || matches!(event, MediaEvent::Control(Event::Transcript { role, done, .. })
             if role == "user" || (role == "assistant" && !done))
 }

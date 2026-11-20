@@ -20,6 +20,7 @@ pub(super) fn farewell(
     if end_at < farewell_at
         || end_at < time(receipt)?
         || end_at < endpoint
+        || (late && time(one(records, run, "delegation.created")?)? <= farewell_at)
         || (late && time(receipt)? <= farewell_at)
         || (!late && time(receipt)? > farewell_at)
         || receipt["tool"] != "end_session"
