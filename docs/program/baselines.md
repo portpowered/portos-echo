@@ -287,6 +287,20 @@ transcript to a silent device 187 ms (`cuts.silent_ms` 179, the 200 ms lead less
 transcript to the cut 796 ms (`cuts.cut_ms`), which is the model talking on for 300 ms and the 500 ms
 quiet stretch. A voice at the microphone alone holds nothing.
 
+Fifth owner run, `echo-bridge` at a7d0f49c with hassmic capturing through the Echo's call pipeline
+(2026-11-20): the owner heard every reply speak a little, pause and then finish. Two calls, 7 replies.
+
+| Fact | Value |
+| --- | --- |
+| `cuts.hold_ms` of each reply's first hold | 2016, 2018, 2041, 2038, 2036, 2036, 2007: the 2 s barge-in window, run out with the model talking on |
+| `reprimes` | 1 in all 7: the Echo ran dry during the hold |
+| `timing` `first_audio_after_endpoint_ms` | none for 2 replies, among them a call's first (no user transcript had come before the reply's audio); 317, 311 and 372 ms for 3 (its first fragment came as the reply's first frames did) |
+| Replies then cut | 4 of 7, `cuts.cut_ms` 26 to 37: the next question's transcript found the delayed reply still playing after the model had ended its turn. No audible frame was discarded |
+| `mic.echo_max` (RMS) | 5 to 257, against 5543 to 17309 before the call pipeline |
+
+The session's transcript of a question trails the start of its answer, so the question held its own
+answer. The session was not transcribing the Echo's speaker in this run.
+
 ## Milestones
 
 | Fact | Value | Measured |

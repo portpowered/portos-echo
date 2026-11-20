@@ -44,7 +44,7 @@ async fn voice_user_speech_under_a_talking_model_cuts_nothing() {
             std::future::pending(),
             |_| Ok(()),
         ));
-        send(&tx, [said("A long answer")]).await;
+        send(&tx, [asked(), said("A long answer")]).await;
         stream(&mut work, &tx, 25, 123).await;
         // Two signs of speech; the model never pauses.
         for _ in 0..2 {
@@ -102,7 +102,7 @@ async fn voice_user_speech_cuts_and_flushes_once_the_model_has_been_quiet() {
             std::future::pending(),
             |_| Ok(()),
         ));
-        send(&tx, [said("Old answer")]).await;
+        send(&tx, [asked(), said("Old answer")]).await;
         stream(&mut work, &tx, 25, 123).await;
         send(&tx, [heard(signal)]).await;
         stream(&mut work, &tx, 10, 123).await;
@@ -171,7 +171,7 @@ async fn voice_device_ending_an_unanswered_replacement_settles_the_run() {
             Ok(())
         },
     ));
-    send(&tx, [said("Old answer")]).await;
+    send(&tx, [asked(), said("Old answer")]).await;
     stream(&mut work, &tx, 25, 123).await;
     send(&tx, [heard(1)]).await;
     stream(&mut work, &tx, 25, 0).await;

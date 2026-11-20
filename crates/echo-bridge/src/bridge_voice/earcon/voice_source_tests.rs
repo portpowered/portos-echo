@@ -272,6 +272,7 @@ async fn barge_in_is_judged_by_the_session_alone_and_its_cut_says_what_was_heard
     let mut source = Source::new(200, false).unwrap();
     let mut port = Narrow::default();
     port.room.set(usize::MAX);
+    source.heard_user(BargeTrigger::UserTranscript, "What time is it?", true);
     source.spoke();
     for _ in 0..50 {
         replying(&mut source, &port, 2000, 0).await;
@@ -344,6 +345,8 @@ async fn barge_in_sound_at_the_microphone_never_holds_or_cuts_the_reply() {
 
 /// T1, the device's lost start: a short answer was held from its first
 /// frame by the transcript of the question, and dropped whole when it ended.
+/// And its pause in every reply: the rest of that transcript came after the
+/// answer's first audio and held it for the whole 2 s window.
 #[tokio::test(start_paused = true)]
 async fn reply_start_is_not_held_by_the_transcript_of_the_turn_it_answers() {
     let mut source = Source::new(200, false).unwrap();
@@ -351,12 +354,74 @@ async fn reply_start_is_not_held_by_the_transcript_of_the_turn_it_answers() {
     port.room.set(usize::MAX);
     source.spoke();
     // The question's transcript comes late: the answer has not sounded yet.
-    source.heard_user(BargeTrigger::UserTranscript, "", false);
+    source.heard_user(BargeTrigger::UserTranscript, "What", false);
     assert!(!source.barge.pending());
     for _ in 0..30 {
         replying(&mut source, &port, 2000, 0).await;
     }
+    // The rest of it comes later still, under the answer.
+    source.heard_user(BargeTrigger::UserTranscript, " time is it?", false);
+    source.heard_user(BargeTrigger::UserTranscript, "What time is it?", true);
+    assert!(!source.barge.pending() && source.playable());
     // A transcript now is the user talking over the answer.
     source.heard_user(BargeTrigger::UserTranscript, "", false);
     assert!(source.barge.pending());
+}
+
+/// 600 ms of a reply at speaking level, with nobody else in the room.
+async fn answering(source: &mut Source, port: &Narrow) {
+    source.spoke();
+    for _ in 0..30 {
+        replying(source, port, 2000, 0).await;
+    }
+}
+
+/// T1, the owner's report from the Echo: every reply spoke a little, paused
+/// and then went on. `reply.quality` showed one hold of 2007 to 2041 ms in
+/// each, and no endpoint before the first audio of a call's first reply: the
+/// session's transcript of the question trailed the answer. Each reply owns
+/// the first user turn transcribed since the reply before it.
+#[tokio::test(start_paused = true)]
+async fn reply_is_not_held_by_a_question_transcribed_after_its_first_audio() {
+    let mut source = Source::new(200, false).unwrap();
+    let mut port = Narrow::default();
+    port.room.set(usize::MAX);
+    // The first reply of a call: all of the question's transcript trails it.
+    answering(&mut source, &port).await;
+    source.heard_user(BargeTrigger::UserTranscript, "What", false);
+    source.heard_user(BargeTrigger::UserTranscript, "What time is it?", true);
+    assert!(!source.barge.pending() && source.playable());
+    // The next turn is the user talking over it. The model yields before
+    // that turn's transcript is whole, and the reply is cut.
+    source.heard_user(BargeTrigger::UserTranscript, "Sto", false);
+    assert!(source.barge.pending() && !source.playable());
+    for _ in 0..26 {
+        replying(&mut source, &port, 0, 0).await;
+    }
+    source.interrupt(&mut port).unwrap();
+    let quality = source.settle(0);
+    assert_eq!((quality.cuts, quality.holds), (1, 1));
+    // The turn that cut it is the next reply's question: the rest of its
+    // transcript holds nothing, and the turn after it does.
+    source.controller.cut_settled();
+    source.resume_reply().unwrap();
+    answering(&mut source, &port).await;
+    source.heard_user(BargeTrigger::UserTranscript, "Stop.", true);
+    assert!(!source.barge.pending() && source.playable());
+    source.heard_user(BargeTrigger::UserTranscript, "No", false);
+    assert!(source.barge.pending());
+    // The model talks through the window: the reply plays on and ends.
+    for _ in 0..101 {
+        replying(&mut source, &port, 2000, 0).await;
+    }
+    assert!(!source.barge.pending());
+    let quality = source.settle(0);
+    assert_eq!((quality.cuts, quality.holds, quality.hold_ms), (0, 1, 2000));
+    // A reply that ended awaits its own question again, as late as it comes.
+    source.resume_reply().unwrap();
+    answering(&mut source, &port).await;
+    source.heard_user(BargeTrigger::UserTranscript, "And tomorrow?", true);
+    assert!(!source.barge.pending());
+    let quality = source.settle(0);
+    assert_eq!((quality.cuts, quality.holds, quality.hold_ms), (0, 0, 0));
 }
