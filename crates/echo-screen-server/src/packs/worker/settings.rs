@@ -126,14 +126,12 @@ impl Worker {
         else {
             return false;
         };
-        let Ok(permit) = self.files.busy.try_lock() else {
-            return false;
-        };
+        // This serial watcher owns at most one bounded scan. Sharing the HTTP
+        // permit makes ordinary catalog/file reads spuriously unavailable.
         let root = self.root.clone();
         let Ok(Ok(catalog)) = tokio::task::spawn_blocking(move || view::scan(&root)).await else {
             return false;
         };
-        drop(permit);
         SettingsDispatch {
             core: self.core.clone(),
             stop: self.stop.clone(),
@@ -148,6 +146,50 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn settings_refresh_keeps_foreground_capacity_independent() {
+        use crate::{SettingsOperation, SettingsReply, screen_core::Core};
+        use echo_contracts::secret::Secret;
+        use std::sync::Arc;
+        use tokio::sync::{Mutex, mpsc, watch};
+
+        let home = tempfile::tempdir().unwrap();
+        fs::write(home.path().join("settings.toml"), "screen_pack=''\n").unwrap();
+        let files = Arc::new(crate::packs::Files::default());
+        let (host, mut inbox) = mpsc::channel::<crate::SettingsRequest>(1);
+        assert!(files.settings.set(host.downgrade()).is_ok());
+        let (_stop, stop) = watch::channel(false);
+        let (_drain, drain) = watch::channel(None);
+        let worker = Worker {
+            root: home.path().join("screens"),
+            client: Err(crate::packs::Error::Ca),
+            core: Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-pair".into())))),
+            stop,
+            drain,
+            files: files.clone(),
+        };
+        let owner = tokio::spawn(async move {
+            let request = inbox.recv().await.unwrap();
+            request
+                .commit(|operation| {
+                    let SettingsOperation::PackRefresh(catalog, settings) = operation else {
+                        return SettingsReply::InvalidPackSelection;
+                    };
+                    assert_eq!(settings.text(), "screen_pack=''\n");
+                    SettingsReply::PackRefreshed(catalog.with_selection(Some("")), false)
+                })
+                .await;
+        });
+        // A real foreground read can hold its permit throughout this refresh.
+        // Previously the refresh returned false before reaching the owner.
+        let foreground = files.busy.lock().await;
+        assert!(worker.refresh_settings(read(home.path()).unwrap()).await);
+        owner.await.unwrap();
+        drop(foreground);
+        assert!(files.busy.try_lock().is_ok());
+        drop(host);
+    }
 
     #[test]
     fn settings_snapshot_bounds_regular_utf8_and_stale_replacement() {

@@ -2,7 +2,7 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 19
-status: in progress; installer, catalog and selection persistence implemented; hot load and renderer pending
+status: in progress; installer, paired controls and reload publication implemented; renderer pending
 ---
 
 # Screen packs
@@ -66,6 +66,13 @@ failure categories. There is no automatic retry or polling. Failed requests keep
 entered values; a queued request clears its URL/digest. Back, Escape and unload
 cancel the panel's request, and an uncertain response asks the user to reopen and
 check before saving again. Pairing failures request reopening the paired screen.
+
+While a request is pending, editing and submission controls are disabled; Back
+remains available. Completion restores keyboard focus to the initiating control,
+or **Refresh packs** when saving replaces the selection form. Tab moves through
+the native pack selector and submission controls. A failed preview displays
+**Preview unavailable** without preventing selection. If the saved pack is
+unavailable, the panel reports that the built-in appearance is being used.
 
 ## Authenticated pack files
 
