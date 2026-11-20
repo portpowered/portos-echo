@@ -238,7 +238,10 @@ impl<'a> View<'a> {
                 "reprimes":quality.reprimes, "concealment_ms":quality.concealment_ms,
                 "fade_ins":quality.fade_ins, "drained_frames":quality.drained_frames,
                 "cuts":{"count":quality.cuts, "trigger":quality.cut_trigger.map(BargeTrigger::name),
-                    "holds":quality.holds}
+                    "holds":quality.holds, "hold_ms":quality.hold_ms},
+                "mic":{"onsets":quality.mic.onsets, "mistakes":quality.mic.mistakes,
+                    "lead_ms":quality.mic_lead_ms, "echo_max":quality.mic.echo_max,
+                    "level_max":quality.mic.level_max, "coupling":quality.mic.coupling}
             }),
         )?;
         let Some(first) = quality.first_audio else {

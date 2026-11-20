@@ -14,6 +14,8 @@ use tokio::{
 };
 #[path = "bridge_observer/bridge_barge.rs"]
 mod bridge_barge;
+#[path = "bridge_observer/bridge_barge_mic.rs"]
+mod bridge_barge_mic;
 #[path = "bridge_support/bridge_cut.rs"]
 mod bridge_cut;
 #[path = "bridge_support/bridge_latency.rs"]

@@ -276,8 +276,8 @@ async fn reply_playout_first_stall_fades_out_reprimes_and_fades_in() {
     // a 20 ms fade-out and lasts 190 ms: the restart waits two frames past
     // the burst for the 300 ms the stall now asks for.
     assert_eq!((quality.underruns, quality.underrun_max_ms), (1, 190));
-    assert_eq!(playout(&quality), [1, 20, 1, 2]);
-    assert_eq!(target(&quality), [100, 300, 200]);
+    assert_eq!(playout(&quality), [1, 20, 1, 0]);
+    assert_eq!(target(&quality), [100, 300, 300]);
     // The 50th frame went out at 900 ms; 80 ms later the Echo has 20 ms left
     // and gets that frame mirrored and faded to silence.
     let (at, faded) = &heard.frames[50];
@@ -290,10 +290,9 @@ async fn reply_playout_first_stall_fades_out_reprimes_and_fades_in() {
     let resumed = samples(resumed);
     assert_eq!((resumed[0], resumed[240], resumed[479]), (0, 4000, 7983));
     assert_eq!(heard.frames[52], (1210, pcm(SPEECH)));
-    // Nothing else is touched. The 300 ms is kept for 20 s; as the target
-    // then decays to 200 ms, 2 silent frames are left out of the pauses to
-    // follow it down: 2063 accepted, 1 added, 2 dropped.
-    assert_eq!((quality.depth_max_ms, heard.frames.len()), (180, 2063 + 1 - 2));
+    // Nothing else is touched, and the 300 ms is kept to the reply's end:
+    // 2063 accepted, 1 added.
+    assert_eq!((quality.depth_max_ms, heard.frames.len()), (180, 2063 + 1));
     let altered = heard.frames.iter().filter(|(_, f)| *f != pcm(SPEECH) && *f != pcm(0));
     assert_eq!(altered.count(), 2);
 }
@@ -327,6 +326,25 @@ async fn reply_playout_next_reply_rides_out_the_stall_the_call_has_shown() {
             .iter()
             .all(|(_, frame)| *frame == pcm(SPEECH) || *frame == pcm(0))
     );
+}
+
+/// The device's choppy replies: the call stalls again in a reply 45 s after
+/// the first stall. The cushion that stall asked for had decayed by then, so
+/// the Echo ran dry again, in four replies of one call.
+#[tokio::test(start_paused = true)]
+async fn reply_playout_keeps_the_cushion_between_stalls_of_one_call() {
+    let mut script = talk(50);
+    script.extend(stall());
+    script.extend(talk(100));
+    let mut meter = ReplyMeter::default();
+    let first = reply(&mut meter, ClockPacer::new(200), &script).await.quality;
+    assert_eq!(first.underruns, 1);
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_secs(45)).await;
+        let later = reply(&mut meter, ClockPacer::new(200), &script).await.quality;
+        assert_eq!((later.underruns, later.reprimes), (0, 0), "{later:?}");
+        assert_eq!(target(&later), [300, 300, 300]);
+    }
 }
 
 #[tokio::test(start_paused = true)]

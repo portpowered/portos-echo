@@ -2,9 +2,13 @@
 use std::time::Duration;
 use tokio::time::Instant;
 
-/// How long a sign of user speech keeps a barge-in pending. Each further
-/// sign renews it.
+/// How long a sign of user speech from the Live session keeps a barge-in
+/// pending. Each further sign renews it.
 pub(crate) const BARGE_WINDOW: Duration = Duration::from_secs(2);
+/// How long speech heard at the microphone does. It is the earlier sign and
+/// the weaker one: a cough holds the reply this long, and a sentence is
+/// taken up by the session's transcript before it runs out.
+pub(crate) const MIC_WINDOW: Duration = Duration::from_millis(800);
 /// A pending barge-in fires once the reply has gone this long without
 /// audible audio from the model: it stopped talking, so the user has the floor.
 pub(crate) const BARGE_QUIET: Duration = Duration::from_millis(500);
@@ -16,6 +20,8 @@ pub enum BargeTrigger {
     UserTranscript,
     /// The Live session's speech-start item.
     SpeechStarted,
+    /// Speech at the microphone that the reply's echo does not explain.
+    MicSpeech,
 }
 
 impl BargeTrigger {
@@ -24,6 +30,14 @@ impl BargeTrigger {
         match self {
             Self::UserTranscript => "user_transcript",
             Self::SpeechStarted => "speech_started",
+            Self::MicSpeech => "mic_speech",
+        }
+    }
+
+    fn window(self) -> Duration {
+        match self {
+            Self::MicSpeech => MIC_WINDOW,
+            Self::UserTranscript | Self::SpeechStarted => BARGE_WINDOW,
         }
     }
 }
@@ -31,6 +45,9 @@ impl BargeTrigger {
 #[derive(Clone, Copy)]
 struct Armed {
     trigger: BargeTrigger,
+    /// A sign from the Live session has joined the microphone's.
+    backed: bool,
+    since: Instant,
     until: Instant,
     quiet_since: Instant,
 }
@@ -38,7 +55,9 @@ struct Armed {
 /// The Live session transcribes whatever the microphone hears while a reply
 /// plays: the user, other voices in the room, the Echo's own speaker. The
 /// model decides for itself whether to yield, and the pinned session has no
-/// request that makes it. A sign of user speech therefore arms a barge-in.
+/// request that makes it. A sign of user speech therefore arms a barge-in:
+/// first speech heard at the microphone (`Ear`), then the session's
+/// transcript of it, which comes some hundred milliseconds later.
 /// While it is pending the reply is held: nothing more is written to the
 /// device, so the user hears it stop, and the model's audio waits in the
 /// reply queue. It fires when the model's reply audio then stays quiet for
@@ -57,17 +76,34 @@ impl Barge {
     /// A sign of user speech came at `now` during a reply. True when it
     /// armed a barge-in, false when it renewed the pending one.
     pub(crate) fn arm(&mut self, now: Instant, trigger: BargeTrigger) -> bool {
-        let until = now + BARGE_WINDOW;
+        let until = now + trigger.window();
         if let Some(armed) = &mut self.armed {
-            armed.until = until;
+            armed.until = armed.until.max(until);
+            armed.backed |= trigger != BargeTrigger::MicSpeech;
             return false;
         }
         self.armed = Some(Armed {
             trigger,
+            backed: trigger != BargeTrigger::MicSpeech,
+            since: now,
             until,
             quiet_since: now,
         });
         true
+    }
+
+    /// When the microphone armed the pending barge-in, once the Live
+    /// session has given its own sign of that speech.
+    #[must_use]
+    pub(crate) fn backed(&self) -> Option<Instant> {
+        let armed = self.armed.filter(|armed| armed.backed)?;
+        (armed.trigger == BargeTrigger::MicSpeech).then_some(armed.since)
+    }
+
+    /// A barge-in is pending: true while only the microphone has armed it.
+    #[must_use]
+    pub(crate) fn unbacked(&self) -> Option<bool> {
+        self.armed.map(|armed| !armed.backed)
     }
 
     /// A barge-in is armed and has neither fired nor been dropped.

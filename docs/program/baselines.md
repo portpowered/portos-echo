@@ -242,6 +242,22 @@ e707712d, hassmic aaf1ca0 in `-D` mode, a `chatgpt` realtime call. The owner tal
 
 The cuts came late and the flush had nothing to stop; the flush itself is prompt. One run, one room.
 
+Second owner run, `echo-bridge` at 00287e17 (holds on a sign of user speech), from the bridge trace: 12
+replies.
+
+| Fact | Value |
+| --- | --- |
+| Replies cut | 6 of 12, every one with `cuts.trigger` `user_transcript` |
+| Holds with no cut (the model talked on) | 2 replies; 74 and 93 silent frames dropped to give the delay back, 0 audible frames lost |
+| Replies in which the Echo ran dry | 5 of 12; `underrun_max_ms` 241, 292, 185, 249, 324 |
+| Jitter target when those stalls came | `target_ms.min` 100, 220, 180, 180, 100 against arrival gaps of 299, 268, 146, 181, 233 ms |
+| `depth_max_ms` | 180 in every reply: the 200 ms lead less one 20 ms frame, by construction |
+
+Speech onset to a silent device is not measurable from this trace: nothing in it marks the onset. On a
+scripted T3 timeline (`bridge_barge_mic.rs`: transcript 700 ms after the speech, loopback device, echo at a
+tenth of the reply) it was 785 ms with the transcript as the only sign and 133 ms with the microphone's.
+The 700 ms and the echo level are assumptions of that timeline, not measurements of the Echo.
+
 ## Milestones
 
 | Fact | Value | Measured |
