@@ -127,7 +127,7 @@ async fn delegation_trace_muse_append_failure_preserves_error_and_prior_task_fai
         host.service(&mut live, &mut witness.trace).await.unwrap();
         drop(host);
         assert_eq!(live.0.len(), 1);
-        assert_eq!(rows(&witness, "session.commentary.append"), vec![]);
+        assert_eq!(rows(&witness, "session.commentary.append").len(), 0);
         let row = resolved(
             &witness,
             "failed",
@@ -179,7 +179,7 @@ async fn delegation_trace_muse_abandon_drop_and_replacement_close_each_generatio
             assert!(row.get("answer").is_none());
             println!("{row}");
         }
-        assert_eq!(rows(&witness, "session.commentary.append"), vec![]);
+        assert_eq!(rows(&witness, "session.commentary.append").len(), 0);
     }
 }
 
@@ -220,8 +220,8 @@ fn check_payloads(witness: &Witness, mut input: Value, payloads: bool) {
     ] {
         assert!(!raw.contains(secret));
     }
-    let created = rows(&witness, "session.delegation.created");
-    let terminal = rows(&witness, "delegation.resolved");
+    let created = rows(witness, "session.delegation.created");
+    let terminal = rows(witness, "delegation.resolved");
     assert_eq!(terminal.len(), 1);
     assert_eq!(terminal[0]["handback"], "submitted");
     if payloads {

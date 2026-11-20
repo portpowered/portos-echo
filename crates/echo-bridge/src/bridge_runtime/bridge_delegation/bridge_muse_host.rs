@@ -78,7 +78,7 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
             deadline_seconds: self.config.task_deadline_seconds,
             max_tool_calls: self.config.max_tool_calls,
         };
-        self.resolution = Some(Resolution::created(trace, run, &id, task.context.clone())?);
+        self.resolution = Some(Resolution::created(trace, run, &id, &task.context)?);
         self.active = Some((run.into(), task.delegation_id.clone()));
         self.start(task, run, trace);
         Ok(true)

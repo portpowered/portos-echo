@@ -21,7 +21,7 @@ pub(super) struct Resolution {
 }
 
 impl Resolution {
-    pub fn created(trace: &Trace, run: &str, id: &str, task: Value) -> Result<Self, Error> {
+    pub fn created(trace: &Trace, run: &str, id: &str, task: &Value) -> Result<Self, Error> {
         let mut trace = trace.clone();
         trace.record(
             "session.delegation.created",
@@ -74,5 +74,66 @@ impl Drop for Resolution {
         // Drop cannot replace the owner's original error. Normal completion
         // propagates trace failures; shutdown still attempts this bounded write.
         let _ = self.finish(self.observed, "unobserved", None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn delegation_trace_retained_first_resolution_wins_over_late_finish_and_drop() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        let mut lifetime = Resolution::created(&trace, "run-1", "delegation-1", &json!("task")).unwrap();
+        tokio::time::advance(std::time::Duration::from_millis(23)).await;
+        lifetime
+            .finish(Outcome::Failed("task_failed"), "unobserved", None)
+            .unwrap();
+        lifetime
+            .finish(Outcome::Completed, "submitted", Some("late answer"))
+            .unwrap();
+        drop(lifetime);
+        let rows: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[1],
+            json!({"event":"delegation.resolved", "elapsed_ms":23,
+            "provider_auth_mode":"api_key", "run_id":"run-1", "delegation_id":"delegation-1",
+            "outcome":"failed", "reason_class":"task_failed", "handback":"unobserved",
+            "duration_ms":23,"tool_counts":{}})
+        );
+        println!("{}", rows[1]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delegation_trace_retained_drop_keeps_observed_terminal_and_failed_creation_has_no_resolution() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        assert_eq!(
+            Resolution::created(&trace, "run-1", &"x".repeat(4096), &json!({})).err(),
+            Some(Error::Trace)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        let mut lifetime = Resolution::created(&trace, "run-2", "delegation-2", &json!({})).unwrap();
+        lifetime.observed(Outcome::TimedOut);
+        drop(lifetime);
+        let rows: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1]["outcome"], "timed_out");
+        assert_eq!(rows[1]["handback"], "unobserved");
+        assert!(rows[1].get("answer").is_none());
+        assert_eq!(rows[1]["run_id"], "run-2");
+        println!("{}", rows[1]);
     }
 }
