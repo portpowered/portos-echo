@@ -102,7 +102,12 @@ async function packPage(t, pack = manifest, vp9 = true) {
                             return this.dataset.src;
                         },
                     });
-                    HTMLImageElement.prototype.decode = () => Promise.resolve();
+                    HTMLImageElement.prototype.decode = () =>
+                        window.pauseDecode
+                            ? new Promise((resolve) => {
+                                  window.finishDecode = resolve;
+                              })
+                            : Promise.resolve();
                     Object.defineProperty(HTMLMediaElement.prototype, "src", {
                         set(value) {
                             this.dataset.src = value;
@@ -263,6 +268,9 @@ test("pack page: MP4 capability fallback, idle/rest, character-only, and reduced
     await loaded(page);
     assert.equal(await visible(page), "idle.mp4");
     await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.waitForFunction(
+        () => document.querySelectorAll("video:not([hidden])").length === 0,
+    );
     assert.equal(await page.locator("video:not([hidden])").count(), 0);
     await send(page, 2, { state: "speaking" });
     assert.equal(await page.locator(".pack-stage img").isVisible(), true);
@@ -320,6 +328,9 @@ test("pack page: layout clock/link coordinates, safe-area approval containment a
                 .isVisible(),
             true,
         );
+        await page.screenshot({
+            path: `test-results/screenshots/pack-layout-${viewport.width}x${viewport.height}.png`,
+        });
     }
     await page.evaluate(() => {
         window.packActive = null;
@@ -339,9 +350,36 @@ test("pack page: reload freshness, reconnect, safe failures and disposal", async
     await reload(page, 1);
     await page.waitForFunction(() => window.packRequests.length === 4);
     assert.equal(await page.locator("h1").textContent(), "ready");
+    await page.waitForFunction(() =>
+        document
+            .querySelector(".pack-stage img")
+            ?.dataset.src.includes("revision=1"),
+    );
+    await loaded(page);
     assert.equal(await page.locator("section").getAttribute("data-seq"), "1");
     await reload(page, 1);
     assert.equal(await page.evaluate(() => window.packRequests.length), 4);
+    await page.evaluate(() => {
+        window.pauseDecode = true;
+        window.packData.character.rest = "replacement.png";
+    });
+    await reload(page, 2);
+    await page.waitForFunction(() => !!window.finishDecode);
+    assert.match(
+        await page.locator(".pack-stage img").getAttribute("data-src"),
+        /\/rest\.png\?/,
+    );
+    assert.equal(await visible(page), "idle.webm");
+    await page.evaluate(() => {
+        window.pauseDecode = false;
+        window.finishDecode();
+    });
+    await page.waitForFunction(() =>
+        document
+            .querySelector(".pack-stage img")
+            ?.dataset.src.includes("replacement.png"),
+    );
+    assert.equal(await page.locator(".pack-stage").count(), 1);
     await page.evaluate(() => {
         window.packStatus = 404;
         window.streams[0].dispatchEvent(new Event("open"));
@@ -351,7 +389,7 @@ test("pack page: reload freshness, reconnect, safe failures and disposal", async
     await page.evaluate(() => {
         window.packStatus = 200;
     });
-    await reload(page, 2);
+    await reload(page, 3);
     await page.locator(".screen-pack").waitFor();
     await page.evaluate(() =>
         document
@@ -361,6 +399,6 @@ test("pack page: reload freshness, reconnect, safe failures and disposal", async
     assert.equal(await page.locator(".screen-pack").count(), 0);
     await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
     const count = await page.evaluate(() => window.packRequests.length);
-    await reload(page, 3);
+    await reload(page, 4);
     assert.equal(await page.evaluate(() => window.packRequests.length), count);
 });
