@@ -24,6 +24,7 @@ pub enum RpcError {
     UnknownRequest,
     IdExhausted,
     Remote(i64),
+    RemoteTransient(i64),
 }
 
 impl fmt::Display for RpcError {
@@ -143,7 +144,14 @@ impl RpcState {
         self.expire(now);
         match message {
             Message::Response { id, result } => self.complete(&id, Ok(result)),
-            Message::Failure { id, code } => self.complete(&id, Err(RpcError::Remote(code))),
+            Message::Failure { id, code, retryable } => self.complete(
+                &id,
+                Err(if retryable {
+                    RpcError::RemoteTransient(code)
+                } else {
+                    RpcError::Remote(code)
+                }),
+            ),
             event => {
                 if self.events.len() == self.limits.notifications {
                     return self.fail(RpcError::EventsFull);

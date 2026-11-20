@@ -39,6 +39,7 @@ impl From<RpcError> for AccountError {
         match error {
             RpcError::Remote(_) => Self::Authorization,
             RpcError::Deadline => Self::Deadline,
+            // Includes the decoder's payload-free remote discovery failures.
             _ => Self::Transport,
         }
     }

@@ -205,3 +205,4 @@ fn binary() -> std::path::PathBuf {
     assert!(output.status.success(), "offline pinned-binary resolution failed");
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
+mod startup;

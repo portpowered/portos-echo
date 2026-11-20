@@ -156,6 +156,7 @@ fn remote_error_and_disconnect_never_expose_remote_text_or_overwrite_completion(
         Message::Failure {
             id: a.clone(),
             code: -32601,
+            retryable: false,
         },
         Duration::ZERO,
     )?;
@@ -260,4 +261,44 @@ fn exhausted_ids_refuse_admission_and_completed_replies_ignore_duplicates() -> R
     assert_eq!(rpc.request("x", &(), Duration::ZERO).err(), Some(RpcError::IdExhausted));
     assert_eq!(rpc.next_deadline(), None);
     Ok(())
+}
+
+#[test]
+fn startup_network_exact_pin_envelopes_discard_payloads_and_preserve_unknown_errors() {
+    use crate::codex_protocol::decode;
+    for (code, message, expected) in [
+        (-32603, "workspace routing discovery failed", true),
+        (-32603, "workspace routing discovery timed out", true),
+        (-32603, "workspace routing discovery unauthorized (401)", false),
+        (-32603, "workspace routing discovery failed: private detail", false),
+        (-32603, "unknown", false),
+        (-32000, "workspace routing discovery failed", false),
+    ] {
+        let mut rpc = state().unwrap();
+        let (id, _) = rpc.request("account/read", &(), Duration::ZERO).unwrap();
+        let envelope = json!({"id":id,"error":{"code":code,"message":message,
+            "data":{"private":"synthetic-private-detail"}}});
+        rpc.receive(decode(&serde_json::to_vec(&envelope).unwrap()).unwrap(), Duration::ZERO)
+            .unwrap();
+        let result = rpc.take_reply(&id).unwrap().unwrap().unwrap_err();
+        assert_eq!(
+            result,
+            if expected {
+                RpcError::RemoteTransient(code)
+            } else {
+                RpcError::Remote(code)
+            }
+        );
+        assert!(!result.to_string().contains("private"));
+    }
+    for error in [
+        json!({"code":-32603}),
+        json!({"code":-32603,"message":null}),
+        json!({"code":"-32603","message":"workspace routing discovery failed"}),
+    ] {
+        assert!(matches!(
+            decode(&serde_json::to_vec(&json!({"id":1,"error":error})).unwrap()),
+            Err(RpcError::Malformed)
+        ));
+    }
 }

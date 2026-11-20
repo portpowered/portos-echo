@@ -17,6 +17,8 @@ pub struct Links {
     pub live: &'static str,
     pub relink_required: bool,
     pub kill_switch: bool,
+    /// Present during pre-Ready dependency recovery; absent after Ready/auth rejection.
+    pub startup_waiting_reason: Option<&'static str>,
 }
 
 impl Default for Links {
@@ -26,6 +28,7 @@ impl Default for Links {
             live: "idle",
             relink_required: false,
             kill_switch: false,
+            startup_waiting_reason: None,
         }
     }
 }
@@ -114,16 +117,19 @@ pub fn response(request: &[u8], links: Links) -> String {
     } else if words[0] != "GET" {
         ("405 Method Not Allowed", "Allow: GET\r\n", String::new())
     } else {
-        (
-            "200 OK",
-            "",
-            serde_json::json!({"status":"running", "wyoming":links.wyoming,"live":links.live,
-                "relink_required":links.relink_required,"kill_switch":links.kill_switch})
-            .to_string(),
-        )
+        ("200 OK", "", health_body(links))
     };
     format!(
         "HTTP/1.1 {status}\r\n{allow}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+fn health_body(links: Links) -> String {
+    let mut body = serde_json::json!({"status":"running", "wyoming":links.wyoming,"live":links.live,
+                "relink_required":links.relink_required,"kill_switch":links.kill_switch});
+    if let Some(reason) = links.startup_waiting_reason {
+        body["startup_waiting_reason"] = reason.into();
+    }
+    body.to_string()
 }
