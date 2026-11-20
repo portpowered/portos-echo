@@ -13,10 +13,14 @@ pub(super) struct Evidence<'a> {
     /// Wire observations after each reply, then the final one at close.
     pub wire: &'a [Value],
     pub models: &'a [Value],
+    pub snapshot: &'a Value,
     pub turns: usize,
 }
 
 pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, String> {
+    if journey == Journey::Recovery {
+        return recovery(evidence);
+    }
     let summary = common(evidence)?;
     let detail = match journey {
         Journey::Turns => turns(evidence, &summary)?,
@@ -26,8 +30,68 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
         Journey::LongWait => long_wait(evidence, &summary)?,
         Journey::End => end(evidence, &summary)?,
         Journey::Limits => limits(evidence, &summary)?,
+        Journey::Recovery => return Err("session: invalid recovery dispatch".into()),
     };
     Ok(json!({"timeline":summary,"journey":detail}))
+}
+
+fn recovery(evidence: &Evidence) -> Result<Value, String> {
+    let rows = |event: &str| {
+        evidence
+            .records
+            .iter()
+            .filter(|row| row["event"] == event)
+            .collect::<Vec<_>>()
+    };
+    let created = rows("delegation.created");
+    let resolved = rows("delegation.resolved");
+    let ended = rows("run.ended");
+    let played = rows("reply.played");
+    if created.len() != 2
+        || resolved.len() != 2
+        || ended.len() != 1
+        || played.len() != 1
+        || created[0]["run_id"] != "run-1"
+        || created[1]["run_id"] != "run-2"
+        || resolved[0]["delegation_id"] != created[0]["delegation_id"]
+        || resolved[0]["outcome"] != "timed_out"
+        || resolved[1]["delegation_id"] != created[1]["delegation_id"]
+        || resolved[1]["outcome"] != "completed"
+        || ended[0]["run_id"] != "run-1"
+        || ended[0]["reason"] != "session_ceiling"
+        || played[0]["run_id"] != "run-2"
+        || played[0]["outcome"] != "played"
+        || evidence.snapshot["calls"] != 2
+        || evidence.snapshot["sidebands"] != 2
+        || evidence.snapshot["external"] != 0
+        || evidence.snapshot["appends"] != json!(["session-turn-1"])
+    {
+        return Err("session: stalled and recovery runs did not have distinct correlated outcomes".into());
+    }
+    let wire = evidence
+        .wire
+        .last()
+        .ok_or("session: missing recovery wire observation")?;
+    let audible = wire["streams"]
+        .as_array()
+        .ok_or("session: no recovery wire playback")?
+        .iter()
+        .filter(|stream| stream["earcon"] == false && stream["audible_samples"].as_u64().is_some_and(|n| n > 0))
+        .collect::<Vec<_>>();
+    if wire["run_opened_us"].as_array().map(Vec::len) != Some(2)
+        || audible.len() != 1
+        || audible[0]["ending"] != "stop"
+        || audible[0]["played_us"].is_null()
+        || audible[0]["pcm_bytes"]
+            .as_u64()
+            .is_none_or(|n| n < 9600 || n % 960 != 0)
+    {
+        return Err(format!("session: recovery PCM/Played wire receipts mismatch: {wire}"));
+    }
+    Ok(
+        json!({"stalled_run":ended[0]["run_id"],"cutoff_ms":ended[0]["elapsed_ms"],
+        "late_appends":0,"played_run":played[0]["run_id"],"pcm_bytes":audible[0]["pcm_bytes"]}),
+    )
 }
 
 fn limits(evidence: &Evidence, summary: &Value) -> Result<Value, String> {

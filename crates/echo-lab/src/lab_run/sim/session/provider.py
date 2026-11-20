@@ -144,7 +144,10 @@ class Script:
         assert turn == len(observed['delegations']), 'unexpected delegation identity'
         if turn:
             assert self.step == len(self.turns[turn - 1]), 'overlapping delegation'
-            if 'say' in self.turns[turn - 1][-1]:
+            prior = self.turns[turn - 1][-1]
+            if prior.get('abandoned'):
+                assert f'session-turn-{turn - 1}' not in observed['appends'], 'abandoned turn had a handback'
+            elif 'say' in prior:
                 assert f'session-turn-{turn - 1}' in observed['appends'], 'ordinary handback is missing'
         self.step = 0
         name = f'session-turn-{turn}'

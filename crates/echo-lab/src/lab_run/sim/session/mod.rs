@@ -23,9 +23,10 @@ pub(super) enum Journey {
     End,
     Dispatch,
     Limits,
+    Recovery,
 }
 
-const JOURNEYS: [(&str, Journey); 7] = [
+const JOURNEYS: [(&str, Journey); 8] = [
     ("session-two-turns", Journey::Turns),
     ("session-idle-timeout", Journey::Idle),
     ("session-extend-capped", Journey::Extend),
@@ -33,11 +34,13 @@ const JOURNEYS: [(&str, Journey); 7] = [
     ("session-end-after-reply", Journey::End),
     ("session-dispatch-waits", Journey::Dispatch),
     ("session-delegation-limits", Journey::Limits),
+    ("session-delegation-recovery", Journey::Recovery),
 ];
 
 const LONG_ANSWER: &str = "The twelve checks are complete.";
 const LONG_CALLS: usize = 12;
 const LONG_WAIT_MS: u64 = 61_000;
+const RECOVERY_MAX_SECONDS: u64 = 90;
 
 fn journey(id: &str) -> Option<Journey> {
     JOURNEYS
@@ -76,6 +79,10 @@ impl Journey {
                 steps.push(json!({"say":LONG_ANSWER,"wait_for_release":true}));
                 json!([steps])
             }
+            Self::Recovery => json!([
+                [{"say":"This stale answer must never play.","wait_for_release":true,"abandoned":true}],
+                [{"say":"The new wake was answered."}]
+            ]),
         }
     }
 
@@ -85,6 +92,7 @@ impl Journey {
             Self::Extend => Some(12),
             Self::LongWait => Some(60),
             Self::Limits => Some(90),
+            Self::Recovery => Some(RECOVERY_MAX_SECONDS),
             _ => None,
         }
     }
@@ -97,7 +105,15 @@ impl Journey {
     }
 
     fn utterances(self) -> usize {
-        if self == Self::Turns { 2 } else { 1 }
+        if matches!(self, Self::Turns | Self::Recovery) {
+            2
+        } else {
+            1
+        }
+    }
+
+    fn trace_run(self) -> Option<&'static str> {
+        (self != Self::Recovery).then_some("run-1")
     }
 }
 
@@ -144,7 +160,7 @@ impl<'a> Persistent<'a> {
             }
             Step::Trace(values) if world.turns == journey.utterances() => {
                 world.finish().await?;
-                selectors::check(&world.trace.records, &selectors::parse(values)?, Some("run-1"))
+                selectors::check(&world.trace.records, &selectors::parse(values)?, journey.trace_run())
             }
             Step::Budget(name, value) => {
                 let configured = journey.budgets()[name].as_f64();
@@ -202,7 +218,11 @@ impl Driver for Persistent<'_> {
         }
         cleanup?;
         for values in &self.traces {
-            selectors::check(&self.world.trace.records, &selectors::parse(values)?, Some("run-1"))?;
+            selectors::check(
+                &self.world.trace.records,
+                &selectors::parse(values)?,
+                self.journey.trace_run(),
+            )?;
         }
         let models = self.world.snapshot["models"].as_array().cloned().unwrap_or_default();
         let observed = self.world.models.clone();
@@ -212,6 +232,7 @@ impl Driver for Persistent<'_> {
                 records: &self.world.trace.records,
                 wire: &self.world.wire,
                 models: &observed,
+                snapshot: &self.world.snapshot,
                 turns: self.world.turns,
             },
         )?;
