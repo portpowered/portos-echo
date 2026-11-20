@@ -19,7 +19,13 @@ function Invoke-WebRequest {
     } elseif ($mode -in @('redirect', 'later-downgrade') -and -not $Uri.AbsolutePath.StartsWith('/hop/')) {
         $location = '/hop/' + $asset
     }
-    if ($location) { return @{ StatusCode = 302; Headers = @{ Location = $location } } }
+    if ($location) {
+        if ($PSVersionTable.PSVersion.Major -lt 7) {
+            # Match the real 5.1 cmdlet: Stop discards the redirect response.
+            Write-Error 'SYNTHETIC-TOKEN' -ErrorAction $ErrorAction
+        }
+        return @{ StatusCode = 302; Headers = @{ Location = $location } }
+    }
     [IO.File]::Copy((Join-Path $root $asset), $OutFile, $true)
     return @{ StatusCode = 200 }
 }

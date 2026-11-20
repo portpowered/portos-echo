@@ -11,9 +11,11 @@ function Get-EchoReleaseFile {
         }
         $response = $null
         try {
+            # Windows PowerShell emits a nonterminating redirect error and
+            # returns the 3xx response. PowerShell 7 throws with the response.
             $response = Invoke-WebRequest -Uri $Uri -OutFile $Destination -PassThru `
                 -UseBasicParsing -MaximumRedirection 0 -TimeoutSec ([int][Math]::Ceiling(120 - $elapsed.Elapsed.TotalSeconds)) `
-                -ErrorAction Stop
+                -ErrorAction SilentlyContinue
         } catch {
             $response = $_.Exception.Response
             if ($null -eq $response) { throw 'download failed' }

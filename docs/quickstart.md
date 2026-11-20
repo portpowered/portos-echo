@@ -82,8 +82,8 @@ them as well. The installer uses the bundled shell to maintain the device and re
 
 ### Build from source
 
-Use Linux with POSIX sh, Git, GNU Make, Python 3.12 and adb on PATH. Use a matching checkout and provision the tools pinned in
-[CI setup](../.github/actions/setup/action.yml) before building. The bridge needs Rust 1.100.0,
+Use Linux with POSIX sh, Git, GNU Make, Python 3.12 and adb on PATH. Use a matching checkout and provision the
+tools pinned in [CI setup](../.github/actions/setup/action.yml) before building. The bridge needs Rust 1.100.0,
 the `armv7-linux-androideabi` target, Android NDK 27.3.13750724 (Linux API-24 clang), CMake and cached dependencies.
 Codex also needs Git, curl, file, patch, Perl, Python, tar and sha256sum; its helper fetches the pinned Codex source.
 Set `ANDROID_NDK_HOME` to the installed NDK. Set `CODEX_ARMV7_WORK_DIR` and `CODEX_ARMV7_OUTPUT_DIR`
