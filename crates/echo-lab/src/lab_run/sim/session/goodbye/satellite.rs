@@ -132,7 +132,7 @@ async fn capture(
         timing.capture(&event, usize::MAX, started.elapsed())?;
         send(write, "audio-start", format.clone(), vec![]).await?;
     }
-    for bytes in crate::lab_run::sim::m3::fixture().chunks_exact(640) {
+    for bytes in crate::lab_run::sim::m3::fixture().as_chunks::<640>().0 {
         let event = send(write, "audio-chunk", format.clone(), bytes.to_vec()).await?;
         timing.capture(&event, usize::MAX, started.elapsed())?;
     }

@@ -206,43 +206,47 @@ impl World {
     }
 
     async fn turn(&mut self, journey: Journey, index: usize, text: &str) -> Result<Option<Value>, String> {
-        match (journey, index) {
-            (Journey::Goodbye, _) => {
-                if index == 1 {
-                    self.run_id = "run-2";
-                }
-                self.satellite.speak(true).await?;
-                let endpoint = self.epoch();
-                if index == 0 {
-                    self.connected().await?;
-                }
-                self.transcript("goodbye", "user", text, true).await?;
-                self.farewell(index, index == 1, endpoint).await.map(Some)
-            }
-            (Journey::Pending, 0) => {
-                self.satellite.speak(true).await?;
-                self.connected().await?;
-                self.provider.control(Control::Delegate(0)).await?;
-                self.wait("prior runner request", |world| world.provider.count("waiting") == 1, 20)
-                    .await?;
-                Ok(None)
-            }
-            (Journey::Pending, _) => {
-                self.satellite.speak(false).await?;
-                let endpoint = self.epoch();
-                self.transcript("pending-goodbye", "user", text, true).await?;
-                self.provider.control(Control::ReleaseGoodbye).await?;
-                self.wait(
-                    "prior handback",
-                    |world| world.provider.count("appends") == 1 && world.count("delegation.resolved") == 1,
-                    20,
-                )
-                .await?;
-                self.reply("It is noon.", 0, None).await?;
-                self.farewell(1, false, endpoint).await.map(Some)
-            }
-            (Journey::Question, _) => self.question(index, text).await,
+        match journey {
+            Journey::Goodbye => self.wake_and_farewell(index, text).await.map(Some),
+            Journey::Pending => self.pending(index, text).await,
+            Journey::Question => self.question(index, text).await,
         }
+    }
+
+    async fn wake_and_farewell(&mut self, index: usize, text: &str) -> Result<Value, String> {
+        if index == 1 {
+            self.run_id = "run-2";
+        }
+        self.satellite.speak(true).await?;
+        let endpoint = self.epoch();
+        if index == 0 {
+            self.connected().await?;
+        }
+        self.transcript("goodbye", "user", text, true).await?;
+        self.farewell(index, index == 1, endpoint).await
+    }
+
+    async fn pending(&mut self, index: usize, text: &str) -> Result<Option<Value>, String> {
+        if index == 0 {
+            self.satellite.speak(true).await?;
+            self.connected().await?;
+            self.provider.control(Control::Delegate(0)).await?;
+            self.wait("prior runner request", |world| world.provider.count("waiting") == 1, 20)
+                .await?;
+            return Ok(None);
+        }
+        self.satellite.speak(false).await?;
+        let endpoint = self.epoch();
+        self.transcript("pending-goodbye", "user", text, true).await?;
+        self.provider.control(Control::ReleaseGoodbye).await?;
+        self.wait(
+            "prior handback",
+            |world| world.provider.count("appends") == 1 && world.count("delegation.resolved") == 1,
+            20,
+        )
+        .await?;
+        self.reply("It is noon.", 0, None).await?;
+        self.farewell(1, false, endpoint).await.map(Some)
     }
 
     async fn connected(&mut self) -> Result<(), String> {
@@ -441,10 +445,8 @@ impl World {
         let bridge = self.bridge.close().await;
         let satellite = self.satellite.close().await;
         let provider = self.provider.close().await;
-        bridge
-            .and(satellite)
-            .and_then(|()| provider)
-            .and_then(|snapshot| quiet.map(|()| snapshot))
+        let snapshot = bridge.and(satellite).and(provider)?;
+        quiet.map(|()| snapshot)
     }
 }
 
