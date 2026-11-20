@@ -27,6 +27,7 @@ struct Playback {
     audible_samples: usize,
     minimum: Option<i16>,
     maximum: Option<i16>,
+    frames: Vec<(usize, usize, usize)>,
 }
 
 impl Session {
@@ -101,12 +102,17 @@ impl Session {
                 let stream = &mut self.streams[index];
                 stream.earcon |= earcon;
                 stream.bytes += event.payload.len();
+                let mut nonzero = 0;
+                let mut audible = 0;
                 for bytes in event.payload.as_chunks::<2>().0 {
                     let sample = i16::from_le_bytes(*bytes);
                     stream.minimum = Some(stream.minimum.map_or(sample, |old| old.min(sample)));
                     stream.maximum = Some(stream.maximum.map_or(sample, |old| old.max(sample)));
-                    stream.audible_samples += usize::from(sample.unsigned_abs() > 64);
+                    nonzero += usize::from(sample != 0);
+                    audible += usize::from(sample.unsigned_abs() > 64);
                 }
+                stream.audible_samples += audible;
+                stream.frames.push((event.payload.len(), nonzero, audible));
             }
             "audio-stop" => self.stop(now, "stop"),
             "hassmic-flush" => self.stop(now, "flush"),
@@ -145,6 +151,15 @@ impl Session {
 }
 
 impl super::Timing {
+    pub(in crate::lab_run::sim) fn reply_frames(&self) -> Vec<&[(usize, usize, usize)]> {
+        self.session
+            .streams
+            .iter()
+            .filter(|stream| !stream.earcon)
+            .map(|stream| stream.frames.as_slice())
+            .collect()
+    }
+
     /// Forwarded run, reply and capture boundaries for persistent journeys.
     pub fn session_observation(&self) -> Value {
         self.session.observation()

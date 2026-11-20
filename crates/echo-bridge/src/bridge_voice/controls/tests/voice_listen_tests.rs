@@ -206,6 +206,21 @@ async fn idle_noise(tx: &mpsc::Sender<MediaEvent>) {
         .unwrap();
 }
 
+fn session_request(
+    command: crate::bridge_codex::SessionCommand,
+    owner: &std::sync::Arc<()>,
+    key: &str,
+) -> (Event, tokio::sync::oneshot::Receiver<echo_agent_api::ToolResult>) {
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    let event = Event::Session(crate::bridge_codex::SessionRequest {
+        command,
+        key: key.into(),
+        run: Some(owner.clone()),
+        reply,
+    });
+    (event, answer)
+}
+
 // T1: the real idle loop must release the guarded clock's voice fence.
 // No screen is installed: Control proves the fence reached screen admission;
 // a missing voice acknowledgement instead leaves the receipt pending.

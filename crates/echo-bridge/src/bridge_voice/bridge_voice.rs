@@ -56,6 +56,9 @@ use voice_source::Source;
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
     fn bind_session(&mut self, _run: Option<std::sync::Arc<()>>) {}
+    fn flush_session_answer(&mut self) -> impl Future<Output = Result<(), Error>> {
+        std::future::ready(Ok(()))
+    }
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
@@ -448,27 +451,7 @@ async fn media(
 ) -> Result<(), Error> {
     match event {
         MediaEvent::Audio(frame) => source.audio(&frame),
-        MediaEvent::Control(Event::ReplyDone { text }) => {
-            if source.stale() {
-                return Ok(());
-            }
-            observe(Notice::Transcript {
-                role: "assistant".into(),
-                text,
-                done: true,
-            })?;
-            if !source.delegation.answered() {
-                return Ok(());
-            }
-            if !source.reply.finished() {
-                while let Some(frame) = port.ready_audio().await? {
-                    source.audio(&frame)?;
-                    tokio::task::yield_now().await;
-                }
-                source.reply.finish()?;
-            }
-            Ok(())
-        }
+        MediaEvent::Control(Event::ReplyDone { text }) => voice_listen::finish_reply(text, port, source, observe).await,
         MediaEvent::Control(Event::Transcript { role, text, done }) => {
             if role == "user" {
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
@@ -480,11 +463,17 @@ async fn media(
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
             source.meter.endpoint(Instant::now(), Endpoint::DelegatedTurn);
-            source.delegation.started();
+            if source.session.goodbye.is_none() {
+                source.delegation.started();
+            }
             Ok(())
         }
         MediaEvent::Control(Event::TurnCompleted { .. }) => {
-            source.delegation.completed();
+            voice_listen::complete_turn(source);
+            Ok(())
+        }
+        MediaEvent::Control(Event::GoodbyeHandoff) => {
+            voice_listen::goodbye_handoff(source);
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStarted) => {
@@ -494,7 +483,7 @@ async fn media(
         MediaEvent::Control(Event::Session(request)) => {
             session_tools::answer(request, &mut source.session, &mut source.controller, observe)
         }
-        MediaEvent::Control(Event::Other) => Ok(()),
+        MediaEvent::Control(Event::Other | Event::ReplyHandoff) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }
 }

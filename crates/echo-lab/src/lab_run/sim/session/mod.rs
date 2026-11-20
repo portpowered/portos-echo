@@ -1,5 +1,7 @@
 //! Persistent voice session journeys on the delivered bridge and native host:
 //! listening between replies, idle expiry, and the agent's session tools.
+pub(in crate::lab_run) mod goodbye;
+mod goodbye_oracle;
 mod oracle;
 mod provider;
 mod world;

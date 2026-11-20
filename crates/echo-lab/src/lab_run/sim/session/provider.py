@@ -22,6 +22,7 @@ from tools_provider import function_tools, read_frame
 answers = queue.Queue()
 commands = queue.Queue()
 heard = threading.Event()
+release_goodbye = threading.Event()
 wake_read, wake_write = socket.socketpair()
 output_lock = threading.Lock()
 observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'models': [], 'delegations': [], 'appends': []}
@@ -55,7 +56,7 @@ class Script:
         assert body['tools'] == function_tools([]), 'session catalog mismatch'
         assert body['model'] == 'gpt-5.4', 'wrong delegated model'
         turn = self.turn()
-        assert 0 <= turn < len(self.turns) and len(observed['appends']) == turn, 'model outside a delegated turn'
+        assert 0 <= turn < len(self.turns), 'model outside a delegated turn'
         steps = self.turns[turn]
         assert self.step < len(steps), 'unexpected model retry'
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
@@ -64,12 +65,21 @@ class Script:
         for position, item in enumerate(mine):
             assert item['call_id'] == f'session-{turn}-{position}', 'tool identity mismatch'
         step = steps[self.step]
+        if steps[0].get('request') == 'end the session':
+            assert ('If the hand-off request is exactly "end the session", immediately call end_session with {} once.'
+                    in body.get('instructions', '')), 'missing goodbye runner instructions'
+        if step.get('wait_for_release'):
+            emit({'event': 'provider.waiting', 'turn': turn})
+            assert release_goodbye.wait(20), 'runner was not released at the scripted boundary'
         if 'call' in step:
             item = {'type': 'function_call', 'id': f'fc-{turn}-{self.step}', 'call_id': f'session-{turn}-{self.step}',
                     'name': step['call'], 'arguments': json.dumps(step['arguments']), 'status': 'completed'}
-        else:
+        elif 'say' in step:
             item = {'type': 'message', 'id': f'msg-{turn}', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': step['say'], 'annotations': []}]}
+        else:
+            assert step == {'silent': True}, 'invalid silent handback'
+            item = None
         self.step += 1
         if 'heard' in step:
             # The turn is in flight: this model request is still unanswered.
@@ -78,26 +88,32 @@ class Script:
             assert heard.wait(20), 'sideband did not deliver the overlapping speech'
         observed['models'].append({'turn': turn, 'tools': [tool['name'] for tool in body['tools'][:-1]]})
         emit({'event': 'provider.model', 'turn': turn, 'outputs': [item['output'] for item in mine]})
-        response = {'id': f'response-{turn}-{self.step}', 'status': 'completed', 'output': [item]}
-        events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
-                  {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
-                  {'type': 'response.completed', 'response': response}]
+        response = {'id': f'response-{turn}-{self.step}', 'status': 'completed', 'output': [item] if item else []}
+        events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}}]
+        if item:
+            events.append({'type': 'response.output_item.done', 'output_index': 0, 'item': item})
+        events.append({'type': 'response.completed', 'response': response})
         return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
 
     def begin(self, turn):
-        assert turn == len(observed['delegations']) == len(observed['appends']), 'overlapping delegation'
+        assert turn == len(observed['delegations']), 'unexpected delegation identity'
+        if turn:
+            assert self.step == len(self.turns[turn - 1]), 'overlapping delegation'
+            if 'say' in self.turns[turn - 1][-1]:
+                assert f'session-turn-{turn - 1}' in observed['appends'], 'ordinary handback is missing'
         self.step = 0
         name = f'session-turn-{turn}'
         observed['delegations'].append(name)
         return {'type': 'delegation.created', 'item': {
             'type': 'delegation', 'target': 'client', 'id': name,
-            'content': [{'type': 'input_text', 'text': f'Answer session turn {turn}.'}]}}
+            'content': [{'type': 'input_text', 'text': self.turns[turn][0].get('request', f'Answer session turn {turn}.')}]}}
 
     def append(self, value):
         turn = self.turn()
         assert self.step == len(self.turns[turn]), 'append before the scripted answer'
         assert value['delegation_item_id'] == f'session-turn-{turn}', 'append identity mismatch'
-        assert value['content'] == [{'type': 'input_text', 'text': self.turns[turn][-1]['say']}], 'append content mismatch'
+        text = self.turns[turn][-1].get('say', '')
+        assert value['content'] == [{'type': 'input_text', 'text': text}], 'append content mismatch'
         observed['appends'].append(value['delegation_item_id'])
 
     def transcripts(self, turn):
@@ -142,6 +158,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             observed['external'] += 1
             self.respond(403, b'{}')
             return
+        if script and any(turn[0].get('request') == 'end the session' for turn in script.turns):
+            if 'hand off exactly "end the session" once' not in body['session'].get('instructions', ''):
+                emit({'event': 'provider.failure', 'failure': 'missing goodbye Live prompt'})
         observed['calls'] += 1
         emit({'event': 'provider.offer', 'offer': body['sdp']})
         self.respond(201, answers.get(timeout=20).encode(), 'application/sdp', '/v1/live/rtc_local')
@@ -183,7 +202,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if 'delegate' in command:
                         value = script.begin(command['delegate'])
                         frame(self.connection, value)
-                        emit({'event': 'provider.delegation', 'delegation_id': value['item']['id']})
+                        emit({'event': 'provider.delegation', 'delegation_id': value['item']['id'],
+                              'request': value['item']['content'][0]['text']})
+                    elif 'events' in command:
+                        for value in command['events']:
+                            frame(self.connection, value)
+                        emit({'event': 'provider.events_sent', 'tag': command['tag']})
                     elif 'heard' in command:
                         frame(self.connection, {'type': 'input_transcript.added', 'item': {'text': command['heard']}})
                         frame(self.connection, {'type': 'turn.done',
@@ -211,9 +235,11 @@ try:
         elif 'script' in command:
             assert script is None
             script = Script(command['script'])
-        elif 'delegate' in command or 'transcripts' in command:
+        elif 'delegate' in command or 'transcripts' in command or 'events' in command:
             commands.put(command)
             wake_write.sendall(b'e')
+        elif command == {'release_goodbye': True}:
+            release_goodbye.set()
         elif command == {'snapshot': True}:
             emit({'event': 'provider.snapshot', **observed})
         else:

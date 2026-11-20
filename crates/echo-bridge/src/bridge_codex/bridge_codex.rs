@@ -37,6 +37,8 @@ pub enum Event {
     Tool { id: RequestId, call: ToolCall },
     TurnStarted { thread: String, turn: String },
     TurnCompleted { thread: String, turn: String },
+    GoodbyeHandoff,
+    ReplyHandoff,
     SpeechStarted,
     Session(SessionRequest),
     Closed,
@@ -75,6 +77,7 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     early: VecDeque<Event>,
     interrupt: Option<(RequestId, Instant)>,
     interrupted: Option<TurnInterrupt>,
+    handoffs: std::collections::HashSet<String>,
     tool_trace: Option<crate::bridge_trace::ToolTrace>,
     setup_trace: Option<crate::bridge_trace::Trace>,
 }
@@ -88,6 +91,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             early: VecDeque::new(),
             interrupt: None,
             interrupted: None,
+            handoffs: std::collections::HashSet::new(),
             tool_trace: None,
             setup_trace: None,
         }

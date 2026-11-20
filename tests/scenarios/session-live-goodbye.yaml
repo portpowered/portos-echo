@@ -1,0 +1,10 @@
+id: session-live-goodbye
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "okay thanks, bye"
+  - say: "okay thanks, bye"
+budgets:
+  session_listen_seconds: 3
+negative: []

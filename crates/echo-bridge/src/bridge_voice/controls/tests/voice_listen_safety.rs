@@ -1,5 +1,7 @@
 //! T1: idle capture/control boundaries with staged memory-only input.
+use super::super::super::session_tools::Grants;
 use super::*;
+use crate::bridge_codex::SessionCommand;
 use echo_link::{MicFrame, MicrophoneRun, RunStats};
 
 struct Run(mpsc::Receiver<MicFrame>);
@@ -28,6 +30,7 @@ struct Input {
     events: Events,
     capture: mpsc::Sender<MicFrame>,
     controls: mpsc::Sender<LinkEvent<Run>>,
+    turn_started: bool,
 }
 impl Input {
     fn new() -> Self {
@@ -38,11 +41,19 @@ impl Input {
             events: Events(events),
             capture,
             controls,
+            turn_started: false,
         }
     }
 
     async fn step(&mut self, port: &mut Port, source: &mut Source) -> Result<bool, Error> {
-        super::super::listening_step(&mut self.events, &mut self.microphone, port, source, &mut |_| Ok(())).await
+        super::super::listening_step(
+            (&mut self.events, &mut self.microphone),
+            port,
+            source,
+            &mut self.turn_started,
+            &mut |_| Ok(()),
+        )
+        .await
     }
 
     async fn samples(&self, value: i16, count: usize) {
@@ -66,6 +77,103 @@ fn source() -> Source {
     source.controller.played(true).unwrap();
     source.controller.listen_after_reply(Duration::from_secs(3)).unwrap();
     source
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_listen_goodbye_timeout_retires_end_authority_without_admitting_speech() {
+    let mut input = Input::new();
+    let (tx, rx) = mpsc::channel(2);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let mut source = Source::new(200, false).unwrap();
+    source.session = Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
+    source.controller.reply_started();
+    source.controller.played(true).unwrap();
+    goodbye_handoff(&mut source);
+    let old = source.session.run.clone();
+    let mut receipts = vec![];
+    let mut observe = |notice| {
+        if let Notice::SessionTool(receipt) = notice {
+            receipts.push(receipt.outcome);
+        }
+        Ok(())
+    };
+    let (event, answer) = session_request(SessionCommand::Invalid { end: true }, &old, "refused");
+    tx.send(MediaEvent::Control(event)).await.unwrap();
+    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+    wait_goodbye(
+        (&mut input.events, &mut input.microphone),
+        &mut port,
+        (&mut source, &mut None),
+        Instant::now() + Duration::from_secs(1),
+        std::future::pending(),
+        &mut observe,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        answer.await.unwrap().content,
+        serde_json::json!({"error":"invalid_arguments"})
+    );
+    assert_eq!(source.controller.idle_deadline(), None);
+    assert!(source.controller.has_played());
+    let (event, answer) = session_request(SessionCommand::End, &old, "obsolete");
+    tx.send(MediaEvent::Control(event)).await.unwrap();
+    goodbye_step(
+        &mut input.events,
+        &mut input.microphone,
+        &mut port,
+        &mut source,
+        &mut observe,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        answer.await.unwrap().content,
+        serde_json::json!({"error":"session_stale"})
+    );
+    assert!(!source.session.ending());
+    assert_eq!(receipts, ["invalid_arguments", "session_stale"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playback() {
+    let mut input = Input::new();
+    let (_tx, rx) = mpsc::channel(1);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let mut source = Source::new(200, false).unwrap();
+    source.session = Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
+    source.spoke();
+    goodbye_handoff(&mut source);
+    source.audio(&[5000; 320]).unwrap();
+    let muted = Cell::new(false);
+    let mut observe = |notice| {
+        if matches!(notice, Notice::Device(LinkEvent::Mute(true))) {
+            muted.set(true);
+        }
+        Ok(())
+    };
+    input.controls.send(LinkEvent::Mute(true)).await.unwrap();
+    let event = input.events.recv().await.unwrap().unwrap();
+    super::super::super::device(&event, false, &mut source, &mut observe).unwrap();
+    input.samples(1234, 320).await;
+    let frame = input.microphone.recv().await.unwrap();
+    assert!(source.capture(frame, &port).unwrap());
+    assert!(muted.get());
+    assert!(port.1.borrow().is_empty());
+    super::super::super::media(
+        MediaEvent::Control(Event::ReplyDone {
+            text: "Goodbye.".into(),
+        }),
+        &mut port,
+        &mut source,
+        &mut observe,
+    )
+    .await
+    .unwrap();
+    assert!(source.reply.finished());
+    assert!(!source.controller.cutting());
+    assert_eq!(source.stats.reply_received, 1);
+    assert!(!source.session.ending());
 }
 
 #[tokio::test(start_paused = true)]
@@ -237,4 +345,156 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
         assert_eq!(source.controller.idle_deadline(), deadline);
         assert_eq!(port.1.borrow().len(), 0);
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_listen_goodbye_settles_without_arming_idle_in_either_tool_order() {
+    for order in [GoodbyeOrder::Early, GoodbyeOrder::LateTool] {
+        goodbye_with_end(order).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_listen_goodbye_handoff_after_played_uses_the_settled_reply() {
+    for turn_first in [false, true] {
+        goodbye_with_end(GoodbyeOrder::LateHandoff { turn_first }).await;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GoodbyeOrder {
+    Early,
+    LateTool,
+    LateHandoff { turn_first: bool },
+}
+
+async fn goodbye_with_end(order: GoodbyeOrder) {
+    let device = Observer::default();
+    let mut client = FakeConnector::new(device.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    device.wake("Computer", vec![]);
+    let Some(LinkEvent::Wake(mut microphone)) = events.recv().await.unwrap() else {
+        unreachable!()
+    };
+    let (tx, rx) = mpsc::channel(64);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let mut source = Source::new(200, false).unwrap();
+    let options = Options {
+        listen_timeout: Some(Duration::from_secs(3)),
+        session_max: Duration::from_secs(60),
+        response_deadline: Instant::now() + Duration::from_secs(10),
+        played_timeout: Duration::from_secs(1),
+        reply_lead_ms: 200,
+        muted: false,
+    };
+    source.session = Grants::new(options.listen_timeout, options.session_max);
+    source.controller.admit_response(options.response_deadline).unwrap();
+    let (end, answer) = session_request(SessionCommand::End, &source.session.run, "farewell");
+    let played = tokio::sync::Notify::new();
+    let stopped = tokio::sync::Notify::new();
+    let mut receipts = Vec::new();
+    let mut observe = |notice| {
+        match notice {
+            Notice::SessionTool(receipt) => receipts.push(receipt.outcome),
+            Notice::ReplyPlayed => played.notify_one(),
+            _ => (),
+        }
+        Ok(())
+    };
+    let answer = goodbye_run(
+        replies(
+            &client,
+            (&mut events, &mut microphone),
+            &mut port,
+            (&mut source, &mut None),
+            &options,
+            std::future::pending(),
+            &mut observe,
+        ),
+        &device,
+        &stopped,
+        goodbye_inputs(&device, &tx, (&stopped, &played), (end, answer), order),
+    )
+    .await;
+    assert_eq!(answer.content, serde_json::json!({"ending_after_reply": true}));
+    assert_eq!(receipts, ["applied"]);
+    if !matches!(order, GoodbyeOrder::LateHandoff { .. }) {
+        assert_eq!(source.controller.idle_deadline(), None);
+    }
+    assert!(source.controller.ready_to_close(true, true));
+    assert_eq!(source.stats.reply_sent, 12);
+    let commands = device.commands();
+    let starts = commands.iter().filter(|cmd| matches!(cmd, Command::Start(..))).count();
+    assert_eq!(starts, 1);
+    assert!(!commands.iter().any(|cmd| matches!(cmd, Command::Cut(_))));
+}
+
+async fn goodbye_run<T>(
+    run: impl Future<Output = Result<(), Error>>,
+    device: &Observer,
+    stopped: &tokio::sync::Notify,
+    inputs: impl Future<Output = T>,
+) -> T {
+    tokio::pin!(run);
+    let mut stop_seen = false;
+    let run = poll_fn(|cx| {
+        let result = run.as_mut().poll(cx);
+        if !stop_seen && device.commands().last() == Some(&Command::Stop) {
+            stop_seen = true;
+            stopped.notify_one();
+        }
+        result.map(Result::unwrap)
+    });
+    let ((), answer) = tokio::join!(run, inputs);
+    answer
+}
+
+async fn goodbye_inputs(
+    device: &Observer,
+    tx: &mpsc::Sender<MediaEvent>,
+    (stopped, played): (&tokio::sync::Notify, &tokio::sync::Notify),
+    (end, answer): (Event, tokio::sync::oneshot::Receiver<echo_agent_api::ToolResult>),
+    order: GoodbyeOrder,
+) -> echo_agent_api::ToolResult {
+    if !matches!(order, GoodbyeOrder::LateHandoff { .. }) {
+        handoff(tx, true).await;
+    }
+    let end = if matches!(order, GoodbyeOrder::Early) {
+        send_control(tx, end).await;
+        None
+    } else {
+        Some(end)
+    };
+    reply(tx, 5000).await;
+    stopped.notified().await;
+    device.finish(Ok(()));
+    played.notified().await;
+    after_goodbye_played(tx, order, end).await;
+    answer.await.unwrap()
+}
+
+async fn after_goodbye_played(tx: &mpsc::Sender<MediaEvent>, order: GoodbyeOrder, end: Option<Event>) {
+    if let GoodbyeOrder::LateHandoff { turn_first } = order {
+        handoff(tx, turn_first).await;
+    }
+    if let Some(end) = end {
+        send_control(tx, Event::SpeechStarted).await;
+        send_control(tx, end).await;
+    }
+}
+
+async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {
+    let turn = Event::TurnStarted {
+        thread: "thread".into(),
+        turn: "turn".into(),
+    };
+    let marker = Event::GoodbyeHandoff;
+    let events = if turn_first { [turn, marker] } else { [marker, turn] };
+    for event in events {
+        send_control(tx, event).await;
+    }
+}
+
+async fn send_control(tx: &mpsc::Sender<MediaEvent>, event: Event) {
+    tx.send(MediaEvent::Control(event)).await.unwrap();
 }

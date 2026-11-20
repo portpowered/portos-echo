@@ -90,6 +90,7 @@ fn ordinary_say(value: &str, scenario: &str, options: &Options) -> Result<Step, 
     if options.sim {
         match crate::lab_validate::load(scenario)?["id"].as_str() {
             Some("m3-full-duplex" | "session-barge-continues") => return sim::m3::utterance(value),
+            Some(id) if sim::session::goodbye::admits(id) => return sim::session::goodbye::utterance(id, value),
             Some(id) if sim::session::admits(id) => return sim::session::utterance(value),
             Some("m4-spoof-tool") => return sim::m4::utterance(value),
             Some("m5-twin-room-lights") => return sim::mcp::utterance(value),
@@ -375,6 +376,9 @@ fn driver<'a>(
         Some("m3-full-duplex" | "session-barge-continues")
     ) {
         return Ok(Box::new(sim::m3::M3::new(options)?));
+    }
+    if scenario["id"].as_str().is_some_and(sim::session::goodbye::admits) {
+        return Ok(Box::new(sim::session::goodbye::Goodbye::new(options)?));
     }
     if scenario["id"].as_str().is_some_and(sim::session::admits) {
         return Ok(Box::new(sim::session::Persistent::new(options)?));

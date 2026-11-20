@@ -314,6 +314,10 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         self.call.answer_tool(id, result)
     }
 
+    pub(super) async fn flush_tool_answer(&mut self) -> Result<(), Error> {
+        self.call.flush_tool_answer().await
+    }
+
     #[must_use]
     pub fn thread_id(&self) -> Option<&str> {
         self.call.thread_id()

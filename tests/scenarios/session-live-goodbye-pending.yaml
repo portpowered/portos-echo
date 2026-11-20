@@ -1,0 +1,10 @@
+id: session-live-goodbye-pending
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "what time is it?"
+  - say: "okay thanks, bye"
+budgets:
+  session_listen_seconds: 3
+negative: []
