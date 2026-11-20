@@ -143,6 +143,8 @@ def independent_bundle(assets):
 
 
 def verify_delivered_assets(assets):
+    from test_release_delivery import delivered_journey
+
     manifest = independent_bundle(assets)
     release = manifest["version"]
     _, linux_name, windows_name, *_ = asset_names(release)
@@ -163,6 +165,7 @@ def verify_delivered_assets(assets):
         result = subprocess.run([str(executable), "--version"], capture_output=True, text=True, timeout=5)
         require((result.returncode, result.stdout, result.stderr) == (0, f"echo-setup {release}\n", ""),
                 "embedded installer version differs")
+        delivered_journey(executable, assets, assets / f"echo-{release}-armv7.tar.gz", manifest)
     print("release-kit: manifest=PASS checksums=PASS ELF-x86_64=PASS PE-x86_64=PASS embedded-version=PASS")
 
 
