@@ -237,7 +237,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/fixture":
             try:
                 self.send(200, dict(output=world.tool(body)))
-            except (ValueError, AssertionError, KeyError):
+            except (ValueError, AssertionError, KeyError, subprocess.CalledProcessError):
                 self.send(422, dict(error="fixture refusal"))
         elif self.path == "/operator/mcp":
             self.operator(body)
