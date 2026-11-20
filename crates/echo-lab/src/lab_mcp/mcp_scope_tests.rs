@@ -278,9 +278,9 @@ async fn t3_portos_full_grant_resolves_and_controls_only_twin_room() {
 fn tool_content(reply: &Value) -> Value {
     let result = &reply["result"];
     assert_eq!(result["isError"], false);
-    let [item] = result["content"].as_array().unwrap().as_slice() else {
-        panic!("expected one text content item");
-    };
+    let items = result["content"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
     assert_eq!(item["type"], "text");
     serde_json::from_str(item["text"].as_str().unwrap()).unwrap()
 }
