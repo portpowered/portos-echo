@@ -49,10 +49,11 @@ optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leave
 - The root `screen_pack` selects installed screen packs.
 
 Missing leaves retain base values. The Port OS server identity and URL are read-only in the panel.
-The paired panel shows the requested scopes separately from the current grant. Link or Relink starts the
+Open the Settings gear and expand OpenAI or Port OS. The Port OS section shows the requested scopes separately
+from the current grant. Link or Relink starts the
 bridge's Port OS authorization flow. Open the displayed verification URL on a phone or PC and enter the
-code before it expires. If a scope save is waiting for restart, open Settings again once the bridge is
-ready and then start a new link. Unlink asks for confirmation and revokes the current grant.
+code before it expires. After saving scopes, wait for Settings to report that the saved values are active
+before starting a new link. Unlink asks for confirmation and revokes the current grant.
 Unknown keys, bad types, unreadable/oversized files or invalid effective values reject the **whole overlay**;
 the validated base remains active and a warning is presented. An invalid base remains a startup error.
 The operator account/link commands load base directly; the voice runtime loads the effective configuration.

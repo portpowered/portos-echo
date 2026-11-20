@@ -10,7 +10,7 @@ import { element, promptForm, settingsForm } from "./forms";
 import { mountKeyboard } from "./keyboard";
 import type { UiState } from "../model";
 import { packControls } from "./packs";
-import { loadSettings, saveSettingsV2 } from "./api-v2";
+import { loadSettings, restartWarning, saveSettingsV2 } from "./api-v2";
 import { openAIOptions, portosForm } from "./forms-v2";
 import { mountPortos } from "./portos/controls";
 
@@ -23,6 +23,13 @@ const RELINK_RESULT: Record<Snapshot["link_status"], string> = {
     link_required: `Port OS needs linking again. ${LINK_FROM_PC}`,
     linked: "Port OS is already linked. Nothing changed.",
 };
+
+function settingsSection(title: string, body: HTMLElement) {
+    const section = element("details");
+    section.className = "settings-section";
+    section.append(element("summary", title), body);
+    return section;
+}
 
 // Navigation never constructs a ScreenFrame or emits a UiAction. The existing
 // presentation continues to accept authoritative SSE updates behind this view.
@@ -180,7 +187,7 @@ export function mountSettings(
                 return;
             }
             void perform(async (signal) => {
-                const pending = decodeSaved(
+                const restarting = decodeSaved(
                     await saveSettingsV2(actions, signal, patch),
                     2,
                 );
@@ -202,7 +209,6 @@ export function mountSettings(
                             data.portos.server.requested_scopes.length,
                             ...patch.portos.scopes,
                         );
-                    if (patch.portos.scopes && pending) portos?.scopesSaved();
                     if (patch.portos.allow_tools)
                         data.portos.server.allow_tools.splice(
                             0,
@@ -210,23 +216,27 @@ export function mountSettings(
                             ...patch.portos.allow_tools,
                         );
                 }
-                return pending
+                if (restarting) portos?.settingsSaved(!!patch.portos?.scopes);
+                return restarting
                     ? "Saved. The bridge will restart after the current reply finishes."
                     : "Saved. Changes apply to the next conversation.";
-            }, "Saving�");
+            }, "Saving…");
         }
         portos = mountPortos(
             permissions.controls,
             actions,
-            data.portos,
+            data,
             perform,
-            data.warnings.includes(
-                "Could not restart bridge; saved settings remain pending",
-            ),
+            (message) => {
+                status.textContent = message;
+            },
         );
         fields.append(
-            settingsForm(data, saveV2, openAIOptions(data.settings)),
-            permissions.section,
+            settingsSection(
+                "OpenAI",
+                settingsForm(data, saveV2, openAIOptions(data.settings)),
+            ),
+            settingsSection("Port OS", permissions.section),
         );
         renderShared(data);
         fields.append(element("p", "Version: " + data.bridge_version));
@@ -281,6 +291,7 @@ export function mountSettings(
             const data = await loadSettings(actions, signal);
             if (signal.aborted) return "";
             render(data);
+            if (data.warnings.includes(restartWarning)) return restartWarning;
             return data.restart_pending
                 ? "Saved settings are waiting for a bridge restart."
                 : "Settings loaded";

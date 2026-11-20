@@ -5,6 +5,8 @@ mod binary_turn;
 mod clock;
 #[path = "configured/restart.rs"]
 mod restart;
+#[path = "configured/restart_v2.rs"]
+mod restart_v2;
 mod startup;
 #[path = "configured/turn.rs"]
 mod turn;

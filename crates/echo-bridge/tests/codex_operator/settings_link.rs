@@ -305,6 +305,38 @@ async fn unlink_paired_grant(journey: &mut PairedGrant<'_>) {
     assert_eq!((counts.links, counts.revokes), (1, 1));
 }
 
+pub(super) async fn replacement_grant(fixture: &Fixture, mock: &echo_lab::lab_mcp::Fixture) {
+    let mut journey = PairedGrant {
+        fixture,
+        mock,
+        client: reqwest::Client::new(),
+        captured: vec![],
+    };
+    let status = journey.portos().await;
+    assert_eq!(status["link_status"], "link_required");
+    assert_eq!(status["link_waiting_for_restart"], false);
+    assert_eq!(status["server"]["requested_scopes"], json!(["endpoint:read"]));
+    journey.begin(std::time::UNIX_EPOCH.elapsed().unwrap().as_secs()).await;
+    mock.approve(echo_lab::lab_mcp::Approval::Approved).unwrap();
+    mock.advance(5).unwrap();
+    let mut reads = tokio::time::interval(Duration::from_millis(50));
+    loop {
+        reads.tick().await;
+        let status = journey.portos().await;
+        if status["operation_state"] != "linking" {
+            assert_eq!(status["operation_state"], "idle");
+            assert_eq!(status["link_status"], "linked");
+            assert_eq!(status["server"]["granted_scopes"], json!(["endpoint:read"]));
+            assert_eq!(status.get("challenge"), None);
+            break;
+        }
+    }
+    unlink_paired_grant(&mut journey).await;
+    let grant: Value =
+        serde_json::from_slice(&std::fs::read(fixture.directory.path().join("grant/grant.json")).unwrap()).unwrap();
+    assert_eq!(grant["grant"], Value::Null);
+}
+
 fn assert_private(journey: &PairedGrant<'_>, path: &std::path::Path, stored: &Value) {
     let rows = std::fs::read_to_string(path).unwrap();
     for secret in [

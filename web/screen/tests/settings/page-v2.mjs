@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { calls, pageFor } from "../browser.mjs";
 import { response, snapshot } from "./page.mjs";
+import { snapshot as pixelSnapshot } from "../support/snapshot.mjs";
 
 const query =
     "?events=%2Fevents%3Ftoken%3Dsynthetic-screen-pair&actions=%2Factions%3Ftoken%3Dsynthetic-screen-pair";
@@ -70,8 +71,10 @@ function v2Snapshot() {
 }
 
 async function open(t, settingsV2Body, settingsV2Status = 200) {
-    const page = await pageFor(t, query, true);
-    await page.setViewportSize({ width: 960, height: 480 });
+    const page = await pageFor(t, query, true, undefined, {
+        viewport: { width: 960, height: 480 },
+        hasTouch: true,
+    });
     await response(page, snapshot);
     await page.evaluate(
         ({ settingsV2Body, settingsV2Status }) => {
@@ -80,9 +83,12 @@ async function open(t, settingsV2Body, settingsV2Status = 200) {
         },
         { settingsV2Body, settingsV2Status },
     );
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).tap();
     return page;
 }
+
+const section = (page, name) =>
+    page.getByText(name, { exact: true }).and(page.locator("summary"));
 
 test("settings V2 displays configured options and submits only changed requested scopes", async (t) => {
     const page = await open(t, v2Snapshot());
@@ -90,11 +96,20 @@ test("settings V2 displays configured options and submits only changed requested
         await page.getByRole("status").textContent(),
         "Settings loaded",
     );
-    for (const name of ["OpenAI", "Port OS"])
-        assert.equal(
-            await page.getByRole("heading", { name, exact: true }).count(),
-            1,
-        );
+    const back = page.getByRole("button", { name: "Back", exact: true });
+    const openai = section(page, "OpenAI");
+    const portos = section(page, "Port OS");
+    for (const control of [back, openai, portos]) {
+        const { y, height } = await control.boundingBox();
+        assert.ok(height >= 64 && y + height <= 480);
+    }
+    await pixelSnapshot(page, "settings-v2-960x480");
+    await back.press("Tab");
+    assert.equal(
+        await openai.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    await openai.press("Enter");
     for (const [label, value] of [
         ["Live voice", "marin"],
         ["Web search", "cached"],
@@ -112,16 +127,18 @@ test("settings V2 displays configured options and submits only changed requested
             value,
         );
     }
-    for (const label of [
-        "Follow-up listening",
-        "notes",
-        "prompts",
-        "endpoint_query",
-    ])
+    for (const label of ["Follow-up listening", "notes", "prompts"])
         assert.equal(
             await page.getByLabel(label, { exact: true }).isChecked(),
             true,
         );
+    await openai.press("Enter");
+    await portos.tap();
+    await pixelSnapshot(page, "settings-v2-portos-960x480");
+    assert.equal(
+        await page.getByLabel("endpoint_query", { exact: true }).isChecked(),
+        true,
+    );
     assert.equal(
         await page.getByText("https://127.0.0.1/mcp", { exact: true }).count(),
         1,
@@ -147,11 +164,13 @@ test("settings V2 displays configured options and submits only changed requested
             choices,
         );
     }
-    await page.getByLabel("message:send", { exact: true }).uncheck();
+    await page.getByText("message:send", { exact: true }).tap();
+    assert.equal(
+        await page.getByLabel("message:send", { exact: true }).isChecked(),
+        false,
+    );
     await response(page, { version: 2, restart_pending: true });
-    await page
-        .getByRole("button", { name: "Save Port OS permissions" })
-        .click();
+    await page.getByRole("button", { name: "Save Port OS permissions" }).tap();
     assert.equal(
         await page.locator(".settings-panel [role=status]").textContent(),
         "Saved. The bridge will restart after the current reply finishes.",
@@ -165,6 +184,64 @@ test("settings V2 displays configured options and submits only changed requested
                 body: '{"version":2,"settings":{"portos":{"scopes":["endpoint:read"]}}}',
             },
         ],
+    );
+    assert.deepEqual(await back.boundingBox(), {
+        x: 816,
+        y: 12,
+        width: 120,
+        height: 64,
+    });
+    assert.equal(
+        await page
+            .locator(".settings-fields")
+            .evaluate((node) => node.scrollHeight > node.clientHeight),
+        true,
+    );
+    await back.tap();
+    assert.equal(
+        await page
+            .getByRole("button", { name: "Settings", exact: true })
+            .evaluate((node) => node === document.activeElement),
+        true,
+    );
+});
+
+test("settings V2 observes replacement without resending a successful save", async (t) => {
+    const page = await open(t, v2Snapshot());
+    await section(page, "OpenAI").tap();
+    const search = page.getByLabel("Web search", { exact: true });
+    await search.selectOption("disabled");
+    await response(page, { version: 2, restart_pending: true });
+    await page
+        .getByRole("button", { name: "Save settings", exact: true })
+        .tap();
+    const status = page.getByRole("status");
+    const saved =
+        "Saved. The bridge will restart after the current reply finishes.";
+    await page.evaluate(() => {
+        window.settingsV2Body.restart_pending = true;
+        window.settingsV2Body.settings.codex.web_search = "disabled";
+    });
+    await page.clock.runFor(500);
+    assert.equal(await status.textContent(), saved);
+    await page.evaluate(() => {
+        window.settingsV2Status = 503;
+    });
+    await page.clock.runFor(500);
+    assert.equal(await status.textContent(), saved);
+    await page.evaluate(() => {
+        window.settingsV2Status = 200;
+        window.settingsV2Body.restart_pending = false;
+    });
+    await page.clock.runFor(500);
+    assert.equal(
+        await status.textContent(),
+        "Bridge restarted. Saved settings are active.",
+    );
+    assert.equal(await search.inputValue(), "disabled");
+    assert.deepEqual(
+        (await calls(page)).map(({ method }) => method),
+        ["GET", "PATCH", "GET", "GET", "GET"],
     );
 });
 
@@ -199,6 +276,22 @@ test("settings V2 refuses invalid and unauthorized replies without falling back"
     }
 });
 
+test("settings V2 leaves a failed replacement pending when Settings reopens", async (t) => {
+    const data = v2Snapshot();
+    data.restart_pending = true;
+    data.warnings = ["Could not restart bridge; saved settings remain pending"];
+    const page = await open(t, data);
+    assert.equal(
+        await page.getByRole("status").textContent(),
+        data.warnings[0],
+    );
+    await page.clock.runFor(2000);
+    assert.deepEqual(
+        (await calls(page)).map(({ method }) => method),
+        ["GET"],
+    );
+});
+
 async function portosStatus(page, updates) {
     await page.evaluate((updates) => {
         Object.assign(window.settingsV2Body.portos, updates);
@@ -214,8 +307,10 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
         await page.getByRole("status").textContent(),
         "Settings loaded",
     );
+    await section(page, "OpenAI").tap();
     const model = page.getByLabel("Delegated model");
     await model.fill("unsaved-local-model");
+    await section(page, "Port OS").tap();
     await response(page, { version: 2, operation: "link" }, 202);
     await page
         .getByRole("button", { name: "Link Port OS", exact: true })

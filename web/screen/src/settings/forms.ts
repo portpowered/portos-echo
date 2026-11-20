@@ -95,7 +95,7 @@ export function settingsForm(
         1n,
     );
     form.append(
-        element("h2", extra ? "OpenAI" : "Conversation"),
+        ...(extra ? [] : [element("h2", "Conversation")]),
         field("Follow-up listening", enabled),
         seconds.label,
         field("Live voice", voice),

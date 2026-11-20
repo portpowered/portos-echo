@@ -37,15 +37,24 @@ export async function saveSettingsV2(
     return readResponse(response, 2);
 }
 
-export async function loadPortos(actions: string, signal: AbortSignal) {
-    const response = await send(settingsUrl(actions, "", 2), signal, "GET");
-    const snapshot = decodeV2(await readResponse(response, 2));
-    return {
-        status: snapshot.portos,
-        restartFailed: snapshot.warnings.includes(
-            "Could not restart bridge; saved settings remain pending",
-        ),
-    };
+export const restartWarning =
+    "Could not restart bridge; saved settings remain pending";
+
+export async function readSettingsProgress(
+    actions: string,
+    signal: AbortSignal,
+    waiting: boolean,
+) {
+    const response = await send(
+        settingsUrl(actions, "", 2),
+        signal,
+        "GET",
+    ).catch((error: unknown) => {
+        if (waiting && error instanceof TypeError) return undefined;
+        throw error;
+    });
+    if (!response || (waiting && response.status === 503)) return undefined;
+    return decodeV2(await readResponse(response, 2));
 }
 
 export async function operatePortos(

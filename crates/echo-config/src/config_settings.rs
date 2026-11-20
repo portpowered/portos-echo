@@ -116,7 +116,21 @@ impl SettingsOverlay {
             result.options.task_deadline_seconds = agent.optional("task_deadline_seconds")?;
             agent.finish()?;
         }
-        result.options.decode_sections(&mut fields)?;
+        if let Some(mut home) = fields.section("home")? {
+            result.options.agent_tools = home.optional("agent_tools")?;
+            home.finish()?;
+        }
+        if let Some(mut mcp) = fields.section("mcp")? {
+            result.options.scopes = mcp.optional("scopes")?;
+            let servers: Option<Vec<SettingsServerTools>> = mcp.optional("server")?;
+            if let Some(mut servers) = servers {
+                if servers.len() != 1 {
+                    return Err(ConfigError::new("mcp.server", "expected one Port OS server override"));
+                }
+                result.options.server = servers.pop();
+            }
+            mcp.finish()?;
+        }
         fields.finish()?;
         if let Some(value) = result.daily_cap {
             i64::try_from(value).map_err(|_| ConfigError::new("agent.daily_request_cap", "must fit a TOML integer"))?;
@@ -232,24 +246,6 @@ impl SettingsOverlay {
 }
 
 impl SettingsOptions {
-    fn decode_sections(&mut self, fields: &mut Fields<'_>) -> Result<(), ConfigError> {
-        if let Some(mut home) = fields.section("home")? {
-            self.agent_tools = home.optional("agent_tools")?;
-            home.finish()?;
-        }
-        if let Some(mut mcp) = fields.section("mcp")? {
-            self.scopes = mcp.optional("scopes")?;
-            if let Some(mut servers) = mcp.optional::<Vec<SettingsServerTools>>("server")? {
-                if servers.len() != 1 {
-                    return Err(ConfigError::new("mcp.server", "expected one Port OS server override"));
-                }
-                self.server = servers.pop();
-            }
-            mcp.finish()?;
-        }
-        Ok(())
-    }
-
     fn apply_to(&self, config: &mut BridgeConfig) -> Result<(), ConfigError> {
         if let Some(mode) = self.web_search {
             config.codex.web_search = mode;

@@ -1,4 +1,4 @@
-import { loadPortos, operatePortos } from "../api-v2";
+import { operatePortos, readSettingsProgress, restartWarning } from "../api-v2";
 import type { SnapshotV2 } from "../api";
 import { element } from "../forms";
 import type { PortosOperationV2 } from "../model";
@@ -33,11 +33,13 @@ function button(label: string) {
 export function mountPortos(
     parent: HTMLElement,
     actions: string,
-    initial: Portos,
+    initial: SnapshotV2,
     perform: Perform,
-    restartFailed: boolean,
+    updateRestart: (message: string) => void,
 ) {
-    let status = initial;
+    let status = initial.portos;
+    let waiting = initial.restart_pending;
+    let restartFailed = initial.warnings.includes(restartWarning);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let read: AbortController | undefined;
     const linkStatus = element("p");
@@ -121,7 +123,7 @@ export function mountPortos(
 
     function monitor() {
         if (timer || read) return;
-        if (active() || (status.link_waiting_for_restart && !restartFailed))
+        if (active() || (waiting && !restartFailed))
             timer = setTimeout(() => void poll(), 500);
     }
 
@@ -131,17 +133,40 @@ export function mountPortos(
         read = controller;
         const deadline = setTimeout(() => controller.abort(), 10000);
         try {
-            const result = await loadPortos(actions, controller.signal);
-            if (controller.signal.aborted || read !== controller) return;
-            status = result.status;
-            restartFailed = result.restartFailed;
+            const result = await readSettingsProgress(
+                actions,
+                controller.signal,
+                waiting,
+            );
+            if (!result || controller.signal.aborted || read !== controller)
+                return;
+            status = result.portos;
+            restartFailed = result.warnings.includes(restartWarning);
+            if (waiting && restartFailed) updateRestart(restartWarning);
+            if (waiting && !result.restart_pending) {
+                const overlayWarning = result.warnings.find((warning) =>
+                    warning.startsWith("settings.toml: ignored overlay:"),
+                );
+                updateRestart(
+                    overlayWarning ??
+                        "Bridge restarted. Saved settings are active.",
+                );
+            }
+            waiting = result.restart_pending;
             render();
         } catch {
-            if (read === controller) {
+            if (
+                read === controller &&
+                !(waiting && controller.signal.aborted)
+            ) {
                 instruction.hidden = code.hidden = true;
                 operationStatus.hidden = false;
                 operationStatus.textContent =
                     "Port OS status is unavailable. Reopen Settings to check the operation.";
+                if (waiting)
+                    updateRestart(
+                        "Restart status is unavailable. Reopen Settings to check the saved settings.",
+                    );
                 read = undefined;
             }
         } finally {
@@ -201,8 +226,12 @@ export function mountPortos(
     monitor();
     return {
         stop,
-        scopesSaved() {
-            status = { ...status, link_waiting_for_restart: true };
+        settingsSaved(scopesChanged: boolean) {
+            stop();
+            waiting = true;
+            restartFailed = false;
+            if (scopesChanged)
+                status = { ...status, link_waiting_for_restart: true };
             render();
             monitor();
         },

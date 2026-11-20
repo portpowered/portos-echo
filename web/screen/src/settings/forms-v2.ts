@@ -8,12 +8,15 @@ function choices<T extends string>(
     current: string[],
 ) {
     const fieldset = element("fieldset");
+    fieldset.className = "settings-choices";
     fieldset.append(element("legend", label));
     const inputs = items.map((name) => {
         const input = element("input");
         input.type = "checkbox";
         input.checked = current.includes(name);
-        fieldset.append(field(name, input));
+        const choice = element("label");
+        choice.append(input, element("span", name));
+        fieldset.append(choice);
         return { name, input };
     });
     const selected = () =>
@@ -78,8 +81,6 @@ export function portosForm(
     save: (patch: PatchV2) => void,
 ) {
     const section = element("section");
-    section.setAttribute("aria-label", "Port OS");
-    section.append(element("h2", "Port OS"));
     const controls = element("div");
     section.append(controls);
     const server = status.server;

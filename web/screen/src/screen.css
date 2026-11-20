@@ -185,6 +185,40 @@ main.settings-open {
 .settings-fields > section {
     max-height: none;
 }
+.settings-section {
+    border-bottom: 1px solid #566c90;
+}
+.settings-section summary {
+    min-height: 64px;
+    padding: 16px;
+    font-size: 26px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.settings-section[open] summary {
+    background: #243b61;
+}
+.settings-section > section {
+    max-height: none;
+}
+.settings-choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+    min-width: 0;
+}
+.settings-choices label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 64px;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+.settings-choices input[type="checkbox"] {
+    flex-shrink: 0;
+}
 .settings-fields form {
     border-bottom: 1px solid #c4d5ff;
     padding-bottom: 16px;
