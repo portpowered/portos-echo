@@ -114,6 +114,15 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
     }
     slot(clock, "clock");
     slot(date, "date");
+    clock.style.width = date.style.width = "max-content";
+    // Time and date anchor at their slot x by their own text-align: centred
+    // text centres its box on x, so both lines share one centre line.
+    function anchor(node: HTMLElement, width: number) {
+        if (node !== clock && node !== date) return 0;
+        const align = getComputedStyle(node).textAlign;
+        if (align === "center") return width / 2;
+        return align === "right" || align === "end" ? width : 0;
+    }
     function clamp() {
         for (const node of host.querySelectorAll<HTMLElement>(
             "[data-pack-slot]",
@@ -121,7 +130,14 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             node.style.transform = "";
             const box = node.getBoundingClientRect();
             const bounds = host.getBoundingClientRect();
-            const x = Math.min(0, bounds.right - box.right);
+            const left = box.left - anchor(node, box.width);
+            const x =
+                left -
+                box.left +
+                Math.max(
+                    Math.min(0, bounds.right - (left + box.width)),
+                    bounds.left - left,
+                );
             const y = Math.min(0, bounds.bottom - box.bottom);
             node.style.transform = `translate(${x}px, ${y}px)`;
         }
@@ -143,7 +159,8 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
     return {
         render(state: string) {
             const idle = ["ready", "connected"].includes(state);
-            clock.hidden = date.hidden = !idle;
+            // Time and date stay put through every state.
+            clock.hidden = date.hidden = false;
             const feedbackSlot = layout?.slots.status;
             placeFeedback(
                 idle && besideStage(feedbackSlot) ? feedbackSlot : undefined,
@@ -189,6 +206,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             node.style.height = `${50 * layout.stage.scale}%`;
             node.style.backgroundColor = layout.stage.background;
         },
+        refresh: clamp,
         dispose() {
             observer.disconnect();
             clearInterval(timer);

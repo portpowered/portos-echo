@@ -139,12 +139,20 @@ button:disabled {
     background: #101827;
     pointer-events: none;
 }
+/* A plain icon: no box, border or fill; a 72 px target and a focus ring. */
 .settings-gear {
     position: fixed;
     top: 12px;
     right: 24px;
     min-width: 72px;
+    min-height: 72px;
+    margin: 0;
     padding: 12px;
+    border: 0;
+    background: transparent;
+    color: #c4d5ff;
+    font-size: 40px;
+    line-height: 1;
 }
 main.settings-open {
     padding: 12px 24px 8px;

@@ -1,5 +1,49 @@
 import { source, type Playback } from "./player";
 
+// A clip change eases the eyes from where the old clip left them to where the
+// new one starts, while the old clip fades out above the new one.
+export const GLIDE_MS = 240;
+const GLIDE_MIN_PX = 6;
+
+// Bright-pixel centroid in the source's own pixels; undefined when unreadable.
+function centroid(
+    canvas: HTMLCanvasElement,
+    image: CanvasImageSource,
+    width: number,
+    height: number,
+): { x: number; y: number } | undefined {
+    try {
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context || !width || !height) return;
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const { data } = context.getImageData(
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+        );
+        let x = 0;
+        let y = 0;
+        let count = 0;
+        for (let i = 0; i < data.length; i += 4) {
+            if (data[i + 3]! < 128) continue;
+            if (Math.max(data[i]!, data[i + 1]!, data[i + 2]!) < 128) continue;
+            const pixel = i / 4;
+            x += pixel % canvas.width;
+            y += Math.floor(pixel / canvas.width);
+            count++;
+        }
+        if (!count) return;
+        return {
+            x: ((x / count + 0.5) * width) / canvas.width,
+            y: ((y / count + 0.5) * height) / canvas.height,
+        };
+    } catch {
+        return undefined;
+    }
+}
+
 export function mediaStage(
     host: HTMLElement,
     still: HTMLImageElement,
@@ -26,24 +70,83 @@ export function mediaStage(
     }
     stage.append(still, ...videos);
     host.prepend(stage);
+    const canvas = document.createElement("canvas");
+    canvas.width = 160;
+    canvas.height = 100;
     let front = -1;
+    let shownPath: string | undefined;
     let generation = 0;
     let stopped = false;
     let cancel = () => {};
+    let settle: (() => void) | undefined;
     const motion = matchMedia("(prefers-reduced-motion: reduce)");
     let current: Playback | undefined;
+
+    // The still is visible only while no clip is: it never sits under a clip.
+    function rest(): void {
+        settle?.();
+        for (const video of videos) {
+            video.pause();
+            video.hidden = true;
+        }
+        still.hidden = false;
+        front = -1;
+        shownPath = undefined;
+    }
+
+    function offset(from: HTMLVideoElement, to: HTMLVideoElement) {
+        const a = centroid(canvas, from, from.videoWidth, from.videoHeight);
+        const b = centroid(canvas, to, to.videoWidth, to.videoHeight);
+        if (!a || !b) return { x: 0, y: 0 };
+        const scale = Math.min(
+            to.clientWidth / to.videoWidth,
+            to.clientHeight / to.videoHeight,
+        );
+        const x = (a.x - b.x) * scale;
+        const y = (a.y - b.y) * scale;
+        return Math.hypot(x, y) < GLIDE_MIN_PX ? { x: 0, y: 0 } : { x, y };
+    }
+
+    function ease(from: HTMLVideoElement, to: HTMLVideoElement): void {
+        from.pause();
+        if (typeof to.animate !== "function") {
+            from.hidden = true;
+            return;
+        }
+        const { x, y } = offset(from, to);
+        const timing = { duration: GLIDE_MS, easing: "ease-out" };
+        from.style.zIndex = "1";
+        const incoming = to.animate(
+            [{ transform: `translate(${x}px, ${y}px)` }, { transform: "none" }],
+            timing,
+        );
+        const outgoing = from.animate(
+            [
+                { transform: "none", opacity: 1 },
+                { transform: `translate(${-x}px, ${-y}px)`, opacity: 0 },
+            ],
+            { ...timing, fill: "forwards" },
+        );
+        const done = () => {
+            if (settle !== done) return;
+            settle = undefined;
+            incoming.cancel();
+            outgoing.cancel();
+            from.hidden = true;
+            from.style.zIndex = "";
+        };
+        settle = done;
+        outgoing.onfinish = done;
+    }
 
     function show(playback: Playback): void {
         current = playback;
         cancel();
+        settle?.();
         const own = ++generation;
         if (stopped) return;
         if (!playback.clip || motion.matches) {
-            for (const video of videos) {
-                video.pause();
-                video.hidden = true;
-            }
-            front = -1;
+            rest();
             return;
         }
         const index = front === 0 ? 1 : 0;
@@ -62,12 +165,20 @@ export function mediaStage(
         const valid = () => !stopped && generation === own;
         const reveal = () => {
             if (!valid()) return;
+            const previous = front !== -1 && front !== index;
             video.hidden = false;
-            if (front !== -1 && front !== index) {
-                videos[front]!.hidden = true;
-                videos[front]!.pause();
+            still.hidden = true;
+            if (previous) {
+                const old = videos[front]!;
+                // A replayed loop joins on its own seam; a new clip eases in.
+                if (shownPath !== path) ease(old, video);
+                else {
+                    old.hidden = true;
+                    old.pause();
+                }
             }
             front = index;
+            shownPath = path;
         };
         video.onloadeddata = () => {
             if (!valid()) return;
@@ -101,6 +212,7 @@ export function mediaStage(
             stopped = true;
             ++generation;
             cancel();
+            settle?.();
             motion.removeEventListener("change", changed);
             for (const video of videos) {
                 video.pause();

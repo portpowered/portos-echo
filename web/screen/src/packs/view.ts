@@ -105,6 +105,7 @@ export function mountPacks(
             css.rel = "stylesheet";
             css.referrerPolicy = "no-referrer";
             if (manifest.layout?.css) {
+                css.onload = () => ownedLayout.refresh();
                 css.href = asset(manifest.layout.css);
                 host.append(css);
             }
