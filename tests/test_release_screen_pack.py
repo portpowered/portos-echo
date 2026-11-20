@@ -11,6 +11,10 @@ from test_release_delivery import DeliveryBox, assert_installed_pack, delivered_
 from test_release_kit import PACK, sha
 
 
+SCREEN = ('[screen]\nlisten = "127.0.0.1:16900"\n'
+          'pairing_token_file = "/data/local/echo-bridge/private/screen-pairing.txt"\n')
+
+
 def write_archive(path, members):
     with tarfile.open(path, "w:gz", format=tarfile.USTAR_FORMAT) as archive:
         for name, data in members.items():
@@ -31,7 +35,7 @@ def release_fixture(box, name, *, unsafe=False, tampered=False, default_status=2
     if tampered:
         (box.assets / asset).write_bytes(b"changed after authentication")
     url = f"https://github.com/portpowered/portos-echo/releases/download/v{release}/{asset}"
-    sample = f'[screen]\nlisten = "127.0.0.1:16900"\npacks = [{{ url = "{url}", sha256 = "{digest}" }},' \
+    sample = SCREEN + f'packs = [{{ url = "{url}", sha256 = "{digest}" }},' \
              ' { url = "https://example.invalid/extra", sha256 = "' + "a" * 64 + '" }]\n'
     files = {key: b"fixture runtime" for key in PACK.REQUIRED | PACK.SETUP_SCRIPTS}
     files.update({"examples/bridge.echo.toml": sample.encode(), "examples/prompts/voice.md": b"voice",
@@ -71,7 +75,7 @@ def case_install(box, name, variant, **options):
     root = home / "screens" / identity
     retained = {home / "settings.toml": b'[screen]\nscreen_pack = ""\n',
                 home / "screens/other@1.0.0/keep.png": b"other installed data",
-                box.device / "private/bridge.toml": b"# operator config\n"}
+                box.device / "private/bridge.toml": b"# operator config\n" + SCREEN.encode()}
     if variant in ("retained", "same", "conflict"):
         for path, data in retained.items():
             owned_file(box, path, data)
@@ -112,8 +116,9 @@ def case_install(box, name, variant, **options):
                         for call in delivery_calls(box.root)), "refused pack reached bundled install or start")
     if variant == "fresh":
         config = tomllib.loads((box.device / "private/bridge.toml").read_text())
-        require(config["screen"] == {"listen": "127.0.0.1:16900",
-                                     "packs": [{"url": "https://example.invalid/extra", "sha256": "a" * 64}]},
+        expected_config = tomllib.loads(SCREEN)
+        expected_config["screen"]["packs"] = [{"url": "https://example.invalid/extra", "sha256": "a" * 64}]
+        require(config == expected_config,
                 "config seed did not remove only the authenticated release pin")
     elif variant in ("retained", "same", "conflict"):
         require(all(path.read_bytes() == data for path, data in retained.items()), "operator config or home bytes changed")

@@ -10,7 +10,6 @@ if ! command -v setup_operator >/dev/null 2>&1; then
   . "$(dirname -- "$0")/echo-install-setup.sh"
 fi
 release_bundle='' release_version=null device_mode=false
-# The trusted adapter prepares the archive; the validated bundle owns install.
 if [ "${1:-}" = --device ]; then
   shift
   device_mode=true
