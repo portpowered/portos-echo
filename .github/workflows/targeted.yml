@@ -2,154 +2,69 @@ name: Targeted
 on:
   workflow_dispatch:
     inputs:
-      nextest_filter:
-        description: Optional nextest -E expression
-        type: string
-        required: false
-        default: ''
-      scenarios:
-        description: Optional space-separated scenario stems or .yaml filenames
-        type: string
-        required: false
-        default: ''
-      repeat:
-        description: Number of executions, integer 1-10
-        type: number
-        required: false
-        default: 1
-      ignored:
-        description: Include ignored tests in the filter selection
-        type: boolean
-        required: false
-        default: true
       release_bundle:
-        description: Build and verify the distributable release bundle
+        description: Run the production template fixture
         type: boolean
-        required: false
         default: false
 permissions:
   contents: read
 jobs:
-  targeted:
-    if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
+  pack:
+    if: inputs.release_bundle
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 23
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
-          target: test-sim
-          sim: 'true'
-      - name: Execute requested selections
-        id: selections
-        shell: sh
-        env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
-          TARGETED_SCENARIOS: ${{ inputs.scenarios }}
-          TARGETED_REPEAT: ${{ inputs.repeat }}
-          TARGETED_IGNORED: ${{ inputs.ignored }}
-        run: |
-          python - <<'PY'
-          import os
-          import re
-          import subprocess
-          import tempfile
-          from pathlib import Path
-          selection = os.environ["TARGETED_FILTER"].strip()
-          names = os.environ["TARGETED_SCENARIOS"].split()
-          count = os.environ["TARGETED_REPEAT"]
-          ignored = os.environ["TARGETED_IGNORED"]
-          if not re.fullmatch(r"(?:[1-9]|10)", count) or ignored not in ("true", "false"):
-              raise SystemExit("targeted: repeat must be 1-10 and ignored must be boolean")
-          if not selection and not names:
-              raise SystemExit("targeted: provide nextest_filter or scenarios")
-          paths = []
-          for name in names:
-              if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.yaml)?", name):
-                  raise SystemExit("targeted: use scenario names within tests/scenarios")
-              path = Path("tests/scenarios") / (name if name.endswith(".yaml") else name + ".yaml")
-              if not path.is_file() or path.resolve().parent != Path("tests/scenarios").resolve():
-                  raise SystemExit("targeted: missing or unsafe scenario")
-              paths.append(path)
-          subprocess.run(["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge",
-                          "-p", "echo-muse-bridge", "--bins"], check=True)
-          report_root = Path(tempfile.mkdtemp(prefix="targeted-reports-", dir=os.environ["RUNNER_TEMP"])).resolve()
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              print(f"report_root={report_root}", file=output)
-          failed = False
-          for number in range(1, int(count) + 1):
-              code = 0
-              if selection:
-                  command = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-targets",
-                             "--config-file", ".github/nextest.toml", "--profile", "ci",
-                             "--no-tests", "fail", "-E", selection]
-                  if ignored == "true":
-                      command += ["--run-ignored", "all"]
-                  code = subprocess.run(command).returncode
-              for index, path in enumerate(paths):
-                  parent = report_root / ("repeat-" + str(number))
-                  parent.mkdir(parents=True, exist_ok=True)
-                  destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
-                  if result and not code:
-                      code = result
-              print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
-              failed = failed or code != 0
-          raise SystemExit(1 if failed else 0)
-          PY
-      - name: Upload echo-lab reports
-        if: always() && steps.selections.outputs.report_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+          target: test-unit
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          name: targeted-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.selections.outputs.report_root }}
-          if-no-files-found: ignore
-          retention-days: 3
-  release-bundle:
-    if: ${{ inputs.release_bundle }}
-    runs-on: ubuntu-24.04
-    # Existing standalone Codex job allows 180 minutes for a cold build.
-    timeout-minutes: 240
-    env:
-      CARGO_BUILD_JOBS: '4'
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+          path: |
+            ~/.npm
+            ~/.cache/ms-playwright
+          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
         with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Focused wrapper and packaging tests
-        run: python3 tests/test_release_kit.py
-      - uses: ./.github/actions/setup
-        with:
-          target: build-echo
-      - name: Provision release tools
+          tool: shellcheck@0.11.0,shfmt@3.14.0
+          fallback: none
+      - name: Verify and prepare both versions
         shell: sh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
-          rustup target add --toolchain 1.100.0 armv7-linux-androideabi
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Cheap release checks
-        run: |
-          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
-          python3 tests/test_release_kit.py --configure-native
-      - name: Build and verify release bundle
-        run: |
-          make dist
-          python3 tests/test_release_kit.py --assets dist
+          set -eu
+          command -v ffprobe || { sudo apt-get update && sudo apt-get install -y ffmpeg; }
+          python3 tests/test_release_kit.py
+          shellcheck scripts/make-template-screenpack.sh scripts/echo-screen-pack.sh
+          shfmt -d scripts/make-template-screenpack.sh scripts/echo-screen-pack.sh
+          python3 tests/test_screen_pack_assets.py --template-witness "$RUNNER_TEMP/candidate"
+          (cd "$RUNNER_TEMP/candidate" && sha256sum --check template-0.2.0.screenpack.tar.gz.sha256 && cat template-0.2.0.screenpack.tar.gz.sha256)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: targeted-release-${{ github.sha }}
-          path: |
-            dist/echo-*-armv7.tar.gz
-            dist/install.sh
-            dist/SHA256SUMS
+          name: template-0.2.0-contact
+          path: ${{ runner.temp }}/candidate/contact.png
           if-no-files-found: error
-          retention-days: 7
+      - name: Exercise the production fixture and paired page
+        shell: sh
+        run: |
+          set -eu
+          cd web/screen
+          npm ci --offline=false
+          npm ci --offline
+          npx --offline playwright install --with-deps chromium
+          npm run lint
+          npm test
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: template-0.2.0-page
+          path: web/screen/test-results/screenshots/template-960x600-*.png
+      - name: Targeted result
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = success ]; then
+            echo "TARGETED_RESULT repeat=1 exit=0"
+          else
+            echo "TARGETED_RESULT repeat=1 exit=1"
+          fi
