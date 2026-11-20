@@ -48,7 +48,8 @@ The operator account/link commands load base directly; the voice runtime loads t
 Voice and cap edits persist first, then request replacement at an idle/between-call boundary.
 They do not interrupt an active conversation. Screen-pack selection saves use the same atomic writer
 and never request or retry replacement. Catalog and selection persistence are implemented; visible
-pack playback and hot reload remain pending (see [screen packs](screen-packs.md)). Pending/applied and failed-restart state are shown on screen. After replacement failure,
+pack playback and hot reload remain pending (see [screen packs](screen-packs.md)).
+Pending/applied and failed-restart state are shown on screen. After replacement failure,
 the old active configuration remains usable; a later explicit stop/start loads the saved overlay.
 Other base edits need restart. To remove an override, stop and edit/remove the corresponding overlay entry;
 changing the base alone does not win over a saved screen value.
