@@ -5,7 +5,7 @@ import { frame, states } from "../fixtures.mjs";
 
 const query =
     "?events=%2Fevents%3Ftoken%3Dsynthetic-screen-pair&actions=%2Factions%3Ftoken%3Dsynthetic-screen-pair";
-const snapshot = {
+export const snapshot = {
     version: 1,
     settings: {
         voice: { session_listen_enabled: true, session_listen_seconds: 15 },
@@ -19,7 +19,7 @@ const snapshot = {
     restart_pending: false,
     warnings: ["Settings overlay was ignored"],
 };
-async function response(page, body, status = 200) {
+export async function response(page, body, status = 200) {
     await page.evaluate(
         ({ body, status }) => {
             window.responseBody = body;
@@ -28,7 +28,7 @@ async function response(page, body, status = 200) {
         { body, status },
     );
 }
-async function settingsPage(t) {
+export async function settingsPage(t) {
     const page = await pageFor(t, query, true);
     await emit(page, frame(1));
     await response(page, snapshot);
@@ -221,9 +221,9 @@ test("settings: prompt text remains inert and exact; blank and over-32KiB values
     await response(page, undefined, 204);
     await page.getByRole("button", { name: "Relink", exact: true }).click();
     assert.equal((await calls(page)).at(-1).body, '{"action":"relink"}');
-    assert.match(
+    assert.equal(
         await page.locator(".settings-panel [role=status]").textContent(),
-        /Return to the screen/,
+        "Port OS is already linked. Nothing changed.",
     );
 });
 
