@@ -20,9 +20,7 @@ impl Session {
         if self.trace.records.iter().any(|r| r["event"] == "run.started") {
             return Err("M5: tool journey already started".into());
         }
-        let host = self.host.as_mut().ok_or("M5: missing host")?;
-        host.send(&json!({"action":"wake"})).await?;
-        host.expect("host.ack").await?;
+        self.wake().await?;
         self.dispatch().await?;
         self.reach(1).await?;
         let state = self
@@ -91,7 +89,13 @@ impl Session {
         Ok(())
     }
 
-    async fn dispatch(&self) -> Result<(), String> {
+    pub(super) async fn wake(&mut self) -> Result<(), String> {
+        let host = self.host.as_mut().ok_or("M5: missing host")?;
+        host.send(&json!({"action":"wake"})).await?;
+        host.expect("host.ack").await.map(|_| ())
+    }
+
+    pub(super) async fn dispatch(&self) -> Result<(), String> {
         self.live
             .as_ref()
             .ok_or("M5: missing Live fixture")?
@@ -153,7 +157,7 @@ impl Session {
         Ok(())
     }
 
-    async fn reach(&mut self, appends: usize) -> Result<(), String> {
+    pub(super) async fn reach(&mut self, appends: usize) -> Result<(), String> {
         loop {
             self.observe()?;
             let live = self.live.as_ref().ok_or("M5: missing Live fixture")?;

@@ -1,5 +1,6 @@
 //! M5 owns the production bridge, pinned host and strict loopback grant peers.
 mod mcp_journey;
+mod mcp_lights;
 mod mcp_peers;
 mod mcp_replay;
 mod mcp_session;
@@ -8,6 +9,7 @@ mod mcp_wire;
 use std::time::Duration;
 
 use super::super::{Driver, McpAction, Step, run_options::Options, run_report::Artifacts};
+pub(in crate::lab_run) use mcp_lights::utterance;
 use mcp_session::Session;
 
 pub struct M5<'a> {
@@ -19,7 +21,7 @@ pub struct M5<'a> {
 }
 
 impl<'a> M5<'a> {
-    pub fn new(options: &'a Options) -> Result<Self, String> {
+    pub fn new(options: &'a Options, lights: bool) -> Result<Self, String> {
         Ok(Self {
             options,
             runtime: tokio::runtime::Builder::new_multi_thread()
@@ -27,7 +29,11 @@ impl<'a> M5<'a> {
                 .enable_all()
                 .build()
                 .map_err(|_| "M5: cannot start runtime")?,
-            session: Session::default(),
+            session: Session::new(if lights {
+                mcp_lights::Journey::Twin
+            } else {
+                mcp_lights::Journey::Lifecycle
+            }),
             deadline: tokio::time::Instant::now() + Duration::from_secs(120),
             expectations: vec![],
         })
@@ -51,6 +57,9 @@ impl<'a> M5<'a> {
             | Step::Ui(_)
             | Step::Trace(_) => {}
             Step::Mcp(McpAction::Call | McpAction::Probe) => session.admit_call()?,
+            Step::SayText(_) | Step::Speech(_) if session.journey == mcp_lights::Journey::Twin => {
+                session.admit_call()?;
+            }
             _ => return Err("M5: unsupported step capability".into()),
         }
         if !session.started() {
@@ -65,6 +74,11 @@ impl<'a> M5<'a> {
             Step::Mcp(McpAction::Replay) => session.replay().await?,
             Step::Mcp(McpAction::Call) => session.call().await?,
             Step::Mcp(McpAction::Probe) => session.probe().await?,
+            Step::SayText(text) => {
+                let observed = session.lights(text).await?;
+                artifacts.measurement(observed)?;
+            }
+            Step::Speech(phrases) => session.expect_reply(phrases)?,
             Step::Ui(expected) => session.expect_screen(expected)?,
             Step::Trace(values) => {
                 session.observe()?;
@@ -73,7 +87,9 @@ impl<'a> M5<'a> {
             _ => return Err("M5: unsupported step capability".into()),
         }
         session.observe()?;
-        artifacts.link_counts = Some(session.measure()?);
+        if session.journey == mcp_lights::Journey::Lifecycle {
+            artifacts.link_counts = Some(session.measure()?);
+        }
         Ok(())
     }
 }

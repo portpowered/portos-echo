@@ -8,8 +8,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-const ROOM: &str = "synthetic/endpoint-groups/twin-room";
-const MESSAGE: &str = "power/messages/turn-off";
+const ROOM: &str = "group-twin-room";
+const MESSAGE: &str = "power/turn-off";
 const TOOLS: [(&str, &str); 11] = [
     ("control", "message:send"),
     ("endpoint_query", "endpoint:read"),
@@ -26,6 +26,7 @@ const TOOLS: [(&str, &str); 11] = [
 
 pub(super) struct Home {
     calls: Vec<Value>,
+    pub(super) scope_denials: Vec<Value>,
     lights_on: bool,
 }
 
@@ -33,6 +34,7 @@ impl Default for Home {
     fn default() -> Self {
         Self {
             calls: Vec::new(),
+            scope_denials: Vec::new(),
             lights_on: true,
         }
     }
@@ -52,15 +54,15 @@ impl Home {
             "group_query" => content(
                 &json!({"groups":[{
                     "id":ROOM,"name":"Twin room","messages":[MESSAGE],
-                    "endpointIds":["synthetic/endpoints/twin-one","synthetic/endpoints/twin-two"]
+                    "endpointIds":["light-a","light-b"]
                 }]}),
                 false,
             ),
             "endpoint_query" | "endpoint_show" => content(
                 &json!({"endpoints":[
-                    {"id":"synthetic/endpoints/twin-one","name":"Twin one","power":self.lights_on},
-                    {"id":"synthetic/endpoints/twin-two","name":"Twin two","power":self.lights_on},
-                    {"id":"synthetic/endpoints/unrelated-plug","name":"Unrelated plug","power":true}
+                    {"id":"light-a","name":"Twin one","power":self.lights_on,"messages":[MESSAGE]},
+                    {"id":"light-b","name":"Twin two","power":self.lights_on,"messages":[MESSAGE]},
+                    {"id":"plug-unrelated","name":"Unrelated plug","power":true}
                 ]}),
                 false,
             ),
@@ -96,6 +98,11 @@ pub(super) async fn request(State(shared): State<Shared>, headers: HeaderMap, Js
     if let Some(scope) = required_scope(method, name)
         && !state.scopes.split(' ').any(|granted| granted == scope)
     {
+        if method == "tools/call" && state.home.scope_denials.len() < 128 {
+            state.home.scope_denials.push(json!({
+                "name":name,"arguments":body["params"]["arguments"],"scope":scope
+            }));
+        }
         return (
             StatusCode::FORBIDDEN,
             [(

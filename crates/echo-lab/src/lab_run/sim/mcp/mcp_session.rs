@@ -14,6 +14,7 @@ use super::{
         process::{self, Process},
         trace::Trace,
     },
+    mcp_lights::Journey,
     mcp_wire::{self, endpoint},
 };
 use crate::lab_run::run_options::Options;
@@ -23,6 +24,7 @@ pub(super) const EPOCH: u64 = 1_800_000_000;
 
 #[derive(Default)]
 pub struct Session {
+    pub(super) journey: Journey,
     pub(super) host: Option<Process>,
     pub(super) bridge: Option<Process>,
     pub(super) fixture: Option<Fixture>,
@@ -47,6 +49,13 @@ pub struct Session {
 }
 
 impl Session {
+    pub(super) fn new(journey: Journey) -> Self {
+        Self {
+            journey,
+            ..Self::default()
+        }
+    }
+
     pub fn started(&self) -> bool {
         !self.directory.as_os_str().is_empty()
     }
@@ -185,21 +194,23 @@ impl Session {
                 .map_err(|_| "M5: authorization startup failed")?,
         );
         let fixture = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?;
-        self.spoof = Some(
-            Spoof::start_authorized(SpoofOptions::default(), Some(fixture.validator()))
-                .await
-                .map_err(|_| "M5: resource startup failed")?,
-        );
-        let spoof = self.spoof.as_ref().ok_or("M5: missing resource")?;
-        fixture
-            .set_resource(spoof.url())
-            .map_err(|_| "M5: resource binding failed")?;
         self.endpoints.push(endpoint(fixture.base())?);
-        self.endpoints.push(endpoint(spoof.url())?);
-        self.live = Some(super::mcp_peers::Peers::bind(python).await?);
+        let resource = if self.journey == Journey::Lifecycle {
+            let spoof = Spoof::start_authorized(SpoofOptions::default(), Some(fixture.validator()))
+                .await
+                .map_err(|_| "M5: resource startup failed")?;
+            let url = spoof.url().to_owned();
+            fixture.set_resource(&url).map_err(|_| "M5: resource binding failed")?;
+            self.endpoints.push(endpoint(&url)?);
+            self.spoof = Some(spoof);
+            url
+        } else {
+            format!("{}/mcp", fixture.base())
+        };
+        self.live = Some(super::mcp_peers::Peers::bind(python, self.journey).await?);
         let origin = self.live.as_ref().ok_or("M5: missing Live fixture")?.origin.clone();
         self.endpoints.push(endpoint(&origin)?);
-        mcp_wire::configure(&self.directory, address, spoof.url())?;
+        mcp_wire::configure(&self.directory, address, &resource, self.journey)?;
         Ok(origin.trim_end_matches('/').into())
     }
 

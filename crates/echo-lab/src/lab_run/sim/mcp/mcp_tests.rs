@@ -4,7 +4,9 @@ use super::*;
 #[tokio::test]
 async fn t3_m5_codex_provider_quiesces_and_closes_without_admitting_a_call() {
     let python = "python3";
-    let provider = super::super::mcp_peers::Peers::bind(python).await.unwrap();
+    let provider = super::super::mcp_peers::Peers::bind(python, Journey::Lifecycle)
+        .await
+        .unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         provider.quiesce().await.unwrap();
         provider.shutdown().await.unwrap()
@@ -27,24 +29,7 @@ async fn m5_codex_link_refresh_restart_call_replay_and_unlink_keep_exact_counts(
 }
 
 async fn journey(phase: &std::cell::Cell<&str>) {
-    let binary = std::env::current_exe()
-        .unwrap()
-        .ancestors()
-        .find(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("deps" | "build")))
-        .and_then(Path::parent)
-        .unwrap()
-        .join("echo-bridge");
-    let options = crate::lab_run::run_options::parse(&[
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/scenarios/m5-port-os-link.yaml")
-            .to_string_lossy()
-            .into_owned(),
-        "--driver".into(),
-        "sim".into(),
-        "--bridge".into(),
-        binary.to_string_lossy().into_owned(),
-    ])
-    .unwrap();
+    let options = options("m5-port-os-link");
     let mut session = Session::default();
     session.prepare(&options).unwrap();
     let path = session.directory.clone();
@@ -69,6 +54,49 @@ async fn journey(phase: &std::cell::Cell<&str>) {
     assert_eq!(cleanup, Ok(()), "M5: collected owners: {:?}", session.released);
     assert_closed(&session);
     assert!(!path.exists());
+}
+
+fn options(scenario: &str) -> Options {
+    let binary = std::env::current_exe()
+        .unwrap()
+        .ancestors()
+        .find(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("deps" | "build")))
+        .and_then(Path::parent)
+        .unwrap()
+        .join("echo-bridge");
+    crate::lab_run::run_options::parse(&[
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../tests/scenarios/{scenario}.yaml"))
+            .to_string_lossy()
+            .into_owned(),
+        "--driver".into(),
+        "sim".into(),
+        "--bridge".into(),
+        binary.to_string_lossy().into_owned(),
+    ])
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge, offline Codex pin and hassmic-host"]
+async fn t3_portos_read_only_delegation_replies_to_relink_without_retry() {
+    let options = options("m5-twin-room-lights");
+    let mut session = Session::new(Journey::ReadOnly);
+    let root = tempfile::tempdir().unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(24), async {
+        session.start(&options, root.path()).await?;
+        session.link().await?;
+        session.approve().await?;
+        session.lights("Computer, turn off twin room lights").await
+    })
+    .await;
+    let cleanup = session.close().await;
+    let observed = result.expect("Port OS readonly journey timed out").unwrap();
+    assert_eq!(cleanup, Ok(()));
+    assert_eq!(observed["reply"], "Link Echo to Port OS again to control devices.");
+    assert_eq!(observed["health"], "relink_for_scope");
+    assert_eq!(session.released, ["bridge", "provider", "authorization", "host"]);
+    println!("{}", observed["diagnostics"][0]);
 }
 
 fn assert_closed(session: &Session) {

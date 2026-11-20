@@ -1,3 +1,4 @@
+use super::mcp_lights::Journey;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -64,7 +65,7 @@ pub async fn state(lines: &mut Screen) -> Result<Value, String> {
     }
 }
 
-pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str) -> Result<(), String> {
+pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str, journey: Journey) -> Result<(), String> {
     let template = include_str!("../../../../../../examples/bridge.example.toml");
     let text = template
         .replace("echo.example.invalid", "127.0.0.1")
@@ -80,6 +81,16 @@ pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str) -> Res
         .replace("http://127.0.0.1:18080/mcp", resource)
         .replace("auth = \"none\"", "auth = 'portos_device_code'")
         .replace(&format!("{}:16900", std::net::Ipv4Addr::UNSPECIFIED), "127.0.0.1:0");
+    let mut text = match journey {
+        Journey::Lifecycle => text,
+        Journey::Twin | Journey::ReadOnly => text.replace(
+            "allow_tools = [\"test.echo\"]",
+            "allow_tools = ['control', 'endpoint_query', 'group_query']",
+        ),
+    };
+    if journey == Journey::ReadOnly {
+        text = text.replace("[mcp]\n", "[mcp]\nscopes = ['endpoint:read']\n");
+    }
     let text = format!("{text}\n[codex]\nhome = '{}'\n", root.join("home").display());
     std::fs::create_dir(root.join("credentials")).map_err(|_| "M5: cannot create pairing directory")?;
     for (name, content) in [

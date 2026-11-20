@@ -165,6 +165,13 @@ impl Fixture {
         Ok(self.shared.lock().map_err(|_| invalid())?.counts)
     }
 
+    /// Scope-denied attempts are counted separately from admitted home calls.
+    /// # Errors
+    /// A poisoned fixture returns a fixed local error.
+    pub fn scope_denials(&self) -> std::io::Result<Vec<Value>> {
+        Ok(self.shared.lock().map_err(|_| invalid())?.home.scope_denials.clone())
+    }
+
     #[must_use]
     pub fn validator(&self) -> Arc<dyn BearerValidator> {
         Arc::new(mcp_tokens::Admission(self.shared.clone()))

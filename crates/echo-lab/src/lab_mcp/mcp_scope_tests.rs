@@ -97,7 +97,7 @@ impl HomeHarness {
 
 fn control() -> Value {
     json!({"name":"control","arguments":{
-        "id":"synthetic/endpoint-groups/twin-room","message":"power/messages/turn-off","payload":{}
+        "id":"group-twin-room","message":"power/turn-off","payload":{}
     }})
 }
 
@@ -250,7 +250,7 @@ async fn t3_portos_full_grant_resolves_and_controls_only_twin_room() {
     .unwrap();
     let room: Value = serde_json::from_str(found["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(room["groups"][0]["id"], control()["arguments"]["id"]);
-    assert_eq!(room["groups"][0]["messages"], json!(["power/messages/turn-off"]));
+    assert_eq!(room["groups"][0]["messages"], json!(["power/turn-off"]));
     let controlled: Value = drive(h.request("tools/call", control()).await.json()).await.unwrap();
     assert_eq!(
         controlled["result"],

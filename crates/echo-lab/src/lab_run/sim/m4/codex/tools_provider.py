@@ -179,3 +179,80 @@ class McpDelegation:
 
     def snapshot(self):
         return {'delegations': self.delegations, 'models': self.models, 'appends': self.appends}
+
+
+class PortosDelegation(McpDelegation):
+    """Script only the model boundary and derive the action from real discovery output."""
+    utterance = 'Computer, turn off twin room lights'
+
+    def __init__(self, tools, readonly):
+        super().__init__(tools)
+        self.readonly = readonly
+        self.outputs = []
+        self.reply = None
+
+    def begin(self):
+        assert not self.delegations, 'duplicate Port OS delegation'
+        self.delegations.append('m5-home')
+        return {'type': 'delegation.created', 'item': {
+            'type': 'delegation', 'target': 'client', 'id': 'm5-home',
+            'content': [{'type': 'input_text', 'text': self.utterance}]}}
+
+    def respond(self, body):
+        assert body['tools'] == function_tools(self.tools), 'Port OS exact dynamic catalog mismatch'
+        assert body['model'] == 'gpt-5.4', 'Port OS wrong delegated model'
+        assert 'Lights need no extra confirmation.' in body.get('instructions', ''), 'missing default runner guidance'
+        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
+        index = len(self.models)
+        assert index <= (3 if self.readonly else 2), 'Port OS model retry'
+        assert len(outputs) == index and outputs[:max(0, index - 1)] == self.outputs, 'Port OS tool history mismatch'
+        self.outputs = outputs
+        for i, output in enumerate(outputs):
+            assert output['call_id'] == f'home-call-{i}', 'Port OS tool call mismatch'
+        item = self.item(index, outputs)
+        self.models.append({'tools': [tool['name'] for tool in body['tools'][:-1]], 'outputs': index})
+        key = f'home-response-{index}'
+        events = [{'type': 'response.created', 'response': {'id': key, 'status': 'in_progress', 'output': []}},
+                  {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
+                  {'type': 'response.completed', 'response': {'id': key, 'status': 'completed', 'output': [item]}}]
+        return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
+
+    def item(self, index, outputs):
+        endpoint_query = {'query': {'name': {'eq': 'Twin one'}}}
+        if index == 0:
+            name, args = ('endpoint_query', endpoint_query) if self.readonly else (
+                'group_query', {'query': {'name': {'eq': 'Twin room'}, 'role': {'eq': 'ROOM'}}})
+        elif index == 1:
+            discovery = self.content(outputs[0])
+            target = discovery['endpoints'][0] if self.readonly else discovery['groups'][0]
+            if not self.readonly:
+                assert target['name'] == 'Twin room' and target['endpointIds'] == ['light-a', 'light-b']
+            name, args = 'control', {'id': target['id'], 'message': target['messages'][0], 'payload': {},
+                                     'idempotencyKey': 'twin-room-off-1', 'waitForResult': False}
+        elif self.readonly and index == 2:
+            assert json.loads(outputs[1]['output']) == [{'type': 'text', 'text':
+                'mcp.scope_insufficient: control requires message:send. Link Echo to Port OS again to control devices.'}]
+            name, args = 'endpoint_query', endpoint_query
+        else:
+            if self.readonly:
+                assert self.content(outputs[2])['endpoints'][0]['power'] is True, 'read-only state changed'
+                self.reply = 'Link Echo to Port OS again to control devices.'
+            else:
+                assert self.content(outputs[1]) == {'status': 'accepted'}, 'Port OS control was not accepted'
+                self.reply = 'The Twin room lights are off.'
+            return {'type': 'message', 'id': f'home-msg-{index}', 'role': 'assistant', 'status': 'completed',
+                    'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
+        return {'type': 'function_call', 'id': f'home-fc-{index}', 'call_id': f'home-call-{index}',
+                'name': name, 'arguments': json.dumps(args), 'status': 'completed'}
+
+    @staticmethod
+    def content(output):
+        content = json.loads(output['output'])
+        assert len(content) == 1 and content[0]['type'] == 'text', 'Port OS tool output shape'
+        return json.loads(content[0]['text'])
+
+    def append(self, value):
+        assert self.reply is not None and not self.appends, 'Port OS append before verified tool outputs or duplicate'
+        assert value['delegation_item_id'] == 'm5-home', 'Port OS append identity mismatch'
+        assert value['content'] == [{'type': 'input_text', 'text': self.reply}], 'Port OS append content mismatch'
+        self.appends.append('m5-home')
