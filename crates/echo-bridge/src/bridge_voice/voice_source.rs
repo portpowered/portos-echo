@@ -1,6 +1,8 @@
 use super::{Error, Stats, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
-use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Cut, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
+use crate::bridge_runtime::bridge_pacing::{
+    Barge, BargeTrigger, Canceller, Cut, Discard, Ear, QUIET, ReplyMeter, ReplyQuality,
+};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
@@ -37,6 +39,8 @@ pub(super) struct Source {
     stale: bool,
     /// Measures the microphone under the reply for `reply.quality`; decides nothing.
     ear: Ear,
+    /// Takes the reply's echo out of the microphone on its way upstream.
+    echo: Canceller,
 }
 
 impl Source {
@@ -104,6 +108,7 @@ impl Source {
         self.meter.paced(self.reply.take_playout());
         let mut quality = self.meter.settle(lost);
         quality.mic = self.ear.rest();
+        quality.aec = self.echo.rest();
         if quality.cuts == 0 {
             self.stats.cut = None;
         }
@@ -116,6 +121,7 @@ impl Source {
         self.mouth.wrote(frame, now);
         self.meter.wrote(now);
         self.ear.played(frame, now);
+        self.echo.played(frame, now);
     }
 
     /// A dispatch that finished while listening gives its answer a fresh
@@ -128,7 +134,7 @@ impl Source {
         }
     }
 
-    pub fn new(lead_ms: u16, muted: bool) -> Result<Self, Error> {
+    pub fn new(lead_ms: u16, muted: bool, echo_delay_ms: Option<u16>) -> Result<Self, Error> {
         Ok(Self {
             microphone: None,
             muted,
@@ -146,6 +152,7 @@ impl Source {
             barge: Barge::default(),
             stale: false,
             ear: Ear::default(),
+            echo: Canceller::new(echo_delay_ms)?,
         })
     }
 
@@ -196,6 +203,7 @@ impl Source {
         }));
         self.stale = true;
         port.retire_audio();
+        self.echo.cut(Instant::now());
         self.fresh_reply()?;
         self.delegation = Delegation::default();
         self.mouth = Mouth::default();
@@ -228,7 +236,8 @@ impl Source {
         for frame in microphone.process(&frame.format, &frame.payload)? {
             // The microphone is measured, never judged: every frame goes up.
             self.ear.heard(&frame, Instant::now());
-            self.forward(&frame, port)?;
+            let clean = self.echo.cleaned(&frame, Instant::now())?;
+            self.forward(&clean, port)?;
         }
         Ok(false)
     }

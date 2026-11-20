@@ -292,6 +292,7 @@ impl Configured {
                     response_timeout: Duration::from_secs(self.config.agent.task_deadline_seconds),
                     played_timeout: Duration::from_secs(5),
                     reply_lead_ms: self.config.audio.reply_lead_ms,
+                    echo_delay_ms: self.config.audio.echo_delay(),
                     muted: false,
                 },
                 connect_timeout: Duration::from_secs(15),

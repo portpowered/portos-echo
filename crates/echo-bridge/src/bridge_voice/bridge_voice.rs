@@ -42,7 +42,7 @@ pub use voice_session::{
 #[cfg(test)]
 mod voice_tests;
 
-pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, Heard, ReplyQuality};
+pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Cancelled, Endpoint, FirstAudio, Heard, ReplyQuality};
 use crate::{
     Error,
     bridge_codex::{Event, MediaEvent},
@@ -106,6 +106,8 @@ pub struct Options {
     pub listen_timeout: Option<Duration>,
     pub session_max: Duration,
     pub reply_lead_ms: u16,
+    /// Where the echo canceller looks for the reply's echo first; none is off.
+    pub echo_delay_ms: Option<u16>,
     pub response_deadline: Instant,
     pub played_timeout: Duration,
     pub muted: bool,
@@ -139,11 +141,10 @@ pub struct Stats {
 /// cannot renew it. None keeps the explicit one-reply lifetime.
 ///
 /// # Errors
-/// Tools without a dispatcher, unexpected
-/// wake, EOF, cancellation and fixed deadlines fail closed. Error cleanup
-/// requests a bounded cut; the host must then await call and device close.
-/// Drop/cancellation also requires host cleanup. This owner does not close a
-/// healthy call, allowing the host to retain it for the idle conversation.
+/// Tools without a dispatcher, unexpected wake, EOF, cancellation and fixed
+/// deadlines fail closed. Error cleanup requests a bounded cut; the host must
+/// then await call and device close. Drop/cancellation also requires host cleanup.
+/// This owner does not close a healthy call: the host may retain it while idle.
 pub async fn run<L: EchoLink>(
     client: &L,
     events: &mut L::Events,
@@ -162,7 +163,7 @@ pub async fn run<L: EchoLink>(
     {
         return Err(Error::Deadline);
     }
-    let mut source = Source::new(options.reply_lead_ms, options.muted)?;
+    let mut source = Source::new(options.reply_lead_ms, options.muted, options.echo_delay_ms)?;
     source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
     port.bind_session(Some(source.session.run.clone()));
     source.controller.admit_response(options.response_deadline)?;
@@ -171,8 +172,7 @@ pub async fn run<L: EchoLink>(
         .map(|clock| clock.voice())
         .transpose()?;
     tokio::pin!(cancelled);
-    // Retain the reply-loop state once per run rather than embedding it in
-    // every conversation/admission future above this boundary.
+    // Keep the reply-loop state once per run, out of every future above this.
     let result = Box::pin(voice_listen::replies(
         client,
         (events, &mut microphone),

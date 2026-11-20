@@ -38,6 +38,7 @@ pub(super) fn runtime_options<'a>(
                 response_timeout: OBSERVATION_TIMEOUT,
                 played_timeout: OBSERVATION_TIMEOUT,
                 reply_lead_ms: 200,
+                echo_delay_ms: None,
                 muted: false,
             },
             connect_timeout: OBSERVATION_TIMEOUT,

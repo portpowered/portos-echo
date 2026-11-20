@@ -467,6 +467,7 @@ fn session_tools_options_reject_a_zero_or_unrepresentable_session_cap() {
         response_timeout: Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),
         reply_lead_ms: 200,
+        echo_delay_ms: None,
         muted: false,
     };
     super::super::voice_session::validate(&options).unwrap();

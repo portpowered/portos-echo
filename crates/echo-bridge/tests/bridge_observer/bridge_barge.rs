@@ -170,6 +170,7 @@ async fn exercise() {
         listen_timeout: Some(Duration::from_secs(1)),
         session_max: Duration::from_secs(600),
         reply_lead_ms: 200,
+        echo_delay_ms: None,
         response_deadline: tokio::time::Instant::now() + Duration::from_secs(10),
         played_timeout: Duration::from_secs(2),
         muted: false,
@@ -204,8 +205,7 @@ async fn exercise() {
     heard(&wire, before, &cuts);
     // The cut reply and the answer each settle with their rows.
     assert_eq!((cuts, played.get()), (vec![1, 0], 2));
-    assert_eq!(retired.load(Ordering::SeqCst), 1);
-    assert_eq!(stats.reply_dropped, 0);
+    assert_eq!((retired.load(Ordering::SeqCst), stats.reply_dropped), (1, 0));
 }
 
 /// What the device was sent: one flush, nothing of the cut response after

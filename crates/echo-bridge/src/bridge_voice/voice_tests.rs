@@ -56,6 +56,7 @@ fn options() -> Options {
         listen_timeout: None,
         session_max: Duration::from_secs(600),
         reply_lead_ms: 200,
+        echo_delay_ms: None,
         response_deadline: Instant::now() + Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),
         muted: false,
@@ -394,8 +395,7 @@ async fn tick<F: Future>(mut work: Pin<&mut F>, frames: usize) {
     }
 }
 
-/// Live calls showed both orders: the filler's done before turn/completed, and
-/// turn/completed while the filler was still being spoken.
+/// Live calls showed both orders of the filler's done and turn/completed.
 async fn delegated_answer(filler: Vec<MediaEvent>, answer: MediaEvent) -> (u64, u64) {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();

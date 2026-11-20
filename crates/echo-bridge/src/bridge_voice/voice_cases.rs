@@ -236,7 +236,7 @@ async fn voice_initial_mute_and_failed_send_keep_exact_accepted_capture_counts()
         payload: vec![0; 1280],
     };
     let (mut port, _tx) = port();
-    let mut source = Source::new(200, true).unwrap();
+    let mut source = Source::new(200, true, None).unwrap();
     assert!(source.capture(Some(frame()), &port).unwrap());
     assert_eq!(source.stats.microphone_chunks, 1);
     assert_eq!(source.stats.microphone_frames, 0);
@@ -255,7 +255,7 @@ async fn voice_duplicate_unmute_preserves_pcm_but_a_transition_discards_partial_
         payload: value.to_le_bytes().repeat(160),
     };
     let (port, _tx) = port();
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     assert!(!source.capture(Some(frame(11)), &port).unwrap());
     device(&LinkEvent::<()>::Mute(false), false, &mut source, &mut |_| Ok(())).unwrap();
     assert!(!source.capture(Some(frame(22)), &port).unwrap());
@@ -281,7 +281,7 @@ async fn voice_muted_capture_reports_each_suppression_and_propagates_observer_fa
     wake(&observer, 320);
     let mut mic = microphone(&mut events).await;
     let (mut port, _tx) = port();
-    let mut source = Source::new(200, true).unwrap();
+    let mut source = Source::new(200, true, None).unwrap();
     let mut dropped = 0;
     assert_eq!(
         step(
@@ -373,7 +373,7 @@ async fn voice_backpressure_keeps_pending_pcm_and_continues_control() {
     wake(&observer, 0);
     let mut mic = microphone(&mut events).await;
     let (mut port, tx) = port();
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     source.controller.microphone_ended();
     let mut pending = Some(vec![12; 960]);
     let mut notices = Vec::new();

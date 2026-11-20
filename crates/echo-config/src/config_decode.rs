@@ -176,6 +176,8 @@ fn audio(value: Value<'_>) -> Result<crate::AudioConfig, ConfigError> {
     let mut f = Fields::new(value, "audio")?;
     let result = crate::AudioConfig {
         reply_lead_ms: f.optional("reply_lead_ms")?.unwrap_or(200),
+        echo_cancel: f.optional("echo_cancel")?.unwrap_or(false),
+        echo_delay_ms: f.optional("echo_delay_ms")?.unwrap_or(240),
     };
     f.finish()?;
     Ok(result)

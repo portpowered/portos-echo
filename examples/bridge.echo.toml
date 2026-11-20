@@ -53,6 +53,13 @@ auth = "portos_device_code"
 allow_tools = ["endpoint_list", "endpoint_query", "control"]
 
 # The screen app on the same device loads the page from loopback; nothing on the LAN reaches it.
+# WebRTC's echo canceller (AEC3) in the bridge: the fallback for a microphone path that does not
+# cancel the reply's echo itself. Off by default; never switch it on over a path that already cancels.
+# echo_delay_ms is only where it looks first: reply.quality reports the delay it found.
+[audio]
+echo_cancel = false
+echo_delay_ms = 240 # Integer 0..800.
+
 [screen]
 listen = "127.0.0.1:16900"
 pairing_token_file = "/data/local/echo-bridge/private/screen-pairing.txt"

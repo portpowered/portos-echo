@@ -3,6 +3,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 mod reply_barge;
+mod reply_cancel;
 mod reply_ear;
 mod reply_jitter;
 mod reply_playout;
@@ -11,6 +12,8 @@ pub(crate) use reply_barge::Barge;
 pub use reply_barge::BargeTrigger;
 #[cfg(test)]
 pub(crate) use reply_barge::{BARGE_QUIET, BARGE_WINDOW};
+pub use reply_cancel::Cancelled;
+pub(crate) use reply_cancel::Canceller;
 pub(crate) use reply_ear::Ear;
 pub use reply_ear::Heard;
 pub(crate) use reply_playout::{ClockPacer, PERIOD, Playout, QUIET};
@@ -95,6 +98,8 @@ pub struct ReplyQuality {
     pub hold_ms: u32,
     /// What the microphone heard under this reply.
     pub mic: Heard,
+    /// What the echo canceller measured under this reply; none while it is off.
+    pub aec: Option<Cancelled>,
     /// The `timing` sample; none when no endpoint preceded the reply's audio.
     pub first_audio: Option<FirstAudio>,
 }

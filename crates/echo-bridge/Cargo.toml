@@ -33,6 +33,7 @@ rustix = { version = "=1.1.6", features = ["fs", "time"] }
 
 [dev-dependencies]
 echo-lab = { version = "0.1.0", path = "../echo-lab" }
+echo-audio = { version = "0.1.0", path = "../echo-audio", features = ["fixture"] }
 p256 = { version = "0.14", features = ["ecdsa"] }
 echo-link = { version = "0.1.0", path = "../echo-link", features = ["fake"] }
 echo-mcp-auth = { version = "0.1.0", path = "../echo-mcp-auth", features = ["mock"] }

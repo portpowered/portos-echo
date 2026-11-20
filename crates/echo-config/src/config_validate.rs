@@ -64,7 +64,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "codex",
         ],
         "home" => &["dir"],
-        "audio" => &["reply_lead_ms"],
+        "audio" => &["reply_lead_ms", "echo_cancel", "echo_delay_ms"],
         "clock" => &["servers", "interval_seconds"],
         "voice" => &[
             "session_listen_enabled",
@@ -118,6 +118,9 @@ pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
             "audio.reply_lead_ms",
             "must be a positive multiple of 20",
         ));
+    }
+    if config.audio.echo_delay_ms > 800 {
+        return Err(ConfigError::new("audio.echo_delay_ms", "must be at most 800"));
     }
     if config.echo.wyoming_port == 0 {
         return Err(ConfigError::new("echo.wyoming_port", "must be nonzero"));

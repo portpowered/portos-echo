@@ -1,5 +1,6 @@
 //! Bounded, network-free audio conversion for bridge-owned buffers.
 mod audio_codec;
+mod audio_echo;
 mod audio_error;
 mod audio_pacer;
 mod audio_pcm;
@@ -7,6 +8,9 @@ mod audio_queue;
 mod audio_sample;
 
 pub use audio_codec::{OpusDecoder, OpusEncoder};
+#[cfg(any(test, feature = "fixture"))]
+pub use audio_echo::echo_room;
+pub use audio_echo::{ECHO_DELAY_MAX_MS, ECHO_FRAME, ECHO_RATE, EchoCanceller, EchoFrame, EchoReport};
 pub use audio_error::AudioError;
 pub use audio_pacer::Pacer;
 pub use audio_pcm::{PcmResampler, SampleProgress};

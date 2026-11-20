@@ -191,6 +191,7 @@ pub(in crate::bridge_voice) fn admission_options() -> ServeOptions<'static> {
             response_timeout: Duration::from_secs(1),
             played_timeout: Duration::from_secs(1),
             reply_lead_ms: 200,
+            echo_delay_ms: None,
             muted: false,
         },
         connect_timeout: Duration::from_secs(2),

@@ -28,6 +28,8 @@ pub struct SessionOptions {
     pub response_timeout: Duration,
     pub played_timeout: Duration,
     pub reply_lead_ms: u16,
+    /// Where the echo canceller looks for the reply's echo first; none is off.
+    pub echo_delay_ms: Option<u16>,
     pub muted: bool,
 }
 
@@ -331,6 +333,7 @@ async fn drive<L: EchoLink>(
                 response_deadline: deadline,
                 played_timeout: options.played_timeout,
                 reply_lead_ms: options.reply_lead_ms,
+                echo_delay_ms: options.echo_delay_ms,
                 muted: options.muted,
             },
             cancelled.as_mut(),

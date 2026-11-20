@@ -80,11 +80,49 @@ fn agent_tools_rejects_duplicates_and_invalid_types_without_input_leaks() {
     }
 }
 
+/// The example without its own three-line `[audio]` table.
+fn plain() -> String {
+    let (before, table) = EXAMPLE.split_once("[audio]\n").unwrap();
+    format!("{before}{}", table.splitn(3, '\n').nth(2).unwrap())
+}
+
+#[test]
+fn echo_cancel_defaults_off_switches_on_and_bounds_its_hint() {
+    let plain = plain();
+    let audio = |table: &str| BridgeConfig::from_toml_str(&format!("{plain}\n{table}")).map(|config| config.audio);
+    // The example names the defaults; an absent or empty table gives the same.
+    let shown = BridgeConfig::from_toml_str(EXAMPLE).unwrap().audio;
+    assert_eq!(
+        (shown.echo_cancel, shown.echo_delay_ms, shown.echo_delay()),
+        (false, 240, None)
+    );
+    assert_eq!(audio("").unwrap(), shown);
+    assert_eq!(audio("[audio]\n").unwrap(), shown);
+    let off = audio("[audio]\necho_cancel=false\necho_delay_ms=300\n").unwrap();
+    assert_eq!((off.echo_delay_ms, off.echo_delay()), (300, None));
+    let on = audio("[audio]\necho_cancel=true\n").unwrap();
+    assert_eq!((on.echo_delay_ms, on.echo_delay()), (240, Some(240)));
+    for value in [0, 320, 800] {
+        let read = audio(&format!("[audio]\necho_cancel=true\necho_delay_ms={value}\n")).unwrap();
+        assert_eq!(read.echo_delay(), Some(value));
+    }
+    for value in ["801", "65535", "65536", "-1", "1.5", "true", "'SYNTHETIC_VALUE'"] {
+        error(
+            &format!("{plain}\n[audio]\necho_delay_ms={value}\n"),
+            "audio.echo_delay_ms",
+        );
+    }
+    for value in ["1", "'true'", "0.0"] {
+        error(&format!("{plain}\n[audio]\necho_cancel={value}\n"), "audio.echo_cancel");
+    }
+}
+
 #[test]
 fn audio_lead_defaults_boundaries_and_safe_errors() {
+    let plain = plain();
     for suffix in ["", "\n[audio]\n"] {
         assert_eq!(
-            BridgeConfig::from_toml_str(&format!("{EXAMPLE}{suffix}"))
+            BridgeConfig::from_toml_str(&format!("{plain}{suffix}"))
                 .unwrap()
                 .audio
                 .reply_lead_ms,
@@ -92,7 +130,7 @@ fn audio_lead_defaults_boundaries_and_safe_errors() {
         );
     }
     for value in [20, 200, 65520] {
-        let input = format!("{EXAMPLE}\n[audio]\nreply_lead_ms={value}\n");
+        let input = format!("{plain}\n[audio]\nreply_lead_ms={value}\n");
         assert_eq!(BridgeConfig::from_toml_str(&input).unwrap().audio.reply_lead_ms, value);
     }
     for value in [
@@ -107,13 +145,13 @@ fn audio_lead_defaults_boundaries_and_safe_errors() {
         "'SYNTHETIC_VALUE'",
     ] {
         error(
-            &format!("{EXAMPLE}\n[audio]\nreply_lead_ms={value}\n"),
+            &format!("{plain}\n[audio]\nreply_lead_ms={value}\n"),
             "audio.reply_lead_ms",
         );
     }
-    error(&format!("{EXAMPLE}\n[audio]\nSYNTHETIC_VALUE=1\n"), "audio");
+    error(&format!("{plain}\n[audio]\nSYNTHETIC_VALUE=1\n"), "audio");
     error(
-        &format!("{EXAMPLE}\n[audio]\nreply_lead_ms={{secret='SYNTHETIC_VALUE'}}\n"),
+        &format!("{plain}\n[audio]\nreply_lead_ms={{secret='SYNTHETIC_VALUE'}}\n"),
         "audio.reply_lead_ms.secret",
     );
 }

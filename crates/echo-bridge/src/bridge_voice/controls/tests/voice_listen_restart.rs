@@ -7,6 +7,7 @@ fn options() -> Options {
         listen_timeout: Some(Duration::from_secs(300)),
         session_max: Duration::from_secs(600),
         reply_lead_ms: 200,
+        echo_delay_ms: None,
         response_deadline: Instant::now() + Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),
         muted: false,

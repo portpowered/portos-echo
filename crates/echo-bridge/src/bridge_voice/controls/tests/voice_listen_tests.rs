@@ -81,6 +81,7 @@ async fn voice_listen_two_replies_keep_one_run_then_expire_without_noise_renewal
             listen_timeout: Some(Duration::from_secs(3)),
             session_max: Duration::from_secs(600),
             reply_lead_ms: 200,
+            echo_delay_ms: None,
             response_deadline: Instant::now() + Duration::from_secs(10),
             played_timeout: Duration::from_secs(1),
             muted: false,
@@ -221,7 +222,7 @@ async fn voice_listen_acknowledges_clock_without_renewing_idle_and_expiry_wins()
     };
     let (_tx, rx) = mpsc::channel(1);
     let mut port = Port(rx, std::rc::Rc::default());
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     source.controller.reply_started();
     source.controller.played(true).unwrap();
     source.controller.listen_after_reply(Duration::from_secs(3)).unwrap();
@@ -290,6 +291,7 @@ async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
             listen_timeout: Some(Duration::from_secs(3)),
             session_max: Duration::from_secs(600),
             reply_lead_ms: 200,
+            echo_delay_ms: None,
             response_deadline: Instant::now() + Duration::from_secs(10),
             played_timeout: Duration::from_secs(1),
             muted: false,
@@ -342,6 +344,7 @@ async fn voice_listen_empty_reply_requires_receipt_then_waits_without_audible_fr
             listen_timeout: Some(Duration::from_secs(3)),
             session_max: Duration::from_secs(600),
             reply_lead_ms: 200,
+            echo_delay_ms: None,
             response_deadline: Instant::now() + Duration::from_secs(10),
             played_timeout: Duration::from_secs(1),
             muted: false,

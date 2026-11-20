@@ -36,7 +36,7 @@ impl VoicePort for Narrow {
 
 #[test]
 fn setup_burst_waits_for_the_sender_in_order_and_mute_withholds_the_rest() {
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     let port = Narrow::default();
     port.room.set(2);
     for marker in 1..=5 {
@@ -63,7 +63,7 @@ fn setup_burst_waits_for_the_sender_in_order_and_mute_withholds_the_rest() {
 
 #[test]
 fn stalled_sender_backlog_is_bounded_and_keeps_the_newest_speech() {
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     let port = Narrow::default();
     for marker in 0..=UPLINK_BACKLOG {
         source.forward(&[i16::try_from(marker).unwrap(); 320], &port).unwrap();
@@ -150,7 +150,7 @@ async fn first_audio_is_timed_from_the_user_transcript_or_the_delegated_turn() {
         turn: "turn-1".into(),
     };
     for (event, endpoint) in [(user, Endpoint::UserTranscript), (turn, Endpoint::DelegatedTurn)] {
-        let mut source = Source::new(200, false).unwrap();
+        let mut source = Source::new(200, false, None).unwrap();
         let mut port = Narrow::default();
         super::super::media(MediaEvent::Control(event), &mut port, &mut source, &mut |_| Ok(()))
             .await
@@ -269,7 +269,7 @@ async fn replying(source: &mut Source, port: &Narrow, level: i16, voice: i16) {
 /// the model's yield cuts it, and the cut says what the session heard.
 #[tokio::test(start_paused = true)]
 async fn barge_in_is_judged_by_the_session_alone_and_its_cut_says_what_was_heard() {
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     let mut port = Narrow::default();
     port.room.set(usize::MAX);
     source.spoke();
@@ -320,7 +320,7 @@ async fn noise(source: &mut Source, port: &Narrow) -> u32 {
 /// echo, not a noise, not a voice as the model ends its turn.
 #[tokio::test(start_paused = true)]
 async fn barge_in_sound_at_the_microphone_never_holds_or_cuts_the_reply() {
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     let mut port = Narrow::default();
     port.room.set(usize::MAX);
     source.spoke();
@@ -346,7 +346,7 @@ async fn barge_in_sound_at_the_microphone_never_holds_or_cuts_the_reply() {
 /// frame by the transcript of the question, and dropped whole when it ended.
 #[tokio::test(start_paused = true)]
 async fn reply_start_is_not_held_by_the_transcript_of_the_turn_it_answers() {
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     let port = Narrow::default();
     port.room.set(usize::MAX);
     source.spoke();
@@ -360,3 +360,6 @@ async fn reply_start_is_not_held_by_the_transcript_of_the_turn_it_answers() {
     source.heard_user(BargeTrigger::UserTranscript, "", false);
     assert!(source.barge.pending());
 }
+
+#[path = "voice_echo_tests.rs"]
+mod echo;

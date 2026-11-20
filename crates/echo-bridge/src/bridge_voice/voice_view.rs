@@ -242,7 +242,8 @@ impl<'a> View<'a> {
                     "cut_ms":cut.map(|cut| cut.yield_ms), "text":cut.map(|cut| cut.text.as_str())},
                 "mic":{"onsets":quality.mic.onsets, "echo_max":quality.mic.echo_max,
                     "level_max":quality.mic.level_max, "coupling":quality.mic.coupling,
-                    "echo_mean":quality.mic.echo_mean, "noise":quality.mic.noise}
+                    "echo_mean":quality.mic.echo_mean, "noise":quality.mic.noise},
+                "aec":aec(quality.aec)
             }),
         )?;
         let Some(first) = quality.first_audio else {
@@ -335,6 +336,14 @@ impl<'a> View<'a> {
             json!({"reason":error.to_string()}),
         )
     }
+}
+
+/// What the echo canceller measured under one reply; null while it is off.
+fn aec(measured: Option<super::Cancelled>) -> serde_json::Value {
+    let Some(aec) = measured else {
+        return serde_json::Value::Null;
+    };
+    json!({"delay_ms":aec.delay_ms, "erle_db":f64::from(aec.erle_db10) / 10.0, "converged":aec.converged})
 }
 
 #[cfg(test)]
