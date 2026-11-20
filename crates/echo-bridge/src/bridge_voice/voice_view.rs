@@ -10,10 +10,18 @@ enum Startup {
     Ready,
 }
 
+/// What the reply-driven publications last showed. Within a run the face
+/// keeps its mouth: closed (Connected) whenever reply audio is not playing.
+/// Only the run's end, or a pause with no run, returns the screen to Ready.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MouthActivity {
     AwaitingReady,
+    Speaking,
+    /// Connected after a reply's audio stopped; the run is still active.
+    Closed,
+    /// Ready was published for a pause outside any run.
     Paused,
+    Thinking,
     ThinkingAfterEarcon,
 }
 
@@ -192,13 +200,10 @@ impl<'a> View<'a> {
             }
             SessionNotice::Run(Notice::Thinking) => self.thinking(),
             SessionNotice::Run(Notice::ReplyStarted) => {
-                self.mouth = MouthActivity::AwaitingReady;
+                self.mouth = MouthActivity::Speaking;
                 self.screen.publish(UiState::Speaking)
             }
-            SessionNotice::Run(Notice::ReplyPaused) => {
-                self.mouth = MouthActivity::Paused;
-                self.screen.ready()
-            }
+            SessionNotice::Run(Notice::ReplyPaused) => self.reply_paused(),
             SessionNotice::Run(Notice::SessionTool(receipt)) => {
                 let mut fields = json!({"tool":receipt.tool,"outcome":receipt.outcome});
                 if let (Some(deadline), Some(capped)) = (receipt.deadline_ms, receipt.capped) {
@@ -221,6 +226,21 @@ impl<'a> View<'a> {
         self.screen.observe(event, self.trace).map(|_| ())
     }
 
+    /// Reply audio stopped. During a run the face stays awake with a closed
+    /// mouth; a reply gap never publishes Ready mid-run.
+    fn reply_paused(&mut self) -> Result<(), Error> {
+        if self.run.is_none() {
+            self.mouth = MouthActivity::Paused;
+            return self.screen.ready();
+        }
+        // Delegated Thinking holds through the gap; muting suppresses activity.
+        if matches!(self.mouth, MouthActivity::Thinking | MouthActivity::ThinkingAfterEarcon) || self.screen.muted()? {
+            return Ok(());
+        }
+        self.mouth = MouthActivity::Closed;
+        self.screen.publish(UiState::Connected)
+    }
+
     fn thinking(&mut self) -> Result<(), Error> {
         if self.screen.muted()? {
             return Ok(());
@@ -234,7 +254,7 @@ impl<'a> View<'a> {
     }
 
     fn show_thinking(&mut self) -> Result<(), Error> {
-        self.mouth = MouthActivity::AwaitingReady;
+        self.mouth = MouthActivity::Thinking;
         self.screen.presentation.thinking()
     }
 
@@ -402,6 +422,10 @@ impl<'a> View<'a> {
 #[cfg(test)]
 #[path = "earcon/voice_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "earcon/voice_reply_hold_tests.rs"]
+mod reply_hold_tests;
 
 #[cfg(test)]
 mod thinking_tests {
