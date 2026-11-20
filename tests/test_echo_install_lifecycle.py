@@ -16,7 +16,6 @@ from unittest.mock import patch
 
 from test_echo_install import Sandbox, prepare_lifecycle, require, owner, set_owner
 
-
 def device_archive(box, kind):
     """An explicit Android filesystem/tool boundary, without any real adb."""
     source = box.script.read_text().replace("/data/local", str(box.root / "remote"))
@@ -52,7 +51,6 @@ def device_archive(box, kind):
             target.addfile(member, io.BytesIO())
     return stage, archive
 
-
 def device_transport_cases():
     for kind in ("valid", "parent", "absolute", "unexpected", "duplicate", "symlink", "fifo"):
         with Sandbox() as box:
@@ -79,7 +77,6 @@ def device_transport_cases():
                     "direct install changed private owner")
             require(box.calls() == [], "direct transport invoked adb")
     print("echo-install direct transport: install=PASS archive-safety=PASS")
-
 
 def recovered_metadata(box):
     for tree in ("private", "home"):
@@ -398,7 +395,6 @@ if mode != 'exit':
     bridge.chmod(0o755)
 
 
-
 def prepared_run(base):
     """Observe real preparation before the launcher's atomic gate is consumed."""
     run = base / "remote/echo-bridge/private/run"
@@ -443,7 +439,10 @@ def release_stop(box):
 
 def setup_operator_cases():
     # Real authored shell; substitute only Android filesystem/tools and bridge process.
-    cases = (("signin", "stopped", 0), ("link", "nobody", 0), ("link", "9999", 0),
+    cases = (("signin", "stopped", 0), ("signin", "signed-in", 0), ("link", "nobody", 0), ("link", "9999", 0),
+             ("ensure-signin", "stopped", 0), ("ensure-signin", "signed-in", 0),
+             ("ensure-signin", "nobody", 1), ("ensure-signin", "locked", 1),
+             ("ensure-signin", "dependency", 1), ("ensure-signin", "redirected", 1),
              ("signin", "nobody", 1), ("link", "stopped", 1), ("link", "root", 1),
              ("link", "unavailable", 1), ("signin", "locked", 1),
              ("signin", "dependency", 1), ("signin", "redirected", 1))
@@ -459,11 +458,13 @@ def setup_operator_cases():
 import json, os, sys
 from pathlib import Path
 root = Path(os.environ['FAKE_ROOT'])
-(root / 'operator-argv').write_text(json.dumps(sys.argv[1:]))
+with (root / 'operator-argv').open('a') as ledger: ledger.write(json.dumps(sys.argv[1:]) + '\\n')
 (root / 'operator-user').write_text(os.environ.get('FAKE_UID', 'root'))
+assert not sys.stdin.buffer.read(), 'operator stdin was not closed'
 print('synthetic-private-content-do-not-print')
 print('synthetic-private-content-do-not-print', file=sys.stderr)
-sys.exit(1 if (root / 'operator-fails').exists() else 0)
+sys.exit(1 if (root / 'operator-fails').exists() or
+         (sys.argv[1] == 'status' and not (root / 'signed-in').exists()) else 0)
 """)
             config = box.device / "private/bridge.toml"
             original = config.read_bytes()
@@ -474,6 +475,8 @@ sys.exit(1 if (root / 'operator-fails').exists() else 0)
                 (box.root / "remote/echo-bridge.lock").mkdir()
             if state == "dependency":
                 (box.root / "operator-fails").touch()
+            if state == "signed-in":
+                (box.root / "signed-in").touch()
             if state == "redirected":
                 config.unlink()
                 config.symlink_to(box.files["config"])
@@ -482,7 +485,11 @@ sys.exit(1 if (root / 'operator-fails').exists() else 0)
             called = box.root / "operator-argv"
             require(called.exists() == (code == 0 or state == "dependency"), "operator admission differs")
             if called.exists():
-                require(json.loads(called.read_text()) == [verb, "--config", str(config)], "operator argv differs")
+                verbs = ["status"] if verb == "ensure-signin" else [verb]
+                if verb == "ensure-signin" and state != "signed-in":
+                    verbs.append("signin")
+                require([json.loads(line) for line in called.read_text().splitlines()] ==
+                        [[step, "--config", str(config)] for step in verbs], "operator argv/count differs")
                 require((box.root / "operator-user").read_text() == "9999", "operator ran as root")
             require(not list(box.root.glob("holder-pid")), "operator started the runtime")
             require((box.root / "remote/echo-bridge.lock").exists() == (state == "locked"), "operator lock leaked")
@@ -490,4 +497,4 @@ sys.exit(1 if (root / 'operator-fails').exists() else 0)
                 require(config.read_bytes() == original, "operator changed config bytes")
             require(result.stdout == ("echo-install: " + verb + " completed\n" if code == 0 else ""),
                     "operator success/privacy differs")
-    print("echo-install setup: signin=PASS link=PASS identity=PASS lock=PASS privacy=PASS")
+    print("echo-install setup: signin=PASS resume=PASS link=PASS identity=PASS lock=PASS privacy=PASS")

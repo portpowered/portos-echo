@@ -86,7 +86,7 @@ printf 'process_user=%s\\n' \"\$user\""
 
 setup_operator() {
   case ${command_name:?} in
-    signin)
+    signin | ensure-signin)
       [ "${running:?}" = 0 ] || fail 'stop the bridge before signing in'
       migrate_state
       ;;
@@ -95,12 +95,22 @@ setup_operator() {
 printf '%s\\n' \"\$users\" | awk '\$3 == \"echo-bridge\" { count++; if (\$2 != \"nobody\" && \$2 != 9999) bad=1 } END { exit count != 1 || bad }'"
       ;;
   esac
+  operator_command=$command_name
+  [ "$operator_command" != ensure-signin ] || operator_command=signin
   # The bridge owns authentication and its screen presentation. Suppress all of
   # its terminal bytes; the native caller observes only authenticated screen SSE.
   run_adb shell "test -x '${device:?}/bin/echo-bridge'
 test -f '${device:?}/private/bridge.toml'
 test ! -L '${device:?}/private/bridge.toml'
 test \"\$(stat -c %u:%h:%a '${device:?}/private/bridge.toml')\" = 9999:1:600
-/data/local/hassmic/runas \"${run_user:?}\" \"${run_groups:?}\" '${device:?}/bin/echo-bridge' '${command_name:?}' --config '${device:?}/private/bridge.toml' </dev/null"
+if test '${command_name:?}' = ensure-signin; then
+  # The existing account owner checks its retained home. A successful status
+  # must not reset the grant or open another sign-in screen. Neither the
+  # account label nor any dependency output crosses the private transport.
+  if /data/local/hassmic/runas \"${run_user:?}\" \"${run_groups:?}\" '${device:?}/bin/echo-bridge' status --config '${device:?}/private/bridge.toml' </dev/null >/dev/null 2>&1; then
+    exit 0
+  fi
+fi
+/data/local/hassmic/runas \"${run_user:?}\" \"${run_groups:?}\" '${device:?}/bin/echo-bridge' '${operator_command:?}' --config '${device:?}/private/bridge.toml' </dev/null"
   printf 'echo-install: %s completed\n' "$command_name"
 }
