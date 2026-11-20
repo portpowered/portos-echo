@@ -13,6 +13,8 @@ pub(super) enum Control {
     /// Tone payload indices of the current reply; transport identities continue.
     Audio(std::ops::Range<u16>),
     Transcripts(usize),
+    Events(&'static str, Vec<Value>),
+    ReleaseGoodbye,
     Quiesce(oneshot::Sender<()>),
     Close,
 }
@@ -40,7 +42,9 @@ impl Provider {
             .to_owned();
         let (commands, receiver) = mpsc::channel(2);
         let (ticks, clock) = mpsc::channel(1);
-        let (observe, observed) = watch::channel(json!({"delegations":[],"appends":[],"models":[]}));
+        let (observe, observed) = watch::channel(
+            json!({"delegations":[],"appends":[],"models":[],"requests":[],"events_sent":[],"waiting":[]}),
+        );
         let task = tokio::spawn(owned(process, receiver, ticks, observe));
         Ok(Self {
             origin,
@@ -181,6 +185,8 @@ async fn conversation(
         match action {
             Some(Control::Delegate(turn)) => process.send(&json!({"delegate":turn})).await?,
             Some(Control::Transcripts(turn)) => process.send(&json!({"transcripts":turn})).await?,
+            Some(Control::Events(tag, events)) => process.send(&json!({"tag":tag,"events":events})).await?,
+            Some(Control::ReleaseGoodbye) => process.send(&json!({"release_goodbye":true})).await?,
             Some(Control::Audio(indices)) => sequence.send(peer, indices).await?,
             Some(Control::Quiesce(done)) => {
                 quiesced = true;
@@ -199,10 +205,19 @@ fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), Str
                 value["failure"].as_str().unwrap_or("unspecified")
             ));
         }
-        Some("provider.delegation") => ("delegations", value["delegation_id"].clone()),
+        Some("provider.delegation") => {
+            observed.send_modify(|state| {
+                if let Some(requests) = state["requests"].as_array_mut() {
+                    requests.push(value["request"].clone());
+                }
+            });
+            ("delegations", value["delegation_id"].clone())
+        }
         Some("provider.append") => ("appends", value["delegation_id"].clone()),
         Some("provider.model") => ("models", json!({"turn":value["turn"],"outputs":value["outputs"]})),
         Some("provider.transcripts" | "provider.heard") => return Ok(()),
+        Some("provider.events_sent") => ("events_sent", value["tag"].clone()),
+        Some("provider.waiting") => ("waiting", value["turn"].clone()),
         _ => return Err("session: provider contract failure".into()),
     };
     observed.send_modify(|state| {

@@ -1,0 +1,10 @@
+id: session-live-thanks-question
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "thanks, and what time is it?"
+  - say: "what day is it?"
+budgets:
+  session_listen_seconds: 3
+negative: []

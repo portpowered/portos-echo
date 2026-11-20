@@ -350,6 +350,15 @@ pub(in crate::lab_run::sim) async fn collect_playout(
     clock: &mut Value,
     milliseconds: u64,
 ) -> Result<Option<Value>, String> {
+    collect_playout_for(bridge, clock, milliseconds, "run-1").await
+}
+
+pub(in crate::lab_run::sim) async fn collect_playout_for(
+    bridge: &mut Process,
+    clock: &mut Value,
+    milliseconds: u64,
+    run_id: &str,
+) -> Result<Option<Value>, String> {
     bridge
         .send(&json!({"action":"advance_playout","milliseconds":milliseconds}))
         .await?;
@@ -357,7 +366,7 @@ pub(in crate::lab_run::sim) async fn collect_playout(
     loop {
         let row = bridge.line().await?;
         match row["event"].as_str() {
-            Some("bridge.run_completed") if row["run_id"] == "run-1" => completed = Some(row),
+            Some("bridge.run_completed") if row["run_id"] == run_id => completed = Some(row),
             Some("bridge.clock_advanced") if row["milliseconds"] == milliseconds => {
                 let previous = clock["epoch_ms"].as_u64().unwrap_or(0);
                 if row["epoch_ms"].as_u64() != previous.checked_add(milliseconds) {

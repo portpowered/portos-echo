@@ -49,7 +49,12 @@ impl Timing {
                 .and_then(|(first, wake)| first.checked_sub(wake)).map(|time| time.as_millis())})
     }
 
-    fn capture(&mut self, event: &Event, target: usize, now: Duration) -> Result<(), String> {
+    pub(in crate::lab_run::sim) fn capture(
+        &mut self,
+        event: &Event,
+        target: usize,
+        now: Duration,
+    ) -> Result<(), String> {
         self.session.capture(event, now);
         match event.header.r#type.as_str() {
             "run-pipeline" if self.run => return Err("wire: multiple runs in one world".into()),
@@ -87,9 +92,12 @@ impl Timing {
         Ok(())
     }
 
-    fn playback(&mut self, event: &Event, now: Duration) -> Result<(), String> {
+    pub(in crate::lab_run::sim) fn playback(&mut self, event: &Event, now: Duration) -> Result<(), String> {
         let earcon = self.earcon.observe(event, now)?;
         self.session.playback(event, now, earcon);
+        if event.header.r#type == "hassmic-end" {
+            self.run = false;
+        }
         if event.header.r#type == "audio-chunk" {
             if !self.run || !pcm(event, 24000) {
                 return Err("wire: invalid reply PCM".into());
