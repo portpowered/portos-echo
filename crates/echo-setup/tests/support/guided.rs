@@ -1,6 +1,7 @@
 //! T3 guided-account owner through real native processes and authenticated HTTP.
 use super::*;
 use echo_setup::setup::Prompt;
+use std::io::ErrorKind;
 use tokio::sync::oneshot;
 
 fn prepare(fixture: &Fixture, screen: u16, verb: &str) -> Result {
@@ -71,7 +72,11 @@ async fn stream(listener: TcpListener, state: &'static str) -> Result {
     let body = format!("data: {{\"seq\":1,\"state\":{state}}}\n\ndata: {{\"seq\":2,\"state\":{state}}}\n\n");
     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n", body.len()).as_bytes()).await?;
     let mut byte = [0];
-    assert_eq!(socket.read(&mut byte).await?, 0);
+    let read = socket
+        .read(&mut byte)
+        .await
+        .map_err(|error| format!("SSE client close: {error:?}"))?;
+    assert_eq!(read, 0, "SSE client must close after the response");
     Ok(())
 }
 
@@ -180,7 +185,9 @@ async fn t3_guided_observation_and_output_failures_settle_before_returning() -> 
         let (publish, account_ready) = oneshot::channel();
         let server = tokio::spawn(async move {
             account_ready.await?;
-            tokio::time::timeout(Duration::from_secs(5), stream(screen, state)).await?
+            tokio::time::timeout(Duration::from_secs(5), stream(screen, state))
+                .await
+                .map_err(|_| "SSE exchange did not finish before the deadline")?
         });
         let mut count = 0;
         let mut guided = Box::pin(connection.guide_account(AccountCommand::Signin, 100, |_| {
@@ -206,9 +213,16 @@ async fn t3_guided_observation_and_output_failures_settle_before_returning() -> 
         assert_eq!(count, usize::from(output_failure));
         cleaned(&fixture, true)?;
         let mut byte = [0];
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(5), child.read(&mut byte)).await??,
-            0
+        let closed = tokio::time::timeout(Duration::from_secs(5), child.read(&mut byte))
+            .await
+            .map_err(|_| "account child socket did not close before the deadline")?;
+        // Forced child termination can reset the readiness connection on Windows.
+        assert!(
+            matches!(closed, Ok(0))
+                || closed
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == ErrorKind::ConnectionReset),
+            "account child socket must close without sending another receipt: {closed:?}"
         );
         server.await??;
     }

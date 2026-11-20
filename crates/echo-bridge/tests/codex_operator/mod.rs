@@ -117,7 +117,7 @@ async fn codex_operator_signin_screen_matching_completion_and_reopened_status() 
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt echo-bridge and local Python"]
-async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_resources() {
+async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_resources() -> Result<(), String> {
     for outcome in ["failure", "eof"] {
         let fixture = Fixture::new("chatgpt");
         std::fs::write(fixture.home.join("auth.json"), b"synthetic prior state").unwrap();
@@ -130,18 +130,18 @@ async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_reso
         let mut control = fixture.control().await;
         let mut screen = bridge_wire_screen::ScreenEvents::connect(fixture.screen.port()).await;
         assert_eq!(
-            screen.next("waiting for sign-in Ready").await,
+            screen.next(&format!("{outcome}: waiting for sign-in Ready")).await?,
             Some(json!({"seq":1,"state":{"state":"ready",
                 "message":"code: TEST-CODE\nurl: http://127.0.0.1:12345/verify\n"}}))
         );
         control.write_all(outcome.as_bytes()).await.unwrap();
         assert_eq!(
-            screen.next(&format!("{outcome}: waiting for relink Error")).await,
+            screen.next(&format!("{outcome}: waiting for relink Error")).await?,
             Some(json!({"seq":2,"state":{"state":"error", "relink":true,
                 "message":"Run echo-bridge signin with your config, then restart the bridge."}})),
             "{outcome}: relink Error must precede screen EOF"
         );
-        assert_eq!(screen.next(&format!("{outcome}: waiting for screen EOF")).await, None);
+        assert_eq!(screen.next(&format!("{outcome}: waiting for screen EOF")).await?, None);
         process.collect(1).await;
         assert_eq!(process.stderr().await, "echo-bridge: authorization\n");
         assert!(process.lines.next_line().await.unwrap().is_none());
@@ -155,6 +155,7 @@ async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_reso
             .expect("sign-in child exits");
         assert_eq!(process.child.id(), None);
     }
+    Ok(())
 }
 
 #[tokio::test]

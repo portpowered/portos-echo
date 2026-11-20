@@ -78,21 +78,25 @@ impl ScreenEvents {
         }
     }
 
-    pub(super) async fn next(&mut self, phase: &str) -> Option<Value> {
+    pub(super) async fn next(&mut self, phase: &str) -> Result<Option<Value>, String> {
         loop {
             if let Some(end) = self.pending.windows(2).position(|bytes| bytes == b"\n\n") {
                 let data = self.pending[..end].strip_prefix(b"data: ").expect("screen event data");
                 let frame = serde_json::from_slice(data).expect("screen event JSON");
                 self.pending.drain(..end + 2);
-                return Some(frame);
+                return Ok(Some(frame));
             }
-            match self.response.chunk().await {
-                Ok(Some(chunk)) => self.pending.extend_from_slice(&chunk),
-                Ok(None) => {
+            match self
+                .response
+                .chunk()
+                .await
+                .map_err(|error| format!("{phase}: HTTP body read failed: {error:?}"))?
+            {
+                Some(chunk) => self.pending.extend_from_slice(&chunk),
+                None => {
                     assert!(self.pending.is_empty(), "{phase}: HTTP body ended inside an SSE record");
-                    return None;
+                    return Ok(None);
                 }
-                Err(error) => panic!("{phase}: HTTP body read failed: {error:?}"),
             }
         }
     }

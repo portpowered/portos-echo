@@ -292,6 +292,17 @@ async fn interrupted(root: &Path, provider: &mut Provider) -> Value {
         value = provider.read() => panic!("unexpected provider receipt before interrupt: {value}"),
     };
     correlated(root, &interrupted);
+    let expected_models = release_refused_model(provider).await;
+    let snapshot = provider.snapshot(json!("refused")).await;
+    assert_eq!(snapshot["models"], json!(expected_models));
+    assert_eq!(snapshot["appends"], json!([]));
+    assert_eq!(snapshot["delegations"], json!(["refused"]));
+    assert_eq!(snapshot["external"], 0);
+    assert_eq!(rows(root, "tools/call").len(), 1);
+    snapshot
+}
+
+async fn release_refused_model(provider: &mut Provider) -> Vec<Value> {
     // The pin may start a request before the bridge observes the turn. Hold
     // any response until the matching interrupt is acknowledged and complete.
     provider.send(json!({"release_model":"refused"})).await;
@@ -299,17 +310,10 @@ async fn interrupted(root: &Path, provider: &mut Provider) -> Value {
     assert_eq!(released["released"], "refused");
     let ingress = released["ingress"].as_array().unwrap();
     assert!(ingress.is_empty() || ingress == &[json!("refused")]);
-    let expected = vec![
+    vec![
         json!({"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":0});
         ingress.len()
-    ];
-    let snapshot = provider.snapshot(json!("refused")).await;
-    assert_eq!(snapshot["models"], json!(expected));
-    assert_eq!(snapshot["appends"], json!([]));
-    assert_eq!(snapshot["delegations"], json!(["refused"]));
-    assert_eq!(snapshot["external"], 0);
-    assert_eq!(rows(root, "tools/call").len(), 1);
-    snapshot
+    ]
 }
 
 fn correlated(root: &Path, completed: &Value) {
