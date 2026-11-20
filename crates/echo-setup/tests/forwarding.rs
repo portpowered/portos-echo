@@ -98,9 +98,8 @@ async fn t3_forwards_allocate_without_rebind_and_close_only_their_own_ports() ->
     let connection = InstalledConnection::read(&fixture.options()?, deadline())
         .await
         .map_err(fixed)?;
-    let session = ForwardSession::open(&fixture.options()?, connection.remote_ports(), deadline())
-        .await
-        .map_err(fixed)?;
+    fs::write(fixture.0.join("devices"), "SYNTHETIC-OTHER\tdevice\n")?;
+    let session = connection.forward().await.map_err(fixed)?;
     assert_eq!(fixture.active()?, ["tcp:49999", "tcp:41001", "tcp:41002"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     session.close().await.map_err(fixed)?;
     assert_eq!(fixture.active()?, ["tcp:49999"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
@@ -141,9 +140,7 @@ async fn t3_forward_lease_routes_real_health_and_authenticated_screen_requests()
     let connection = InstalledConnection::read(&fixture.options()?, deadline())
         .await
         .map_err(fixed)?;
-    let session = ForwardSession::open(&fixture.options()?, connection.remote_ports(), deadline())
-        .await
-        .map_err(fixed)?;
+    let session = connection.forward().await.map_err(fixed)?;
     let body =
         r#"{"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false}"#;
     let health_server = tokio::spawn(async move { serve(&health, "/healthz", "application/json", body).await });

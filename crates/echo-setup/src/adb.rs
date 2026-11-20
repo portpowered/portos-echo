@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
+#[derive(Clone)]
 pub struct Adb {
     executable: PathBuf,
     serial: Option<OsString>,

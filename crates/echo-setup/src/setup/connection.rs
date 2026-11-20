@@ -35,6 +35,13 @@ impl InstalledConnection {
         [self.screen, 16901]
     }
 
+    /// Allocate on the already selected device, even if discovery changes.
+    /// # Errors
+    /// Fixed forward, cleanup or deadline categories.
+    pub async fn forward(&self) -> Result<super::ForwardSession> {
+        super::ForwardSession::selected(self.adb.clone(), self.remote_ports(), self.deadline).await
+    }
+
     /// Call after the bridge's screen owner creates its pairing file. Absence
     /// is a refusal, never permission to generate/replace a credential here.
     /// # Errors

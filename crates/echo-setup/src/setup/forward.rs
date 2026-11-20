@@ -29,6 +29,16 @@ impl ForwardSession {
         tokio::time::timeout_at(deadline, adb.select(options.serial.as_deref()))
             .await
             .map_err(|_| Failure("setup_timeout"))??;
+        Self::selected(adb, remote, deadline).await
+    }
+
+    pub(super) async fn selected(adb: Adb, remote: [u16; 2], deadline: Instant) -> Result<Self> {
+        if remote.contains(&0) {
+            return Err(Failure("setup_forward_failed"));
+        }
+        if Instant::now() >= deadline {
+            return Err(Failure("setup_timeout"));
+        }
         let (ready, response) = oneshot::channel();
         let (release, released) = oneshot::channel();
         let owner = tokio::spawn(own(adb, remote, ready, released, deadline));
