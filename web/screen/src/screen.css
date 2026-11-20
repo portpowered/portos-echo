@@ -148,3 +148,11 @@ button:disabled {
     outline: 4px solid #ffdb70;
     outline-offset: 2px;
 }
+.settings-packs img {
+    display: block;
+    width: 160px;
+    height: 160px;
+    max-width: 100%;
+    object-fit: contain;
+    background: #101827;
+}

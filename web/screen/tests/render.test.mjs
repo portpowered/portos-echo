@@ -5,6 +5,7 @@ import { snapshot as pixelSnapshot } from "./support/snapshot.mjs";
 import { pageFor, emit, calls, bounds } from "./browser.mjs";
 import { states, frame } from "./fixtures.mjs";
 import "./settings/page.mjs";
+import "./settings/packs.mjs";
 
 test("F01 F02 F11: exact supplied status/link/error values, semantic snapshots and reference bounds", async (t) => {
     const page = await pageFor(t);

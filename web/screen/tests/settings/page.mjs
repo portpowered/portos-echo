@@ -19,7 +19,7 @@ const snapshot = {
     restart_pending: false,
     warnings: ["Settings overlay was ignored"],
 };
-async function response(page, body, status = 200) {
+export async function response(page, body, status = 200) {
     await page.evaluate(
         ({ body, status }) => {
             window.responseBody = body;
@@ -28,7 +28,7 @@ async function response(page, body, status = 200) {
         { body, status },
     );
 }
-async function settingsPage(t) {
+export async function settingsPage(t) {
     const page = await pageFor(t, query, true);
     await emit(page, frame(1));
     await response(page, snapshot);

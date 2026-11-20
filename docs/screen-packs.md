@@ -32,7 +32,7 @@ files or create a home. Running the bridge installs configured archives serially
 in the background. Each completion records `screen.pack_download` with a safe
 installed identity or fixed failure reason in the bridge trace. Configured and
 interactive downloads share one serial worker. The catalog exposes safe job
-status; the settings-page controls remain pending in this lane.
+status, available through Settings > Load screen packs.
 
 The installer requires `codex.ca_file` and trusts only those PEM roots. It disables
 proxy use, retries and HTTP downgrade, permits at most three HTTPS redirects and
@@ -47,8 +47,25 @@ including `pack.json`, and 8 MiB per WebM/MP4 clip. Tar headers and padding have
 their own bounded decoding budget. Only json/css/png/webp/webm/mp4 files are
 accepted. Validation stages files under `screens` before an atomic directory
 rename to `<home>/screens/<name>@<version>/`; an existing conflicting identity is
-retained. The paired installation controls remain implementation work.
+retained. Paired installation is available from the settings panel.
 Installed data does not yet activate a renderer.
+
+## Paired controls
+
+Open Settings and choose **Load screen packs**. This explicit request keeps a
+pack-hosting failure independent of conversation settings. The panel lists valid
+installed identities and their authenticated rest previews (layout-only packs have
+no preview). Select **Built-in appearance** to disable packs or an installed pack,
+then **Use screen pack** to save through the existing settings owner. Pack saves
+require no restart. The renderer remains pending in this lane.
+
+**Add from URL** requires an HTTPS URL and exactly 64 hexadecimal SHA-256 digits.
+**Download pack** queues a background job; it does not wait for the download.
+Use **Refresh packs** to read queued/downloading/installed/failed statuses and safe
+failure categories. There is no automatic retry or polling. Failed requests keep
+entered values; a queued request clears its URL/digest. Back, Escape and unload
+cancel the panel's request, and an uncertain response asks the user to reopen and
+check before saving again. Pairing failures request reopening the paired screen.
 
 ## Authenticated pack files
 
