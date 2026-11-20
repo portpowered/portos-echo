@@ -109,7 +109,23 @@ async fn inspect(
 }
 
 async fn settle(fixture: &Fixture, cause: &str, observer: &Observer, stop: Option<tokio::sync::oneshot::Sender<()>>) {
-    let recovering = matches!(cause, "child" | "error" | "closed" | "malformed" | "media" | "timeout");
+    if cause == "timeout" {
+        wait(fixture, "run.ended").await;
+        assert_eq!(
+            trace(&fixture.directory.path().join("tool-trace"))
+                .iter()
+                .find(|row| row["event"] == "run.ended")
+                .unwrap()["reason"],
+            "no_response"
+        );
+        stop.unwrap().send(()).unwrap();
+        while observer.commands().last() != Some(&echo_link::fake::Command::Close) {
+            tokio::task::yield_now().await;
+        }
+        observer.finish(Ok(()));
+        return;
+    }
+    let recovering = matches!(cause, "child" | "error" | "closed" | "malformed" | "media");
     if recovering {
         // Release the fake playback/capture before awaiting real recovery.
         observer.finish(Ok(()));
