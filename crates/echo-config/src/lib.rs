@@ -12,7 +12,10 @@ mod config_validate;
 mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
 pub use config_clock::{ClockConfig, DEFAULT_TIME_SERVERS};
-pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS, WebSearch, realtime_voices};
+pub use config_codex::{
+    CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, LIVE_SESSION_GUIDANCE, RUNNER_INSTRUCTIONS, RUNNER_SESSION_GUIDANCE,
+    WebSearch, realtime_voices,
+};
 pub use config_muse::{AgentBackend, MuseConfig};
 pub use config_screen::ScreenPackDownload;
 pub use config_settings::{EffectiveConfig, SettingsOptions, SettingsOverlay, SettingsServerTools};

@@ -112,6 +112,25 @@ async fn remote(
     };
     assert_prompt_bytes(home, expected.0, expected.1);
     let thread = format!("thread-{index}");
+    // Owner files replace the base prompts only. The bridge advertises
+    // end_session, so its own guidance for that tool follows either file.
+    let runner = format!(
+        "{}
+
+{}",
+        expected.0,
+        echo_config::RUNNER_SESSION_GUIDANCE
+    );
+    let voice = format!(
+        "{}
+
+{}",
+        expected.1,
+        echo_config::LIVE_SESSION_GUIDANCE
+    );
+    assert!(runner.contains("immediately call end_session with {} once") && voice.contains("hand off once"));
+    let advertised: Vec<_> = catalog.as_array().unwrap().iter().map(|tool| &tool["name"]).collect();
+    assert_eq!(advertised.iter().filter(|name| **name == "end_session").count(), 1);
     for method in ["thread/start", "thread/realtime/start", "thread/realtime/stop"] {
         let mut line = String::new();
         server.read_line(&mut line).await.unwrap();
@@ -120,7 +139,7 @@ async fn remote(
         if method == "thread/start" {
             assert_eq!(request["params"]["dynamicTools"], *catalog);
         }
-        let result = prompt_result(server, &request, method, &thread, expected).await;
+        let result = prompt_result(server, &request, method, &thread, (&runner, &voice)).await;
         send(server, &json!({"id":request["id"],"result":result})).await;
         if method == "thread/realtime/start" {
             turn(server, &thread, index, home).await;

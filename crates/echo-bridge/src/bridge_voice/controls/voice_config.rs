@@ -323,6 +323,27 @@ impl Configured {
     }
 }
 
+/// The session tools are the bridge's own and so is their guidance. It follows
+/// whatever base prompts were admitted, built in or from the owner's files,
+/// so a prompt file that predates a tool cannot leave that tool unused.
+pub(super) fn session_guidance((runner, voice): (String, String), advertised: bool) -> (String, String) {
+    if !advertised {
+        return (runner, voice);
+    }
+    let join = |base: String, guidance: &str| {
+        format!(
+            "{}
+
+{guidance}",
+            base.trim_end()
+        )
+    };
+    (
+        join(runner, echo_config::RUNNER_SESSION_GUIDANCE),
+        join(voice, echo_config::LIVE_SESSION_GUIDANCE),
+    )
+}
+
 /// Append a call-local snapshot. Std has no portable local-zone discovery.
 pub(super) fn call_instructions(prefix: &str, now: std::time::SystemTime, zone: Option<&str>) -> Result<String, Error> {
     let seconds = match now.duration_since(std::time::UNIX_EPOCH) {

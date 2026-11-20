@@ -201,12 +201,15 @@ where
         .checked_add(options.connect_timeout)
         .ok_or(Error::Input)?;
     let mut setup_observer = |notice| observe(ServeNotice::Session(notice));
+    // A call with tools advertises end_session, so it carries its guidance.
+    let advertised = tools.is_some();
     let (mut media, instructions) = tokio::select! {
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
         result = super::earcon::negotiating(device.1, super::earcon::capture_during(&mut device.2, async {
             // One clock sample: the delegated turn and the Live prompt carry the same snapshot.
             let (runner, voice) = super::prompts::snapshot(options.call.instructions, options.call.prompt, &mut trace)?;
+            let (runner, voice) = super::voice_config::session_guidance((runner, voice), advertised);
             let (now, zone) = (clock(), options.call.time_zone);
             let instructions = (
                 super::voice_config::call_instructions(&runner, now, zone)?,

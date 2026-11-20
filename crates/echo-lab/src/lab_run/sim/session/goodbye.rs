@@ -1,4 +1,5 @@
 //! Live-originated goodbye through the shipped bridge and pinned app server.
+mod home;
 mod satellite;
 
 use super::provider::{Control, Provider};
@@ -182,6 +183,7 @@ impl World {
         let provider = Provider::start(&options.python, script).await?;
         let mut command = tokio::process::Command::new(bridge);
         crate::lab_run::sim::m3::configure(&mut command, &root.0, satellite.address.port(), &provider.origin)?;
+        home::installed(&root.0)?;
         let mut bridge = Process::start(&mut command)?;
         bridge.expect("bridge.ready").await?;
         let trace = read_trace(&root.0)?;
