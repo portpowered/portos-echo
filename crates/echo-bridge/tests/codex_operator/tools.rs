@@ -81,6 +81,15 @@ pub(super) async fn result(fixture: &Fixture) -> Value {
     }
 }
 
+fn media(closed: &Arc<AtomicUsize>) -> Media {
+    Media {
+        state: watch::channel(PeerState::New).0,
+        closed: closed.clone(),
+        setup: OnceLock::new(),
+        lost: Arc::default(),
+    }
+}
+
 async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accepted: Option<bool>) -> Value {
     let observer = Observer::default();
     let closed = Arc::new(AtomicUsize::new(0));
@@ -93,14 +102,7 @@ async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accept
     .unwrap();
     let work = prepared.execute(
         FakeConnector::new(observer.clone()),
-        async || {
-            Ok(Media {
-                state: watch::channel(PeerState::New).0,
-                closed: closed.clone(),
-                setup: OnceLock::new(),
-                lost: Arc::default(),
-            })
-        },
+        async || Ok(media(&closed)),
         vec![],
         async {
             stopping.await.unwrap();
@@ -155,7 +157,10 @@ pub(super) async fn ready(fixture: &Fixture) -> (tokio::net::TcpStream, Lines<Bu
 }
 
 async fn wait_resolution(fixture: &Fixture) {
-    if std::fs::read_to_string(fixture.home.join("mode")).unwrap() != "tool-trace" {
+    if !std::fs::read_to_string(fixture.home.join("mode"))
+        .unwrap()
+        .starts_with("tool-trace")
+    {
         return;
     }
     loop {
@@ -371,7 +376,7 @@ async fn delegation_trace_configured_search_and_mcp_complete_once_with_payload_s
             })
             .collect();
         assert_eq!(rows.len(), 4);
-        rows[1..3].sort_by_key(|row| if row["kind"] == "web_search" { 0 } else { 1 });
+        rows[1..3].sort_by_key(|row| row["kind"] != "web_search");
         assert_eq!(rows[0]["event"], "delegation.created");
         assert_eq!(rows[1]["kind"], "web_search");
         assert_eq!(rows[1]["name"], "web_search");
@@ -381,16 +386,7 @@ async fn delegation_trace_configured_search_and_mcp_complete_once_with_payload_s
         assert_eq!(rows[2]["server"], "spoof-trace");
         assert_eq!(rows[2]["call_id"], "fixture-call");
         assert_eq!(rows[2]["request_id"], "fixture-tool");
-        for row in &rows[1..3] {
-            assert_eq!(row["status"], "completed");
-            assert!(row["duration_ms"].is_u64());
-            assert_eq!(row["turn_id"], "fixture-turn");
-            assert_eq!(row["thread_id"], "fixture-thread");
-        }
-        assert_eq!(rows[3]["event"], "delegation.resolved");
-        assert_eq!(rows[3]["outcome"], "completed");
-        assert_eq!(rows[3]["tool_counts"], json!({"mcp":1,"web_search":1}));
-        assert_eq!(rows[3]["handback"], "unobserved");
+        assert_trace_metadata(&rows);
         assert_trace_payloads(&raw, &rows, payloads);
         for row in rows {
             use std::io::Write;
@@ -398,6 +394,19 @@ async fn delegation_trace_configured_search_and_mcp_complete_once_with_payload_s
         }
         spoof.shutdown().await.unwrap();
     }
+}
+
+fn assert_trace_metadata(rows: &[Value]) {
+    for row in &rows[1..3] {
+        assert_eq!(row["status"], "completed");
+        assert!(row["duration_ms"].is_u64());
+        assert_eq!(row["turn_id"], "fixture-turn");
+        assert_eq!(row["thread_id"], "fixture-thread");
+    }
+    assert_eq!(rows[3]["event"], "delegation.resolved");
+    assert_eq!(rows[3]["outcome"], "completed");
+    assert_eq!(rows[3]["tool_counts"], json!({"mcp":1,"web_search":1}));
+    assert_eq!(rows[3]["handback"], "unobserved");
 }
 
 fn assert_trace_payloads(raw: &str, rows: &[Value], payloads: bool) {
