@@ -161,7 +161,8 @@ impl TimeWorld {
         let start_bytes = world.start_pcm(self.turns).await?;
         world.tail_pcm(start_bytes).await?;
         world.played(self.turns, answer).await?;
-        artifacts.measurement(oracle::reply(world, &result, self.turns)?)?;
+        let reply = oracle::reply(world, &result, self.turns)?;
+        artifacts.event("session.live_time_answer", Some(question), Some(&reply.to_string()))?;
         self.turns += 1;
         Ok(())
     }
@@ -169,7 +170,7 @@ impl TimeWorld {
     async fn close(self, artifacts: &mut Artifacts) -> Result<(), String> {
         let (snapshot, trace) = self.world.close().await?;
         let evidence = oracle::counts(&snapshot, &trace.records, self.configured);
-        artifacts.measurement(evidence.clone())?;
+        artifacts.event("session.live_time_counts", None, Some(&evidence.to_string()))?;
         let expected = if self.configured { CONFIGURED_TURNS } else { 1 };
         if self.turns == expected {
             oracle::direct_only(&evidence, expected)?;

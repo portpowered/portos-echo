@@ -60,7 +60,7 @@ pub(super) fn reply(world: &World, result: &Value, index: usize) -> Result<Value
         ));
     }
     Ok(json!({
-        "event":"session.live_time_answer","question":result["question"],"context":result["context"],
+        "question":result["question"],"context":result["context"],
         "transcript":result["answer"],"run_id":world.run_id,"reply":index + 1,"wyoming":stream,
     }))
 }
@@ -78,10 +78,11 @@ pub(super) fn delegated(world: &World, artifacts: &mut Artifacts, result: &Value
     {
         return Err("time answers: unexpected provider or bridge delegation identity".into());
     }
-    artifacts.measurement(json!({
-        "event":"session.live_time_delegated","question":result["question"],"context":result["context"],
+    let evidence = json!({
+        "question":result["question"],"context":result["context"],
         "provider_delegations":1,"bridge_delegations":delegations,"delegation_id":id,"run_id":world.run_id,
-    }))?;
+    });
+    artifacts.event("session.live_time_delegated", None, Some(&evidence.to_string()))?;
     Err(format!(
         "time answers: expected a direct reply to {}, observed one delegation.created ({id})",
         result["question"]
@@ -91,12 +92,13 @@ pub(super) fn delegated(world: &World, artifacts: &mut Artifacts, result: &Value
 pub(super) fn counts(snapshot: &Value, records: &[Value], configured: bool) -> Value {
     let count = |event| records.iter().filter(|row| row["event"] == event).count();
     json!({
-        "event":"session.live_time_counts","configured":configured,
+        "configured":configured,"bridge_errors":count("bridge.error"),
         "calls":snapshot["calls"],"sidebands":snapshot["sidebands"],"external":snapshot["external"],
         "provider_delegations":snapshot["delegations"].as_array().map(Vec::len),
         "bridge_delegations":count("delegation.created"),"model_requests":snapshot["model_requests"],
         "tool_calls":count("delegation.tool") + count("item/tool/call"),
         "runs":count("wyoming.run_started"),"replies_played":count("reply.played"),
+        "replies_confirmed":records.iter().filter(|row| row["event"] == "reply.played" && row["outcome"] == "played").count(),
     })
 }
 
@@ -108,8 +110,10 @@ pub(super) fn direct_only(evidence: &Value, replies: usize) -> Result<(), String
         || evidence["bridge_delegations"] != 0
         || evidence["model_requests"] != 0
         || evidence["tool_calls"] != 0
+        || evidence["bridge_errors"] != 0
         || evidence["runs"] != 1
         || evidence["replies_played"] != replies
+        || evidence["replies_confirmed"] != replies
     {
         return Err(format!(
             "time answers: expected {replies} direct replies in one local call, observed {evidence}"
