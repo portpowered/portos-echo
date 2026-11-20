@@ -61,7 +61,7 @@ impl World {
             }
         } else if command.contains("kill $(cat") {
             self.alive = false;
-        } else if command.contains(": >") && command.contains("trace.jsonl") {
+        } else if (command.contains(": >") || command.contains("rm -f")) && command.contains("trace.jsonl") {
             self.trace.clear();
         } else if command.contains("wc -c") {
             return format!("{} log\n", self.log.len());
