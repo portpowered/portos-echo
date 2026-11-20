@@ -203,18 +203,17 @@ async fn replace(
     active
 }
 
-fn settings_url(root: &Path) -> String {
+fn settings_url(root: &Path) -> reqwest::Url {
     let address = lifecycle::screen_address(root);
     assert_eq!(address.ip(), Ipv4Addr::LOCALHOST);
-    format!(
-        "http://127.0.0.1:{}/settings/v2?token=synthetic-screen-pair",
-        address.port()
-    )
+    let mut url = reqwest::Url::parse("http://127.0.0.1/settings/v2?token=synthetic-screen-pair").unwrap();
+    url.set_port(Some(address.port())).unwrap();
+    url
 }
 
-async fn save(client: &reqwest::Client, url: &str, fast: bool, pending: bool) {
+async fn save(client: &reqwest::Client, url: &reqwest::Url, fast: bool, pending: bool) {
     let response = client
-        .patch(url)
+        .patch(url.clone())
         .json(&json!({"version":2,"settings":{"codex":{"delegate_fast":fast}}}))
         .send()
         .await
@@ -226,8 +225,8 @@ async fn save(client: &reqwest::Client, url: &str, fast: bool, pending: bool) {
     );
 }
 
-async fn assert_snapshot(client: &reqwest::Client, url: &str, fast: bool) {
-    let response = client.get(url).send().await.unwrap();
+async fn assert_snapshot(client: &reqwest::Client, url: &reqwest::Url, fast: bool) {
+    let response = client.get(url.clone()).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let data: Value = response.json().await.unwrap();
     assert_eq!(data["settings"]["codex"]["delegate_fast"], fast);
