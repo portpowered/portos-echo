@@ -7,6 +7,30 @@ status: current main overview; W4 deployment and in-progress changes are labelle
 
 # Architecture and conversation lifecycle
 
+## Delegation trace payload boundary (in progress)
+
+Delegation diagnostics use the private bridge trace. The payload boundary for
+`delegation.created`, retained `session.delegation.created`, `delegation.tool`
+and `delegation.resolved` accepts observed task, request, response and answer
+objects. `[trace] payloads` defaults to true; setting it false and restarting
+removes these fields and retains lifecycle metadata. It is base configuration,
+not a screen settings overlay; remove the table before rolling back to an older binary.
+
+Credentials, authorization values, account and installation identifiers are
+redacted recursively, including JSON nested in tool text. Bearer and JWT-shaped
+credentials in text are replaced by `[redacted]`. Each object is measured after
+redaction and capped at 65536 compact JSON bytes. A larger object is replaced by
+`{"truncated":true,"original_bytes":N}` with the exact redacted pre-cap size;
+there is no raw preview. A delegation row permits at most two such objects plus
+the existing 4096-byte metadata envelope. Unrelated trace rows retain their
+4096-byte rejection limit and private file ownership.
+
+The native path can observe a handoff request and a final agent answer, but the
+fixed app-server pin exposes no native send receipt. Its handback must remain
+`unobserved` even after a completed agent item and turn. A real-pin local-provider
+test may observe exact append identity and content only for its own run. Retained
+`submitted` or `failed` describes the local append boundary, never remote acknowledgement.
+
 ## Purpose and placement
 
 This page explains the running parts and follows a conversation across them. It describes main at

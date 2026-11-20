@@ -40,6 +40,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::time::Instant;
+mod delegation_payload;
 mod tool_receipts;
 pub(crate) use tool_receipts::{PortosReceipts, ToolTrace};
 
@@ -49,6 +50,7 @@ pub struct Trace {
     started: Instant,
     mode: &'static str,
     active_run: Arc<Mutex<Option<String>>>,
+    payloads: bool,
 }
 
 impl Trace {
@@ -64,7 +66,13 @@ impl Trace {
             started: Instant::now(),
             mode,
             active_run: Arc::default(),
+            payloads: true,
         })
+    }
+
+    pub(crate) fn with_payloads(mut self, payloads: bool) -> Self {
+        self.payloads = payloads;
+        self
     }
 
     pub(crate) fn tool_run(&self, run: Option<&str>) -> Result<(), Error> {
@@ -89,11 +97,22 @@ impl Trace {
         if let Some(run) = run {
             entry.insert("run_id".into(), run.into());
         }
-        if let Value::Object(fields) = fields {
+        if let Value::Object(mut fields) = fields {
+            if delegation_payload::event(event) {
+                delegation_payload::prepare(&mut fields, self.payloads)?;
+            }
             entry.extend(fields);
         }
+        if delegation_payload::event(event) && !delegation_payload::metadata_fits(&entry)? {
+            return Err(Error::Trace);
+        }
         let bytes = serde_json::to_vec(&entry).map_err(|_| Error::Trace)?;
-        if bytes.len() > 4096 {
+        let limit = if delegation_payload::event(event) {
+            2 * 65536 + 4096
+        } else {
+            4096
+        };
+        if bytes.len() > limit {
             return Err(Error::Trace);
         }
         writer
@@ -176,6 +195,7 @@ mod bridge_spine_tests {
             started: Instant::now(),
             mode: "chatgpt",
             active_run: Arc::default(),
+            payloads: true,
         };
         let error = trace.record("run.started", Some("run-1"), json!({})).unwrap_err();
         assert_eq!(error, Error::Trace);
