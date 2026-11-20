@@ -3,6 +3,8 @@
 use super::{cases::Stalled, *};
 use crate::bridge_runtime::bridge_pacing::BARGE_QUIET;
 
+#[path = "controls/tests/voice_barge_stop.rs"]
+mod stop_cases;
 #[path = "controls/tests/voice_barge_yield.rs"]
 mod yield_cases;
 
@@ -114,11 +116,11 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
         }
         assert_drained_reply(&observer, old_frames);
         send(&tx, [heard(signal)]).await;
-        // A reply that is done is cut at once. One the model left open plays
-        // out through the quiet stretch first.
+        // A reply that is done is cut at once. One the model left open is
+        // held from the device through the quiet stretch first.
         pending(work.as_mut()).await;
         tick(work.as_mut(), usize::from(!done_first) * 25).await;
-        let old_sent = if done_first { old_frames.min(10) } else { old_frames };
+        let old_sent = old_frames.min(10);
         assert_eq!(command_count(&observer, false), 1);
         assert_eq!(command_count(&observer, true), 1);
         observer.finish(Ok(()));

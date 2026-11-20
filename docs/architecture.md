@@ -874,12 +874,18 @@ On current main, `-D` continues capture during reply audio, but configured Codex
 events to cut playback. Error/kill cleanup can cut through `hassmic-continue` and `audio-stop`, then await
 `played`; that cleanup closes/fails the voice run instead of continuing a normal interrupted question.
 
-The session controller's barge-in (2026-11-19) waits for the model to yield. The Live session transcribes
-whatever the microphone hears during a reply, and the model decides for itself whether to stop. A user
-transcript fragment or speech-start therefore only arms a barge-in for 2 s. It fires once the model has sent
-no audible reply audio for 500 ms, or at once when the model ends its turn. Firing retires the reply, drops
-the pacer lead and queued call audio, and flushes the device. A model that is still talking after the 2 s
-was not interrupted, and its reply plays on whole. Both times are constants in
+The session controller's barge-in (2026-11-19) silences the reply at once and cuts it when the model
+yields. The Live session transcribes whatever the microphone hears during a reply, and the model decides for
+itself whether to stop: the pinned V3 session has no request that cancels a response. A user transcript
+fragment or speech-start therefore arms a barge-in for 2 s. While it is pending the bridge holds the reply:
+it writes nothing more to the device, which plays out the lead it already has (about 200 ms), and the
+model's audio waits in the reply queue. The barge-in fires once the model has sent no audible reply audio
+for 500 ms, or at once when the model ends its turn. Firing retires the reply, drops the held audio and
+flushes the device. The cut reply then settles: `reply.played` (`outcome` `cut`) and `reply.quality` are
+written, call audio is discarded until the model's next utterance, and the run listens for that answer
+with no playback open. More speech from the user renews the listen window and opens nothing. A model that
+is still talking after the 2 s was not interrupted: the held audio plays, late but whole, and the delay is
+given back in the reply's silent frames. Both times are constants in
 [reply_barge.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_barge.rs).
 
 #### Why — Barge-in

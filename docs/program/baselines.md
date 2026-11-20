@@ -200,7 +200,7 @@ Measured on the Echo with an instrumented armv7 `echo-bridge` at 34cbe231 and ha
 (`arrival_gap_max_ms`, `late_arrivals`, `underruns`, `underrun_max_ms`, `depth_min_ms`, `depth_max_ms`,
 `discarded.{after_reply,idle,cut,audible}`, `rtp_lost`; since the adaptive playout also
 `target_ms.{min,max,final}`, `reprimes`, `concealment_ms`, `fade_ins`, `drained_frames`; since 2026-11-19 also
-`cuts.{count,trigger}`). Depth and underruns
+`cuts.{count,trigger}` and `cuts.holds`). Depth and underruns
 are the bridge's model of the device queue (20 ms of playout per frame written); hassmic logs no underrun of
 its own.
 
@@ -221,6 +221,26 @@ The pacing unit test `bridge_pacing_measured_jitter_never_runs_the_primed_echo_d
 gap pattern and fails if a primed stream underruns. This is one device, one network and one evening; it
 establishes no Wi-Fi-wide bound. Room recordings through the Ring were too noisy to count clicks (ambient
 alone scored 16 "dropouts"), so no acoustic before/after count exists.
+
+## Barge-in on the Echo (2026-11-19)
+
+Measured on the Echo from hassmic's boot log and the bridge trace of one owner run: `echo-bridge` at
+e707712d, hassmic aaf1ca0 in `-D` mode, a `chatgpt` realtime call. The owner talked over the replies.
+
+| Fact | Value |
+| --- | --- |
+| Flushes in the run | 9 in 47 s |
+| Reply audio each flush found left to discard | 0 to 5,760 bytes (at most 120 ms); `written` equals `before` in all 9 |
+| Flush receipt to closed player in hassmic | 1 to 13 ms |
+| Audio written to one reply before its flush | 1,279,680 bytes over 27.1 s: real time at 48,000 bytes/s, not a backlog |
+| Replacement playback opened after each flush | 1 to 14 ms later (`speaking -> listening -> speaking`) |
+| Model's next assistant fragment after a cut (`call.receive_reset`) | 0.1 to 0.6 s later, after 8 of the 9 cuts |
+| After the last cut, with no further model audio | hassmic's duplex failsafe ended the open playback 30.04 s later and went idle |
+| Bridge after that failsafe | held the run 35 s more, to the response deadline plus the played timeout, then `live.closed` `failed`, `bridge.recovering` `deadline` |
+| A wake 13.5 s after the failsafe | not answered: the bridge still owned the dead run |
+| `reply.played` and `reply.quality` rows for the run | none: a reply's rows were written only when it ended uncut |
+
+The cuts came late and the flush had nothing to stop; the flush itself is prompt. One run, one room.
 
 ## Milestones
 

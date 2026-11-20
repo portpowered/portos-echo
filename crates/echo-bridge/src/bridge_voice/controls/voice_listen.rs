@@ -33,22 +33,21 @@ pub(super) async fn replies<L: EchoLink>(
         .await;
         if result == Err(Error::Control) && source.controller.cutting() {
             source.controller.cut_settled();
-            generation_options.response_deadline = source.controller.replacement_deadline()?;
             observe(Notice::ReplyPaused)?;
-            continue;
+            if options.listen_timeout.is_none() {
+                generation_options.response_deadline = source.controller.replacement_deadline()?;
+                continue;
+            }
+            // The model yielded and may say nothing more: the cut reply
+            // settles and the run listens, with no playback left open.
+            source.controller.cut_played();
+        } else {
+            result?;
         }
-        result?;
         if options.listen_timeout.is_none() && !source.delegation.in_flight() {
             return Ok(());
         }
-        // Off suppresses new follow-up admission, not work already admitted.
-        let timeout = options.listen_timeout.unwrap_or(
-            source
-                .controller
-                .replacement_deadline()?
-                .saturating_duration_since(tokio::time::Instant::now()),
-        );
-        source.controller.listen_after_reply(timeout)?;
+        source.controller.listen_after_reply(window(source, options)?)?;
         // Waiting granted during the reply outlives it, within the run's cap.
         if let Some(granted) = source.session.granted() {
             source.controller.extend_idle(granted);
@@ -166,6 +165,13 @@ async fn listening_step<E: LinkEvents>(
         event = port.next() => {
             let event = event?;
             if activity(&event) {
+                // After a barge-in only the model's answer opens a reply.
+                // More of the user's speech keeps the run listening for it.
+                if source.stale() && !answer(&event) {
+                    source.renew_idle();
+                    super::media(event, port, source, observe).await?;
+                    return Ok(false);
+                }
                 source.resume_reply()?;
                 super::media(event, port, source, observe).await?;
                 return Ok(true);
@@ -190,6 +196,22 @@ fn activity(event: &MediaEvent) -> bool {
         MediaEvent::Control(Event::SpeechStarted | Event::TurnStarted { .. })
     ) || matches!(event, MediaEvent::Control(Event::Transcript { role, done, .. })
             if role == "user" || (role == "assistant" && !done))
+}
+
+/// The listen window. Off suppresses new follow-up admission, not work
+/// already admitted.
+fn window(source: &Source, options: &Options) -> Result<std::time::Duration, Error> {
+    if let Some(timeout) = options.listen_timeout {
+        return Ok(timeout);
+    }
+    let deadline = source.controller.replacement_deadline()?;
+    Ok(deadline.saturating_duration_since(tokio::time::Instant::now()))
+}
+
+/// Activity that is the model's own: a delegated turn or assistant speech.
+fn answer(event: &MediaEvent) -> bool {
+    matches!(event, MediaEvent::Control(Event::TurnStarted { .. }))
+        || matches!(event, MediaEvent::Control(Event::Transcript { role, .. }) if role == "assistant")
 }
 
 #[cfg(test)]

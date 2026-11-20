@@ -448,7 +448,7 @@ async fn media(
     match event {
         MediaEvent::Audio(frame) => source.audio(&frame),
         MediaEvent::Control(Event::ReplyDone { text }) => {
-            if source.controller.retired() {
+            if source.stale() {
                 return Ok(());
             }
             observe(Notice::Transcript {
@@ -473,8 +473,7 @@ async fn media(
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
                 source.heard_user(BargeTrigger::UserTranscript);
             } else if role == "assistant" && !done {
-                source.controller.reply_started();
-                source.delegation.spoke();
+                source.spoke();
             }
             observe(Notice::Transcript { role, text, done })
         }

@@ -12,6 +12,8 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines},
     process::Command,
 };
+#[path = "bridge_support/bridge_barge.rs"]
+mod bridge_barge;
 #[path = "bridge_support/bridge_cut.rs"]
 mod bridge_cut;
 #[path = "bridge_support/bridge_latency.rs"]
