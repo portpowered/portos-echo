@@ -28,11 +28,11 @@ jobs:
           persist-credentials: false
       - name: Native installer tests
         run: cargo test --locked -p echo-setup
-      - name: Existing Linux installer regression
-        if: runner.os == 'Linux'
-        run: python3 tests/test_echo_install.py
       - name: Existing Linux release regression
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: |
           python3 tests/test_release_kit.py
           python3 tests/test_release_redirects.py
+      - name: Existing Linux installer regression
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: python3 tests/test_echo_install.py

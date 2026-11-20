@@ -213,7 +213,8 @@ def failure_cases():
                 (box.root / "mode").write_text("stale")
             else:
                 (box.root / (fault + "-fails")).touch()
-            result = box.invoke(code=1)
+            try: result = box.invoke(code=1)
+            except subprocess.TimeoutExpired as error: raise AssertionError("release failure timed out: " + fault) from error
             require(diagnostic in result.stderr, "failure diagnostic differs")
             if fault in ("hassmic", "install", "start", "prepare", "ownership", "spawn"):
                 require(not any(c[:2] == ["install", "-r"] for c in box.calls()), "failure continued to screen")

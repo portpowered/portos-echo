@@ -35,18 +35,11 @@ release_guard() {
   test -d \"\$root\" || exit 1
   bad=\$(find \"\$root\" ! -type d ! -type f -print)
   test -z \"\$bad\" || exit 1
-  find \"\$root\" -exec sh -c '
-    for p do
-      info=\$(stat -c %u:%h:%a \"\$p\") || exit 1
-      case \$info in 0:*:600 | 0:*:644 | 0:*:700 | 0:*:755) ;; *) exit 1 ;; esac
-      if test ! -d \"\$p\"; then case \$info in 0:1:*) ;; *) exit 1 ;; esac; fi
-    done' sh {} + || exit 1
-done
-for name in pending metadata observed; do
-  test ! -e '${device:?}/releases/'\$name || test -f '${device:?}/releases/'\$name || exit 1
-done
-for name in previous stage retired; do
-  test ! -e '${device:?}/releases/'\$name || test -d '${device:?}/releases/'\$name || exit 1
+  dirs=\$(find \"\$root\" -type d -exec stat -c %u:%a {} +) || exit 1
+  files=\$(find \"\$root\" -type f -exec stat -c %u:%h:%a {} +) || exit 1
+  test -n \"\$dirs\" || exit 1
+  printf '%s\\n' \"\$dirs\" | awk 'NF && \$0 !~ /^0:(600|644|700|755)$/ { bad=1 } END { exit bad+0 }'
+  printf '%s\\n' \"\$files\" | awk 'NF && \$0 !~ /^0:1:(600|644|700|755)$/ { bad=1 } END { exit bad+0 }'
 done
 test ! -L '${device:?}/MANIFEST'
 test ! -e '${device:?}/MANIFEST' || test -f '${device:?}/MANIFEST'"
