@@ -1,7 +1,7 @@
-import { loadPortos, operatePortos } from "./api-v2";
-import type { SnapshotV2 } from "./api";
-import { element } from "./forms";
-import type { PortosOperationV2 } from "./model";
+import { loadPortos, operatePortos } from "../api-v2";
+import type { SnapshotV2 } from "../api";
+import { element } from "../forms";
+import type { PortosOperationV2 } from "../model";
 
 type Portos = SnapshotV2["portos"];
 type Perform = (

@@ -12,7 +12,7 @@ import type { UiState } from "../model";
 import { packControls } from "./packs";
 import { loadSettings, saveSettingsV2 } from "./api-v2";
 import { openAIOptions, portosForm } from "./forms-v2";
-import { mountPortos } from "./portos";
+import { mountPortos } from "./portos/controls";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
