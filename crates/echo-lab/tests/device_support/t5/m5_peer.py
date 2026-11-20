@@ -10,6 +10,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import shutil
 import ssl
 import subprocess
 import sys
@@ -39,18 +40,26 @@ class World:
         self.grant = json.loads((root / "grant.json").read_text())
         self.calls, self.replays = [], []
         self.linked = threading.Event()
+        self.remote = root / "remote"
+        self.remote.mkdir()
+        for name, data in [("bridge.toml", "installed config sentinel\n"), ("trace.jsonl", "installed trace sentinel\n"), ("neighbor", "unowned neighbor\n")]:
+            (self.remote / name).write_text(data)
+        (root / "mode").write_text(mode)
 
     def record(self, event, **fields):
         self.elapsed += 1
         self.trace.append(dict(event=event, elapsed_ms=self.elapsed, **fields))
+        with (self.remote / "lab-trace.jsonl").open("a") as output:
+            output.write(json.dumps(self.trace[-1]) + "\n")
 
     def state(self, value):
         self.states.append(dict(seq=len(self.states) + 1, state=value))
         self.condition.notify_all()
 
     def boot(self):
-        if self.generation and self.mode == "launch":
+        if (self.generation and self.mode == "launch") or self.mode == "initial-launch":
             raise ValueError("nominated launch failed")
+        (self.remote / "lab-holder.pid").write_text("123\n")
         self.alive = True
         self.pid += 1
         self.generation += 1
@@ -62,6 +71,8 @@ class World:
             self.record("mcp.grant.reloaded")
         self.log += "client connected\n"
         self.state(READY)
+        if self.mode == "cancel-start":
+            (self.root / "cancel").write_text("cancel")
 
     def play(self, args):
         self.plays += 1
@@ -104,7 +115,12 @@ class World:
         if args[0] == "forward":
             return str(self.port) if args[1] == "tcp:0" else ""
         if args[0] == "push":
-            (self.root / "pushed.toml").write_bytes(Path(args[1]).read_bytes())
+            data = Path(args[1]).read_bytes()
+            destination = Path(args[2].replace("/data/local/echo-bridge/private", str(self.remote)))
+            destination.write_bytes(data[:3] if self.mode == "push" else data)
+            if self.mode == "push":
+                raise ValueError("partial push")
+            (self.root / "pushed.toml").write_bytes(data)
             return ""
         if args[0] == "exec-out":
             if "head -c 65537" in command:
@@ -121,6 +137,8 @@ class World:
         if "setsid" in command:
             self.boot()
         elif "kill $(cat" in command:
+            if self.mode == "stop" and self.generation == 2:
+                raise ValueError("stop failed")
             self.alive = False
             self.condition.notify_all()
             if self.mode == "late" and self.generation == 2:
@@ -128,13 +146,26 @@ class World:
         elif "wc -c" in command:
             return str(len(self.log))
         elif "stat -c %u:%g:%a" in command:
-            return "9999:9999:600"
+            path = Path(command.split()[-1].replace("/data/local/echo-bridge/private", str(self.remote)))
+            return "9999:9999:" + ("644" if self.mode == "mode" else oct(path.stat().st_mode & 0o777)[2:])
         elif "stat -c %a" in command:
             return "700" if command.endswith("/portos") else "600"
-        elif "rm -f" in command and "trace.jsonl" in command:
-            self.trace = []
-            if self.mode == "cleanup" and self.generation == 2:
+        elif command.startswith("chown "):
+            if self.mode == "chown":
+                raise ValueError("chown failed")
+        elif command.startswith("/data/local/hassmic/runas nobody 3990,inet "):
+            fragment = command.removeprefix("/data/local/hassmic/runas nobody 3990,inet ")
+            assert fragment.startswith(("mkdir ", "chmod ", "mkfifo ", "ln -T ", "sh -c ")), fragment
+            fragment = fragment.replace("/data/local/echo-bridge/private", str(self.remote))
+            if self.mode == "chmod" and fragment.startswith("chmod "):
+                raise ValueError("chmod failed")
+            if self.mode == "cleanup" and self.generation == 2 and "rm -f" in fragment and "lab-bridge.toml;" in fragment:
                 raise ValueError("nominated cleanup failed")
+            subprocess.run(["sh", "-c", fragment], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if self.mode == "cancel-stage" and fragment.startswith("ln -T ") and fragment.endswith("lab-stderr.log"):
+                (self.root / "cancel").write_text("cancel")
+        else:
+            raise ValueError("unsupported adb command: " + str(args))
         return ""
 
     def tool(self, args):

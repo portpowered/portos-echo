@@ -29,8 +29,8 @@ impl Peer {
             root.join("launcher.json"),
             json!({
                 "private_dir":"/data/local/echo-bridge/private",
-                "config":"/data/local/echo-bridge/private/bridge.toml",
-                "trace":"/data/local/echo-bridge/private/trace.jsonl",
+                "config":"/data/local/echo-bridge/private/lab-bridge.toml",
+                "trace":"/data/local/echo-bridge/private/lab-trace.jsonl",
                 "hassmic_log":"/data/local/hassmic/boot.log",
                 "binary":"/data/local/echo-bridge/echo-bridge"
             })
@@ -113,10 +113,33 @@ impl Peer {
             usize::from(played)
         );
         assert!(!self.session.0.join("artifacts/configured.private").exists());
-        assert!(calls.iter().any(|c| {
-            c.join(" ")
-                .contains("rm -f /data/local/echo-bridge/private/bridge.toml")
-        }));
+        let remote = self.session.0.join("remote");
+        assert_eq!(
+            fs::read(remote.join("bridge.toml")).unwrap(),
+            b"installed config sentinel\n"
+        );
+        assert_eq!(
+            fs::read(remote.join("trace.jsonl")).unwrap(),
+            b"installed trace sentinel\n"
+        );
+        assert_eq!(fs::read(remote.join("neighbor")).unwrap(), b"unowned neighbor\n");
+        assert_eq!(fs::read_to_string(self.session.0.join("bridge.toml")).unwrap(), CONFIG);
+        if !matches!(
+            fs::read_to_string(self.session.0.join("mode")).unwrap().as_str(),
+            "cleanup" | "stop"
+        ) {
+            for name in [
+                "lab-bridge.toml",
+                "lab-trace.jsonl",
+                "lab-stdin",
+                "lab-holder.pid",
+                "lab-stdout.log",
+                "lab-stderr.log",
+                "lab-bridge.toml.lab-owner",
+            ] {
+                assert!(!remote.join(name).exists(), "owned residue: {name}");
+            }
+        }
         for name in ["report.json", "events.jsonl", "device-steps.jsonl"] {
             let contents = fs::read_to_string(self.session.0.join("artifacts").join(name)).unwrap();
             for marker in [
@@ -251,4 +274,99 @@ fn t3_on_device_m5_failed_cleanup_revokes_counts() {
 #[test]
 fn t3_on_device_m5_late_receipt_rechecks_exact_counts() {
     failed_journey("late");
+}
+
+#[test]
+fn t3_on_device_m5_stage_and_initial_launch_failures_preserve_installed_bytes() {
+    for mode in ["push", "chown", "chmod", "mode", "initial-launch"] {
+        let peer = Peer::new(mode);
+        let output = peer.run();
+        assert_eq!(output.status.code(), Some(1), "{mode}");
+        let report = peer.session.report();
+        assert_eq!(report["result"], "fail");
+        assert_eq!(report["link_counts"], Value::Null);
+        let remote = peer.session.0.join("remote");
+        assert_eq!(
+            fs::read(remote.join("bridge.toml")).unwrap(),
+            b"installed config sentinel\n"
+        );
+        assert_eq!(
+            fs::read(remote.join("trace.jsonl")).unwrap(),
+            b"installed trace sentinel\n"
+        );
+        for name in [
+            "lab-bridge.toml",
+            "lab-trace.jsonl",
+            "lab-stdin",
+            "lab-holder.pid",
+            "lab-stdout.log",
+            "lab-stderr.log",
+            "lab-bridge.toml.lab-owner",
+        ] {
+            assert!(!remote.join(name).exists(), "{mode} residue {name}");
+        }
+        assert!(!peer.calls().iter().any(|c| c[0] == "session" && c[1] == "hold"));
+    }
+}
+
+#[test]
+fn t3_on_device_m5_refuses_installed_empty_and_auxiliary_collisions_without_mutation() {
+    for name in [
+        "lab-bridge.toml",
+        "lab-trace.jsonl",
+        "lab-stdin",
+        "lab-holder.pid",
+        "lab-stdout.log",
+        "lab-stderr.log",
+    ] {
+        for bytes in [b"foreign bytes".as_slice(), b""] {
+            let peer = Peer::new("success");
+            let remote = peer.session.0.join("remote");
+            fs::write(remote.join(name), bytes).unwrap();
+            let output = peer.run();
+            assert_eq!(output.status.code(), Some(1), "{name}");
+            assert_eq!(fs::read(remote.join(name)).unwrap(), bytes);
+            assert_eq!(
+                fs::read(remote.join("bridge.toml")).unwrap(),
+                b"installed config sentinel\n"
+            );
+            assert_eq!(peer.session.report()["result"], "fail");
+            assert_eq!(peer.session.report()["link_counts"], Value::Null);
+            assert!(!peer.calls().iter().any(|c| c.join(" ").contains("setsid")));
+            assert!(!peer.calls().iter().any(|c| c.join(" ").contains("kill $(cat")));
+        }
+    }
+}
+
+#[test]
+fn t3_on_device_m5_failed_stop_retains_owned_residue_and_preserves_installed_bytes() {
+    failed_journey("stop");
+}
+
+#[test]
+fn t3_on_device_m5_cancellation_before_stage_after_acquisition_and_during_start_preserves_bytes() {
+    for mode in ["cancel-before", "cancel-stage", "cancel-start"] {
+        let peer = Peer::new(mode);
+        if mode == "cancel-before" {
+            fs::write(peer.session.0.join("cancel"), "cancel").unwrap();
+        }
+        let output = peer.run();
+        assert_eq!(output.status.code(), Some(1), "{mode}");
+        assert_eq!(peer.session.report()["result"], "fail");
+        assert_eq!(peer.session.report()["link_counts"], Value::Null);
+        let remote = peer.session.0.join("remote");
+        assert_eq!(
+            fs::read(remote.join("bridge.toml")).unwrap(),
+            b"installed config sentinel\n"
+        );
+        assert_eq!(fs::read_dir(remote).unwrap().count(), 3, "{mode} left owned residue");
+        if mode == "cancel-before" {
+            assert!(
+                !peer
+                    .calls()
+                    .iter()
+                    .any(|c| c[0] == "push" || c.join(" ").contains("rm -f"))
+            );
+        }
+    }
 }
