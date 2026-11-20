@@ -28,9 +28,7 @@ jobs:
       - run: npx --offline playwright install --with-deps chromium
       - run: npm run lint
       - run: npm run build
-      - name: Regenerate Chromium snapshots
-        run: UPDATE_SCREEN_SNAPSHOTS=1 node --test --test-concurrency=1 tests/render.test.mjs tests/emotion.test.mjs
-      - name: Validate focused behavior against regenerated snapshots
+      - name: Validate focused Chromium behavior
         run: node --test --test-timeout=30000 tests/render.test.mjs tests/touch.test.mjs tests/boundary.test.mjs tests/emotion.test.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -60,7 +58,7 @@ jobs:
       - run: cd web/screen && npx --offline playwright install --with-deps chromium
       - name: Run the native screen suite
         working-directory: web/screen
-        run: npm ci --offline && UPDATE_SCREEN_SNAPSHOTS=1 npm test
+        run: npm ci --offline && npm test
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

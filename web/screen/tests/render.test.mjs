@@ -89,6 +89,9 @@ test("home at 960x600: bottom clock rolls over, prompts have space, and Settings
         await page.getByText(/^(ready|echo live ready|start)$/i).count(),
         0,
     );
+    await page.screenshot({
+        path: "test-results/screenshots/home-960x600.png",
+    });
     await page.clock.runFor(1000);
     assert.deepEqual(await readings(), ["11:59 PM", "11/21/2026"]);
     await page.clock.runFor(60000);
@@ -105,7 +108,7 @@ test("home at 960x600: bottom clock rolls over, prompts have space, and Settings
     ]) {
         const state = JSON.parse(wire);
         await emit(page, frame(seq, wire));
-        assert.equal(await clock.boundingBox(), null);
+        assert.equal(await clock.count(), 0);
         const card = page.locator(".details");
         const box = await card.boundingBox();
         assert.ok(box.y >= 0 && box.y + box.height <= home.y);
@@ -130,6 +133,9 @@ test("home at 960x600: bottom clock rolls over, prompts have space, and Settings
                 );
             }
         }
+        await page.screenshot({
+            path: `test-results/screenshots/${state.state}-960x600.png`,
+        });
     }
     await emit(page, frame(5));
     assert.deepEqual(await clock.boundingBox(), home);
