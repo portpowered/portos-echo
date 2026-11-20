@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const ADAPTER: &str = include_str!("../../../scripts/echo-install.sh");
+const ADAPTER: &str = crate::DEVICE_SCRIPT;
 static NONCE: AtomicU64 = AtomicU64::new(0);
 
 struct Scratch(PathBuf);
@@ -70,6 +70,9 @@ pub async fn install(options: &Options) -> Result<String> {
     fs::write(&adapter, ADAPTER).map_err(|_| Failure("temporary_files_failed"))?;
     let mut adb = Adb::discover(options.adb.as_deref())?;
     adb.select(options.serial.as_deref()).await?;
+    if options.command == "update" && !adb.script("stop").await?.0 {
+        return Err(Failure("stop_failed"));
+    }
     let name = scratch
         .0
         .file_name()
@@ -117,7 +120,9 @@ async fn stage_install(
             input.version.clone()
         }
     };
-    let mut command = format!("sh '{bundle}/scripts/echo-install.sh' --device install --bundle '{bundle}'");
+    let mut command = format!(
+        "sh '{bundle}/scripts/echo-install.sh' --device install --bundle '{bundle}' --release-version '{version}'"
+    );
     if let Some(config) = &options.config {
         adb.push(config, &format!("{stage}/config")).await?;
         let _ = write!(command, " --config '{stage}/config'");

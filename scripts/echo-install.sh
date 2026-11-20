@@ -1,6 +1,11 @@
 #!/bin/sh
 # Manual Linux operator command. Hardware use belongs to the coordinator.
 set -eu
+# shellcheck source=scripts/echo-install-release.sh
+if ! command -v release_metadata >/dev/null 2>&1; then
+  . "$(dirname -- "$0")/echo-install-release.sh"
+fi
+release_bundle='' release_version=null
 # Native host adapter: retain one lifecycle implementation behind two transports.
 # Only the trusted, embedded copy accepts an archive; the validated bundle owns install.
 if [ "${1:-}" = --device ]; then
@@ -29,7 +34,7 @@ if [ "${1:-}" = --device ]; then
     tar -tzf "$archive" >"$stage/names" 2>/dev/null || exit 1
     awk '
       /(^\/|(^|\/)\.\.?($|\/)|[^A-Za-z0-9_.\/-])/ { bad=1 }
-      !/^(MANIFEST|LICENSE|NOTICE|bin\/(echo-bridge|codex-app-server|cacert.pem)|apk\/echo-screen.apk|scripts\/echo-install.sh|examples\/(bridge.echo.toml|prompts\/(voice|runner).md)|licenses\/[A-Za-z0-9_.\/-]+)$/ { bad=1 }
+      !/^(MANIFEST|LICENSE|NOTICE|bin\/(echo-bridge|codex-app-server|cacert.pem)|apk\/echo-screen.apk|scripts\/echo-install(-release)?.sh|examples\/(bridge.echo.toml|prompts\/(voice|runner).md)|licenses\/[A-Za-z0-9_.\/-]+)$/ { bad=1 }
       { if (seen[$0]++) bad=1 }
       END { exit bad }' "$stage/names" || exit 1
     tar -tvzf "$archive" >"$stage/types" 2>/dev/null || exit 1
@@ -37,19 +42,23 @@ if [ "${1:-}" = --device ]; then
     umask 077
     mkdir "$stage/bundle" || exit 1
     tar -xzf "$archive" -C "$stage/bundle" --no-same-owner --no-same-permissions 2>/dev/null || exit 1
-    for member in MANIFEST LICENSE NOTICE bin/echo-bridge bin/codex-app-server bin/cacert.pem apk/echo-screen.apk scripts/echo-install.sh examples/bridge.echo.toml examples/prompts/voice.md examples/prompts/runner.md licenses/codex/LICENSE licenses/codex/NOTICE licenses/ca/MPL-2.0.txt licenses/ca/NOTICE; do
+    for member in MANIFEST LICENSE NOTICE bin/echo-bridge bin/codex-app-server bin/cacert.pem apk/echo-screen.apk scripts/echo-install.sh scripts/echo-install-release.sh examples/bridge.echo.toml examples/prompts/voice.md examples/prompts/runner.md licenses/codex/LICENSE licenses/codex/NOTICE licenses/ca/MPL-2.0.txt licenses/ca/NOTICE; do
       [ -f "$stage/bundle/$member" ] || exit 1
     done
     exit 0
   fi
   if [ "${1:-}" = install ] && [ "${2:-}" = --bundle ]; then
-    [ "$#" = 3 ] || { [ "$#" = 5 ] && [ "$4" = --config ]; } || exit 2
+    [ "$#" = 5 ] || { [ "$#" = 7 ] && [ "$6" = --config ]; } || exit 2
+    [ "$4" = --release-version ] || exit 2
+    release_version=$5
+    release_version_valid "$release_version" || exit 2
     bundle=$3
     case $bundle in /data/local/tmp/echo-setup-*/bundle) ;; *) exit 1 ;; esac
     suffix=${bundle#/data/local/tmp/echo-setup-}
     suffix=${suffix%/bundle}
     case $suffix in '' | *[!0-9-]*) exit 1 ;; esac
-    config=${5:-$bundle/examples/bridge.echo.toml}
+    release_bundle=$bundle
+    config=${7:-$bundle/examples/bridge.echo.toml}
     case $config in "$bundle/examples/bridge.echo.toml" | "${bundle%/bundle}/config") ;; *) exit 1 ;; esac
     set -- install --config "$config" --bridge "$bundle/bin/echo-bridge" --codex "$bundle/bin/codex-app-server" --ca "$bundle/bin/cacert.pem"
   fi
@@ -68,6 +77,7 @@ Usage: sh scripts/echo-install.sh --help
        sh scripts/echo-install.sh stop
        sh scripts/echo-install.sh status
        sh scripts/echo-install.sh doctor
+       sh scripts/echo-install.sh rollback
        sh scripts/echo-install.sh uninstall [--purge]
 Linux only; requires adb on PATH and exactly one ready device with hassmic.
 --config FILE: required readable operator config; never printed or rewritten.
@@ -87,7 +97,6 @@ W5 shared-home config: [home] dir = "/data/local/echo-bridge/home";
 all secrets and codex.home stay in private/.
 Supply config compatible with the bridge build; TOML is not validated or rewritten.
 Prompt defaults: examples/prompts/*.md; seed missing home/prompts files only.
-Absent defaults are skipped with a note.
 Launch: setsid, /data/local/hassmic/runas nobody 3990,inet, held stdin; the hassmic fork repeats it at boot.
 start requires exact echo-bridge NAME from ps -A -o PID,NAME and a new
 hassmic boot.log client connected line within 20 seconds.
@@ -101,8 +110,6 @@ Status fields: process=running|stopped; process_user=USER|unavailable;
 uptime_seconds=INTEGER|unavailable;
 hassmic_link=SANITIZED_LINE|unavailable
 uninstall retains private/ and home/ unless --purge; never changes hassmic or /system.
-Success: echo-install: uninstalled (state retained)
-Success with --purge: echo-install: uninstalled (purged)
 A running root process fails; unverifiable running identity fails closed.
 Exit status: 0 success/help/safe status observation; 1 operation/prerequisite/unsafe process-user failure;
 2 usage error. Errors use fixed diagnostics without raw adb output.
@@ -125,7 +132,7 @@ if [ "$1" = --help ]; then
 fi
 command_name=$1
 shift
-case $command_name in install | start | stop | status | uninstall | doctor) ;; *) usage ;; esac
+case $command_name in install | start | stop | status | uninstall | doctor | rollback) ;; *) usage ;; esac
 config='' bridge='' codex='' ca='' force=false purge=false seen=' '
 while [ "$#" -gt 0 ]; do
   flag=$1
@@ -259,31 +266,8 @@ for p in launch.sh bridge.log bridge.toml bridge.trace; do test ! -L '$device/pr
 if test -d '$device/private/run'; then
   for p in stdin control stop finished deadline log-inode log-prefix; do test ! -L '$device/private/run/'\$p || exit 1; done
 fi"
-run_adb shell "if test -e '$device/release.json' || test -L '$device/release.json'; then
-  test ! -L '$device/release.json' && test -f '$device/release.json' || exit 1
-  test \"\$(stat -c %u '$device')\" = 0 && test \"\$(stat -c %a '$device')\" = 755 || exit 1
-  test \"\$(stat -c %u '$device/release.json')\" = 0 && test \"\$(stat -c %h '$device/release.json')\" = 1 || exit 1
-  case \$(stat -c %a '$device/release.json') in 600 | 644) ;; *) exit 1 ;; esac
-  test \"\$(stat -c %s '$device/release.json')\" -le 1024 || exit 1
-  awk '
-    function version(v, parts, n, i) {
-      if (v == \"null\") return 1
-      if (v !~ /^\"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?\"$/) return 0
-      sub(/^.*-/, \"\", v); sub(/\"$/, \"\", v)
-      n=split(v, parts, /[.]/)
-      for (i=1; i<=n; i++) if (parts[i] ~ /^0[0-9]+$/) return 0
-      return 1
-    }
-    { data=data \$0 \"\\n\" }
-    END {
-      if (data !~ /^[ \t\r\n]*\{[ \t\r\n]*\"format\"[ \t\r\n]*:[ \t\r\n]*1[ \t\r\n]*,[ \t\r\n]*\"current\"[ \t\r\n]*:[ \t\r\n]*(null|\"[A-Za-z0-9.-]+\")[ \t\r\n]*,[ \t\r\n]*\"previous\"[ \t\r\n]*:[ \t\r\n]*(null|\"[A-Za-z0-9.-]+\")[ \t\r\n]*\}[ \t\r\n]*$/) exit 1
-      gsub(/[ \t\r\n{}]/, \"\", data); split(data, fields, \",\")
-      sub(/^\"current\":/, \"\", fields[2]); sub(/^\"previous\":/, \"\", fields[3])
-      if (!version(fields[2]) || !version(fields[3])) exit 1
-      gsub(/\"/, \"\", fields[2]); gsub(/\"/, \"\", fields[3])
-      printf \"version_current=%s\\nversion_previous=%s\\n\", fields[2], fields[3]
-    }' '$device/release.json'
-fi"
+release_guard
+release_metadata
 versions=$(cat "$log")
 if [ "$command_name" = status ]; then
   [ -z "$versions" ] || printf '%s\n' "$versions"
@@ -334,6 +318,9 @@ run_adb shell "umask 077; mkdir '$lock'"
 locked=true
 # Reobserve after locking: a competing start may have completed during validation.
 process_state
+release_guard
+release_metadata
+versions=$(cat "$log")
 case $command_name in install | start) [ "$running" = 0 ] || fail 'bridge is already running; stop first' ;; esac
 stop_bridge() {
   run_adb shell "$close_stdin"
@@ -346,9 +333,19 @@ if [ "$command_name" = stop ]; then
   printf '%s\n' 'echo-install: stopped'
   exit 0
 fi
+if [ "$command_name" = rollback ]; then
+  release_verify_previous
+  saved_version=$(cat "$log")
+  [ "$saved_version" = null ] || release_version_valid "$saved_version" || fail 'invalid previous release'
+  stop_bridge
+  release_restore
+  printf '%s\n' 'echo-install: rolled back'
+  exit 0
+fi
 if [ "$command_name" = uninstall ]; then
   stop_bridge
-  run_adb shell "rm -rf '$device/bin'
+  run_adb shell "rm -rf '$device/bin' '$device/apk' '$device/scripts' '$device/releases'
+rm -f '$device/MANIFEST' '$device/release.json'
 rm -f '$device/private/launch.sh'"
   if [ "$purge" = true ]; then
     run_adb shell "rm -rf '$device/private' '$device/home'"
@@ -465,6 +462,8 @@ chown 0:0 '$device' '$device/bin' &&
 chmod 755 '$device' '$device/bin'"
 safe_paths=true
 migrate_state
+release_recover
+release_snapshot
 # Each copy is staged privately; failed transfers never replace an existing file.
 # The destination leaf is fixed or a restricted prompt basename, never shell input.
 copy_file() {
@@ -496,5 +495,6 @@ for prompt in "$checkout"/examples/prompts/*.md; do
   prompts=true
 done
 write_launcher
+release_publish
 [ "$prompts" = true ] || printf '%s\n' 'echo-install: prompt defaults absent; skipped'
 printf '%s\n' 'echo-install: installed'

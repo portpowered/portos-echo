@@ -12,6 +12,7 @@ pub async fn execute(options: &Options) -> Result<Value> {
     adb.select(options.serial.as_deref()).await?;
     let operation = match options.command.as_str() {
         "status" => "status",
+        "rollback" => "rollback",
         "uninstall" if options.purge => "uninstall --purge",
         "uninstall" => "uninstall",
         _ => return Err(Failure("command_not_implemented")),
@@ -25,7 +26,17 @@ pub async fn execute(options: &Options) -> Result<Value> {
         return Ok(result);
     }
     if !success {
-        return Err(Failure("uninstall_failed"));
+        return Err(Failure(if options.command == "rollback" {
+            "rollback_failed"
+        } else {
+            "uninstall_failed"
+        }));
+    }
+    if options.command == "rollback" {
+        if !adb.script("start").await?.0 {
+            return Err(Failure("start_failed"));
+        }
+        return Ok(json!({"type":"result", "command":"rollback", "ok":true}));
     }
     Ok(json!({"type":"result", "command":"uninstall", "ok":true, "purged":options.purge}))
 }

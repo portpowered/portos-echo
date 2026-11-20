@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?"
 REQUIRED = {
     "bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem", "apk/echo-screen.apk",
-    "scripts/echo-install.sh", "examples/bridge.echo.toml", "examples/prompts/voice.md",
+    "scripts/echo-install.sh", "scripts/echo-install-release.sh", "examples/bridge.echo.toml", "examples/prompts/voice.md",
     "examples/prompts/runner.md", "LICENSE", "NOTICE", "licenses/codex/LICENSE",
     "licenses/codex/NOTICE", "licenses/ca/MPL-2.0.txt", "licenses/ca/NOTICE",
 }
@@ -102,6 +102,7 @@ def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses):
         "bin/codex-app-server": (codex / "codex-app-server").read_bytes(),
         "bin/cacert.pem": (codex / "cacert.pem").read_bytes(),
         "apk/echo-screen.apk": apk.read_bytes(),
+        "scripts/echo-install-release.sh": (ROOT / "scripts/echo-install-release.sh").read_bytes(),
         "scripts/echo-install.sh": (ROOT / "scripts/echo-install.sh").read_bytes(),
         "examples/bridge.echo.toml": config_projection((ROOT / "examples/bridge.echo.toml").read_bytes()),
         "examples/prompts/voice.md": (ROOT / "examples/prompts/voice.md").read_bytes(),

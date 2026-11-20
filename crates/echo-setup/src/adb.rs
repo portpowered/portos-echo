@@ -69,7 +69,7 @@ impl Adb {
                 OsString::from("shell"),
                 OsString::from(format!("sh -s -- --device {operation}")),
             ],
-            Some(include_bytes!("../../../scripts/echo-install.sh")),
+            Some(crate::DEVICE_SCRIPT.as_bytes()),
         )
         .await
     }

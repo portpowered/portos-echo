@@ -356,3 +356,49 @@ fn t3_prerequisites_refuse_without_push_and_never_print_external_data() -> Resul
     assert_eq!(fixture.ledger()?.len(), 2);
     Ok(())
 }
+
+#[test]
+fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result {
+    let fixture = Fixture::new()?;
+    let bundle = fixture.bundle()?;
+    let output = Command::new(env!("CARGO_BIN_EXE_echo-setup"))
+        .env("ECHO_SETUP_TEST_ROOT", &fixture.0)
+        .args([
+            "update",
+            "--json",
+            "--adb",
+            env!("CARGO_BIN_EXE_echo-setup-test-adb"),
+            "--from-dir",
+        ])
+        .arg(&bundle)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(private_output(&output)?["command"], "update");
+    let ledger = fixture.ledger()?;
+    let commands: Vec<_> = ledger
+        .iter()
+        .filter_map(|args| args.last())
+        .filter(|arg| arg.contains("--device"))
+        .collect();
+    assert_eq!(commands.len(), 3);
+    assert_eq!(commands[0], "sh -s -- --device stop");
+    assert!(commands[1].contains("--release-version '0.2.0'"));
+    assert!(commands[2].ends_with("--device start"));
+    fs::remove_file(fixture.0.join("ledger"))?;
+    fs::write(bundle.join("bin/echo-bridge"), "tampered")?;
+    let output = Command::new(env!("CARGO_BIN_EXE_echo-setup"))
+        .env("ECHO_SETUP_TEST_ROOT", &fixture.0)
+        .args([
+            "update",
+            "--json",
+            "--adb",
+            env!("CARGO_BIN_EXE_echo-setup-test-adb"),
+            "--from-dir",
+        ])
+        .arg(&bundle)
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(private_output(&output)?["error"], "manifest_mismatch");
+    assert_eq!(fixture.ledger()?, Vec::<Vec<String>>::new());
+    Ok(())
+}

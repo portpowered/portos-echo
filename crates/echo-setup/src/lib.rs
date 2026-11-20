@@ -13,3 +13,10 @@ mod version;
 pub struct Failure(pub &'static str);
 
 pub type Result<T> = std::result::Result<T, Failure>;
+
+/// Authored lifecycle and release helper travel as one stdin program.
+pub const DEVICE_SCRIPT: &str = concat!(
+    include_str!("../../../scripts/echo-install-release.sh"),
+    "\n",
+    include_str!("../../../scripts/echo-install.sh")
+);

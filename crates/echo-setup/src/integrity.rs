@@ -13,6 +13,7 @@ pub const REQUIRED: &[&str] = &[
     "bin/cacert.pem",
     "apk/echo-screen.apk",
     "scripts/echo-install.sh",
+    "scripts/echo-install-release.sh",
     "examples/bridge.echo.toml",
     "examples/prompts/voice.md",
     "examples/prompts/runner.md",

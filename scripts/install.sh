@@ -58,7 +58,7 @@ main() {
   tar -tzf "$temp/$archive" >"$temp/names" 2>/dev/null || fail 'unsafe archive'
   awk '
     /(^\/|(^|\/)\.\.?($|\/)|[^A-Za-z0-9_.\/-])/ { bad=1 }
-    !/^(MANIFEST|LICENSE|NOTICE|bin\/(echo-bridge|codex-app-server|cacert.pem)|apk\/echo-screen.apk|scripts\/echo-install.sh|examples\/(bridge.echo.toml|prompts\/(voice|runner).md)|licenses\/[A-Za-z0-9_.\/-]+)$/ { bad=1 }
+    !/^(MANIFEST|LICENSE|NOTICE|bin\/(echo-bridge|codex-app-server|cacert.pem)|apk\/echo-screen.apk|scripts\/echo-install(-release)?.sh|examples\/(bridge.echo.toml|prompts\/(voice|runner).md)|licenses\/[A-Za-z0-9_.\/-]+)$/ { bad=1 }
     { if (seen[$0]++) bad=1 }
     END { exit bad }' "$temp/names" || fail 'unsafe archive'
   tar -tvzf "$temp/$archive" >"$temp/types" 2>/dev/null || fail 'unsafe archive'
@@ -66,7 +66,7 @@ main() {
   mkdir "$temp/bundle"
   tar -xzf "$temp/$archive" -C "$temp/bundle" --no-same-owner --no-same-permissions 2>/dev/null || fail 'archive extraction failed'
   bundle=$temp/bundle
-  for file in scripts/echo-install.sh bin/echo-bridge bin/codex-app-server bin/cacert.pem apk/echo-screen.apk examples/bridge.echo.toml; do
+  for file in scripts/echo-install.sh scripts/echo-install-release.sh bin/echo-bridge bin/codex-app-server bin/cacert.pem apk/echo-screen.apk examples/bridge.echo.toml; do
     [ -f "$bundle/$file" ] || fail 'required bundle file is missing'
   done
   [ -n "$config" ] || config=$bundle/examples/bridge.echo.toml

@@ -90,7 +90,7 @@ fn t3_status_normalizes_identity_and_line_endings_and_discards_private_logs() ->
             );
             assert_eq!(
                 fs::read(fixture.0.join("adapter-input"))?,
-                include_bytes!("../../../scripts/echo-install.sh")
+                echo_setup::DEVICE_SCRIPT.as_bytes()
             );
         }
     }
@@ -224,7 +224,7 @@ fn t3_doctor_reports_each_failure_with_fixed_fixes_and_no_external_data() -> Res
             }
             assert_eq!(
                 fs::read(fixture.0.join("adapter-input"))?,
-                include_bytes!("../../../scripts/echo-install.sh")
+                echo_setup::DEVICE_SCRIPT.as_bytes()
             );
         }
     }
@@ -308,5 +308,26 @@ fn t3_native_lifecycle_executes_real_authored_shell() -> Result {
         String::from_utf8(output.stdout)?,
         "echo-setup native shell: status=PASS identity=PASS uninstall=PASS retention=PASS privacy=PASS\n"
     );
+    Ok(())
+}
+
+#[test]
+fn t3_rollback_starts_only_after_shell_owned_restore_succeeds() -> Result {
+    for failed in [false, true] {
+        let fixture = Fixture::new()?;
+        if failed {
+            fs::write(fixture.0.join("operation-failed"), b"")?;
+        }
+        let output = fixture.run("rollback", &[])?;
+        assert_eq!(output.status.code(), Some(i32::from(failed)));
+        let result = event(&output)?;
+        assert_eq!(result["ok"], !failed);
+        if failed {
+            assert_eq!(result["error"], "rollback_failed");
+        }
+        let ledger = fs::read_to_string(fixture.0.join("ledger"))?;
+        assert_eq!(ledger.contains("--device start"), !failed);
+        assert!(ledger.contains("--device rollback"));
+    }
     Ok(())
 }

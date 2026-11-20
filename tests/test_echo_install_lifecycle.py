@@ -26,6 +26,9 @@ def device_archive(box, kind):
                             "licenses/codex/NOTICE", "licenses/ca/MPL-2.0.txt",
                             "licenses/ca/NOTICE"), b"synthetic public bytes")
     payload["scripts/echo-install.sh"] = source.encode()
+    helper = box.script.with_name("echo-install-release.sh")
+    helper.write_text(helper.read_text().replace("/data/local", str(box.root / "remote")))
+    payload["scripts/echo-install-release.sh"] = helper.read_bytes()
     archive = stage / "archive.tar.gz"
     with tarfile.open(archive, "w:gz", format=tarfile.USTAR_FORMAT) as target:
         for name, data in payload.items():
@@ -61,7 +64,7 @@ def device_transport_cases():
                 continue
             bundle = stage / "bundle"
             result = subprocess.run(["/bin/sh", str(bundle / "scripts/echo-install.sh"),
-                                     "--device", "install", "--bundle", str(bundle)],
+                                     "--device", "install", "--bundle", str(bundle), "--release-version", "0.2.0"],
                                     env=env, capture_output=True, timeout=10)
             require(result.returncode == 0, "direct bundled install failed")
             require((box.device / "bin/echo-bridge").read_bytes() == b"synthetic public bytes",
@@ -343,3 +346,82 @@ def nonroot_cases():
                 require(path.read_text() == "retained bytes" and outside.read_text() == "outside bytes", "migration escaped")
                 require(not (box.root / "remote/echo-bridge.lock").exists(), "migration leaked lock")
     print("NR install=PASS ownership=PASS migration=PASS launch=PASS status=PASS")
+
+
+def public_bytes(box):
+    return {str(path.relative_to(box.device)): path.read_bytes()
+            for name in ("bin", "apk", "scripts", "MANIFEST")
+            for path in ([box.device / name] if (box.device / name).is_file()
+                         else (box.device / name).rglob("*")) if path.is_file()}
+
+
+def release_cases():
+    # Run both the actual bundle device entry and ordinary Linux operator CLI.
+    with Sandbox() as box:
+        stage, archive = device_archive(box, "valid")
+        env = dict(box.env, PATH=str(box.root / "remote-tools") + ":/usr/bin:/bin")
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        result = subprocess.run(["/bin/sh", str(box.script), "--device", "prepare-archive",
+                                 "--archive", str(archive), "--sha256", digest, "--stage", str(stage)],
+                                env=env, capture_output=True, timeout=5)
+        require(result.returncode == 0, "release archive preparation failed")
+        bundle = stage / "bundle"
+
+        def install(version):
+            result = subprocess.run(["/bin/sh", str(bundle / "scripts/echo-install.sh"),
+                                     "--device", "install", "--bundle", str(bundle),
+                                     "--release-version", version], env=env,
+                                    capture_output=True, timeout=15)
+            require(result.returncode == 0, "release install failed: " + result.stderr.decode())
+
+        install("0.1.0")
+        original = public_bytes(box)
+        box.run(["rollback"], 1)
+        require(public_bytes(box) == original, "first rollback changed active release")
+        private = {"private/bridge.toml": "edited config", "home/notes.md": "retained notes"}
+        for name, value in private.items():
+            path = box.device / name
+            path.write_text(value)
+            set_owner(box.root, path, "9999:9999")
+        for name in ("bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem", "apk/echo-screen.apk", "MANIFEST"):
+            (bundle / name).write_text("version B: " + name)
+        install("0.2.0")
+        current = public_bytes(box)
+        require(json.loads((box.device / "release.json").read_text()) ==
+                {"format": 1, "current": "0.2.0", "previous": "0.1.0"}, "release metadata differs")
+        previous = box.device / "releases/previous"
+        require({str(path.relative_to(previous)): path.read_bytes()
+                 for path in previous.rglob("*") if path.is_file() and path.name not in ("version", "SHA256SUMS")}
+                == original, "previous payload differs")
+        require(not (previous / "private").exists() and not (previous / "home").exists(),
+                "snapshot contains private data")
+        saved = (previous / "bin/echo-bridge").read_bytes()
+        (previous / "bin/echo-bridge").write_bytes(b"tampered")
+        box.run(["rollback"], 1)
+        require(public_bytes(box) == current, "tampered rollback changed active files")
+        (previous / "bin/echo-bridge").write_bytes(saved)
+        box.run(["rollback"])
+        require(public_bytes(box) == original, "rollback did not restore every public file")
+        require(json.loads((box.device / "release.json").read_text()) ==
+                {"format": 1, "current": "0.1.0", "previous": None}, "rollback version differs")
+        for name, value in private.items():
+            require((box.device / name).read_text() == value, "rollback changed private/home bytes")
+        box.run(["rollback"], 1)
+        require(not (box.root / "remote/echo-bridge.lock").exists(), "rollback leaked lock")
+        box.run(["uninstall"])
+        require(not (box.device / "releases").exists(), "uninstall retained release binaries")
+    with Sandbox() as box:
+        box.install()
+        original = public_bytes(box)
+        box.files["bridge"].write_text("version B")
+        (box.root / "fault").write_text("push")
+        box.install(code=1)
+        require((box.device / "releases/pending").is_file(), "partial install is not marked")
+        box.run(["status"], 1)
+        box.run(["start"], 1)
+        box.run(["rollback"])
+        require(public_bytes(box) == original, "failed update lost recoverable files")
+        box.files["bridge"].write_text("version C")
+        box.install()
+        require((box.device / "bin/echo-bridge").read_text() == "version C", "recovery did not install")
+    print("echo-install releases: snapshot=PASS rollback=PASS partial=PASS retention=PASS")

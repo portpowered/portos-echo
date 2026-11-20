@@ -3,7 +3,10 @@ on:
   pull_request:
     paths:
       - 'crates/echo-setup/**'
-      - 'scripts/echo-install.sh'
+      - 'scripts/echo-install*.sh'
+      - 'scripts/package-dist.py'
+      - 'scripts/install.sh'
+      - 'tests/test_release*.py'
       - 'tests/test_echo_install*.py'
       - 'Cargo.lock'
       - '.github/workflows/echo-setup.yml'
@@ -28,3 +31,8 @@ jobs:
       - name: Existing Linux installer regression
         if: runner.os == 'Linux'
         run: python3 tests/test_echo_install.py
+      - name: Existing Linux release regression
+        if: runner.os == 'Linux'
+        run: |
+          python3 tests/test_release_kit.py
+          python3 tests/test_release_redirects.py

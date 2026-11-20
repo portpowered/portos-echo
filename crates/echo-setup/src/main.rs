@@ -20,10 +20,10 @@ async fn run() -> i32 {
         return 0;
     }
     let result: Result<serde_json::Value> = match options.command.as_str() {
-        "install" => echo_setup::install::install(&options).await.map(|version| {
-            serde_json::json!({"type":"result", "command":"install", "ok":true, "version":version, "setup":"pending"})
+        "install" | "update" => echo_setup::install::install(&options).await.map(|version| {
+            serde_json::json!({"type":"result", "command":options.command, "ok":true, "version":version, "setup":"pending"})
         }),
-        "status" | "uninstall" => echo_setup::lifecycle::execute(&options).await,
+        "status" | "uninstall" | "rollback" => echo_setup::lifecycle::execute(&options).await,
         "doctor" => Ok(echo_setup::doctor::execute(&options).await),
         _ => Err(Failure("command_not_implemented")),
     };
@@ -42,7 +42,7 @@ fn render(options: &cli::Options, event: &serde_json::Value) {
         let _ = writeln!(io::stdout(), "{event}");
     } else {
         match options.command.as_str() {
-            "install" if event["ok"] == true => {
+            "install" | "update" if event["ok"] == true => {
                 let version = event["version"].as_str().unwrap_or("unavailable");
                 let _ = writeln!(
                     io::stdout(),
@@ -61,6 +61,9 @@ fn render(options: &cli::Options, event: &serde_json::Value) {
                         let _ = writeln!(io::stdout(), "{name}: {state} {fix}");
                     }
                 }
+            }
+            "rollback" if event["ok"] == true => {
+                let _ = writeln!(io::stdout(), "Echo rolled back and started.");
             }
             "uninstall" if event["ok"] == true => {
                 let state = if options.purge { "purged" } else { "state retained" };
