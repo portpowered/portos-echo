@@ -32,6 +32,10 @@ impl Drop for Attempt<'_> {
 }
 
 impl AccountOwner {
+    pub(super) fn unsettled(&self) -> bool {
+        self.0.load(Ordering::Acquire) == UNSETTLED
+    }
+
     fn enter(&self, expected: u8) -> Result<Attempt<'_>> {
         self.0
             .compare_exchange(expected, ACTIVE, Ordering::AcqRel, Ordering::Acquire)
@@ -69,6 +73,74 @@ impl AccountOwner {
             Ok(())
         })
         .await
+    }
+}
+
+/// Observe public prompts while the authored command owns authentication. A
+/// successful command may need no prompt (an existing account/link is retained).
+pub(super) async fn guide(
+    connection: &super::InstalledConnection,
+    command: AccountCommand,
+    deadline: Instant,
+    now_unix: u64,
+    mut present: impl FnMut(&super::Prompt) -> Result<()>,
+) -> Result<()> {
+    let forwards = connection.forward().await?;
+    let result = {
+        let provider = match command {
+            AccountCommand::EnsureSignin | AccountCommand::Signin => super::Provider::Chatgpt,
+            AccountCommand::Link => super::Provider::Portos,
+        };
+        let pending = connection.account(command);
+        let prompts = observe(connection, &forwards, provider, deadline, now_unix, &mut present);
+        tokio::pin!(pending, prompts);
+        tokio::select! {
+            biased;
+            result = &mut pending => result,
+            result = &mut prompts => result,
+        }
+    };
+    // Both futures are dropped before settlement. Local adb cancellation alone
+    // cannot authorize another remote owner. Always drain forward cleanup even
+    // when settlement fails, and give cleanup refusals diagnostic priority.
+    let settlement = connection.recover_account().await;
+    let cleanup = forwards.close().await;
+    settlement.and(cleanup).and(result)
+}
+
+async fn observe(
+    connection: &super::InstalledConnection,
+    forwards: &super::ForwardSession,
+    provider: super::Provider,
+    deadline: Instant,
+    now_unix: u64,
+    present: &mut impl FnMut(&super::Prompt) -> Result<()>,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut events = bounded(deadline, async {
+        loop {
+            let connected = match connection.pairing().await {
+                Ok(pairing) => forwards.screen(&pairing, deadline).await,
+                Err(error) => Err(error),
+            };
+            match connected {
+                Ok(events) => return Ok(events),
+                // Signin creates its own screen listener/pairing file after
+                // acquiring the stopped runtime's account lease. Poll only
+                // startup absence/transport failures, never malformed frames.
+                Err(Failure("setup_private_unavailable" | "setup_observation_failed")) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await?;
+    loop {
+        let now = now_unix.saturating_add(started.elapsed().as_secs());
+        let prompt = events.next_prompt(provider, now).await?;
+        present(&prompt)?;
+        events.presented(prompt);
     }
 }
 

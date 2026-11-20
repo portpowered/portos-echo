@@ -61,6 +61,31 @@ impl InstalledConnection {
         self.account.run(&self.adb, command, self.deadline).await
     }
 
+    /// Present only authenticated public prompts while awaiting the authored
+    /// account completion frame. Returned failures settle ambiguous account
+    /// ownership and drain owned forwards before reaching the caller.
+    /// Dropping this future cancels local work and releases forwards; the caller
+    /// must still call `settle_account` before claiming remote cleanup.
+    /// # Errors
+    /// Fixed account, observation, presentation or cleanup categories. Cleanup
+    /// refusals take priority over the original failure; never raw device bytes.
+    pub async fn guide_account(
+        &self,
+        command: super::AccountCommand,
+        now_unix: u64,
+        present: impl FnMut(&super::Prompt) -> Result<()>,
+    ) -> Result<()> {
+        super::account::guide(self, command, self.deadline, now_unix, present).await
+    }
+
+    pub(super) async fn recover_account(&self) -> Result<()> {
+        if self.account.unsettled() {
+            let cleanup = Instant::now() + std::time::Duration::from_secs(10);
+            self.settle_account(cleanup).await?;
+        }
+        Ok(())
+    }
+
     /// Settle an ambiguous/cancelled account attempt through the existing stop
     /// owner on the retained device. This deliberately stops a running bridge.
     /// The shell must acquire its lifecycle lock and prove bridge absence; an

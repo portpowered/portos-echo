@@ -19,6 +19,9 @@ use tokio::{
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[path = "support/guided.rs"]
+mod guided;
+
 struct Fixture(PathBuf);
 
 impl Fixture {

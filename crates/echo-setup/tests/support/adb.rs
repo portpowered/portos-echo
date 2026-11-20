@@ -22,11 +22,11 @@ fn main() -> io::Result<()> {
     };
     let mut args: Vec<_> = std::env::args_os().skip(1).collect();
     let mut ledger = OpenOptions::new().create(true).append(true).open(root.join("ledger"))?;
-    writeln!(
-        ledger,
-        "{}",
-        serde_json::to_string(&args.iter().map(|v| v.to_string_lossy()).collect::<Vec<_>>())?
-    )?;
+    // Prompt observation and account dispatch intentionally run concurrently.
+    // Append each small record in one write rather than interleaving formatting
+    // fragments from independently spawned fake-adb processes.
+    let record = serde_json::to_string(&args.iter().map(|v| v.to_string_lossy()).collect::<Vec<_>>())?;
+    ledger.write_all(format!("{record}\n").as_bytes())?;
     let _ = writeln!(io::stderr(), "SYNTHETIC-TOKEN SYNTHETIC-ACCOUNT SYNTHETIC-PRIVATE-PATH");
     if args.first().is_some_and(|v| v == "-s") {
         args.drain(..2);
