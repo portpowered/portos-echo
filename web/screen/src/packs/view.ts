@@ -24,11 +24,13 @@ export function mountPacks(
     let state: UiState = { state: "ready", message: "" };
     let revision = -1;
     function clear() {
+        const changed = host.classList.contains("screen-pack");
         cleanup?.();
         cleanup = undefined;
         player = undefined;
         layout = undefined;
         host.classList.remove("screen-pack");
+        return changed;
     }
     async function reload() {
         pending?.abort();
@@ -42,8 +44,7 @@ export function mountPacks(
             if (controller.signal.aborted || stopped) return;
             revision = catalog.revision;
             if (!catalog.active) {
-                clear();
-                redraw();
+                if (clear()) redraw();
                 return;
             }
             const base = packUrl(actions, `/${catalog.active}/`);
@@ -123,8 +124,7 @@ export function mountPacks(
             redraw();
         } catch {
             if (!controller.signal.aborted && !stopped) {
-                clear();
-                redraw();
+                if (clear()) redraw();
             }
         }
     }

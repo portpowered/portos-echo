@@ -347,6 +347,25 @@ test("pack page: layout clock/link coordinates, safe-area approval containment a
     assert.equal(await page.locator(".pack-clock").count(), 0);
     assert.equal(await page.locator("h1").textContent(), "approval");
     assert.equal(await page.locator("section").getAttribute("data-seq"), "3");
+    await page.getByRole("button", { name: "Allow", exact: true }).focus();
+    const requestCount = await page.evaluate(() => {
+        window.retainedControl = document.activeElement;
+        const count = window.packRequests.length;
+        window.streams[0].dispatchEvent(new Event("open"));
+        return count;
+    });
+    await page.waitForFunction(
+        (count) => window.packRequests.length > count,
+        requestCount,
+    );
+    assert.equal(
+        await page.evaluate(
+            () =>
+                window.retainedControl === document.activeElement &&
+                window.retainedControl.isConnected,
+        ),
+        true,
+    );
 });
 
 test("pack page: reload freshness, reconnect, safe failures and disposal", async (t) => {
