@@ -31,10 +31,14 @@ export async function pageFor(
     query = "?events=%2Fevents&actions=%2Factions",
     settings = false,
     configure,
+    contextOptions = {},
 ) {
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
         serviceWorkers: "block",
+        locale: "en-US",
+        timezoneId: "UTC",
+        ...contextOptions,
     });
     let page;
     let coverageStarted = false;

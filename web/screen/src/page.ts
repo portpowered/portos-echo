@@ -13,9 +13,15 @@ function text(tag: string, value: string): HTMLElement {
 
 export function startPage(root: HTMLElement, href: string): () => void {
     const content = document.createElement("section");
+    content.className = "screen-presentation";
     content.setAttribute("aria-label", "Screen presentation");
     const diagnostic = text("p", "");
     diagnostic.setAttribute("role", "status");
+    const clock = document.createElement("div");
+    clock.className = "home-clock";
+    const time = text("p", "");
+    const date = text("p", "");
+    clock.append(time, date);
     root.replaceChildren(content, diagnostic);
     const presentation = new Presentation();
     let stream: EventSource;
@@ -24,6 +30,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     let disposed = false;
     let cancelPending: (() => void) | undefined;
     let stopAnimation: (() => void) | undefined;
+    let clockTimer: ReturnType<typeof setTimeout> | undefined;
     let settings: ReturnType<typeof mountSettings> | undefined;
     let packs: ReturnType<typeof mountPacks> | undefined;
     async function send(action: UiAction, frame: ScreenFrame): Promise<void> {
@@ -83,18 +90,28 @@ export function startPage(root: HTMLElement, href: string): () => void {
         });
         return node;
     }
+    function refreshClock(): void {
+        const now = new Date();
+        time.textContent = now.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+        date.textContent = now.toLocaleDateString();
+        clockTimer = setTimeout(refreshClock, 60000 - (now.getTime() % 60000));
+    }
     function render(frame: ScreenFrame): void {
         settings?.update(frame.state);
         stopAnimation?.();
         cancelPending?.();
+        clearTimeout(clockTimer);
         const state = frame.state;
+        const idle = state.state === "ready" || state.state === "connected";
         const retained = content.querySelectorAll(
             ":scope > [data-pack-persistent]",
         );
-        content.replaceChildren(
-            ...retained,
-            text("h1", state.state.replace(/_/g, " ")),
-        );
+        content.replaceChildren(...retained);
+        content.dataset.uiState = state.state;
+        if (!idle) content.append(text("h1", state.state.replace(/_/g, " ")));
         const details = document.createElement("div");
         details.className = "details";
         const controls = document.createElement("div");
@@ -102,17 +119,22 @@ export function startPage(root: HTMLElement, href: string): () => void {
         content.append(details, controls);
         content.dataset.seq = frame.seq.toString();
         diagnostic.textContent = "";
+        if (idle && !content.classList.contains("screen-pack")) {
+            content.append(clock);
+            refreshClock();
+        }
         switch (state.state) {
-            case "ready":
-                details.append(text("p", state.message));
-                controls.append(
-                    button(
-                        "Start",
-                        { action: "tap", target: "primary" },
-                        frame,
-                    ),
+            case "ready": {
+                const tap = button(
+                    "",
+                    { action: "tap", target: "primary" },
+                    frame,
                 );
+                tap.className = "home-tap";
+                tap.setAttribute("aria-label", "Begin session");
+                content.append(tap);
                 break;
+            }
             case "link_code":
                 details.append(
                     text("p", state.user_code),
@@ -206,6 +228,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         if (disposed) return;
         disposed = true;
         stopAnimation?.();
+        clearTimeout(clockTimer);
         settings?.dispose();
         packs?.dispose();
         stream.close();

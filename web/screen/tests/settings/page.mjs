@@ -372,7 +372,10 @@ test("settings: invalid pairing bootstrap remains local and the state stream sti
         assert.deepEqual(await calls(page), []);
         await emit(page, frame(1));
         await page.getByRole("button", { name: "Back", exact: true }).click();
-        assert.equal(await page.locator("h1:visible").textContent(), "ready");
+        assert.equal(
+            await page.locator("[data-ui-state=ready]:visible").count(),
+            1,
+        );
     }
 });
 
