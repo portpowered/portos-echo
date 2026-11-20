@@ -1,6 +1,7 @@
 //! Owned local forwards and read-only setup observers. Completion belongs to the command owner,
 //! never to an arbitrary screen message or a closed SSE connection.
 mod confirmation;
+mod connection;
 mod events;
 mod forward;
 mod http;
@@ -8,6 +9,7 @@ mod prompt;
 mod wake;
 
 pub use confirmation::{ConfirmationEvidence, WakeConfirmation};
+pub use connection::InstalledConnection;
 pub use forward::ForwardSession;
 pub use http::{Health, ScreenEvents, health};
 pub use prompt::{Prompt, Provider};

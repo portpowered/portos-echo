@@ -119,6 +119,9 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
         if root.join("operation-failed").exists() {
             std::process::exit(1);
         }
+        if projection_read(root, command)? {
+            return Ok(());
+        }
         if command == "sh -s -- --device status" {
             let status = root.join("status");
             if status.exists() {
@@ -134,10 +137,6 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
             if root.join("status-refused").exists() {
                 std::process::exit(1);
             }
-            return Ok(());
-        }
-        if command == "sh -s -- --device doctor" {
-            io::stdout().write_all(&fs::read(root.join("doctor"))?)?;
             return Ok(());
         }
         if command == "sh -s -- --device wake-cursor" || command.starts_with("sh -s -- --device wake-check ") {
@@ -166,4 +165,18 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
         fs::write(root.join("process-user"), "nobody")?;
     }
     writeln!(io::stdout(), "SYNTHETIC-TOKEN SYNTHETIC-ACCOUNT SYNTHETIC-PRIVATE-PATH")
+}
+
+fn projection_read(root: &Path, command: &str) -> io::Result<bool> {
+    let Some(name) = command.strip_prefix("sh -s -- --device ") else {
+        return Ok(false);
+    };
+    if !["setup-config", "setup-pairing", "doctor"].contains(&name) {
+        return Ok(false);
+    }
+    if name != "doctor" {
+        notify(root, "private-barrier", b"ready")?;
+    }
+    io::stdout().write_all(&fs::read(root.join(name))?)?;
+    Ok(true)
 }

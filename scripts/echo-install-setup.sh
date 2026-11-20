@@ -2,6 +2,10 @@
 # Device-side setup support; lifecycle locking and output policy stay in the driver.
 setup_observation() {
   case ${1:-} in
+    setup-config | setup-pairing)
+      setup_private_read "$@" 2>/dev/null || exit 1
+      exit 0
+      ;;
     wake-cursor | wake-check)
       setup_wake "$@" 2>/dev/null || exit 1
       exit 0
@@ -11,6 +15,31 @@ setup_observation() {
       exit 0
       ;;
   esac
+}
+
+setup_private_read() {
+  # Private transport only: never dispatch these reads as public CLI output.
+  [ "$#" = 1 ] || return 1
+  base=/data/local/echo-bridge
+  test ! -L "$base" && test -d "$base" || return 1
+  test ! -L "$base/private" && test -d "$base/private" || return 1
+  [ "$(stat -c %u:%a "$base/private")" = 9999:700 ] || return 1
+  case $1 in
+    setup-config)
+      file=$base/private/bridge.toml
+      limit=1048576
+      ;;
+    setup-pairing)
+      file=$base/private/screen-pairing.txt
+      limit=16384
+      ;;
+    *) return 1 ;;
+  esac
+  test ! -L "$file" && test -f "$file" || return 1
+  [ "$(stat -c %u:%h:%a "$file")" = 9999:1:600 ] || return 1
+  bytes=$(wc -c <"$file") || return 1
+  [ "$bytes" -gt 0 ] && [ "$bytes" -le "$limit" ] || return 1
+  cat "$file"
 }
 
 setup_wake() {
