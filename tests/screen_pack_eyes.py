@@ -1,5 +1,6 @@
 """Decoded-art and 960×600 layout checks for the generated eyes pack."""
 from collections import Counter
+from colorsys import rgb_to_hsv
 from itertools import groupby
 import json
 from pathlib import Path
@@ -56,14 +57,19 @@ def idle_and_focus(pack, decode):
     require(max(abs(a - b) for a, b in zip(x, x[1:])) <= 3, 'idle gaze jumps between frames')
     blinks = [len(list(run)) for closed, run in groupby(area < max(areas) * .8 for area in areas) if closed]
     require(2 <= len(blinks) <= 3 and all(2 <= run <= 6 for run in blinks), 'idle blink timing differs')
-    require(len(set(colors)) == 1 and colors[0][0] < colors[0][1] < colors[0][2], 'idle eye hue varies')
+    # Chroma subsampling and downscaling mix a blink's thin edges with the
+    # backdrop. Compare the decoded core hues within that encoding tolerance.
+    hues = [360 * rgb_to_hsv(*color)[0] for color in colors]
+    require(205 <= min(hues) <= max(hues) <= 223 and max(hues) - min(hues) <= 8,
+            f'idle eye hue varies from {min(hues):.1f} to {max(hues):.1f} degrees')
     for frame in pixel_runs(pack, 'listening', decode):
         (fx, fy), area, color = measure(frame)
         require(abs(fx - 79.5) < 3.2 and abs(fy - 49.5) < 2, 'listening gaze moved off center')
         require(area > max(areas) and color[1] - color[0] > 90, 'listening eyes lack cyan focus')
     require(not any(lit(frame, 85 * SAMPLE[0]) for frame in idle), 'idle shows unexpected marks')
     print(f'FACE idle: seconds={len(idle) / 30:g} stable_positions={len(stable)} '
-          f'width_span={span:.1%} blink_frames={blinks} colors={len(set(colors))}; listening=centered')
+          f'width_span={span:.1%} blink_frames={blinks} '
+          f'hue={min(hues):.1f}–{max(hues):.1f}deg; listening=centered')
 
 
 def muted_and_speaking(pack, decode):
