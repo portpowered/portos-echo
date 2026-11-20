@@ -2,12 +2,13 @@
 import http.server
 import json
 from pathlib import Path
+import re
 import socket
 import sys
 import threading
 import urllib.request
 
-from catalog import intent
+from catalog import intent, namespace_for
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import provider as session
@@ -18,17 +19,18 @@ ANSWER = 'v=answer\r\n'
 
 
 class Turn:
-    def __init__(self, case, variant, fault=None):
+    def __init__(self, case, variant, names, fault=None):
         self.case = case
         self.variant = variant
         self.fault = fault
+        self.names = names
         self.id = f'{variant}-{case.id}-{fault or "ok"}'
         self.raw = []
         self.calls = []
         self.selected = None
         self.diagnostic = None
         self.answer = None
-        self.appended = False
+        self.appended = threading.Event()
         self.sideband_closed = threading.Event()
 
     @property
@@ -41,9 +43,9 @@ class Turn:
                 'id': self.id, 'content': [{'type': 'input_text', 'text': self.case.utterance}]}}
 
     def append(self, value):
-        assert not self.appended and value['delegation_item_id'] == self.id
+        assert not self.appended.is_set() and value['delegation_item_id'] == self.id
         assert value['content'] == [{'type': 'input_text', 'text': self.answer}]
-        self.appended = True
+        self.appended.set()
 
     def respond(self, raw):
         body = json.loads(raw)
@@ -63,22 +65,19 @@ class Turn:
                        for event in events).encode()
 
     def utterance(self, items):
-        matches = []
-        for item in items:
-            if item.get('role') == 'user':
-                for part in item['content']:
-                    for text in part.get('text', '').splitlines():
-                        if self.case.utterance in text:
-                            matches.append(self.case.utterance)
-        assert matches, 'delegation did not carry the fixed utterance'
+        messages = [part.get('text', '') for item in items if item.get('role') == 'user'
+                    for part in item['content']]
+        matches = [text for message in messages for text in re.findall(r'<input>(.*?)</input>', message, re.S)]
+        assert matches == [self.case.utterance], 'delegation did not carry the fixed utterance'
         return matches[0]
 
     def next_item(self, items, utterance, index):
         catalog, = [item['tools'] for item in items if item['type'] == 'additional_tools']
+        visible = [(namespace, name) for namespace, name in functions(catalog) if name in self.names]
         search = [tool for tool in catalog if tool.get('type') == 'tool_search']
         if self.variant == 'deferred':
             assert len(search) == 1 and search[0]['execution'] == 'client', 'client search is missing'
-            assert not any(name.startswith('portos_') for name, _ in functions(catalog)), 'deferred tool leaked upfront'
+            assert not visible, 'deferred tool leaked upfront'
             if index == 0:
                 return {'type': 'tool_search_call', 'id': f'{self.id}-search-item', 'status': 'completed',
                         'execution': 'client', 'call_id': f'{self.id}-search',
@@ -88,6 +87,9 @@ class Turn:
             catalog = loaded['tools']
         else:
             assert not search, 'direct replay advertised search'
+            expected = [(namespace_for(name) if self.variant == 'namespaced' else 'functions', name)
+                        for name in self.names]
+            assert sorted(visible) == sorted(expected), 'direct catalog differs from declared namespaces'
         if self.selected:
             outputs = [item['output'] for item in items if item['type'] == 'function_call_output'
                        and item['call_id'] == self.call_id]
@@ -97,6 +99,8 @@ class Turn:
             selected = [(namespace, name) for namespace, name in functions(catalog) if name == intent(utterance)]
             if selected:
                 self.selected, = selected
+                if self.variant == 'deferred':
+                    assert self.selected[0] == namespace_for(self.selected[1]), 'loaded tool lost its namespace'
                 return {'type': 'function_call', 'id': f'{self.id}-function', 'call_id': self.call_id,
                         'namespace': self.selected[0], 'name': self.selected[1], 'arguments': '{}', 'status': 'completed'}
             self.diagnostic = f'missing reachable candidate {intent(utterance)}'

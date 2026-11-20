@@ -73,6 +73,12 @@ def valid(tools):
     ) and {tool['name'] for tool in tools} == {case.expected for case in CASES}
 
 
+def namespace_for(name):
+    stem = name.split('_', 1)[0]
+    domain = {'group': 'groups', 'subscription': 'subscriptions'}.get(stem, 'endpoints')
+    return f'portos_{domain}'
+
+
 def declarations(tools, variant):
     direct = ['web', 'functions']
     settings = {'features.code_mode.direct_only_tool_namespaces': direct}
@@ -80,9 +86,7 @@ def declarations(tools, variant):
         return tools, settings
     groups = defaultdict(list)
     for tool in tools:
-        stem = tool['name'].split('_', 1)[0]
-        domain = {'group': 'groups', 'subscription': 'subscriptions'}.get(stem, 'endpoints')
-        name = 'functions' if variant == 'forced-direct' else f'portos_{domain}'
+        name = 'functions' if variant == 'forced-direct' else namespace_for(tool['name'])
         entry = {'type': 'function', **tool}
         if variant in ('deferred', 'forced-direct'):
             entry['deferLoading'] = True
@@ -144,10 +148,14 @@ def tool_spans(raw):
 
 def render(capture):
     import tiktoken
+    from unittest.mock import patch
 
     if tiktoken.__version__ != '0.13.0':
         raise ValueError('full replay requires offline tiktoken 0.13.0')
-    encoding = tiktoken.get_encoding('o200k_base')
+    # The public constructor verifies the cached vocabulary hash. Refuse its
+    # download fallback so a clean tokenizer cache cannot create remote traffic.
+    with patch('tiktoken.load.read_file', side_effect=ValueError('offline o200k_base vocabulary is missing')):
+        encoding = tiktoken.get_encoding('o200k_base')
     print('variant case tool initial followup_additional followup_search round_trips')
     rows = json.loads((capture / 'selections.json').read_bytes())
     assert [(row['variant'], row['case'], row['tool']) for row in rows] == [

@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import queue
-import re
 import shutil
 import subprocess
 import sys
@@ -123,7 +122,7 @@ def thread_settings(tools, variant, model, home):
 def measure(rpc, peers, home, tools, case, variant, fault=None):
     from peer import MODEL, OFFER, Turn, session
 
-    turn = Turn(case, variant, fault)
+    turn = Turn(case, variant, [tool['name'] for tool in tools], fault)
     session.script = turn
     thread = rpc.request('thread/start', thread_settings(tools, variant, MODEL, home))['thread']['id']
     rpc.request('thread/realtime/start', {'threadId': thread, 'outputModality': 'audio',
@@ -132,22 +131,21 @@ def measure(rpc, peers, home, tools, case, variant, fault=None):
     peers.delegate()
     try:
         status = rpc.turn(peers, turn, thread)
+        assert not peers.failures, f'{turn.id}: {peers.failures}'
+        assert status == ('failed' if fault == 'peer-close' else 'completed'), f'{turn.id}: unexpected turn {status}'
+        if status == 'completed':
+            assert turn.appended.wait(3), f'{turn.id}: missing delegation handback'
     finally:
         rpc.request('thread/realtime/stop', {'threadId': thread})
         assert turn.sideband_closed.wait(3), f'{turn.id}: sideband did not close'
-    assert not peers.failures, f'{turn.id}: {peers.failures}'
     assert session.observed['external'] == 0, 'app server attempted non-fixture traffic'
     if fault:
         expected = {'missing': f'missing reachable candidate {case.expected}',
                     'peer-close': 'model peer closed while request was pending'}
         assert turn.selected is None and turn.calls == [] and turn.diagnostic == expected[fault]
-        if fault == 'missing':
-            assert status == 'completed' and turn.appended
-        else:
-            assert status == 'failed' and not turn.appended
+        assert turn.appended.is_set() == (fault == 'missing')
         print(f'{turn.id}: {turn.diagnostic}; MCP calls=0; result=diagnostic')
         return None, turn.raw
-    assert status == 'completed' and turn.appended, f'{turn.id}: missing successful handback'
     selected = turn.selected[1] if turn.selected else None
     assert selected == case.expected and turn.calls == [case.expected], f'{turn.id}: wrong selection or call'
     assert len(turn.raw) == (3 if variant == 'deferred' else 2), f'{turn.id}: wrong round trip count'
@@ -160,8 +158,10 @@ def schema(binary, home, origin):
     subprocess.run([str(binary), 'app-server', 'generate-json-schema', '--experimental', '--out', str(directory)],
                    env=environment(home, origin), cwd=home, check=True, timeout=5, stdout=subprocess.DEVNULL)
     text = (directory / 'v2/ThreadStartParams.json').read_text(encoding='utf-8')
-    for field in ('dynamicTools', 'deferLoading', 'NamespaceDynamicToolSpec'):
-        lines = [str(n) for n, line in enumerate(text.splitlines(), 1) if re.match(rf'^\s*"{field}":', line)]
+    markers = {'dynamicTools': '"dynamicTools":', 'deferLoading': '"deferLoading":',
+               'namespace variant': '"title": "NamespaceDynamicToolSpec"'}
+    for field, marker in markers.items():
+        lines = [str(n) for n, line in enumerate(text.splitlines(), 1) if line.lstrip().startswith(marker)]
         assert lines, f'generated experimental schema is missing {field}'
         print(f'v2/ThreadStartParams.json:{",".join(lines)} {field}')
 
