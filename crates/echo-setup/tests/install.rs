@@ -13,7 +13,10 @@ use std::thread;
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-struct Fixture(PathBuf);
+#[path = "support/install_setup.rs"]
+mod install_setup;
+
+struct Fixture(PathBuf, Option<install_setup::Service>);
 
 impl Fixture {
     fn new() -> Result<Self> {
@@ -24,7 +27,8 @@ impl Fixture {
         ));
         fs::create_dir(&root)?;
         fs::write(root.join("devices"), "SYNTHETIC-DEVICE\tdevice\r\n")?;
-        Ok(Self(root))
+        let service = install_setup::Service::new(&root)?;
+        Ok(Self(root, Some(service)))
     }
 
     fn command(&self) -> Command {
@@ -71,6 +75,7 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
+        self.1.take();
         let _ = fs::remove_dir_all(&self.0);
     }
 }
@@ -89,7 +94,12 @@ fn private_output(output: &Output) -> Result<serde_json::Value> {
     ] {
         assert!(!text.contains(marker), "private boundary data escaped");
     }
-    Ok(serde_json::from_slice(&output.stdout)?)
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?;
+    assert_eq!(events.iter().filter(|event| event["type"] == "result").count(), 1);
+    Ok(events.last().ok_or("missing terminal result")?.clone())
 }
 
 fn server(sums: String, bytes: Vec<u8>, count: usize) -> Result<(String, thread::JoinHandle<io::Result<()>>)> {
@@ -124,7 +134,6 @@ fn server(sums: String, bytes: Vec<u8>, count: usize) -> Result<(String, thread:
     });
     Ok((base, handle))
 }
-
 #[test]
 fn t3_verified_release_pushes_then_dispatches_bundled_install_start() -> Result {
     let fixture = Fixture::new()?;
@@ -136,7 +145,7 @@ fn t3_verified_release_pushes_then_dispatches_bundled_install_start() -> Result 
     assert_eq!(output.status.code(), Some(0));
     let result = private_output(&output)?;
     assert_eq!(result["version"], "0.2.0");
-    assert_eq!(result["setup"], "pending");
+    assert_eq!(result["setup"], "complete");
     let ledger = fixture.ledger()?;
     assert_eq!(ledger[0], ["devices"]);
     let dispatch: Vec<_> = ledger
@@ -144,16 +153,31 @@ fn t3_verified_release_pushes_then_dispatches_bundled_install_start() -> Result 
         .filter_map(|args| args.last())
         .filter(|arg| arg.contains("--device"))
         .collect();
-    assert_eq!(dispatch.len(), 4);
-    assert!(dispatch[0].contains("--device prepare-archive"));
-    assert!(dispatch[1].contains("/bundle/scripts/echo-install.sh' --device install --bundle"));
-    assert!(dispatch[2].contains("/bundle/scripts/echo-install.sh' --device start"));
-    assert_eq!(dispatch[3], "sh -s -- --device status");
+    assert_eq!(dispatch[0], "sh -s -- --device stop");
+    assert!(dispatch[1].contains("--device prepare-archive"));
+    assert!(dispatch[2].contains("/bundle/scripts/echo-install.sh' --device install --bundle"));
+    let start = dispatch
+        .iter()
+        .position(|call| call.contains("/bundle/scripts/echo-install.sh' --device start"))
+        .ok_or("missing bundled start")?;
+    assert_eq!(dispatch[start - 1], "sh -s -- --device ensure-signin");
+    assert_eq!(dispatch[start + 1], "sh -s -- --device status");
+    assert_eq!(
+        dispatch
+            .iter()
+            .filter(|call| call.as_str() == "sh -s -- --device link")
+            .count(),
+        1
+    );
+    assert!(
+        dispatch
+            .last()
+            .is_some_and(|call| call.starts_with("sh -s -- --device confirm-check '"))
+    );
     assert!(ledger.iter().any(|args| args.get(2).is_some_and(|arg| arg == "push")));
     assert_eq!(fs::read_to_string(fixture.0.join("process-user"))?, "nobody");
     Ok(())
 }
-
 #[test]
 fn t3_tamper_and_invalid_selected_checksums_call_no_adb() -> Result {
     let valid = format!("{}  echo-0.2.0-armv7.tar.gz\n", digest(b"original"));
@@ -173,7 +197,6 @@ fn t3_tamper_and_invalid_selected_checksums_call_no_adb() -> Result {
     }
     Ok(())
 }
-
 #[test]
 fn t3_offline_manifest_mismatch_and_missing_member_call_no_adb() -> Result {
     for missing in [false, true] {
@@ -191,7 +214,6 @@ fn t3_offline_manifest_mismatch_and_missing_member_call_no_adb() -> Result {
     }
     Ok(())
 }
-
 #[test]
 fn t3_device_archive_refusal_cleans_stage_without_running_bundled_script() -> Result {
     let fixture = Fixture::new()?;
@@ -220,7 +242,6 @@ fn t3_device_archive_refusal_cleans_stage_without_running_bundled_script() -> Re
     );
     Ok(())
 }
-
 #[test]
 fn t3_text_failures_have_fixed_guidance_and_no_external_data() -> Result {
     let fixture = Fixture::new()?;
@@ -240,7 +261,6 @@ fn t3_text_failures_have_fixed_guidance_and_no_external_data() -> Result {
     assert_eq!(output.stdout, b"");
     Ok(())
 }
-
 #[test]
 fn t3_adb_discovery_uses_closed_path_then_sdk_without_real_adb() -> Result {
     for sdk in [false, true] {
@@ -268,7 +288,6 @@ fn t3_adb_discovery_uses_closed_path_then_sdk_without_real_adb() -> Result {
     }
     Ok(())
 }
-
 #[test]
 fn t3_offline_install_preserves_native_paths_and_exact_device_selection() -> Result {
     let fixture = Fixture::new()?;
@@ -331,7 +350,6 @@ fn t3_direct_shell_archive_safety_and_install() -> Result {
     );
     Ok(())
 }
-
 #[test]
 fn t3_prerequisites_refuse_without_push_and_never_print_external_data() -> Result {
     for devices in [
@@ -357,7 +375,6 @@ fn t3_prerequisites_refuse_without_push_and_never_print_external_data() -> Resul
     assert_eq!(fixture.ledger()?.len(), 2);
     Ok(())
 }
-
 #[test]
 fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result {
     let fixture = Fixture::new()?;
@@ -381,11 +398,14 @@ fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result
         .filter_map(|args| args.last())
         .filter(|arg| arg.contains("--device"))
         .collect();
-    assert_eq!(commands.len(), 4);
     assert_eq!(commands[0], "sh -s -- --device stop");
     assert!(commands[1].contains("--release-version '0.2.0'"));
-    assert!(commands[2].ends_with("--device start"));
-    assert_eq!(commands[3], "sh -s -- --device status");
+    let start = commands
+        .iter()
+        .position(|call| call.ends_with("--device start"))
+        .ok_or("missing bundled start")?;
+    assert_eq!(commands[start - 1], "sh -s -- --device ensure-signin");
+    assert_eq!(commands[start + 1], "sh -s -- --device status");
     fs::remove_file(fixture.0.join("ledger"))?;
     fs::write(bundle.join("bin/echo-bridge"), "tampered")?;
     let output = Command::new(env!("CARGO_BIN_EXE_echo-setup"))
@@ -404,7 +424,6 @@ fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result
     assert_eq!(fixture.ledger()?, Vec::<Vec<String>>::new());
     Ok(())
 }
-
 #[test]
 fn t3_install_and_update_require_observed_identity_and_matching_release_after_start() -> Result {
     let healthy = "version_current=0.2.0\nversion_previous=null\nprocess=running\nprocess_user=nobody\nuptime_seconds=1\nhassmic_link=unavailable\n";
@@ -466,8 +485,8 @@ fn t3_install_and_update_require_observed_identity_and_matching_release_after_st
 fn assert_started_then_observed_then_cleaned(ledger: &[Vec<String>]) {
     let commands: Vec<_> = ledger.iter().filter_map(|args| args.last()).collect();
     let end = commands.len();
-    assert!(commands[end - 3].ends_with("--device start"));
-    assert_eq!(commands[end - 2], "sh -s -- --device status");
+    let start = commands.iter().position(|call| call.ends_with("--device start"));
+    assert!(start.is_some_and(|index| commands[index + 1] == "sh -s -- --device status"));
     assert!(commands[end - 1].starts_with("rm -rf '/data/local/tmp/echo-setup-"));
     assert!(
         !commands

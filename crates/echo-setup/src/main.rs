@@ -20,8 +20,10 @@ async fn run() -> i32 {
         return 0;
     }
     let result: Result<serde_json::Value> = match options.command.as_str() {
-        "install" | "update" => echo_setup::install::install(&options).await.map(|version| {
-            serde_json::json!({"type":"result", "command":options.command, "ok":true, "version":version, "setup":"pending"})
+        "install" | "update" => echo_setup::install::install(
+            &options, |prompt| present(&options, prompt), || instruct(&options),
+        ).await.map(|version| {
+            serde_json::json!({"type":"result", "command":options.command, "ok":true, "version":version, "setup":"complete"})
         }),
         "status" | "uninstall" | "rollback" => echo_setup::lifecycle::execute(&options).await,
         "doctor" => Ok(echo_setup::doctor::execute(&options).await),
@@ -34,7 +36,46 @@ async fn run() -> i32 {
         }
     };
     render(&options, &event);
-    i32::from(event["ok"] != true)
+    exit_code(&event)
+}
+
+fn exit_code(event: &serde_json::Value) -> i32 {
+    if event["error"] == "setup_timeout" {
+        3
+    } else {
+        i32::from(event["ok"] != true)
+    }
+}
+
+fn present(options: &cli::Options, prompt: &echo_setup::setup::Prompt) -> Result<()> {
+    let event = serde_json::to_value(prompt).map_err(|_| Failure("output_failed"))?;
+    let mut output = io::stdout().lock();
+    if options.json {
+        writeln!(output, "{event}")
+    } else {
+        writeln!(
+            output,
+            "{}: visit {} and enter {}.",
+            event["provider"].as_str().unwrap_or("account"),
+            event["verification_uri"].as_str().unwrap_or(""),
+            event["user_code"].as_str().unwrap_or("")
+        )
+    }
+    .and_then(|()| output.flush())
+    .map_err(|_| Failure("output_failed"))
+}
+
+fn instruct(options: &cli::Options) -> Result<()> {
+    let mut output = io::stdout().lock();
+    let message = "Say Computer near the Echo. Waiting for a fresh wake and bridge run.";
+    if options.json {
+        let event = serde_json::json!({"type":"instruction", "message":message});
+        writeln!(output, "{event}")
+    } else {
+        writeln!(output, "{message}")
+    }
+    .and_then(|()| output.flush())
+    .map_err(|_| Failure("output_failed"))
 }
 
 fn render(options: &cli::Options, event: &serde_json::Value) {
@@ -46,7 +87,7 @@ fn render(options: &cli::Options, event: &serde_json::Value) {
                 let version = event["version"].as_str().unwrap_or("unavailable");
                 let _ = writeln!(
                     io::stdout(),
-                    "Echo {version} installed and started; account setup is pending."
+                    "Echo {version} installed, linked and confirmed a fresh wake and bridge run."
                 );
             }
             "status" if event.get("process").is_some() => {
@@ -99,7 +140,25 @@ fn fix(error: &str) -> &'static str {
         "unsafe_process_user" => {
             "The running bridge identity is unsafe. Run status and doctor before retrying; no process was signalled."
         }
+        "setup_timeout" => "Setup timed out. Run install again to resume setup.",
+        "setup_relink_required" => "ChatGPT still requires sign-in. Run install again to resume setup.",
+        "setup_kill_switch" => "The bridge kill switch is active. Inspect status before resuming setup.",
+        "setup_account_unsettled" => "Account cleanup could not be confirmed. Inspect status before resuming setup.",
         "command_not_implemented" => "This installer command is still under development.",
         _ => "Check device connectivity and prerequisites, then run install again.",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn terminal_exit_distinguishes_bounded_setup_timeout() {
+        for (ok, error, code) in [
+            (true, "", 0),
+            (false, "setup_timeout", 3),
+            (false, "setup_account_unsettled", 1),
+        ] {
+            assert_eq!(super::exit_code(&serde_json::json!({"ok":ok,"error":error})), code);
+        }
     }
 }

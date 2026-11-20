@@ -180,7 +180,16 @@ fn account_reply(root: &Path, command: &str) -> io::Result<bool> {
         return Ok(false);
     }
     notify(root, "account-barrier", b"ready")?;
-    io::stdout().write_all(&fs::read(root.join("account-reply"))?)?;
+    let verb = command
+        .strip_prefix("sh -s -- --device ")
+        .ok_or_else(|| io::Error::other("missing verb"))?;
+    let specific = root.join(format!("{verb}-reply"));
+    let reply = if specific.exists() {
+        specific
+    } else {
+        root.join("account-reply")
+    };
+    io::stdout().write_all(&fs::read(reply)?)?;
     if root.join("account-failed").exists() {
         std::process::exit(1);
     }

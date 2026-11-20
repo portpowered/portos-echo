@@ -9,10 +9,11 @@ use tokio::time::Instant;
 /// Device selection is retained across config/pairing reads. Neither private
 /// bytes nor the selected identity implement Debug/Display through this owner.
 pub struct InstalledConnection {
-    adb: Adb,
+    pub(super) adb: Adb,
     screen: u16,
-    deadline: Instant,
+    pub(super) deadline: Instant,
     account: super::account::AccountOwner,
+    launch: Option<(String, String)>,
 }
 
 impl InstalledConnection {
@@ -23,14 +24,37 @@ impl InstalledConnection {
         bounded(deadline, async {
             let mut adb = Adb::discover(options.adb.as_deref())?;
             adb.select(options.serial.as_deref()).await?;
+            Self::selected(adb, deadline, None).await
+        })
+        .await
+    }
+
+    pub(crate) async fn selected(adb: Adb, deadline: Instant, launch: Option<(String, String)>) -> Result<Self> {
+        bounded(deadline, async {
             let raw = private_read(&adb, "setup-config").await?;
-            let screen = screen_port(raw.expose())?;
             Ok(Self {
                 adb,
-                screen,
+                screen: screen_port(raw.expose())?,
                 deadline,
                 account: super::account::AccountOwner::default(),
+                launch,
             })
+        })
+        .await
+    }
+
+    pub(super) async fn start(&self) -> Result<()> {
+        bounded(self.deadline, async {
+            let version = if let Some((command, version)) = &self.launch {
+                self.adb.shell(command).await.map_err(|_| Failure("start_failed"))?;
+                Some(version.as_str())
+            } else {
+                if !self.adb.script("start").await?.0 {
+                    return Err(Failure("start_failed"));
+                }
+                None
+            };
+            crate::lifecycle::require_started(&self.adb, version).await
         })
         .await
     }

@@ -22,6 +22,9 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 #[path = "support/guided.rs"]
 mod guided;
 
+#[path = "support/workflow.rs"]
+mod workflow;
+
 struct Fixture(PathBuf);
 
 impl Fixture {

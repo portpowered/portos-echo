@@ -54,7 +54,11 @@ enum Input {
 /// Integrity is established before even running `adb devices`.
 /// # Errors
 /// Returns fixed integrity, prerequisite or device-operation categories.
-pub async fn install(options: &Options) -> Result<String> {
+pub async fn install(
+    options: &Options,
+    mut present: impl FnMut(&crate::setup::Prompt) -> Result<()>,
+    mut ask_wake: impl FnMut() -> Result<()>,
+) -> Result<String> {
     let input = if let Some(directory) = &options.from_dir {
         Input::Offline(integrity::offline(directory)?)
     } else {
@@ -70,7 +74,8 @@ pub async fn install(options: &Options) -> Result<String> {
     fs::write(&adapter, ADAPTER).map_err(|_| Failure("temporary_files_failed"))?;
     let mut adb = Adb::discover(options.adb.as_deref())?;
     adb.select(options.serial.as_deref()).await?;
-    if options.command == "update" && !adb.script("stop").await?.0 {
+    let (stopped, output) = adb.script("stop").await?;
+    if !stopped || output != "echo-install: stopped\n" {
         return Err(Failure("stop_failed"));
     }
     let name = scratch
@@ -83,11 +88,41 @@ pub async fn install(options: &Options) -> Result<String> {
         "test ! -L /data/local/tmp && test -d /data/local/tmp && umask 077 && mkdir '{stage}'"
     ))
     .await?;
-    let result = stage_install(&adb, &scratch, &stage, &adapter, &input, options).await;
-    let cleanup = adb.shell(&format!("rm -rf '{stage}'")).await;
-    let version = result?;
-    cleanup.map_err(|_| Failure("stage_cleanup_failed"))?;
-    Ok(version)
+    let result = async {
+        let version = stage_install(&adb, &scratch, &stage, &adapter, &input, options).await?;
+        guide_installed(&adb, &stage, &version, options, &mut present, &mut ask_wake).await?;
+        Ok(version)
+    }
+    .await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        adb.shell(&format!("rm -rf '{stage}'")),
+    )
+    .await
+    .map_err(|_| Failure("stage_cleanup_failed"))?
+    .map_err(|_| Failure("stage_cleanup_failed"))?;
+    result
+}
+
+async fn guide_installed(
+    adb: &Adb,
+    stage: &str,
+    version: &str,
+    options: &Options,
+    present: impl FnMut(&crate::setup::Prompt) -> Result<()>,
+    ask_wake: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(options.timeout_seconds))
+        .ok_or(Failure("setup_timeout"))?;
+    let start = format!("sh '{stage}/bundle/scripts/echo-install.sh' --device start");
+    let connection =
+        crate::setup::InstalledConnection::selected(adb.clone(), deadline, Some((start, version.to_owned()))).await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| Failure("setup_clock_invalid"))?
+        .as_secs();
+    connection.guide(now, present, ask_wake).await
 }
 
 async fn stage_install(
@@ -128,9 +163,5 @@ async fn stage_install(
         let _ = write!(command, " --config '{stage}/config'");
     }
     adb.shell(&command).await.map_err(|_| Failure("install_failed"))?;
-    adb.shell(&format!("sh '{bundle}/scripts/echo-install.sh' --device start"))
-        .await
-        .map_err(|_| Failure("start_failed"))?;
-    crate::lifecycle::require_started(adb, Some(&version)).await?;
     Ok(version)
 }

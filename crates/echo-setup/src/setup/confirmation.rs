@@ -35,6 +35,13 @@ impl WakeConfirmation {
         bounded(deadline, async {
             let mut adb = Adb::discover(options.adb.as_deref())?;
             adb.select(options.serial.as_deref()).await?;
+            Self::selected(adb, deadline).await
+        })
+        .await
+    }
+
+    pub(super) async fn selected(adb: Adb, deadline: Instant) -> Result<Self> {
+        bounded(deadline, async {
             let (success, output) = adb.script("confirm-cursor").await?;
             if !success {
                 return Err(Failure("setup_wake_unavailable"));
