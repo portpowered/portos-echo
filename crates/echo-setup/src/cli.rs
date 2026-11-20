@@ -6,11 +6,13 @@ use std::path::PathBuf;
 
 pub const VERSION: &str = env!("ECHO_SETUP_RELEASE_VERSION");
 pub const HELP: &str = "echo-setup --help | --version
-echo-setup install|update [--version VERSION | --from-dir DIR] [--config FILE] [OPTIONS]
+echo-setup install [--version VERSION | --from-dir DIR] [--config FILE [--force]] [OPTIONS]
+echo-setup update [--version VERSION | --from-dir DIR] [--config FILE] [OPTIONS]
 echo-setup status|rollback|doctor [OPTIONS]
 echo-setup uninstall [--purge] [OPTIONS]
 OPTIONS: --adb PATH --serial DEVICE --json --timeout-seconds N --release-base URL
 Default release matches this executable; never latest. Versions omit leading v.
+Install --force requires a readable --config FILE and replaces only the base config.
 Downloads require HTTPS; explicit http://127.0.0.1:PORT mirrors are for local tests.
 Exit 0: completed; 1: prerequisite/integrity/device failure; 2: usage; 3: setup timeout.
 Expired provider codes also exit 3. Run install again to resume with a fresh code.
@@ -29,6 +31,7 @@ pub struct Options {
     pub version: String,
     pub from_dir: Option<PathBuf>,
     pub config: Option<PathBuf>,
+    pub force: bool,
     pub adb: Option<PathBuf>,
     // Device identifiers deliberately implement neither Debug nor Display.
     pub serial: Option<OsString>,
@@ -69,6 +72,7 @@ impl Options {
             match flag {
                 "--json" => result.json = true,
                 "--purge" => result.purge = true,
+                "--force" => result.force = true,
                 _ => result.value(flag, arguments.next().ok_or(Failure("usage"))?)?,
             }
         }
@@ -82,6 +86,7 @@ impl Options {
             version: VERSION.to_owned(),
             from_dir: None,
             config: None,
+            force: false,
             adb: None,
             serial: None,
             json: false,
@@ -117,6 +122,7 @@ impl Options {
     fn validate(&self, seen: &BTreeSet<String>) -> Result<()> {
         let install = matches!(self.command.as_str(), "install" | "update");
         if (self.purge && self.command != "uninstall")
+            || (self.force && (self.command != "install" || self.config.is_none()))
             || (!install
                 && ["--version", "--from-dir", "--config", "--release-base"]
                     .iter()
@@ -148,6 +154,7 @@ mod tests {
     #[test]
     fn default_is_embedded_and_version_normalizes_once() -> Result<()> {
         assert_eq!(parse(&["install"])?.version, VERSION);
+        assert!(!parse(&["install"])?.force);
         assert_eq!(parse(&["install", "--version", "v1.2.3-rc.1"])?.version, "1.2.3-rc.1");
         for invalid in ["vv1.2.3", "../1.2.3", "1.2", "01.2.3", "1.2.3-", "1.2.3-01", "1.2.3\n"] {
             assert_eq!(version(invalid), Err(Failure("invalid_version")));
@@ -165,6 +172,22 @@ mod tests {
             vec!["doctor", "--timeout-seconds", "0"],
             vec!["--help", "--json"],
             vec!["install", "--unknown", "x"],
+            vec!["install", "--force"],
+            vec!["install", "--config", "--force"],
+            vec!["install", "--config", "x", "--force", "--force"],
+            vec!["install", "--config", "x", "--force", "true"],
+            vec!["update", "--config", "x", "--force"],
+            vec!["status", "--force"],
+            vec![
+                "install",
+                "--config",
+                "x",
+                "--force",
+                "--from-dir",
+                "x",
+                "--release-base",
+                "x",
+            ],
         ] {
             assert!(parse(&args).is_err());
         }
@@ -172,7 +195,15 @@ mod tests {
 
     #[test]
     fn local_paths_are_opaque_arguments() -> Result<()> {
-        let options = parse(&["install", "--config", "space ü ' ; $ config", "--adb", "adb path"])?;
+        let options = parse(&[
+            "install",
+            "--config",
+            "space ü ' ; $ config",
+            "--force",
+            "--adb",
+            "adb path",
+        ])?;
+        assert!(options.force);
         assert_eq!(options.config, Some(PathBuf::from("space ü ' ; $ config")));
         assert_eq!(options.adb, Some(PathBuf::from("adb path")));
         Ok(())

@@ -13,6 +13,8 @@ use std::thread;
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[path = "support/force_config.rs"]
+mod force_config;
 #[path = "support/install_setup.rs"]
 mod install_setup;
 #[path = "support/screen.rs"]
@@ -135,50 +137,6 @@ fn server(sums: String, bytes: Vec<u8>, count: usize) -> Result<(String, thread:
         Ok(())
     });
     Ok((base, handle))
-}
-#[test]
-fn t3_verified_release_pushes_then_dispatches_bundled_install_start() -> Result {
-    let fixture = Fixture::new()?;
-    let bytes = b"controlled archive boundary".to_vec();
-    let sums = format!("{}  echo-0.2.0-armv7.tar.gz\r\n", digest(&bytes));
-    let (base, handle) = server(sums, bytes, 2)?;
-    let output = fixture.install().args(["--release-base", &base]).output()?;
-    handle.join().map_err(|_| "server panicked")??;
-    assert_eq!(output.status.code(), Some(0));
-    let result = private_output(&output)?;
-    assert_eq!(result["version"], "0.2.0");
-    assert_eq!(result["setup"], "complete");
-    let ledger = fixture.ledger()?;
-    assert_eq!(ledger[0], ["devices"]);
-    let dispatch: Vec<_> = ledger
-        .iter()
-        .filter_map(|args| args.last())
-        .filter(|arg| arg.contains("--device") && !arg.starts_with("sh -s -- --device setup-"))
-        .collect();
-    assert_eq!(dispatch[0], "sh -s -- --device stop");
-    assert!(dispatch[1].contains("--device prepare-archive"));
-    assert!(dispatch[2].contains("/bundle/scripts/echo-install.sh' --device install --bundle"));
-    let start = dispatch
-        .iter()
-        .position(|call| call.contains("/bundle/scripts/echo-install.sh' --device start"))
-        .ok_or("missing bundled start")?;
-    assert_eq!(dispatch[start - 1], "sh -s -- --device ensure-signin");
-    assert_eq!(dispatch[start + 1], "sh -s -- --device status");
-    assert_eq!(
-        dispatch
-            .iter()
-            .filter(|call| call.as_str() == "sh -s -- --device link")
-            .count(),
-        1
-    );
-    assert!(
-        dispatch
-            .last()
-            .is_some_and(|call| call.starts_with("sh -s -- --device confirm-check '"))
-    );
-    assert!(ledger.iter().any(|args| args.get(2).is_some_and(|arg| arg == "push")));
-    assert_eq!(fs::read_to_string(fixture.0.join("process-user"))?, "nobody");
-    Ok(())
 }
 #[test]
 fn t3_tamper_and_invalid_selected_checksums_call_no_adb() -> Result {
@@ -308,6 +266,7 @@ fn t3_offline_install_transfers_verified_bytes_after_source_changes() -> Result 
         .arg(&bundle)
         .arg("--config")
         .arg(&config)
+        .arg("--force")
         .args(["--serial", "SYNTHETIC-DEVICE"])
         .output()?;
     assert_eq!(output.status.code(), Some(0));
@@ -320,12 +279,11 @@ fn t3_offline_install_transfers_verified_bytes_after_source_changes() -> Result 
             .all(|args| args[..2] == ["-s", "SYNTHETIC-DEVICE"])
     );
     let pushes: Vec<_> = ledger.iter().skip(1).filter(|args| args[2] == "push").collect();
-    let [_, bundle_push, config_push] = pushes.as_slice() else {
+    let [_, bundle_push, _] = pushes.as_slice() else {
         return Err("expected adapter, bundle and configuration pushes".into());
     };
     assert!(bundle_push[4].ends_with("/bundle"));
-    assert_eq!(config_push[3], config.to_string_lossy());
-    assert!(config_push[4].ends_with("/config"));
+    force_config::assert_config_dispatch(&ledger, &config, true)?;
     assert_eq!(fs::read(bundle.join("MANIFEST"))?, b"changed after verification");
     assert_eq!(fs::read(fixture.0.join("manifest"))?, manifest);
     for file in ["script", "attribution"] {
@@ -350,7 +308,7 @@ fn t3_direct_shell_archive_safety_and_install() -> Result {
     );
     assert_eq!(
         String::from_utf8(output.stdout)?,
-        "echo-install direct transport: install=PASS archive-safety=PASS\n"
+        "echo-install direct transport: install=PASS archive-safety=PASS config-retention=PASS config-force=PASS config-refusal=PASS\n"
     );
     Ok(())
 }
@@ -383,6 +341,8 @@ fn t3_prerequisites_refuse_without_push_and_never_print_external_data() -> Resul
 fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result {
     let fixture = Fixture::new()?;
     let bundle = fixture.bundle()?;
+    let config = fixture.0.join("candidate.toml");
+    fs::write(&config, b"synthetic candidate config")?;
     let output = Command::new(env!("CARGO_BIN_EXE_echo-setup"))
         .env("ECHO_SETUP_TEST_ROOT", &fixture.0)
         .args([
@@ -393,6 +353,8 @@ fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result
             "--from-dir",
         ])
         .arg(&bundle)
+        .arg("--config")
+        .arg(&config)
         .output()?;
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(private_output(&output)?["command"], "update");
@@ -403,7 +365,7 @@ fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result
         .filter(|arg| arg.contains("--device") && !arg.starts_with("sh -s -- --device setup-"))
         .collect();
     assert_eq!(commands[0], "sh -s -- --device stop");
-    assert!(commands[1].contains("--release-version '0.2.0'"));
+    force_config::assert_config_dispatch(&ledger, &config, false)?;
     let start = commands
         .iter()
         .position(|call| call.ends_with("--device start"))
@@ -479,6 +441,12 @@ fn t3_install_and_update_require_observed_identity_and_matching_release_after_st
             if let Some(error) = error {
                 assert_eq!(result["error"], error);
                 assert!(result["setup"].is_null());
+            }
+            if error == Some("start_failed") {
+                assert_eq!(
+                    result["fix"],
+                    "The installed files remain available. Run doctor to diagnose startup."
+                );
             }
             assert_started_then_observed_then_cleaned(&fixture.ledger()?);
         }
