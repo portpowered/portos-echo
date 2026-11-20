@@ -77,33 +77,9 @@ async fn configured_journey(selection: Option<&str>, enabled: bool) {
         assert_eq!(read_json(&mut observed).await, json!({"initialized":"runner-skills"}));
     }
     let mut bridge = launch(root, ready["origin"].as_str().unwrap());
-    let mut stdin = bridge.stdin.take().unwrap();
-    let (mut satellite, _) = listener.accept().await.unwrap();
-    let mut stdout = BufReader::new(bridge.stdout.take().unwrap()).lines();
-    admit(&mut satellite, &mut stdout, &config).await;
-    let mut screen = lifecycle::screen(root).await;
-    wake(&mut satellite).await;
-    let mut peer = connect_provider(&mut control, &mut observed).await;
-    let connected =
-        async { while lifecycle::next_frame(&mut screen).await.unwrap()["state"]["state"] != "connected" {} };
-    await_connected(&mut peer, &mut stdin, &mut stdout, connected).await;
-    if enabled {
-        send_json(&mut control, json!({"transcripts":true})).await;
-        assert_eq!(
-            drive_peer(&mut peer, read_json(&mut observed)).await,
-            json!({"append":"runner-skills"})
-        );
-    }
-    send_json(&mut control, json!({"session":true})).await;
-    let context = voice_context(&read_json(&mut observed).await);
-    let rows = read_rpc(root);
-    check_thread(&rows[0], &context, &tools, enabled);
-    if enabled {
-        send_json(&mut control, json!({"snapshot":"runner-skills"})).await;
-        check_skill_results(&rows[1..], &read_json(&mut observed).await);
-    } else {
-        assert_eq!(rows.len(), 1);
-    }
+    let (mut satellite, stdin, mut peer) =
+        admit_journey(root, &listener, &config, &mut bridge, &mut control, &mut observed).await;
+    observe_journey(root, &tools, enabled, &mut peer, &mut control, &mut observed).await;
     drop(stdin);
     acknowledge_cut(&mut satellite).await;
     let output = bridge.wait_with_output().await.unwrap();
@@ -111,6 +87,54 @@ async fn configured_journey(selection: Option<&str>, enabled: bool) {
     peer.close();
     drop(control);
     assert!(provider.wait().await.unwrap().success());
+}
+
+async fn admit_journey(
+    root: &Path,
+    listener: &TcpListener,
+    config: &CodexConfig,
+    bridge: &mut tokio::process::Child,
+    control: &mut tokio::process::ChildStdin,
+    observed: &mut Output,
+) -> (TcpStream, tokio::process::ChildStdin, LivePeer) {
+    let mut stdin = bridge.stdin.take().unwrap();
+    let (mut satellite, _) = listener.accept().await.unwrap();
+    let mut stdout = BufReader::new(bridge.stdout.take().unwrap()).lines();
+    admit(&mut satellite, &mut stdout, config).await;
+    let mut screen = lifecycle::screen(root).await;
+    wake(&mut satellite).await;
+    let mut peer = connect_provider(control, observed).await;
+    let connected =
+        async { while lifecycle::next_frame(&mut screen).await.unwrap()["state"]["state"] != "connected" {} };
+    await_connected(&mut peer, &mut stdin, &mut stdout, connected).await;
+    (satellite, stdin, peer)
+}
+
+async fn observe_journey(
+    root: &Path,
+    tools: &[Value],
+    enabled: bool,
+    peer: &mut LivePeer,
+    control: &mut tokio::process::ChildStdin,
+    observed: &mut Output,
+) {
+    if enabled {
+        send_json(control, json!({"transcripts":true})).await;
+        assert_eq!(
+            drive_peer(peer, read_json(observed)).await,
+            json!({"append":"runner-skills"})
+        );
+    }
+    send_json(control, json!({"session":true})).await;
+    let context = voice_context(&read_json(observed).await);
+    let rows = read_rpc(root);
+    check_thread(&rows[0], &context, tools, enabled);
+    if enabled {
+        send_json(control, json!({"snapshot":"runner-skills"})).await;
+        check_skill_results(&rows[1..], &read_json(observed).await);
+    } else {
+        assert_eq!(rows.len(), 1);
+    }
 }
 
 fn start_provider() -> (tokio::process::Child, tokio::process::ChildStdin, Output) {
@@ -130,10 +154,17 @@ async fn acknowledge_cut(satellite: &mut TcpStream) {
     loop {
         let (header, payload) = read_wire(satellite).await;
         assert_eq!(payload, b"");
-        if header["type"] != "audio-start" {
-            assert_eq!(header["type"], "hassmic-flush");
-            send(satellite, "played", json!({}), vec![]).await;
-            return;
+        match header["type"].as_str().unwrap() {
+            "audio-start" => (),
+            "hassmic-thinking" => {
+                let thinking = header["data"]["thinking"].as_bool().unwrap();
+                assert_eq!(header["data"], json!({"thinking":thinking}));
+            }
+            kind => {
+                assert_eq!(kind, "hassmic-flush");
+                send(satellite, "played", json!({}), vec![]).await;
+                return;
+            }
         }
     }
 }
