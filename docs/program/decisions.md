@@ -14,6 +14,10 @@ one place.
 
 ## Decided
 
+On 2026-11-20 the owner confirmed that `template@0.2.0` is the hassmic-style eyes
+appearance. The downloadable pack supplies the procedural art. The home page
+cleanup belongs to `el-w5-screen-home-eyes-v2`.
+
 | Date | Decision | By | Where it applies |
 | --- | --- | --- | --- |
 | 2026-11-20 | **Keep the home stage tappable, put time and date at the bottom, and render the eyes through the template pack.** Owner: "can we render eyes instead", "we should have the date on the bottom like before on the bottom", and "remove the echo live is ready, and remove the ready from the screen as well as the start". Owner correction: "i mean the eyes should be the template". The template supplies the eyes and keeps its current automatic selection. The page drops redundant home copy, keeps the Settings gear, and retains the tap action on the stage. Link and approval prompts have room for their existing text and controls. M1 and M2 assert the page's Ready and Connected state markers. The screen frames and scenario sequences stay intact. | Owner, presentation wording authorized by coordinator | `el-w5-screen-home-eyes-v2`; `el-w5-screen-face-template`; plan section 8.3 |
