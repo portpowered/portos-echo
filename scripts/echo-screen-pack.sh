@@ -237,16 +237,36 @@ def unique_fields(pairs):
 
 
 ROOT = '/data/local/echo-bridge/home/screens'
+ADB_REASONS = re.compile(
+    rb'(?:^|: )(Permission denied|Operation not permitted|Read-only file system|'
+    rb'No space left on device|No such file or directory|File exists|Directory not empty|'
+    rb'device offline|no devices/emulators found|more than one device/emulator)\r?$',
+    re.MULTILINE,
+)
 
 
-def adb(*args):
-    subprocess.run(['adb', *args], check=True, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL, timeout=30)
+def adb(step, *args):
+    # adb can include serials and paths in its messages. Only forward known
+    # reason phrases, never the full line or stdout.
+    with tempfile.TemporaryFile() as errors:
+        try:
+            result = subprocess.run(['adb', *args], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=errors, timeout=30)
+        except subprocess.TimeoutExpired:
+            raise Refused(f'adb {step} failed: timed out') from None
+        except OSError:
+            raise Refused(f'adb {step} failed: executable unavailable') from None
+        if result.returncode:
+            errors.seek(0)
+            match = ADB_REASONS.search(errors.read(4096))
+            reason = match[1].decode('ascii') if match else 'diagnostic redacted'
+            raise Refused(f'adb {step} failed: {reason}')
 
 
 def push(files, identity):
     # All shell substitutions below are fixed roots, a UUID, or validated identity.
     stage = ROOT + '/.push-' + uuid.uuid4().hex
+    payload = stage + '/' + identity
     lock = ROOT + '/.push-lock'
     destination = ROOT + '/' + identity
     guard = '\n'.join("test ! -L '" + path + "' && test -d '" + path + "' || exit 1"
@@ -254,29 +274,39 @@ def push(files, identity):
                                    '/data/local/echo-bridge/home'))
     guard += "\ntest ! -L '" + ROOT + "' || exit 1\n"
     guard += "test ! -e '" + ROOT + "' || test -d '" + ROOT + "' || exit 1\n"
+    absent = "test ! -e '" + destination + "' && test ! -L '" + destination + "'"
     acquired = False
     try:
-        adb('shell', guard + "umask 077\nmkdir -p '" + ROOT + "' && mkdir '" + lock + "'")
+        adb('lock', 'shell', guard + "umask 077\nmkdir -p '" + ROOT + "' && mkdir '" + lock + "'")
         acquired = True
-        adb('shell', "test ! -e '" + destination + "' && test ! -L '" + destination
-            + "' && mkdir '" + stage + "'")
+        adb('staging', 'shell', "umask 077\n" + absent + " && mkdir '" + stage
+            + "' '" + payload + "'")
         with tempfile.TemporaryDirectory(prefix='screen-pack-') as temporary:
             source = Path(temporary) / 'payload'
             for name, data in sorted(files.items()):
                 parent = name.rpartition('/')[0]
                 if parent:
-                    adb('shell', "mkdir -p '" + stage + '/' + parent + "'")
+                    adb('staging', 'shell', "mkdir -p '" + payload + '/' + parent + "'")
                 source.write_bytes(data)
-                adb('push', str(source), stage + '/' + name)
-        adb('shell', "set -e\nchown 9999:9999 '" + ROOT + "'\nchmod 700 '" + ROOT
-            + "'\nchown -R 9999:9999 '" + stage + "'\nfind '" + stage
-            + "' -type d -exec chmod 700 {} +\nfind '" + stage
-            + "' -type f -exec chmod 600 {} +\nmv -T -n '" + stage + "' '" + destination
-            + "'\ntest ! -d '" + stage + "'")
+                adb('transfer', 'push', str(source), payload + '/' + name)
+        # Target the existing parent with the final basename so toybox resolves
+        # exactly one destination, even if a competing directory has appeared.
+        adb('publication', 'shell', "set -e\nchown 9999:9999 '" + ROOT + "'\nchmod 700 '" + ROOT
+            + "'\nchown -R 9999:9999 '" + payload + "'\nfind '" + payload
+            + "' -type d -exec chmod 700 {} +\nfind '" + payload
+            + "' -type f -exec chmod 600 {} +\n" + absent + " || exit 1\nmv -n '" + payload
+            + "' '" + ROOT + "/'\ntest ! -e '" + payload + "'")
     finally:
         if acquired:
             # Only our unpredictable private staging directory and acquired lock.
-            adb('shell', guard + "rm -rf '" + stage + "' && rmdir '" + lock + "'")
+            primary = sys.exc_info()[1]
+            try:
+                adb('cleanup', 'shell', guard + "rm -rf '" + stage + "' && rmdir '" + lock + "'")
+            except Refused as cleanup:
+                if primary is None:
+                    raise
+                reasons = primary.args if isinstance(primary, Refused) else ('validation or transport failed',)
+                raise Refused(*reasons, *cleanup.args) from None
 
 
 def interrupted(_signal, _frame):
@@ -300,7 +330,8 @@ def main():
 try:
     sys.exit(main())
 except Refused as error:
-    print('screen-pack: ' + str(error), file=sys.stderr)
+    for reason in error.args:
+        print('screen-pack: ' + reason, file=sys.stderr)
     sys.exit(1)
 except (OSError, ValueError, TypeError, RecursionError, subprocess.SubprocessError):
     print('screen-pack: validation or transport failed', file=sys.stderr)
