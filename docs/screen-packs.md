@@ -322,8 +322,10 @@ transparent still and ten silent 640 × 400 clips at 30 fps. The 16-second idle
 loop looks around and blinks. Listening holds a cyan gaze at center, thinking
 looks upward, and speaking animates a small mouth. Muted holds two still red
 slits, error narrows the eyes in red-orange, and the `happy` emote lifts the eyes
-into arcs before returning to rest. The layout reserves the bottom for the
-clock and date. Earlier template versions retain their original art and layout.
+into arcs before returning to rest. At 960 × 600 the stage occupies 696 × 435
+pixels, with the clock and date below and native prompts and controls in a
+column to its right. Earlier template versions retain their original art and
+layout.
 
 WebM uses lossless VP9 with alpha (`yuva420p`, `-auto-alt-ref 0`); MP4 uses H.264
 `yuv420p`, CRF 18 and fast-start metadata. MP4 has no alpha: transparent portions

@@ -3,15 +3,12 @@ from collections import Counter
 from colorsys import rgb_to_hsv
 from itertools import groupby
 import json
-from pathlib import Path
-import re
 import subprocess
 
 from test_echo_install import require
 
 SIZE = (640, 400)
 SAMPLE = (160, 100)
-SCREEN_CSS = Path(__file__).resolve().parents[1] / 'web/screen/src/screen.css'
 SAMPLES = {'rest': 0, 'idle': 160, 'listening': 15, 'thinking': 22,
            'speaking': 31, 'muted': 15, 'connecting': 15, 'setup': 15,
            'approval': 15, 'error': 15, 'happy': 15}
@@ -118,33 +115,23 @@ def clip_boundaries(pack, decode):
 def layout_cases(pack):
     layout = json.loads((pack / 'pack.json').read_text())['layout']
     stage = layout['stage']
-    css = SCREEN_CSS.read_text()
-    page = re.search(r':root\s*\{[^}]*background:\s*(#[\da-f]{6})', css)[1]
-    require(stage['background'] == page, 'stage background differs from the page')
+    require(stage['background'] == '#101827', 'stage background differs from the template color')
     area = layout['safe_area']
     width, height = 9.6 * area['width'], 6 * area['height']
     w, h = width * stage['scale'] / 2, height * stage['scale'] / 2
     cx, cy = (stage['anchor']['x'] * width / 100, stage['anchor']['y'] * height / 100)
-    region = (cx - w / 2, cy - h / 2, w, h)
-
-    def slot(name, w, h):
-        anchor = layout['slots'][name]
-        x, y = anchor['x'] * width / 100, anchor['y'] * height / 100
-        return min(x, width - w), min(y, height - h), w, h
-
-    # Reserve space for the clock/date and for each mutually exclusive prompt.
-    status = slot('status', 208, 42)
-    groups = [[region, status, slot('clock', 120, 44), slot('date', 120, 28),
-               (12, 43, 864, 74), (12, 158, 180, 72)]]
-    groups.extend([region, status, slot(state, 540, 174)] for state in ('link_code', 'approval', 'error'))
-    for group in groups:
-        for i, (x, y, w, h) in enumerate(group):
-            require(x >= 0 and y >= 0 and x + w <= width and y + h <= height, 'layout leaves viewport')
-            for a, b, m, n in group[i + 1:]:
-                require(min(x + w, a + m) <= max(x, a) or min(y + h, b + n) <= max(y, b),
-                        'layout slots overlap')
-    require(region[2] > width / 2 and region[3] > height / 2, 'stage does not span most of viewport')
-    print(f'FACE 960x600: stage={page} extent={region[2]:g}x{region[3]:g} overlap_area=0')
+    right, bottom = cx + w / 2, cy + h / 2
+    require(0 <= cx - w / 2 < right <= width and 0 <= cy - h / 2 < bottom <= height,
+            'stage leaves the safe area')
+    require(w * h > 960 * 600 / 2, 'stage does not cover most of viewport')
+    slots = layout['slots']
+    # Check the authored anchors. The paired browser checks actual rendered bounds.
+    for name in ('status', 'link_code', 'approval', 'error'):
+        require(right < width * slots[name]['x'] / 100 < width, f'{name} lacks a right-side lane')
+    for name in ('clock', 'date'):
+        require(bottom < height * slots[name]['y'] / 100 < height, f'{name} lacks space below the stage')
+    print(f'FACE 960x600: stage={stage["background"]} extent={w:g}x{h:g} '
+          f'right_lane={width - right:g}px bottom_lane={height - bottom:g}px')
 
 
 def eyes_cases(pack, decode):

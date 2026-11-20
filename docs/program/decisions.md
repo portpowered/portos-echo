@@ -17,6 +17,9 @@ one place.
 On 2026-11-20 the owner confirmed that `template@0.2.0` is the hassmic-style eyes
 appearance. The downloadable pack supplies the procedural art. The home page
 cleanup belongs to `el-w5-screen-home-eyes-v2`.
+The coordinator approved deriving a native prompt column from the pack's stage
+and slot coordinates in `packs/layout.ts`. The format-1 schema and CSS grammar
+stay the same.
 
 | Date | Decision | By | Where it applies |
 | --- | --- | --- | --- |

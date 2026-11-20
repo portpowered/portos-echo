@@ -20,6 +20,31 @@ export interface Layout {
     css?: string;
 }
 
+const nativeCardStates = ["link_code", "approval", "error"] as const;
+type NativeCardState = (typeof nativeCardStates)[number];
+
+function fitSideSlot(node: HTMLElement, slot: Slot) {
+    node.style.right = "12px";
+    node.style.maxHeight = `calc(${100 - slot.y}% - 12px)`;
+}
+
+function fitSideCard(card: HTMLElement, controls: HTMLElement | null) {
+    for (const message of card.querySelectorAll<HTMLElement>(":scope > p")) {
+        message.style.fontSize = "inherit";
+        message.style.margin = "0 0 8px";
+    }
+    if (!controls) return;
+    controls.style.gap = "12px";
+    controls.style.flexWrap = "nowrap";
+    for (const button of controls.querySelectorAll("button")) {
+        button.style.flex = "1 1 0";
+        button.style.minWidth = "0";
+        button.style.maxWidth = "none";
+        button.style.paddingInline = "8px";
+        button.style.fontSize = "20px";
+    }
+}
+
 // Content remains the canonical native controls. Position its overlays inside
 // the safe area; scroll oversized text instead of clipping approval actions.
 export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
@@ -45,6 +70,17 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
         if (value.color) node.style.color = value.color;
         if (value.font_scale)
             node.style.fontSize = `${28 * value.font_scale}px`;
+        return value;
+    }
+    function besideStage(value: Slot | undefined): value is Slot {
+        return !!(
+            value &&
+            value.x < 100 &&
+            value.y < 100 &&
+            layout &&
+            host.querySelector(".pack-stage") &&
+            value.x >= layout.stage.anchor.x + 25 * layout.stage.scale
+        );
     }
     slot(clock, "clock");
     slot(date, "date");
@@ -80,16 +116,40 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             clock.hidden = date.hidden = !idle;
             const heading = host.querySelector<HTMLElement>("h1");
             const details = host.querySelector<HTMLElement>(".details");
+            const controls = host.querySelector<HTMLElement>(".controls");
+            const status = heading && slot(heading, "status");
             if (heading) {
-                slot(heading, "status");
                 heading.dataset.packSlot = "";
+                if (status && besideStage(status)) fitSideSlot(heading, status);
             }
-            if (details && ["link_code", "approval", "error"].includes(state)) {
-                slot(details, state as "link_code" | "approval" | "error");
+            if (
+                details &&
+                nativeCardStates.includes(state as NativeCardState)
+            ) {
+                const anchor = slot(details, state as NativeCardState);
                 details.dataset.packSlot = "";
-                // Approval buttons stay with their prompt within one scrollable card.
-                const controls = host.querySelector(".controls");
+                // Native buttons stay with their prompt inside one scrollable card.
                 if (controls) details.append(controls);
+                if (besideStage(anchor)) {
+                    fitSideSlot(details, anchor);
+                    fitSideCard(details, controls);
+                }
+            } else if (
+                state === "ready" &&
+                heading &&
+                details &&
+                status &&
+                besideStage(status)
+            ) {
+                // Keep the Ready message and action in the same column as their heading.
+                slot(details, "status");
+                fitSideSlot(details, status);
+                delete heading.dataset.packSlot;
+                heading.style.position = "static";
+                heading.style.marginBottom = "12px";
+                details.prepend(heading);
+                if (controls) details.append(controls);
+                fitSideCard(details, controls);
             }
             observer.disconnect();
             observer.observe(host);

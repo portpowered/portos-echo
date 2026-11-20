@@ -219,13 +219,14 @@ def generate(stage, work, version):
     }
     if use_eyes:
         manifest['layout']['slots'] = {
-            'clock': {'x': 43.6, 'y': 86.5, 'font_scale': 1.1},
-            'date': {'x': 44, 'y': 94, 'font_scale': 0.7},
-            'status': {'x': 68, 'y': 21, 'font_scale': 0.9},
-            **{state: {'x': 2, 'y': 0} for state in ('link_code', 'approval', 'error')},
+            'clock': {'x': 45, 'y': 86.5, 'font_scale': 1.1},
+            'date': {'x': 44.8, 'y': 94, 'font_scale': 0.7},
+            'status': {'x': 75, 'y': 17, 'font_scale': 0.9},
+            **{state: {'x': 75, 'y': 24.5, 'font_scale': 0.8}
+               for state in ('link_code', 'approval', 'error')},
         }
         manifest['layout']['stage'] = {
-            'anchor': {'x': 50, 'y': 58}, 'scale': 1.1,
+            'anchor': {'x': 37, 'y': 45}, 'scale': 1.45,
             'background': '#' + bytes(BACKGROUND).hex(),
         }
     (pack / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
