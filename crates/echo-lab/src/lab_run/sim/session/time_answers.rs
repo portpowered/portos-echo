@@ -30,6 +30,7 @@ pub struct TimeAnswers<'a> {
     deadline: Instant,
     world: Option<TimeWorld>,
     turns: usize,
+    reached_budget: bool,
 }
 
 impl<'a> TimeAnswers<'a> {
@@ -48,6 +49,7 @@ impl<'a> TimeAnswers<'a> {
             deadline: Instant::now() + Duration::from_secs(120),
             world: None,
             turns: 0,
+            reached_budget: false,
         })
     }
 }
@@ -56,6 +58,7 @@ impl Driver for TimeAnswers<'_> {
     fn execute(&mut self, step: &Step, _: usize, _: Option<&Step>, artifacts: &mut Artifacts) -> Result<(), String> {
         match step {
             Step::Budget(name, value) if name == "session_listen_seconds" && value.to_bits() == 3.0_f64.to_bits() => {
+                self.reached_budget = true;
                 return Ok(());
             }
             Step::SayText(text) if QUESTIONS.get(self.turns) == Some(&text.as_str()) => {}
@@ -88,9 +91,17 @@ impl Driver for TimeAnswers<'_> {
         if let Some(world) = self.world.take() {
             self.runtime.block_on(world.close(artifacts))?;
         }
-        artifacts
-            .checks
-            .insert("live_time_answers".into(), self.turns == QUESTIONS.len());
+        let complete = self.turns == QUESTIONS.len();
+        artifacts.checks.insert("live_time_answers".into(), complete);
+        if self.reached_budget && !complete {
+            return Err(format!(
+                "time answers: completed {} of {} questions; missing {:?}",
+                self.turns,
+                QUESTIONS.len(),
+                QUESTIONS[self.turns],
+            ));
+        }
+        // Dispatch already reports the original error if a turn failed before the budget.
         Ok(())
     }
 }
