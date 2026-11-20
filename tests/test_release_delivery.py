@@ -5,6 +5,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import selectors
 import shlex
 import subprocess
 import sys
@@ -13,7 +14,7 @@ import tempfile
 import threading
 import time
 
-from test_echo_install import Sandbox, SENTINEL, fake_adb, metadata_tool, require, set_owner
+from test_echo_install import Sandbox, SENTINEL, fake_adb, metadata_tool, remote_tool, require, set_owner
 from test_echo_install_lifecycle import configure_lifecycle
 from test_release_kit import sha
 
@@ -33,14 +34,9 @@ class DeliveryBox(Sandbox):
         (self.root / "remote/tmp").mkdir()
         (self.root / "remote/hassmic/state").mkdir()
         (self.root / "clock").write_text(str(int(time.time())))
-        bridge = self.root / "synthetic-bridge"
-        configure_lifecycle(self, bridge=bridge)
-        # The staged shell owns start. It observes ps and the log, so this
-        # transport uses those readiness signals without the host-mode FIFO.
-        bridge.write_text(bridge.read_text().replace(
-            "with (base / 'ready').open('w') as ready: ready.write('ready')\n", ""))
+        configure_lifecycle(self, bridge=self.root / "synthetic-bridge")
         self.tool(self.tools / "adb", "adb")
-        for name in ("pm", "am", "nc", "df"):
+        for name in ("pm", "am", "nc", "df", "date"):
             self.tool(self.root / "remote-tools" / name, name)
         self.tool(self.root / "remote/hassmic/runas", "runas")
 
@@ -173,7 +169,28 @@ def recording_adb(base, args):
     return fake_adb()
 
 
+def wait_for_launch(base):
+    # Direct-device shell calls run behind one adb invocation. Use its first
+    # readiness poll to wait for the fixture child's existing FIFO signal.
+    run = base / "remote/echo-bridge/private/run"
+    deadline = run / "deadline"
+    if not deadline.exists() or (run / "stop").exists() or (run / "finished").exists():
+        return
+    attempt = deadline.read_text()
+    ready = base / "ready-attempt"
+    if not attempt or (ready.exists() and ready.read_text() == attempt):
+        return
+    with open(base / "ready", "rb+", buffering=0) as fifo, selectors.DefaultSelector() as selector:
+        selector.register(fifo, selectors.EVENT_READ)
+        require(bool(selector.select(5)), "delivered bridge did not signal readiness")
+        require(fifo.read(5) == b"ready", "delivered readiness signal differs")
+    ready.write_text(attempt)
+
+
 def fake_tool(base, label, args):
+    if label == "date":
+        wait_for_launch(base)
+        return remote_tool()
     if label == "runas":
         require(args[:2] == ["nobody", "3990,inet"], "runtime identity differs")
         if args[2:4] == [str(base / "remote/echo-bridge/bin/echo-bridge"), "status"]:
