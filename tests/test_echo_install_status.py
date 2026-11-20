@@ -466,23 +466,25 @@ def release_cases():
             box.install()
             require((box.device / "bin/echo-bridge").read_text() == "version C", "recovery did not install")
             require((box.device / "private/launch.sh").is_file(), "recovery did not restore the launcher")
-    for kind in ("symlink", "hardlink", "fifo", "owner", "mode"):
-        with Sandbox() as box:
-            box.install()
-            box.install()
-            original = public_bytes(box)
-            target = box.device / "releases/previous/bin/echo-bridge"
-            outside = box.root / "outside"
-            outside.write_text("outside bytes")
-            if kind in ("symlink", "hardlink", "fifo"):
-                target.unlink()
-                if kind == "symlink": target.symlink_to(outside)
-                elif kind == "hardlink": os.link(outside, target)
-                else: os.mkfifo(target)
-            elif kind == "owner": set_owner(box.root, target, "9999:9999")
-            else: target.chmod(0o666)
-            box.run(["rollback"], 1)
-            require(public_bytes(box) == original and outside.read_text() == "outside bytes",
-                    "unsafe snapshot changed active or outside bytes")
-            require(not (box.root / "remote/echo-bridge.lock").exists(), "unsafe snapshot took lock")
+    for target_name in ("releases/previous/bin/echo-bridge", "MANIFEST"):
+        for kind in ("symlink", "hardlink", "fifo", "owner", "mode"):
+            with Sandbox() as box:
+                box.install()
+                box.install()
+                target = box.device / target_name
+                if not target.exists(): target.write_text("public manifest")
+                outside = box.root / "outside"
+                outside.write_text("outside bytes")
+                if kind in ("symlink", "hardlink", "fifo"):
+                    target.unlink()
+                    if kind == "symlink": target.symlink_to(outside)
+                    elif kind == "hardlink": os.link(outside, target)
+                    else: os.mkfifo(target)
+                elif kind == "owner": set_owner(box.root, target, "9999:9999")
+                else: target.chmod(0o666)
+                original = public_bytes(box)
+                box.run(["rollback"], 1)
+                require(public_bytes(box) == original and outside.read_text() == "outside bytes",
+                        "unsafe snapshot changed active or outside bytes")
+                require(not (box.root / "remote/echo-bridge.lock").exists(), "unsafe snapshot took lock")
     print("echo-install releases: snapshot=PASS rollback=PASS partial=PASS retention=PASS")

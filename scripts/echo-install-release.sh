@@ -42,7 +42,11 @@ release_guard() {
   printf '%s\\n' \"\$files\" | awk 'NF && \$0 !~ /^0:1:(600|644|700|755)$/ { bad=1 } END { exit bad+0 }'
 done
 test ! -L '${device:?}/MANIFEST'
-test ! -e '${device:?}/MANIFEST' || test -f '${device:?}/MANIFEST'"
+if test -e '${device:?}/MANIFEST'; then
+  test -f '${device:?}/MANIFEST' || exit 1
+  info=\$(stat -c %u:%h:%a '${device:?}/MANIFEST')
+  case \$info in 0:1:600 | 0:1:644) ;; *) exit 1 ;; esac
+fi"
   case ${command_name:?} in install | rollback | stop | uninstall) return ;; esac
   run_adb shell "test ! -e '${device:?}/releases/pending'"
 }
