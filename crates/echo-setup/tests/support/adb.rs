@@ -5,6 +5,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 fn main() -> io::Result<()> {
+    if let Some(root) = std::env::var_os("ECHO_SETUP_TEST_BOOTSTRAP") {
+        return bootstrap_child(Path::new(&root));
+    }
     let root = if let Some(root) = std::env::var_os("ECHO_SETUP_TEST_ROOT") {
         PathBuf::from(root)
     } else {
@@ -46,6 +49,19 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+fn bootstrap_child(root: &Path) -> io::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    fs::write(root.join("installer-args.json"), serde_json::to_vec(&args)?)?;
+    writeln!(io::stdout(), "synthetic installer completed")?;
+    let code: i32 = fs::read_to_string(root.join("child-exit"))?
+        .parse()
+        .map_err(io::Error::other)?;
+    if code != 0 {
+        writeln!(io::stderr(), "synthetic installer needs resume")?;
+    }
+    std::process::exit(code);
 }
 
 fn forward(root: &Path, args: &[std::ffi::OsString]) -> io::Result<()> {

@@ -6,6 +6,7 @@ on:
       - 'scripts/echo-install*.sh'
       - 'scripts/package-dist.py'
       - 'scripts/install.sh'
+      - 'scripts/install.ps1'
       - 'tests/test_release*.py'
       - 'tests/test_echo_install*.py'
       - 'Cargo.lock'
