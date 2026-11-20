@@ -456,12 +456,9 @@ def main():
     from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, ownership_lifetime_case, setup_operator_cases
     from test_echo_install_release import release_cases
     from test_echo_install_status import status_cases
-    import time as _t
-    def _timed(function):
-        start = _t.time(); function(); print(f"CASE-TIMING {function.__name__} {_t.time() - start:.1f}", flush=True)
-    _timed(ownership_lifetime_case)
+    ownership_lifetime_case()
     with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(_timed,
+        list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases,
                        failure_cases, release_cases, lifecycle_cases, status_cases, nonroot_cases,
                        setup_operator_cases, setup_wake_cases)))

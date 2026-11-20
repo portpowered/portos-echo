@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn partitions_cover_each_runnable_index_exactly_once() {
         for shards in 1..=4 {
-            let mut seen = vec![0; 17];
+            let mut seen = [0_usize; 17];
             for shard in 1..=shards {
                 let parsed = partition(&format!("{shard}/{shards}")).unwrap();
                 assert_eq!(parsed, (shard, shards));

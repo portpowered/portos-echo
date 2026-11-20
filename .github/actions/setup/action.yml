@@ -30,6 +30,9 @@ runs:
         add-rust-environment-hash-key: false
         # Preserve compiled dependencies when a cold gate reaches its time limit.
         cache-on-failure: true
+        # Only main saves. Pull requests restore main's caches (falling back to an older lockfile's),
+        # and per-pull-request copies filled the 10 GB repository cache and evicted main's.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: Locked dependency cache
       shell: sh
       run: cargo fetch --locked
