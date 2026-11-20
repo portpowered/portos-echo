@@ -84,7 +84,7 @@ class Turn:
             self.answer = 'The simulated tool is unavailable.'
         else:
             assert not search, 'direct replay advertised search'
-            expected = [(namespace_for(name) if self.variant == 'namespaced' else 'functions', name)
+            expected = [(namespace_for(name) if self.variant in ('namespaced', 'forced-direct') else 'functions', name)
                         for name in self.names]
             assert sorted(visible) == sorted(expected), 'direct catalog differs from declared namespaces'
             next_call = self.direct_item(items, visible, utterance)

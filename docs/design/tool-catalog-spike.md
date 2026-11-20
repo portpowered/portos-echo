@@ -33,11 +33,11 @@ request still contains `functions.exec` and omits both the deferred
 declarations and client `tool_search`. This pin therefore offers no native
 discovery route for that variant. Keep deferral off for the no-host setup.
 The namespaced direct replay puts those domains in the direct-only list.
-The pin reserves explicit `functions` declarations in
-`app-server/src/request_processors/thread_processor.rs:394–424`. The
-override probe sets `deferLoading` on unqualified declarations, which
-normalize to `functions` on the model wire. The test checks that the stock
-direct-only setting makes them callable upfront.
+The pin requires an explicit namespace on deferred declarations and reserves
+`functions` in `app-server/src/request_processors/thread_processor.rs:375–424`.
+The test asserts both validation errors and exercises the same direct-only
+override on a legal Port OS namespace. Under that override the deferred
+declaration appears upfront and dispatches directly.
 
 ## Full replay
 

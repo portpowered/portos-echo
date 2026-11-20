@@ -84,18 +84,14 @@ def declarations(tools, variant):
     settings = {'features.code_mode.direct_only_tool_namespaces': direct}
     if variant == 'flat':
         return tools, settings
-    if variant == 'forced-direct':
-        # App-server reserves the explicit functions namespace. An unqualified
-        # declaration resolves to functions under the production settings.
-        return [{**tool, 'deferLoading': True} for tool in tools], settings
     groups = defaultdict(list)
     for tool in tools:
         name = namespace_for(tool['name'])
         entry = {'type': 'function', **tool}
-        if variant == 'deferred':
+        if variant in ('deferred', 'forced-direct'):
             entry['deferLoading'] = True
         groups[name].append(entry)
-    if variant == 'namespaced':
+    if variant in ('namespaced', 'forced-direct'):
         direct.extend(groups)
     if variant == 'deferred':
         settings['features.code_mode.excluded_tool_namespaces'] = list(groups)

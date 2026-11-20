@@ -40,13 +40,18 @@ class Rpc:
         assert message is not None, 'pin closed JSON-RPC'
         return message
 
-    def request(self, method, params):
+    def request(self, method, params, expected_error=None):
         self.sequence += 1
         self.send({'id': self.sequence, 'method': method, 'params': params})
         deadline = time.monotonic() + 4
         while True:
             message = self.receive(deadline)
             if message.get('id') == self.sequence and 'method' not in message:
+                if expected_error:
+                    error = message.get('error', {})
+                    assert error.get('code') == -32600 and expected_error in error.get('message', ''), (
+                        f'{method}: missing expected validation of {expected_error}')
+                    return None
                 assert 'error' not in message, f'{method}: pin error {message.get("error", {}).get("code")}'
                 return message['result']
             self.pending.append(message)
@@ -117,6 +122,18 @@ def thread_settings(tools, variant, model, home):
     return {'model': model, 'cwd': str(home), 'dynamicTools': dynamic, 'ephemeral': True,
             'approvalPolicy': 'never', 'sandbox': 'read-only', 'environments': [], 'config': config,
             'baseInstructions': 'Use the declared tools when appropriate.'}
+
+
+def reserved_functions(rpc, home, tool):
+    from peer import MODEL
+
+    params = thread_settings([tool], 'flat', MODEL, home)
+    params['dynamicTools'] = [{**tool, 'deferLoading': True}]
+    rpc.request('thread/start', params, 'deferred dynamic tool must include a namespace')
+    params['dynamicTools'] = [{'type': 'namespace', 'name': 'functions', 'description': 'Port OS tools.',
+                               'tools': [{'type': 'function', **tool, 'deferLoading': True}]}]
+    rpc.request('thread/start', params, 'reserved Responses API namespace: functions')
+    print('F12: pin rejects deferral in the stock functions namespace')
 
 
 def measure(rpc, peers, home, tools, case, variant, fault=None):
@@ -195,6 +212,7 @@ def replay(binary):
                 assert row is None
             row, _ = measure(rpc, peers, home, tools, CASES[0], 'deferred', 'unsupported')
             assert row is None
+            reserved_functions(rpc, home, tools[0])
             measure(rpc, peers, home, tools, CASES[0], 'forced-direct')
             row, _ = measure(rpc, peers, home, tools, CASES[0], 'flat', 'peer-close')
             assert row is None
