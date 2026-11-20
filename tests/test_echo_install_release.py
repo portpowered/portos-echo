@@ -5,7 +5,33 @@ import json
 import os
 import subprocess
 import tarfile
-from test_echo_install import Sandbox, owner, require, set_owner
+from test_echo_install import SENTINEL, TIME_ZONE_HINT, Sandbox, owner, require, set_owner
+
+DEVICE_ZONE = "America/Los_Angeles"
+DEVICE_ZONE_HINT = f"{TIME_ZONE_HINT} (device zone: {DEVICE_ZONE})\n"
+ZONE_UNSET = b'[codex]\r\n# time_zone = "UTC"\r\nweb_search = "cached"\r\n'
+ZONE_SET = b'[codex]\r\n  time_zone\t= "Europe/Berlin"\r\n'
+
+
+def time_zone_hint_cases():
+    for name, zone, original, expected in (
+        ("device-zone", DEVICE_ZONE, ZONE_UNSET, DEVICE_ZONE_HINT),
+        ("empty", "", ZONE_UNSET, TIME_ZONE_HINT + "\n"),
+        ("invalid", f"{DEVICE_ZONE}\n{SENTINEL}", ZONE_UNSET, TIME_ZONE_HINT + "\n"),
+        ("configured", DEVICE_ZONE, ZONE_SET, ""),
+    ):
+        with Sandbox() as box:
+            (box.root / "time-zone").write_text(zone + "\n")
+            supplied = box.files["config"]
+            supplied.write_bytes(original)
+            result = box.install()
+            require(result.stderr == expected, f"{name}: time-zone hint differs")
+            require(result.stdout == "echo-install: prompt defaults absent; skipped\necho-install: installed\n",
+                    f"{name}: install output differs")
+            require((box.device / "private/bridge.toml").read_bytes() == original,
+                    f"{name}: installed config bytes changed")
+            require(supplied.read_bytes() == original, f"{name}: supplied config bytes changed")
+    print("echo-install time-zone hint: device-zone=PASS empty=PASS invalid=PASS configured=PASS config-bytes=PASS")
 
 def device_archive(box, kind):
     """An explicit Android filesystem/tool boundary, without any real adb."""
@@ -20,6 +46,7 @@ def device_archive(box, kind):
                             "examples/prompts/runner.md", "licenses/codex/LICENSE",
                             "licenses/codex/NOTICE", "licenses/ca/MPL-2.0.txt",
                             "licenses/ca/NOTICE"), b"synthetic public bytes")
+    payload["examples/bridge.echo.toml"] = ZONE_UNSET
     payload["scripts/echo-install.sh"] = source.encode()
     for name in ("echo-install-release.sh", "echo-install-setup.sh"):
         helper = box.script.with_name(name)
@@ -62,7 +89,7 @@ def device_transport_cases():
 
 def device_config_cases(box, stage, env):
     bundle = stage / "bundle"
-    def install(version, *options, code=0, prompts="kept"):
+    def install(version, *options, code=0, prompts="kept", stderr=TIME_ZONE_HINT + "\n"):
         result = subprocess.run(["/bin/sh", str(bundle / "scripts/echo-install.sh"),
                                  "--device", "install", "--bundle", str(bundle),
                                  "--release-version", version, *options],
@@ -72,13 +99,17 @@ def device_config_cases(box, stage, env):
                     f"echo-install: prompt voice.md {prompts}\n"
                     "echo-install: installed\n").encode() if code == 0 else b""
         require(result.stdout == expected, "direct bundled install output differs")
+        if code == 0:
+            require(result.stderr == stderr.encode(), "direct bundled install time-zone hint differs")
 
     example = bundle / "examples/bridge.echo.toml"
     config = box.device / "private/bridge.toml"
-    install("0.1.0", prompts="seeded")
+    (box.root / "time-zone").write_text(DEVICE_ZONE + "\n")
+    install("0.1.0", prompts="seeded", stderr=DEVICE_ZONE_HINT)
     require((box.device / "bin/echo-bridge").read_bytes() == b"synthetic public bytes",
             "direct install bytes differ")
-    base = example.read_bytes()
+    base = ZONE_UNSET
+    require(example.read_bytes() == base, "bundled example config changed")
     require(config.read_bytes() == base, "first install did not seed the bundled config")
     require(owner(box.root, config) == "9999:9999", "direct install changed private owner")
     retained = {"home/prompts/voice.md": b"custom voice prompt",
@@ -91,12 +122,14 @@ def device_config_cases(box, stage, env):
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(value)
     candidate = stage / "config"
-    replacement = b"synthetic replacement configuration\n"
+    (box.root / "time-zone").unlink()
+    replacement = b'[codex]\r\nweb_search = "disabled"\r\n'
     candidate.write_bytes(replacement)
     for version, previous in (("0.1.0", None), ("0.2.0", "0.1.0")):
         install(version, "--config", str(candidate))
         require_release(box, version, previous)
         require(config.read_bytes() == base, "plain install changed the base config")
+        require(candidate.read_bytes() == replacement, "plain install changed supplied config")
         for name, value in retained.items():
             require((box.device / name).read_bytes() == value, "plain install changed retained data")
 
@@ -111,10 +144,12 @@ def device_config_cases(box, stage, env):
     require(snapshot_bytes(box.device) == before, "config refusal changed installed state")
     require_release(box, "0.2.0", "0.1.0")
 
-    candidate.write_bytes(replacement)
-    install("0.2.0", "--config", str(candidate), "--force")
+    (box.root / "time-zone").write_text(DEVICE_ZONE + "\n")
+    candidate.write_bytes(ZONE_SET)
+    install("0.2.0", "--config", str(candidate), "--force", stderr="")
     require_release(box, "0.2.0", "0.1.0")
-    require(config.read_bytes() == replacement, "forced install did not replace the base config")
+    require(config.read_bytes() == ZONE_SET, "forced install did not copy the supplied config bytes")
+    require(candidate.read_bytes() == ZONE_SET, "forced install changed supplied config")
     require(config.stat().st_mode & 0o777 == 0o600, "forced config mode differs")
     require(owner(box.root, config) == "9999:9999", "forced config owner differs")
     for name, value in retained.items():

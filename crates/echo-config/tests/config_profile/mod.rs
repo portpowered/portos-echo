@@ -90,10 +90,7 @@ fn invalid_profile_values_are_sanitized_offline() {
 #[test]
 fn documented_profile_can_be_enabled_without_changing_defaults() {
     let input = EXAMPLE
-        .replace(
-            "# Optional Codex settings (add a table named codex to customize):",
-            "[codex]",
-        )
+        .replace("# [codex]\n", "[codex]\n")
         .replace("# delegate_model =", "delegate_model =")
         .replace("# delegate_effort =", "delegate_effort =")
         .replace("# time_zone =", "time_zone =");
@@ -105,7 +102,7 @@ fn documented_profile_can_be_enabled_without_changing_defaults() {
     ] {
         assert_eq!(config.codex_model(), Some("fixture-model"));
         assert_eq!(config.codex.delegate_effort.as_deref(), Some("low"));
-        assert_eq!(config.codex.time_zone.as_deref(), Some("Europe/Berlin"));
+        assert_eq!(config.codex.time_zone.as_deref(), Some("America/Los_Angeles"));
     }
 }
 

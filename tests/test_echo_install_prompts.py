@@ -3,7 +3,7 @@ import hashlib
 import os
 import subprocess
 
-from test_echo_install import DEVICE, ROOT, Sandbox, owner, require
+from test_echo_install import DEVICE, ROOT, TIME_ZONE_HINT, Sandbox, owner, require
 
 NAMES = ("runner", "voice")
 FAILURE = "echo-install: device operation failed\n"
@@ -32,7 +32,7 @@ def ship_prompt(box, name, data):
 def check_output(result, **dispositions):
     expected = "".join(f"echo-install: prompt {name}.md {dispositions[name]}\n"
                        for name in sorted(dispositions))
-    require(result.stdout == expected + "echo-install: installed\n" and not result.stderr,
+    require(result.stdout == expected + "echo-install: installed\n" and result.stderr == TIME_ZONE_HINT + "\n",
             "prompt disposition differs")
 
 
@@ -186,7 +186,7 @@ def prompt_seed_cases():
     with Sandbox() as box:
         result = box.install()
         require(result.stdout == "echo-install: prompt defaults absent; skipped\necho-install: installed\n"
-                and not result.stderr, "absent defaults output differs")
+                and result.stderr == TIME_ZONE_HINT + "\n", "absent defaults output differs")
         require(not list((box.device / "home/prompts").iterdir())
                 and not seed_record(box, "runner").parent.exists(), "absent defaults created seed state")
     refusal_cases()

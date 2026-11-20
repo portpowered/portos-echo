@@ -103,6 +103,7 @@ Config must select [codex] launch = "standalone", binary = "/data/local/echo-bri
 W5 shared-home config: [home] dir = "/data/local/echo-bridge/home";
 all secrets and codex.home stay in private/.
 Supply config compatible with the bridge build; TOML is not validated or rewritten.
+Install suggests setting codex.time_zone when the supplied config lacks a time_zone assignment.
 Prompt defaults: seed missing prompts, refresh recognized release seeds, and keep owner edits.
 Launch: setsid, /data/local/hassmic/runas nobody 3990,inet, held stdin; the hassmic fork repeats it at boot.
 start requires exact echo-bridge NAME from ps -A -o PID,NAME and a new
@@ -408,6 +409,18 @@ chmod 700 '$device/private/.install-stage' &&
 mv -f '$device/private/.install-stage' '$device/private/launch.sh' &&
 touch '$device/private/bridge.log' && chown '$ECHO_RUN_OWNER' '$device/private/bridge.log' && chmod 600 '$device/private/bridge.log'"
 }
+time_zone_hint() {
+  if awk '/^[[:space:]]*time_zone[[:space:]]*=/ { found=1; exit } END { exit !found }' <"$1"; then
+    return 0
+  fi
+  zone=$(adb shell 'getprop persist.sys.timezone' 2>/dev/null) || zone=''
+  hint='echo-install: set codex.time_zone in bridge.toml for local time answers'
+  case $zone in
+    '' | /* | */ | *//* | *[!A-Za-z0-9_+/-]*) ;;
+    UTC | GMT | */*) hint="$hint (device zone: $zone)" ;;
+  esac
+  printf '%s\n' "$hint" >&2
+}
 if [ "$command_name" = start ]; then
   # Recover only owned state after proving no bridge is currently running.
   stop_bridge
@@ -472,4 +485,5 @@ copy_file "$config" "$device/private/bridge.toml" 600 "$force"
 release_install_prompts "${release_bundle:-$checkout}/examples/prompts"
 release_publish
 write_launcher
+LC_ALL=C time_zone_hint "$config"
 printf '%s\n' 'echo-install: installed'
