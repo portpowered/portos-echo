@@ -5,8 +5,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 fn main() -> io::Result<()> {
-    let root = std::env::var_os("ECHO_SETUP_TEST_ROOT").ok_or_else(|| io::Error::other("missing fixture"))?;
-    let root = PathBuf::from(root);
+    let root = if let Some(root) = std::env::var_os("ECHO_SETUP_TEST_ROOT") {
+        PathBuf::from(root)
+    } else {
+        std::env::current_exe()?
+            .parent()
+            .ok_or_else(|| io::Error::other("missing fixture"))?
+            .to_path_buf()
+    };
     let mut args: Vec<_> = std::env::args_os().skip(1).collect();
     let mut ledger = OpenOptions::new().create(true).append(true).open(root.join("ledger"))?;
     writeln!(
@@ -27,8 +33,68 @@ fn main() -> io::Result<()> {
             .ok_or_else(|| io::Error::other("missing shell"))?
             .to_string_lossy();
         shell(&root, &command)?;
+    } else if args.first().is_some_and(|v| v == "forward") {
+        forward(&root, &args[1..])?;
     } else if args.first().is_none_or(|v| v != "push") {
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn forward(root: &Path, args: &[std::ffi::OsString]) -> io::Result<()> {
+    let state = root.join("forwards.json");
+    let mut active: Vec<String> = serde_json::from_slice(&fs::read(&state)?)?;
+    let targets = root.join("forward-targets.json");
+    let mut mapped: std::collections::BTreeMap<String, String> = serde_json::from_slice(&fs::read(&targets)?)?;
+    if args.first().is_some_and(|arg| arg == "--list") {
+        for port in active {
+            let remote = mapped.get(&port).ok_or_else(|| io::Error::other("missing target"))?;
+            writeln!(io::stdout(), "SYNTHETIC-DEVICE {port} {remote}\r")?;
+        }
+    } else if args.first().is_some_and(|arg| arg == "--remove") {
+        let port = args
+            .get(1)
+            .ok_or_else(|| io::Error::other("missing port"))?
+            .to_string_lossy();
+        if root.join("remove-fails").exists() {
+            std::process::exit(1);
+        }
+        active.retain(|value| value != &port);
+        fs::write(state, serde_json::to_vec(&active)?)?;
+        notify(root, "cleanup-notify", port.as_bytes())?;
+    } else {
+        assert_eq!(args.len(), 3);
+        assert_eq!(args[0], "--no-rebind");
+        assert_eq!(args[1].to_str().and_then(|value| value.strip_prefix("tcp:")), Some("0"));
+        let replies_path = root.join("forward-replies.json");
+        let mut replies: Vec<String> = serde_json::from_slice(&fs::read(&replies_path)?)?;
+        let reply = replies.remove(0);
+        fs::write(replies_path, serde_json::to_vec(&replies)?)?;
+        if reply == "FAIL" {
+            std::process::exit(1);
+        }
+        notify(root, "allocation-barrier", b"ready")?;
+        let port = format!("tcp:{}", reply.trim());
+        if reply.trim().parse::<u16>().is_ok_and(|port| port > 0) && !active.contains(&port) {
+            active.push(port.clone());
+            mapped.insert(port, args[2].to_string_lossy().into_owned());
+            fs::write(targets, serde_json::to_vec(&mapped)?)?;
+            fs::write(state, serde_json::to_vec(&active)?)?;
+        }
+        write!(io::stdout(), "{reply}")?;
+    }
+    Ok(())
+}
+
+fn notify(root: &Path, name: &str, message: &[u8]) -> io::Result<()> {
+    let path = root.join(name);
+    if path.exists() {
+        let port: u16 = fs::read_to_string(path)?.parse().map_err(io::Error::other)?;
+        let mut socket = std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))?;
+        socket.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        socket.write_all(message)?;
+        let mut ack = [0];
+        socket.read_exact(&mut ack)?;
     }
     Ok(())
 }

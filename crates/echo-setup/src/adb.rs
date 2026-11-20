@@ -54,8 +54,45 @@ impl Adb {
         Ok(())
     }
 
+    pub async fn forward(&self, arguments: &[OsString]) -> Result<String> {
+        let mut argv = vec![OsString::from("forward")];
+        argv.extend_from_slice(arguments);
+        let (success, output) = self
+            .execute(&argv, None, Duration::from_secs(10))
+            .await
+            .map_err(|_| Failure("setup_forward_failed"))?;
+        if !success {
+            return Err(Failure("setup_forward_failed"));
+        }
+        Ok(output)
+    }
+
+    pub async fn remove_forward(&self, local: u16, remote: u16) -> Result<()> {
+        let local = format!("tcp:{local}");
+        let remote = format!("tcp:{remote}");
+        let listing = self.forward(&[OsString::from("--list")]).await?;
+        let mut found = false;
+        for line in listing.lines().filter(|line| !line.is_empty()) {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            if fields.len() != 3 {
+                return Err(Failure("setup_forward_cleanup_failed"));
+            }
+            if fields[1] == local {
+                if found || self.serial.as_deref() != Some(OsStr::new(fields[0])) || fields[2] != remote {
+                    return Err(Failure("setup_forward_cleanup_failed"));
+                }
+                found = true;
+            }
+        }
+        if found {
+            self.forward(&[OsString::from("--remove"), OsString::from(local)])
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn call(&self, arguments: &[OsString]) -> Result<String> {
-        let (success, output) = self.execute(arguments, None).await?;
+        let (success, output) = self.execute(arguments, None, Duration::from_secs(600)).await?;
         if !success {
             return Err(Failure("adb_failed"));
         }
@@ -70,11 +107,12 @@ impl Adb {
                 OsString::from(format!("sh -s -- --device {operation}")),
             ],
             Some(crate::DEVICE_SCRIPT.as_bytes()),
+            Duration::from_secs(600),
         )
         .await
     }
 
-    async fn execute(&self, arguments: &[OsString], input: Option<&[u8]>) -> Result<(bool, String)> {
+    async fn execute(&self, arguments: &[OsString], input: Option<&[u8]>, budget: Duration) -> Result<(bool, String)> {
         let mut command = Command::new(&self.executable);
         if let Some(serial) = &self.serial {
             command.arg("-s").arg(serial);
@@ -94,7 +132,7 @@ impl Adb {
             let success = child.wait().await.map_err(|_| Failure("adb_failed"))?.success();
             Ok((success, output))
         };
-        tokio::time::timeout(Duration::from_secs(600), operation)
+        tokio::time::timeout(budget, operation)
             .await
             .map_err(|_| Failure("adb_timeout"))?
     }
