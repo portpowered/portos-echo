@@ -50,3 +50,21 @@ jobs:
       - name: Check focus packages for lint regressions
         if: always()
         run: cargo clippy --offline --locked -p echo-config -p echo-screen-contract -p echo-screen-server -p echo-bridge --all-targets -- -D warnings
+
+  settings-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: npm --prefix web/screen ci --offline=false
+      - run: npx --prefix web/screen playwright install --with-deps chromium
+      - run: npm --prefix web/screen run build
+      - name: Exercise the bundled settings and screen packs in Chromium
+        working-directory: web/screen
+        run: node --test --test-timeout=30000 tests/render.test.mjs
+      - run: npm --prefix web/screen run lint

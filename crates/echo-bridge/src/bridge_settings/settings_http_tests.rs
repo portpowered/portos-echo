@@ -259,3 +259,121 @@ async fn t3_settings_host_http_prompt_exact_bytes_cache_and_validation_without_r
 
 #[path = "settings_http_tests/pack_cases.rs"]
 mod pack_cases;
+
+#[tokio::test]
+async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
+    use serde_json::{Value, json};
+    let fixture = Fixture::open().await;
+    let url = fixture.url("/settings/v2");
+    let unauthenticated = url.split('?').next().unwrap();
+    for (request, expected) in [
+        (fixture.client.get(unauthenticated), StatusCode::UNAUTHORIZED),
+        (
+            fixture.client.patch(unauthenticated).body("invalid"),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            fixture
+                .client
+                .patch(&url)
+                .header("Origin", "http://127.0.0.1:1")
+                .body("invalid"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            fixture.client.patch(&url).body("invalid"),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (
+            fixture
+                .client
+                .patch(&url)
+                .json(&json!({"version":1,"settings":{"agent":{"max_tool_calls":6}}})),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            fixture
+                .client
+                .patch(&url)
+                .json(&json!({"version":2,"settings":{"agent":{}}})),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            fixture
+                .client
+                .post(fixture.url("/settings/v1"))
+                .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":6}}})),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), expected);
+        assert!(response.bytes().await.unwrap().is_empty());
+        println!("Refused paired boundary request with {expected}");
+    }
+    let response = fixture
+        .client
+        .patch(&url)
+        .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":33}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(
+        body,
+        json!({"version":2,"message":"agent.max_tool_calls: must be within 1..=32"})
+    );
+    println!("Refused invalid config with {body}");
+    assert!(!fixture.path("settings.toml").exists());
+    assert!(!fixture.snapshot().await.restart_pending);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
+    use serde_json::{Value, json};
+    let fixture = Fixture::open().await;
+    let v1 = fixture.snapshot().await;
+    let base = fixture.root.path().join("bridge.toml");
+    let original_base = fs::read(&base).unwrap();
+    let path = fixture.path("settings.toml");
+    fs::create_dir(&path).unwrap();
+    let url = fixture.url("/settings/v2");
+    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner"},"agent":{"max_tool_calls":6}}});
+    let response = fixture.client.patch(&url).json(&fields).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(
+        body,
+        json!({"version":2,"message":"Could not save file; previous file retained"})
+    );
+    assert_eq!(fixture.snapshot().await, v1);
+    assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+    fs::remove_dir(&path).unwrap();
+    let response = fixture.client.patch(&url).json(&fields).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.json::<Value>().await.unwrap(),
+        json!({"version":2,"restart_pending":true})
+    );
+    let snapshot = fixture.client.get(url).send().await.unwrap();
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    assert_eq!(snapshot.headers().get("cache-control").unwrap(), "no-store");
+    let data: Value = snapshot.json().await.unwrap();
+    assert_eq!(data["settings"]["agent"]["max_tool_calls"], 6);
+    assert_eq!(data["settings"]["codex"]["delegate_model"], "synthetic-runner");
+    assert_eq!(data["settings"]["codex"]["web_search"], "cached");
+    assert_eq!(data["portos"]["link_status"], "unconfigured");
+    assert!(data["portos"].get("server").is_none());
+    assert_eq!(
+        data["settings"]["voice"],
+        serde_json::to_value(&v1.settings.voice).unwrap()
+    );
+    assert_eq!(data["prompts"], serde_json::to_value(&v1.prompts).unwrap());
+    assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 6);
+    assert_eq!(fs::read(base).unwrap(), original_base);
+    owner_only(&path);
+    println!("Refused failed rename with {body}; subsequent accepted public snapshot {data}; base bytes identical");
+    fixture.close().await;
+}

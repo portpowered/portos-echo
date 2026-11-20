@@ -12,7 +12,11 @@ export type Patch = SettingsPatchV1["settings"];
 export type SnapshotV2 = SettingsSnapshotV2;
 export type PatchV2 = SettingsPatchV2["settings"];
 
-export function settingsUrl(actions: string, suffix = "", version: 1 | 2 = 1): string {
+export function settingsUrl(
+    actions: string,
+    suffix = "",
+    version: 1 | 2 = 1,
+): string {
     const url = new URL(actions);
     const tokens = url.searchParams.getAll("token");
     if (tokens.length !== 1 || !tokens[0])
@@ -39,8 +43,12 @@ export function assertShape(
     optional: string[] = [],
 ) {
     if (
-        required.some((key) => !Object.prototype.hasOwnProperty.call(value, key)) ||
-        Object.keys(value).some((key) => !required.includes(key) && !optional.includes(key))
+        required.some(
+            (key) => !Object.prototype.hasOwnProperty.call(value, key),
+        ) ||
+        Object.keys(value).some(
+            (key) => !required.includes(key) && !optional.includes(key),
+        )
     )
         invalid();
 }
@@ -50,11 +58,20 @@ function invalid(): never {
 }
 
 export const snapshotKeys = [
-    "version", "settings", "allowed_voices", "prompts", "bridge_version",
-    "restart_pending", "warnings",
+    "version",
+    "settings",
+    "allowed_voices",
+    "prompts",
+    "bridge_version",
+    "restart_pending",
+    "warnings",
 ];
 
-export function decodeShared(data: Record<string, unknown>, codex: Record<string, unknown>, agent: Record<string, unknown>) {
+export function decodeShared(
+    data: Record<string, unknown>,
+    codex: Record<string, unknown>,
+    agent: Record<string, unknown>,
+) {
     const voice = record(record(data.settings).voice);
     const prompts = record(data.prompts);
     assertShape(voice, ["session_listen_enabled", "session_listen_seconds"]);
@@ -89,7 +106,9 @@ export function decodeSnapshot(value: unknown): Snapshot {
     decodeShared(data, codex, agent);
     if (
         data.version !== 1 ||
-        !["unconfigured", "link_required", "linked"].some((status) => status === data.link_status)
+        !["unconfigured", "link_required", "linked"].some(
+            (status) => status === data.link_status,
+        )
     )
         invalid();
     return data as Snapshot;
@@ -100,7 +119,10 @@ export async function request(
     signal: AbortSignal,
     body?: unknown,
 ): Promise<unknown> {
-    return readResponse(await send(url, signal, body === undefined ? "GET" : "POST", body), 1);
+    return readResponse(
+        await send(url, signal, body === undefined ? "GET" : "POST", body),
+        1,
+    );
 }
 
 export async function send(
@@ -124,7 +146,10 @@ export async function send(
     });
 }
 
-export async function readResponse(response: Response, version: 1 | 2): Promise<unknown> {
+export async function readResponse(
+    response: Response,
+    version: 1 | 2,
+): Promise<unknown> {
     if (response.status === 200) return response.json();
     if (response.status === 422 || response.status === 500) {
         const error = record(await response.json());

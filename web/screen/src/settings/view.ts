@@ -175,20 +175,39 @@ export function mountSettings(
                 return;
             }
             void perform(async (signal) => {
-                const pending = decodeSaved(await saveSettingsV2(actions, signal, patch), 2);
+                const pending = decodeSaved(
+                    await saveSettingsV2(actions, signal, patch),
+                    2,
+                );
                 if (signal.aborted) return "";
-                if (patch.voice) Object.assign(data.settings.voice, patch.voice);
-                if (patch.codex) Object.assign(data.settings.codex, patch.codex);
-                if (patch.agent) Object.assign(data.settings.agent, patch.agent);
-                if (patch.home && data.settings.home) data.settings.home.agent_tools = patch.home.agent_tools;
+                if (patch.voice)
+                    Object.assign(data.settings.voice, patch.voice);
+                if (patch.codex)
+                    Object.assign(data.settings.codex, patch.codex);
+                if (patch.agent)
+                    Object.assign(data.settings.agent, patch.agent);
+                if (patch.home && data.settings.home) {
+                    const groups = data.settings.home.agent_tools;
+                    groups.splice(0, groups.length, ...patch.home.agent_tools);
+                }
                 if (patch.portos && data.portos.server) {
-                    if (patch.portos.scopes) data.portos.server.requested_scopes.splice(0, Infinity, ...patch.portos.scopes);
-                    if (patch.portos.allow_tools) data.portos.server.allow_tools.splice(0, Infinity, ...patch.portos.allow_tools);
+                    if (patch.portos.scopes)
+                        data.portos.server.requested_scopes.splice(
+                            0,
+                            data.portos.server.requested_scopes.length,
+                            ...patch.portos.scopes,
+                        );
+                    if (patch.portos.allow_tools)
+                        data.portos.server.allow_tools.splice(
+                            0,
+                            data.portos.server.allow_tools.length,
+                            ...patch.portos.allow_tools,
+                        );
                 }
                 return pending
                     ? "Saved. The bridge will restart after the current reply finishes."
                     : "Saved. Changes apply to the next conversation.";
-            }, "Saving…");
+            }, "Savingï¿½");
         };
         fields.append(
             settingsForm(data, saveV2, openAIOptions(data.settings)),
