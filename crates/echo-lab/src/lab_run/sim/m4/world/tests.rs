@@ -99,7 +99,24 @@ fn assert_trace(trace: &Trace) {
         crate::lab_run::sim::selectors::check(&trace.records, &selectors, Some("run-1")),
         Ok(())
     );
-    for forbidden in ["synthetic-m4-key", "test-pair", "delegated echo"] {
+    for forbidden in ["synthetic-m4-key", "test-pair"] {
         assert!(!serde_json::to_string(&trace.records).unwrap().contains(forbidden));
+    }
+    // The owner's default-on payload amendment permits synthetic public text
+    // only in the new diagnostics; legacy dispatch receipts still omit it.
+    let tool = trace
+        .records
+        .iter()
+        .find(|row| row["event"] == "delegation.tool")
+        .unwrap();
+    assert_eq!(tool["request"], json!({"text":"delegated echo"}));
+    assert_eq!(tool["name"], "test.echo");
+    for row in &trace.records {
+        if !matches!(
+            row["event"].as_str(),
+            Some("delegation.created" | "delegation.tool" | "delegation.resolved")
+        ) {
+            assert!(!row.to_string().contains("delegated echo"));
+        }
     }
 }
