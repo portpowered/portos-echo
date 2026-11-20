@@ -1002,8 +1002,14 @@ carries the instructions, the voice, the delegation mode and the initial items, 
 has no field for either. The Echo's microphone path has no echo cancellation, so the session hears the
 Echo's speaker and can interrupt its own reply.
 
-A transcript of the user that comes before any audio of the reply has been written to the Echo arms
-nothing: it is of the turn the reply answers. A call's first reply starts on a 300 ms jitter cushion, the
+The transcript of the turn a reply answers arms nothing. The session's transcripts carry no turn identity,
+and on the Echo the question's transcript came as the answer began, part or all of it after the answer's
+first audio. Each reply therefore owns the first user turn transcribed since the reply before it, through
+that turn's whole transcript, and only a later turn is the user talking over it. A turn that cut a reply
+is the question of the next. A transcript that comes before any audio of the reply has been written to the
+Echo is always the question's. A reply nobody asked for, such as a delegated answer, takes the first user
+turn spoken over it for its question: the bridge does not hold or cut for that turn, and the reply stops
+only as the model itself stops. A call's first reply starts on a 300 ms jitter cushion, the
 one every measured call came to need in its first reply, not on the 100 ms floor.
 
 #### Why — Barge-in

@@ -62,7 +62,7 @@ async fn barge_in_stops_reply_audio_and_settles_the_cut_reply() {
         std::future::pending(),
         rows(&settled, &played),
     ));
-    send(&tx, [said("A long answer")]).await;
+    send(&tx, [asked(), said("A long answer")]).await;
     // Faster than real time: the bridge queues what the device is not owed yet.
     send(&tx, audible(30)).await;
     tick(work.as_mut(), 1).await;
@@ -139,7 +139,7 @@ async fn barge_in_sign_under_a_talking_model_loses_no_reply_audio() {
             Ok(())
         },
     ));
-    send(&tx, [said("A long answer")]).await;
+    send(&tx, [asked(), said("A long answer")]).await;
     stream(&mut work, &tx, 25, 123).await;
     send(&tx, [heard(1)]).await;
     stream(&mut work, &tx, talking, 123).await;
@@ -195,7 +195,7 @@ async fn barge_in_the_model_never_answers_ends_the_run_in_order() {
             Ok(())
         },
     ));
-    send(&tx, [said("A long answer")]).await;
+    send(&tx, [asked(), said("A long answer")]).await;
     stream(&mut work, &tx, 25, 123).await;
     send(&tx, [heard(1)]).await;
     stream(&mut work, &tx, 26, 0).await;

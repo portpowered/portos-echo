@@ -104,7 +104,7 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
             std::future::pending(),
             |_| Ok(()),
         ));
-        send(&tx, [said("Yes")]).await;
+        send(&tx, [asked(), said("Yes")]).await;
         let old_frames = if done_first && signal == 2 { 3 } else { 12 };
         send(&tx, audible(old_frames)).await;
         pending(work.as_mut()).await;
@@ -227,6 +227,17 @@ async fn voice_barge_without_cut_receipt_never_opens_replacement_playback() {
     );
     assert_eq!(command_count(&observer, true), 1);
     assert_eq!(frames(&observer).len(), 0);
+}
+
+/// The whole transcript of the question a reply answers. A reply owns the
+/// first user turn transcribed since the reply before it; a later turn is
+/// the user talking over it.
+fn asked() -> MediaEvent {
+    MediaEvent::Control(Event::Transcript {
+        role: "user".into(),
+        text: "question".into(),
+        done: true,
+    })
 }
 
 /// A sign of user speech: the speech-start item, or a transcript fragment.

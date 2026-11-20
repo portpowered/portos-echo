@@ -1,5 +1,6 @@
 use super::{Error, Stats, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
+use crate::bridge_runtime::bridge_pacing::Question;
 use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Cut, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
@@ -37,6 +38,8 @@ pub(super) struct Source {
     stale: bool,
     /// Measures the microphone under the reply for `reply.quality`; decides nothing.
     ear: Ear,
+    /// The session's transcript of the turn the reply answers.
+    question: Question,
 }
 
 impl Source {
@@ -106,6 +109,7 @@ impl Source {
         quality.mic = self.ear.rest();
         if quality.cuts == 0 {
             self.stats.cut = None;
+            self.question = Question::default();
         }
         quality
     }
@@ -146,6 +150,7 @@ impl Source {
             barge: Barge::default(),
             stale: false,
             ear: Ear::default(),
+            question: Question::default(),
         })
     }
 
@@ -156,12 +161,14 @@ impl Source {
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
     pub fn heard_user(&mut self, trigger: BargeTrigger, said: &str, whole: bool) {
-        if self.delegation.in_flight() || !self.controller.speaking() {
-            return;
-        }
-        // Nobody talks over a reply that has not sounded yet: a transcript
-        // this early is of the turn the reply answers.
-        if trigger == BargeTrigger::UserTranscript && !self.ear.sounded() {
+        let replying = !self.delegation.in_flight() && self.controller.speaking();
+        // Nobody talks over a reply that has not sounded yet, and a reply
+        // that has is not talked over by its own question.
+        let over = match trigger {
+            BargeTrigger::UserTranscript => self.question.transcribed(whole, replying && self.ear.sounded()),
+            BargeTrigger::SpeechStarted => self.question.speech_started(),
+        };
+        if !(over && replying) {
             return;
         }
         let now = Instant::now();
@@ -195,6 +202,7 @@ impl Source {
             yield_ms,
         }));
         self.stale = true;
+        self.question.cut();
         port.retire_audio();
         self.fresh_reply()?;
         self.delegation = Delegation::default();

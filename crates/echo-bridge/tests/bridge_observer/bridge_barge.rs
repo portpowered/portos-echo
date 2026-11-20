@@ -109,6 +109,8 @@ async fn model(model: mpsc::Sender<MediaEvent>, wire: Wire) -> usize {
 
 /// A long reply, and the user talking over it until the model yields.
 async fn interrupted(model: &mpsc::Sender<MediaEvent>, wire: &Wire) {
+    // The question's transcript is whole: a later one is the user talking over.
+    model.send(said("user", "tell me a story", true)).await.unwrap();
     model.send(said("assistant", "A long answer", false)).await.unwrap();
     // Faster than real time: the bridge queues what the device is not owed yet.
     for _ in 0..60 {

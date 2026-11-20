@@ -201,6 +201,8 @@ pub(super) async fn call(script: impl AsyncFnOnce(&mpsc::Sender<MediaEvent>, &Ro
 /// The owner talks over a long reply. The model talks on for a second, as
 /// it does until the session has heard the user, and then yields.
 async fn talked_over(model: &mpsc::Sender<MediaEvent>, room: &Room) {
+    // The question's transcript is whole: a later one is the user talking over.
+    model.send(said("user", "tell me a story", true)).await.unwrap();
     model.send(said("assistant", "A long answer", false)).await.unwrap();
     stream(model, 75, TALK).await;
     room.speak(VOICE);
