@@ -205,11 +205,12 @@ test("settings V2 displays configured options and submits only changed requested
             },
         ],
     );
+    // Back stays the corner control (--corner-* tokens) while saving.
     assert.deepEqual(await back.boundingBox(), {
-        x: 816,
+        x: 864,
         y: 12,
-        width: 120,
-        height: 64,
+        width: 72,
+        height: 72,
     });
     assert.equal(
         await page

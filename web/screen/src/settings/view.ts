@@ -47,17 +47,19 @@ export function mountSettings(
 ) {
     const gear = element("button", "⚙");
     gear.type = "button";
-    gear.className = "settings-gear";
+    gear.className = "corner-control";
     gear.setAttribute("aria-label", "Settings");
     gear.setAttribute("aria-expanded", "false");
     const panel = element("section");
     panel.className = "settings-panel";
     panel.hidden = true;
     panel.setAttribute("aria-label", "Settings");
-    const back = element("button", "Back");
+    // Back is the gear's twin: the same corner control, so opening and
+    // closing Settings feels like one toggle. The title sits at the left.
+    const back = element("button", "✕");
     back.type = "button";
-    back.className = "settings-back";
-    // The title sits at the left; Back takes the gear's corner at the top right.
+    back.className = "corner-control";
+    back.setAttribute("aria-label", "Back");
     const header = element("div");
     header.className = "settings-header";
     header.append(element("h1", "Settings"), back);

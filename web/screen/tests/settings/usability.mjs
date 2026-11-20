@@ -22,33 +22,62 @@ async function open(t, changes = {}) {
     const page = await pageFor(t, query, true);
     await page.setViewportSize(ECHO);
     await emit(page, frame(1));
-    const gear = await page
-        .getByRole("button", { name: "Settings", exact: true })
-        .boundingBox();
+    const button = page.getByRole("button", { name: "Settings", exact: true });
+    const gear = await button.boundingBox();
+    const opacity = () =>
+        button.evaluate((node) => Number(getComputedStyle(node).opacity));
+    const rest = await opacity();
+    await button.focus();
+    const focused = await opacity();
     await response(page, { ...snapshot, ...changes });
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await button.click();
     // A successful load shows no message.
     assert.equal(await status(page), "");
-    return { page, gear };
+    return { page, gear, opacity: { rest, focused } };
 }
 
-test("settings usability: at 960x600 Back sits in the gear's top-right corner and the fields take 78% of the height", async (t) => {
-    const { page, gear } = await open(t);
+// The corner control's box, from the shared CSS tokens.
+async function corner(page) {
+    const [top, right, size] = await page.evaluate(() => {
+        const style = getComputedStyle(document.documentElement);
+        return ["--corner-top", "--corner-right", "--corner-size"].map((name) =>
+            parseFloat(style.getPropertyValue(name)),
+        );
+    });
+    return { x: ECHO.width - right - size, y: top, width: size, height: size };
+}
+
+test("settings usability: at 960x600 Back sits exactly where the gear was and the fields take 76% of the height", async (t) => {
+    const { page, gear, opacity } = await open(t);
     const back = await page
         .getByRole("button", { name: "Back", exact: true })
         .boundingBox();
-    assert.deepEqual(back, { x: 816, y: 12, width: 120, height: 64 });
-    // The top-right quarter, ending exactly where the gear ends.
-    assert.ok(back.x >= ECHO.width / 2);
-    assert.ok(back.y + back.height <= ECHO.height / 2);
-    assert.equal(back.x + back.width, gear.x + gear.width);
-    assert.deepEqual(gear, { x: 864, y: 24, width: 72, height: 72 });
+    const expected = await corner(page);
+    assert.deepEqual(expected, { x: 864, y: 12, width: 72, height: 72 });
+    // Gear and Back are one control toggling: the same box within 1 px.
+    for (const box of [gear, back])
+        for (const key of ["x", "y", "width", "height"])
+            assert.ok(
+                Math.abs(box[key] - expected[key]) <= 1,
+                JSON.stringify({ box, expected }),
+            );
+    assert.equal(
+        await page
+            .getByRole("button", { name: "Back", exact: true })
+            .textContent(),
+        "✕",
+    );
+    // Quiet at rest, fully visible when focused.
+    assert.ok(opacity.rest < 0.7, `rest opacity ${opacity.rest}`);
+    assert.equal(opacity.focused, 1);
     const title = await page.locator(".settings-panel h1").boundingBox();
     assert.equal(title.x, 24);
-    assert.ok(title.y >= back.y && title.y + title.height <= 76);
+    assert.ok(
+        title.y >= back.y && title.y + title.height <= back.y + back.height,
+    );
     assert.ok(title.x + title.width <= back.x);
     const fields = await page.locator(".settings-fields").boundingBox();
-    assert.deepEqual(fields, { x: 24, y: 124, width: 912, height: 468 });
+    assert.deepEqual(fields, { x: 24, y: 132, width: 912, height: 460 });
     assert.ok(fields.height >= 0.7 * ECHO.height);
     // Label at the left, control at the right, on one line.
     for (const name of [
