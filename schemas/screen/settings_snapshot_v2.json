@@ -51,25 +51,11 @@
       "properties": {
         "daily_request_cap": {
           "$ref": "#/$defs/DailyCapV1"
-        },
-        "max_tool_calls": {
-          "type": "integer",
-          "format": "uint32",
-          "maximum": 32,
-          "minimum": 1
-        },
-        "task_deadline_seconds": {
-          "type": "integer",
-          "format": "uint32",
-          "maximum": 600,
-          "minimum": 5
         }
       },
       "additionalProperties": false,
       "required": [
-        "daily_request_cap",
-        "max_tool_calls",
-        "task_deadline_seconds"
+        "daily_request_cap"
       ]
     },
     "CodexValuesV2": {

@@ -82,7 +82,7 @@ async fn inspect(fixture: &Fixture, recovering: bool, stop: tokio::sync::oneshot
         let home = fixture.directory.path().join("agent-home");
         settings_runtime_requests(fixture, &home).await;
         assert_eq!(
-            settings_runtime_patch(fixture, json!({"agent":{"max_tool_calls":3}})).await,
+            settings_runtime_patch(fixture, json!({"agent":{"daily_request_cap":"3"}})).await,
             json!({"version":1,"restart_pending":true})
         );
         assert_eq!(
@@ -102,7 +102,7 @@ async fn recovered_surface(fixture: &Fixture) {
         .await
         .unwrap();
     assert_eq!(value["restart_pending"], true);
-    assert_eq!(value["settings"]["agent"]["max_tool_calls"], 3);
+    assert_eq!(value["settings"]["agent"]["daily_request_cap"], "3");
     assert_eq!(value["prompts"]["voice"], "saved voice\n");
     assert_eq!(value["prompts"]["runner"], "admitted runner");
     assert_eq!(
@@ -275,7 +275,7 @@ async fn binary_retry(
     process: &mut Process,
 ) -> tokio::net::TcpStream {
     assert_eq!(
-        settings_runtime_patch(fixture, json!({"agent":{"max_tool_calls":3}})).await,
+        settings_runtime_patch(fixture, json!({"agent":{"daily_request_cap":"3"}})).await,
         json!({"version":1,"restart_pending":true})
     );
     let replacement = binary_ready(listener, process).await;
@@ -283,12 +283,12 @@ async fn binary_retry(
     assert_eq!(snapshot["restart_pending"], false);
     assert_eq!(snapshot["warnings"], json!([]));
     assert_eq!(snapshot["settings"]["voice"]["session_listen_seconds"], 4);
-    assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 3);
+    assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "3");
     assert_eq!(snapshot["prompts"]["voice"], "accepted after failed exec\n");
     let path = fixture.directory.path().join("agent-home/settings.toml");
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
-        "[agent]\nmax_tool_calls = 3\n\n[voice]\nsession_listen_seconds = 4\n"
+        "[agent]\ndaily_request_cap = 3\n\n[voice]\nsession_listen_seconds = 4\n"
     );
     owner_only(&path);
     replacement

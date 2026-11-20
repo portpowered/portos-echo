@@ -23,12 +23,14 @@
           "$ref": "#/$defs/DailyCapV1"
         },
         "max_tool_calls": {
+          "description": "Deprecated compatibility input. Accepted and ignored without updating the settings overlay.",
           "type": "integer",
           "format": "uint32",
           "maximum": 32,
           "minimum": 1
         },
         "task_deadline_seconds": {
+          "description": "Deprecated compatibility input. Accepted and ignored without updating the settings overlay.",
           "type": "integer",
           "format": "uint32",
           "maximum": 600,

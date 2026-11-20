@@ -152,11 +152,9 @@ fn same_values(first: &BridgeConfig, second: &BridgeConfig) -> bool {
         && first.voice.session_listen_seconds == second.voice.session_listen_seconds
         && first.codex_voice() == second.codex_voice()
         && first.agent.daily_request_cap == second.agent.daily_request_cap
-        && first.agent.max_tool_calls == second.agent.max_tool_calls
         && first.codex.web_search == second.codex.web_search
         && first.codex_model() == second.codex_model()
         && first.codex.delegate_effort == second.codex.delegate_effort
-        && first.agent.task_deadline_seconds == second.agent.task_deadline_seconds
         && first.home == second.home
         && first.mcp == second.mcp
 }

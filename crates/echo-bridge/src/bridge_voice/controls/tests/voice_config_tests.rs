@@ -54,16 +54,13 @@ fn settings_cli_handoff_retains_single_startup_read() {
         std::fs::write(&path, "invalid").unwrap();
         std::fs::write(home.join("settings.toml"), "[agent]\nmax_tool_calls=1\n").unwrap();
         let prepared = super::super::voice_entry::prepare(settings).unwrap();
-        assert_eq!(prepared.config.agent.max_tool_calls, cap);
+        assert_eq!(prepared.config.agent.max_tool_calls, 8);
         assert_eq!(prepared.settings_warning.is_some(), warning);
         let startup = prepared.startup.as_ref().unwrap();
         assert_eq!(startup.base.agent.max_tool_calls, 8);
-        assert_eq!(startup.config.agent.max_tool_calls, cap);
+        assert_eq!(startup.config.agent.max_tool_calls, 8);
         assert_eq!(startup.warning.is_some(), warning);
-        assert_eq!(
-            startup.overlay.apply_to(&startup.base).unwrap().agent.max_tool_calls,
-            cap
-        );
+        assert_eq!(startup.overlay.legacy_tool_cap().unwrap_or(8), cap);
         assert!(!directory.path().join("trace").exists());
         assert!(!directory.path().join("codex").exists());
     }

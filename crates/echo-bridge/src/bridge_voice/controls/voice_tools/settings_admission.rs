@@ -64,6 +64,7 @@ async fn open_paired_portos(peer: &mut TlsPeer) -> (SettingsService, Screen, Too
             config: peer.config.clone(),
             overlay,
             warning: None,
+            deprecations: Vec::new(),
         },
         PromptTextsV1 {
             voice: "synthetic voice".into(),
@@ -119,7 +120,7 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
     assert_eq!(initial["settings"]["voice"]["session_listen_seconds"], 20);
     let patch = json!({
         "codex":{"web_search":"cached","delegate_model":"synthetic-runner"},
-        "agent":{"max_tool_calls":6},
+        "agent":{"daily_request_cap":"6"},
         "portos":{"scopes":["endpoint:read"],"allow_tools":["endpoint_query"]}
     });
     save(client, url, &patch).await;
@@ -131,7 +132,7 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
         ),
         (&json!("cached"), &json!("synthetic-runner")),
     );
-    assert_eq!(saved["settings"]["agent"]["max_tool_calls"], 6);
+    assert_eq!(saved["settings"]["agent"]["daily_request_cap"], "6");
     assert_eq!(saved["portos"]["server"]["requested_scopes"], json!(["endpoint:read"]));
     assert_eq!(
         saved["portos"]["server"]["granted_scopes"],
@@ -174,7 +175,7 @@ fn assert_disk_overlay(config: &BridgeConfig) -> String {
     assert_eq!(effective.voice.session_listen_seconds, 20);
     assert_eq!(effective.codex.web_search, echo_config::WebSearch::Cached);
     assert_eq!(effective.codex.delegate_model.as_deref(), Some("synthetic-runner"));
-    assert_eq!(effective.agent.max_tool_calls, 6);
+    assert_eq!(effective.agent.daily_request_cap, 6);
     assert_eq!(effective.mcp.scopes, ["endpoint:read"]);
     assert_eq!(effective.mcp.server[0].allow_tools, ["endpoint_query"]);
     assert_private(&overlay);

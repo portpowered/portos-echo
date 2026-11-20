@@ -394,6 +394,11 @@ fn configure_run(root: &Path, max: u64, seed_v1: bool) -> Result<(), String> {
     }
     let mut text = text.replace("session_max_seconds = 600 ", &format!("session_max_seconds = {max} "));
     if seed_v1 {
+        text = text.replacen(
+            "[agent]\n",
+            "[agent]\nmax_tool_calls = 8\ntask_deadline_seconds = 60\n",
+            1,
+        );
         let home = root.join("agent-home");
         std::fs::create_dir(&home).map_err(|_| "session: cannot create settings home")?;
         std::fs::write(home.join("settings.toml"), "[agent]\nmax_tool_calls = 4\n")

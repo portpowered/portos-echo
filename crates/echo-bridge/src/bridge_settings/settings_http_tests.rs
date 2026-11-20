@@ -113,7 +113,7 @@ async fn t3_settings_host_http_sparse_merge_validation_permissions_and_base_pres
     assert!(!original.restart_pending);
     assert_eq!(
         fixture.patch(serde_json::json!({"agent":{"max_tool_calls":4}})).await,
-        (StatusCode::OK, serde_json::json!({"version":1,"restart_pending":true}))
+        (StatusCode::OK, serde_json::json!({"version":1,"restart_pending":false}))
     );
     assert_eq!(
         fs::read_to_string(fixture.path("settings.toml")).unwrap(),
@@ -350,7 +350,7 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     let path = fixture.path("settings.toml");
     fs::create_dir(&path).unwrap();
     let url = fixture.url("/settings/v2");
-    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner"},"agent":{"max_tool_calls":6}}});
+    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner"},"agent":{"daily_request_cap":"6","max_tool_calls":6,"task_deadline_seconds":45}}});
     let response = fixture.client.patch(&url).json(&fields).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body: Value = response.json().await.unwrap();
@@ -371,7 +371,7 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     assert_eq!(snapshot.status(), StatusCode::OK);
     assert_eq!(snapshot.headers().get("cache-control").unwrap(), "no-store");
     let data: Value = snapshot.json().await.unwrap();
-    assert_eq!(data["settings"]["agent"]["max_tool_calls"], 6);
+    assert_eq!(data["settings"]["agent"], json!({"daily_request_cap":"6"}));
     assert_eq!(data["settings"]["codex"]["delegate_model"], "synthetic-runner");
     assert_eq!(data["settings"]["codex"]["web_search"], "cached");
     assert_eq!(data["portos"]["link_status"], "unconfigured");
@@ -381,7 +381,11 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
         serde_json::to_value(&v1.settings.voice).unwrap()
     );
     assert_eq!(data["prompts"], serde_json::to_value(&v1.prompts).unwrap());
-    assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 6);
+    assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 8);
+    let persisted = fs::read_to_string(&path).unwrap();
+    let decoded = SettingsOverlay::from_toml_str(&persisted).unwrap();
+    assert_eq!(decoded.legacy_tool_cap(), None);
+    assert!(!persisted.contains("task_deadline_seconds"));
     assert_eq!(fs::read(base).unwrap(), original_base);
     owner_only(&path);
     writeln!(
@@ -390,5 +394,56 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
         data["settings"],
     )
     .unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn t3_settings_legacy_patches_keep_v1_storage_and_skip_v2_writes() {
+    use serde_json::{Value, json};
+    let fixture = Fixture::open().await;
+    let path = fixture.path("settings.toml");
+    let url = fixture.url("/settings/v2");
+    let legacy = json!({"version":2,"settings":{"agent":{"max_tool_calls":2,"task_deadline_seconds":5}}});
+    let patch = || fixture.client.patch(&url).json(&legacy).send();
+    for persisted in [false, true] {
+        let before = fs::read(&path).ok();
+        let reply = patch().await.unwrap();
+        assert_eq!(reply.status(), StatusCode::OK);
+        assert_eq!(
+            reply.json::<Value>().await.unwrap(),
+            json!({"version":2,"restart_pending":false})
+        );
+        assert_eq!(fs::read(&path).ok(), before);
+        assert_eq!(path.exists(), persisted);
+        if !persisted {
+            assert_eq!(
+                fixture.patch(json!({"agent":{"max_tool_calls":4}})).await,
+                (StatusCode::OK, json!({"version":1,"restart_pending":false}))
+            );
+        }
+    }
+    assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 4);
+    let base_path = fixture.root.path().join("bridge.toml");
+    let text = format!("{BASE}\n[home]\ndir='{}'\n", fixture.path("").display());
+    fs::write(&base_path, text).unwrap();
+    let loaded = BridgeConfig::load_effective(&base_path).unwrap();
+    assert_eq!(loaded.overlay.legacy_tool_cap(), Some(4));
+    assert_eq!(loaded.config, loaded.base);
+    let mut reloaded =
+        SettingsHost::open(loaded.base, loaded.overlay, fixture.snapshot().await.prompts, vec![]).unwrap();
+    let echo_screen_server::SettingsReply::Snapshot(snapshot) = reloaded.transaction(
+        echo_screen_server::SettingsOperation::Snapshot,
+        LinkStatusV1::Unconfigured,
+    ) else {
+        unreachable!("V1 after reload")
+    };
+    assert_eq!(snapshot.settings.agent.max_tool_calls, 4);
+    assert!(!snapshot.restart_pending);
+    let response = fixture.client.get(url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["settings"]["agent"],
+        json!({"daily_request_cap":"500"})
+    );
     fixture.close().await;
 }

@@ -32,17 +32,20 @@ fn files(path: &Path) -> Vec<String> {
 #[test]
 fn screen_settings_store_sparse_saves_preserve_siblings_base_and_effective_values() {
     let (root, mut store) = setup();
-    assert!(store.save(&patch("[agent]\nmax_tool_calls=4")).unwrap());
+    assert!(store.save(&patch("[agent]\ndaily_request_cap=4")).unwrap());
     assert_eq!(
         fs::read_to_string(store.home.join("settings.toml")).unwrap(),
-        "[agent]\nmax_tool_calls = 4\n"
+        "[agent]\ndaily_request_cap = 4\n"
     );
     assert!(store.save(&patch("[codex]\nvoice='marin'")).unwrap());
     let persisted = fs::read_to_string(store.home.join("settings.toml")).unwrap();
-    assert_eq!(persisted, "[agent]\nmax_tool_calls = 4\n\n[codex]\nvoice = \"marin\"\n");
+    assert_eq!(
+        persisted,
+        "[agent]\ndaily_request_cap = 4\n\n[codex]\nvoice = \"marin\"\n"
+    );
     let effective = patch(&persisted).apply_to(&store.base).unwrap();
     assert_eq!(effective, *store.effective());
-    assert_eq!(effective.agent.max_tool_calls, 4);
+    assert_eq!(effective.agent.daily_request_cap, 4);
     assert_eq!(effective.codex_voice(), Some("marin"));
     assert_eq!(effective.voice.session_listen_seconds, 15);
     assert_eq!(fs::read_to_string(root.path().join("bridge.toml")).unwrap(), BASE);
@@ -78,9 +81,10 @@ fn screen_settings_store_noop_does_not_replace_or_request_restart() {
     let (_root, mut store) = setup();
     // Explicit server default and an absent voice have identical runtime meaning.
     assert!(!store.save(&patch("[codex]\nvoice='default'")).unwrap());
-    assert!(!store.save(&patch("[agent]\nmax_tool_calls=8")).unwrap());
+    assert!(!store.save(&patch("[agent]\nmax_tool_calls=4")).unwrap());
+    assert_eq!(store.overlay.legacy_tool_cap(), Some(4));
     let before = fs::read(store.home.join("settings.toml")).unwrap();
-    let duplicate = patch("[agent]\nmax_tool_calls=8");
+    let duplicate = patch("[agent]\nmax_tool_calls=4");
     let mut stages = Vec::new();
     assert!(
         !store
@@ -99,12 +103,12 @@ fn screen_settings_store_noop_does_not_replace_or_request_restart() {
 #[test]
 fn screen_settings_store_pre_rename_failures_retain_file_mode_and_state_and_remove_temp() {
     let (_root, mut store) = setup();
-    store.save(&patch("[agent]\nmax_tool_calls=4")).unwrap();
+    store.save(&patch("[agent]\ndaily_request_cap=4")).unwrap();
     let path = store.home.join("settings.toml");
     let previous = fs::read(&path).unwrap();
     for failed in [Stage::Create, Stage::Write, Stage::FileSync, Stage::Rename] {
         let error = store
-            .save_with(&patch("[agent]\nmax_tool_calls=5"), |stage| {
+            .save_with(&patch("[agent]\ndaily_request_cap=5"), |stage| {
                 if stage == failed {
                     Err(std::io::Error::other("SYNTHETIC_VALUE"))
                 } else {
@@ -114,20 +118,20 @@ fn screen_settings_store_pre_rename_failures_retain_file_mode_and_state_and_remo
             .unwrap_err();
         assert_eq!(error.to_string(), "Could not save file; previous file retained");
         assert_eq!(fs::read(&path).unwrap(), previous);
-        assert_eq!(store.effective().agent.max_tool_calls, 4);
+        assert_eq!(store.effective().agent.daily_request_cap, 4);
         assert_eq!(files(&store.home), ["settings.toml"]);
         #[cfg(unix)]
         assert_eq!(mode(&path), 0o600);
     }
-    assert!(store.save(&patch("[agent]\nmax_tool_calls=5")).unwrap());
+    assert!(store.save(&patch("[agent]\ndaily_request_cap=5")).unwrap());
 }
 
 #[test]
 fn screen_settings_store_directory_sync_failure_reports_uncertainty_without_false_rollback() {
     let (_root, mut store) = setup();
-    store.save(&patch("[agent]\nmax_tool_calls=4")).unwrap();
+    store.save(&patch("[agent]\ndaily_request_cap=4")).unwrap();
     let error = store
-        .save_with(&patch("[agent]\nmax_tool_calls=5"), |stage| {
+        .save_with(&patch("[agent]\ndaily_request_cap=5"), |stage| {
             if stage == Stage::DirectorySync {
                 Err(std::io::Error::other("synthetic"))
             } else {
@@ -141,12 +145,12 @@ fn screen_settings_store_directory_sync_failure_reports_uncertainty_without_fals
     );
     assert_eq!(
         fs::read_to_string(store.home.join("settings.toml")).unwrap(),
-        "[agent]\nmax_tool_calls = 5\n"
+        "[agent]\ndaily_request_cap = 5\n"
     );
-    assert_eq!(store.effective().agent.max_tool_calls, 4);
+    assert_eq!(store.effective().agent.daily_request_cap, 4);
     assert_eq!(files(&store.home), ["settings.toml"]);
     assert!(matches!(
-        store.save(&patch("[agent]\nmax_tool_calls=6")),
+        store.save(&patch("[agent]\ndaily_request_cap=6")),
         Err(SettingsError::Durability)
     ));
 }
@@ -183,7 +187,7 @@ fn screen_settings_store_prompt_boundaries_preserve_exact_utf8_and_fixed_destina
     }
     assert_eq!(files(&store.home.join("prompts")), ["runner.md", "voice.md"]);
     assert_eq!(files(&store.home), ["prompts"]);
-    assert_eq!(store.effective().agent.max_tool_calls, 8);
+    assert_eq!(store.effective().agent.daily_request_cap, 500);
 }
 
 #[test]
@@ -222,11 +226,11 @@ fn screen_settings_store_real_rename_failure_cleans_temp_and_does_not_accept_sav
     let target = store.home.join("settings.toml");
     fs::create_dir(&target).unwrap();
     assert!(matches!(
-        store.save(&patch("[agent]\nmax_tool_calls=4")),
+        store.save(&patch("[agent]\ndaily_request_cap=4")),
         Err(SettingsError::Persistence)
     ));
     assert!(target.is_dir());
-    assert_eq!(store.effective().agent.max_tool_calls, 8);
+    assert_eq!(store.effective().agent.daily_request_cap, 500);
     assert_eq!(files(&store.home), ["settings.toml"]);
     store.save_prompt(PromptKind::Voice, "voice").unwrap();
     assert_eq!(
@@ -250,13 +254,13 @@ fn screen_settings_store_replacements_are_owner_only_and_do_not_follow_destinati
     fs::write(&other, "outside target").unwrap();
     let path = store.home.join("settings.toml");
     symlink(&other, &path).unwrap();
-    assert!(store.save(&patch("[agent]\nmax_tool_calls=4")).unwrap());
+    assert!(store.save(&patch("[agent]\ndaily_request_cap=4")).unwrap());
     assert!(!fs::symlink_metadata(&path).unwrap().is_symlink());
     assert_eq!(fs::read_to_string(&other).unwrap(), "outside target");
     assert_eq!(mode(&path), 0o600);
     assert_eq!(mode(&store.home), 0o700);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(store.save(&patch("[agent]\nmax_tool_calls=5")).unwrap());
+    assert!(store.save(&patch("[agent]\ndaily_request_cap=5")).unwrap());
     assert_eq!(mode(&path), 0o600);
     for kind in [PromptKind::Voice, PromptKind::Runner] {
         store.save_prompt(kind, "prompt").unwrap();
@@ -270,7 +274,7 @@ fn screen_settings_store_shared_owner_serializes_sparse_concurrent_saves() {
     let (_root, store) = setup();
     let shared = std::sync::Mutex::new(store);
     std::thread::scope(|scope| {
-        for input in ["[agent]\nmax_tool_calls=4", "[codex]\nvoice='marin'"] {
+        for input in ["[agent]\ndaily_request_cap=4", "[codex]\nvoice='marin'"] {
             let shared = &shared;
             scope.spawn(move || assert!(shared.lock().unwrap().save(&patch(input)).unwrap()));
         }
@@ -278,7 +282,7 @@ fn screen_settings_store_shared_owner_serializes_sparse_concurrent_saves() {
     let store = shared.into_inner().unwrap();
     let persisted = fs::read_to_string(store.home.join("settings.toml")).unwrap();
     assert_eq!(patch(&persisted).apply_to(&store.base).unwrap(), *store.effective());
-    assert_eq!(store.effective().agent.max_tool_calls, 4);
+    assert_eq!(store.effective().agent.daily_request_cap, 4);
     assert_eq!(store.effective().codex_voice(), Some("marin"));
     assert_eq!(files(&store.home), ["settings.toml"]);
 }
@@ -297,14 +301,14 @@ fn screen_settings_store_requires_configured_home_and_validates_adopted_overlay(
         Err(SettingsError::Validation(_))
     ));
     let store = SettingsStore::open(base, patch("[agent]\nmax_tool_calls=4")).unwrap();
-    assert_eq!(store.effective().agent.max_tool_calls, 4);
+    assert_eq!(store.overlay.legacy_tool_cap(), Some(4));
     assert_eq!(files(&store.home), [] as [&str; 0]);
 }
 
 #[test]
 fn screen_pack_store_persists_selection_without_voice_restart_and_preserves_siblings() {
     let (_root, mut store) = setup();
-    assert!(store.save(&patch("[agent]\nmax_tool_calls=4")).unwrap());
+    assert!(store.save(&patch("[agent]\ndaily_request_cap=4")).unwrap());
     let before = store.effective().clone();
     for selection in ["template@0.1.0", "local-pack", ""] {
         let overlay = patch(&format!("screen_pack='{selection}'"));
@@ -313,7 +317,7 @@ fn screen_pack_store_persists_selection_without_voice_restart_and_preserves_sibl
         let persisted = fs::read_to_string(store.home.join("settings.toml")).unwrap();
         let restored = patch(&persisted);
         assert_eq!(restored.screen_pack(), Some(selection));
-        assert_eq!(restored.apply_to(&store.base).unwrap().agent.max_tool_calls, 4);
+        assert_eq!(restored.apply_to(&store.base).unwrap().agent.daily_request_cap, 4);
         assert!(!store.save(&overlay).unwrap());
         assert_eq!(fs::read_to_string(store.home.join("settings.toml")).unwrap(), persisted);
     }

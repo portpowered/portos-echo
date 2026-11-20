@@ -2,7 +2,7 @@
 use super::{PromptKind, SettingsError, SettingsStore, portos_permissions::PortosPermissions};
 use crate::bridge_mcp::Grant;
 #[path = "settings_host/settings_v2.rs"]
-mod settings_v2;
+pub(super) mod settings_v2;
 use echo_config::{BridgeConfig, SettingsOverlay};
 use echo_screen_contract::settings_v1::{
     AgentValuesV1, CodexPatchV1, DailyCapV1, LinkStatusV1, PromptTextsV1, SaveResultV1, SettingsErrorV1,
@@ -221,7 +221,7 @@ impl SettingsHost {
                 },
                 agent: AgentValuesV1 {
                     daily_request_cap,
-                    max_tool_calls: config.agent.max_tool_calls,
+                    max_tool_calls: self.store.overlay.legacy_tool_cap().unwrap_or(8),
                 },
             },
             allowed_voices: echo_config::realtime_voices().map(String::from).collect(),

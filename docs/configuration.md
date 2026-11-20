@@ -42,7 +42,7 @@ optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leave
 - Voice and OpenAI use `voice.session_listen_enabled`, `voice.session_listen_seconds`,
   `codex.voice`, `codex.web_search`, `codex.delegate_model` and `codex.delegate_effort`.
   An empty delegated model or effort selects the pinned app server's default.
-- Agent settings include `agent.daily_request_cap`, `agent.max_tool_calls`, `agent.task_deadline_seconds`
+- Agent settings include `agent.daily_request_cap`
   and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
 - Port OS permissions use `mcp.scopes` and the `allow_tools` list under `[[mcp.server]]`, bound to the configured
   Port OS server by its `name`. An empty tool list disables all Port OS tools.
@@ -125,9 +125,9 @@ per-tool elicitation requirement; supported approval UI (including spoof-MCP tes
 Port OS `control` call prompts. Grant only the necessary scopes and tool names, not a broad permission list
 on the assumption that a screen prompt will catch every action.
 
-`agent.daily_request_cap` limits delegated requests by UTC day, `agent.max_tool_calls` bounds each task and
-`agent.task_deadline_seconds` bounds its duration; over-budget work is refused/interrupted rather than silently
-expanding permission. These are not a cap on all voice conversation or a provider billing guarantee.
+`agent.daily_request_cap` limits delegated requests by UTC day. New requests above that cap are refused and the
+allowance resets at UTC midnight. The bridge stops waiting on a stalled delegation at the configured session
+maximum. The daily request cap applies to delegated requests.
 Quiet-hours options in `echo-lab` govern the operator bench; there is no accepted bridge quiet-hours schedule key.
 Use stop/mute for operator control and preserve the hardware mute latch's authority.
 
@@ -163,7 +163,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `voice` | Optional run-listening table, defaults below. | restart / no |
 | `voice.session_listen_enabled` | Boolean, default true; keep listening after reply. | boundary / yes |
 | `voice.session_listen_seconds` | Integer 3–300, default 15; listening window. Must not exceed session_max_seconds. | boundary / yes |
-| `voice.session_max_seconds` | Integer 3–2147483647, default 600; cap for agent-granted waiting extensions, at least listen seconds. Does not cut active speech/playback. | restart / no |
+| `voice.session_max_seconds` | Integer 3–2147483647, default 600; run ceiling for delegated waiting and agent-granted listening extensions, at least listen seconds. Active speech and playback finish under their existing rules. | restart / no |
 | `audio` | Optional audio policy table. | restart / no |
 | `audio.reply_lead_ms` | Positive u16 multiple of 20 milliseconds, default 200; maximum send lead. | restart / no |
 | `clock` | Optional network-time table. The bridge measures its clock against SNTP servers and tells the model the measured time while the system clock is more than 2 s off; see [architecture](architecture.md), launch contract item 9. | restart / no |
@@ -171,8 +171,6 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `clock.interval_seconds` | Integer 60–86400, default 3600; time between measurements after the one at startup. | restart / no |
 | `agent` | Required delegated-task policy table. | restart / no |
 | `agent.backend` | `client` (default) or `muse` parses; current Codex voice runtime admits only client. | restart / no |
-| `agent.max_tool_calls` | Integer 1–32, default 8, per delegated task. | boundary / yes |
-| `agent.task_deadline_seconds` | Integer 5–600, default 60, per delegated task. | boundary / yes |
 | `agent.daily_request_cap` | Unsigned 64-bit integer, default 500; UTC-day delegated-request cap. Overlay must also fit signed TOML integer. | boundary / yes |
 | `agent.model` | Optional nonblank runner-model alias, lowest precedence. | restart / no |
 | `muse` | Optional legacy backend table; required by muse selection; not used by current Codex voice path. | restart / no |

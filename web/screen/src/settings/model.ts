@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
-// Schema SHA-256: e61c6f3422a6816e9741c5365a9f90f89dd42bf3ff62fceaddb79f7971633255
+// Schema SHA-256: 3af45b9865d82ff648793bcc2b93c64fcb4bcaffab9d1a005feb59c9627a4334
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -51,11 +51,7 @@ export type SaveResultV1 = {
     restart_pending: boolean;
 };
 export type SettingsErrorV1 = { version: SettingsVersionV1; message: string };
-export type AgentValuesV2 = {
-    daily_request_cap: DailyCapV1;
-    max_tool_calls: number;
-    task_deadline_seconds: number;
-};
+export type AgentValuesV2 = { daily_request_cap: DailyCapV1 };
 export type CodexValuesV2 = {
     voice: string;
     web_search: WebSearchV2;

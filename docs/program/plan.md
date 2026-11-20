@@ -127,7 +127,7 @@ sequenceDiagram
 | --- | --- |
 | Supervises the app server; asks it to open and close Live calls with the session config (voice, instructions, `client` delegation) | Wake word, the echo canceller, the mute latch: hardware authority stays here |
 | The WebRTC media peer (Opus, adapted from Codex's `voice-host`); the kill switch is `thread/realtime/stop` | Streams the microphone of a run over Wyoming; with `-D` it keeps streaming while the reply plays |
-| Tool host: MCP `tools/list` → `dynamicTools` on `thread/start` → each `item/tool/call` executed as MCP `tools/call` → result returned; at most 8 tool calls and a deadline per task, then `turn/interrupt` | Plays the reply audio the bridge sends; reports `played` |
+| Tool host: MCP `tools/list` → `dynamicTools` on `thread/start` → each `item/tool/call` executed as MCP `tools/call` → result returned; waiting on the active turn is bounded by the run ceiling | Plays the reply audio the bridge sends; reports `played` |
 | Port OS credential, tool allowlist, confirmation policy, idempotency ledger; single writer of MCP calls | Nothing of the program's state |
 
 Consequences:
@@ -145,7 +145,8 @@ Consequences:
 - **One persistent session per wake word.** With `-D` the run and its capture stay open after each reply is Played,
   listening for `voice.session_listen_seconds` (default 15 s); speech in that window continues the same run. The run
   ends at idle expiry, right after the current reply when the agent calls `end_session`, or at the
-  `voice.session_max_seconds` cap on waiting the agent grants with `extend_session` (`docs/program/decisions.md`).
+  `voice.session_max_seconds` ceiling for delegated waiting and listening granted by `extend_session`. Active speech and playback
+  retain their own completion rules (`docs/program/decisions.md`).
   The Live call stays open for `session_idle_seconds`, so the next wake word continues the same conversation.
 
 ### 3.1 Spikes (W1)
@@ -204,8 +205,8 @@ need, since the Echo's disk is small.
   Every other built-in effect stays off. Codex's local tools are off: `features.shell_tool=false`,
   `features.unified_exec=false`, empty `environments`, no MCP
   servers in Codex's config, `approvalPolicy: never` with a read-only sandbox. The result goes back as
-  `delegation.context.append` without bridge code. The bridge enforces the 8-call and deadline caps and ends an
-  over-budget turn with `turn/interrupt`.
+  `delegation.context.append` without bridge code. The bridge stops waiting and interrupts a stalled turn when the run reaches
+  its session ceiling (600 s by default). Ordinary unanswered Live runs use a separate 60 s response window.
   Every model in the pin's catalog is code-mode-only, and the pin keeps its own `functions.exec`,
   `functions.wait`, `functions.request_user_input_async` and `clock.sleep` declared. The bridge's tools are
   direct declarations beside them, never `exec` callables: `exec` runs in `codex-code-mode-host`, which the
@@ -434,7 +435,7 @@ channels, and the wrapper uses both:
 
 | Operation | Implementation |
 | --- | --- |
-| `submit(task)` | Create `task_id` and a deadline. Send a message carrying the task, the `task_id`, and the instruction to finish by calling `echo.report.result` with that id. Persist the task |
+| `submit(task)` | Create `task_id` with the remaining run time for an Echo delegation. Send a message carrying the task, the `task_id`, and the instruction to finish by calling `echo.report.result` with that id. Persist the task |
 | `events(task)` | `Progress` from interim replies; `Completed` or `Failed` only from an `echo.report.result` call whose `task_id` matches a live task. Reject unknown or expired ids |
 | `cancel(task)` | Mark cancelled, send a cancel message, ignore later results for that id |
 | Timeout | No `echo.report.result` by the deadline: `Failed {retryable: false}` with an honest voice message. Never infer success from chat text |

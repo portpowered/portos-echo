@@ -278,7 +278,7 @@ async fn finish_owner(owner: SettingsService, cancel: bool) {
 async fn t3_settings_service_retains_pending_state_without_automatic_retry() {
     let (mut fixture, owner, _) = Fixture::open("[voice]\nsession_listen_seconds=9\n").await;
     let edits = async {
-        fixture.patch(json!({"agent":{"max_tool_calls":4}})).await;
+        fixture.patch(json!({"agent":{"daily_request_cap":"4"}})).await;
     };
     let (((), completion), ()) = tokio::join!(
         owner.scope(super::super::settings_restart::requested(), || LinkStatusV1::Linked),
@@ -291,8 +291,22 @@ async fn t3_settings_service_retains_pending_state_without_automatic_retry() {
         let snapshot = fixture.snapshot().await;
         assert!(snapshot.restart_pending);
         assert_eq!(snapshot.settings.voice.session_listen_seconds, 9);
-        assert_eq!(snapshot.settings.agent.max_tool_calls, 4);
+        assert_eq!(snapshot.settings.agent.daily_request_cap.as_str(), "4");
         assert_eq!(snapshot.prompts.voice, echo_config::LIVE_INSTRUCTIONS);
+        let before = fixture.overlay();
+        let reply = fixture
+            .client
+            .patch(fixture.url("/settings/v2"))
+            .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":3,"task_deadline_seconds":5}}}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reply.status(), StatusCode::OK);
+        assert_eq!(
+            reply.json::<Value>().await.unwrap(),
+            json!({"version":2,"restart_pending":true})
+        );
+        assert_eq!(fixture.overlay(), before);
         stop.send(()).unwrap();
     };
     let ((result, completion), ()) = tokio::join!(owner.scope(stopped, || LinkStatusV1::Linked), inspect);
@@ -327,7 +341,7 @@ async fn recovery_save(fixture: &mut Fixture, host: Box<SettingsHost>) {
     assert!(completion.restart_requested);
     assert_eq!(
         fixture.overlay(),
-        "[agent]\ndaily_request_cap = 71\nmax_tool_calls = 4\n\n[voice]\nsession_listen_seconds = 9\n"
+        "[agent]\ndaily_request_cap = 71\n\n[voice]\nsession_listen_seconds = 9\n"
     );
     let owner = fixture.remount(completion.host).await;
     let (stop, stopped) = tokio::sync::oneshot::channel();
@@ -380,7 +394,7 @@ async fn t3_screen_pack_service_selection_never_requests_or_retries_voice_restar
     assert!(!completion.restart_requested);
     let owner = fixture.remount(completion.host).await;
     let edits = async {
-        fixture.patch(json!({"agent":{"max_tool_calls":4}})).await;
+        fixture.patch(json!({"agent":{"daily_request_cap":"4"}})).await;
     };
     let (((), completion), ()) = tokio::join!(
         owner.scope(super::super::settings_restart::requested(), || LinkStatusV1::Linked),
@@ -396,7 +410,7 @@ async fn t3_screen_pack_service_selection_never_requests_or_retries_voice_restar
             json!({"version":1,"restart_pending":true})
         );
         assert!(fixture.snapshot().await.restart_pending);
-        assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 4);
+        assert_eq!(fixture.snapshot().await.settings.agent.daily_request_cap.as_str(), "4");
         let overlay = SettingsOverlay::from_toml_str(&fixture.overlay()).unwrap();
         assert_eq!(overlay.screen_pack(), Some(""));
         finish.send(()).unwrap();

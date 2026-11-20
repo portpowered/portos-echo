@@ -94,9 +94,9 @@ fn portos_startup(fixture: &Fixture, base_url: &str, client_id: &str) -> echo_co
         base,
         overlay: echo_config::SettingsOverlay::default(),
         warning: None,
+        deprecations: Vec::new(),
     }
 }
-
 struct PairedGrant<'a> {
     fixture: &'a Fixture,
     mock: &'a echo_lab::lab_mcp::Fixture,

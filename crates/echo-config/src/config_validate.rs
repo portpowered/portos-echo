@@ -123,15 +123,6 @@ pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
     if config.echo.wyoming_port == 0 {
         return Err(ConfigError::new("echo.wyoming_port", "must be nonzero"));
     }
-    if !(1..=32).contains(&config.agent.max_tool_calls) {
-        return Err(ConfigError::new("agent.max_tool_calls", "must be within 1..=32"));
-    }
-    if !(5..=600).contains(&config.agent.task_deadline_seconds) {
-        return Err(ConfigError::new(
-            "agent.task_deadline_seconds",
-            "must be within 5..=600",
-        ));
-    }
     if config.agent.model.as_ref().is_some_and(|model| model.trim().is_empty()) {
         return Err(ConfigError::new("agent.model", "must be nonblank"));
     }

@@ -82,7 +82,6 @@ export function decodeShared(
         typeof codex.voice !== "string" ||
         typeof agent.daily_request_cap !== "string" ||
         !/^(0|[1-9][0-9]{0,18})$/.test(agent.daily_request_cap) ||
-        !Number.isSafeInteger(agent.max_tool_calls) ||
         !strings(data.allowed_voices) ||
         !data.allowed_voices.includes(codex.voice) ||
         typeof prompts.voice !== "string" ||
@@ -106,6 +105,7 @@ export function decodeSnapshot(value: unknown): Snapshot {
     decodeShared(data, codex, agent);
     if (
         data.version !== 1 ||
+        !Number.isSafeInteger(agent.max_tool_calls) ||
         !["unconfigured", "link_required", "linked"].some(
             (status) => status === data.link_status,
         )

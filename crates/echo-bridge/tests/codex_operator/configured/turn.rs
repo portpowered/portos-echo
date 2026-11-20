@@ -72,7 +72,7 @@ async fn save_during_playback(
         tokio::task::yield_now().await;
     }
     for patch in [
-        json!({"agent":{"max_tool_calls":3}}),
+        json!({"agent":{"daily_request_cap":"3"}}),
         json!({"codex":{"voice":"marin"}}),
     ] {
         assert_eq!(
@@ -99,7 +99,7 @@ async fn pending_snapshot(fixture: &Fixture) {
         .json()
         .await
         .unwrap();
-    assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 3);
+    assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "3");
     assert_eq!(snapshot["settings"]["codex"]["voice"], "marin");
     assert_eq!(snapshot["restart_pending"], true);
 }
@@ -113,7 +113,7 @@ fn assert_coalesced(fixture: &Fixture, path: &Path, host: &mut echo_bridge::brid
         unreachable!("retained host refused snapshot")
     };
     assert!(snapshot.restart_pending);
-    assert_eq!(snapshot.settings.agent.max_tool_calls, 3);
+    assert_eq!(snapshot.settings.agent.daily_request_cap.as_str(), "3");
     assert_eq!(snapshot.settings.codex.voice, "marin");
     let rows = trace(path);
     for event in ["bridge.run_completed", "settings.restart_prepared"] {

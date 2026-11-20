@@ -247,7 +247,7 @@ async fn step(peer: &mut LivePeer) {
 async fn held_playback(fixture: &Fixture, satellite: &mut TcpStream, signal: &mut BufReader<TcpStream>) {
     receive_playback(satellite, signal).await;
     for patch in [
-        json!({"agent":{"max_tool_calls":3}}),
+        json!({"agent":{"daily_request_cap":"3"}}),
         json!({"codex":{"voice":"marin"}}),
     ] {
         assert_eq!(
@@ -257,7 +257,7 @@ async fn held_playback(fixture: &Fixture, satellite: &mut TcpStream, signal: &mu
     }
     let snapshot = binary_snapshot(fixture).await;
     assert_eq!(snapshot["restart_pending"], true);
-    assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 3);
+    assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "3");
     assert_eq!(snapshot["settings"]["codex"]["voice"], "marin");
     let rows = trace(&fixture.directory.path().join("trace"));
     assert_eq!(
@@ -311,7 +311,7 @@ async fn playback_frame(satellite: &mut TcpStream) -> (Value, Vec<u8>) {
 async fn after_cleanup(fixture: &Fixture, finish: Finish) {
     let snapshot = binary_snapshot(fixture).await;
     assert_eq!(snapshot["restart_pending"], finish == Finish::Kill);
-    assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 3);
+    assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "3");
     assert_eq!(snapshot["settings"]["codex"]["voice"], "marin");
     if finish == Finish::Kill {
         let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;

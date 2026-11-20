@@ -103,6 +103,7 @@ pub struct AgentPatchV1 {
     #[schemars(with = "DailyCapV1")]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub daily_request_cap: Option<DailyCapV1>,
+    /// Legacy Settings V1 value. Accepted and stored for wire compatibility. Ignored by delegated execution.
     #[schemars(with = "u32")]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub max_tool_calls: Option<u32>,
@@ -163,6 +164,7 @@ pub struct VoiceValuesV1 {
 #[serde(deny_unknown_fields)]
 pub struct AgentValuesV1 {
     pub daily_request_cap: DailyCapV1,
+    /// Legacy Settings V1 value. Accepted and stored for wire compatibility. Ignored by delegated execution.
     pub max_tool_calls: u32,
 }
 
