@@ -24,9 +24,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                 if params["threadId"].as_str() != self.thread.as_deref() {
                     return Ok(Event::Other);
                 }
-                if let Some(trace) = &mut self.tool_trace {
-                    trace.notification(&method, &params)?;
-                }
+                self.trace_notification(&method, &params)?;
                 if method == "thread/realtime/itemAdded" {
                     return Ok(if params["item"]["type"] == "input_audio_buffer.speech_started" {
                         Event::SpeechStarted
@@ -65,6 +63,18 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
             }
             _ => Ok(Event::Other),
         }
+    }
+
+    fn trace_notification(&mut self, method: &str, params: &serde_json::Value) -> Result<(), Error> {
+        if let Some(trace) = &mut self.tool_trace {
+            // Requested stop is Phase::Starting; only an unsolicited active
+            // closure is a failure. Projection and shutdown behavior stay intact.
+            if method == "thread/realtime/closed" && self.phase == Phase::Active {
+                trace.close("failed", Some("realtime_closed"))?;
+            }
+            trace.notification(method, params)?;
+        }
+        Ok(())
     }
 
     fn notification(&mut self, method: &str, raw: serde_json::Value) -> Result<Event, Error> {

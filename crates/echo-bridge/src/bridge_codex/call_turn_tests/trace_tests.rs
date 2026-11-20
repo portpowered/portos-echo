@@ -220,7 +220,7 @@ fn terminal_case<'a>(call: &mut TracedCall<'_>, case: &'a str) -> (&'a str, Opti
         }
         "closed" => {
             project(call, "thread/realtime/closed", json!({"threadId":"thread-1"})).unwrap();
-            ("cancelled", None)
+            ("failed", Some("realtime_closed"))
         }
         "malformed" => {
             assert!(matches!(

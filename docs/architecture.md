@@ -45,7 +45,8 @@ The native single reader records each observed `handoff_request` as
 `delegation.created`, with its task and the run active at creation. Observed
 turn completion, failure or interruption closes matching delegations once;
 an observed deadline takes precedence over the interrupt it triggers. Realtime
-closure and owner abandonment cancel outstanding lifetimes. Control, child EOF
+requested closure and owner abandonment cancel outstanding lifetimes. An
+unsolicited closure during an active call instead fails with `realtime_closed`. Control, child EOF
 and media failures use fixed failure classes. Final agent-item text may populate
 `answer`, but never changes `handback=unobserved`. Duplicate handoffs and terminal
 notifications cannot produce additional lifetimes or resolutions.

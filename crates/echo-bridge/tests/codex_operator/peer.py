@@ -47,9 +47,43 @@ def tool_request(approval=False):
         "arguments": {} if approval else {"text": "delegated echo"}, "namespace": None}})
 
 
+def trace_exit(mode):
+    cause = mode.removeprefix("tool-trace-exit-")
+    connection, _ = control.accept()
+    with connection:
+        assert connection.recv(64) == b"exit"
+    if cause == "child":
+        os._exit(0)
+    if cause in ("shutdown", "kill", "media"):
+        return
+    if cause == "timeout":
+        tool_request(True)
+        return
+    if cause == "interrupt":
+        emit({"id": "fixture-refusal", "method": "item/tool/call", "params": {
+            "threadId": "fixture-thread", "turnId": "fixture-turn", "callId": "fixture-refusal",
+            "tool": "unknown_fixture_tool", "arguments": {}, "namespace": None}})
+        return
+    if cause in ("error", "closed"):
+        emit({"method": "thread/realtime/" + ("error" if cause == "error" else "closed"),
+              "params": {"threadId": "fixture-thread", "message": "synthetic-private-error"}})
+        return
+    status = "failed" if cause == "failed" else "completed"
+    for _ in range(2):
+        emit({"method": "turn/completed", "params": {"threadId": "fixture-thread", "turn": {
+            "id": "" if cause == "malformed" else "fixture-turn", "status": status}}})
+    emit({"method": "item/completed", "params": {"threadId": "fixture-thread", "turnId": "fixture-turn",
+          "item": {"type": "agentMessage", "id": "late-answer", "phase": "final_answer", "text": "late-not-an-answer"}}})
+
+
 for line in sys.stdin:
     request = json.loads(line)
     if "method" not in request:
+        if home.joinpath("mode").read_text().startswith("tool-trace-exit-"):
+            assert request["id"] in ("fixture-tool", "fixture-refusal")
+            if request["id"] == "fixture-refusal":
+                tool_request()
+            continue
         assert request["id"] == "fixture-tool"
         if home.joinpath("mode").read_text().startswith("tool-trace"):
             # The RPC result and item completion name the same logical call.
@@ -189,6 +223,9 @@ for line in sys.stdin:
         if early:
             tool_request()
         emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
+        if home.joinpath("mode").read_text().startswith("tool-trace-exit-"):
+            trace_exit(home.joinpath("mode").read_text())
+            continue
         if home.joinpath("mode").read_text().startswith("tool-trace"):
             search = {"type": "webSearch", "id": "search-7", "query": "synthetic-query-7",
                       "action": {"type": "search", "query": "synthetic-query-7", "queries": None}}
@@ -200,6 +237,13 @@ for line in sys.stdin:
                 "threadId": "fixture-thread", "turnId": "fixture-turn", "item": search}})
         if not early:
             tool_request(home.joinpath("mode").read_text() in ("tool-approval", "tool-trace-approval"))
+    elif method == "turn/interrupt":
+        assert home.joinpath("mode").read_text() in ("tool-trace-exit-timeout", "tool-trace-exit-interrupt")
+        assert request["params"] == {"threadId": "fixture-thread", "turnId": "fixture-turn"}
+        emit({"id": request["id"], "result": {}})
+        for status in ("interrupted", "completed", "interrupted"):
+            emit({"method": "turn/completed", "params": {"threadId": "fixture-thread",
+                  "turn": {"id": "fixture-turn", "status": status}}})
     elif method == "thread/realtime/stop":
         if home.joinpath("mode").read_text() == "tool-binary-reply":
             signaling.write(b"closing\n")

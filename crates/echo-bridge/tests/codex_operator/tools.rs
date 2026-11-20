@@ -10,6 +10,7 @@ use std::sync::{
 };
 use tokio::sync::watch;
 
+mod trace_exits;
 mod trace_failures;
 
 pub(super) struct Media {

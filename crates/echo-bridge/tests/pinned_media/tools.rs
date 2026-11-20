@@ -7,6 +7,7 @@ use echo_config::{AgentConfig, McpAuth, McpServer};
 use echo_delegation::codex_dispatch::Catalog;
 use echo_mcp_client::{McpClient, TokenError, TokenProvider};
 use echo_spoof_mcp::{Fault, Spoof};
+use std::io::Write as _;
 
 struct NoToken;
 impl TokenProvider for NoToken {
@@ -461,6 +462,5 @@ async fn append_receipts(
             "content":[{"type":"input_text","text":if negative { "I couldn't call test echo." } else { "test echo: delegated echo" }}]}])
     };
     assert_eq!(observed, json!({"append_receipts":expected}));
-    use std::io::Write;
     writeln!(std::io::stdout(), "{observed}").unwrap();
 }
