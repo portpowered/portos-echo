@@ -77,6 +77,15 @@ pub(super) async fn replies<L: EchoLink>(
     }
 }
 
+/// A silent gap in a running turn is Thinking, even with more playout queued.
+pub(super) fn playout_notice(mouth: &mut super::voice_source::Mouth, delegating: bool) -> Option<Notice> {
+    Some(match (mouth.poll(tokio::time::Instant::now())?, delegating) {
+        (true, _) => Notice::ReplyStarted,
+        (false, true) => Notice::Thinking,
+        (false, false) => Notice::ReplyPaused,
+    })
+}
+
 pub(super) async fn think<L: EchoLink>(
     client: &L,
     source: &mut Source,

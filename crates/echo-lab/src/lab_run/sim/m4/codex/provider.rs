@@ -176,15 +176,7 @@ async fn conversation(
             }
         };
         if let Some(value) = value {
-            observation(observed, &value)?;
-            if value["event"] == "provider.append" {
-                if std::mem::replace(&mut reply, true) {
-                    return Err("m4: duplicate native append".into());
-                }
-                if allow_reply {
-                    observed.send_modify(|state| state["reply_ready"] = json!(true));
-                }
-            }
+            observe_reply(observed, &value, &mut reply, allow_reply)?;
         } else {
             match action {
                 Some(Control::Delegate) => process.send(&json!({"transcripts":true})).await?,
@@ -211,6 +203,25 @@ async fn conversation(
             }
         }
     }
+}
+
+fn observe_reply(
+    observed: &watch::Sender<Value>,
+    value: &Value,
+    reply: &mut bool,
+    allow_reply: bool,
+) -> Result<(), String> {
+    observation(observed, value)?;
+    if value["event"] != "provider.append" {
+        return Ok(());
+    }
+    if std::mem::replace(reply, true) {
+        return Err("m4: duplicate native append".into());
+    }
+    if allow_reply {
+        observed.send_modify(|state| state["reply_ready"] = json!(true));
+    }
+    Ok(())
 }
 
 fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), String> {

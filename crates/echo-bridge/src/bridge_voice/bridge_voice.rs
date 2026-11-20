@@ -326,8 +326,8 @@ async fn drive<L: EchoLink>(
             },
             () = tokio::time::sleep_until(barge.unwrap_or(deadline)), if barge.is_some() => source.interrupt(port)?,
             () = tokio::time::sleep_until(source.mouth.due().unwrap_or(deadline)), if source.mouth.due().is_some() => {
-                if let Some(open) = source.mouth.poll(Instant::now()) {
-                    observe(if open { Notice::ReplyStarted } else { Notice::ReplyPaused })?;
+                if let Some(notice) = voice_listen::playout_notice(&mut source.mouth, source.delegation.in_flight()) {
+                    observe(notice)?;
                 }
             },
             result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,
