@@ -314,30 +314,74 @@ fn t3_on_device_m5_stage_and_initial_launch_failures_preserve_installed_bytes() 
 
 #[test]
 fn t3_on_device_m5_refuses_installed_empty_and_auxiliary_collisions_without_mutation() {
-    for name in [
-        "lab-bridge.toml",
-        "lab-trace.jsonl",
-        "lab-stdin",
-        "lab-holder.pid",
-        "lab-stdout.log",
-        "lab-stderr.log",
-    ] {
-        for bytes in [b"foreign bytes".as_slice(), b""] {
-            let peer = Peer::new("success");
-            let remote = peer.session.0.join("remote");
-            fs::write(remote.join(name), bytes).unwrap();
-            let output = peer.run();
-            assert_eq!(output.status.code(), Some(1), "{name}");
-            assert_eq!(fs::read(remote.join(name)).unwrap(), bytes);
-            assert_eq!(
-                fs::read(remote.join("bridge.toml")).unwrap(),
-                b"installed config sentinel\n"
+    refuses_collision("lab-bridge.toml");
+}
+
+#[test]
+fn t3_on_device_m5_auxiliary_path_collision_trace() {
+    refuses_collision("lab-trace.jsonl");
+}
+
+#[test]
+fn t3_on_device_m5_auxiliary_path_collision_stdin() {
+    refuses_collision("lab-stdin");
+}
+
+#[test]
+fn t3_on_device_m5_auxiliary_path_collision_holder_pid() {
+    refuses_collision("lab-holder.pid");
+}
+
+#[test]
+fn t3_on_device_m5_auxiliary_path_collision_stdout() {
+    refuses_collision("lab-stdout.log");
+}
+
+#[test]
+fn t3_on_device_m5_auxiliary_path_collision_stderr() {
+    refuses_collision("lab-stderr.log");
+}
+
+fn refuses_collision(name: &str) {
+    for bytes in [b"foreign bytes".as_slice(), b""] {
+        let peer = Peer::new("success");
+        let root = &peer.session.0;
+        let remote = root.join("remote");
+        fs::write(remote.join(name), bytes).unwrap();
+        if name == "lab-stdin" && !bytes.is_empty() {
+            // An existing file forces mkfifo to fail through the same fake adb transport.
+            let refusal = Command::new(root.join("tool"))
+                .env("ECHO_M5_ROOT", root)
+                .args([
+                    "shell",
+                    concat!(
+                        "/data/local/hassmic/runas nobody 3990,inet ",
+                        "mkfifo /data/local/echo-bridge/private/lab-stdin"
+                    ),
+                ])
+                .output()
+                .unwrap();
+            assert_eq!(refusal.status.code(), Some(1));
+            assert!(refusal.stdout.is_empty());
+            assert!(
+                refusal.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&refusal.stderr)
             );
-            assert_eq!(peer.session.report()["result"], "fail");
-            assert_eq!(peer.session.report()["link_counts"], Value::Null);
-            assert!(!peer.calls().iter().any(|c| c.join(" ").contains("setsid")));
-            assert!(!peer.calls().iter().any(|c| c.join(" ").contains("kill $(cat")));
         }
+        let output = peer.run();
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert_eq!(fs::read(remote.join(name)).unwrap(), bytes);
+        assert_eq!(
+            fs::read(remote.join("bridge.toml")).unwrap(),
+            b"installed config sentinel\n"
+        );
+        let report = peer.session.report();
+        assert_eq!(report["result"], "fail");
+        assert_eq!(report["link_counts"], Value::Null);
+        let calls = peer.calls();
+        assert!(!calls.iter().any(|c| c.join(" ").contains("setsid")));
+        assert!(!calls.iter().any(|c| c.join(" ").contains("kill $(cat")));
     }
 }
 
