@@ -328,6 +328,7 @@ async fn t3_screen_pack_selection_reload_once_noop_alias_failure_and_reconnect()
     let _jobs = fixture.server.install_configured_packs(fixture.path(""), None, vec![]);
     let mut events = Events::open(&fixture).await;
     assert_eq!(catalog(&fixture).await["revision"], 0);
+    assert_eq!(select(&fixture, "template@1.0.0").await.0, StatusCode::OK);
     frame_barrier(&fixture, &mut events, 1).await;
     assert_eq!(select(&fixture, "local").await.0, StatusCode::OK);
     events.reload(1, json!("local")).await;
@@ -355,7 +356,12 @@ async fn t3_screen_pack_selection_reload_once_noop_alias_failure_and_reconnect()
     frame_barrier(&fixture, &mut reconnected, 5).await;
     assert!(!fixture.snapshot().await.restart_pending);
     fixture.server.revoke_pairing().await.unwrap();
-    assert!(reconnected.response.chunk().await.unwrap().is_none());
+    // Revocation drops the connection immediately; chunked HTTP need not have
+    // a terminal zero chunk. A body/decode EOF is closure, never another event.
+    match reconnected.response.chunk().await {
+        Ok(chunk) => assert!(chunk.is_none()),
+        Err(error) => assert!(error.is_body() || error.is_decode()),
+    }
     drop(events);
     drop(reconnected);
     fixture.close().await;
