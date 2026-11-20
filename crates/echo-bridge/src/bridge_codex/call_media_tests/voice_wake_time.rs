@@ -3,12 +3,112 @@ use super::*;
 use std::io::Write;
 
 const ZONE: &str = "America/Los_Angeles";
-const INITIAL: &str = "Live prompt\n[Call-start context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; operator time zone: America/Los_Angeles; answer time questions in America/Los_Angeles]";
-const BASE: &str = "Client audio bridge\n[Call-start context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; operator time zone: America/Los_Angeles; answer time questions in America/Los_Angeles]";
-const LATER: &str = "[Wake-time context: 2026-02-03 Tuesday 03:37:05 UTC+00:00; operator time zone: America/Los_Angeles; answer time questions in America/Los_Angeles]";
+const INITIAL: &str = "Live prompt\n[Call-start context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; operator time zone: America/Los_Angeles; answer time questions in America/Los_Angeles]"; // lint-rules: allow-literal synthetic UTC clock text
+const BASE: &str = "Client audio bridge\n[Call-start context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; operator time zone: America/Los_Angeles; answer time questions in America/Los_Angeles]"; // lint-rules: allow-literal synthetic UTC clock text
+const LATER: &str = "[Wake-time context: 2026-02-03 Tuesday 03:37:05 UTC+00:00; operator time zone: America/Los_Angeles; answer time questions in America/Los_Angeles]"; // lint-rules: allow-literal synthetic UTC clock text
 
-pub(super) fn t0() -> std::time::SystemTime {
+fn t0() -> std::time::SystemTime {
     std::time::UNIX_EPOCH + Duration::from_secs(1_770_089_405)
+}
+
+fn assert_no_reply(stats: &[crate::bridge_voice::Stats], observer: &Observer) {
+    assert_eq!(
+        stats
+            .iter()
+            .map(|s| (s.reply_received, s.reply_sent))
+            .collect::<Vec<_>>(),
+        vec![(0, 0); 2]
+    );
+    assert_eq!(
+        observer
+            .commands()
+            .iter()
+            .filter(|command| matches!(command, Command::Frame(_)))
+            .count(),
+        0
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_retained_wake_time_refresh_reuses_call_and_discards_old_pcm() {
+    use crate::bridge_voice::TEST_WAKE_TIME;
+    TEST_WAKE_TIME.scope(std::cell::Cell::new(t0()), refreshed_wake()).await;
+}
+
+async fn refreshed_wake() {
+    let (mut io, mut server) = fixture();
+    let (peer, state, audio) = peer(true, None);
+    let (link, mut events, microphone, observer) = device().await;
+    let (again, mut receive) = mpsc::unbounded_channel::<()>();
+    let completed = Arc::new(Mutex::new(Vec::new()));
+    let client = async {
+        let mut call = MediaCall::new(&mut io, peer);
+        start_call(&mut call).await;
+        conversation(
+            (&link, &mut events, microphone),
+            &mut call,
+            session_options(),
+            std::future::pending(),
+            |notice| {
+                reuse_notice(notice, &completed, &again);
+                Ok(())
+            },
+        )
+        .await
+    };
+    let remote = two_wakes(&mut server, &mut receive, &state);
+    let mut work = Box::pin(async { tokio::join!(client, remote).0 });
+    settle_reused_wakes(work.as_mut(), &state, &audio, &completed, &observer).await;
+    drop(work);
+    assert!(io.begin_request("account/read", &json!({})).is_ok());
+}
+
+async fn settle_reused_wakes(
+    mut work: Pin<&mut impl Future<Output = Result<u64, Error>>>,
+    state: &State,
+    audio: &mpsc::Sender<PcmFrame>,
+    completed: &Mutex<Vec<crate::bridge_voice::Stats>>,
+    observer: &Observer,
+) {
+    settle_wake_reply(work.as_mut(), observer).await;
+    assert_eq!(completed.lock().unwrap().len(), 1);
+    tokio::time::advance(Duration::from_secs(4)).await;
+    crate::bridge_voice::TEST_WAKE_TIME.with(|clock| clock.set(t0() + Duration::from_secs(420)));
+    audio.send([123; 320]).await.unwrap(); // belongs to the prior, idle reply
+    wake(observer);
+    settle_wake_reply(work.as_mut(), observer).await;
+    assert_eq!(completed.lock().unwrap().len(), 2);
+    verify_renewed_idle(work, state).await;
+    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(*state.sent.lock().unwrap(), vec![[0; 320]; 2]);
+    assert_no_reply(&completed.lock().unwrap(), observer);
+}
+
+async fn settle_wake_reply(mut work: Pin<&mut impl Future<Output = Result<u64, Error>>>, observer: &Observer) {
+    pump(work.as_mut()).await;
+    assert_eq!(observer.commands().last(), Some(&Command::Stop));
+    observer.finish(Ok(()));
+    pump(work.as_mut()).await;
+}
+
+async fn verify_renewed_idle(mut work: Pin<&mut impl Future<Output = Result<u64, Error>>>, state: &State) {
+    tokio::time::advance(Duration::from_secs(4)).await;
+    pump(work.as_mut()).await;
+    assert_eq!(state.closes.load(Ordering::SeqCst), 0);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(work.await, Ok(2));
+}
+
+fn reuse_notice(
+    notice: SessionNotice,
+    completed: &Mutex<Vec<crate::bridge_voice::Stats>>,
+    started: &mpsc::UnboundedSender<()>,
+) {
+    match notice {
+        SessionNotice::Completed(outcome) => completed.lock().unwrap().push(outcome),
+        SessionNotice::Started => started.send(()).unwrap(),
+        _ => (),
+    }
 }
 
 fn assert_refresh(request: &serde_json::Value, context: &str) {
@@ -23,7 +123,7 @@ fn assert_refresh(request: &serde_json::Value, context: &str) {
     writeln!(std::io::stdout(), "observed retained-wake request: {request}").unwrap();
 }
 
-pub(super) async fn start_call<R, W>(call: &mut MediaCall<'_, R, W, Controlled>)
+async fn start_call<R, W>(call: &mut MediaCall<'_, R, W, Controlled>)
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -42,7 +142,7 @@ where
     call.start(&options, vec![], deadline()).await.unwrap();
 }
 
-pub(super) async fn two_wakes(server: &mut Server, starts: &mut mpsc::UnboundedReceiver<()>, state: &State) {
+async fn two_wakes(server: &mut Server, starts: &mut mpsc::UnboundedReceiver<()>, state: &State) {
     let params = start_with_prompt(server, INITIAL).await;
     assert_eq!(params["baseInstructions"], BASE);
     starts.recv().await.unwrap();
@@ -179,7 +279,7 @@ async fn failed_request(server: &mut Server, admitted: mpsc::UnboundedSender<()>
     let item = read(server).await;
     assert_refresh(
         &item,
-        "[Wake-time context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; local offset unavailable]",
+        "[Wake-time context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; local offset unavailable]", // lint-rules: allow-literal synthetic UTC clock text
     );
     admitted.send(()).unwrap();
     refuse(server, &item, failure).await;
