@@ -81,6 +81,7 @@ async fn open_paired_portos(peer: &mut TlsPeer) -> (SettingsService, Screen, Too
 
 async fn exercise_running_catalog(host: &impl ToolHost, client: &Client, url: &str, config: &BridgeConfig) {
     assert_narrow_save(client, url, config).await;
+    assert_link_waiting_for_restart(client, url).await;
     assert_eq!(
         host.call_tool("control", json!({}), "1:t1:u1:a").await,
         Err(ToolError::Denied)
@@ -137,6 +138,17 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
     );
     assert_eq!(saved["portos"]["server"]["allow_tools"], json!(["endpoint_query"]));
     assert_eq!(saved["portos"]["link_waiting_for_restart"], true);
+    assert_eq!(saved["prompts"], initial["prompts"]);
+    let file = assert_disk_overlay(config);
+    writeln!(
+        std::io::stdout().lock(),
+        "Saved settings.toml (0600) {file}\nNarrow status {}",
+        saved["portos"]
+    )
+    .unwrap();
+}
+
+async fn assert_link_waiting_for_restart(client: &Client, url: &str) {
     let mut link = reqwest::Url::parse(url).unwrap();
     link.set_path("/settings/v2/portos");
     let refused = client
@@ -150,14 +162,6 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
         refused.json::<Value>().await.unwrap(),
         json!({"version":2,"message":"Port OS linking is waiting for the bridge restart."})
     );
-    assert_eq!(saved["prompts"], initial["prompts"]);
-    let file = assert_disk_overlay(config);
-    writeln!(
-        std::io::stdout().lock(),
-        "Saved settings.toml (0600) {file}\nNarrow status {}",
-        saved["portos"]
-    )
-    .unwrap();
 }
 
 fn assert_disk_overlay(config: &BridgeConfig) -> String {
