@@ -108,11 +108,9 @@ async fn serve(mut stream: TcpStream, unauthorized: bool, ledger: &Ledger) {
         (
             "200 OK",
             json!({"accounts":[{"id":"synthetic-local",
-        "workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}),
+        "workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}), // lint-rules: allow-literal inert pin routing metadata; all HTTP uses LocalRoutes proxy
         )
-    }
-    // lint-rules: allow-literal inert pin routing metadata; all HTTP uses LocalRoutes proxy
-    else {
+    } else {
         ("200 OK", json!({"requirements_toml":{}}))
     };
     let body = body.to_string();
@@ -194,6 +192,13 @@ async fn inspect(
     let serving = tokio::spawn(serve_all(listener, unauthorized, ledger.clone()));
     // Cross the timer wheel's millisecond rounding at the 1 s retry boundary.
     tokio::time::advance(Duration::from_millis(1001)).await;
+    assert_admission(path, observer, unauthorized, &ledger).await;
+    stop.send(()).unwrap();
+    serving.abort();
+    let _ = serving.await;
+}
+
+async fn assert_admission(path: &Path, observer: &Observer, unauthorized: bool, ledger: &Ledger) {
     event(
         path,
         if unauthorized {
@@ -212,7 +217,4 @@ async fn inspect(
         ledger.refreshes.load(std::sync::atomic::Ordering::SeqCst) != 0,
         unauthorized
     );
-    stop.send(()).unwrap();
-    serving.abort();
-    let _ = serving.await;
 }
