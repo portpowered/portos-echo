@@ -16,16 +16,11 @@ impl Worker {
                 () = crate::draining(self.drain.clone()) => return,
                 _ = ticks.tick() => {}
             }
-            let Ok(permit) = self.files.busy.clone().try_lock_owned() else {
-                continue;
-            };
             let revision = self.core.lock().await.pack_revision;
             let root = self.root.clone();
-            let snapshot = tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                view::scan(&root)
-            })
-            .await;
+            // This single serial loop owns one bounded scan. Background work
+            // must not take the HTTP capacity permit or starve settings reads.
+            let snapshot = tokio::task::spawn_blocking(move || view::scan(&root)).await;
             let Ok(Ok(catalog)) = snapshot else {
                 settled = None;
                 continue;
