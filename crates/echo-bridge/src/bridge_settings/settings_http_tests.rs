@@ -58,7 +58,7 @@ impl Fixture {
         Self {
             root,
             server,
-            states: states,
+            states,
             host,
             client: Client::builder()
                 .no_proxy()
