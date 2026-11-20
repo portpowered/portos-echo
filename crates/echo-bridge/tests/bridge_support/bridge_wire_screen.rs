@@ -50,6 +50,54 @@ pub(super) async fn state(lines: &mut Lines<BufReader<TcpStream>>) -> Value {
     presentation(lines).await["state"].clone()
 }
 
+/// Decode the HTTP body before reading complete screen events. HTTP chunk
+/// boundaries need not coincide with SSE record boundaries.
+pub(super) struct ScreenEvents {
+    response: reqwest::Response,
+    pending: Vec<u8>,
+}
+
+impl ScreenEvents {
+    pub(super) async fn connect(port: u16) -> Self {
+        let mut url = reqwest::Url::parse("http://127.0.0.1/events?token=synthetic-screen-pair").unwrap();
+        url.set_port(Some(port)).unwrap();
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(OBSERVATION_TIMEOUT)
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .expect("connect to paired screen");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.headers()[reqwest::header::CONTENT_TYPE], "text/event-stream");
+        Self {
+            response,
+            pending: Vec::new(),
+        }
+    }
+
+    pub(super) async fn next(&mut self, phase: &str) -> Option<Value> {
+        loop {
+            if let Some(end) = self.pending.windows(2).position(|bytes| bytes == b"\n\n") {
+                let data = self.pending[..end].strip_prefix(b"data: ").expect("screen event data");
+                let frame = serde_json::from_slice(data).expect("screen event JSON");
+                self.pending.drain(..end + 2);
+                return Some(frame);
+            }
+            match self.response.chunk().await {
+                Ok(Some(chunk)) => self.pending.extend_from_slice(&chunk),
+                Ok(None) => {
+                    assert!(self.pending.is_empty(), "{phase}: HTTP body ended inside an SSE record");
+                    return None;
+                }
+                Err(error) => panic!("{phase}: HTTP body read failed: {error:?}"),
+            }
+        }
+    }
+}
+
 async fn presentation(lines: &mut Lines<BufReader<TcpStream>>) -> Value {
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
