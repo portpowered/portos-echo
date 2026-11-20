@@ -4,8 +4,13 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
+    armPlayback,
     checkCompanionDisplay,
+    checkHandoffs,
+    checkHeldLinkCode,
+    playbackTrace,
     visibleCharacterBoxes,
+    viewport as displayViewport,
 } from "./companion-geometry.mjs";
 import { activeVideo, open, playing, refresh, token } from "./pack-session.mjs";
 
@@ -65,6 +70,38 @@ async function saved(page) {
         .waitFor();
 }
 
+function openCompanion(t, viewport) {
+    const archivePath = process.env.SCREEN_COMPANION_ARCHIVE;
+    const initialState = presentations[0][0];
+    assert.ok(archivePath, "suite owner must supply a Companion archive");
+    return open(t, { archivePath, template, viewport, initialState });
+}
+
+async function installCompanion(f) {
+    const { page } = f;
+    await playing(page, "idle.webm", template);
+    await settings(page).click();
+    await refresh(page);
+    await download(f, f.sha256);
+    await page.waitForFunction(() => window.packRevision === 1);
+    await refresh(page);
+}
+
+async function useCompanion(page) {
+    await selection(page).selectOption(id);
+    await save(page).click();
+    await saved(page);
+    await back(page).click();
+    await playing(page, "idle.webm", id);
+}
+
+const withSelected = (check) => async (t) => {
+    const f = await openCompanion(t, displayViewport);
+    await installCompanion(f);
+    await useCompanion(f.page);
+    await check(f);
+};
+
 async function installedBytes(home) {
     const pack = join(home, "screens", id);
     const hash = createHash("sha256");
@@ -78,13 +115,7 @@ async function installedBytes(home) {
 async function geometry(page, state) {
     const art = await visibleCharacterBoxes(page);
     assert.ok(art.length, `${state}: decoded character is visible`);
-    const characters = art.map(({ left, top, right, bottom }) => ({
-        label: "character",
-        x: left,
-        y: top,
-        width: right - left,
-        height: bottom - top,
-    }));
+    const characters = art.map((box) => ({ label: "character", ...box }));
     const { slots, buttons } = await page.evaluate(() => {
         const visible = (selector) =>
             [...document.querySelectorAll(selector)]
@@ -99,19 +130,17 @@ async function geometry(page, state) {
         };
     });
     const overlap = (a, b) =>
-        a.x < b.x + b.width &&
-        b.x < a.x + a.width &&
-        a.y < b.y + b.height &&
-        b.y < a.y + a.height;
-    for (const box of [...characters, ...slots, ...buttons]) {
+        a.left < b.right &&
+        b.left < a.right &&
+        a.top < b.bottom &&
+        b.top < a.bottom;
+    const boxes = [...characters, ...slots, ...buttons];
+    const { width, height } = viewport;
+    for (const { left, top, right, bottom, label } of boxes)
         assert.ok(
-            box.x >= 0 &&
-                box.y >= 0 &&
-                box.x + box.width <= viewport.width &&
-                box.y + box.height <= viewport.height,
-            `${state}: ${JSON.stringify(box)}`,
+            left >= 0 && top >= 0 && right <= width && bottom <= height,
+            `${state}: ${label} bounds=${[left, top, right, bottom]}`,
         );
-    }
     // Ready's transparent hit area intentionally spans the pack content.
     const paintedButtons = buttons.filter(
         (button) => state !== "ready" || button.label !== "home-tap",
@@ -145,7 +174,8 @@ async function geometry(page, state) {
         for (const label of ["pack-clock", "pack-date"]) {
             const box = slots.find((slot) => slot.label === label);
             assert.ok(
-                box.y >= 480 && Math.abs(box.x + box.width / 2 - 480) <= 42,
+                box.top >= 480 &&
+                    Math.abs((box.left + box.right) / 2 - 480) <= 42,
                 label,
             );
         }
@@ -293,6 +323,14 @@ async function alternatePlayback(f) {
         pixel.every((value, i) => Math.abs(value - [16, 24, 39][i]) <= 4),
         pixel,
     );
+    const setup = ["setup-enter.mp4", "setup.mp4", "setup.mp4"];
+    const observer = await armPlayback(mp4, setup, 2);
+    await f.update(
+        presentations.find(([state]) => state.state === "link_code")[0],
+    );
+    const { rows } = await playbackTrace(observer);
+    checkHandoffs(rows, setup);
+    assert.ok(rows.every(({ art }) => art));
     await mp4.close();
     await f.page.emulateMedia({ reducedMotion: "reduce" });
     await f.update({ state: "listening" });
@@ -317,31 +355,19 @@ async function alternatePlayback(f) {
         [768, 720, "rest.png"],
     );
     console.log(
-        `B3 h264=decoded background=${pixel.join(",")} reduced_motion=rest.png state=listening`,
+        `B3 h264=decoded background=${pixel.join(",")} setup=entry->loop->replay reduced_motion=rest.png state=listening`,
     );
 }
 
 test("T3 Companion installs, selects, decodes, preserves selection on failure, and rolls back", async (t) => {
-    const archivePath = process.env.SCREEN_COMPANION_ARCHIVE;
-    assert.ok(archivePath, "suite owner must supply a Companion archive");
-    const f = await open(t, {
-        archivePath,
-        template,
-        viewport,
-        initialState: presentations[0][0],
-    });
+    const f = await openCompanion(t, viewport);
     const { page, home } = f;
     const navigations = [];
     page.on("framenavigated", (frame) => {
         if (frame === page.mainFrame()) navigations.push(frame.url());
     });
     await mkdir(screenshots, { recursive: true });
-    await playing(page, "idle.webm", template);
-    await settings(page).click();
-    await refresh(page);
-    await download(f, f.sha256);
-    await page.waitForFunction(() => window.packRevision === 1);
-    await refresh(page);
+    await installCompanion(f);
     assert.equal((await f.api("/screen-packs/v1")).active, template);
     const preview = page.getByRole("img", { name: "companion rest pose" });
     await preview.scrollIntoViewIfNeeded();
@@ -352,11 +378,7 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
         }),
         768,
     );
-    await selection(page).selectOption(id);
-    await save(page).click();
-    await saved(page);
-    await back(page).click();
-    await playing(page, "idle.webm", id);
+    await useCompanion(page);
     assert.equal(
         await readFile(join(home, "settings.toml"), "utf8"),
         `screen_pack = "${id}"\n`,
@@ -467,5 +489,10 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
 
 test(
     "T3 Companion visible art fills the display while leaving room for native content",
-    checkCompanionDisplay,
+    withSelected(checkCompanionDisplay),
+);
+
+test(
+    "T3 Companion Link Code stays centered through natural replays",
+    withSelected(checkHeldLinkCode),
 );
