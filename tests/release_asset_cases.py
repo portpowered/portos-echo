@@ -28,14 +28,14 @@ def companion_cases(assets, pack, witness):
         manifest = json.load(source.extractfile('pack.json'))
     require((manifest['format'], manifest['name'], manifest['version']) == (1, 'companion', '0.1.0'),
             'Companion identity differs')
-    template = next(assets.glob('template-*.screenpack.tar.gz')).read_bytes()
-    substitute = f'{hashlib.sha256(template).hexdigest()}  {name}\n'
+    default_pack = next(assets.glob('default-*.screenpack.tar.gz')).read_bytes()
+    substitute = f'{hashlib.sha256(default_pack).hexdigest()}  {name}\n'
     faults = (
         (None, sums, 'invalid companion asset membership'),
         (data, sums.replace(row, ''), 'invalid companion asset membership'),
         (data + b'changed', sums, 'asset checksum mismatch'),
         (data, sums + row, 'invalid checksums'),
-        (template, sums.replace(row, substitute), 'invalid companion identity'),
+        (default_pack, sums.replace(row, substitute), 'invalid companion identity'),
         (None, sums.replace(row, ''), None),
     )
     with tempfile.TemporaryDirectory(prefix='companion-faults-') as temporary:
@@ -83,7 +83,7 @@ def pre_setup_cases(assets, archive, verify):
         name = row.split()[1]
         if name.startswith('echo-setup-') or name == 'install.ps1':
             (assets / name).unlink()
-    base = {archive.name, 'install.sh', next(assets.glob('template-*.screenpack.tar.gz')).name}
+    base = {archive.name, 'install.sh', next(assets.glob('default-*.screenpack.tar.gz')).name}
     rows = {row.split()[1]: row for row in rows if row.split()[1] in base}
     sums.write_text(''.join(rows.values()))
     result = subprocess.run(verify, capture_output=True, text=True, timeout=15)

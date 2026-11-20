@@ -153,7 +153,7 @@ jobs:
           name: targeted-release-${{ github.sha }}
           path: |
             dist/echo-*-armv7.tar.gz
-            dist/template-*.screenpack.tar.gz
+            dist/default-*.screenpack.tar.gz
             dist/companion-0.1.0.screenpack.tar.gz
             dist/echo-setup-*-linux-x86_64
             dist/echo-setup-*-windows-x86_64.exe
