@@ -160,6 +160,32 @@ async fn t3_screen_pack_catalog_selection_guards_and_failed_writer_retain_choice
     assert_eq!(unmounted.status(), StatusCode::SERVICE_UNAVAILABLE);
     pack(&fixture, "sample", "sample", "0.1.0");
     let _jobs = fixture.server.install_configured_packs(fixture.path(""), None, vec![]);
+    pairing_guards(&fixture).await;
+    selection_input_guards(&fixture).await;
+    assert!(!fixture.path("settings.toml").exists());
+    assert_eq!(select(&fixture, "sample").await.0, StatusCode::OK);
+    fs::remove_file(fixture.path("settings.toml")).unwrap();
+    fs::create_dir(fixture.path("settings.toml")).unwrap();
+    let (code, error) = select(&fixture, "").await;
+    assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error["message"], "Could not save file; previous file retained");
+    assert_eq!(catalog(&fixture).await["active"], "sample");
+    assert!(!fixture.snapshot().await.restart_pending);
+    fixture.server.revoke_pairing().await.unwrap();
+    assert_eq!(
+        fixture
+            .client
+            .get(fixture.url("/screen-packs/v1"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    fixture.close().await;
+}
+
+async fn pairing_guards(fixture: &Fixture) {
     for route in ["/screen-packs/v1", "/screen-packs/v1/selection"] {
         for query in [
             "",
@@ -187,6 +213,9 @@ async fn t3_screen_pack_catalog_selection_guards_and_failed_writer_retain_choice
             assert_eq!(response.text().await.unwrap(), "");
         }
     }
+}
+
+async fn selection_input_guards(fixture: &Fixture) {
     let url = fixture.url("/screen-packs/v1/selection");
     for (body, media, code) in [
         ("{}", "text/plain", StatusCode::UNSUPPORTED_MEDIA_TYPE),
@@ -238,27 +267,6 @@ async fn t3_screen_pack_catalog_selection_guards_and_failed_writer_retain_choice
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert!(!fixture.path("settings.toml").exists());
-    assert_eq!(select(&fixture, "sample").await.0, StatusCode::OK);
-    fs::remove_file(fixture.path("settings.toml")).unwrap();
-    fs::create_dir(fixture.path("settings.toml")).unwrap();
-    let (code, error) = select(&fixture, "").await;
-    assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(error["message"], "Could not save file; previous file retained");
-    assert_eq!(catalog(&fixture).await["active"], "sample");
-    assert!(!fixture.snapshot().await.restart_pending);
-    fixture.server.revoke_pairing().await.unwrap();
-    assert_eq!(
-        fixture
-            .client
-            .get(fixture.url("/screen-packs/v1"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
-    );
-    fixture.close().await;
 }
 
 struct Events {
@@ -305,7 +313,7 @@ impl Events {
 // from any preceding no-op/refusal would appear before this exact frame.
 async fn frame_barrier(fixture: &Fixture, events: &mut Events, seq: u64) {
     fixture
-        ._states
+        .states
         .send(echo_screen_contract::UiState::Listening)
         .await
         .unwrap();

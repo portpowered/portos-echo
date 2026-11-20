@@ -14,7 +14,7 @@ const BASE: &str = "[echo]\nhost='127.0.0.1'\n[live]\nvoice='alloy'\ncredential_
 pub(crate) struct Fixture {
     root: tempfile::TempDir,
     server: ScreenServer,
-    _states: mpsc::Sender<echo_screen_contract::UiState>,
+    states: mpsc::Sender<echo_screen_contract::UiState>,
     host: JoinHandle<()>,
     client: Client,
 }
@@ -58,7 +58,7 @@ impl Fixture {
         Self {
             root,
             server,
-            _states: states,
+            states: states,
             host,
             client: Client::builder()
                 .no_proxy()
