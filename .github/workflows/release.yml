@@ -24,7 +24,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Focused wrapper and packaging tests
-        run: python3 tests/test_release_kit.py
+        run: |
+          python3 tests/test_release_kit.py
+          python3 tests/test_release_redirects.py
       - uses: ./.github/actions/setup
         with:
           target: build-echo
@@ -32,9 +34,9 @@ jobs:
         shell: sh
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3
+          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3 gcc-mingw-w64-x86-64
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
-          rustup target add --toolchain 1.100.0 armv7-linux-androideabi
+          rustup target add --toolchain 1.100.0 armv7-linux-androideabi x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Cheap release checks
@@ -59,7 +61,10 @@ jobs:
           name: echo-release-${{ github.sha }}
           path: |
             dist/echo-*-armv7.tar.gz
+            dist/echo-setup-*-linux-x86_64
+            dist/echo-setup-*-windows-x86_64.exe
             dist/install.sh
+            dist/install.ps1
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
@@ -84,4 +89,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$RELEASE_TAG" dist/echo-*-armv7.tar.gz dist/install.sh dist/SHA256SUMS --verify-tag --notes-from-tag
+        run: |
+          gh release create "$RELEASE_TAG" dist/echo-*-armv7.tar.gz \
+            dist/echo-setup-*-linux-x86_64 dist/echo-setup-*-windows-x86_64.exe \
+            dist/install.sh dist/install.ps1 dist/SHA256SUMS --verify-tag --notes-from-tag

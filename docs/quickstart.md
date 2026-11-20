@@ -2,14 +2,14 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 19
-status: active; Linux operator guide
+status: active; Windows/Linux installer and Linux source guide
 ---
 
 # Run Echo on your Echo Show
 
 Echo uses the rooted Echo Show 8 (2nd gen, `athena`) as a voice assistant. hassmic handles the microphone,
 speaker and wake word; `echo-bridge` and its pinned Codex app-server child run beside it on the Echo.
-The Linux PC installs and maintains them. It need not stay in the audio path.
+A Windows or Linux x86_64 PC installs and maintains them. It need not stay in the audio path.
 Start with the [configuration guide](configuration.md), especially voice access and permissions.
 
 ## Before installing
@@ -20,8 +20,10 @@ change firmware or install hassmic. Follow the fork's installation procedure sep
 The configured wake word is **Computer**; the [baselines](program/baselines.md) record the supported device facts.
 Keep Wyoming restricted to loopback for this placement.
 
-Use Linux with POSIX sh, Git, GNU Make, Python 3.12 and Android platform-tools (`adb`) on PATH.
-Connect exactly one ready adb device. Root is used to prepare files; the bridge runs as `nobody` (uid 9999)
+Install Android platform-tools (`adb`) and connect exactly one ready adb device. The native installer looks
+for adb on PATH and in the platform's default Android SDK locations. Use `--adb PATH` for a custom location
+or `--serial DEVICE` to select a device when multiple are connected.
+Root is used to prepare files; the bridge runs as `nobody` (uid 9999)
 with groups `3990,inet`, through `/data/local/hassmic/runas`. Do not run the bridge as root.
 The shared `nobody` identity is not a separate runner sandbox.
 
@@ -33,48 +35,54 @@ All device and account commands below are operator actions. Factory workers only
 
 ## Choose release assets or source builds
 
-### Paired release installation
+### Install a release with echo-setup
 
-When a release is published, download its `install.sh` asset from
-[GitHub Releases](https://github.com/portpowered/portos-echo/releases), alongside the matching version's assets.
-Select an actual published version; these instructions do not imply that one is already available.
-Inspect the downloaded script before running it. The release script downloads the versioned ARMv7 archive and
-`SHA256SUMS`, verifies the archive, installs its paired bridge/Codex/CA files, starts the bridge, and sets up the
-screen if absent. Retain the extracted bundle's `scripts/echo-install.sh` for lifecycle commands, or use that
-same script from a matching source checkout. To extract a separately downloaded paired archive on Linux:
+Prepare a local `bridge.toml` using [Prepare and install configuration](#prepare-and-install-configuration).
+Choose a published version from [GitHub Releases](https://github.com/portpowered/portos-echo/releases).
+Replace `VERSION` with that version number throughout. Download the installer and its paired
+`SHA256SUMS`, then compare the hash before running the installer.
 
-```sh
-tar -xzf echo-VERSION-armv7.tar.gz
+On Windows PowerShell:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\echo-setup-VERSION-windows-x86_64.exe
+.\echo-setup-VERSION-windows-x86_64.exe install --config .\bridge.toml
+.\echo-setup-VERSION-windows-x86_64.exe status --json
+.\echo-setup-VERSION-windows-x86_64.exe doctor
 ```
 
-Replace `VERSION` with the published version. Run from the extracted bundle for subsequent `scripts/` commands.
-Prepare `bridge.toml` as described below before running the downloaded asset:
+You can inspect the published `install.ps1` and run it directly with `-Config .\bridge.toml`, or use its
+paired one-line bootstrap. The bootstrap verifies the executable before running it.
 
-```sh
-sh install.sh --config ./bridge.toml
+```powershell
+$env:ECHO_SETUP_CONFIG = (Resolve-Path .\bridge.toml).Path
+irm https://github.com/portpowered/portos-echo/releases/download/vVERSION/install.ps1 | iex
 ```
 
-The release asset embeds its version. The repository's unprocessed `scripts/install.sh` additionally requires
-`--version VERSION`. Downloads require curl or wget, tar, sha256sum and ordinary coreutils.
-The wrapper attempts **start before sign-in**. On a fresh installation it can report
-`echo-release: start failed; installed files retained`. This is a partial installation, not readiness.
-Use the stopped-bridge sign-in below, then start. If this failure prevented screen setup, install the paired APK:
+On Linux, verify the matching entry and then run the installer:
 
 ```sh
-adb install -r apk/echo-screen.apk
-adb shell "printf '%s\n' org.portos.echoscreen > /data/local/hassmic/state/screen_home &&
-  chown system:system /data/local/hassmic/state/screen_home &&
-  chmod 644 /data/local/hassmic/state/screen_home"
-adb shell am start -n org.portos.echoscreen/.MainActivity
+sha256sum echo-setup-VERSION-linux-x86_64
+chmod u+x echo-setup-VERSION-linux-x86_64
+./echo-setup-VERSION-linux-x86_64 install --config ./bridge.toml
+./echo-setup-VERSION-linux-x86_64 status --json
+./echo-setup-VERSION-linux-x86_64 doctor
 ```
 
-`screen setup failed; bridge already started` means the bridge start succeeded but APK/home setup did not.
-The commands above repair that step without replacing private state. The wrapper does not replace an already
-installed screen APK; use `adb install -r` with the paired APK when updating it.
+Alternatively, download and inspect the paired `install.sh` and run `sh install.sh --config ./bridge.toml`.
+It uses curl or wget and sha256sum. The raw source bootstrap needs an explicit `--version VERSION` or
+`-Version VERSION` for PowerShell. An already unpacked release bundle can be installed with
+`echo-setup install --from-dir ./bundle --config ./bridge.toml`.
+
+Approve the ChatGPT and Port OS codes at the URLs displayed in the terminal, then say **Computer** when
+prompted. If setup times out, run the same install command again to resume. `status --json` shows the installed
+version and runtime identity. `update --version VERSION` installs another release and keeps the previous
+public files for `rollback`. `uninstall` retains credentials and settings. Use `uninstall --purge` to remove
+them as well. The installer uses the bundled shell to maintain the device and reuses an installed screen APK.
 
 ### Build from source
 
-Use a checkout compatible with the current configuration reference. Provision the tools pinned in
+Use Linux with POSIX sh, Git, GNU Make, Python 3.12 and adb on PATH. Use a matching checkout and provision the tools pinned in
 [CI setup](../.github/actions/setup/action.yml) before building. The bridge needs Rust 1.100.0,
 the `armv7-linux-androideabi` target, Android NDK 27.3.13750724 (Linux API-24 clang), CMake and cached dependencies.
 Codex also needs Git, curl, file, patch, Perl, Python, tar and sha256sum; its helper fetches the pinned Codex source.

@@ -1,4 +1,4 @@
-"""T3: real wget and trusted loopback TLS; recording adb, no device access."""
+"""T3: real curl/wget and trusted loopback TLS; recording installer, no device access."""
 import http.server
 import os
 from pathlib import Path
@@ -13,25 +13,24 @@ import threading
 from test_echo_install import require
 
 
-def route_wget():
+def route_download():
     """Only replace the fixed release origin; all redirect handling stays real."""
-    args = sys.argv[2:]
+    client, *args = sys.argv[2:]
     origin = "https://github.com/"
-    require(args[-1].startswith("https://"), "non-HTTPS request reached wget")
+    require(args[-1].startswith("https://"), "non-HTTPS request reached downloader")
     if args[-1].startswith(origin):
         args[-1] = os.environ["REDIRECT_ORIGIN"] + "/" + args[-1][len(origin):]
-    require(args[-1].startswith(os.environ["REDIRECT_ORIGIN"] + "/"), "non-loopback wget target")
-    os.execv(os.environ["REAL_WGET"], ["wget", "--no-proxy",
-             "--ca-certificate=" + os.environ["REDIRECT_CERT"], *args])
+    require(args[-1].startswith(os.environ["REDIRECT_ORIGIN"] + "/"), "non-loopback downloader target")
+    if client == "wget":
+        args = ["--no-proxy", "--ca-certificate=" + os.environ["REDIRECT_CERT"], *args]
+    else:
+        args[1:1] = ["--noproxy", "*", "--cacert", os.environ["REDIRECT_CERT"]]
+    os.execv(os.environ["REAL_DOWNLOADER"], [client, *args])
 
 
-def redirect_cases(box_class=None):
+def redirect_cases():
     from test_release_kit import ReleaseBox, executable
 
-    box_class = box_class or ReleaseBox
-
-    real_wget = shutil.which("wget")
-    require(real_wget is not None, "real GNU wget required for redirect witness")
     state = {"requests": [], "http": []}
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -91,29 +90,32 @@ def redirect_cases(box_class=None):
             for thread in threads:
                 thread.start()
             try:
-                for mode, asset in (("good", "archive"), ("direct", "archive"),
-                                    ("later", "archive"), ("direct", "SHA256SUMS"),
-                                    ("later", "SHA256SUMS"), ("loop", "archive")):
-                    with box_class(wget=True) as box:
-                        state.update(mode=mode, assets=box.assets,
-                                     asset=box.archive.name if asset == "archive" else asset,
-                                     requests=[], http=[])
-                        command = (shlex.quote(sys.executable) + " " + shlex.quote(str(Path(__file__).resolve()))
-                                   + " --wget-route")
-                        executable(box.tools / "wget", command)
-                        box.env.update(REAL_WGET=real_wget, REDIRECT_ORIGIN=origin, REDIRECT_CERT=str(cert))
-                        result = box.invoke(code=0 if mode == "good" else 1)
-                        require(state["http"] == [], "HTTP downgrade was contacted")
-                        if mode == "good":
-                            require(len(state["requests"]) == 10, "HTTPS redirect chain differed")
-                            require("Echo installed and started" in result.stdout, "HTTPS journey failed")
-                            require(sum(c[0] == "push" for c in box.calls()) == 6, "payload not installed")
-                        else:
-                            require(box.calls() == [], "redirect failure reached adb")
-                            require("download failed" in result.stderr, "redirect failure diagnostic differed")
-                            if mode == "loop":
-                                require(len(state["requests"]) == 11, "redirect count was not bounded")
-                print("B1 real wget: HTTPS redirects=PASS archive/checksum downgrade=REFUSED HTTP requests=0 loop=BOUNDED adb=0 on failure")
+                for client in ("curl", "wget"):
+                    real = shutil.which(client)
+                    require(real is not None, "real " + client + " required for redirect witness")
+                    for mode, asset in (("good", "installer"), ("direct", "installer"),
+                                        ("later", "installer"), ("direct", "SHA256SUMS"),
+                                        ("later", "SHA256SUMS"), ("loop", "installer"), ("loop", "SHA256SUMS")):
+                        with ReleaseBox(wget=client == "wget") as box:
+                            state.update(mode=mode, assets=box.assets,
+                                         asset=box.installer.name if asset == "installer" else asset,
+                                         requests=[], http=[])
+                            command = (shlex.quote(sys.executable) + " " + shlex.quote(str(Path(__file__).resolve()))
+                                       + " --route " + client)
+                            executable(box.tools / client, command)
+                            box.env.update(REAL_DOWNLOADER=real, REDIRECT_ORIGIN=origin, REDIRECT_CERT=str(cert))
+                            result = box.invoke(code=0 if mode == "good" else 1)
+                            require(state["http"] == [] and box.calls() == [], "unexpected HTTP or adb call")
+                            if mode == "good":
+                                require(len(state["requests"]) == 10, "HTTPS redirect chain differed")
+                                require(box.installer_args() == ["install", "--version", box.version], "HTTPS journey failed")
+                            else:
+                                require(box.installer_args() is None, "redirect failure executed the installer")
+                                require(result.stderr == "echo-release: download failed\n", "redirect failure diagnostic differed")
+                                if mode == "loop":
+                                    expected = 11 if asset == "installer" else 16
+                                    require(len(state["requests"]) == expected, "redirect count was not bounded")
+                    print(f"F31 real {client}: HTTPS redirects=PASS installer/checksum downgrade=REFUSED HTTP requests=0 loop=BOUNDED")
             finally:
                 for server in (plain, secure):
                     server.shutdown()
@@ -122,7 +124,7 @@ def redirect_cases(box_class=None):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["--wget-route"]:
-        route_wget()
+    if sys.argv[1:2] == ["--route"]:
+        route_download()
     else:
         redirect_cases()

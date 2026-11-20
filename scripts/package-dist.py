@@ -94,7 +94,16 @@ def config_projection(data):
     return text.encode()
 
 
-def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses):
+def installer_names(release):
+    return (f"echo-setup-{release}-linux-x86_64", f"echo-setup-{release}-windows-x86_64.exe")
+
+
+def checksum_assets(archive):
+    return (archive.name, *installer_names(archive.name.removeprefix("echo-").removesuffix("-armv7.tar.gz")),
+            "install.sh", "install.ps1")
+
+
+def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, installers):
     """Only explicit runtime inputs and license texts can enter the archive."""
     version(release)
     payload = {
@@ -131,9 +140,14 @@ def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses):
             info.size = len(data)
             info.mode = 0o755 if name in ("bin/echo-bridge", "bin/codex-app-server", "scripts/echo-install.sh") else 0o644
             target.addfile(info, io.BytesIO(data))
-    wrapper = (ROOT / "scripts/install.sh").read_bytes().replace(b"@ECHO_VERSION@", release.encode())
-    (out / "install.sh").write_bytes(wrapper)
-    (out / "SHA256SUMS").write_text("".join(f"{digest(path.read_bytes())}  {path.name}\n" for path in (archive, out / "install.sh")))
+    for name, binary in zip(installer_names(release), installers, strict=True):
+        shutil.copyfile(binary, out / name)
+        (out / name).chmod(0o755)
+    for name in ("install.sh", "install.ps1"):
+        wrapper = (ROOT / "scripts" / name).read_bytes().replace(b"@ECHO_VERSION@", release.encode())
+        (out / name).write_bytes(wrapper)
+    (out / "SHA256SUMS").write_text("".join(
+        f"{digest((out / name).read_bytes())}  {name}\n" for name in checksum_assets(archive)))
     verify(archive, out / "SHA256SUMS")
 
 
@@ -176,7 +190,8 @@ def verify(archive, checksums):
         if not binary:
             if re.search(rb'(?:Bearer\s+[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,})', data):
                 raise BundleError("credential-shaped payload")
-    expected = {archive.name: digest(archive.read_bytes()), "install.sh": digest((checksums.parent / "install.sh").read_bytes())}
+    expected = {name: digest(path.read_bytes()) for name in checksum_assets(archive)
+                for path in (archive if name == archive.name else checksums.parent / name,)}
     actual = {}
     for line in checksums.read_text().splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
@@ -185,8 +200,14 @@ def verify(archive, checksums):
         actual[match[2]] = match[1]
     if actual != expected:
         raise BundleError("asset checksum mismatch")
-    if PRIVATE.search((checksums.parent / "install.sh").read_bytes()):
-        raise BundleError("private path in installer")
+    for name in ("install.sh", "install.ps1"):
+        if PRIVATE.search((checksums.parent / name).read_bytes()):
+            raise BundleError("private path in installer")
+    for name in installer_names(release):
+        data = (checksums.parent / name).read_bytes()
+        if PERSONAL.search(data):
+            print("release-kit: rejected path categories " + json.dumps(private_path_counts(data), sort_keys=True), file=sys.stderr)
+            raise BundleError("private path in " + name)
     print("release-kit: verified binary paths checkout=0 current_home=0", flush=True)
     return manifest
 
@@ -277,6 +298,19 @@ def screen_proof():
     print("release-kit: developer_screen=PASS embedded_screen_http_outside_checkout=PASS", flush=True)
 
 
+def build_installers(work, release, env):
+    target = work / "setup-target"
+    setup_env = dict(env, ECHO_SETUP_RELEASE_VERSION=release, CARGO_TARGET_DIR=str(target),
+                     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="x86_64-w64-mingw32-gcc")
+    artifacts = []
+    for triple, name in (("x86_64-unknown-linux-gnu", "echo-setup"),
+                         ("x86_64-pc-windows-gnu", "echo-setup.exe")):
+        subprocess.run(["cargo", "+1.100.0", "build", "--locked", "--release", "-p", "echo-setup",
+                        "--bin", "echo-setup", "--target", triple], cwd=ROOT, env=setup_env, check=True)
+        artifacts.append(target / triple / "release" / name)
+    return artifacts
+
+
 def build(args):
     if sys.platform != "linux":
         raise BundleError("Linux is required")
@@ -289,6 +323,7 @@ def build(args):
     with tempfile.TemporaryDirectory(prefix="echo-release-", dir="/tmp") as work, tempfile.TemporaryDirectory(prefix=".echo-dist-", dir=out.parent) as stage:
         work = Path(work)
         env = build_environment(work)
+        installers = build_installers(work, args.version, env)
         screen_bundle(env)
         # build-echo deliberately builds offline. Provision this fresh cache,
         # rather than relying on CI setup's separate default Cargo home.
@@ -307,7 +342,7 @@ def build(args):
         print("release-kit: assembling and verifying bundle", flush=True)
         assemble(Path(stage), args.version, source, identity[0], work / "codex-out",
                  target / "armv7-linux-androideabi/release/echo-bridge", ROOT / "target/echo-screen/echo-screen.apk",
-                 licenses)
+                 licenses, installers)
         os.rename(stage, out)
         # TemporaryDirectory tolerates the moved stage on exit.
 

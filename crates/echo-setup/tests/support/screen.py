@@ -36,9 +36,10 @@ def android_tool():
 
 
 def fixture(box):
-    box.install()
+    # Supply the installed APK directly. Installation has its own witness and
+    # does not need to run for each screen failure and retry.
     apk = box.device / "apk/echo-screen.apk"
-    apk.parent.mkdir()
+    apk.parent.mkdir(parents=True)
     apk.write_bytes(b"synthetic APK")
     apk.chmod(0o644)
     state = box.root / "remote/hassmic/state"
@@ -51,7 +52,6 @@ def fixture(box):
         path.write_text("#!/bin/sh\nexec " + command + " --tool " + tool + ' "$@"\n')
         path.chmod(0o755)
     box.env["PATH"] = str(box.root / "remote-tools") + ":/usr/bin:/bin"
-    (box.root / "ledger").unlink()
     return state
 
 
