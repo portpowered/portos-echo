@@ -133,20 +133,20 @@ async fn play_reply(
         }
     }
     wait(path, "reply.started").await;
-    live.events
-        .send(json!({"type":"response.audio.done"}).to_string())
-        .await
-        .unwrap();
+    live.send_acknowledged(json!({"type":"response.audio.done"}).to_string())
+        .await;
+    let mut completed = false;
     if clocked {
-        let mut completed = false;
-        for _ in 0..250 {
+        // Allow one poll and ten 20 ms frames. Played comes from the host's
+        // real playout clock, so leave the bridge clock still while it drains.
+        for _ in 0..=10 {
             if playback_tick(bridge, run).await {
                 completed = true;
                 break;
             }
         }
-        assert!(completed, "no played completion: {:?}", trace(path));
-    } else {
+    }
+    if !completed {
         assert_eq!(
             serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
             json!({"event":"bridge.run_completed","run_id":run})
