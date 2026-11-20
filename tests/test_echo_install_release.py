@@ -62,18 +62,20 @@ def device_transport_cases():
 
 def device_config_cases(box, stage, env):
     bundle = stage / "bundle"
-    def install(version, *options, code=0):
+    def install(version, *options, code=0, prompts="kept"):
         result = subprocess.run(["/bin/sh", str(bundle / "scripts/echo-install.sh"),
                                  "--device", "install", "--bundle", str(bundle),
                                  "--release-version", version, *options],
                                 env=env, capture_output=True, timeout=10)
         require(result.returncode == code, "direct bundled install exit differs")
-        expected = b"echo-install: installed\n" if code == 0 else b""
+        expected = (f"echo-install: prompt runner.md {prompts}\n"
+                    f"echo-install: prompt voice.md {prompts}\n"
+                    "echo-install: installed\n").encode() if code == 0 else b""
         require(result.stdout == expected, "direct bundled install output differs")
 
     example = bundle / "examples/bridge.echo.toml"
     config = box.device / "private/bridge.toml"
-    install("0.1.0")
+    install("0.1.0", prompts="seeded")
     require((box.device / "bin/echo-bridge").read_bytes() == b"synthetic public bytes",
             "direct install bytes differ")
     base = example.read_bytes()
