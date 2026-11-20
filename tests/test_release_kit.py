@@ -18,6 +18,7 @@ import tempfile
 from unittest.mock import patch
 
 from test_echo_install import Sandbox, fake_adb, require, SENTINEL
+from test_echo_install_lifecycle import configure_lifecycle, release_started, release_stop
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("package_dist", ROOT / "scripts/package-dist.py")
@@ -68,18 +69,6 @@ def fake_boundary():
         if "screen_home" in command:
             intercepted = True
             code = 1 if (base / "home-fails").exists() else 0
-        elif "setsid /system/bin/sh" in command:
-            intercepted = True
-            (base / "running").touch()
-        elif "read -r end <" in command:
-            intercepted = True
-            code = 1 if (base / "start-fails").exists() else 0
-        elif "test -x '/data/local/echo-bridge/private/launch.sh'" in command:
-            # Fake Android start boundary: no ARM binary is executed.
-            intercepted = True
-        elif "echo-bridge/private/run/control" in command and "while ! test" in command:
-            intercepted = True
-            (base / "running").unlink(missing_ok=True)
     if intercepted:
         with (base / "ledger").open("a") as output:
             print(json.dumps(args), file=output)
@@ -97,6 +86,7 @@ def executable(path, command):
 class ReleaseBox(Sandbox):
     def __init__(self, wget=False):
         super().__init__()
+        configure_lifecycle(self, bridge=self.root / "synthetic-bridge")
         self.assets = self.root / "assets"
         self.assets.mkdir()
         if ASSETS:
@@ -120,7 +110,6 @@ class ReleaseBox(Sandbox):
             executable(self.tools / name, entry + name)
         self.env["TMPDIR"] = str(self.root / "tmp")
         (self.root / "tmp").mkdir()
-        (self.root / "remote/hassmic/boot.log").write_text("old client connected\n")
 
     def invoke(self, args=(), code=0, pipe=False):
         command = ["/bin/sh", *([] if pipe else [str(self.wrapper)]), *args]
@@ -165,13 +154,17 @@ def happy_cases():
             calls = box.calls()
             pushes = [c for c in calls if c[0] == "push"]
             require(len(pushes) == 6, "required payload not installed")
-            require((box.device / "bin/echo-bridge").read_bytes() != b"", "bridge not copied")
+            with tarfile.open(box.archive) as bundle:
+                require((box.device / "bin/echo-bridge").read_bytes() == bundle.extractfile("bin/echo-bridge").read(),
+                        "bridge bytes differ from packaged input")
+            release_started(box)
             install = next(i for i, c in enumerate(calls) if c[:2] == ["install", "-r"])
-            start = next(i for i, c in enumerate(calls) if "setsid /system/bin/sh" in " ".join(c))
+            start = next(i for i, c in enumerate(calls) if "setsid /data/local/hassmic/runas" in " ".join(c))
             require(start < install and sum(c[:2] == ["install", "-r"] for c in calls) == 1, "screen order/count differs")
             downloads = [json.loads(line) for line in (box.root / "downloads").read_text().splitlines()]
             require([c[-1] for c in downloads] == [f"https://github.com/portpowered/portos-echo/releases/download/v{box.version}/{name}" for name in (box.archive.name, "SHA256SUMS")], "version/download mismatch")
             require(all(("--https-only" in c if wget else "--proto-redir" in c) for c in downloads), "HTTPS restriction missing")
+            release_stop(box)
     print("F01 F03 F16 F17: PASS")
 
 
@@ -207,19 +200,32 @@ def integrity_cases():
 
 def failure_cases():
     for fault, diagnostic in (("hassmic", "hassmic must"), ("install", "install failed"),
-                               ("start", "start failed"), ("screen", "bridge already started"),
+                               ("start", "start failed"), ("prepare", "start failed"),
+                               ("ownership", "start failed"), ("spawn", "start failed"), ("screen", "bridge already started"),
                                ("home", "bridge already started"), ("launch", "bridge already started")):
         with ReleaseBox() as box:
             if fault == "hassmic":
                 (box.root / "remote/hassmic/runas").unlink()
-            elif fault == "install":
-                (box.root / "fault").write_text("push")
+            elif fault in ("install", "prepare", "ownership", "spawn"):
+                point = {"install": "push", "prepare": "mkfifo", "ownership": "chown -R", "spawn": "setsid"}[fault]
+                (box.root / "fault").write_text(point)
+            elif fault == "start":
+                (box.root / "mode").write_text("stale")
             else:
                 (box.root / (fault + "-fails")).touch()
             result = box.invoke(code=1)
             require(diagnostic in result.stderr, "failure diagnostic differs")
-            if fault in ("hassmic", "install", "start"):
+            if fault in ("hassmic", "install", "start", "prepare", "ownership", "spawn"):
                 require(not any(c[:2] == ["install", "-r"] for c in box.calls()), "failure continued to screen")
+            if fault in ("prepare", "ownership", "spawn", "start"):
+                require((box.device / "bin/echo-bridge").is_file(), "start failure lost installed files")
+                require(not (box.device / "private/run").exists(), "start failure leaked run state")
+                require(not (box.root / "remote/echo-bridge.lock").exists(), "start failure leaked lock")
+            if fault in ("prepare", "ownership"):
+                require(not any("setsid " in " ".join(c) for c in box.calls()), "preparation failure launched")
+            if fault in ("screen", "home", "launch"):
+                release_started(box)
+                release_stop(box)
             if fault == "hassmic":
                 require(not any(c[0] == "push" for c in box.calls()), "absent hassmic mutated state")
     for devices in ("", "fixture\toffline\n", "a\tdevice\nb\tdevice\n"):
@@ -242,13 +248,16 @@ def retention_cases():
         require((box.device / "private/bridge.toml").read_text() == SENTINEL, "config bytes changed")
         prompt = box.device / "home/prompts/voice.md"
         prompt.write_text("edited voice")
-        (box.root / "running").unlink()
+        release_started(box)
+        release_stop(box)
         override.write_text("replacement")
         box.invoke(["--config", str(override)])
+        release_started(box, starts=2)
         require(prompt.read_text() == "edited voice", "prompt edit lost")
         require((box.device / "private/bridge.toml").read_text() == SENTINEL, "existing config lost")
         require(sum(c[:2] == ["install", "-r"] for c in box.calls()) == 1, "existing APK reinstalled")
         require(not (box.root / "escaped").exists(), "filename executed")
+        release_stop(box)
     with ReleaseBox() as box:
         (box.root / "remote/echo-bridge.lock").mkdir()
         box.invoke(code=1)
