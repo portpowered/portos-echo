@@ -217,9 +217,9 @@ For a Linux source build, use the source install command above with `--force`, f
 For an optional screen pack, use the [local directory push](screen-packs.md#local-push) from a Linux
 authoring host. It places a validated `<name>@<version>` directory under the installed home’s `screens/`.
 For a hosted pack, open Settings > **Load screen packs** on the paired screen, enter the HTTPS URL and
-its 64-digit hexadecimal SHA-256 digest under **Add from URL**, then choose **Download pack**. Use **Refresh packs** to
-check installation. Select the installed pack and choose **Use screen pack** in the same
-[paired controls](screen-packs.md#paired-controls).
+its 64-digit hexadecimal SHA-256 digest under **Add from URL**, then choose **Download pack**. Use
+**Refresh packs** to check installation. Select the installed pack and choose **Use screen pack**
+in the same [paired controls](screen-packs.md#paired-controls).
 
 To unlink Port OS while the bridge is running:
 
@@ -251,7 +251,7 @@ Neither bridge uninstall nor screen uninstall removes hassmic.
 | Network deadline despite working root networking | The non-root launch needs Android network group 3990 as well as inet. Use `runas nobody 3990,inet`; do not switch to root to hide the error. |
 | TLS/certificate failure | The child has a cleared environment and cannot discover the Echo's system CA bundle. Set absolute `codex.ca_file` to the installed PEM bundle; it also supplies bridge OAuth/MCP trust roots. |
 | Echo asks to link Port OS again, or `/healthz` shows `"mcp":"relink_for_scope"` | The current grant lacks a permission required by a called tool. Run the link command above and review the requested permissions. Then ask for the action again. |
-| Native `start_failed` | Installed files remain available. Run `doctor` with the same installer to diagnose startup, correct the reported prerequisite, then run plain `install` to resume. |
+| Native `start_failed` | Installed files remain available. Run `doctor` with the same installer to diagnose startup and `status --json` to check runtime identity and version. Correct the reported prerequisite, then run plain `install` to resume. |
 | Home already owned / second start refused | Stop the existing owner and wait for cleanup before sign-in/start. Do not delete the lease or blindly kill an unknown process. |
 | Invalid base / rejected settings | An invalid base prevents startup. An invalid overlay is rejected wholly and the validated base is retained with a warning. Correct the reported field and retry. |
 

@@ -82,7 +82,7 @@ def device_config_cases(box, stage, env):
     retained = {"home/prompts/voice.md": b"custom voice prompt",
                 "home/prompts/runner.md": b"custom runner prompt",
                 "home/settings.toml": b"saved settings",
-                "home/grant.json": b"retained synthetic grant",
+                "private/portos/grant.json": b"retained synthetic grant",
                 "private/codex-home/auth.json": b"retained synthetic credential"}
     for name, value in retained.items():
         path = box.device / name

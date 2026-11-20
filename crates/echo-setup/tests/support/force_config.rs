@@ -100,7 +100,7 @@ fn assert_guided_start(ledger: &[Vec<String>], links: bool) -> Result {
 async fn t3_invalid_force_exits_before_contacting_mirror_or_adb() -> Result {
     let fixture = Fixture::new()?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let base = format!("http://{}", listener.local_addr()?);
+    let base = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
     let missing = fixture.0.join("SYNTHETIC-PRIVATE-PATH.toml");
     for (args, code) in [
         (vec!["install", "--force"], 2),
@@ -145,11 +145,11 @@ async fn t3_invalid_force_exits_before_contacting_mirror_or_adb() -> Result {
         };
         assert_eq!(output.status.code(), Some(code));
         if code == 2 {
-            assert!(output.stdout.is_empty());
+            assert_eq!(output.stdout, b"");
             assert_eq!(output.stderr, b"echo-setup: invalid usage; see --help\n");
         } else {
             assert_eq!(private_output(&output)?["error"], "config_unreadable");
-            assert!(output.stderr.is_empty());
+            assert_eq!(output.stderr, b"");
         }
         assert_eq!(fixture.ledger()?, Vec::<Vec<String>>::new());
     }
