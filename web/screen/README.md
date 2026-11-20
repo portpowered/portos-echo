@@ -39,6 +39,17 @@ The settings panel scrolls independently while Back and status stay visible
 at both 1280x800 and 1280x774. Pages without the capability retain the original
 presentation and full-page snapshots.
 
+The Echo shows the page at 960x600 CSS px and has no system keyboard. The open
+panel has a title row with Back at the top right, in the gear's corner, and the
+fields take the rest of the height with the label left of its control. Whole
+numbers have − / + buttons clamped to the field's range; holding one repeats.
+Focusing a text field or a prompt opens a built-in keyboard (letters, digits,
+punctuation, Shift, space, Del, Enter, Done) docked under the fields; it types
+at the caret, fires `input` events and never sets `inputmode`, so a real
+keyboard still works. Relink's result names the link status: when Port OS is
+not linked it says to run `echo-bridge link` on the PC, and it reports
+on-screen instructions only when the bridge republishes its relink error.
+
 `npm test` builds the Rust `screen_fixture` example once before running tests.
 The integration file consumes that prebuilt artifact, drives synthetic states
 through stdin and observes exact returned actions through stdout, using native

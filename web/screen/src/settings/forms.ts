@@ -1,4 +1,9 @@
 import type { Patch, Snapshot } from "./api";
+import { stepper } from "./stepper";
+
+// The largest cap the bridge can store (a TOML integer).
+const CAP_MAX = 9223372036854775807n;
+let fields = 0;
 
 export function element<K extends keyof HTMLElementTagNameMap>(
     tag: K,
@@ -8,12 +13,28 @@ export function element<K extends keyof HTMLElementTagNameMap>(
     node.textContent = value;
     return node;
 }
-function field(label: string, control: HTMLElement): HTMLLabelElement {
-    const node = element("label", label);
-    node.append(control);
-    return node;
+// One row: the label at the left and its control at the right. `control` may
+// wrap `target` (a stepper); the label always names `target` alone.
+function field(
+    label: string,
+    control: HTMLElement,
+    target: HTMLElement = control,
+): HTMLDivElement {
+    const row = element("div");
+    row.className = "settings-row";
+    const name = element("label", label);
+    target.id = `settings-field-${++fields}`;
+    name.htmlFor = target.id;
+    row.append(name, control);
+    return row;
 }
-function number(label: string, value: number, min: number, max: number) {
+function number(
+    label: string,
+    value: number,
+    min: number,
+    max: number,
+    fast: bigint,
+) {
     const input = element("input");
     Object.assign(input, {
         type: "number",
@@ -23,7 +44,14 @@ function number(label: string, value: number, min: number, max: number) {
         step: "1",
         required: true,
     });
-    return { input, label: field(label, input) };
+    return {
+        input,
+        label: field(
+            label,
+            stepper(input, BigInt(min), BigInt(max), fast),
+            input,
+        ),
+    };
 }
 
 export function settingsForm(snapshot: Snapshot, save: (patch: Patch) => void) {
@@ -37,6 +65,7 @@ export function settingsForm(snapshot: Snapshot, save: (patch: Patch) => void) {
         values.voice.session_listen_seconds,
         3,
         300,
+        10n,
     );
     const voice = element("select");
     for (const name of snapshot.allowed_voices) {
@@ -58,13 +87,14 @@ export function settingsForm(snapshot: Snapshot, save: (patch: Patch) => void) {
         values.agent.max_tool_calls,
         1,
         32,
+        1n,
     );
     form.append(
         element("h2", "Conversation"),
         field("Follow-up listening", enabled),
         seconds.label,
         field("Live voice", voice),
-        field("Daily request cap", cap),
+        field("Daily request cap", stepper(cap, 0n, CAP_MAX, 10n), cap),
         tools.label,
         element(
             "p",
@@ -100,11 +130,13 @@ export function promptForm(
     const input = element("textarea");
     input.value = text;
     input.required = true;
-    input.rows = 8;
+    input.rows = 6;
     input.spellcheck = false;
+    const prompt = field(`${kind}.md`, input);
+    prompt.classList.add("settings-row-wide");
     form.append(
         element("h2", `${kind === "voice" ? "Voice" : "Runner"} instructions`),
-        field(`${kind}.md`, input),
+        prompt,
         element("button", `Save ${kind}.md`),
     );
     form.addEventListener("submit", (event) => {
