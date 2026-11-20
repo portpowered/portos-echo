@@ -201,11 +201,9 @@ fn retained_settings(host: &mut echo_bridge::bridge_settings::SettingsHost, rest
         unreachable!("retained host refused snapshot")
     };
     assert_eq!(snapshot.restart_pending, restart);
-    let cap = snapshot.settings.agent.daily_request_cap.as_str();
-    assert_eq!(
-        (cap, snapshot.prompts.voice.as_str()),
-        (if restart { "3" } else { "8" }, "saved voice\n")
-    );
+    let agent = snapshot.settings.agent;
+    assert_eq!(agent.daily_request_cap.as_str(), if restart { "3" } else { "8" });
+    assert_eq!(snapshot.prompts.voice, "saved voice\n");
     assert_eq!(snapshot.prompts.runner, "admitted runner");
 }
 
@@ -263,7 +261,7 @@ async fn settings_runtime_saves(fixture: &Fixture, home: &Path, client: &reqwest
     let previous = std::fs::read(home.join("settings.toml")).unwrap();
     let invalid = client
         .post(url.as_str())
-        .json(&json!({"version":1,"settings":{"agent":{"daily_request_cap":"3"3}}}))
+        .json(&json!({"version":1,"settings":{"agent":{"max_tool_calls":33}}}))
         .send()
         .await
         .unwrap();
