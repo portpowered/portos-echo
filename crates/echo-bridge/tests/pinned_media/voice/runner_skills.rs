@@ -370,7 +370,7 @@ fn check_thread(observed: &Value, context: &str, tools: &[Value], enabled: bool)
                     "features.code_mode.direct_only_tool_namespaces":["web","functions"],"web_search":"disabled",
                     "mcp_servers":{},"skills.include_instructions":false
                 },
-                "model":MODEL,"baseInstructions":runner,"dynamicTools":tools
+                "model":MODEL,"serviceTier":null,"baseInstructions":runner,"dynamicTools":tools
             }
         })
     );
