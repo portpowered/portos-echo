@@ -50,8 +50,17 @@ fi"
   case ${command_name:?} in install | rollback | stop | uninstall) return ;; esac
   run_adb shell "test ! -e '${device:?}/releases/pending'"
 }
+release_version_field() {
+  printf '%s\n' "${versions-}" | awk -F= -v field="version_$1" '$1 == field { print $2; found=1 } END { if (!found) print "null" }'
+}
+
 release_snapshot() {
-  # Snapshot only public files. Never copy private/ or home/.
+  # A same-version refresh needs recovery bytes without replacing the rollback slot.
+  snapshot=previous
+  active_version=$(release_version_field current)
+  if [ "${release_version:?}" != null ] && [ "$release_version" = "$active_version" ]; then
+    snapshot=retry
+  fi
   run_adb shell "umask 077
 mkdir -p '${device:?}/releases'
 chown 0:0 '${device:?}/releases'
@@ -64,18 +73,21 @@ mkdir '${device:?}/releases/stage'
 for name in bin apk scripts MANIFEST; do
   if test -e '${device:?}/'\$name; then cp -R '${device:?}/'\$name '${device:?}/releases/stage/'\$name; fi
 done
-printf '%s\\n' '${versions-}' | awk -F= '\$1 == \"version_current\" { print \$2; found=1 } END { if (!found) print \"null\" }' > '${device:?}/releases/stage/version'
+printf '%s\\n' '$active_version' > '${device:?}/releases/stage/version'
 cd '${device:?}/releases/stage'
 find . -type f ! -path ./SHA256SUMS -exec sha256sum {} + | sort > SHA256SUMS
 sha256sum -c SHA256SUMS >/dev/null 2>&1
 chown -R 0:0 '${device:?}/releases/stage'
-if test -d '${device:?}/releases/previous'; then
+if test '$snapshot' = retry; then
+  rm -rf '${device:?}/releases/retry'
+elif test -d '${device:?}/releases/previous'; then
   rm -rf '${device:?}/releases/retired'
   mv '${device:?}/releases/previous' '${device:?}/releases/retired'
 fi
-mv '${device:?}/releases/stage' '${device:?}/releases/previous'
+mv '${device:?}/releases/stage' '${device:?}/releases/$snapshot'
 rm -rf '${device:?}/releases/retired'
-touch '${device:?}/releases/pending'
+printf '%s\\n' '$snapshot' > '${device:?}/releases/transaction'
+mv -f '${device:?}/releases/transaction' '${device:?}/releases/pending'
 rm -f '${device:?}/private/launch.sh'"
 }
 release_publish() {
@@ -90,27 +102,31 @@ chmod 755 '${device:?}/apk' '${device:?}/scripts'
 chmod 644 '${device:?}/apk/echo-screen.apk' '${device:?}/scripts/echo-install.sh' '${device:?}/scripts/echo-install-release.sh' '${device:?}/scripts/echo-install-setup.sh' '${device:?}/MANIFEST'"
   fi
   current=${release_version:?}
-  [ "$current" = null ] || current=\"$current\"
-  previous=$(printf '%s\n' "${versions-}" | awk -F= '$1 == "version_current" { print $2; found=1 } END { if (!found) print "null" }')
-  [ "$previous" = null ] || previous=\"$previous\"
+  previous=$active_version
+  if [ "$snapshot" = retry ]; then
+    previous=$(release_version_field previous)
+  fi
   release_write_metadata
 }
 release_write_metadata() {
+  [ "$current" = null ] || current=\"$current\"
+  [ "$previous" = null ] || previous=\"$previous\"
   run_adb shell "umask 077
 printf '%s\\n' '{\"format\":1,\"current\":$current,\"previous\":$previous}' > '${device:?}/releases/metadata'
 chown 0:0 '${device:?}/releases/metadata'
 chmod 644 '${device:?}/releases/metadata'
 mv -f '${device:?}/releases/metadata' '${device:?}/release.json'
-rm -f '${device:?}/releases/pending'"
+rm -f '${device:?}/releases/pending'
+rm -rf '${device:?}/releases/retry'"
 }
 release_verify_previous() {
   run_adb shell "for name in echo-bridge codex-app-server cacert.pem; do
   test -f '${device:?}/releases/previous/bin/'\$name || exit 1
 done"
-  release_verify_snapshot
+  release_verify_snapshot previous
 }
 release_verify_snapshot() {
-  run_adb shell "cd '${device:?}/releases/previous'
+  run_adb shell "cd '${device:?}/releases/$1'
 for name in version SHA256SUMS; do
   test -f \"\$name\" || exit 1
 done
@@ -121,23 +137,24 @@ sha256sum -c SHA256SUMS >/dev/null 2>&1
 value=\$(cat version)
 printf '%s\\n' \"\$value\""
 }
-release_restore() {
+release_restore_files() {
   # Retain the verified snapshot until publication succeeds, allowing retries.
   run_adb shell "touch '${device:?}/releases/pending'
 for name in bin apk scripts MANIFEST; do
   rm -rf '${device:?}/'\$name
-  if test -e '${device:?}/releases/previous/'\$name; then
-    cp -R '${device:?}/releases/previous/'\$name '${device:?}/'\$name
+  if test -e '${device:?}/releases/$1/'\$name; then
+    cp -R '${device:?}/releases/$1/'\$name '${device:?}/'\$name
   fi
 done
 chown -R 0:0 '${device:?}/bin'
 if test -f '${device:?}/bin/echo-bridge'; then
   chmod 755 '${device:?}/bin' '${device:?}/bin/echo-bridge' '${device:?}/bin/codex-app-server'
   chmod 644 '${device:?}/bin/cacert.pem'
-fi
-cat '${device:?}/releases/previous/version'"
-  current=$(cat "${log:?}")
-  [ "$current" = null ] || current=\"$current\"
+fi"
+}
+release_restore() {
+  release_restore_files previous
+  current=$saved_version
   previous=null
   release_write_metadata
   run_adb shell "rm -rf '${device:?}/releases/previous'"
@@ -156,13 +173,26 @@ release_version_valid() {
 }
 
 release_recover() {
-  run_adb shell "if test -f '${device:?}/releases/pending'; then printf pending; fi"
-  if [ "$(cat "${log:?}")" = pending ]; then
-    release_verify_snapshot
-    saved_version=$(cat "${log:?}")
-    [ "$saved_version" = null ] || release_version_valid "$saved_version" || fail 'invalid previous release'
+  run_adb shell "if test -f '${device:?}/releases/pending'; then
+  if test -s '${device:?}/releases/pending'; then cat '${device:?}/releases/pending'; else printf previous; fi
+fi"
+  pending=$(cat "${log:?}")
+  case $pending in
+    '') return ;;
+    previous | retry) ;;
+    *) fail 'invalid release recovery marker' ;;
+  esac
+  release_verify_snapshot "$pending"
+  saved_version=$(cat "${log:?}")
+  [ "$saved_version" = null ] || release_version_valid "$saved_version" || fail 'invalid previous release'
+  if [ "$pending" = previous ]; then
     release_restore
-    release_metadata
-    versions=$(cat "${log:?}")
+  else
+    release_restore_files retry
+    current=$saved_version
+    previous=$(release_version_field previous)
+    release_write_metadata
   fi
+  release_metadata
+  versions=$(cat "${log:?}")
 }

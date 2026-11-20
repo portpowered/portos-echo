@@ -471,12 +471,12 @@ def setup_wake_cases():
         log.write_text("")
         require(":0:" in box.run(["--device", "wake-cursor"]).stdout, "empty cursor refused")
     print("echo-install wake: fresh=PASS stale=PASS rotation=PASS partial=PASS privacy=PASS")
-
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
     ownership_lifetime_case()
     from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, setup_operator_cases
-    from test_echo_install_status import status_cases, release_cases
+    from test_echo_install_release import release_cases
+    from test_echo_install_status import status_cases
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases,

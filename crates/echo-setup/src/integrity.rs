@@ -4,7 +4,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 pub const REQUIRED: &[&str] = &[
@@ -74,10 +75,10 @@ pub struct OfflineBundle {
     pub files: Vec<String>,
 }
 
-/// Validate the entire tree before any device effect; never traverse links.
+/// Validate and snapshot the entire tree before any device effect.
 /// # Errors
 /// Rejects unsafe members, missing files, unsupported manifests and wrong hashes.
-pub fn offline(directory: &Path) -> Result<OfflineBundle> {
+pub fn offline(directory: &Path, snapshot: PathBuf) -> Result<OfflineBundle> {
     let root = directory.canonicalize().map_err(|_| Failure("invalid_bundle"))?;
     let manifest_path = root.join("MANIFEST");
     regular(&manifest_path)?;
@@ -91,14 +92,18 @@ pub fn offline(directory: &Path) -> Result<OfflineBundle> {
         return Err(Failure("invalid_bundle"));
     }
     let mut observed = BTreeMap::new();
-    inspect(&root, &root, &mut observed)?;
-    observed.remove("MANIFEST");
+    inspect(&root, &root, &snapshot, &mut observed)?;
     if observed != manifest.files {
         return Err(Failure("manifest_mismatch"));
     }
     let mut files: Vec<_> = observed.into_keys().collect();
+    write_member(&snapshot.join("MANIFEST"), &encoded)?;
     files.push("MANIFEST".to_owned());
-    Ok(OfflineBundle { root, version, files })
+    Ok(OfflineBundle {
+        root: snapshot,
+        version,
+        files,
+    })
 }
 
 fn regular(path: &Path) -> Result<()> {
@@ -112,7 +117,7 @@ fn regular(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn inspect(root: &Path, directory: &Path, files: &mut BTreeMap<String, String>) -> Result<()> {
+fn inspect(root: &Path, directory: &Path, snapshot: &Path, files: &mut BTreeMap<String, String>) -> Result<()> {
     for entry in fs::read_dir(directory).map_err(|_| Failure("invalid_bundle"))? {
         let entry = entry.map_err(|_| Failure("invalid_bundle"))?;
         let path = entry.path();
@@ -121,22 +126,34 @@ fn inspect(root: &Path, directory: &Path, files: &mut BTreeMap<String, String>) 
             .map_err(|_| Failure("invalid_bundle"))?
             .to_str()
             .ok_or(Failure("unsafe_bundle_member"))?
-            .replace('\\', "/");
+            .replace(std::path::MAIN_SEPARATOR, "/");
         if !safe_name(&name) {
             return Err(Failure("unsafe_bundle_member"));
         }
         let kind = entry.file_type().map_err(|_| Failure("invalid_bundle"))?;
         if kind.is_dir() {
-            inspect(root, &path, files)?;
+            inspect(root, &path, snapshot, files)?;
         } else {
             regular(&path)?;
             if !allowed_file(&name) {
                 return Err(Failure("unsafe_bundle_member"));
             }
-            files.insert(name, digest(&fs::read(path).map_err(|_| Failure("invalid_bundle"))?));
+            if name != "MANIFEST" {
+                let bytes = fs::read(path).map_err(|_| Failure("invalid_bundle"))?;
+                write_member(&snapshot.join(&name), &bytes)?;
+                files.insert(name, digest(&bytes));
+            }
         }
     }
     Ok(())
+}
+
+fn write_member(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().ok_or(Failure("temporary_files_failed"))?;
+    fs::create_dir_all(parent).map_err(|_| Failure("temporary_files_failed"))?;
+    File::create_new(path)
+        .and_then(|mut file| file.write_all(bytes))
+        .map_err(|_| Failure("temporary_files_failed"))
 }
 
 #[must_use]

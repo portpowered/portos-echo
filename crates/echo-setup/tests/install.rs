@@ -291,9 +291,11 @@ fn t3_adb_discovery_uses_closed_path_then_sdk_without_real_adb() -> Result {
     Ok(())
 }
 #[test]
-fn t3_offline_install_preserves_native_paths_and_exact_device_selection() -> Result {
+fn t3_offline_install_transfers_verified_bytes_after_source_changes() -> Result {
     let fixture = Fixture::new()?;
     let bundle = fixture.bundle()?;
+    let manifest = fs::read(bundle.join("MANIFEST"))?;
+    fs::write(fixture.0.join("offline-source"), bundle.to_str().ok_or("fixture path")?)?;
     fs::write(
         fixture.0.join("devices"),
         "SYNTHETIC-OTHER\tdevice\r\nSYNTHETIC-DEVICE\tdevice\r\n",
@@ -323,12 +325,9 @@ fn t3_offline_install_preserves_native_paths_and_exact_device_selection() -> Res
         .ok_or("config push absent")?;
     assert_eq!(config_push.len(), 5);
     assert!(config_push[4].ends_with("/config"));
-    let bridge = bundle.canonicalize()?.join("bin/echo-bridge");
-    assert!(
-        ledger
-            .iter()
-            .any(|args| args.get(3).is_some_and(|arg| arg == &bridge.to_string_lossy()))
-    );
+    assert_eq!(fs::read(bundle.join("MANIFEST"))?, b"changed after verification");
+    assert_eq!(fs::read(fixture.0.join("manifest"))?, manifest);
+    assert_eq!(fs::read(fixture.0.join("script"))?, b"synthetic public release bytes");
     Ok(())
 }
 

@@ -35,6 +35,13 @@ fn main() -> io::Result<()> {
         args.drain(..2);
     }
     if args.first().is_some_and(|v| v == "devices") {
+        let offline = root.join("offline-source");
+        if offline.exists() {
+            let source = PathBuf::from(fs::read_to_string(offline)?);
+            for name in ["scripts/echo-install.sh", "MANIFEST"] {
+                fs::write(source.join(name), b"changed after verification")?;
+            }
+        }
         let devices = fs::read_to_string(root.join("devices"))?;
         write!(io::stdout(), "List of devices attached\r\n{devices}\r\n")?;
     } else if args.first().is_some_and(|v| v == "shell") {
@@ -45,7 +52,18 @@ fn main() -> io::Result<()> {
         shell(&root, &command)?;
     } else if args.first().is_some_and(|v| v == "forward") {
         forward(&root, &args[1..])?;
-    } else if args.first().is_none_or(|v| v != "push") {
+    } else if args.first().is_some_and(|v| v == "push") {
+        if root.join("offline-source").is_file() {
+            for (suffix, captured) in [
+                ("/bundle/scripts/echo-install.sh", "script"),
+                ("/bundle/MANIFEST", "manifest"),
+            ] {
+                if args[2].to_string_lossy().ends_with(suffix) {
+                    fs::copy(&args[1], root.join(captured))?;
+                }
+            }
+        }
+    } else {
         std::process::exit(1);
     }
     Ok(())
@@ -140,21 +158,7 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
             return Ok(());
         }
         if command == "sh -s -- --device status" {
-            let status = root.join("status");
-            if status.exists() {
-                io::stdout().write_all(&fs::read(status)?)?;
-            } else if root.join("process-user").exists() {
-                write!(
-                    io::stdout(),
-                    "version_current=0.2.0\r\nversion_previous=null\r\nprocess=running\r\nprocess_user=nobody\r\nuptime_seconds=1\r\nhassmic_link=unavailable\r\n"
-                )?;
-            } else {
-                std::process::exit(1);
-            }
-            if root.join("status-refused").exists() {
-                std::process::exit(1);
-            }
-            return Ok(());
+            return status_reply(root);
         }
         if command == "sh -s -- --device wake-cursor" || command.starts_with("sh -s -- --device wake-check ") {
             let name = if command.ends_with("wake-cursor") {
@@ -176,12 +180,47 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
             io::stdout().write_all(&fs::read(root.join(name))?)?;
             return Ok(());
         }
+        if command == "sh -s -- --device rollback" && root.join("previous").exists() {
+            fs::remove_dir_all(root.join("active"))?;
+            fs::rename(root.join("previous"), root.join("active"))?;
+        }
         fs::write(root.join("last-operation"), command)?;
     }
     if command.contains("--device start") {
         fs::write(root.join("process-user"), "nobody")?;
     }
     writeln!(io::stdout(), "SYNTHETIC-TOKEN SYNTHETIC-ACCOUNT SYNTHETIC-PRIVATE-PATH")
+}
+
+fn status_reply(root: &Path) -> io::Result<()> {
+    let status = root.join("status");
+    if status.exists() {
+        io::stdout().write_all(&fs::read(status)?)?;
+    } else if root.join("active/version").exists() {
+        let current = fs::read_to_string(root.join("active/version"))?;
+        let previous = root.join("previous/version");
+        let previous = if previous.exists() {
+            fs::read_to_string(previous)?
+        } else {
+            "null".to_owned()
+        };
+        let user = fs::read_to_string(root.join("process-user"))?;
+        write!(
+            io::stdout(),
+            "version_current={current}\r\nversion_previous={previous}\r\nprocess=running\r\nprocess_user={user}\r\nuptime_seconds=1\r\nhassmic_link=unavailable\r\n"
+        )?;
+    } else if root.join("process-user").exists() {
+        write!(
+            io::stdout(),
+            "version_current=0.2.0\r\nversion_previous=null\r\nprocess=running\r\nprocess_user=nobody\r\nuptime_seconds=1\r\nhassmic_link=unavailable\r\n"
+        )?;
+    } else {
+        std::process::exit(1);
+    }
+    if root.join("status-refused").exists() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn account_reply(root: &Path, command: &str) -> io::Result<bool> {

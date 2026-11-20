@@ -61,8 +61,9 @@ pub async fn install(
     cancelled: &crate::Cancellation,
 ) -> Result<String> {
     cancelled.until(async { Ok(()) }).await?;
+    let scratch = Scratch::create()?;
     let input = if let Some(directory) = &options.from_dir {
-        Input::Offline(integrity::offline(directory)?)
+        Input::Offline(integrity::offline(directory, scratch.0.join("bundle"))?)
     } else {
         Input::Remote(
             cancelled
@@ -76,7 +77,6 @@ pub async fn install(
         return Err(Failure("config_unreadable"));
     }
     cancelled.until(async { Ok(()) }).await?;
-    let scratch = Scratch::create()?;
     let adapter = scratch.0.join("adapter.sh");
     fs::write(&adapter, ADAPTER).map_err(|_| Failure("temporary_files_failed"))?;
     let mut adb = Adb::discover(options.adb.as_deref())?;

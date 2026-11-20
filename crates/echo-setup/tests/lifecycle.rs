@@ -338,6 +338,48 @@ fn t3_rollback_starts_only_after_shell_owned_restore_succeeds() -> Result {
 }
 
 #[test]
+fn t3_rollback_restores_previous_payload_and_version() -> Result {
+    let fixture = Fixture::new()?;
+    let active = fixture.0.join("active");
+    let previous = fixture.0.join("previous");
+    let files = [
+        "bin/echo-bridge",
+        "bin/codex-app-server",
+        "bin/cacert.pem",
+        "apk/echo-screen.apk",
+        "scripts/echo-install.sh",
+        "scripts/echo-install-release.sh",
+        "scripts/echo-install-setup.sh",
+        "MANIFEST",
+    ];
+    for (root, version) in [(&active, "0.2.0"), (&previous, "0.1.0")] {
+        fs::create_dir(root)?;
+        fs::write(root.join("version"), version)?;
+        for name in files {
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().ok_or("fixture file has no parent")?)?;
+            fs::write(path, format!("{version}: {name}"))?;
+        }
+    }
+    let output = fixture.run("rollback", &[])?;
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(event(&output)?["ok"], true);
+    for name in files {
+        assert_eq!(fs::read(active.join(name))?, format!("0.1.0: {name}").into_bytes());
+    }
+    assert!(!previous.exists());
+    let output = fixture.run("status", &[])?;
+    assert_eq!(output.status.code(), Some(0));
+    let state = event(&output)?;
+    assert_eq!(
+        state["versions"],
+        serde_json::json!({"current":"0.1.0","previous":null})
+    );
+    assert_eq!(state["process_user"], "nobody");
+    Ok(())
+}
+
+#[test]
 fn t3_rollback_refuses_unobserved_or_unsafe_started_process_without_signalling_it() -> Result {
     let healthy = "version_current=0.1.0\nversion_previous=0.2.0\nprocess=running\nprocess_user=nobody\nuptime_seconds=1\nhassmic_link=unavailable\n";
     for (raw, refused, error) in [
