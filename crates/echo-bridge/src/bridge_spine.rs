@@ -428,3 +428,18 @@ fn mcp_link_epoch_requires_guard_and_local_overrides_and_unsigned_value() {
     assert_eq!(parse(&duplicate, [None, None, None]).err(), Some(Error::Input));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
 }
+
+#[test]
+fn startup_network_waiting_reason_is_optional_in_health_response() {
+    let mut links = Links::default();
+    for waiting in [None, Some("dependency_unavailable"), None] {
+        links.startup_waiting_reason = waiting;
+        let response = response(b"GET /healthz HTTP/1.1\r\n\r\n", links);
+        let body: serde_json::Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["relink_required"], false);
+        assert_eq!(
+            body.get("startup_waiting_reason").and_then(serde_json::Value::as_str),
+            waiting
+        );
+    }
+}

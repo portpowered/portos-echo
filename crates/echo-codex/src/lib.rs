@@ -50,16 +50,42 @@ impl ThreadSettings {
                 "features.goals": false,
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
-                "web_search": "disabled",
+                "features.code_mode.direct_only_tool_namespaces": ["web"],
+                "web_search": "live",
                 "mcp_servers": {},
             }),
         }
+    }
+    /// Adapt the caller's validated bridge mode without a config-crate dependency.
+    #[must_use]
+    pub fn with_web_search(mut self, mode: &str) -> Self {
+        self.config["web_search"] = mode.into();
+        self
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_search_changes_only_the_selected_config_field() {
+        for mode in ["live", "cached", "disabled"] {
+            let tool = DynamicTool {
+                name: "test_echo".into(),
+                description: "Echo".into(),
+                input_schema: json!({"type":"object"}),
+            };
+            for tools in [vec![], vec![tool]] {
+                let mut expected = serde_json::to_value(ThreadSettings::new(tools.clone())).unwrap();
+                expected["config"]["web_search"] = mode.into();
+                assert_eq!(
+                    serde_json::to_value(ThreadSettings::new(tools).with_web_search(mode)).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
 
     #[test]
     fn thread_settings_preserve_empty_and_nonempty_caller_tools() -> Result<(), serde_json::Error> {
@@ -83,7 +109,8 @@ mod tests {
                 "features.goals": false,
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
-                "web_search": "disabled",
+                "features.code_mode.direct_only_tool_namespaces": ["web"],
+                "web_search": "live",
                 "mcp_servers": {},
             })
         );

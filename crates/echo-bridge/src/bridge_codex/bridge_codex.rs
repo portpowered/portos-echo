@@ -54,6 +54,7 @@ pub struct Options<'a> {
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub time_zone: Option<&'a str>,
+    pub web_search: echo_config::WebSearch,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -151,7 +152,8 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
     }
 
     async fn prepare_thread(&mut self, options: &Options<'_>, tools: Vec<DynamicTool>) -> Result<(), Error> {
-        let mut params = serde_json::to_value(ThreadSettings::new(tools)).map_err(|_| Error::Decode)?;
+        let mut params = serde_json::to_value(ThreadSettings::new(tools).with_web_search(options.web_search.as_str()))
+            .map_err(|_| Error::Decode)?;
         params["baseInstructions"] = options.instructions.into();
         if let Some(model) = options.model {
             params["model"] = model.into();

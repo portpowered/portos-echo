@@ -95,6 +95,7 @@ async fn client(config: &CodexConfig, routes: &LocalRoutes, commands: mpsc::Send
                     model: None,
                     effort: None,
                     time_zone: None,
+                    web_search: echo_config::WebSearch::default(),
                 },
                 vec![],
                 Instant::now() + Duration::from_secs(10),
@@ -205,3 +206,4 @@ fn binary() -> std::path::PathBuf {
     assert!(output.status.success(), "offline pinned-binary resolution failed");
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
+mod startup;

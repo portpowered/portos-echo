@@ -325,9 +325,15 @@ fn parse_epoch(value: &str) -> Result<u64, Error> {
 
 fn prompt_config_error(error: &echo_config::ConfigError) -> Error {
     let text = error.to_string();
-    if ["home:", "home.dir:", "codex.instructions:", "codex.live_instructions:"]
-        .iter()
-        .any(|prefix| text.starts_with(prefix))
+    if [
+        "home:",
+        "home.dir:",
+        "codex.instructions:",
+        "codex.live_instructions:",
+        "codex.web_search:",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
     {
         Error::PromptConfig(text)
     } else {

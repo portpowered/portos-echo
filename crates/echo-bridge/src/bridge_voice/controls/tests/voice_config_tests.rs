@@ -10,6 +10,22 @@ mod voice_context_tests;
 // T1: argv admission and the configured owner retain the same original base,
 // accepted overlay and safe warning without reopening a changed config file.
 #[test]
+fn web_search_configured_mode_survives_voice_conversation_snapshot() {
+    for mode in [
+        echo_config::WebSearch::Live,
+        echo_config::WebSearch::Cached,
+        echo_config::WebSearch::Disabled,
+    ] {
+        let mut prepared = configured();
+        prepared.config.codex.web_search = mode;
+        let options = prepared.options(None, vec![]);
+        assert_eq!(options.voice.call.web_search, mode);
+        let snapshot = options.voice.conversation(("runner", "voice"), options.host.deadline);
+        assert_eq!(snapshot.call.web_search, mode);
+    }
+}
+
+#[test]
 fn settings_cli_handoff_retains_single_startup_read() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path().join("home");
@@ -163,6 +179,7 @@ pub(in crate::bridge_voice) fn admission_options() -> ServeOptions<'static> {
             model: Some("fixture-model"),
             effort: Some("low"),
             time_zone: Some("Europe/Berlin"),
+            web_search: echo_config::WebSearch::default(),
             instructions: "configured\n\u{8a9e} \n",
             prompt: "live\n\u{8a9e} \n",
         },

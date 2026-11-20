@@ -131,6 +131,7 @@ async fn round_trip() {
             model: None,
             effort: None,
             time_zone: None,
+            web_search: echo_config::WebSearch::default(),
         };
         call.start(&options, vec![], Instant::now() + Duration::from_secs(10))
             .await

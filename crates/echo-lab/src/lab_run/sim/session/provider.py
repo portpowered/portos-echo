@@ -76,7 +76,7 @@ class Script:
             commands.put({'heard': step['heard']})
             wake_write.sendall(b'e')
             assert heard.wait(20), 'sideband did not deliver the overlapping speech'
-        observed['models'].append({'turn': turn, 'tools': [tool['name'] for tool in body['tools']]})
+        observed['models'].append({'turn': turn, 'tools': [tool['name'] for tool in body['tools'][:-1]]})
         emit({'event': 'provider.model', 'turn': turn, 'outputs': [item['output'] for item in mine]})
         response = {'id': f'response-{turn}-{self.step}', 'status': 'completed', 'output': [item]}
         events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},

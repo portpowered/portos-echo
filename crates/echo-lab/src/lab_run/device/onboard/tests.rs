@@ -1,4 +1,4 @@
-//! T2: every adb call lands in a synthetic ledger. No adb, Echo, Ring or account is used.
+//! T1 controlled Shell ledger; unchanged schema fixtures remain T2. Every adb call lands in a synthetic ledger. No adb, Echo, Ring or account is used.
 #[path = "journey_tests.rs"]
 mod journey;
 
@@ -35,6 +35,7 @@ pub(super) struct World {
     pub pushed: Vec<(String, String, String)>,
     pub grant: Vec<u8>,
     pub replacement_grant: Option<Vec<u8>>,
+    pub directory_identity: Option<String>,
     pub pem: Vec<u8>,
 }
 
@@ -60,10 +61,12 @@ impl World {
             }
         } else if command.contains("kill $(cat") {
             self.alive = false;
-        } else if command.contains("rm -f") && command.contains("trace.jsonl") {
+        } else if (command.contains(": >") || command.contains("rm -f")) && command.contains("trace.jsonl") {
             self.trace.clear();
         } else if command.contains("wc -c") {
             return format!("{} log\n", self.log.len());
+        } else if command.contains("stat -c %d:%i") {
+            return self.directory_identity.clone().unwrap_or_else(|| format!("{OWNER}\n"));
         } else if command.contains("stat -c %a") && command.ends_with("/portos") {
             return "700\n".into();
         } else if command.contains("stat -c %a") {
@@ -95,7 +98,11 @@ impl Shell for Fake {
         if !world.fail.is_empty() && command.contains(&world.fail) {
             return Err("synthetic staging failure".into());
         }
-        if command.starts_with(IDENTITY) && command.contains("bridge.toml") && world.owner != OWNER {
+        if command.starts_with(IDENTITY)
+            && (command.contains("chmod ") || command.contains("stat -c %u") || command.contains("stat -c %a"))
+            && command.contains("bridge.toml")
+            && world.owner != OWNER
+        {
             return Err("synthetic nobody access denied".into());
         }
         let output = match args[0].as_str() {
@@ -365,7 +372,7 @@ fn t2_nobody_cannot_chmod_a_root_staged_file_until_ownership_transfer() {
     let local = root.path().join("config");
     std::fs::write(&local, "derived").unwrap();
     let world = world();
-    let remote = remote(&world);
+    let mut remote = remote(&world);
     remote
         .shell
         .adb(&[
@@ -381,4 +388,75 @@ fn t2_nobody_cannot_chmod_a_root_staged_file_until_ownership_transfer() {
     remote.stage(&local).unwrap();
     assert_eq!(world.borrow().owner, OWNER);
     assert_eq!(world.borrow().mode, "600");
+}
+
+#[test]
+fn t1_on_device_unacquired_release_has_no_file_or_process_authority() {
+    let world = world();
+    let mut remote = remote(&world);
+    remote.release().unwrap();
+    assert_eq!(world.borrow().calls.len(), 0);
+}
+
+#[test]
+fn t1_on_device_incomplete_acquisition_cannot_launch_and_release_consumes_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let local = root.path().join("config");
+    std::fs::write(&local, "derived").unwrap();
+    let world = world();
+    let mut remote = remote(&world);
+    assert_eq!(
+        remote.check_owned().unwrap_err(),
+        "device: bench acquisition incomplete"
+    );
+    remote.stage(&local).unwrap();
+    assert!(remote.stage(&local).unwrap_err().contains("already attempted"));
+    remote.release().unwrap();
+    let effects = world.borrow().calls.len();
+    remote.release().unwrap();
+    assert_eq!(world.borrow().calls.len(), effects);
+    assert_eq!(
+        remote.check_owned().unwrap_err(),
+        "device: bench acquisition incomplete"
+    );
+}
+
+#[test]
+fn t1_on_device_malformed_directory_identity_retains_uncertain_residue_without_launch() {
+    let identities = ["", "invalid:identity:shape", "1:bad", ":2"].map(String::from);
+    for identity in identities.into_iter().chain([format!("{OWNER};rm")]) {
+        let root = tempfile::tempdir().unwrap();
+        let local = root.path().join("config");
+        std::fs::write(&local, "derived").unwrap();
+        let world = world();
+        world.borrow_mut().directory_identity = Some(identity);
+        let mut remote = remote(&world);
+        assert!(
+            remote
+                .stage(&local)
+                .unwrap_err()
+                .contains("invalid bench directory identity")
+        );
+        assert!(remote.release().unwrap_err().contains("uncertain"));
+        assert!(!world.borrow().ran("push") && !world.borrow().ran("rm -f") && !world.borrow().ran("setsid"));
+    }
+}
+
+#[tokio::test]
+async fn t1_on_device_existing_bridge_is_refused_and_never_stopped_by_finalization() {
+    let root = tempfile::tempdir().unwrap();
+    let local = root.path().join("config");
+    std::fs::write(&local, "derived").unwrap();
+    let world = world();
+    let mut remote = remote(&world);
+    remote.stage(&local).unwrap();
+    world.borrow_mut().alive = true;
+    assert_eq!(
+        remote.start().await.unwrap_err(),
+        "device: refusing to replace an existing bridge process"
+    );
+    remote.stop().await.unwrap();
+    remote.release().unwrap();
+    assert!(world.borrow().alive);
+    assert!(!world.borrow().ran("kill $(cat") && !world.borrow().ran("setsid"));
 }

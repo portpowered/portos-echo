@@ -235,3 +235,27 @@ async fn t3_screen_release_bounds_stalled_client_and_cancellation_skips_drain() 
         assert!(screen.address().is_none());
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn startup_network_projection_clears_waiting_on_ready_and_terminal_auth() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut trace = Trace::open(&directory.path().join("trace"), "chatgpt").unwrap();
+    let screen = Screen::bind(None).await.unwrap();
+    let health = Health::offline();
+    let mut view = View::new(&screen, &health, &mut trace);
+    let retry = (1, std::time::Duration::from_secs(1));
+    view.recovering(&Error::Unavailable, retry, false).unwrap();
+    assert_eq!(
+        health.state.borrow().startup_waiting_reason,
+        Some("dependency_unavailable")
+    );
+    assert!(!health.state.borrow().relink_required);
+    view.failed(&Error::Authorization).await.unwrap();
+    assert_eq!(health.state.borrow().startup_waiting_reason, None);
+    assert!(health.state.borrow().relink_required);
+    view.observe(super::super::ServeNotice::Ready).unwrap();
+    assert_eq!(health.state.borrow().startup_waiting_reason, None);
+    assert!(!health.state.borrow().relink_required);
+    view.recovering(&Error::Unavailable, retry, true).unwrap();
+    assert_eq!(health.state.borrow().startup_waiting_reason, None);
+}

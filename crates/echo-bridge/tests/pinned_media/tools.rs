@@ -75,14 +75,87 @@ async fn t3_pinned_tools_daily_cap_interrupts_without_mcp() {
     .unwrap();
 }
 
+macro_rules! search_case {
+    ($name:ident, $model:literal, $mode:ident) => {
+        #[tokio::test]
+        async fn $name() {
+            tokio::time::timeout(
+                Duration::from_secs(25),
+                Box::pin(exercise_search(
+                    false,
+                    false,
+                    ToolBudget::new(1, || Ok(7)),
+                    $model,
+                    echo_config::WebSearch::$mode,
+                )),
+            )
+            .await
+            .unwrap();
+        }
+    };
+}
+search_case!(t3_pinned_tools_web_search_cached_conventional, "gpt-5.4", Cached);
+search_case!(t3_pinned_tools_web_search_disabled_conventional, "gpt-5.4", Disabled);
+search_case!(t3_pinned_tools_web_search_cached_native, "gpt-6.1-sol", Cached);
+search_case!(t3_pinned_tools_web_search_disabled_native, "gpt-6.1-sol", Disabled);
+
+#[test]
+fn t3_pinned_tools_web_search_concurrent_homes_keep_distinct_modes() {
+    // Each media witness owns a paused Tokio clock. Independent runtimes keep
+    // concurrent homes isolated without pausing the same clock twice.
+    let runs = [echo_config::WebSearch::Live, echo_config::WebSearch::Disabled].map(|mode| {
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(25),
+                    Box::pin(exercise_search(
+                        false,
+                        false,
+                        ToolBudget::new(1, || Ok(7)),
+                        "gpt-5.4",
+                        mode,
+                    )),
+                )
+                .await
+                .unwrap();
+            });
+        })
+    });
+    for run in runs {
+        run.join().unwrap();
+    }
+}
+
 async fn exercise(negative: bool) {
     Box::pin(exercise_mode(negative, false, ToolBudget::new(1, || Ok(7)), "gpt-5.4")).await;
 }
 
 async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, model: &str) {
+    Box::pin(exercise_search(
+        negative,
+        exhausted,
+        budget,
+        model,
+        echo_config::WebSearch::Live,
+    ))
+    .await;
+}
+
+async fn exercise_search(
+    negative: bool,
+    exhausted: bool,
+    budget: ToolBudget,
+    model: &str,
+    web_search: echo_config::WebSearch,
+) {
     let directory = tempfile::tempdir().unwrap();
 
     let config = CodexConfig {
+        web_search,
         binary: Some(binary()),
         home: Some(directory.path().join("home")),
         ..CodexConfig::default()
@@ -104,7 +177,7 @@ async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, mode
     let ready: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let origin = ready["origin"].as_str().unwrap();
     let routes = LocalRoutes::new(origin, origin).unwrap();
-    let initialize = json!({"tools":catalog.tools(), "negative":negative, "exhausted":exhausted, "model":model});
+    let initialize = json!({"tools":catalog.tools(), "negative":negative, "exhausted":exhausted, "model":model,"web_search":web_search.as_str()});
     input.write_all(format!("{initialize}\n").as_bytes()).await.unwrap();
     let (commands, receive) = mpsc::channel(2);
     let (started, model_started) = tokio::sync::oneshot::channel();
@@ -120,7 +193,7 @@ async fn exercise_mode(negative: bool, exhausted: bool, budget: ToolBudget, mode
     );
     remote.close();
     assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
-    snapshot(&mut input, &mut output, exhausted, model).await;
+    snapshot(&mut input, &mut output, exhausted, model, web_search).await;
     check_mcp(&spoof, exhausted);
     drop(input);
     assert!(provider.wait().await.unwrap().success());
@@ -201,6 +274,7 @@ async fn client(
                     model: Some(model),
                     effort: None,
                     time_zone: None,
+                    web_search: config.web_search,
                 },
                 catalog.tools().to_vec(),
                 Instant::now() + Duration::from_secs(10),
@@ -314,10 +388,11 @@ async fn snapshot(
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     exhausted: bool,
     model: &str,
+    web_search: echo_config::WebSearch,
 ) {
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let value: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    let names = if model == "gpt-5.4" {
+    let mut names = if model == "gpt-5.4" {
         json!(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"])
     } else {
         json!([
@@ -327,6 +402,9 @@ async fn snapshot(
             "clock.sleep"
         ])
     };
+    if model != "gpt-5.4" && web_search != echo_config::WebSearch::Disabled {
+        names.as_array_mut().unwrap().push(json!("web.run"));
+    }
     if exhausted {
         // rust-v0.160.0: release exactly one request before bridge polling.
         // This is the pre-notification window, not a universal zero-work claim.

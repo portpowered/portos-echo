@@ -63,7 +63,7 @@ async fn t3_on_device_launch_pushes_the_derived_config_and_starts_in_its_own_ses
         world.pushed,
         [(
             staged.to_string_lossy().into_owned(),
-            format!("{PRIVATE}/bridge.toml"),
+            format!("{PRIVATE}/bridge.toml.lab-owner/config"),
             DERIVED.to_owned()
         )]
     );
@@ -73,9 +73,9 @@ async fn t3_on_device_launch_pushes_the_derived_config_and_starts_in_its_own_ses
         assert_eq!(std::fs::metadata(&staged).unwrap().permissions().mode() & 0o777, 0o600);
     }
     for expected in [
-        format!("shell chown 9999:9999 {PRIVATE}/bridge.toml"), // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
-        format!("/data/local/hassmic/runas nobody 3990,inet chmod 600 {PRIVATE}/bridge.toml"),
-        format!("/data/local/hassmic/runas nobody 3990,inet stat -c %u:%g:%a {PRIVATE}/bridge.toml"),
+        format!("shell chown 9999:9999 {PRIVATE}/bridge.toml.lab-owner/config"), // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
+        format!("/data/local/hassmic/runas nobody 3990,inet chmod 600 {PRIVATE}/bridge.toml.lab-owner/config"),
+        format!("/data/local/hassmic/runas nobody 3990,inet stat -c %u:%g:%a {PRIVATE}/bridge.toml.lab-owner/config"),
         format!("/data/local/hassmic/runas nobody 3990,inet sh -c 'umask 077; cd {PRIVATE} || exit 1;"),
         "setsid sh -c".into(),
         format!("--config {PRIVATE}/bridge.toml --trace {PRIVATE}/trace.jsonl <lab-stdin"),
@@ -106,7 +106,7 @@ async fn t3_on_device_m1_wake_is_judged_from_the_trace_read_back_and_cleanup_is_
     let world = world.borrow();
     assert!(!world.alive && !root.path().join("configured.private").exists());
     let forward = format!("forward --remove tcp:{}", world.forward);
-    let private = format!("rm -f {PRIVATE}/bridge.toml {PRIVATE}/trace.jsonl");
+    let private = format!("test {PRIVATE}/bridge.toml.lab-owner/config -ef {PRIVATE}/bridge.toml");
     assert!(world.ran(&forward) && world.ran(&private));
 }
 

@@ -32,8 +32,9 @@ def read_frame(connection):
 
 
 class Delegation:
-    def __init__(self, tools, negative, exhausted=False, model="gpt-5.4"):
+    def __init__(self, tools, negative, exhausted=False, model="gpt-5.4", web_search="live"):
         self.tools = tools
+        self.web_search = web_search
         self.model = model
         self.native = model != "gpt-5.4"
         self.negative = negative
@@ -96,22 +97,34 @@ class Delegation:
         return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
 
     def check_tools(self, body, expected):
+        hosted = []
+        if self.web_search != 'disabled':
+            search = {'type': 'web_search', 'external_web_access': self.web_search == 'live'}
+            hosted = [search]
         if not self.native:
-            assert body['tools'] == expected, 'model exposed tools beyond exact dynamic catalog'
-            return [tool['name'] for tool in body['tools']]
+            assert body['tools'] == expected + hosted, 'model exposed tools beyond exact dynamic catalog: ' + json.dumps(body['tools'])
+            return [tool['name'] for tool in expected]
+        assert 'tools' not in body, 'unexpected conventional native tools field'
+        assert not any(item.get('additional_tools') for item in body['input']), 'unexpected hosted native tools'
         # Bundled sol uses Responses Lite: declarations are input tool blocks.
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
+        namespaces = blocks[0]
+        # Responses Lite uses the pin's direct provider-backed web.run extension.
+        # It never becomes an exec nested callable or a hosted declaration.
         names = [namespace['name'] + '.' + tool['name']
-                 for namespace in blocks[0] for tool in namespace['tools']]
-        description = blocks[0][0]['tools'][0]['description']
+                 for namespace in namespaces for tool in namespace['tools']]
+        description = namespaces[0]['tools'][0]['description']
         nested = re.findall(r'^### `([^`]+)`$', description, re.M)
         print(json.dumps({'model': self.model, 'tools': names, 'nested': nested}), file=sys.stderr, flush=True)
         # Pin spec_plan.rs:1178-1204 registers async input from bundled model
         # metadata independently of tools.experimental_request_user_input.enabled.
         # :1225-1251 registers clock from that metadata and default sleep_tool.
         # The binding amendment permits these exact extras, not synchronous input.
-        assert names == ['functions.exec', 'functions.wait', 'functions.request_user_input_async', 'clock.sleep'], names
+        expected_names = ['functions.exec', 'functions.wait', 'functions.request_user_input_async', 'clock.sleep']
+        if self.web_search != 'disabled':
+            expected_names += ['web.run']
+        assert names == expected_names, names
         assert nested == sorted(tool['name'] for tool in self.tools) + ['clock__curr_time'], nested
         for tool, fields in zip(self.tools, ['text: string;', 'ms: number;', '', 'name: string;']):
             declaration = 'declare const tools: { ' + tool['name'] + '(args: { ' + fields + ' }): Promise<unknown>; };'

@@ -270,3 +270,29 @@ async fn codex_operator_required_home_and_offline_cache_miss_fail_before_spawn()
     assert!(!fixture.directory.path().join("credential").exists());
     drop(fixture.owner());
 }
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge and local Python"]
+async fn web_search_invalid_cli_rejects_before_child_trace_home_or_connection() {
+    let fixture = Fixture::new("chatgpt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    voice_entry::configure(&fixture, listener.local_addr().unwrap().port());
+    let path = fixture.directory.path().join("bridge.toml");
+    let absent = fixture.directory.path().join("absent-codex-home");
+    let text = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("[codex]", "[codex]\nweb_search='invalid-private-input'")
+        .replace(&fixture.home.display().to_string(), &absent.display().to_string());
+    std::fs::write(path, text).unwrap();
+    let mut process = Process::spawn(&mut voice_entry::command(&fixture));
+    process.collect(2).await;
+    assert_eq!(
+        process.stderr().await,
+        "echo-bridge: codex.web_search: invalid type or value\n"
+    );
+    assert!(process.lines.next_line().await.unwrap().is_none());
+    assert!(!absent.exists());
+    assert!(!fixture.home.join("launches").exists());
+    assert!(!fixture.directory.path().join("trace").exists());
+    assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
+}

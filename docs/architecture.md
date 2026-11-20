@@ -262,8 +262,31 @@ binary; the [ARM build](adr/0028-codex-armv7.md) carries authorized build patche
 
 - Own ChatGPT sign-in storage/refresh, authenticated call creation, sideband and delegated model execution.
 - Expose only bridge-supplied dynamic tools on ephemeral, read-only threads; built-in execution tools,
-  environments and app-server MCP configuration are disabled by our thread/home settings.
+  environments and app-server MCP configuration are disabled by our thread/home settings. Provider-backed read-only
+  web search is the sole exception, selected by `[codex] web_search`.
 - It does not capture the Echo mic, play its speaker or hold the Port OS grant. Its media peer is in the bridge.
+
+#### Configuration — Codex app server
+
+`[codex] web_search` accepts exactly `"live"`, `"cached"` or `"disabled"`. Omitting the table or key
+selects `"live"`. Live search allows external web access; cached search sets provider
+`external_web_access` to false in both search forms; disabled omits search. The pin's `indexed` value
+is not exposed. Conventional models receive one hosted `web_search` declaration. Responses Lite models,
+including `gpt-6.1-sol`, receive the pin's standalone `web.run` extension instead, using the authenticated
+provider search API. Neither form adds local fetch, process, browser or file authority.
+The complete bridge dynamic catalog and nested `exec` callables remain unchanged; native direct tools
+add exactly `web.run` when enabled. Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
+Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["web"]` so search
+remains direct. The local-fake provider opts into `supports_standalone_web_search` to reproduce
+production support.
+
+Invalid types or values stop startup with exit 2, empty stdout and exactly
+`echo-bridge: codex.web_search: invalid type or value` on stderr followed by a newline, before child,
+home, trace or listener effects. The supplied value is never echoed. Both thread settings and local-fake
+child overrides receive the selected mode. Restart the bridge after changing it. To roll back search,
+set `web_search = "disabled"` and restart. Remove the key before restoring an older bridge binary,
+which always disables search. No credential, notes or ledger migration is needed; no query/result logging
+is added. Real provider execution and spoken source attribution remain operator T5 evidence.
 
 #### Where it runs — Codex app server
 

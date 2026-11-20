@@ -4,6 +4,7 @@ use super::*;
 mod binary_turn;
 #[path = "configured/restart.rs"]
 mod restart;
+mod startup;
 #[path = "configured/turn.rs"]
 mod turn;
 use echo_bridge::{Error, bridge_voice::Configured};

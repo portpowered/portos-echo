@@ -35,6 +35,12 @@ connections_lock = threading.Lock()
 connections_empty = threading.Event()
 connections_empty.set()
 ANSWER = 'v=0\r\ns=fake-answer\r\n'
+EXPECTED_TOOLS = [
+    {'type': 'function', 'name': 'echo_test', 'description': 'Synthetic echo',
+     'parameters': {'type': 'object', 'properties': {'message': {'type': 'string'}},
+                    'required': ['message'], 'additionalProperties': False}, 'strict': False},
+    {'type': 'web_search', 'external_web_access': True},
+]
 
 def frame(sock, value):
     data = json.dumps(value).encode()
@@ -148,6 +154,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.respond(404, b'{}')
             return
         observed['responses'].append(body)
+        assert body['tools'] == EXPECTED_TOOLS, body['tools']
         if case.startswith('responses-'):
             self.respond(int(case.removeprefix('responses-')), b'{"error":{"message":"synthetic model refusal"}}')
             return
@@ -172,7 +179,8 @@ def verify(sdps, tools, started, closed):
     assert urllib.parse.parse_qs(urllib.parse.urlsplit(call['path']).query) == {'intent': ['quicksilver'], 'architecture': ['avas']}, call['path']
     assert call['body']['session']['model'] == 'gpt-live-1-codex', call['body']['session']['model']
     assert sdps == [ANSWER] and started == ['v3'], (sdps, started)
-    assert normalized == [['echo_test'], ['echo_test']], normalized
+    assert [body['tools'] for body in observed['responses']] == [EXPECTED_TOOLS, EXPECTED_TOOLS]
+    assert normalized == [['echo_test', 'web_search'], ['echo_test', 'web_search']], normalized
     assert len(tools) == 1 and tools[0]['tool'] == 'echo_test' and (tools[0]['arguments'] == {'message': 'ping'}), tools
     assert len(observed['append']) == 1 and observed['append'][0]['delegation_item_id'] == 'delegation-local', observed['append']
     assert observed['append'][0]['content'] == [{'type': 'input_text', 'text': 'echo-ok'}]
@@ -195,7 +203,7 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 port = server.server_port
 base = f'http://127.0.0.1:{port}'
 with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=True) as home:
-    overrides = {'model_provider': 'local', 'model': 'gpt-5.4', 'model_providers.local': {'name': 'local', 'base_url': base + '/v1', 'wire_api': 'responses', 'requires_openai_auth': True, 'experimental_bearer_token': 'dummy-local-only'}, 'experimental_realtime_webrtc_call_base_url': base + '/backend-api/codex', 'experimental_realtime_ws_base_url': base + '/v1', 'features.plugins': False, 'features.recommended_plugins': False, 'features.remote_models': False, 'features.apps': False, 'features.remote_control': False, 'features.skill_search': False, 'features.skip_host_skill_discovery': True, 'cloud.skills.enabled': False, 'analytics.enabled': False, 'feedback.enabled': False, 'features.multi_agent': False, 'features.multi_agent_v2': False, 'features.goals': False, 'tools.experimental_request_user_input.enabled': False, 'features.shell_tool': False, 'features.unified_exec': False, 'web_search': 'disabled', 'tools.update_plan.enabled': False, 'mcp_servers': {}, 'cli_auth_credentials_store': 'file', 'check_for_update_on_startup': False}
+    overrides = {'model_provider': 'local', 'model': 'gpt-5.4', 'model_providers.local': {'name': 'local', 'base_url': base + '/v1', 'wire_api': 'responses', 'requires_openai_auth': True, 'experimental_bearer_token': 'dummy-local-only'}, 'experimental_realtime_webrtc_call_base_url': base + '/backend-api/codex', 'experimental_realtime_ws_base_url': base + '/v1', 'features.plugins': False, 'features.recommended_plugins': False, 'features.remote_models': False, 'features.apps': False, 'features.remote_control': False, 'features.skill_search': False, 'features.skip_host_skill_discovery': True, 'cloud.skills.enabled': False, 'analytics.enabled': False, 'feedback.enabled': False, 'features.multi_agent': False, 'features.multi_agent_v2': False, 'features.goals': False, 'tools.experimental_request_user_input.enabled': False, 'features.shell_tool': False, 'features.unified_exec': False, 'web_search': 'live', 'tools.update_plan.enabled': False, 'mcp_servers': {}, 'cli_auth_credentials_store': 'file', 'check_for_update_on_startup': False}
 
     def toml(v):
         if isinstance(v, dict):
@@ -257,14 +265,14 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                 assert report == {'dropped': True}, report
                 assert len(observed['calls']) == 1 and len(observed['sideband']) == 1
                 assert len(observed['responses']) == 1 and observed['append'] == []
-                assert [tool['name'] for tool in observed['responses'][0]['tools']] == ['echo_test']
+                assert observed['responses'][0]['tools'] == EXPECTED_TOOLS
                 assert not observed['external']
                 assert watcher.stdout.readline().strip() == 'EXITED'
                 assert watcher.wait(timeout=5) == 0
             elif case == 'interrupt':
                 print(json.dumps({'case': case, 'report': report, 'append': observed['append']}), flush=True)
                 assert len(observed['responses']) == 1
-                assert [tool['name'] for tool in observed['responses'][0]['tools']] == ['echo_test']
+                assert observed['responses'][0]['tools'] == EXPECTED_TOOLS
                 assert len(report['tools']) == 1 and report['tools'][0]['turnId'] == report['turn_id']
                 assert report['closed'] is True and report['sdp'] == [ANSWER] and report['started'] == ['v3']
                 assert observed['append'] == []
