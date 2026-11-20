@@ -1,6 +1,6 @@
 //! Configured T3 journey through the pinned app server and fake Wyoming/Responses/Live.
 use super::*;
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::{fs, future::Future, os::unix::fs::PermissionsExt};
 use tokio::io::Lines;
 
 type Output = Lines<BufReader<tokio::process::ChildStdout>>;
@@ -77,6 +77,7 @@ async fn configured_journey(selection: Option<&str>, enabled: bool) {
         assert_eq!(read_json(&mut observed).await, json!({"initialized":"runner-skills"}));
     }
     let mut bridge = launch(root, ready["origin"].as_str().unwrap());
+    let mut stdin = bridge.stdin.take().unwrap();
     let (mut satellite, _) = listener.accept().await.unwrap();
     let mut stdout = BufReader::new(bridge.stdout.take().unwrap()).lines();
     admit(&mut satellite, &mut stdout, &config).await;
@@ -85,36 +86,25 @@ async fn configured_journey(selection: Option<&str>, enabled: bool) {
     let mut peer = connect_provider(&mut control, &mut observed).await;
     let connected =
         async { while lifecycle::next_frame(&mut screen).await.unwrap()["state"]["state"] != "connected" {} };
-    tokio::pin!(connected);
-    loop {
-        tokio::select! {
-            () = step(&mut peer) => (),
-            () = &mut connected => break,
-        }
-    }
+    await_connected(&mut peer, &mut stdin, &mut stdout, connected).await;
     if enabled {
         send_json(&mut control, json!({"transcripts":true})).await;
-        loop {
-            tokio::select! {
-                () = step(&mut peer) => (),
-                value = read_json(&mut observed) => {
-                    assert_eq!(value, json!({"append":"runner-skills"}));
-                    break;
-                }
-            }
-        }
+        assert_eq!(
+            drive_peer(&mut peer, read_json(&mut observed)).await,
+            json!({"append":"runner-skills"})
+        );
     }
     send_json(&mut control, json!({"session":true})).await;
     let context = voice_context(&read_json(&mut observed).await);
     let rows = read_rpc(root);
-    check_thread(&rows[0], &context, tools, enabled);
+    check_thread(&rows[0], &context, &tools, enabled);
     if enabled {
         send_json(&mut control, json!({"snapshot":"runner-skills"})).await;
         check_skill_results(&rows[1..], &read_json(&mut observed).await);
     } else {
         assert_eq!(rows.len(), 1);
     }
-    drop(bridge.stdin.take());
+    drop(stdin);
     acknowledge_cut(&mut satellite).await;
     let output = bridge.wait_with_output().await.unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -139,15 +129,48 @@ fn start_provider() -> (tokio::process::Child, tokio::process::ChildStdin, Outpu
 async fn acknowledge_cut(satellite: &mut TcpStream) {
     loop {
         let (header, payload) = read_wire(satellite).await;
-        assert!(payload.is_empty());
-        match header["type"].as_str().unwrap() {
-            "audio-start" => (),
-            "hassmic-flush" => {
-                send(satellite, "played", json!({}), vec![]).await;
-                return;
-            }
-            other => panic!("unexpected Wyoming frame before shutdown flush: {other}"),
+        assert_eq!(payload, b"");
+        if header["type"] != "audio-start" {
+            assert_eq!(header["type"], "hassmic-flush");
+            send(satellite, "played", json!({}), vec![]).await;
+            return;
         }
+    }
+}
+
+async fn drive_peer<T>(peer: &mut LivePeer, work: impl Future<Output = T>) -> T {
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            () = step(peer) => (),
+            value = &mut work => return value,
+        }
+    }
+}
+
+async fn await_connected(
+    peer: &mut LivePeer,
+    stdin: &mut tokio::process::ChildStdin,
+    stdout: &mut Output,
+    connected: impl Future<Output = ()>,
+) {
+    tokio::select! {
+        () = drive_peer(peer, connected) => (),
+        () = tick_clock(stdin, stdout) => (),
+    }
+}
+
+// The executable uses paused time. Run its protocol timers while ICE and
+// DTLS negotiate, and use the Connected frame as the readiness barrier.
+async fn tick_clock(stdin: &mut tokio::process::ChildStdin, stdout: &mut Output) {
+    let mut ticks = tokio::time::interval(Duration::from_millis(20));
+    loop {
+        ticks.tick().await;
+        send_json(stdin, json!({"action":"advance_clock","milliseconds":20})).await;
+        assert_eq!(
+            read_json(stdout).await,
+            json!({"event":"bridge.clock_advanced","milliseconds":20})
+        );
     }
 }
 
@@ -198,9 +221,6 @@ async fn connect_provider(control: &mut tokio::process::ChildStdin, observed: &m
     loopback_offer(offer);
     let answer = peer.answer(offer).await.unwrap();
     send_json(control, json!({"answer":answer})).await;
-    while !peer.ready() {
-        step(&mut peer).await;
-    }
     peer
 }
 
@@ -250,7 +270,7 @@ fn declarations(enabled: bool) -> Vec<Value> {
     tools
 }
 
-fn check_thread(observed: &Value, context: &str, tools: Vec<Value>, enabled: bool) {
+fn check_thread(observed: &Value, context: &str, tools: &[Value], enabled: bool) {
     let skills = if enabled { SKILLS } else { "" };
     let runner = format!(
         "Fixture runner.\n\n{}\n{context}{skills}",
