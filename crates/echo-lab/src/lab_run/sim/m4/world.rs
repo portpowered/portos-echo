@@ -4,6 +4,8 @@ use echo_spoof_mcp::Spoof;
 use serde_json::Value;
 use std::path::Path;
 
+pub const LIVE_IDLE_SECONDS: u64 = 120;
+
 #[derive(Default)]
 pub struct World {
     pub ui_states: Vec<Value>,
@@ -41,7 +43,7 @@ wyoming_port = {port}
 mode = "api_key"
 credential_file = "credential"
 voice = "alloy"
-session_idle_seconds = 120
+session_idle_seconds = {LIVE_IDLE_SECONDS}
 [agent]
 model = "fixture-model"
 max_tool_calls = 8

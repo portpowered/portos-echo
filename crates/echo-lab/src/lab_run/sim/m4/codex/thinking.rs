@@ -37,6 +37,9 @@ async fn exercise(muted: bool) -> Result<(), String> {
             let result = work(&mut case, &mut screen, latch, &phases).await?;
             assert_eq!(result, json!({"event":"bridge.run_completed","run_id":"run-1"}));
             if muted {
+                // Drain the retained call while its presentation is still muted.
+                // EOF during a call that received an active mute reports Control.
+                drain_live_idle(&mut case).await?;
                 unmute.send(()).unwrap();
                 observe(&mut screen, &mut case.ui_states, "ready").await?;
                 advance(&mut case, 0).await?;
@@ -136,6 +139,23 @@ async fn advance(case: &mut Case, milliseconds: u64) -> Result<(), String> {
         crate::lab_run::sim::m2::codex::collect_playout(case.bridge.as_mut().unwrap(), &mut case.clock, milliseconds)
             .await?;
     assert_eq!(result, None);
+    Ok(())
+}
+
+async fn drain_live_idle(case: &mut Case) -> Result<(), String> {
+    let bridge = case.bridge.as_mut().unwrap();
+    let milliseconds = world::LIVE_IDLE_SECONDS * 1000;
+    bridge
+        .send(&json!({"action":"advance_clock","milliseconds":milliseconds}))
+        .await?;
+    let events = [bridge.line().await?, bridge.line().await?];
+    assert!(
+        events.contains(&json!({"event":"bridge.clock_advanced","milliseconds":milliseconds})),
+        "{events:?}"
+    );
+    assert!(events.contains(&json!({"event":"bridge.ready"})), "{events:?}");
+    let epoch = case.clock["epoch_ms"].as_u64().unwrap();
+    case.clock["epoch_ms"] = json!(epoch + milliseconds);
     Ok(())
 }
 
