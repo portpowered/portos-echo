@@ -90,7 +90,7 @@ def device_transport_cases():
                 continue
             device_config_cases(box, stage, env)
     print("echo-install direct transport: install=PASS archive-safety=PASS "
-          "single-component-zone=PASS config-retention=PASS config-force=PASS config-refusal=PASS")
+          "config-retention=PASS config-force=PASS config-refusal=PASS")
 
 def device_config_cases(box, stage, env):
     bundle = stage / "bundle"
