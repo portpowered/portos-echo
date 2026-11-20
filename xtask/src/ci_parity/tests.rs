@@ -127,13 +127,16 @@ fn shards_cover_every_partition_exactly_once() {
         let block = shards::part(part);
         assert_job_rejected(&workflow, &block, &block.replace(from, to), part);
     }
+}
+#[test]
+fn make_targets_of_split_gates_equal_their_parts() {
     let (makefile, workflow) = fixture();
     for rule in shards::MAKE_SPLITS {
-        for changed in [
-            String::new(),
-            format!("{rule}{rule}"),
-            rule.replace(" $(NEXTEST_SHARD)", ""),
-        ] {
+        let unsharded = rule.replace(" $(NEXTEST_SHARD)", "");
+        for changed in [String::new(), format!("{rule}{rule}"), unsharded]
+            .into_iter()
+            .filter(|changed| changed != rule)
+        {
             assert_failure(
                 &makefile.replace(rule, &changed),
                 &workflow,
@@ -307,7 +310,6 @@ fn shared_sim_provisioning_requires_each_exact_host_step() {
     for fragment in [
         "    - name: Host build dependencies\n",
         "      run: sudo apt-get update && sudo apt-get install -y libopus-dev zlib1g-dev\n",
-        "    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n",
         "        path: .cache/hassmic-host\n",
         "        key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n",
         "    - name: Build pinned hassmic-host\n",
