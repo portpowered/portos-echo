@@ -1,0 +1,68 @@
+name: Screen home witness
+on:
+  push:
+    branches: [proof/el-w5-screen-home-eyes-v2-clock-feedback]
+permissions:
+  contents: read
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: web/screen
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/ms-playwright
+          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
+      - run: npm ci --offline=false
+      - run: npx --offline playwright install --with-deps chromium
+      - run: npm run lint
+      - run: npm run build
+      - name: Validate focused Chromium behavior
+        run: node --test --test-timeout=30000 tests/render.test.mjs tests/touch.test.mjs tests/boundary.test.mjs tests/emotion.test.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: home-witness
+          path: |
+            web/screen/tests/goldens/*.json
+            web/screen/test-results/screenshots/
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-unit
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/ms-playwright
+          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
+      - run: npm --prefix web/screen ci --offline=false
+      - run: cd web/screen && npx --offline playwright install --with-deps chromium
+      - name: Run the native screen suite
+        working-directory: web/screen
+        run: npm ci --offline && npm test
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: home-native-witness
+          path: |
+            web/screen/test-results/screenshots/
+            web/screen/test-results/summary.txt
