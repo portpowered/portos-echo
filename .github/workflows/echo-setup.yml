@@ -32,7 +32,7 @@ jobs:
         if: runner.os == 'Linux'
         run: python3 tests/test_echo_install.py
       - name: Existing Linux release regression
-        if: runner.os == 'Linux'
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: |
           python3 tests/test_release_kit.py
           python3 tests/test_release_redirects.py

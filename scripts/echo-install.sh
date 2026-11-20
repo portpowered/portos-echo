@@ -89,9 +89,7 @@ Linux only; requires adb on PATH and exactly one ready device with hassmic.
 --purge: also remove private/ and home/ after a verified stop.
 Device root: /data/local/echo-bridge
 Config: private/bridge.toml (0600); private/ and home/ are 0700.
-Config must select [codex] launch = "standalone",
-binary = "/data/local/echo-bridge/bin/codex-app-server",
-ca_file = "/data/local/echo-bridge/bin/cacert.pem".
+Config must select [codex] launch = "standalone", binary = "/data/local/echo-bridge/bin/codex-app-server", ca_file = "/data/local/echo-bridge/bin/cacert.pem".
 W5 shared-home config: [home] dir = "/data/local/echo-bridge/home";
 all secrets and codex.home stay in private/.
 Supply config compatible with the bridge build; TOML is not validated or rewritten.
@@ -109,6 +107,8 @@ Status fields: process=running|stopped; process_user=USER|unavailable;
 uptime_seconds=INTEGER|unavailable;
 hassmic_link=SANITIZED_LINE|unavailable
 uninstall retains private/ and home/ unless --purge; never changes hassmic or /system.
+Success: echo-install: uninstalled (state retained)
+Success with --purge: echo-install: uninstalled (purged)
 A running root process fails; unverifiable running identity fails closed.
 Exit status: 0 success/help/safe status observation; 1 operation/prerequisite/unsafe process-user failure;
 2 usage error. Errors use fixed diagnostics without raw adb output.
