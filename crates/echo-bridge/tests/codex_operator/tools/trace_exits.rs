@@ -104,6 +104,9 @@ async fn inspect(
         "timeout" => expire(fixture, &mut screen).await,
         _ => (),
     }
+    if matches!(cause, "shutdown" | "kill") {
+        release(observer).await;
+    }
     wait(fixture, "delegation.resolved").await;
     settle(fixture, cause, observer, stop).await;
 }
@@ -134,17 +137,21 @@ async fn settle(fixture: &Fixture, cause: &str, observer: &Observer, stop: Optio
     if let Some(stop) = stop {
         let _ = stop.send(());
     }
-    if !recovering {
-        while !observer.commands().iter().any(|command| {
-            matches!(
-                command,
-                echo_link::fake::Command::Cut(_) | echo_link::fake::Command::Close
-            )
-        }) {
-            tokio::task::yield_now().await;
-        }
-        observer.finish(Ok(()));
+    if !recovering && !matches!(cause, "shutdown" | "kill") {
+        release(observer).await;
     }
+}
+
+async fn release(observer: &Observer) {
+    while !observer.commands().iter().any(|command| {
+        matches!(
+            command,
+            echo_link::fake::Command::Cut(_) | echo_link::fake::Command::Close
+        )
+    }) {
+        tokio::task::yield_now().await;
+    }
+    observer.finish(Ok(()));
 }
 
 async fn expire(fixture: &Fixture, screen: &mut Lines<BufReader<tokio::net::TcpStream>>) {
