@@ -99,6 +99,7 @@ async fn pinned_call(
     (provider_input, provider_output): (&mut ChildStdin, &mut Lines),
 ) {
     let mut bridge = run_bridge(root, origin, true);
+    let mut input = bridge.stdin.take().unwrap();
     let mut output = BufReader::new(bridge.stdout.take().unwrap()).lines();
     let mut satellite = listener.accept().await.unwrap().0;
     admit(&mut satellite, &mut output, config).await;
@@ -108,8 +109,14 @@ async fn pinned_call(
         fast,
     )
     .await;
-    let mut peer = connect_call(root, &mut satellite, provider_input, provider_output).await;
-    drop(bridge.stdin.take());
+    let mut peer = connect_call(
+        root,
+        &mut satellite,
+        (provider_input, provider_output),
+        (&mut input, &mut output),
+    )
+    .await;
+    drop(input);
     acknowledge_cut(&mut satellite).await;
     assert_clean_exit(bridge).await;
     peer.close();
@@ -197,9 +204,11 @@ async fn replace(
 }
 
 fn settings_url(root: &Path) -> String {
+    let address = lifecycle::screen_address(root);
+    assert_eq!(address.ip(), Ipv4Addr::LOCALHOST);
     format!(
-        "http://{}/settings/v2?token=synthetic-screen-pair",
-        lifecycle::screen_address(root)
+        "http://127.0.0.1:{}/settings/v2?token=synthetic-screen-pair",
+        address.port()
     )
 }
 
@@ -226,15 +235,20 @@ async fn assert_snapshot(client: &reqwest::Client, url: &str, fast: bool) {
     assert_eq!(data["restart_pending"], false);
 }
 
-async fn connect_call(root: &Path, satellite: &mut TcpStream, input: &mut ChildStdin, output: &mut Lines) -> LivePeer {
+async fn connect_call(
+    root: &Path,
+    satellite: &mut TcpStream,
+    (provider_input, provider_output): (&mut ChildStdin, &mut Lines),
+    (clock_input, clock_output): (&mut ChildStdin, &mut Lines),
+) -> LivePeer {
     let mut screen = lifecycle::screen(root).await;
     wake(satellite).await;
-    let request: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+    let request: Value = serde_json::from_str(&provider_output.next_line().await.unwrap().unwrap()).unwrap();
     let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
         .await
         .unwrap();
     let answer = peer.answer(request["offer"].as_str().unwrap()).await.unwrap();
-    input
+    provider_input
         .write_all(format!("{}\n", json!({"answer":answer})).as_bytes())
         .await
         .unwrap();
@@ -244,7 +258,7 @@ async fn connect_call(root: &Path, satellite: &mut TcpStream, input: &mut ChildS
     loop {
         tokio::select! {
             () = &mut connected => break,
-            () = step(&mut peer) => (),
+            () = step(&mut peer) => advance(clock_input, clock_output).await,
         }
     }
     peer
