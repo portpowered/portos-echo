@@ -203,6 +203,9 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             params["voice"] = voice.into();
         }
         params["prompt"] = options.prompt.into();
+        if let Some(items) = live_history(options.prompt) {
+            params["initialItems"] = items;
+        }
         let request = self
             .io
             .begin_request("thread/realtime/start", &params)
@@ -405,4 +408,12 @@ pub(crate) fn rpc_error(error: RpcError) -> Error {
         RpcError::Malformed => Error::Decode,
         _ => Error::Unavailable,
     }
+}
+
+/// The chatgpt call route was measured to drop session `instructions` on v3
+/// calls, so the prompt also opens the Live history as a developer item. The
+/// pin refuses an item past 8192 estimated tokens (four bytes each); a longer
+/// prompt is sent as `prompt` only.
+fn live_history(prompt: &str) -> Option<serde_json::Value> {
+    (!prompt.is_empty() && prompt.len() <= 32_768).then(|| json!([{"role": "developer", "text": prompt}]))
 }

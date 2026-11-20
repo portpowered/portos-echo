@@ -54,6 +54,15 @@ async fn journey() {
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
         "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0})
     );
+    // The pinned server must hand the provider the Live prompt both as session
+    // instructions and as the developer item that opens the Live history.
+    input.write_all(b"{\"session\":true}\n").await.unwrap();
+    let session: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(
+        session,
+        json!({"session":{"instructions":"Live voice prompt", "initial_items":[{"type":"message",
+            "role":"developer", "content":[{"type":"input_text","text":"Live voice prompt"}]}]}})
+    );
     drop(input);
     assert!(provider.wait().await.unwrap().success());
     // with_host_options has reaped its child and dropped the home lease.
@@ -91,7 +100,7 @@ async fn client(config: &CodexConfig, routes: &LocalRoutes, commands: mpsc::Send
                 &Options {
                     voice: None,
                     instructions: "Client audio bridge",
-                    prompt: "Client audio bridge",
+                    prompt: "Live voice prompt",
                     model: None,
                     effort: None,
                     time_zone: None,

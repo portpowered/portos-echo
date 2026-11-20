@@ -18,6 +18,7 @@ observed = {'calls': [], 'sidebands': 0, 'external': 0}
 output_lock = threading.Lock()
 delegation = None
 manual = False
+session = None
 
 
 def emit(value):
@@ -75,6 +76,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             observed['external'] += 1
             self.respond(403, b'{}')
             return
+        global session
+        session = {key: body['session'].get(key) for key in ('instructions', 'initial_items')}
         observed['calls'].append({
             'path': self.path, 'model': body['session']['model'],
             'alpha': self.headers.get('OpenAI-Alpha'),
@@ -156,6 +159,8 @@ try:
             emit({'transcripts': transcript_count})
         elif command == {'append_receipts': True}:
             emit({'append_receipts': delegation.append_receipts})
+        elif command == {'session': True}:
+            emit({'session': session})
         elif command == {'snapshot': True}:
             emit(observed if delegation is None else {**observed, **delegation.snapshot()})
         else:
