@@ -80,6 +80,7 @@ impl Drop for Resolution {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[tokio::test(start_paused = true)]
     async fn delegation_trace_retained_first_resolution_wins_over_late_finish_and_drop() {
@@ -108,7 +109,7 @@ mod tests {
             "outcome":"failed", "reason_class":"task_failed", "handback":"unobserved",
             "duration_ms":23,"tool_counts":{}})
         );
-        println!("{}", rows[1]);
+        writeln!(std::io::stdout(), "{}", rows[1]).unwrap();
     }
 
     #[tokio::test(start_paused = true)]
@@ -134,6 +135,6 @@ mod tests {
         assert_eq!(rows[1]["handback"], "unobserved");
         assert!(rows[1].get("answer").is_none());
         assert_eq!(rows[1]["run_id"], "run-2");
-        println!("{}", rows[1]);
+        writeln!(std::io::stdout(), "{}", rows[1]).unwrap();
     }
 }

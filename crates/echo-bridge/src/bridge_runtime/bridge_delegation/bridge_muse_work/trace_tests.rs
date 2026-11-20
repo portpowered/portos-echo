@@ -1,6 +1,7 @@
 //! T1: retained owner, in-memory backend/Live and per-case paused time/private trace.
 use super::*;
 use crate::bridge_runtime::bridge_delegation::bridge_muse_host::Muse;
+use std::io::Write;
 
 fn rows(witness: &Witness, event: &str) -> Vec<Value> {
     witness
@@ -25,7 +26,7 @@ fn resolved(witness: &Witness, outcome: &str, handback: &str, answer: Option<&st
     assert!(row.get("thread_id").is_none());
     assert!(row.get("turn_id").is_none());
     for row in [created[0].clone(), row.clone()] {
-        println!("{row}");
+        writeln!(std::io::stdout(), "{row}").unwrap();
     }
     row
 }
@@ -79,8 +80,7 @@ async fn delegation_trace_muse_task_outcomes_keep_exact_speech_and_one_local_han
         );
         assert_eq!(
             live.0,
-            text.map(|text| vec![(task().delegation_id, text.into())])
-                .unwrap_or_default()
+            text.map_or_else(Vec::new, |text| vec![(task().delegation_id, text.into())])
         );
         host.service(&mut live, &mut witness.trace).await.unwrap();
         assert!(!host.abandon().await);
@@ -177,7 +177,7 @@ async fn delegation_trace_muse_abandon_drop_and_replacement_close_each_generatio
             assert_eq!(row["outcome"], "cancelled");
             assert_eq!(row["handback"], "unobserved");
             assert!(row.get("answer").is_none());
-            println!("{row}");
+            writeln!(std::io::stdout(), "{row}").unwrap();
         }
         assert_eq!(rows(&witness, "session.commentary.append").len(), 0);
     }
@@ -248,6 +248,6 @@ fn check_payloads(witness: &Witness, mut input: Value, payloads: bool) {
         }
     }
     for row in [created[0].clone(), terminal[0].clone()] {
-        println!("{row}");
+        writeln!(std::io::stdout(), "{row}").unwrap();
     }
 }
