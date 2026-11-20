@@ -3,6 +3,8 @@
 use super::*;
 #[path = "phase.rs"]
 mod phase;
+#[path = "thinking.rs"]
+mod thinking;
 use echo_contracts::wyoming::{Event, Header, encode};
 use std::io::Write;
 use tokio::{
@@ -170,6 +172,7 @@ fn assert_presentation(frames: &[Value], negative: bool, emotion: bool) {
             vec![
                 json!({"state":"listening"}),
                 json!({"state":"connected"}),
+                json!({"state":"thinking"}),
                 json!({"state":"speaking"}),
                 json!({"state":"ready","message":"Echo Live ready"})
             ]
@@ -183,6 +186,15 @@ async fn satellite(
     measurement: phase::Measurement,
     phases: phase::Phase,
 ) -> usize {
+    let mut socket = wake_satellite(listener, wake, &phases).await;
+    let count = playback(&mut socket, &phases).await;
+    phases.seen("satellite.played");
+    measurement.mark("media done");
+    assert_eq!(socket.read(&mut [0]).await.unwrap(), 0);
+    count
+}
+
+async fn wake_satellite(listener: TcpListener, wake: oneshot::Receiver<()>, phases: &phase::Phase) -> TcpStream {
     let mut socket = listener.accept().await.unwrap().0;
     assert_eq!(read(&mut socket).await.0["type"], "run-satellite");
     assert_eq!(read(&mut socket).await.0["type"], "describe");
@@ -201,11 +213,7 @@ async fn satellite(
     .unwrap();
     send(&mut socket, "run-pipeline", row["header"]["data"].clone(), vec![]).await;
     capture(&mut socket).await;
-    let count = playback(&mut socket, &phases).await;
-    phases.seen("satellite.played");
-    measurement.mark("media done");
-    assert_eq!(socket.read(&mut [0]).await.unwrap(), 0);
-    count
+    socket
 }
 async fn playback(socket: &mut TcpStream, phases: &phase::Phase) -> usize {
     let mut pcm = vec![];
@@ -333,10 +341,11 @@ async fn presentation(
         spoof.set_fault(Fault::Http500).unwrap();
     }
     connected.send(()).unwrap();
+    observe(screen, &mut states, "thinking").await?;
     if emotion {
         if !negative {
             observe(screen, &mut states, "emotion").await?;
-            observe(screen, &mut states, "connected").await?;
+            observe(screen, &mut states, "thinking").await?;
         }
         replies.send(Control::Reply).await.unwrap();
     }

@@ -59,6 +59,30 @@ impl Presentation {
         self.send(current.visible())
     }
 
+    pub fn thinking(&self) -> Result<(), Error> {
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        if current.muted || current.activity == UiState::Thinking {
+            return Ok(());
+        }
+        current.activity = UiState::Thinking;
+        if current.overlay.is_none() && current.emotion.is_none() {
+            self.send(UiState::Thinking)?;
+        }
+        Ok(())
+    }
+
+    /// Drop closed-run activity before a recovery or kill overlay can clear.
+    /// The view owns the next visible publication.
+    pub fn clear_thinking(&self) -> Result<(), Error> {
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        if current.activity == UiState::Thinking {
+            current.activity = UiState::Ready {
+                message: "Echo Live ready".into(),
+            };
+        }
+        Ok(())
+    }
+
     pub fn overlay(&self, state: Option<UiState>) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
         current.overlay = state;

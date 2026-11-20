@@ -154,6 +154,10 @@ impl<'a> View<'a> {
                 }
                 Ok(())
             }
+            SessionNotice::Run(Notice::Thinking) => {
+                self.mouth_paused = false;
+                self.screen.presentation.thinking()
+            }
             SessionNotice::Run(Notice::ReplyStarted) => {
                 self.mouth_paused = false;
                 self.screen.publish(UiState::Speaking)
@@ -259,6 +263,7 @@ impl<'a> View<'a> {
 
     pub fn closed(&mut self, reason: &'static str) -> Result<(), Error> {
         self.pending_connected = false;
+        self.screen.presentation.clear_thinking()?;
         self.trace.tool_run(None)?;
         if self.connected {
             self.trace.record("live.closed", None, json!({"reason":reason}))?;
@@ -340,3 +345,54 @@ impl<'a> View<'a> {
 #[cfg(test)]
 #[path = "earcon/voice_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+    use crate::bridge_mcp::bridge_presentation::Presentation;
+    use tokio::sync::mpsc;
+
+    #[tokio::test(start_paused = true)]
+    async fn thinking_preserves_prompt_and_relink_then_resets_for_a_direct_reply() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut trace = Trace::open(&directory.path().join("trace"), "chatgpt").unwrap();
+        let health = Health::offline();
+        let (send, mut receive) = mpsc::channel(8);
+        let mut screen = Screen::bind(None).await.unwrap();
+        screen.presentation = Presentation::new(Some(send));
+        let mut view = View::new(&screen, &health, &mut trace);
+        view.observe(ServeNotice::Listening).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        let prompt = UiState::Approval {
+            id: "local".into(),
+            prompt: "Proceed?".into(),
+            accept_label: "Proceed".into(),
+            deny_label: "Cancel".into(),
+        };
+        screen.presentation.approval(prompt.clone()).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), prompt);
+        for _ in 0..2 {
+            view.session(SessionNotice::Run(Notice::Thinking)).unwrap();
+            assert!(receive.try_recv().is_err());
+        }
+        screen.presentation.clear_approval("local").unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Thinking);
+        view.session(SessionNotice::Run(Notice::Thinking)).unwrap();
+        assert!(receive.try_recv().is_err());
+        view.recovering(&Error::Authorization, (1, std::time::Duration::from_secs(1)), true)
+            .unwrap();
+        assert_eq!(
+            receive.try_recv().unwrap(),
+            crate::bridge_runtime::bridge_screen::failure_state(true)
+        );
+        view.observe(ServeNotice::Ready).unwrap();
+        let ready = UiState::Ready {
+            message: "Echo Live ready".into(),
+        };
+        assert_eq!(receive.try_recv().unwrap(), ready);
+        assert_eq!(receive.try_recv().unwrap(), ready);
+        view.observe(ServeNotice::Listening).unwrap();
+        assert_eq!(receive.try_recv().unwrap(), UiState::Listening);
+        tests::complete(&mut view, &mut receive);
+    }
+}

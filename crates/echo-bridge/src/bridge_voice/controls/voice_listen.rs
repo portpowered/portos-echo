@@ -60,7 +60,7 @@ pub(super) async fn replies<L: EchoLink>(
             return Ok(());
         }
         // A dispatch that outlives its spoken acknowledgement shows as thinking.
-        super::voice_source::think(client, source).await;
+        think(client, source, observe).await?;
         if !listen(
             (events, microphone),
             port,
@@ -75,6 +75,23 @@ pub(super) async fn replies<L: EchoLink>(
         }
         generation_options.response_deadline = source.controller.replacement_deadline()?;
     }
+}
+
+pub(super) async fn think<L: EchoLink>(
+    client: &L,
+    source: &mut Source,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    if let Some(on) = source.thinking_change() {
+        if on {
+            // The screen holds this state through queued audio. The mouth's
+            // playout edge replaces it once the reply reaches the speaker.
+            observe(Notice::Thinking)?;
+        }
+        // The device indication remains best effort.
+        let _ = tokio::time::timeout(Duration::from_secs(1), client.thinking(on)).await;
+    }
+    Ok(())
 }
 
 fn settled(

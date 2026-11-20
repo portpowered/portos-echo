@@ -17,6 +17,8 @@ transcript_count = 0
 observed = {'calls': [], 'sidebands': 0, 'external': 0, 'transcripts': []}
 output_lock = threading.Lock()
 delegation = None
+hold_model = False
+release_model = threading.Event()
 
 
 def emit(value):
@@ -54,6 +56,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         if self.path == '/v1/responses' and delegation is not None:
             try:
+                if hold_model and not release_model.is_set():
+                    emit({'event': 'provider.model_held'})
+                    assert release_model.wait(timeout=15), 'model release deadline'
                 data = delegation.respond(body)
                 if isinstance(delegation, tools_provider.McpDelegation):
                     emit({'event': 'provider.model', 'request': {'input': [
@@ -150,6 +155,7 @@ try:
             answers.put(command['answer'])
         elif 'tools' in command:
             assert delegation is None
+            hold_model = command.get('hold_model', False)
             if 'portos' in command:
                 delegation = tools_provider.PortosDelegation(command['tools'], command['portos'] == 'readonly')
             elif command.get('mcp'):
@@ -159,6 +165,8 @@ try:
                                                        command.get('exhausted', False), command.get('emotion', False))
         elif command == {'complete': True}:
             transcript_output.sendall(b'c')
+        elif command == {'release_model': True}:
+            release_model.set()
         elif command == {'transcripts': True}:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:

@@ -11,15 +11,15 @@ fn frames() -> Vec<Value> {
 #[test]
 fn m6_partial_measurements_do_not_invent_return_and_validate_native_state_types() {
     let mut world = super::super::world::World::default();
-    for count in 0..=7 {
+    for count in 0..=8 {
         world.ui_states = frames().into_iter().take(count).collect();
         let measured = measurement(&world);
         assert_eq!(measured["ui_states"], json!(world.ui_states));
-        assert_eq!(measured["frame_count"], if count >= 4 { 2 } else { 0 });
+        assert_eq!(measured["frame_count"], if count >= 5 { 2 } else { 0 });
         assert_eq!(
             measured["return_state"],
-            if count >= 5 {
-                json!({"state":"connected"})
+            if count >= 6 {
+                json!({"state":"thinking"})
             } else {
                 json!({})
             }
@@ -59,14 +59,14 @@ fn m6_ordered_oracle_requires_exact_values_and_increasing_native_sequences() {
         ("frames", json!(["a", "b"])),
     ] {
         let mut wrong = frames();
-        wrong[3]["state"][field] = value;
+        wrong[4]["state"][field] = value;
         let message = ordered(&wrong, &expected).unwrap_err();
         assert_eq!(
             message,
-            format!("m6: expected state {}; observed {}", state(), wrong[3]["state"])
+            format!("m6: expected state {}; observed {}", state(), wrong[4]["state"])
         );
     }
-    for index in 1..7 {
+    for index in 1..8 {
         let mut wrong = frames();
         wrong[index]["seq"] = wrong[index - 1]["seq"].clone();
         assert_eq!(
@@ -75,14 +75,14 @@ fn m6_ordered_oracle_requires_exact_values_and_increasing_native_sequences() {
         );
     }
     let mut swapped = frames();
-    swapped.swap(4, 5);
+    swapped.swap(5, 6);
     assert!(
         ordered(&swapped, &expected)
             .unwrap_err()
             .starts_with("m6: expected state")
     );
     let mut missing = frames();
-    missing.remove(3);
+    missing.remove(4);
     assert_eq!(
         ordered(&missing, &expected),
         Err("m6: ordered screen state count mismatch".into())
@@ -93,7 +93,7 @@ fn m6_ordered_oracle_requires_exact_values_and_increasing_native_sequences() {
 fn m6_still_empty_duplicate_and_malformed_frames_fail_before_value_comparison() {
     for (frames_value, distinct) in [(json!([]), 0), (json!(["(^_^)"]), 1), (json!(["same", "same"]), 1)] {
         let mut actual = frames();
-        actual[3]["state"]["frames"] = frames_value;
+        actual[4]["state"]["frames"] = frames_value;
         assert_eq!(
             ordered(&actual, &json!({"sequence":sequence()})),
             Err(format!(

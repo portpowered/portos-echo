@@ -72,7 +72,7 @@ async fn t3_m4_cancel_active_reply_reaps_children_listeners_and_private_files() 
     screen.expect("ready").await.unwrap();
     let cancel = owners.root.join("cancel");
     let cancelled = async {
-        for state in ["listening", "connected", "speaking"] {
+        for state in ["listening", "connected", "thinking", "speaking"] {
             screen.expect(state).await.unwrap();
         }
         std::fs::write(&cancel, "cancel").unwrap();

@@ -292,7 +292,7 @@ fn completed_trace(path: &std::path::Path) {
     );
 }
 
-fn complete(view: &mut View<'_>, receive: &mut mpsc::Receiver<UiState>) {
+pub(super) fn complete(view: &mut View<'_>, receive: &mut mpsc::Receiver<UiState>) {
     view.observe(ServeNotice::Session(SessionNotice::Run(Notice::ReplyStarted)))
         .unwrap();
     assert_eq!(receive.try_recv().unwrap(), UiState::Speaking);

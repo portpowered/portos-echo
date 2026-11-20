@@ -35,6 +35,7 @@ use std::{path::Path, time::Duration};
 struct Case {
     negative: bool,
     emotion: bool,
+    hold_model: bool,
     ui_states: Vec<Value>,
     screen: Option<Screen>,
     root: Option<Root>,
@@ -140,7 +141,7 @@ impl Case {
             .await
             .map_err(|_| "m4: spoof startup")?,
         );
-        self.provider = Some(Provider::start_mode(&options.python, negative, self.emotion).await?);
+        self.provider = Some(Provider::start_mode(&options.python, negative, self.emotion, self.hold_model).await?);
         let root = &self.root.as_ref().ok_or("m4: missing root")?.0;
         world::configure(
             root,
@@ -195,10 +196,11 @@ impl Case {
                     .map_err(|_| "m4: cannot inject MCP fault")?;
             }
             connected.send(()).map_err(|()| "m4: connection observer abandoned")?;
+            observe(&mut screen, states, "thinking").await?;
             if emotion {
                 if !negative {
                     observe(&mut screen, states, "emotion").await?;
-                    observe(&mut screen, states, "connected").await?;
+                    observe(&mut screen, states, "thinking").await?;
                 }
                 replies
                     .send(Control::Reply)
