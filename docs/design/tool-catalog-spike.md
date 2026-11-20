@@ -2,7 +2,7 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 20
-status: measurement pending
+status: measured
 ---
 
 # Port OS tool catalog measurement
@@ -41,10 +41,11 @@ declaration appears upfront and dispatches directly.
 
 ## Full replay
 
-Use a Linux checkout with the verified pin already provisioned, the
-authorized local backend checkout, and offline `tiktoken` 0.13.0 with its
-`o200k_base` vocabulary already cached. Keep the projection and request
-captures in private storage. Set `backend` to the local backend checkout.
+Use a Linux checkout with the verified pin already provisioned and set
+`backend` to the authorized local backend checkout. Use a `python3` that has
+`tiktoken==0.13.0` and the `o200k_base` vocabulary already cached for
+`render`. The measured run used a Python virtual environment for this step.
+Keep the projection and request captures in private storage.
 
 ```sh
 set -eu
@@ -80,14 +81,49 @@ enabled. The backend's guide is a resource outside the measured tools.
 `tools` array received by the fake model. It prints initial and follow-up
 declaration counts, tokens in returned search definitions including repeats,
 and total model requests. Counts include native wrapper declarations in those
-arrays. The fixed model peer derives an intent from the received utterance,
+arrays. `followup_additional` counts declarations sent again after the initial
+request. `followup_search` counts declarations returned by search. The fixed model
+peer derives an intent from the received utterance,
 selects that tool only when visible, and waits for the correlated MCP receipt
 before replying. The routing fixture exercises tool visibility and dispatch.
 Provider billing, hosted model choices, and device behavior remain unmeasured.
 
-The full replay produces ten rows each for flat and direct namespaces. The
-deferred probe has no selection or comparable token count. Exact counts and
-the recommendation between the two callable formats are pending the full
-replay. The hosted smoke uses two synthetic definitions and exercises the
-same app-server boundaries, including candidate removal and a peer closing
-with a model request pending.
+## Results and recommendation
+
+The full Linux replay at `548566989eaff70a599f0aa4c0b98a3edd8990d9` passed
+`t3_session_tool_catalog`. The `render` command printed these asserted selections
+and exact wire-token counts.
+
+```text
+variant case tool initial followup_additional followup_search round_trips
+flat F01 endpoint_query 8077 8077 0 2
+flat F02 endpoint_show 8077 8077 0 2
+flat F03 endpoint_manage 8077 8077 0 2
+flat F04 control 8077 8077 0 2
+flat F05 group_query 8077 8077 0 2
+flat F06 group_manage 8077 8077 0 2
+flat F07 subscription_list 8077 8077 0 2
+flat F08 subscription_inspect 8077 8077 0 2
+flat F09 subscription_cancel 8077 8077 0 2
+flat F10 subscription_label_edit 8077 8077 0 2
+namespaced F01 endpoint_query 8161 8161 0 2
+namespaced F02 endpoint_show 8161 8161 0 2
+namespaced F03 endpoint_manage 8161 8161 0 2
+namespaced F04 control 8161 8161 0 2
+namespaced F05 group_query 8161 8161 0 2
+namespaced F06 group_manage 8161 8161 0 2
+namespaced F07 subscription_list 8161 8161 0 2
+namespaced F08 subscription_inspect 8161 8161 0 2
+namespaced F09 subscription_cancel 8161 8161 0 2
+namespaced F10 subscription_label_edit 8161 8161 0 2
+```
+
+Keep the current flat direct definitions on this pin. Explicit domain
+namespaces add 84 tokens to each declaration block (about 1%) and 168
+tokens per measured turn. Both formats select the expected tool in all
+ten cases, issue one correlated MCP call per case, and take two model
+requests. The fixture measures visibility and dispatch, so it gives no
+estimate of how domain labels affect a hosted model's selection accuracy.
+Keep deferred loading off in the no-host setup. The deferred probe has no
+selection or comparable token count because the pin hides client
+`tool_search` in code-mode-only turns.
