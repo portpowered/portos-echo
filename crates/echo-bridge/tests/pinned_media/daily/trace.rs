@@ -150,7 +150,7 @@ fn assert_trace(root: &Path, id: &str, tool_status: &str, outcome: &str) {
 
 fn assert_tools(tools: &[Value], resolved: &Value, tool_status: &str) {
     if tool_status == "absent" {
-        assert_eq!(tools, vec![]);
+        assert_eq!(tools.len(), 0);
         assert_eq!(resolved["tool_counts"], json!({}));
         assert!(resolved.get("answer").is_none());
     } else {
