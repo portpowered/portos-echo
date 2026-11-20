@@ -80,7 +80,10 @@ fn pack_install_publishes_exact_bytes_deduplicates_and_retains_conflicts() {
     let stop = AtomicBool::new(false);
     let pending = prepare(root.path(), &bytes, None).unwrap();
     assert!(!root.path().join("template@0.1.0").exists());
-    assert_eq!(pending.publish(root.path(), &stop).unwrap(), "template@0.1.0");
+    assert_eq!(
+        pending.publish(root.path(), &stop).unwrap(),
+        ("template@0.1.0".into(), true)
+    );
     for (file, expected) in valid_files() {
         assert_eq!(
             std::fs::read(root.path().join("template@0.1.0").join(file)).unwrap(),
@@ -92,7 +95,7 @@ fn pack_install_publishes_exact_bytes_deduplicates_and_retains_conflicts() {
             .unwrap()
             .publish(root.path(), &stop)
             .unwrap(),
-        "template@0.1.0"
+        ("template@0.1.0".into(), false)
     );
     let mut changed = valid_files();
     changed[1].1 = b"changed".to_vec();

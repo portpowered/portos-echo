@@ -7,6 +7,14 @@ use serde_json::{Value, json};
 use std::net::SocketAddr;
 
 async fn mounted(home: &Path, ca: Option<std::path::PathBuf>) -> Result<echo_screen_server::ScreenServer> {
+    mounted_selection(home, ca, None).await
+}
+
+async fn mounted_selection(
+    home: &Path,
+    ca: Option<std::path::PathBuf>,
+    selection: Option<String>,
+) -> Result<echo_screen_server::ScreenServer> {
     let (send, receive) = tokio::sync::mpsc::channel(1);
     let (host, mut inbox) = echo_screen_server::settings_channel();
     let mut server =
@@ -17,7 +25,9 @@ async fn mounted(home: &Path, ca: Option<std::path::PathBuf>) -> Result<echo_scr
         while let Some(request) = inbox.recv().await {
             request
                 .commit(|operation| match operation {
-                    SettingsOperation::PackCatalog(catalog) => SettingsReply::Packs(catalog.with_selection(None)),
+                    SettingsOperation::PackCatalog(catalog) => {
+                        SettingsReply::Packs(catalog.with_selection(selection.as_deref()))
+                    }
                     _ => SettingsReply::InvalidPackSelection,
                 })
                 .await;
@@ -26,6 +36,48 @@ async fn mounted(home: &Path, ca: Option<std::path::PathBuf>) -> Result<echo_scr
     let mut configured = server.install_configured_packs(home.into(), ca, vec![]);
     assert!(configured.recv().await.is_none());
     Ok(server)
+}
+
+#[tokio::test]
+async fn t3_screen_pack_install_reload_once_uses_accepted_selection_and_deduplicates() -> Result {
+    use tokio::io::AsyncReadExt;
+    let peer = Peer::start().await?;
+    for selection in [None, Some(String::new())] {
+        let home = tempfile::tempdir()?;
+        let mut server = mounted_selection(home.path(), Some(peer.ca()), selection.clone()).await?;
+        let addr = server.bound_addr;
+        let mut events = crate::support::events(addr).await?;
+        assert_eq!(catalog(addr).await?["revision"], 0);
+        let url = format!("{}/good", peer.base);
+        assert_eq!(post(addr, &url, &peer.digest()).await?.0, 202);
+        let installed = settled(addr, "1", "installed").await?;
+        let active = if selection.is_none() {
+            json!("template@0.1.0")
+        } else {
+            Value::Null
+        };
+        assert_eq!(installed["active"], active);
+        assert_eq!(installed["revision"], 1);
+        assert_eq!(post(addr, &url, &peer.digest()).await?.0, 202);
+        assert_eq!(settled(addr, "2", "installed").await?["revision"], 1);
+        assert_eq!(post(addr, &url, &"0".repeat(64)).await?.0, 202);
+        assert_eq!(settled(addr, "3", "failed").await?["revision"], 1);
+        server.revoke_pairing().await?;
+        let mut wire = String::new();
+        tokio::time::timeout(std::time::Duration::from_secs(2), events.read_to_string(&mut wire)).await??;
+        assert_eq!(wire.matches("event: screen-pack-reload").count(), 1);
+        let data = wire
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .ok_or("missing reload")?;
+        assert_eq!(
+            serde_json::from_str::<Value>(data)?,
+            json!({"version":1,"revision":1,"active":active})
+        );
+        assert!(!home.path().join("settings.toml").exists());
+        server.shutdown().await?;
+    }
+    peer.stop().await
 }
 
 async fn post(addr: SocketAddr, url: &str, sha256: &str) -> Result<(u16, Value)> {

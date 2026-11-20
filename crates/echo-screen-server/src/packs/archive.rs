@@ -139,14 +139,14 @@ impl Prepared {
     }
 
     /// Called only by the lifetime/auth publication owner, after blocking work.
-    pub fn publish(self, root: &Path, cancelled: &AtomicBool) -> Result<String, Error> {
+    pub fn publish(self, root: &Path, cancelled: &AtomicBool) -> Result<(String, bool), Error> {
         check_cancel(cancelled)?;
         let id = self.identity();
         let destination = root.join(&id);
         let marker = root.join(format!(".{id}.sha256"));
         if destination.exists() {
             return if same_pin(&marker, &self.digest) {
-                Ok(id)
+                Ok((id, false))
             } else {
                 Err(Error::Conflict)
             };
@@ -157,7 +157,7 @@ impl Prepared {
         std::io::Write::write_all(&mut pin, self.digest.as_bytes()).map_err(|_| Error::Storage)?;
         pin.persist(marker).map_err(|_| Error::Storage)?;
         std::fs::rename(self.stage.path(), destination).map_err(|_| Error::Storage)?;
-        Ok(id)
+        Ok((id, true))
     }
 }
 

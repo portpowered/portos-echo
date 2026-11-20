@@ -60,7 +60,8 @@ impl SettingsReply {
 /// Dropping the HTTP future cancels requests not yet admitted by `commit`.
 pub struct SettingsRequest {
     operation: SettingsOperation,
-    uri: Uri,
+    uri: Option<Uri>,
+    installed: bool,
     core: Arc<Mutex<Core>>,
     stop: watch::Receiver<bool>,
     drain: watch::Receiver<Option<tokio::time::Instant>>,
@@ -76,7 +77,7 @@ impl SettingsRequest {
         if self.reply.is_closed() {
             return;
         }
-        let response = if !authorized(&core, &self.uri) {
+        let response = if self.uri.as_ref().is_some_and(|uri| !authorized(&core, uri)) {
             StatusCode::UNAUTHORIZED.into_response()
         } else if *self.stop.borrow()
             || self.drain.borrow().is_some()
@@ -91,7 +92,12 @@ impl SettingsRequest {
                 SettingsReply::PackSaved(_, catalog, true) => {
                     core.pack_reload(catalog.active());
                 }
-                SettingsReply::Packs(catalog) => catalog.set_revision(core.pack_revision),
+                SettingsReply::Packs(catalog) => {
+                    if self.installed {
+                        core.pack_reload(catalog.active());
+                    }
+                    catalog.set_revision(core.pack_revision);
+                }
                 _ => {}
             }
             reply.into_response()
@@ -116,8 +122,19 @@ pub(crate) struct SettingsDispatch {
 
 impl SettingsDispatch {
     pub async fn send(self, uri: Uri, operation: SettingsOperation) -> Response {
+        self.dispatch(Some(uri), operation, false).await
+    }
+
+    // Only the lifetime-owned installer can create this notification. It reads
+    // the accepted selection through the existing host, never through TOML or a
+    // retained browser credential. Commit still serializes revocation/shutdown.
+    pub(crate) async fn installed(self, catalog: crate::PackCatalog) {
+        let _ = self.dispatch(None, SettingsOperation::PackCatalog(catalog), true).await;
+    }
+
+    async fn dispatch(self, uri: Option<Uri>, operation: SettingsOperation, installed: bool) -> Response {
         let core = self.core.lock().await;
-        if !authorized(&core, &uri) {
+        if uri.as_ref().is_some_and(|uri| !authorized(&core, uri)) {
             return StatusCode::UNAUTHORIZED.into_response();
         }
         if *self.stop.borrow() || self.drain.borrow().is_some() || !core.accepting() {
@@ -130,15 +147,23 @@ impl SettingsDispatch {
         let request = SettingsRequest {
             operation,
             uri,
+            installed,
             core: self.core.clone(),
             stop: self.stop.clone(),
             drain: self.drain.clone(),
             reply,
         };
-        if host.try_send(request).is_err() {
+        drop(core);
+        if installed {
+            tokio::select! {
+                biased;
+                () = cancelled(self.stop.clone()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                () = crate::draining(self.drain.clone()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                result = host.send(request) => if result.is_err() { return StatusCode::SERVICE_UNAVAILABLE.into_response(); },
+            }
+        } else if host.try_send(request).is_err() {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
-        drop(core);
         tokio::select! {
             biased;
             () = cancelled(self.stop) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -237,6 +262,34 @@ mod tests {
             }
             request.commit(|_| unreachable!("stopped work ran")).await;
             assert_eq!(sending.await.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+    }
+
+    #[tokio::test]
+    async fn settings_installer_notification_rechecks_lifetime_before_host_commit() {
+        for signal in 0..3 {
+            let mut fixture = fixture();
+            let sending = fixture
+                .dispatch
+                .clone()
+                .dispatch(None, SettingsOperation::Snapshot, true);
+            tokio::pin!(sending);
+            assert!(std::future::poll_fn(|cx| Poll::Ready(sending.as_mut().poll(cx).is_pending())).await);
+            let request = fixture.inbox.recv().await.unwrap();
+            match signal {
+                0 => {
+                    fixture.stop.send_replace(true);
+                }
+                1 => {
+                    fixture.drain.send_replace(Some(tokio::time::Instant::now()));
+                }
+                _ => fixture.dispatch.core.lock().await.revoke(),
+            }
+            request
+                .commit(|_| unreachable!("cancelled installer notification reached host"))
+                .await;
+            assert_eq!(sending.await.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(fixture.dispatch.core.lock().await.pack_revision, 0);
         }
     }
 }

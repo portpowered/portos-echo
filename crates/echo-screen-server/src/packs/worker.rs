@@ -1,4 +1,5 @@
 pub(crate) mod jobs;
+mod notification;
 use super::{Error, archive, download};
 use crate::screen_core::Core;
 use std::{
@@ -105,13 +106,20 @@ impl Worker {
                 Err(error) => Err(*error),
             }
         };
+        if matches!(&result, Ok((_, true))) {
+            self.notify().await;
+        }
+        self.finish(&request.id, result).await
+    }
+
+    async fn finish(&self, job: &str, result: Result<(String, bool), Error>) -> crate::PackInstallResult {
         self.files.jobs.lock().await.update(
-            &request.id,
+            job,
             if result.is_ok() { "installed" } else { "failed" },
             result.as_ref().err().copied(),
         );
         match result {
-            Ok(id) => crate::PackInstallResult {
+            Ok((id, _)) => crate::PackInstallResult {
                 installed: Some(id),
                 reason: None,
             },
@@ -130,7 +138,7 @@ async fn install(
     core: &Mutex<Core>,
     stop: &watch::Receiver<bool>,
     drain: &watch::Receiver<Option<tokio::time::Instant>>,
-) -> Result<String, Error> {
+) -> Result<(String, bool), Error> {
     download::url(url)?;
     tokio::fs::create_dir_all(root).await.map_err(|_| Error::Storage)?;
     let metadata = tokio::fs::symlink_metadata(root).await.map_err(|_| Error::Storage)?;

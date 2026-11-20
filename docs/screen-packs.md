@@ -47,7 +47,7 @@ including `pack.json`, and 8 MiB per WebM/MP4 clip. Tar headers and padding have
 their own bounded decoding budget. Only json/css/png/webp/webm/mp4 files are
 accepted. Validation stages files under `screens` before an atomic directory
 rename to `<home>/screens/<name>@<version>/`; an existing conflicting identity is
-retained. Interactive status and reload events remain implementation work.
+retained. The paired installation controls remain implementation work.
 Installed data does not yet activate a renderer.
 
 ## Authenticated pack files
@@ -210,5 +210,13 @@ latest ordinary screen frame; fetch the catalog again for current pack state.
 Pairing revocation closes both kinds of publication. Slow clients share the
 existing bounded queue and are disconnected rather than blocking voice state.
 
-The page renderer, file/settings watchers and install-completion reloads are
-still pending. Selecting data does not yet change the page's look.
+Each newly published configured or interactive installation also emits one
+reload, resolved against the settings owner's accepted selection. This includes
+installing a pack while the built-in look is selected (`active: null`). The
+completion notification precedes the job's `installed` status. Reinstalling
+the same pinned identity and failed installations emit nothing. Notifications
+use the existing bounded host inbox and recheck revocation and shutdown before
+commit; they neither save settings nor request a voice restart.
+
+The page renderer and file/settings watchers are still pending. Selecting data
+does not yet change the page's look.

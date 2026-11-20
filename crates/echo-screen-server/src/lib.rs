@@ -205,6 +205,9 @@ pub async fn serve_with_settings(
     let (stop, stop_rx) = watch::channel(false);
     let (drain, drain_rx) = watch::channel(None);
     let pack_files = Arc::new(packs::Files::default());
+    if let Some(host) = &settings {
+        let _ = pack_files.settings.set(host.clone());
+    }
     let app = screen_http::router(
         core.clone(),
         actions_tx,

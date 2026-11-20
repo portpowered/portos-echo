@@ -118,7 +118,7 @@ fn prerelease_cmp(a: &str, b: &str) -> Ordering {
     a.split('.').count().cmp(&b.split('.').count())
 }
 
-fn scan(root: &Path) -> Result<PackCatalog, Error> {
+pub(super) fn scan(root: &Path) -> Result<PackCatalog, Error> {
     let mut installed = Vec::new();
     match std::fs::symlink_metadata(root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
