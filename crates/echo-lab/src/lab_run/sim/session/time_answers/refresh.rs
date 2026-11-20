@@ -22,7 +22,14 @@ pub(super) async fn ask(world: &mut World, clock: &Clock, index: usize) -> Resul
             ));
         }
         clock.select_later_sample();
-        world.step(60_000).await?;
+        // Let the local peer answer ICE keepalives as virtual time advances.
+        for _ in 0..60 {
+            if corrected_samples(world) > samples {
+                break;
+            }
+            world.provider.tick().await?;
+            world.step(1_000).await?;
+        }
         world
             .wait(
                 "new corrected SNTP sample",

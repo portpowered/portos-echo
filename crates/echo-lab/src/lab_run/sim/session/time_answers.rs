@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use std::{net::SocketAddr, path::Path, time::Duration};
 use tokio::time::Instant;
 
-const ID: &str = "session-live-time-answers";
-const REFRESH_ID: &str = "session-live-time-refresh";
+pub const ID: &str = "session-live-time-answers";
+pub const REFRESH_ID: &str = "session-live-time-refresh";
 const REPEATED: [&str; 2] = ["What time is it?"; 2];
 const QUESTIONS: [&str; 4] = [
     "What time is it?",

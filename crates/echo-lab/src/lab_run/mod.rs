@@ -91,7 +91,9 @@ fn ordinary_say(value: &str, scenario: &str, options: &Options) -> Result<Step, 
         match crate::lab_validate::load(scenario)?["id"].as_str() {
             Some("m3-full-duplex" | "session-barge-continues") => return sim::m3::utterance(value),
             Some(id) if sim::session::goodbye::admits(id) => return sim::session::goodbye::utterance(id, value),
-            Some(id) if sim::session::time_answers::admits(id) => return sim::session::time_answers::utterance(value),
+            Some(sim::session::time_answers::ID | sim::session::time_answers::REFRESH_ID) => {
+                return sim::session::time_answers::utterance(value);
+            }
             Some(id) if sim::session::admits(id) => return sim::session::utterance(value),
             Some("m4-spoof-tool") => return sim::m4::utterance(value),
             Some("m5-twin-room-lights") => return sim::mcp::utterance(value),

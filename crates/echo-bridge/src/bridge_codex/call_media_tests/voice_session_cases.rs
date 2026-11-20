@@ -207,14 +207,7 @@ async fn refreshed() {
             session_options(),
             std::future::pending(),
             |notice| {
-                match notice {
-                    SessionNotice::Completed(outcome) => completed.lock().unwrap().push(outcome),
-                    SessionNotice::Started => again.send(()).unwrap(),
-                    SessionNotice::Connected
-                    | SessionNotice::Run(_)
-                    | SessionNotice::ReplyCompleted(_)
-                    | SessionNotice::MicrophoneCompleted(_) => (),
-                }
+                reuse_notice(notice, &completed, &again);
                 Ok(())
             },
         )
@@ -244,6 +237,18 @@ async fn refreshed() {
     assert_eq!(*state.sent.lock().unwrap(), vec![[0; 320]; 2]);
     assert_no_reply(&completed.lock().unwrap(), &observer);
     assert!(io.begin_request("account/read", &json!({})).is_ok());
+}
+
+fn reuse_notice(
+    notice: SessionNotice,
+    completed: &Mutex<Vec<crate::bridge_voice::Stats>>,
+    started: &mpsc::UnboundedSender<()>,
+) {
+    match notice {
+        SessionNotice::Completed(outcome) => completed.lock().unwrap().push(outcome),
+        SessionNotice::Started => started.send(()).unwrap(),
+        _ => (),
+    }
 }
 
 #[tokio::test(start_paused = true)]

@@ -16,6 +16,7 @@ pub(super) enum Control {
     Events(&'static str, Vec<Value>),
     TimeQuestion(&'static str),
     TimeQuestionOnAudio(&'static str, oneshot::Sender<()>),
+    MediaQuestion(&'static str),
     ReleaseGoodbye,
     Quiesce(oneshot::Sender<()>),
     Close,
@@ -183,9 +184,10 @@ async fn conversation(
             loop {
                 tokio::select! {
                     value = &mut line => break Some(value?),
-                    result = step(peer), if !quiesced => {
-                        if result? && let Some(text) = question.take() {
-                            break Some(json!({"media_question":text}));
+                    result = media_step(peer, &mut question), if !quiesced => {
+                        if let Some(text) = result? {
+                            action = Some(Control::MediaQuestion(text));
+                            break None;
                         }
                     },
                     _ = clock.tick(), if !quiesced => {let _ = ticks.try_send(());},
@@ -194,10 +196,6 @@ async fn conversation(
             }
         };
         if let Some(value) = value {
-            if value.get("media_question").is_some() {
-                process.send(&value).await?;
-                continue;
-            }
             observation(observed, &value)?;
             continue;
         }
@@ -206,12 +204,8 @@ async fn conversation(
             Some(Control::Transcripts(turn)) => process.send(&json!({"transcripts":turn})).await?,
             Some(Control::Events(tag, events)) => process.send(&json!({"tag":tag,"events":events})).await?,
             Some(Control::TimeQuestion(text)) => process.send(&json!({"time_question":text})).await?,
-            Some(Control::TimeQuestionOnAudio(text, armed)) => {
-                if question.replace(text).is_some() {
-                    return Err("session: overlapping time questions".into());
-                }
-                let _ = armed.send(());
-            }
+            Some(Control::MediaQuestion(text)) => process.send(&json!({"media_question":text})).await?,
+            Some(Control::TimeQuestionOnAudio(text, armed)) => arm(&mut question, text, armed)?,
             Some(Control::ReleaseGoodbye) => process.send(&json!({"release_goodbye":true})).await?,
             Some(Control::Audio(indices)) => sequence.send(peer, indices).await?,
             Some(Control::Quiesce(done)) => {
@@ -220,6 +214,22 @@ async fn conversation(
             }
             Some(Control::Close) | None => return Ok(()),
         }
+    }
+}
+
+fn arm(question: &mut Option<&'static str>, text: &'static str, armed: oneshot::Sender<()>) -> Result<(), String> {
+    if question.replace(text).is_some() {
+        return Err("session: overlapping time questions".into());
+    }
+    let _ = armed.send(());
+    Ok(())
+}
+
+async fn media_step(peer: &mut LivePeer, question: &mut Option<&'static str>) -> Result<Option<&'static str>, String> {
+    if step(peer).await? {
+        Ok(question.take())
+    } else {
+        Ok(None)
     }
 }
 

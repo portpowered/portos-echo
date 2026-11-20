@@ -1,5 +1,6 @@
 //! T1: a pending context append never releases the next wake on failure.
 use super::*;
+use std::io::Write;
 
 const ZONE: &str = "America/Los_Angeles";
 const INITIAL: &str = "Live prompt\n[Call-start context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; operator time zone: America/Los_Angeles; answer time questions in America/Los_Angeles]";
@@ -19,7 +20,6 @@ fn assert_refresh(request: &serde_json::Value, context: &str) {
         request["params"],
         json!({"threadId":"thread-1", "role":"developer", "text":text})
     );
-    use std::io::Write;
     writeln!(std::io::stdout(), "observed retained-wake request: {request}").unwrap();
 }
 
@@ -100,12 +100,7 @@ async fn failed(failure: Failure) {
                 cancelled.await.unwrap();
             },
             |notice| {
-                let (starts, replies) = counts.get();
-                match notice {
-                    SessionNotice::Started => counts.set((starts + 1, replies)),
-                    SessionNotice::ReplyCompleted(_) => counts.set((starts, replies + 1)),
-                    _ => (),
-                }
+                count(&counts, &notice);
                 Ok(())
             },
         )
@@ -141,6 +136,15 @@ async fn failed(failure: Failure) {
     assert!(io.begin_request("account/read", &json!({})).is_ok());
 }
 
+fn count(counts: &std::cell::Cell<(usize, usize)>, notice: &SessionNotice) {
+    let (starts, replies) = counts.get();
+    match notice {
+        SessionNotice::Started => counts.set((starts + 1, replies)),
+        SessionNotice::ReplyCompleted(_) => counts.set((starts, replies + 1)),
+        _ => (),
+    }
+}
+
 async fn failed_request(server: &mut Server, admitted: mpsc::UnboundedSender<()>, failure: Failure) {
     start(server).await;
     reply(server).await;
@@ -161,7 +165,7 @@ async fn refuse(server: &mut Server, item: &serde_json::Value, failure: Failure)
                 server,
                 json!({"id":item["id"], "error":{"code":-32603, "message":"fixture refusal"}}),
             )
-            .await
+            .await;
         }
         Failure::Realtime => {
             notification(
@@ -169,7 +173,7 @@ async fn refuse(server: &mut Server, item: &serde_json::Value, failure: Failure)
                 "thread/realtime/error",
                 json!({"threadId":"thread-1", "message":"fixture error"}),
             )
-            .await
+            .await;
         }
         Failure::Deadline | Failure::Cancelled => (),
     }
