@@ -460,6 +460,11 @@ async fn goodbye_inputs(
     stopped.notified().await;
     device.finish(Ok(()));
     played.notified().await;
+    after_goodbye_played(tx, order, end).await;
+    answer.await.unwrap()
+}
+
+async fn after_goodbye_played(tx: &mpsc::Sender<MediaEvent>, order: GoodbyeOrder, end: Option<Event>) {
     if let GoodbyeOrder::LateHandoff { turn_first } = order {
         handoff(tx, turn_first).await;
     }
@@ -467,7 +472,6 @@ async fn goodbye_inputs(
         send_control(tx, Event::SpeechStarted).await;
         send_control(tx, end).await;
     }
-    answer.await.unwrap()
 }
 
 async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {
