@@ -154,7 +154,7 @@ release_version_valid() {
       }
       valid=1
     }
-    END { exit !valid }'
+    END { exit !valid || NR != 1 }'
 }
 
 release_recover() {

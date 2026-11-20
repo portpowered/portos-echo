@@ -61,7 +61,7 @@ def status_observation():
         before = snapshot(box)
         index = len(box.calls())
         result = box.run(["status"])
-        require(result.stdout == "process=running\nprocess_user=nobody\nuptime_seconds=42\n"
+        require(result.stdout == "version_current=null\nversion_previous=null\nprocess=running\nprocess_user=nobody\nuptime_seconds=42\n"
                 "hassmic_link=client connected / satellite: running\nbridge.log (last 5):\n"
                 "line 1\nline 2\nline 3\nline 4\nline 5\n", "status observation differs")
         require(before == snapshot(box), "status mutated owner files")
@@ -73,7 +73,7 @@ def status_observation():
         require("uptime_seconds=unavailable\n" in box.run(["status"]).stdout, "missing uptime invented")
     with Sandbox() as box:
         result = box.run(["status"])
-        require(result.stdout == "process=stopped\nprocess_user=unavailable\nuptime_seconds=unavailable\nhassmic_link=unavailable\n"
+        require(result.stdout == "version_current=null\nversion_previous=null\nprocess=stopped\nprocess_user=unavailable\nuptime_seconds=unavailable\nhassmic_link=unavailable\n"
                 "bridge.log (last 5):\nunavailable\n", "missing status differs")
         require(not box.device.exists(), "status created device state")
         (box.root / "fault").write_text("ps -A")
