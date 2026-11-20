@@ -1,7 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { settingsPage, response } from "./page.mjs";
+import { settingsPage as basePage, response } from "./page.mjs";
 import { calls } from "../browser.mjs";
+
+async function settingsPage(t) {
+    let page;
+    // Capture the rendered controls before the shared context cleanup, including
+    // failures. A bounded action reports its exact locator before the test cap.
+    t.after(async () => {
+        if (page)
+            await page.screenshot({
+                path: `test-results/screenshots/${t.name.replace(/[^a-z0-9]/gi, "-")}.png`,
+            });
+    });
+    page = await basePage(t);
+    page.setDefaultTimeout(5000);
+    return page;
+}
 
 const empty = {
     version: 1,
@@ -366,12 +381,15 @@ test("packs: narrow and reference viewports retain scrollable native controls, c
             )
             .all()) {
             await control.scrollIntoViewIfNeeded();
+            await control.evaluate((node) =>
+                node.scrollIntoView({ block: "center" }),
+            );
             const box = await control.boundingBox();
             const area = await page.locator(".settings-fields").boundingBox();
             assert.ok(box.width >= 64 && box.height >= 64, JSON.stringify(box));
             assert.ok(
                 box.x >= area.x && box.x + box.width <= area.x + area.width,
-                JSON.stringify(box),
+                JSON.stringify({ box, area }),
             );
             assert.ok(
                 box.y >= area.y && box.y + box.height <= area.y + area.height,
