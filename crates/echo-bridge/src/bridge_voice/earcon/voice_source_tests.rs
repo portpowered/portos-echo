@@ -137,6 +137,57 @@ async fn mouth_preserves_quiet_gaps_even_when_all_audio_is_written_ahead() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
+    use super::super::{ServeNotice, SessionNotice, voice_listen::playout_notice, voice_view::View};
+    use crate::{
+        bridge_health::Health, bridge_mcp::bridge_presentation::Presentation, bridge_runtime::bridge_screen::Screen,
+        bridge_trace::Trace,
+    };
+    use echo_screen_contract::UiState;
+
+    for queued_audio in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut trace = Trace::open(&directory.path().join("trace"), "chatgpt").unwrap();
+        let health = Health::offline();
+        let (send, mut states) = tokio::sync::mpsc::channel(8);
+        let mut screen = Screen::bind(None).await.unwrap();
+        screen.presentation = Presentation::new(Some(send));
+        let mut view = View::new(&screen, &health, &mut trace);
+        let mut delegation = Delegation::default();
+        delegation.started();
+        delegation.spoke();
+        let mut mouth = Mouth::default();
+        let now = Instant::now();
+        mouth.wrote(&frame(1000), now);
+        assert!(!delegation.answered());
+        if queued_audio {
+            mouth.wrote(&frame(0), now);
+            mouth.wrote(&frame(1000), now);
+        }
+
+        let mut project_mouth = |mouth: &mut Mouth| {
+            let notice = playout_notice(mouth, delegation.in_flight()).unwrap();
+            view.observe(ServeNotice::Session(SessionNotice::Run(notice))).unwrap();
+        };
+        tokio::time::advance(OUTPUT_DELAY).await;
+        project_mouth(&mut mouth);
+        tokio::time::advance(FRAME).await;
+        project_mouth(&mut mouth);
+        assert_eq!(mouth.voiced(), queued_audio);
+        assert_eq!(states.try_recv().unwrap(), UiState::Speaking);
+        assert_eq!(states.try_recv().unwrap(), UiState::Thinking);
+        assert!(states.try_recv().is_err());
+
+        if queued_audio {
+            tokio::time::advance(FRAME).await;
+            project_mouth(&mut mouth);
+            assert_eq!(states.try_recv().unwrap(), UiState::Speaking);
+            assert!(states.try_recv().is_err());
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn first_audio_is_timed_from_the_user_transcript_or_the_delegated_turn() {
     use crate::bridge_codex::{Event, MediaEvent};
     use crate::bridge_runtime::bridge_pacing::{Endpoint, FirstAudio};

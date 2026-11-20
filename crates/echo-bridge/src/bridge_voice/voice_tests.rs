@@ -126,7 +126,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
         std::future::pending(),
         |notice| {
             notices.push(match notice {
-                Notice::EarconPlayed(_) => "earcon",
+                Notice::EarconPlayed(_) | Notice::Thinking => "indication",
                 Notice::ReplyStarted => "speaking",
                 Notice::ReplyPaused => "paused",
                 Notice::ReplyPlayed | Notice::ReplySettled(_) => "played",

@@ -52,7 +52,6 @@ use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
 use tokio::time::{Instant, timeout, timeout_at};
 use voice_source::Source;
-
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
@@ -81,7 +80,6 @@ pub trait VoicePort {
     }
 }
 
-/// No payload-bearing observation implements Debug or Display.
 pub enum Notice {
     EarconPlayed(Duration),
     Device(LinkEvent<()>),
@@ -90,6 +88,8 @@ pub enum Notice {
         text: String,
         done: bool,
     },
+    /// A delegated turn is active during a gap in audible reply audio.
+    Thinking,
     /// Audible reply audio reached the Echo's speaker.
     ReplyStarted,
     /// The speaker went quiet: the mouth closes until audio resumes.
@@ -300,7 +300,7 @@ async fn drive<L: EchoLink>(
         if source.controller.cutting() {
             return Err(Error::Control);
         }
-        voice_source::think(client, source).await;
+        voice_listen::think(client, source, observe).await?;
         let barge = source.barge_due();
         if source.reply.drained() && pending.is_none() && sink.is_some() {
             drop(sink.take());
@@ -326,8 +326,8 @@ async fn drive<L: EchoLink>(
             },
             () = tokio::time::sleep_until(barge.unwrap_or(deadline)), if barge.is_some() => source.interrupt(port)?,
             () = tokio::time::sleep_until(source.mouth.due().unwrap_or(deadline)), if source.mouth.due().is_some() => {
-                if let Some(open) = source.mouth.poll(Instant::now()) {
-                    observe(if open { Notice::ReplyStarted } else { Notice::ReplyPaused })?;
+                if let Some(notice) = voice_listen::playout_notice(&mut source.mouth, source.delegation.in_flight()) {
+                    observe(notice)?;
                 }
             },
             result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,

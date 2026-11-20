@@ -19,8 +19,9 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
             expected[0].clone(),
             expected[1].clone(),
             expected[2].clone(),
-            expected[5].clone(),
-            expected[6].clone()
+            expected[3].clone(),
+            expected[6].clone(),
+            expected[7].clone()
         ]
     );
     assert!(
@@ -45,7 +46,7 @@ async fn m6_t3_eof_during_animation_reaps_pending_expiry_model_and_all_listeners
     screen.expect("ready").await.unwrap();
     let (cancel, cancelled) = tokio::sync::oneshot::channel();
     let observation = async {
-        for state in ["listening", "connected", "emotion"] {
+        for state in ["listening", "connected", "thinking", "emotion"] {
             screen.expect(state).await.unwrap();
         }
         cancel.send(()).unwrap();

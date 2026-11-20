@@ -87,6 +87,7 @@ async fn project_chime(
         assert_eq!(view.health.state.borrow().live, "connected");
     }
     assert!(earcon::active());
+    view.session(SessionNotice::Run(Notice::Thinking)).unwrap();
     assert!(receive.try_recv().is_err());
     let duration = chime_receipt(events, receive).await;
     assert_eq!(duration, std::time::Duration::from_millis(160));
@@ -95,7 +96,7 @@ async fn project_chime(
     if fresh {
         assert_eq!(receive.try_recv().unwrap(), UiState::Connected);
     }
-    assert!(receive.try_recv().is_err());
+    assert_eq!(receive.try_recv().unwrap(), UiState::Thinking);
 }
 
 async fn chime_receipt(events: &mut impl LinkEvents, receive: &mut mpsc::Receiver<UiState>) -> std::time::Duration {
@@ -292,7 +293,7 @@ fn completed_trace(path: &std::path::Path) {
     );
 }
 
-fn complete(view: &mut View<'_>, receive: &mut mpsc::Receiver<UiState>) {
+pub(super) fn complete(view: &mut View<'_>, receive: &mut mpsc::Receiver<UiState>) {
     view.observe(ServeNotice::Session(SessionNotice::Run(Notice::ReplyStarted)))
         .unwrap();
     assert_eq!(receive.try_recv().unwrap(), UiState::Speaking);

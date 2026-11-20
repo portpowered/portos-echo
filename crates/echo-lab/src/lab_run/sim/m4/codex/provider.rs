@@ -25,7 +25,7 @@ pub(super) struct Provider {
     task: Option<JoinHandle<Result<Value, String>>>,
 }
 impl Provider {
-    pub async fn start_mode(python: &str, negative: bool, emotion: bool) -> Result<Self, String> {
+    pub async fn start_mode(python: &str, negative: bool, emotion: bool, hold_model: bool) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
@@ -33,7 +33,7 @@ impl Provider {
         let mut process = Process::start(&mut command)?;
         let ready = process.expect("provider.ready").await?;
         process
-            .send(&json!({"tools": catalog(), "negative":negative,"emotion":emotion}))
+            .send(&json!({"tools": catalog(), "negative":negative,"emotion":emotion,"hold_model":hold_model}))
             .await?;
         let origin = ready["origin"]
             .as_str()
@@ -42,7 +42,7 @@ impl Provider {
         let (commands, receiver) = mpsc::channel(2);
         let (ticks, clock) = mpsc::channel(1);
         let (observe, observed) = watch::channel(json!({"delegations":[],"appends":[]}));
-        let task = tokio::spawn(owned(process, receiver, ticks, observe, emotion));
+        let task = tokio::spawn(owned(process, receiver, ticks, observe, (emotion, hold_model)));
         Ok(Self {
             origin,
             observed,
@@ -91,10 +91,10 @@ async fn owned(
     mut commands: mpsc::Receiver<Control>,
     ticks: mpsc::Sender<()>,
     observed: watch::Sender<Value>,
-    emotion: bool,
+    mode: (bool, bool),
 ) -> Result<Value, String> {
     let mut peer = None;
-    let result = drive(&mut process, &mut commands, &ticks, &observed, &mut peer, emotion).await;
+    let result = drive(&mut process, &mut commands, &ticks, &observed, &mut peer, mode).await;
     if let Some(peer) = &mut peer {
         peer.close();
     }
@@ -108,7 +108,7 @@ async fn drive(
     ticks: &mpsc::Sender<()>,
     observed: &watch::Sender<Value>,
     peer: &mut Option<LivePeer>,
-    emotion: bool,
+    mode: (bool, bool),
 ) -> Result<Value, String> {
     let offer = tokio::select! {
         offer = process.expect("provider.offer") => Some(offer?),
@@ -130,7 +130,7 @@ async fn drive(
             ticks,
             observed,
             peer.as_mut().ok_or("m4: missing peer")?,
-            emotion,
+            mode,
         )
         .await?;
     }
@@ -151,8 +151,9 @@ async fn conversation(
     ticks: &mpsc::Sender<()>,
     observed: &watch::Sender<Value>,
     peer: &mut LivePeer,
-    emotion: bool,
+    mode: (bool, bool),
 ) -> Result<(), String> {
+    let (emotion, mut hold_model) = mode;
     let mut reply = false;
     let mut allow_reply = !emotion;
     let mut quiesced = false;
@@ -175,18 +176,14 @@ async fn conversation(
             }
         };
         if let Some(value) = value {
-            observation(observed, &value)?;
-            if value["event"] == "provider.append" {
-                if std::mem::replace(&mut reply, true) {
-                    return Err("m4: duplicate native append".into());
-                }
-                if allow_reply {
-                    observed.send_modify(|state| state["reply_ready"] = json!(true));
-                }
-            }
+            observe_reply(observed, &value, &mut reply, allow_reply)?;
         } else {
             match action {
                 Some(Control::Delegate) => process.send(&json!({"transcripts":true})).await?,
+                Some(Control::Reply) if hold_model => {
+                    hold_model = false;
+                    process.send(&json!({"release_model":true})).await?;
+                }
                 Some(Control::Reply) if emotion && !allow_reply => {
                     allow_reply = true;
                     if reply {
@@ -208,12 +205,35 @@ async fn conversation(
     }
 }
 
+fn observe_reply(
+    observed: &watch::Sender<Value>,
+    value: &Value,
+    reply: &mut bool,
+    allow_reply: bool,
+) -> Result<(), String> {
+    observation(observed, value)?;
+    if value["event"] != "provider.append" {
+        return Ok(());
+    }
+    if std::mem::replace(reply, true) {
+        return Err("m4: duplicate native append".into());
+    }
+    if allow_reply {
+        observed.send_modify(|state| state["reply_ready"] = json!(true));
+    }
+    Ok(())
+}
+
 fn observation(observed: &watch::Sender<Value>, value: &Value) -> Result<(), String> {
     if value["event"] == "provider.failure" {
         return Err(format!(
             "m4: provider contract failure: {}",
             value["failure"].as_str().unwrap_or("unspecified")
         ));
+    }
+    if value["event"] == "provider.model_held" {
+        observed.send_modify(|state| state["model_held"] = json!(true));
+        return Ok(());
     }
     let key = match value["event"].as_str() {
         Some("provider.delegation") => "delegations",

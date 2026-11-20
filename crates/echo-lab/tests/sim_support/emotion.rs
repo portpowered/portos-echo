@@ -30,12 +30,12 @@ fn m6_cli_orders_animation_return_and_exact_later_host_playback() {
     );
     let expected = json!([
         {"state":"ready","message":"Echo Live ready"}, {"state":"listening"},
-        {"state":"connected"},
+        {"state":"connected"}, {"state":"thinking"},
         {"state":"emotion","name":"happy","frame_ms":80,"frames":["(^_^)","(^o^)"]},
-        {"state":"connected"}, {"state":"speaking"}, {"state":"ready","message":"Echo Live ready"}
+        {"state":"thinking"}, {"state":"speaking"}, {"state":"ready","message":"Echo Live ready"}
     ]);
     let frames = report["m6"]["ui_states"].as_array().unwrap();
-    assert_eq!(frames.len(), 7);
+    assert_eq!(frames.len(), 8);
     let mut seq = 0;
     for (frame, state) in frames.iter().zip(expected.as_array().unwrap()) {
         assert_eq!(&frame["state"], state);
@@ -43,7 +43,7 @@ fn m6_cli_orders_animation_return_and_exact_later_host_playback() {
         assert!(next > seq);
         seq = next;
     }
-    assert_eq!(report["m6"]["return_state"], json!({"state":"connected"}));
+    assert_eq!(report["m6"]["return_state"], json!({"state":"thinking"}));
     for (key, value) in [
         ("frame_count", 2),
         ("frame_ms", 80),
@@ -113,10 +113,10 @@ fn m4_audio(session: &Session, report: &Value, case: &str) {
     assert!(audio["audibility"]["nonzero_samples"].as_u64().unwrap() >= 2400);
     assert!(audio["audibility"]["audible_samples"].as_u64().unwrap() >= 2400);
     let frames = audio["ui_states"].as_array().unwrap();
-    assert_eq!(frames.len(), 5);
+    assert_eq!(frames.len(), 6);
     for (index, (frame, state)) in frames
         .iter()
-        .zip(["ready", "listening", "connected", "speaking", "ready"])
+        .zip(["ready", "listening", "connected", "thinking", "speaking", "ready"])
         .enumerate()
     {
         assert_eq!(frame["seq"], index + 1);

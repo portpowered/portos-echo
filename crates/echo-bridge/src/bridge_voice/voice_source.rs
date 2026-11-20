@@ -5,7 +5,9 @@ use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Cut, Discard, Ea
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
-use tokio::time::{Duration, Instant};
+#[cfg(test)]
+use tokio::time::Duration;
+use tokio::time::Instant;
 
 #[path = "earcon/voice_mouth.rs"]
 mod voice_mouth;
@@ -57,7 +59,7 @@ impl Source {
     /// reply audio is written, so it stays up from a completed turn until its
     /// answer is on its way, and always clears before that reply's audio ends.
     /// The device drops it itself when the run ends.
-    fn thinking_change(&mut self) -> Option<bool> {
+    pub(super) fn thinking_change(&mut self) -> Option<bool> {
         let wanted = !self.mouth.voiced() && (self.thinking || self.delegation.in_flight());
         (wanted != self.thinking).then(|| {
             self.thinking = wanted;
@@ -482,14 +484,6 @@ impl Delegation {
     /// the answer, if it still comes, is dropped instead of failing the run.
     pub fn abandon(&mut self) {
         self.abandoned = true;
-    }
-}
-
-/// Best effort: the indication is display only, so a device that cannot take
-/// it never fails or delays the reply.
-pub(super) async fn think<L: echo_link::EchoLink>(client: &L, source: &mut Source) {
-    if let Some(on) = source.thinking_change() {
-        let _ = tokio::time::timeout(Duration::from_secs(1), client.thinking(on)).await;
     }
 }
 
