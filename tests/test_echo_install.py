@@ -203,7 +203,6 @@ def prerequisite_cases():
         box.install(code=1)
         require(len(box.calls()) == 2 and not box.device.exists(), "missing hassmic caused effects")
     print("F03 F04: PASS")
-
 def modes_and_defaults():
     for defaults in (False, True):
         with Sandbox() as box:
@@ -235,7 +234,6 @@ def modes_and_defaults():
                     "push destinations or count differ")
             require(not (box.root / "remote/echo-bridge.lock").exists(), "lock leaked")
     print("F05: PASS")
-
 def retention_cases():
     with Sandbox() as box:
         box.prompt("voice.md", "default voice")
@@ -430,11 +428,13 @@ def setup_wake_cases():
     old = SENTINEL + "\nwake: COMPUTER type=2\nclient connected / satellite: running\n"
     cases = {"stale": ("", "pending", "pending"),
              "wake": ("wake: COMPUTER type=2\n", "confirmed", "pending"),
-             "run": ("satellite: running\n", "pending", "pending"),
+             "link": ("satellite: running\n", "pending", "pending"),
              "wrong-type": ("wake: COMPUTER type=20\nsatellite: running\n", "pending", "pending"),
              "reversed": ("satellite: running\nwake: COMPUTER type=2\n", "confirmed", "pending"),
-             "partial": ("wake: COMPUTER type=2\nsatellite: running", "confirmed", "pending"),
-             "fresh": (old, "confirmed", "connected")}
+             "partial": ("wake: COMPUTER type=2\nsatellite: running", "pending", "pending"),
+             "fresh": (old, "confirmed", "connected"),
+             "disconnected": (old + "client disconnected\n", "confirmed", "pending"),
+             "partial-disconnect": (old + "client disconn", "pending", "pending")}
     for kind in (*cases, "rotated", "truncated", "rewritten", "symlink", "parent-link", "injection"):
         with Sandbox() as box:
             for path in box.script.parent.glob("echo-install*.sh"):

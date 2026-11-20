@@ -43,9 +43,10 @@ setup_wake() {
     evidence=$({
       tail -c +$((bytes + 1)) "$wake_log" && printf '\001'
     } | awk '
-      index($0, "\001") { complete=1; next }
+      index($0, "\001") { complete=1; if (index($0, "\001")>1) wake=linked=0; next }
       /(^|[[:space:]])wake: COMPUTER type=2([[:space:]]|$)/ { wake=1 }
       wake && /satellite: running([[:space:]]|$)/ { linked=1 }
+      /client disconnected|no Home Assistant link/ { linked=0 }
       END { if (!complete) exit 1
         printf "wake=%s\nlink=%s\n", wake ? "confirmed" : "pending", linked ? "connected" : "pending" }') || return 1
     setup_wake_prefix || return 1
