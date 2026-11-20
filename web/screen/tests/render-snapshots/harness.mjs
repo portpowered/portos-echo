@@ -230,7 +230,7 @@ export const intersects = (a, b) =>
 export async function surfaces(page) {
     const found = {};
     for (const [name, selector] of [
-        ["gear", ".settings-gear"],
+        ["gear", ".corner-control"],
         ["clock", ".pack-clock"],
         ["date", ".pack-date"],
         ["heading", ".screen-pack > h1"],

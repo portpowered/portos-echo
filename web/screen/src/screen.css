@@ -144,9 +144,11 @@ button:disabled {
    layout space and shows no box while empty. A side status slot overrides. */
 .screen-pack + [role="status"] {
     position: fixed;
-    top: 12px;
-    left: 24px;
-    max-width: calc(100vw - 144px);
+    top: var(--corner-top);
+    left: var(--corner-right);
+    max-width: calc(
+        100vw - 2 * var(--corner-right) - var(--corner-size) - var(--corner-gap)
+    );
     min-height: 0;
     margin: 0;
     z-index: 1;
