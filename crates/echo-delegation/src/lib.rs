@@ -292,18 +292,7 @@ mod delegation_tests {
                             extra: std::collections::BTreeMap::default()
                         }))
                     );
-                    assert_eq!(
-                        *sink.0.lock().unwrap(),
-                        vec![
-                            TraceEvent::DelegationCreated {
-                                delegation_id: DelegationId::new("d-unit").unwrap()
-                            },
-                            TraceEvent::CommentaryAppend {
-                                delegation_id: DelegationId::new("d-unit").unwrap()
-                            },
-                        ],
-                        "default observation callbacks preserve the legacy event stream exactly"
-                    );
+                    assert_default_sink(&sink);
                 }
                 None => assert_eq!(result, Err(DelegationError::MissingTerminal)),
             }
@@ -319,6 +308,20 @@ mod delegation_tests {
             )
             .await,
             Err(DelegationError::Submission)
+        );
+    }
+    fn assert_default_sink(sink: &Sink) {
+        assert_eq!(
+            *sink.0.lock().unwrap(),
+            vec![
+                TraceEvent::DelegationCreated {
+                    delegation_id: DelegationId::new("d-unit").unwrap()
+                },
+                TraceEvent::CommentaryAppend {
+                    delegation_id: DelegationId::new("d-unit").unwrap()
+                },
+            ],
+            "default observation callbacks preserve the legacy event stream exactly"
         );
     }
 }

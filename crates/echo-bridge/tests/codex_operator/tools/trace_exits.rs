@@ -133,7 +133,9 @@ fn assert_rows(fixture: &Fixture, cause: &str) {
         .collect();
     assert_eq!(created.len(), 1);
     assert_eq!(resolved.len(), 1);
+    writeln!(std::io::stdout(), "native exit {cause}: {}", resolved[0]).unwrap();
     assert_terminal(resolved[0], created[0], cause);
+    assert_counts(&rows, resolved[0], cause);
     assert!(
         !std::fs::read_to_string(fixture.directory.path().join("tool-trace"))
             .unwrap()
@@ -169,4 +171,21 @@ fn assert_terminal(resolved: &Value, created: &Value, cause: &str) {
     assert_eq!(resolved["thread_id"], "fixture-thread");
     assert_eq!(resolved["run_id"], "run-1");
     assert!(resolved.get("answer").is_none());
+}
+
+fn assert_counts(rows: &[Value], resolved: &Value, cause: &str) {
+    let tools: Vec<_> = rows.iter().filter(|row| row["event"] == "delegation.tool").collect();
+    if cause == "interrupt" {
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["status"], "declined");
+        assert_eq!(resolved["tool_counts"], json!({"mcp":1}));
+        for event in ["turn/interrupt", "turn.interrupt_acknowledged", "turn.interrupted"] {
+            let receipts: Vec<_> = rows.iter().filter(|row| row["event"] == event).collect();
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(receipts[0]["turn_id"], "fixture-turn");
+        }
+    } else {
+        assert_eq!(tools.len(), 0);
+        assert_eq!(resolved["tool_counts"], json!({}));
+    }
 }
