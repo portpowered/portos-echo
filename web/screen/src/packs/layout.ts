@@ -70,6 +70,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             minute: "2-digit",
         });
         date.textContent = now.toLocaleDateString();
+        clamp();
     }
     tick();
     const timer = window.setInterval(tick, 1000);
@@ -90,6 +91,12 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
                 const controls = host.querySelector(".controls");
                 if (controls) details.append(controls);
             }
+            observer.disconnect();
+            observer.observe(host);
+            for (const node of host.querySelectorAll<HTMLElement>(
+                "[data-pack-slot]",
+            ))
+                observer.observe(node);
             clamp();
         },
         stage() {

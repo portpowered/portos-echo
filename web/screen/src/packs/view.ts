@@ -92,6 +92,7 @@ export function mountPacks(
             const css = document.createElement("link");
             css.dataset.packPersistent = "";
             css.rel = "stylesheet";
+            css.referrerPolicy = "no-referrer";
             if (manifest.layout?.css) {
                 css.href = asset(manifest.layout.css);
                 host.append(css);
