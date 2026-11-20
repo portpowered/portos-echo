@@ -106,7 +106,7 @@ async fn t3_screen_pack_interactive_install_status_checksum_failure_and_continue
 }
 
 #[tokio::test]
-async fn t3_screen_pack_interactive_admission_auth_shape_media_and_safe_errors() -> Result {
+async fn t3_screen_pack_interactive_auth_origin_media_and_revocation() -> Result {
     let home = tempfile::tempdir()?;
     let mut server = mounted(home.path(), None).await?;
     let addr = server.bound_addr;
@@ -131,6 +131,21 @@ async fn t3_screen_pack_interactive_admission_auth_shape_media_and_safe_errors()
         403
     );
     assert_eq!(request(addr, "POST", &path, &good, "").await?.0, 415);
+    assert_eq!(catalog(addr).await?["jobs"], json!([]));
+    server.revoke_pairing().await?;
+    assert_eq!(post(addr, url, &"a".repeat(64)).await?, (401, Value::Null));
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_screen_pack_interactive_shape_and_safe_errors() -> Result {
+    let home = tempfile::tempdir()?;
+    let mut server = mounted(home.path(), None).await?;
+    let addr = server.bound_addr;
+    let url = "https://127.0.0.1/pack";
+    let good = json!({"version":1,"url":url,"sha256":"a".repeat(64)}).to_string();
+    let path = format!("/screen-packs/v1/install?token={TOKEN}");
     for body in [
         "{".to_owned(),
         good.replace("\"version\":1", "\"version\":2"),
@@ -169,8 +184,6 @@ async fn t3_screen_pack_interactive_admission_auth_shape_media_and_safe_errors()
         settled(addr, "1", "failed").await?["jobs"],
         json!([{"id":"1","status":"failed","reason":"tls_failed"}])
     );
-    server.revoke_pairing().await?;
-    assert_eq!(post(addr, url, &"a".repeat(64)).await?, (401, Value::Null));
     server.shutdown().await?;
     Ok(())
 }
