@@ -33,7 +33,7 @@ async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, send: mpsc::
             let _ = respond(&mut stream, code, Value::Null).await;
             return;
         }
-        Err(()) => return,
+        Err(_) => return,
     };
     let Ok(permit) = slot.try_acquire_owned() else {
         let _ = respond(&mut stream, 409, Value::Null).await;
