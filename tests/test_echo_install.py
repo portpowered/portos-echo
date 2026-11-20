@@ -12,17 +12,12 @@ import tempfile
 import errno
 import stat
 from concurrent.futures import ThreadPoolExecutor
-
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE = "/data/local/echo-bridge"
 SENTINEL = "synthetic-private-content-do-not-print"
-
-
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
-
-
 def fake_adb():
     """Translate the fixed remote filesystem into a fresh Linux sandbox."""
     args = sys.argv[2:]
@@ -86,8 +81,6 @@ def fake_adb():
         sys.stderr.buffer.write(result.stderr)
         return result.returncode
     return 1
-
-
 class Sandbox:
     def __init__(self):
         self.temp = tempfile.TemporaryDirectory(prefix="echo-install-")
@@ -137,10 +130,8 @@ class Sandbox:
         self.env = dict(os.environ, PATH=str(self.tools), FAKE_ROOT=str(self.root))
         self.env.pop("CARGO_TARGET_DIR", None)
         self.env.pop("CODEX_ARMV7_OUTPUT_DIR", None)
-
     def __enter__(self):
         return self
-
     def __exit__(self, *unused):
         # Only synthetic fixture children can be signalled by test teardown.
         for name in ("holder-pid", "child-pid"):
@@ -156,11 +147,9 @@ class Sandbox:
                 except ProcessLookupError:
                     pass
         self.temp.cleanup()
-
     def calls(self):
         ledger = self.root / "ledger"
         return [json.loads(line) for line in ledger.read_text().splitlines()] if ledger.exists() else []
-
     def run(self, args, code=0):
         result = subprocess.run(["/bin/sh", str(self.script), *args], cwd=self.root,
                                 env=self.env, capture_output=True, text=True, timeout=15)
@@ -172,22 +161,17 @@ class Sandbox:
         if code:
             require("echo-install: installed" not in result.stdout, "false success")
         return result
-
     def install_args(self, force=False):
         args = ["install"]
         for name, path in self.files.items():
             args.extend(["--" + name, str(path)])
         return args + (["--force"] if force else [])
-
     def install(self, force=False, code=0):
         return self.run(self.install_args(force), code)
-
     def prompt(self, name, text):
         path = self.root / "examples/prompts" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
-
-
 def cli_cases():
     with Sandbox() as box:
         (box.tools / "adb").unlink()
@@ -206,8 +190,6 @@ def cli_cases():
         box.install(code=1)
         require(box.calls() == [], "missing input touched device")
     print("F01 F02: PASS")
-
-
 def prerequisite_cases():
     for devices in ("", "fixture-a\tdevice\nfixture-b\tdevice\n", "fixture\toffline\n",
                     "fixture\tunauthorized\n"):
@@ -221,7 +203,6 @@ def prerequisite_cases():
         box.install(code=1)
         require(len(box.calls()) == 2 and not box.device.exists(), "missing hassmic caused effects")
     print("F03 F04: PASS")
-
 
 def modes_and_defaults():
     for defaults in (False, True):
@@ -255,7 +236,6 @@ def modes_and_defaults():
             require(not (box.root / "remote/echo-bridge.lock").exists(), "lock leaked")
     print("F05: PASS")
 
-
 def retention_cases():
     with Sandbox() as box:
         box.prompt("voice.md", "default voice")
@@ -282,7 +262,6 @@ def retention_cases():
             require(len([call for call in box.calls() if call[0] == "push"]) == 4, "empty glob pushed")
     print("F06 F07: PASS")
 
-
 def failure_cases():
     from test_echo_install_lifecycle import recovery_case
     for label, fault in (("push", "push"), ("chmod", "chmod '600'"),
@@ -306,8 +285,6 @@ def failure_cases():
         require(lock.is_dir() and not box.device.exists(), "busy lock mutated state")
     print("F08: PASS")
 
-
-
 def ownership_attribute(path):
     info = path.stat()
     if stat.S_ISFIFO(info.st_mode):
@@ -315,7 +292,6 @@ def ownership_attribute(path):
         # metadata on the parent directory, which supports user xattrs.
         return path.parent, f"user.echo_fifo_{info.st_ino}_{info.st_ctime_ns}"
     return path, "user.echo_install_owner"
-
 
 def owner(base, path):
     target, attribute = ownership_attribute(path)
@@ -326,13 +302,11 @@ def owner(base, path):
             raise
         return "0:0"
 
-
 def set_owner(base, path, value):
     # Follow the filesystem object's lifetime: rename/hardlink retain ownership,
     # deletion destroys it, and inode reuse cannot inherit a deleted owner.
     target, attribute = ownership_attribute(path)
     os.setxattr(target, attribute, value.encode("ascii"))
-
 
 def ownership_lifetime_case():
     from unittest.mock import patch
@@ -363,7 +337,6 @@ def ownership_lifetime_case():
         os.mkfifo(fifo, 0o600)
         require(owner(base, fifo) == "0:0", "recreated FIFO inherited deleted ownership")
     print("NR ownership-lifetime=PASS")
-
 
 def metadata_tool(base, name, args):
     if name == "runas":
@@ -408,7 +381,6 @@ def metadata_tool(base, name, args):
         return 0
     return subprocess.run(["/usr/bin/" + name, *args], check=False).returncode
 
-
 def remote_tool():
     base = Path(os.environ["FAKE_ROOT"])
     name = sys.argv[2]
@@ -448,13 +420,57 @@ def remote_tool():
             (base / "stale-expired").touch()
     return 0
 
-
 def prepare_lifecycle(box, mode="ready"):
     from test_echo_install_lifecycle import configure_lifecycle
     configure_lifecycle(box, mode)
     box.install()
 
-
+def setup_wake_cases():
+    # Real shell observer, synthetic log only; each case has its own filesystem.
+    old = SENTINEL + "\nwake: COMPUTER type=2\nclient connected / satellite: running\n"
+    cases = {"stale": ("", "pending", "pending"),
+             "wake": ("wake: COMPUTER type=2\n", "confirmed", "pending"),
+             "run": ("satellite: running\n", "pending", "pending"),
+             "wrong-type": ("wake: COMPUTER type=20\nsatellite: running\n", "pending", "pending"),
+             "reversed": ("satellite: running\nwake: COMPUTER type=2\n", "confirmed", "pending"),
+             "partial": ("wake: COMPUTER type=2\nsatellite: running", "confirmed", "pending"),
+             "fresh": (old, "confirmed", "connected")}
+    for kind in (*cases, "rotated", "truncated", "rewritten", "symlink", "parent-link", "injection"):
+        with Sandbox() as box:
+            for path in box.script.parent.glob("echo-install*.sh"):
+                path.write_text(path.read_text().replace("/data/local", str(box.root / "remote")))
+            box.env["PATH"] = str(box.root / "remote-tools") + ":/usr/bin:/bin"
+            log = box.root / "remote/hassmic/boot.log"
+            log.write_text(old)
+            box.run(["wake-cursor"], 2)
+            cursor = box.run(["--device", "wake-cursor"]).stdout.strip()
+            fields = cursor.split(":")
+            require(len(fields) == 4 and int(fields[2]) == len(old), "cursor differs")
+            require(fields[3] == __import__("hashlib").sha256(old.encode()).hexdigest(), "prefix differs")
+            if kind in cases: log.write_text(old + cases[kind][0])
+            elif kind == "rotated": log.rename(log.with_suffix(".old")); log.write_text(old + old)
+            elif kind == "truncated": log.write_text("")
+            elif kind == "rewritten": log.write_text("x" * len(old) + old)
+            elif kind == "injection": cursor = "1:1:0:$(touch escaped)"
+            else:
+                target = log if kind == "symlink" else log.parent
+                saved = target.with_name(target.name + "-saved")
+                target.rename(saved)
+                target.symlink_to(saved, target_is_directory=kind == "parent-link")
+            result = box.run(["--device", "wake-check", cursor], 0 if kind in cases else 1)
+            expected = ("wake=" + cases[kind][1] + "\nlink=" + cases[kind][2] + "\n") if kind in cases else ""
+            require(result.stdout == expected and not result.stderr, "wake observation/privacy differs")
+            require(not (box.root / "remote/echo-bridge.lock").exists(), "observation took lifecycle lock")
+    with Sandbox() as box:
+        for path in box.script.parent.glob("echo-install*.sh"):
+            path.write_text(path.read_text().replace("/data/local", str(box.root / "remote")))
+        box.env["PATH"] = "/usr/bin:/bin"
+        log = box.root / "remote/hassmic/boot.log"
+        log.write_text("wake: COMPUTER type=")
+        box.run(["--device", "wake-cursor"], 1)
+        log.write_text("")
+        require(":0:" in box.run(["--device", "wake-cursor"]).stdout, "empty cursor refused")
+    print("echo-install wake: fresh=PASS stale=PASS rotation=PASS partial=PASS privacy=PASS")
 
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
@@ -464,9 +480,9 @@ def main():
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases,
-                       failure_cases, release_cases, lifecycle_cases, status_cases, nonroot_cases, setup_operator_cases)))
+                       failure_cases, release_cases, lifecycle_cases, status_cases, nonroot_cases,
+                       setup_operator_cases, setup_wake_cases)))
     print("echo-install tests: install=PASS lifecycle=PASS status=PASS retention=PASS privacy=PASS")
-
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--native-lifecycle":

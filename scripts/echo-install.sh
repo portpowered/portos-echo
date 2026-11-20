@@ -15,6 +15,7 @@ release_bundle='' release_version=null device_mode=false
 if [ "${1:-}" = --device ]; then
   shift
   device_mode=true
+  setup_observation "$@"
   adb() {
     case $1 in
       devices) printf 'List of devices attached\nlocal\tdevice\n' ;;
