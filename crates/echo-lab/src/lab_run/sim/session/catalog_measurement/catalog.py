@@ -84,11 +84,15 @@ def declarations(tools, variant):
     settings = {'features.code_mode.direct_only_tool_namespaces': direct}
     if variant == 'flat':
         return tools, settings
+    if variant == 'forced-direct':
+        # App-server reserves the explicit functions namespace. An unqualified
+        # declaration resolves to functions under the production settings.
+        return [{**tool, 'deferLoading': True} for tool in tools], settings
     groups = defaultdict(list)
     for tool in tools:
-        name = 'functions' if variant == 'forced-direct' else namespace_for(tool['name'])
+        name = namespace_for(tool['name'])
         entry = {'type': 'function', **tool}
-        if variant in ('deferred', 'forced-direct'):
+        if variant == 'deferred':
             entry['deferLoading'] = True
         groups[name].append(entry)
     if variant == 'namespaced':
@@ -96,7 +100,7 @@ def declarations(tools, variant):
     if variant == 'deferred':
         settings['features.code_mode.excluded_tool_namespaces'] = list(groups)
     return [{'type': 'namespace', 'name': name, 'tools': children,
-             'description': DOMAINS.get(name.removeprefix('portos_'), 'Port OS tools.')}
+             'description': DOMAINS[name.removeprefix('portos_')]}
             for name, children in groups.items()], settings
 
 

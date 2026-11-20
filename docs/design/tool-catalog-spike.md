@@ -33,8 +33,11 @@ request still contains `functions.exec` and omits both the deferred
 declarations and client `tool_search`. This pin therefore offers no native
 discovery route for that variant. Keep deferral off for the no-host setup.
 The namespaced direct replay puts those domains in the direct-only list.
-The test checks that the stock direct-only `functions` namespace makes a
-tool callable directly even when it requests deferral.
+The pin reserves explicit `functions` declarations in
+`app-server/src/request_processors/thread_processor.rs:394–424`. The
+override probe sets `deferLoading` on unqualified declarations, which
+normalize to `functions` on the model wire. The test checks that the stock
+direct-only setting makes them callable upfront.
 
 ## Full replay
 

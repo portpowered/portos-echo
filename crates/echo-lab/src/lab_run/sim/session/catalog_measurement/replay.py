@@ -168,9 +168,9 @@ def schema(binary, home, origin):
 
 
 def replay(binary):
+    tools, capture = load(os.environ)
     from peer import Peers
 
-    tools, capture = load(os.environ)
     print('catalog mode=' + ('full' if capture else 'smoke'))
     with tempfile.TemporaryDirectory(prefix='echo-tool-catalog-') as temp, Peers() as peers:
         home = Path(temp)
