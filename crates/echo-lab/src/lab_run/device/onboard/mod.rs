@@ -4,6 +4,8 @@ mod budget;
 mod launch;
 mod link;
 pub(super) mod operator;
+#[path = "../runtime/ownership.rs"]
+mod ownership;
 mod query;
 pub(super) mod replay;
 #[cfg(test)]
@@ -24,12 +26,14 @@ const POLL: Duration = Duration::from_millis(200);
 const SETTLE: Duration = Duration::from_secs(10);
 // Launch contract (docs/architecture.md): own session, stdin held open by a FIFO
 // writer, owner-only files. Every name is relative to the nominated private directory.
-const START: &str = "umask 077; cd {private_dir} || exit 1; rm -f lab-stdin lab-holder.pid; \
-mkfifo lab-stdin || exit 1; setsid sh -c \"sleep 2147483647 >lab-stdin & echo \\$! >lab-holder.pid; \
+const START: &str = "umask 077; cd {private_dir} || exit 1; \
+setsid sh -c \"sleep 2147483647 >lab-stdin & echo \\$! >lab-holder.pid; \
 exec {binary} --config {config} --trace {trace} <lab-stdin >lab-stdout.log 2>lab-stderr.log\" \
 </dev/null >/dev/null 2>&1 &";
 // Closing the FIFO's write end is the bridge's clean-stop request.
-const STOP: &str = "cd {private_dir} && kill $(cat lab-holder.pid); rm -f lab-holder.pid lab-stdin";
+// An empty PID file cannot prove that the detached launch has finished acquiring
+// its holder. Refuse cleanup rather than race a late launch after a lost reply.
+const STOP: &str = "cd {private_dir} && if test -s lab-holder.pid; then kill $(cat lab-holder.pid); else exit 1; fi";
 
 /// Every device effect of on-device mode crosses this boundary; tests supply a fake.
 pub trait Shell {
@@ -180,6 +184,8 @@ pub struct Remote {
     reverses: Vec<u16>,
     link_mark: u64,
     wake_mark: u64,
+    owned: ownership::Owned,
+    attempted: bool,
 }
 
 impl Remote {
@@ -192,6 +198,8 @@ impl Remote {
             reverses: Vec::new(),
             link_mark: 0,
             wake_mark: 0,
+            owned: ownership::Owned::default(),
+            attempted: false,
         }
     }
 
@@ -239,19 +247,6 @@ impl Remote {
         }
     }
 
-    /// Pushes the run's derived configuration, never the operator's file, and proves its mode.
-    pub fn stage(&self, local: &Path) -> Result<(), String> {
-        let config = &self.launcher.config;
-        self.shell
-            .adb(&["push".into(), local.to_string_lossy().into_owned(), config.clone()])?;
-        self.shell.adb(&["shell".into(), format!("chown 9999:9999 {config}")])?;
-        self.shell(&format!("chmod 600 {config}"))?;
-        if self.shell(&format!("stat -c %u:%g:%a {config}"))?.trim() != "9999:9999:600" {
-            return Err("device: unmet prerequisite: pushed bridge configuration with owner 9999:9999 and mode 0600 on the Echo".into());
-        }
-        Ok(())
-    }
-
     async fn settle(&self, alive: bool, error: &str) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + SETTLE;
         loop {
@@ -267,11 +262,14 @@ impl Remote {
 
     pub async fn start(&mut self) -> Result<(), String> {
         if self.pid()?.is_some() {
-            self.stop().await?;
+            return Err("device: refusing to replace an existing bridge process".into());
         }
-        self.shell(&format!("rm -f {}", self.launcher.trace))?;
+        self.check_owned()?;
+        self.shell(&format!("sh -c ': > {}'", self.launcher.trace))?;
+        self.shell(&format!("sh -c ': > {}/lab-holder.pid'", self.launcher.private_dir))?;
         self.cursor = 0;
         self.link_mark = self.log_size()?;
+        self.attempted = true;
         self.shell
             .adb(&self.launcher.command(self.launcher.start.as_ref(), START))?;
         self.settle(
@@ -282,13 +280,19 @@ impl Remote {
     }
 
     pub async fn stop(&mut self) -> Result<(), String> {
+        if !self.attempted {
+            return Ok(());
+        }
+        self.check_owned()?;
         self.shell
             .adb(&self.launcher.command(self.launcher.stop.as_ref(), STOP))?;
         self.settle(
             false,
             "device: unmet prerequisite: bridge on the Echo stopped by the launcher; stop any other bridge there first",
         )
-        .await
+        .await?;
+        self.attempted = false;
+        Ok(())
     }
 
     /// The screen listens on the Echo's loopback; an owned forward reaches it.
@@ -331,8 +335,7 @@ impl Remote {
             let args = ["reverse".into(), "--remove".into(), format!("tcp:{port}")];
             failures.extend(self.shell.adb(&args).err());
         }
-        let private = format!("rm -f {} {}", self.launcher.config, self.launcher.trace);
-        failures.extend(self.shell(&private).err());
+        failures.extend(self.release_owned().err());
         if failures.is_empty() {
             Ok(())
         } else {

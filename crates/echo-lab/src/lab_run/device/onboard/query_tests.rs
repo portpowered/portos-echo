@@ -8,9 +8,15 @@ const CONFIG: &str = include_str!("../../../../../../examples/bridge.echo.toml")
 
 fn runtime() -> (Rc<RefCell<World>>, Runtime) {
     let world = world();
+    let root = tempfile::tempdir().unwrap();
+    let local = root.path().join("config");
+    std::fs::write(&local, CONFIG).unwrap();
+    let mut owned = remote(&world);
+    owned.stage(&local).unwrap();
+    owned.attempted = true;
     world.borrow_mut().alive = true;
     let mut state = Runtime::default();
-    state.remote = Some(remote(&world));
+    state.remote = Some(owned);
     state.configure_portos(CONFIG).unwrap();
     state.started = true;
     state.generation = 1;
@@ -184,13 +190,14 @@ fn mcp_device_query_dispatch_requires_nominated_speech_and_revokes_prior_counts(
         driver.state = state;
         let mut artifacts = Artifacts::create(root.path().join("report")).unwrap();
         artifacts.link_counts = Some(echo_lab::lab_mcp::LinkCounts::default());
+        let calls_before_query = world.borrow().calls.clone();
         assert_eq!(
             driver.mcp(action, 7, &mut artifacts),
             Err("device: M5 query requires --wake-clip naming only Echo test light".into())
         );
         assert!(driver.state.invalid);
         assert!(artifacts.link_counts.is_none());
-        assert_eq!(world.borrow().calls, Vec::<Vec<String>>::new());
+        assert_eq!(world.borrow().calls, calls_before_query);
         assert_eq!(driver.state.plays, Vec::<Value>::new());
     }
 }
