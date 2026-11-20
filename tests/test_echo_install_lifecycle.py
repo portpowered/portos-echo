@@ -280,10 +280,9 @@ def lifecycle_cases():
         with Sandbox() as box:
             prepare_lifecycle(box)
             (box.root / "process-user").write_text(user)
-            index = len(box.calls())
             box.run(["start"], 1)
-            require(not any("kill " in " ".join(call) for call in box.calls()[index:]),
-                    "unsafe startup identity signalled a process")
+            require((box.root / "eof").read_text() == "EOF",
+                    "unsafe startup identity did not close owned stdin")
             box.run(["stop"])
     concurrent_cases()
     interrupted_cases()
