@@ -176,7 +176,7 @@ async fn voice_barge_cut_withdraws_discarded_reply_frames_from_the_paused_clock(
         clock.submitted("reply").unwrap();
     }
     observer.finish(Ok(()));
-    let source = Source::new(200, false).unwrap();
+    let source = Source::new(200, false, None).unwrap();
     let second = std::time::Duration::from_secs(1);
     let cut = voice_source::cut_generation(&client, playback, &result, second, &source, true);
     assert_eq!(clock.owning(cut).await, Ok(()));
@@ -259,7 +259,7 @@ fn command_count(observer: &Observer, starts: bool) -> usize {
 #[tokio::test(start_paused = true)]
 async fn voice_barge_is_not_armed_while_a_dispatch_is_in_flight() {
     let (mut port, _tx) = port();
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     // A dispatch in flight is thinking: user speech arms nothing, before or
     // during its filler. Barge-in returns once it completes.
     for event in [turn(true), said("One sec")] {
@@ -289,7 +289,7 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     wake(&observer, 0);
     let mut mic = microphone(&mut events).await;
     let (mut port, tx) = port();
-    let mut source = Source::new(200, false).unwrap();
+    let mut source = Source::new(200, false, None).unwrap();
     source.controller.microphone_ended();
     media(said("old"), &mut port, &mut source, &mut |_| Ok(()))
         .await

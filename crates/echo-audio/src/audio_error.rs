@@ -15,6 +15,8 @@ pub enum AudioError {
     Poisoned,
     #[error("stream has finished; reset before adding input")]
     Finished,
+    #[error("echo canceller refused a frame")]
+    Echo,
     #[error("native codec failure: {0}")]
     Codec(#[from] opus::Error),
     #[error("resampler configuration failure: {0}")]
@@ -43,6 +45,7 @@ mod tests {
                 "processor failed; reset or recreate it before reuse",
             ),
             (AudioError::Finished, "stream has finished; reset before adding input"),
+            (AudioError::Echo, "echo canceller refused a frame"),
         ];
         for (error, message) in cases {
             assert_eq!(error.to_string(), message);

@@ -140,15 +140,32 @@ pub struct LiveConfig {
     pub session_idle_seconds: u64,
 }
 
-/// Maximum reply audio sent ahead of playback, in complete 20 ms frames.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioConfig {
+    /// Maximum reply audio sent ahead of playback, in complete 20 ms frames.
     pub reply_lead_ms: u16,
+    /// Take the reply's own echo out of the microphone before it goes upstream.
+    pub echo_cancel: bool,
+    /// Where the canceller looks for that echo first, after the reply frame
+    /// was written to the Echo. It finds the real delay by itself.
+    pub echo_delay_ms: u16,
+}
+
+impl AudioConfig {
+    /// The canceller's delay hint; none when it is switched off.
+    #[must_use]
+    pub fn echo_delay(&self) -> Option<u16> {
+        self.echo_cancel.then_some(self.echo_delay_ms)
+    }
 }
 
 impl Default for AudioConfig {
     fn default() -> Self {
-        Self { reply_lead_ms: 200 }
+        Self {
+            reply_lead_ms: 200,
+            echo_cancel: true,
+            echo_delay_ms: 240,
+        }
     }
 }
 

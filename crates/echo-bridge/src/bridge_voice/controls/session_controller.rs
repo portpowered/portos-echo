@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn session_controller_closing_rejects_activity_and_requires_successful_end() {
-        let mut source = Source::new(200, false).unwrap();
+        let mut source = Source::new(200, false, None).unwrap();
         assert_eq!(source.controller.begin_close(true), Err(Error::Wyoming));
         source.controller.reply_started();
         source.controller.played(true).unwrap();
@@ -295,7 +295,7 @@ mod tests {
         let Some(LinkEvent::Wake(mut microphone)) = events.recv().await.unwrap() else {
             unreachable!()
         };
-        let mut source = Source::new(200, false).unwrap();
+        let mut source = Source::new(200, false, None).unwrap();
         source.controller.reply_started();
         source.controller.played(true).unwrap();
         let result = close(
@@ -381,7 +381,7 @@ mod tests {
             let Some(LinkEvent::Wake(mut microphone)) = events.recv().await.unwrap() else {
                 unreachable!()
             };
-            let mut source = Source::new(200, false).unwrap();
+            let mut source = Source::new(200, false, None).unwrap();
             source.controller.reply_started();
             assert_eq!(source.controller.played(true), Ok(true));
             assert!(!source.controller.microphone_finished());

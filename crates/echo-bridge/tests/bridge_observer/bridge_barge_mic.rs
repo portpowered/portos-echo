@@ -171,6 +171,7 @@ pub(super) async fn call(script: impl AsyncFnOnce(&mpsc::Sender<MediaEvent>, &Ro
         listen_timeout: Some(Duration::from_secs(1)),
         session_max: Duration::from_secs(600),
         reply_lead_ms: 200,
+        echo_delay_ms: None,
         response_deadline: Instant::now() + Duration::from_secs(10),
         played_timeout: Duration::from_secs(2),
         muted: false,

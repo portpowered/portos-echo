@@ -59,6 +59,12 @@ pairing_token_file = "credentials/screen-pairing.txt"
 session_listen_seconds = 15 # Integer 3..300.
 session_max_seconds = 600 # Integer 3..2147483647, at least listen; bounds tool-granted waiting.
 
+# WebRTC's echo canceller (AEC3) takes the reply's own echo out of the microphone before it
+# goes upstream. echo_delay_ms is only where it looks first: reply.quality reports the delay it found.
+[audio]
+echo_cancel = true
+echo_delay_ms = 240 # Integer 0..800.
+
 # Private delegation payload capture. Restart to apply; remove this table before rollback.
 [trace]
 payloads = true

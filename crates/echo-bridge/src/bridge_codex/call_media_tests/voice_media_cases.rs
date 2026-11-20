@@ -71,6 +71,7 @@ async fn media_call_runs_device_capture_reply_drain_and_played_on_one_io_owner()
                 listen_timeout: None,
                 session_max: std::time::Duration::from_secs(600),
                 reply_lead_ms: 200,
+                echo_delay_ms: None,
                 response_deadline: deadline(),
                 played_timeout: std::time::Duration::from_secs(1),
                 muted: false,

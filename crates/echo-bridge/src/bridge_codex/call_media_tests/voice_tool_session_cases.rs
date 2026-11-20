@@ -15,6 +15,7 @@ fn settings() -> SessionOptions {
         response_timeout: Duration::from_secs(10),
         played_timeout: Duration::from_secs(1),
         reply_lead_ms: 200,
+        echo_delay_ms: None,
         muted: false,
     }
 }
