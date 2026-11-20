@@ -93,7 +93,7 @@ impl Home {
             })
             .map(|(id, name, kind, on)| {
                 let attributes = if fresh_power {
-                    json!([{"name":"powerState","freshness":"FRESH","retrievability":"RETRIEVABLE",
+                    json!([{"name":"power","freshness":"FRESH","retrievability":"RETRIEVABLE",
                         "autoUpdateFrequency":"REALTIME","sampledAt":"2026-11-19T00:00:00Z",
                         "value":{"value":if on {"ON"} else {"OFF"}}}])
                 } else {

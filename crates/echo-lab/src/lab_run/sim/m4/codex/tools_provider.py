@@ -285,7 +285,7 @@ class PortosDelegation(McpDelegation):
                 for device in readings for interface in device['interfaces']
                 if interface['name'] == 'port1/systems/zero/capability-interfaces/power'
                 for attribute in interface['attributes']
-                if attribute['name'] == 'powerState' and attribute['freshness'] == 'FRESH'}
+                if attribute['name'] == 'power' and attribute['freshness'] == 'FRESH'}
 
     @staticmethod
     def content(output):
