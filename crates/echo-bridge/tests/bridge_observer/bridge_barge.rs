@@ -21,9 +21,9 @@ const NEW: i16 = 12000;
 
 /// The Live model's side of the call. The pinned V3 session takes no cancel
 /// request: retiring the receive side is all the bridge can do upstream.
-struct Model {
-    events: mpsc::Receiver<MediaEvent>,
-    retired: Arc<AtomicUsize>,
+pub(super) struct Model {
+    pub(super) events: mpsc::Receiver<MediaEvent>,
+    pub(super) retired: Arc<AtomicUsize>,
 }
 impl VoicePort for Model {
     fn send(&self, _: echo_media::PcmFrame) -> Result<(), Error> {
@@ -78,7 +78,7 @@ async fn device(listener: tokio::net::TcpListener, wire: Wire) -> tokio::net::Tc
     }
 }
 
-fn said(role: &str, text: &str, done: bool) -> MediaEvent {
+pub(super) fn said(role: &str, text: &str, done: bool) -> MediaEvent {
     MediaEvent::Control(Event::Transcript {
         role: role.into(),
         text: text.into(),
@@ -86,7 +86,7 @@ fn said(role: &str, text: &str, done: bool) -> MediaEvent {
     })
 }
 
-async fn stream(model: &mpsc::Sender<MediaEvent>, count: usize, level: i16) {
+pub(super) async fn stream(model: &mpsc::Sender<MediaEvent>, count: usize, level: i16) {
     for _ in 0..count {
         model.send(MediaEvent::Audio(Box::new([level; 320]))).await.unwrap();
         tokio::time::sleep(FRAME).await;

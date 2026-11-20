@@ -3,6 +3,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 mod reply_barge;
+mod reply_ear;
 mod reply_jitter;
 mod reply_playout;
 
@@ -10,6 +11,8 @@ pub(crate) use reply_barge::Barge;
 pub use reply_barge::BargeTrigger;
 #[cfg(test)]
 pub(crate) use reply_barge::{BARGE_QUIET, BARGE_WINDOW};
+pub(crate) use reply_ear::Ear;
+pub use reply_ear::Heard;
 pub(crate) use reply_playout::{ClockPacer, PERIOD, Playout, QUIET};
 
 /// Initial playback credit followed by the existing no-catch-up 20 ms pacer.
@@ -86,8 +89,15 @@ pub struct ReplyQuality {
     /// Barge-ins that cut this reply, and what armed the last of them.
     pub cuts: u32,
     pub cut_trigger: Option<BargeTrigger>,
-    /// Times a sign of user speech held the reply back from the device.
+    /// Times a sign of user speech held the reply back from the device,
+    /// and for how long in all: to the cut, or to the release.
     pub holds: u32,
+    pub hold_ms: u32,
+    /// From speech heard at the microphone to the Live session's own sign
+    /// of it, for the last hold the microphone began.
+    pub mic_lead_ms: Option<u32>,
+    /// What the microphone heard under this reply.
+    pub mic: Heard,
     /// The `timing` sample; none when no endpoint preceded the reply's audio.
     pub first_audio: Option<FirstAudio>,
 }
@@ -137,6 +147,8 @@ pub(crate) struct ReplyMeter {
     endpoint: Option<(Instant, Endpoint)>,
     /// A cut flushed the device: the next write starts its clock again.
     restarted: bool,
+    /// When the pending hold began, and whether its lead has been measured.
+    holding: Option<(Instant, bool)>,
     /// The call's arrival lateness; it outlives each reply's window.
     jitter: reply_jitter::Jitter,
     targeted: bool,
@@ -243,17 +255,30 @@ impl ReplyMeter {
         self.quality.cuts += 1;
         self.quality.cut_trigger = Some(trigger);
         self.arrived = None;
-        self.restarted = self.playout.is_some();
+        self.released(Instant::now());
     }
 
-    /// A sign of user speech holds the reply back from the device.
-    pub(crate) fn held(&mut self) {
+    /// A sign of user speech holds the reply back from the device at `now`.
+    pub(crate) fn held(&mut self, now: Instant) {
         self.quality.holds += 1;
+        self.holding = Some((now, false));
     }
 
-    /// The model talked through the hold: the held audio plays from here. The
-    /// device ran dry on purpose, which is not an underrun.
-    pub(crate) fn released(&mut self) {
+    /// The Live session gave its sign of speech `lead` after the microphone.
+    pub(crate) fn mic_led(&mut self, lead: Duration) {
+        if let Some((_, led @ false)) = &mut self.holding {
+            *led = true;
+            self.quality.mic_lead_ms = Some(millis(lead));
+        }
+    }
+
+    /// The hold ended at `now`. If the model talked through it, the held
+    /// audio plays from here: the device ran dry on purpose, which is not an
+    /// underrun.
+    pub(crate) fn released(&mut self, now: Instant) {
+        if let Some((since, _)) = self.holding.take() {
+            self.quality.hold_ms += millis(now.saturating_duration_since(since));
+        }
         self.restarted = self.playout.is_some();
     }
 

@@ -42,7 +42,7 @@ pub use voice_session::{
 #[cfg(test)]
 mod voice_tests;
 
-pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, ReplyQuality};
+pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, Heard, ReplyQuality};
 use crate::{
     Error,
     bridge_codex::{Event, MediaEvent},
@@ -378,8 +378,7 @@ async fn step<E: LinkEvents>(
         result = forward(sink, pending.as_deref()), if pending.is_some() => {
             result.inspect_err(|_| { source.failure = "reply_send"; })?;
             if let Some(frame) = pending.take() {
-                source.mouth.wrote(&frame, Instant::now());
-                source.meter.wrote(Instant::now());
+                source.wrote(&frame);
                 if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
                     clock.submitted("reply")?;
                 }

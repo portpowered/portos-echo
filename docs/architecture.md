@@ -885,8 +885,18 @@ flushes the device. The cut reply then settles: `reply.played` (`outcome` `cut`)
 written, call audio is discarded until the model's next utterance, and the run listens for that answer
 with no playback open. More speech from the user renews the listen window and opens nothing. A model that
 is still talking after the 2 s was not interrupted: the held audio plays, late but whole, and the delay is
-given back in the reply's silent frames. Both times are constants in
+given back in the reply's silent frames. The times are constants in
 [reply_barge.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_barge.rs).
+
+The session's transcript of the user is its earliest sign of speech at the pin, and it comes some hundred
+milliseconds after the speech. The bridge therefore also listens to the microphone frames it forwards
+([reply_ear.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_ear.rs)): a level three times
+above what the reply audio written in the last 700 ms can explain, for 80 ms, is speech. How much of the
+reply the microphone hears is learned per call, from the reply's first half second and from every frame not
+taken for speech. Speech at the microphone holds the reply for 800 ms; the transcript that follows extends
+the hold as before. A hold the session does not bear out is released with nothing lost, and the ear raises
+its estimate of the echo. The ear never cuts a reply by itself: without the model's yield there is no cut.
+Its calibration on the Echo is unmeasured; `reply.quality` `mic` reports what it heard.
 
 #### Why — Barge-in
 

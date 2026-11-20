@@ -1,10 +1,16 @@
 use super::{Error, Stats, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
-use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Discard, QUIET, ReplyMeter, ReplyQuality};
+use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
 use tokio::time::{Duration, Instant};
+
+#[path = "earcon/voice_mouth.rs"]
+mod voice_mouth;
+pub use voice_mouth::Mouth;
+#[cfg(test)]
+use voice_mouth::{FRAME, OUTPUT_DELAY};
 
 /// Thirty seconds of 20 ms frames: above the setup capture's own bound.
 const UPLINK_BACKLOG: usize = 1500;
@@ -29,6 +35,8 @@ pub(super) struct Source {
     barge: Barge,
     /// A barge-in cut the reply: call audio is its until the model speaks again.
     stale: bool,
+    /// Tells speech at the microphone from the reply's own echo.
+    ear: Ear,
 }
 
 impl Source {
@@ -94,7 +102,17 @@ impl Source {
     /// Close the reply's quality window. `lost` is the call's cumulative RTP loss.
     pub fn settle(&mut self, lost: u64) -> ReplyQuality {
         self.meter.paced(self.reply.take_playout());
-        self.meter.settle(lost)
+        let mut quality = self.meter.settle(lost);
+        quality.mic = self.ear.rest();
+        quality
+    }
+
+    /// One reply frame was handed to the Echo.
+    pub fn wrote(&mut self, frame: &[u8]) {
+        let now = Instant::now();
+        self.mouth.wrote(frame, now);
+        self.meter.wrote(now);
+        self.ear.played(frame, now);
     }
 
     /// A dispatch that finished while listening gives its answer a fresh
@@ -124,6 +142,7 @@ impl Source {
             uplink: VecDeque::new(),
             barge: Barge::default(),
             stale: false,
+            ear: Ear::default(),
         })
     }
 
@@ -133,8 +152,18 @@ impl Source {
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
     pub fn heard_user(&mut self, trigger: BargeTrigger) {
-        if !self.delegation.in_flight() && self.controller.speaking() && self.barge.arm(Instant::now(), trigger) {
-            self.meter.held();
+        if self.delegation.in_flight() || !self.controller.speaking() {
+            return;
+        }
+        let now = Instant::now();
+        if self.barge.arm(now, trigger) {
+            self.meter.held(now);
+        }
+        // The Live session's sign of speech the microphone heard first.
+        if trigger != BargeTrigger::MicSpeech
+            && let Some(sign) = self.barge.backed()
+        {
+            self.meter.mic_led(now.saturating_duration_since(sign));
         }
     }
 
@@ -187,6 +216,9 @@ impl Source {
         }
         let microphone = self.microphone.as_mut().ok_or(Error::Audio)?;
         for frame in microphone.process(&frame.format, &frame.payload)? {
+            if self.ear.heard(&frame, Instant::now()) {
+                self.heard_user(BargeTrigger::MicSpeech);
+            }
             self.forward(&frame, port)?;
         }
         Ok(false)
@@ -244,10 +276,14 @@ impl Source {
             // PCM has no utterance identity. Only ordered assistant control
             // opens Speaking; the initial user transcript can lag audible RTP.
             let now = Instant::now();
-            let held = self.barge.pending();
+            let held = self.barge.unbacked();
             self.barge.heard(now, audible(frame));
-            if held && !self.barge.pending() {
-                self.meter.released();
+            if let (Some(alone), false) = (held, self.barge.pending()) {
+                self.meter.released(now);
+                // The session heard nobody: the ear took the echo for speech.
+                if alone {
+                    self.ear.mistaken();
+                }
             }
             let wanted = self.meter.arrived(now);
             self.meter.targeted(self.reply.retarget(wanted));
@@ -423,75 +459,11 @@ impl Delegation {
     }
 }
 
-const FRAME: Duration = Duration::from_millis(20);
-/// Measured on the real Echo: hassmic reports `played` 0.07 to 0.24 s (typically
-/// 0.22 s) after the modelled playout clock below drains.
-const OUTPUT_DELAY: Duration = Duration::from_millis(200);
-
-/// The screen's mouth follows audio the Echo is actually playing, not model
-/// events. Frames written to the Echo play back to back on its clock, which
-/// restarts when the device ran dry. The mouth opens when the first audible
-/// frame reaches the speaker and closes when the last one has played.
-#[derive(Default)]
-pub struct Mouth {
-    clock: Option<Instant>,
-    transitions: VecDeque<(Instant, bool)>,
-    open: bool,
-}
-
 /// Best effort: the indication is display only, so a device that cannot take
 /// it never fails or delays the reply.
 pub(super) async fn think<L: echo_link::EchoLink>(client: &L, source: &mut Source) {
     if let Some(on) = source.thinking_change() {
         let _ = tokio::time::timeout(Duration::from_secs(1), client.thinking(on)).await;
-    }
-}
-
-impl Mouth {
-    /// Record one 24 kHz s16le frame written to the Echo at `now`.
-    pub fn wrote(&mut self, frame: &[u8], now: Instant) {
-        if frame.is_empty() {
-            return;
-        }
-        let start = self.clock.filter(|end| *end > now).unwrap_or(now);
-        self.clock = Some(start + FRAME);
-        let audible = frame
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .any(|sample| i16::from_le_bytes(*sample).unsigned_abs() > QUIET);
-        if audible {
-            let open = start + OUTPUT_DELAY;
-            let close = open + FRAME;
-            if let Some((due, false)) = self.transitions.back_mut()
-                && *due == open
-            {
-                *due = close;
-            } else {
-                self.transitions.push_back((open, true));
-                self.transitions.push_back((close, false));
-            }
-        }
-    }
-
-    /// When the next open or close is due.
-    #[must_use]
-    pub fn due(&self) -> Option<Instant> {
-        self.transitions.front().map(|(due, _)| *due)
-    }
-
-    /// The change due by `now`, if any: true opens the mouth, false closes it.
-    pub fn poll(&mut self, now: Instant) -> Option<bool> {
-        self.due().filter(|due| *due <= now)?;
-        let (_, open) = self.transitions.pop_front()?;
-        self.open = open;
-        Some(open)
-    }
-
-    /// Audible reply audio is written to the Echo and not yet played out.
-    #[must_use]
-    pub fn voiced(&self) -> bool {
-        self.open || self.due().is_some()
     }
 }
 
