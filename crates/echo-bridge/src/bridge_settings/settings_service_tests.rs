@@ -455,9 +455,11 @@ async fn t3_screen_pack_external_settings_adoption_keeps_runtime_and_exec_unchan
     assert!(!completion.restart_requested);
     assert_eq!(fs::read(fixture.root.path().join("bridge.toml")).unwrap(), base);
     let mut host = completion.host;
-    let SettingsReply::Snapshot(snapshot) = host.transaction(SettingsOperation::Snapshot, LinkStatusV1::Linked) else {
-        panic!("expected accepted settings snapshot");
+    let snapshot = match host.transaction(SettingsOperation::Snapshot, LinkStatusV1::Linked) {
+        SettingsReply::Snapshot(snapshot) => Some(snapshot),
+        _ => None,
     };
+    let snapshot = snapshot.unwrap();
     assert_eq!(snapshot.settings.agent.max_tool_calls, 4);
     assert!(!snapshot.restart_pending);
     assert_eq!(
