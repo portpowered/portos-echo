@@ -56,11 +56,8 @@ function fitSideCard(card: HTMLElement, controls: HTMLElement | null) {
 
 // Content remains the canonical native controls. Position its overlays inside
 // the safe area; scroll oversized text instead of clipping approval actions.
-export function applyLayout(
-    host: HTMLElement,
-    diagnostic: HTMLElement,
-    layout: Layout | undefined,
-) {
+export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
+    const feedback = host.nextElementSibling;
     const clock = document.createElement("p");
     clock.className = "pack-clock";
     clock.dataset.packPersistent = "";
@@ -95,6 +92,26 @@ export function applyLayout(
             value.x >= layout.stage.anchor.x + 25 * layout.stage.scale
         );
     }
+    function placeFeedback(status?: Slot) {
+        // The page keeps its live region immediately after the presentation.
+        if (
+            !(feedback instanceof HTMLElement) ||
+            !feedback.matches('[role="status"]')
+        )
+            return;
+        const { style } = feedback;
+        if (!status) {
+            style.position = style.inset = style.width = style.margin = "";
+            return;
+        }
+        const left = area.x + (status.x / 100) * area.width;
+        const top = area.y + (status.y / 100) * area.height;
+        const right = 100 - area.x - area.width;
+        style.position = "fixed";
+        style.inset = `${top}dvh calc(${right}vw + 12px) auto ${left}vw`;
+        style.width = "auto";
+        style.margin = "0";
+    }
     slot(clock, "clock");
     slot(date, "date");
     function clamp() {
@@ -127,6 +144,10 @@ export function applyLayout(
         render(state: string) {
             const idle = ["ready", "connected"].includes(state);
             clock.hidden = date.hidden = !idle;
+            const feedbackSlot = layout?.slots.status;
+            placeFeedback(
+                idle && besideStage(feedbackSlot) ? feedbackSlot : undefined,
+            );
             const heading = host.querySelector<HTMLElement>("h1");
             const details = host.querySelector<HTMLElement>(".details");
             if (heading) {
@@ -167,27 +188,13 @@ export function applyLayout(
             node.style.width = `${50 * layout.stage.scale}%`;
             node.style.height = `${50 * layout.stage.scale}%`;
             node.style.backgroundColor = layout.stage.background;
-            const status = layout.slots.status;
-            if (besideStage(status)) {
-                // The live region is a sibling of the pack, so map the slot
-                // from safe-area coordinates to viewport coordinates.
-                const left = area.x + (status.x / 100) * area.width;
-                const top = area.y + (status.y / 100) * area.height;
-                const right = 100 - area.x - area.width;
-                diagnostic.style.setProperty(
-                    "--pack-feedback-inset",
-                    `${top}% calc(${right}% + 12px) auto ${left}%`,
-                );
-                diagnostic.classList.add("pack-idle-feedback");
-            }
         },
         dispose() {
             observer.disconnect();
             clearInterval(timer);
             clock.remove();
             date.remove();
-            diagnostic.classList.remove("pack-idle-feedback");
-            diagnostic.style.removeProperty("--pack-feedback-inset");
+            placeFeedback();
             for (const key of ["x", "y", "width", "height"])
                 host.style.removeProperty(`--pack-${key}`);
         },
