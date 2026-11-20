@@ -24,7 +24,7 @@ fn world(negative: bool) -> World {
     world.completion = json!({"event":"bridge.run_completed","run_id":"run-1"});
     world.playback = json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":9000});
     world.audibility = json!({"pcm_bytes":9600,"nonzero_samples":4800,"audible_samples":4700,"host":world.playback});
-    world.ui_states = ["ready", "listening", "connected", "speaking", "connected", "ready"]
+    world.ui_states = ["ready", "listening", "connected", "speaking", "ready"]
         .map(|state| json!({"state":state}))
         .into();
     world.muse.calls = vec![

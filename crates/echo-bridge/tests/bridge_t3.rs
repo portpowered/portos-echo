@@ -312,7 +312,10 @@ async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
-    bridge_wire_screen::closed_then_ready(&mut screen).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
     assert_eq!(host.command("pcm").await, "30720 0");
     bridge.finish(0).await;
     host.finish(0).await;

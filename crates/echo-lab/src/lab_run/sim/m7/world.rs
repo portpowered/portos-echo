@@ -128,7 +128,6 @@ impl World {
             .ok_or("m7: missing bridge")?
             .expect("bridge.run_completed")
             .await?;
-        self.ui_states.push(screen.expect("connected").await?);
         self.ui_states.push(screen.expect("ready").await?);
         self.playback = self.control(json!({"action":"playback"})).await?;
         self.relay.as_ref().ok_or("m7: missing relay")?.timing().sample()?;

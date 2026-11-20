@@ -113,7 +113,7 @@ fn playback(world: &World, run: &str) -> Result<(), String> {
     equal(
         "screen sequence",
         &json!(states),
-        &json!(["ready", "listening", "connected", "speaking", "connected", "ready"]),
+        &json!(["ready", "listening", "connected", "speaking", "ready"]),
     )?;
     equal("client model requests", &json!(world.model_requests), &json!(0))?;
     equal("client tool calls", &json!(world.tool_calls), &json!(0))?;

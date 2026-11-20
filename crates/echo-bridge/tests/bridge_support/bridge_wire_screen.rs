@@ -123,7 +123,10 @@ async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
-    closed_then_ready(&mut events).await;
+    assert_eq!(
+        state(&mut events).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
     bridge.finish(0).await;
     bridge.assert_collected();
     let text = std::fs::read_to_string(path).unwrap();
@@ -224,15 +227,6 @@ async fn bridge_mute_snapshot_idle_stray_frames_and_unmute_are_measured() {
 pub(super) async fn listening_then_connected(events: &mut Lines<BufReader<TcpStream>>) {
     assert_eq!(state(events).await, json!({"state":"listening"}));
     assert_eq!(state(events).await, json!({"state":"connected"}));
-}
-
-/// The reply's mouth closes (awake, Connected), then the run's end shows Ready.
-pub(super) async fn closed_then_ready(events: &mut Lines<BufReader<TcpStream>>) {
-    assert_eq!(state(events).await, json!({"state":"connected"}));
-    assert_eq!(
-        state(events).await,
-        json!({"state":"ready","message":"Echo Live ready"})
-    );
 }
 
 pub(super) async fn microphone_chunk(satellite: &mut TcpStream) {

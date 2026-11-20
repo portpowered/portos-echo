@@ -21,7 +21,8 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
             expected[2].clone(),
             expected[3].clone(),
             expected[6].clone(),
-            expected[7].clone()
+            expected[7].clone(),
+            expected[8].clone()
         ]
     );
     assert!(

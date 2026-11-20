@@ -192,7 +192,7 @@ fn fixture() -> (Vec<Value>, Vec<Value>) {
         ("connected", 0),
         ("speaking", 200),
         ("connected", 400),
-        ("ready", 400),
+        ("ready", 440),
     ]
     .map(|(state, epoch)| json!({"epoch_ms":epoch,"state":{"state":state}}))
     .to_vec();
@@ -208,7 +208,6 @@ fn mouth_oracle_accepts_only_exact_audible_pcm_and_bounded_state_offsets() {
     let mut at_limit = states.clone();
     at_limit[3]["epoch_ms"] = json!(220);
     at_limit[4]["epoch_ms"] = json!(420);
-    at_limit[5]["epoch_ms"] = json!(420);
     assert_eq!(check(&pcm, &at_limit).unwrap()["end_offset_ms"], 220);
     for (index, time) in [(3, 199), (3, 221), (4, 399), (4, 421)] {
         let mut wrong = states.clone();

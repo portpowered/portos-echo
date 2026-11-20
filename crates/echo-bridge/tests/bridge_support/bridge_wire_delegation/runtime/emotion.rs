@@ -106,7 +106,10 @@ async fn m6_repeated_delegation_executes_once_and_cancelled_animation_cannot_ove
     );
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
-    bridge_wire_screen::closed_then_ready(&mut screen).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"ready","message":"Echo Live ready"})
+    );
     assert_no_request(&app.model).await;
     assert_eq!(app.spoof.snapshot().unwrap().calls.len(), 1);
     assert_eq!(app.spoof.snapshot().unwrap().calls[0].count, 1);
