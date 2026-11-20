@@ -47,7 +47,7 @@ async function corner(page) {
     return { x: ECHO.width - right - size, y: top, width: size, height: size };
 }
 
-test("settings usability: at 960x600 Back sits exactly where the gear was and the fields take 76% of the height", async (t) => {
+test("settings usability: at 960x600 Back shares the gear position and the fields start below the title", async (t) => {
     const { page, gear, opacity } = await open(t);
     const back = await page
         .getByRole("button", { name: "Back", exact: true })
@@ -78,7 +78,7 @@ test("settings usability: at 960x600 Back sits exactly where the gear was and th
     assert.ok(title.x + title.width <= back.x);
     const fields = await page.locator(".settings-fields").boundingBox();
     // The scroll area spans the screen; its content sits on the 24..936 column.
-    assert.deepEqual(fields, { x: 0, y: 132, width: 960, height: 460 });
+    assert.deepEqual(fields, { x: 0, y: 84, width: 960, height: 508 });
     assert.ok(fields.height >= 0.7 * ECHO.height);
     // Label at the left, control at the right, on one line.
     for (const name of [

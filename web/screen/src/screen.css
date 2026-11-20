@@ -219,6 +219,10 @@ main.settings-open {
     font-size: 22px;
     margin: 4px 0;
 }
+.settings-panel > [role="status"]:empty {
+    min-height: 0;
+    margin: 0;
+}
 /* Settings is one column: from the title's left edge to Back's right edge.
    The scroll area bleeds to the screen edges so focus rings and the open
    section band have room, and pads its content back onto the column. */
@@ -231,6 +235,9 @@ main.settings-open {
     /* Text ink that spills a pixel left of the column repaints with the
        fields, never as a stale dot when they scroll. */
     will-change: scroll-position;
+}
+.settings-panel > [role="status"]:empty + .settings-fields {
+    padding-top: 0;
 }
 .settings-fields section {
     padding-inline: 0;

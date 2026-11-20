@@ -67,7 +67,10 @@ test("960×600 Settings starts with both Accounts, then Presentation", async (t)
             .getByText("On a phone or PC, open https://127.0.0.1/approve")
             .waitFor();
         const code = row.getByText(
-            new RegExp("LOCAL-" + endpoint + " · Expires at "),
+            "Code: LOCAL-" + endpoint + " · Expires at 3:33:20 AM",
+            {
+                exact: true,
+            },
         );
         await code.waitFor();
         await setStatus({

@@ -1,3 +1,4 @@
+import { formatExpiry } from "../../expiry";
 import { element } from "../forms";
 import type { PortosOperationV2 } from "../model";
 
@@ -110,10 +111,8 @@ export function accountChallenge() {
             code.textContent = challenge
                 ? "Code: " +
                   challenge.user_code +
-                  " · Expires at " +
-                  new Date(
-                      challenge.expires_at_unix * 1000,
-                  ).toLocaleTimeString()
+                  " · " +
+                  formatExpiry(challenge.expires_at_unix, "local-time").label
                 : "";
         },
     };
