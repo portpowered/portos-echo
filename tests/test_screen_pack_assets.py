@@ -11,12 +11,17 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 
 from test_echo_install import require, SENTINEL
 
 ROOT = Path(__file__).resolve().parents[1]
 STATES = {'idle', 'connecting', 'listening', 'thinking', 'speaking', 'muted',
           'setup', 'approval', 'error'}
+
+
+def pack_style(version):
+    return tuple(map(int, version.split('-', 1)[0].split('.')[:2]))
 
 
 def generate(out, version='0.1.0', name='template'):
@@ -34,21 +39,24 @@ def generate(out, version='0.1.0', name='template'):
     rejected = subprocess.run(command, capture_output=True, text=True, timeout=10)
     require(rejected.returncode == 2, 'invalid version was accepted')
     independent_template(out / f'{name}-{version}.screenpack.tar.gz', name)
-    if name == 'default':
+    pack = out / f'{name}@{version}'
+    if pack_style(version) >= (0, 3):
         from screen_pack_face import face_cases
-        face_cases(out / f'{name}@{version}', decode)
-    elif version == '0.2.0':
+        face_cases(pack, decode)
+    elif pack_style(version) == (0, 2):
         from screen_pack_eyes import eyes_cases
-        eyes_cases(out / f'template@{version}', decode)
+        eyes_cases(pack, decode)
     else:
-        media_cases(out / f'template@{version}')
-    print('F23 template: identity=PASS archive=PASS checksum=PASS codecs=PASS rest_boundaries=PASS')
+        media_cases(pack)
+    print(f'F23 {name}: identity=PASS archive=PASS checksum=PASS codecs=PASS rest_boundaries=PASS')
 
 
 def independent_template(archive, name='template'):
-    # The default face adds the awake (wake) clip pair and its pack.css.
-    states = STATES | {'wake'} if name == 'default' else STATES
-    count = 2 + 2 * (len(states) + 1) + (name == 'default')
+    version = archive.name.removeprefix(name + '-').removesuffix('.screenpack.tar.gz')
+    style = pack_style(version)
+    face = style >= (0, 3)
+    states = STATES | {'wake'} if face else STATES
+    count = 2 + 2 * (len(states) + 1) + face
     with tarfile.open(archive) as source:
         members = source.getmembers()
         require(len(members) == count and all(m.isfile() for m in members), 'template membership differs')
@@ -56,15 +64,15 @@ def independent_template(archive, name='template'):
         require(len(files) == count, 'duplicate template member')
     manifest = json.loads(files['pack.json'])
     require(manifest['format'] == 1 and manifest['name'] == name, 'template identity differs')
-    require(manifest['version'] == archive.name[len(name) + 1:-18], 'template version differs')
+    require(manifest['version'] == version, 'template version differs')
     require(manifest['character']['rest'] == 'rest.png', 'rest reference differs')
     require(set(manifest['character']['states']) == states, 'mapped states differ')
-    if tuple(map(int, manifest['version'].split('-', 1)[0].split('.')[:2])) < (0, 2):
+    if style < (0, 2):
         require(manifest['layout'] == {
             'safe_area': {'x': 0, 'y': 0, 'width': 100, 'height': 100}, 'slots': {},
             'stage': {'anchor': {'x': 50, 'y': 50}, 'scale': 1, 'background': '#101820'}},
             'default layout differs')
-    expected = {'pack.json', 'rest.png'} | ({'pack.css'} if name == 'default' else set())
+    expected = {'pack.json', 'rest.png'} | ({'pack.css'} if face else set())
     for clip_name in sorted(states | {'happy'}):
         clip = (manifest['character']['emotes']['happy'] if clip_name == 'happy'
                 else manifest['character']['states'][clip_name]['clip'])
@@ -104,35 +112,41 @@ def independent_bundle(assets, pack, asset_names):
     for name, content in files.items():
         require(hashlib.sha256(content).hexdigest() == manifest['files'][name], 'payload hash differs')
         require(pack.safe_name(name), 'forbidden member')
-    template = assets / ('template-' + manifest['version'] + '.screenpack.tar.gz')
-    art = independent_template(template)
+    version = manifest['version']
+    default_pack = assets / f'default-{version}.screenpack.tar.gz'
+    companion = assets / 'companion-0.1.0.screenpack.tar.gz'
+    require(set(assets.glob('*.screenpack.tar.gz')) == {default_pack, companion}, 'release screen pack set differs')
+    art = independent_template(default_pack, 'default')
     require(all(data not in files['bin/echo-bridge'] for data in art.values()), 'art embedded in bridge')
     expected = {name: hashlib.sha256((assets / name).read_bytes()).hexdigest()
-                for name in asset_names(manifest['version'])}
+                for name in asset_names(version)}
     lines = (assets / 'SHA256SUMS').read_text().splitlines()
     require(len(lines) == len(expected) and set(lines) == {
         value + '  ' + name for name, value in expected.items()}, 'asset hashes differ')
-    config = pack.tomllib.loads(files['examples/bridge.echo.toml'].decode())
-    require(config['screen']['packs'] == [{
-        'url': f"https://github.com/portpowered/portos-echo/releases/download/v{manifest['version']}/{template.name}",
-        'sha256': expected[template.name]}], 'template release pin differs')
+    config = tomllib.loads(files['examples/bridge.echo.toml'].decode())
+    pin = {'url': f'https://github.com/portpowered/portos-echo/releases/download/v{version}/{default_pack.name}',
+           'sha256': expected[default_pack.name]}
+    require(config['screen']['packs'] == [pin], 'default release pin differs')
     require(manifest['components']['ca_bundle']['sha256'] == hashlib.sha256(files['bin/cacert.pem']).hexdigest(),
             'CA provenance differs')
     pack.verify(archive, assets / 'SHA256SUMS', require_companion=True)
+    identity = json.loads(art['pack.json'])
+    print(f"release-kit: archive={default_pack.name} manifest={identity['name']}@{identity['version']} "
+          f"url={pin['url']} sha256={pin['sha256']}", flush=True)
     return manifest
 
 
 def exclusion_cases(archive, pack):
-    art = independent_template(archive)
+    art = independent_template(archive, 'default')
     for name, data in art.items():
         try:
-            pack.exclude_screen_pack('template', art, (b'synthetic-executable', b'prefix' + data + b'suffix'))
+            pack.exclude_screen_pack('default', art, (b'synthetic-executable', b'prefix' + data + b'suffix'))
         except pack.BundleError as error:
-            require(str(error) == 'template data embedded in executable or JavaScript',
+            require(str(error) == 'default data embedded in executable or JavaScript',
                     'media exclusion diagnostic differs')
         else:
             raise AssertionError('embedded generated payload accepted: ' + name)
-    pack.exclude_screen_pack('template', art, (b'synthetic-executable', b'synthetic-javascript'))
+    pack.exclude_screen_pack('default', art, (b'synthetic-executable', b'synthetic-javascript'))
     print('U-PACK complete generated payload exclusion: PASS')
 
 
@@ -278,7 +292,8 @@ class PushBox:
                                  'push', str(self.pack)], env=self.env,
                                 capture_output=True, text=True, timeout=30)
         if okay:
-            require(result.returncode == 0 and result.stdout == f"screen-pack: pushed template@{self.manifest['version']}\n"
+            identity = f"{self.manifest['name']}@{self.manifest['version']}"
+            require(result.returncode == 0 and result.stdout == f'screen-pack: pushed {identity}\n'
                     and result.stderr == '', 'push success diagnostic differs: ' + result.stderr)
         else:
             require(result.returncode == 1 and result.stdout == ''
@@ -299,14 +314,14 @@ class PushBox:
         self.temporary.cleanup()
 
 
-def push_cases(generated, version='0.1.0', echo_home=None):
+def push_cases(generated, version='0.1.0', echo_home=None, *, name='template'):
     with PushBox() as box:
-        identity = f'template@{version}'
-        box.manifest['version'] = version
+        identity = f'{name}@{version}'
+        box.manifest.update(name=name, version=version)
         shutil.rmtree(box.pack)
         shutil.copytree(generated / identity, box.pack)
         prior = []
-        if version != '0.1.0':
+        if name == 'template' and version != '0.1.0':
             prior = ['template@0.1.0']
             box.remote.mkdir()
             shutil.copytree(generated / 'older/template@0.1.0', box.remote / prior[0])

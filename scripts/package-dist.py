@@ -80,7 +80,11 @@ def safe_name(name):
             and not re.search(r"token|secret|credential|auth\.json|hassmic", name, re.I))
 
 
-def config_projection(data, release, template_sha):
+def screen_pack_pin(asset, release, sha):
+    return {"url": f"https://github.com/portpowered/portos-echo/releases/download/v{release}/{asset}", "sha256": sha}
+
+
+def config_projection(data, release, pack_sha):
     text = data.decode()
     parsed = tomllib.loads(text)
     for key, leaf in (("binary", "codex-app-server"), ("ca_file", "cacert.pem")):
@@ -98,8 +102,7 @@ def config_projection(data, release, template_sha):
     table = re.search(r"(?ms)^\[screen\]\n.*?(?=^\[|\Z)", text)
     if table is None:
         raise BundleError("missing screen config")
-    pin = {"url": f"https://github.com/portpowered/portos-echo/releases/download/v{release}/template-{release}.screenpack.tar.gz",
-           "sha256": template_sha}
+    pin = screen_pack_pin(f"default-{release}.screenpack.tar.gz", release, pack_sha)
     value = 'packs = [{ url = ' + json.dumps(pin["url"]) + ', sha256 = ' + json.dumps(pin["sha256"]) + ' }]'
     changed, count = re.subn(r"(?m)^packs\s*=.*$", value, table[0])
     if count != 1:
@@ -116,7 +119,8 @@ def screen_pack_payload(archive, name, release):
         members = source.getmembers()
         if (len(members) > 64 or sum(m.size for m in members) > 64 * 1024**2
                 or any(not m.isfile() or m.name != PurePosixPath(m.name).name
-                       or not re.fullmatch(r"[a-z][a-z0-9-]*\.(?:json|png|webm|mp4)", m.name)
+                       or (not (name == "default" and m.name == "pack.css")
+                           and not re.fullmatch(r"[a-z][a-z0-9-]*\.(?:json|png|webm|mp4)", m.name))
                        or m.size > 8 * 1024**2 for m in members)):
             raise BundleError(f"invalid {name} members")
         files = {m.name: source.extractfile(m).read() for m in members}
@@ -153,18 +157,15 @@ def installer_names(release):
     return (f"echo-setup-{release}-linux-x86_64", f"echo-setup-{release}-windows-x86_64.exe")
 
 
-def checksum_assets(archive, has_setup=True):
-    release = archive.name.removeprefix("echo-").removesuffix("-armv7.tar.gz")
-    template = f"template-{release}.screenpack.tar.gz"
-    if has_setup:
-        return (archive.name, *installer_names(release), "install.sh", "install.ps1", template)
-    return (archive.name, "install.sh", template)
+def checksum_assets(archive, release, pack_asset, has_setup=True):
+    setup = (*installer_names(release), "install.sh", "install.ps1") if has_setup else ("install.sh",)
+    return (archive.name, *setup, pack_asset)
 
 
 def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, installers):
     """Only explicit runtime inputs and license texts can enter the archive."""
     version(release)
-    template = out / f"template-{release}.screenpack.tar.gz"
+    default_pack = out / f"default-{release}.screenpack.tar.gz"
     companion = out / COMPANION_ASSET
     if companion.is_symlink() or not companion.is_file() or companion.stat().st_size > 65 * 1024**2:
         raise BundleError("invalid companion asset membership")
@@ -176,7 +177,7 @@ def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, i
         "scripts/echo-install-setup.sh": (ROOT / "scripts/echo-install-setup.sh").read_bytes(),
         "scripts/echo-install-release.sh": (ROOT / "scripts/echo-install-release.sh").read_bytes(),
         "scripts/echo-install.sh": (ROOT / "scripts/echo-install.sh").read_bytes(),
-        "examples/bridge.echo.toml": config_projection((ROOT / "examples/bridge.echo.toml").read_bytes(), release, digest(template.read_bytes())),
+        "examples/bridge.echo.toml": config_projection((ROOT / "examples/bridge.echo.toml").read_bytes(), release, digest(default_pack.read_bytes())),
         "examples/prompts/voice.md": (ROOT / "examples/prompts/voice.md").read_bytes(),
         "examples/prompts/runner.md": (ROOT / "examples/prompts/runner.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(), "NOTICE": (ROOT / "NOTICE").read_bytes(),
@@ -209,7 +210,8 @@ def assemble(out, release, source, codex_commit, codex, bridge, apk, licenses, i
         wrapper = (ROOT / "scripts" / name).read_bytes().replace(b"@ECHO_VERSION@", release.encode())
         (out / name).write_bytes(wrapper)
     (out / "SHA256SUMS").write_text("".join(
-        f"{digest((out / name).read_bytes())}  {name}\n" for name in (*checksum_assets(archive), COMPANION_ASSET)))
+        f"{digest((out / name).read_bytes())}  {name}\n"
+        for name in (*checksum_assets(archive, release, default_pack.name), COMPANION_ASSET)))
     verify(archive, out / "SHA256SUMS", require_companion=True)
 
 
@@ -253,14 +255,12 @@ def verify(archive, checksums, *, require_companion=False):
             raise BundleError("private path or key in " + name)
         if not binary and re.search(rb'(?:Bearer\s+[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,})', data):
             raise BundleError("credential-shaped payload")
-    template = checksums.parent / f"template-{release}.screenpack.tar.gz"
-    art = screen_pack_payload(template, "template", release)
-    exclude_screen_pack("template", art, (payload["bin/echo-bridge"],))
-    config = tomllib.loads(payload["examples/bridge.echo.toml"].decode())
-    if config["screen"]["packs"] != [{"url": f"https://github.com/portpowered/portos-echo/releases/download/v{release}/{template.name}", "sha256": digest(template.read_bytes())}]:
-        raise BundleError("template config pin mismatch")
     has_setup = SETUP_SCRIPTS <= payload.keys()
-    companion = verify_asset_digests(archive, checksums, release, has_setup, require_companion)
+    pack_name, pack_path, pack_sha, companion = verify_asset_digests(archive, checksums, release, has_setup, require_companion)
+    config = tomllib.loads(payload["examples/bridge.echo.toml"].decode())
+    if config["screen"]["packs"] != [screen_pack_pin(pack_path.name, release, pack_sha)]:
+        raise BundleError(f"{pack_name} config pin mismatch")
+    exclude_screen_pack(pack_name, screen_pack_payload(pack_path, pack_name, release), (payload["bin/echo-bridge"],))
     if companion is not None:
         art = screen_pack_payload(companion, "companion", COMPANION_VERSION)
         exclude_screen_pack("companion", art, (payload["bin/echo-bridge"],))
@@ -284,7 +284,11 @@ def verify_asset_digests(archive, checksums, release, has_setup, require_compani
         if not match or match[2] in actual:
             raise BundleError("invalid checksums")
         actual[match[2]] = match[1]
-    names = checksum_assets(archive, has_setup)
+    # Historical distributions keep their original asset name and TOML pin.
+    legacy_name = "template"
+    pack_name = legacy_name if f"{legacy_name}-{release}.screenpack.tar.gz" in actual else "default"
+    pack_asset = f"{pack_name}-{release}.screenpack.tar.gz"
+    names = checksum_assets(archive, release, pack_asset, has_setup)
     if not has_setup and any(os.path.lexists(checksums.parent / name)
                              for name in (*installer_names(release), "install.ps1")):
         raise BundleError("invalid setup asset membership")
@@ -294,15 +298,15 @@ def verify_asset_digests(archive, checksums, release, has_setup, require_compani
                 or companion.stat().st_size > 65 * 1024**2):
             raise BundleError("invalid companion asset membership")
         names += (COMPANION_ASSET,)
-    else:
-        companion = None
     paths = {name: archive if name == archive.name else checksums.parent / name for name in names}
     if actual.keys() != paths.keys() or any(path.is_symlink() or not path.is_file()
                                             for path in paths.values()):
         raise BundleError("asset checksum mismatch")
+    if paths[pack_asset].stat().st_size > 65 * 1024**2:
+        raise BundleError(f"invalid {pack_name} archive")
     if actual != {name: digest(path.read_bytes()) for name, path in paths.items()}:
         raise BundleError("asset checksum mismatch")
-    return companion
+    return pack_name, paths[pack_asset], actual[pack_asset], paths.get(COMPANION_ASSET)
 
 
 def license_inputs(codex_work, env):
@@ -404,11 +408,14 @@ def build_installers(work, release, env):
     return artifacts
 
 
-def stage_companion(stage, work, env=None):
-    generated = work / "companion"
-    subprocess.run(["sh", "scripts/make-companion-screenpack.sh", "--version", COMPANION_VERSION,
-                    "--out", str(generated)], cwd=ROOT, env=env, check=True)
-    archive = stage / COMPANION_ASSET
+def stage_screen_pack(stage, work, name, release, env=None):
+    generated = work / name
+    generator = "companion" if name == "companion" else "template"
+    args = ["sh", f"scripts/make-{generator}-screenpack.sh", "--version", release, "--out", str(generated)]
+    if generator == "template":
+        args += ["--name", name]
+    subprocess.run(args, cwd=ROOT, env=env, check=True)
+    archive = stage / f"{name}-{release}.screenpack.tar.gz"
     shutil.copyfile(generated / archive.name, archive)
     return archive
 
@@ -427,16 +434,10 @@ def build(args):
         stage = Path(stage)
         env = build_environment(work)
         installers = build_installers(work, args.version, env)
-        generated = work / "template"
-        subprocess.run(["sh", "scripts/make-template-screenpack.sh", "--version", args.version,
-                        "--out", str(generated)], cwd=ROOT, env=env, check=True)
-        template = generated / f"template-{args.version}.screenpack.tar.gz"
-        shutil.copyfile(template, stage / template.name)
-        companion = stage_companion(stage, work, env)
         screen_bundle(env)
         javascript = (ROOT / "web/screen/dist/screen.js").read_bytes()
-        for archive, name, pack_version in ((template, "template", args.version),
-                                            (companion, "companion", COMPANION_VERSION)):
+        for name, pack_version in (("default", args.version), ("companion", COMPANION_VERSION)):
+            archive = stage_screen_pack(stage, work, name, pack_version, env)
             exclude_screen_pack(name, screen_pack_payload(archive, name, pack_version), (javascript,))
         # build-echo deliberately builds offline. Provision this fresh cache,
         # rather than relying on CI setup's separate default Cargo home.

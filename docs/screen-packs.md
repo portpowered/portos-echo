@@ -368,14 +368,14 @@ the state's pose so Listening and Muted hold their expression from the first
 frame. The `happy` emote returns to the centered idle pose used by `rest.png`.
 Keep any new clips silent and within the size limits above.
 
-`make dist DIST_VERSION=0.2.0` generates a separate
-`template-0.2.0.screenpack.tar.gz`, adds its exact digest to `SHA256SUMS`, and pins
+`make dist DIST_VERSION=0.3.0` generates a separate
+`default-0.3.0.screenpack.tar.gz`, adds its exact digest to `SHA256SUMS`, and pins
 that version's release URL and digest in the runtime archive's example config
-before computing `MANIFEST`. The checked-in example's zero digest is a placeholder;
-replace it from the release's `SHA256SUMS` when using that example directly.
-The runtime archive contains no template media. Packaging refuses full generated
-payloads embedded in the real bridge binary or the built JavaScript. The existing
-release workflow uploads the separate pack and publishes it on tag releases;
+before computing `MANIFEST`. For source installs, use a published pack URL and
+its digest from the same release's `SHA256SUMS`, or set `packs = []`.
+The runtime archive keeps the pack media separate. Packaging refuses full generated
+payloads embedded in the real bridge binary or the built JavaScript. The release
+workflow uploads the default and Companion archives and publishes both on tag releases;
 workers use manual workflow runs, never create release tags.
 
 For a local installation without device access, place the generated
@@ -408,8 +408,8 @@ For a released build, use the HTTPS URL for
 `companion-0.1.0.screenpack.tar.gz` and that file's digest from the same
 release's `SHA256SUMS`. Enter both in **Settings > Load screen packs**. After
 installation, select **companion 0.1.0**, choose **Use screen pack**, then
-choose **Back** to see the new appearance. The release example pins template as
-the default. To roll back, select the installed template or **Disable screen packs**,
+choose **Back** to see the new appearance. The release example pins the release's
+default pack. To roll back, select the installed default pack or **Disable screen packs**,
 save with **Use screen pack**, and choose **Back**.
 
 ## Local push

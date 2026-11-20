@@ -70,11 +70,11 @@ def executable(path, command):
 
 
 class ReleaseBox(Sandbox):
-    def __init__(self, wget=False, *, template=None, companion=None):
+    def __init__(self, wget=False, *, default_pack=None, companion=None, version="0.1.0"):
         super().__init__()
         self.assets = self.root / "assets"
         self.assets.mkdir()
-        self.version = "0.1.0"
+        self.version = version
         self.archive = self.assets / f"echo-{self.version}-armv7.tar.gz"
         self.installer = self.assets / f"echo-setup-{self.version}-linux-x86_64"
         self.wrapper = self.assets / "install.sh"
@@ -82,14 +82,14 @@ class ReleaseBox(Sandbox):
         entry = shlex.quote(sys.executable) + " " + shlex.quote(str(Path(__file__).resolve())) + " --fake "
         executable(payload, 'python3 "$ECHO_SETUP_TEST_DRIVER" --fake installer')
         self.env["ECHO_SETUP_TEST_DRIVER"] = str(Path(__file__).resolve())
-        if template is None:
+        if default_pack is None:
             shutil.copyfile(payload, self.installer)
             self.wrapper.write_bytes((ROOT / "scripts/install.sh").read_bytes()
                                      .replace(b"@ECHO_VERSION@", self.version.encode()))
             (self.assets / "SHA256SUMS").write_text(f"{sha(payload.read_bytes())}  {self.installer.name}\n")
         else:
             assemble_fixture(self.assets, self.files["bridge"], self.files["ca"], (payload, payload),
-                             template, companion)
+                             default_pack, companion, version=version)
         for name in ("sha256sum", "chmod", "python3"):
             executable(self.tools / name, shlex.quote(shutil.which(name)))
         executable(self.tools / ("wget" if wget else "curl"), entry + ("wget" if wget else "curl"))
@@ -118,11 +118,11 @@ class ReleaseBox(Sandbox):
 def asset_names(version):
     return (f"echo-{version}-armv7.tar.gz", f"echo-setup-{version}-linux-x86_64",
             f"echo-setup-{version}-windows-x86_64.exe", "install.sh", "install.ps1",
-            f"template-{version}.screenpack.tar.gz", "companion-0.1.0.screenpack.tar.gz")
+            f"default-{version}.screenpack.tar.gz", "companion-0.1.0.screenpack.tar.gz")
 
 
-def assemble_fixture(assets, bridge, apk, installers, template, companion, private_binary=None):
-    shutil.copyfile(template, assets / template.name)
+def assemble_fixture(assets, bridge, apk, installers, default_pack, companion, private_binary=None, *, version="0.1.0"):
+    shutil.copyfile(default_pack, assets / default_pack.name)
     shutil.copyfile(companion, assets / companion.name)
     codex = assets.parent / "codex"
     codex.mkdir()
@@ -130,7 +130,7 @@ def assemble_fixture(assets, bridge, apk, installers, template, companion, priva
         (codex / name).write_text("synthetic public " + name)
     if private_binary:
         (codex / "codex-app-server").write_bytes(private_binary)
-    PACK.assemble(assets, "0.1.0", "a" * 40, "b" * 40, codex, bridge, apk,
+    PACK.assemble(assets, version, "a" * 40, "b" * 40, codex, bridge, apk,
                   {"licenses/ca/MPL-2.0.txt": b"synthetic license", "licenses/ca/NOTICE": b"CA attribution"},
                   installers)
 
@@ -250,8 +250,8 @@ def interruption_case():
     print("F32 Linux bootstrap: interruption cleanup=PASS")
 
 
-def package_cases(template, companion, witness):
-    path_diagnostic_cases(PACK, partial(assemble_fixture, template=template, companion=companion))
+def package_cases(default_pack, companion, witness):
+    path_diagnostic_cases(PACK, partial(assemble_fixture, default_pack=default_pack, companion=companion))
     native_flags_cases()
     for value in ("0.1.0", "0.0.0-dev.abc123"):
         require(PACK.version(value) == value, "version changed")
@@ -261,7 +261,7 @@ def package_cases(template, companion, witness):
             raise AssertionError("invalid version accepted")
         except ValueError:
             pass
-    with ReleaseBox(template=template, companion=companion) as box:
+    with ReleaseBox(default_pack=default_pack, companion=companion) as box:
         independent_bundle(box.assets, PACK, asset_names)
         companion_cases(box.assets, PACK, witness)
         checksum_set_cases(box)
@@ -280,7 +280,7 @@ def package_cases(template, companion, witness):
     for name, content, update in (("licenses/extra.txt", b"/home/example/private/file", True),
                                   ("licenses/secret.txt", b"seed", True),
                                   ("bin/cacert.pem", b"changed", False)):
-        with ReleaseBox(template=template, companion=companion) as box:
+        with ReleaseBox(default_pack=default_pack, companion=companion) as box:
             with tarfile.open(box.archive) as bundle:
                 files = {m.name: bundle.extractfile(m).read() for m in bundle.getmembers()}
             files[name] = content
@@ -412,6 +412,37 @@ def configure_native():
     print("OpenSSL Configure: previous_response=REJECTED private_cargo_no_response=PASS")
 
 
+def default_pack_cases(work, companion):
+    version = "0.3.0"
+    archive = PACK.stage_screen_pack(work, work, "default", version)
+    with ReleaseBox(default_pack=archive, companion=companion, version=version) as box:
+        independent_bundle(box.assets, PACK, asset_names)
+        subprocess.run([sys.executable, str(ROOT / "scripts/package-dist.py"), "verify",
+                        str(box.archive), "--checksums", str(box.assets / "SHA256SUMS"),
+                        "--require-companion"], check=True, timeout=20)
+        published = box.assets / archive.name
+        seeded = work / "unknown" / archive.name
+        seeded.parent.mkdir()
+        with tarfile.open(published) as source, tarfile.open(seeded, "w:gz") as sink:
+            members = source.getmembers()
+            print(f"{published.name} contents: " + " ".join(m.name for m in members), flush=True)
+            art = PACK.screen_pack_payload(published, "default", version)
+            require(art["pack.css"] == source.extractfile("pack.css").read(),
+                    "verified stylesheet differs from the generated bytes")
+            for member in members:
+                sink.addfile(member, source.extractfile(member))
+            unknown = tarfile.TarInfo("unknown.txt")
+            unknown.size = 1
+            sink.addfile(unknown, io.BytesIO(b"x"))
+        try:
+            PACK.screen_pack_payload(seeded, "default", version)
+        except PACK.BundleError as error:
+            require(str(error) == "invalid default members", "unknown member diagnostic differs")
+        else:
+            raise AssertionError("unknown pack member accepted")
+    print("release-kit: pack.css=ACCEPTED unknown.txt=REFUSED (invalid default members)")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path)
@@ -425,18 +456,19 @@ def main():
     if args.assets:
         verify_delivered_assets(args.assets.resolve())
         return
-    with tempfile.TemporaryDirectory(prefix="template-witness-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="default-pack-witness-") as temporary:
         work = Path(temporary)
         generated = work / "generated"
-        generate(generated)
-        push_cases(generated)
-        template = generated / "template-0.1.0.screenpack.tar.gz"
-        exclusion_cases(template, PACK)
+        generate(generated, name="default")
+        push_cases(generated, name="default")
+        default_pack = generated / "default-0.1.0.screenpack.tar.gz"
+        exclusion_cases(default_pack, PACK)
         stage = work / "stage"
         stage.mkdir()
-        companion = PACK.stage_companion(stage, work)
+        companion = PACK.stage_screen_pack(stage, work, "companion", PACK.COMPANION_VERSION)
+        default_pack_cases(work, companion)
         with ThreadPoolExecutor(max_workers=4) as pool:
-            cases = (partial(package_cases, template, companion, args.companion_witness_out),
+            cases = (partial(package_cases, default_pack, companion, args.companion_witness_out),
                      happy_cases, integrity_cases, usage_cases, interruption_case)
             list(pool.map(lambda function: function(), cases))
     print("release-kit tests: integrity=PASS bootstrap=PASS privacy=PASS")
