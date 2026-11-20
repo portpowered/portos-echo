@@ -238,6 +238,15 @@ async fn assert_fixed_clock_save_refused(fixture: &Fixture, client: &reqwest::Cl
         assert_eq!(std::fs::read(overlay).unwrap(), ACCOUNT_OVERLAY.as_bytes());
         assert_eq!(snapshot(client, &v2).await, before);
     }
+    assert_fixed_clock_noop_accepted(client, v2).await;
+    writeln!(
+        std::io::stdout().lock(),
+        "Fixed clock: V2 PATCH=503 V1 POST=503 overlay_unchanged=true max_tool_calls=8 restart_pending=false noop=200"
+    )
+    .unwrap();
+}
+
+async fn assert_fixed_clock_noop_accepted(client: &reqwest::Client, v2: reqwest::Url) {
     let noop = client
         .patch(v2)
         .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":8}}}))
@@ -249,11 +258,6 @@ async fn assert_fixed_clock_save_refused(fixture: &Fixture, client: &reqwest::Cl
         noop.json::<Value>().await.unwrap(),
         json!({"version":2,"restart_pending":false})
     );
-    writeln!(
-        std::io::stdout().lock(),
-        "Fixed clock: V2 PATCH=503 V1 POST=503 overlay_unchanged=true max_tool_calls=8 restart_pending=false noop=200"
-    )
-    .unwrap();
 }
 
 fn account_process(fixture: &Fixture, mock: &MockPortos, epoch: u64) -> Process {
