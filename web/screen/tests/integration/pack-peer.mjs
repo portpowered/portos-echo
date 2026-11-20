@@ -6,7 +6,11 @@ import { once } from "node:events";
 
 // External archive boundary only. Production downloads use exclusive configured
 // trust and real TLS; browsers request media from the production screen server.
-export async function archivePeer(root, archive) {
+export async function archivePeer(
+    root,
+    archive,
+    name = "template.screenpack.tar.gz",
+) {
     const openssl = (...args) =>
         execFileSync("openssl", args, { cwd: root, stdio: "pipe" });
     openssl(
@@ -79,7 +83,7 @@ export async function archivePeer(root, archive) {
     peer.listen(0, "127.0.0.1");
     await once(peer, "listening");
     return {
-        url: `https://127.0.0.1:${peer.address().port}/template.screenpack.tar.gz`,
+        url: `https://127.0.0.1:${peer.address().port}/${name}`,
         requests,
         close: () =>
             new Promise((resolve) => {

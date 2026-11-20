@@ -1,0 +1,172 @@
+"""Rasterize the selected art and render silent, neutral-ended clips."""
+
+import math
+from pathlib import Path
+import subprocess
+
+ART = Path(__file__).with_name("art")
+WIDTH, HEIGHT, FPS = 256, 320, 30
+SIZE = f"{WIDTH}x{HEIGHT}"
+BACKGROUND = "#101827"
+FRAME_BYTES = WIDTH * HEIGHT * 4
+FFMPEG = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+          "-filter_threads", "1", "-filter_complex_threads", "1"]
+
+# Artwork rectangles (x, y, w, h), with atlas gutters removed. Keep the head
+# crown and waist aligned when changing poses. The setup hand extends left.
+POSES = {
+    "rest": ("reference", (166, 6, 564, 881), 0),
+    "idle": ("poses", (97, 11, 327, 491), 0),
+    "connecting": ("poses", (634, 12, 287, 490), 0),
+    "listening": ("poses", (1136, 21, 278, 481), 0),
+    "thinking": ("poses", (113, 524, 309, 490), 0),
+    "error": ("poses", (613, 523, 320, 491), 0),
+    "happy": ("poses", (1159, 524, 264, 490), 0),
+    "setup": ("cards", (103, 18, 610, 852), -12),
+    "approval": ("cards", (1068, 16, 525, 856), 0),
+}
+
+# The lip/eyelid patches are feathered inside the face. Their placements are
+# in the registered raster of the idle sprite; motion shifts the entire head.
+PATCHES = {
+    "blink": ((718, 300, 252, 72), (96, 67, 66, 22)),
+    "half": ((1329, 394, 110, 80), (111, 94, 29, 23)),
+    "open": ((1869, 396, 110, 80), (111, 94, 29, 23)),
+}
+
+# Unequal held mouth shapes within one loop. The whole clip restarts at the
+# rest pose. The runs never repeat as a shorter regular speech cycle.
+SPEECH = (("idle", 9), ("half", 5), ("open", 8), ("half", 4), ("idle", 10),
+          ("open", 5), ("half", 8), ("idle", 4), ("half", 4), ("open", 10),
+          ("idle", 12))
+FRAMES = {"idle": 126, "connecting": 72, "listening": 48, "thinking": 72,
+          "speaking": 100, "muted": 30, "setup": 60, "approval": 60,
+          "error": 60, "happy": 45}
+TRANSITION = 10
+
+
+def run(args, data=None):
+    return subprocess.run([*FFMPEG, *args], input=data, check=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+
+
+def raw_input(path):
+    return ["-f", "rawvideo", "-pixel_format", "rgba", "-video_size", SIZE,
+            "-framerate", str(FPS), "-i", str(path)]
+
+
+def raster(sheet, rect, output_size, pad=""):
+    x, y, width, height = rect
+    out_width, out_height = output_size
+    filters = (f"format=rgba,crop={width}:{height}:{x}:{y},"
+               f"lutrgb=a='if(lt(val,16),0,val)',"
+               f"scale={out_width}:{out_height}:flags=lanczos{pad}")
+    return run(["-i", str(ART / f"{sheet}.png"), "-vf", filters, "-frames:v", "1",
+                "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
+
+
+def face_patch(idle, source, placement):
+    x, y, width, height = placement
+    pixels = raster("expression", source, (width, height))
+    pose = bytearray(idle)
+    for row in range(height):
+        for column in range(width):
+            i = (row * width + column) * 4
+            j = ((y + row) * WIDTH + x + column) * 4
+            edge = min(row, height - 1 - row, column, width - 1 - column)
+            alpha = min(1, edge / 4) * (pixels[i + 3] / 255)
+            for channel in range(3):
+                pose[j + channel] = round(
+                    pose[j + channel] * (1 - alpha) + pixels[i + channel] * alpha)
+    return bytes(pose)
+
+
+def keyframes():
+    frames = {}
+    for name, (sheet, rect, offset) in POSES.items():
+        width = round(rect[2] * 292 / rect[3])
+        x = (WIDTH - width) // 2 + offset
+        frames[name] = raster(sheet, rect, (width, 292),
+                              f",pad={WIDTH}:{HEIGHT}:{x}:12:color=black@0")
+    for name, (source, placement) in PATCHES.items():
+        frames[name] = face_patch(frames["idle"], source, placement)
+    return frames
+
+
+def shift(frame, x, y):
+    if x == 0 and y == 0:
+        return frame
+    # Each registered full pose has at least 12 transparent pixels on each
+    # moving edge, so row slices can translate without clipping visible art.
+    stride = WIDTH * 4
+    start = max(0, -y) * stride
+    stop = FRAME_BYTES - max(y, 0) * stride
+    rows = [bytes(stride * max(y, 0))]
+    for row in range(start, stop, stride):
+        pixels = frame[row + 4 * max(-x, 0):row + stride - 4 * max(x, 0)]
+        rows.append(bytes(4 * max(x, 0)) + pixels + bytes(4 * max(-x, 0)))
+    rows.append(bytes(stride * max(-y, 0)))
+    return b"".join(rows)
+
+
+def timeline(role, frames):
+    length = FRAMES[role]
+    speech = tuple(pose for pose, run_length in SPEECH for _ in range(run_length))
+    for index in range(length):
+        if role == "muted" or index in (0, length - 1):
+            yield frames["rest"]
+            continue
+        cycle = math.tau * index / (length - 1)
+        name, x, y = role, 0, 0
+        if role == "idle":
+            name = ("blink" if 62 <= index < 66 else
+                    "connecting" if 88 <= index < 98 else role)
+            # Hold the image registration across the four-frame blink.
+            y = -1 if 56 <= index <= 70 else round(math.cos(cycle) - 1)
+        elif role == "speaking":
+            name = speech[min(max(0, index - TRANSITION), len(speech) - 1)]
+            x = round(2 * math.sin(cycle))
+        elif role == "happy":
+            y = -round(9 * math.sin(cycle / 2) ** 2)
+        elif role in ("connecting", "listening", "thinking"):
+            x = round(2 * math.sin(cycle))
+            y = -round(3 * math.sin(cycle / 2) ** 2)
+        yield shift(frames[name], x, y)
+
+
+def encode(pack, raw, role, count):
+    # Blend premultiplied colors so the short transitions have clean edges
+    # on the alpha path. Both outputs derive from the exact same frames.
+    amount = f"max(0,min(1,min(N-1,{count}-N)/{TRANSITION}))"
+    transition = f"(1-cos(PI*({amount})))/2"
+    graph = (
+        "[0:v]format=gbrap,premultiply=inplace=1[rest];"
+        "[1:v]format=gbrap,premultiply=inplace=1[pose];"
+        f"[rest][pose]blend=all_expr='A+(B-A)*({transition})':shortest=1,"
+        "unpremultiply=inplace=1,format=yuva420p,split[webm][alpha];"
+        f"color=c={BACKGROUND}:s={SIZE}:r={FPS}[background];"
+        "[background][alpha]overlay=shortest=1,format=yuv420p[mp4]"
+    )
+    fixed = ["-an", "-threads", "1", "-fflags", "+bitexact",
+             "-flags:v", "+bitexact", "-map_metadata", "-1", "-frames:v", str(count)]
+    # Encode the held frame identically, even across the first keyframe.
+    gop = ["-g", "1"] if role == "muted" else []
+    h264_quality = ["-qp", "18"] if role == "muted" else ["-crf", "18"]
+    run(["-loop", "1", "-framerate", str(FPS), "-i", str(pack / "rest.png"),
+         *raw_input(raw), "-filter_complex", graph,
+         "-map", "[webm]", *fixed, *gop, "-c:v", "libvpx-vp9",
+         "-auto-alt-ref", "0", "-lossless", "1", str(pack / f"{role}.webm"),
+         "-map", "[mp4]", *fixed, *gop, "-c:v", "libx264", *h264_quality, "-preset", "fast",
+         "-x264-params", "aq-mode=0:mbtree=0", "-movflags", "+faststart",
+         str(pack / f"{role}.mp4")])
+
+
+def render(pack, work):
+    frames = keyframes()
+    run([*raw_input("pipe:0"), "-frames:v", "1", "-threads", "1",
+         str(pack / "rest.png")], frames["rest"])
+    raw = work / "frames.rgba"
+    for role, count in FRAMES.items():
+        with raw.open("wb") as stream:
+            stream.writelines(timeline(role, frames))
+        encode(pack, raw, role, count)

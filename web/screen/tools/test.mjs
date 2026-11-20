@@ -26,63 +26,80 @@ if (fixture.status !== 0) process.exit(fixture.status ?? 1);
 // Fixture preparation belongs to the suite owner. Integration tests consume
 // prebuilt executables and generated data; they never compile a binary.
 const packRoot = await mkdtemp(join(tmpdir(), "screen-pack-test-"));
-// The three generated packs encode in parallel; each encoder stays
-// single-threaded and deterministic.
-const generations = [
-    ["0.1.0", "template"],
-    ["0.2.0", "template"],
-    ["0.3.0", "default"],
-].map(
-    ([version, name]) =>
-        new Promise((resolve) => {
-            const child = spawn(
-                "sh",
-                [
-                    "scripts/make-template-screenpack.sh",
-                    "--version",
-                    version,
-                    "--name",
-                    name,
-                    "--out",
-                    join(packRoot, version),
-                ],
-                {
-                    cwd: new URL("../../../", import.meta.url),
-                    stdio: "inherit",
-                },
-            );
-            child.on("error", (error) => resolve({ error }));
-            child.on("exit", (status) => resolve({ status }));
-        }),
-);
-for (const generated of await Promise.all(generations)) {
-    if (generated.error || generated.status !== 0) {
-        await rm(packRoot, { recursive: true, force: true });
-        if (generated.error) throw generated.error;
-        process.exit(generated.status ?? 1);
-    }
+function generate(script, args) {
+    return new Promise((resolve) => {
+        const child = spawn("sh", [`scripts/${script}`, ...args], {
+            cwd: new URL("../../../", import.meta.url),
+            stdio: "inherit",
+        });
+        child.on("error", (error) => resolve({ error }));
+        child.on("exit", (status) => resolve({ script, status }));
+    });
 }
-const result = spawnSync(
-    process.execPath,
-    [
-        "--test",
-        "--test-timeout=30000",
-        "--test-concurrency=2",
-        "tests/*.test.mjs",
-        "tests/integration/*.test.mjs",
-        "tests/render-snapshots/*.test.mjs",
-    ],
-    {
-        encoding: "utf8",
-        env: {
-            ...process.env,
-            SCREEN_PACK_FIXTURE: join(packRoot, "0.1.0"),
-            SCREEN_PACK_EYES_FIXTURE: join(packRoot, "0.2.0"),
-            SCREEN_PACK_DEFAULT_FIXTURE: join(packRoot, "0.3.0"),
+
+const stagedCompanion = process.env.SCREEN_COMPANION_ARCHIVE;
+const companionDir = join(packRoot, "companion");
+let result;
+try {
+    // Independent fixture packs encode in parallel.
+    const generations = [
+        ["0.1.0", "template"],
+        ["0.2.0", "template"],
+        ["0.3.0", "default"],
+    ].map(([version, name]) =>
+        generate("make-template-screenpack.sh", [
+            "--version",
+            version,
+            "--name",
+            name,
+            "--out",
+            join(packRoot, version),
+        ]),
+    );
+    if (stagedCompanion === undefined) {
+        generations.push(
+            generate("make-companion-screenpack.sh", [
+                "--version",
+                "0.1.0",
+                "--out",
+                companionDir,
+            ]),
+        );
+    }
+    for (const generated of await Promise.all(generations)) {
+        if (generated.error) throw generated.error;
+        if (generated.status !== 0) {
+            throw new Error(
+                `${generated.script} exited with status ${generated.status ?? 1}`,
+            );
+        }
+    }
+    result = spawnSync(
+        process.execPath,
+        [
+            "--test",
+            "--test-timeout=30000",
+            "--test-concurrency=2",
+            "tests/*.test.mjs",
+            "tests/integration/*.test.mjs",
+            "tests/render-snapshots/*.test.mjs",
+        ],
+        {
+            encoding: "utf8",
+            env: {
+                ...process.env,
+                SCREEN_PACK_FIXTURE: join(packRoot, "0.1.0"),
+                SCREEN_PACK_EYES_FIXTURE: join(packRoot, "0.2.0"),
+                SCREEN_PACK_DEFAULT_FIXTURE: join(packRoot, "0.3.0"),
+                SCREEN_COMPANION_ARCHIVE:
+                    stagedCompanion ??
+                    join(companionDir, "companion-0.1.0.screenpack.tar.gz"),
+            },
         },
-    },
-);
-await rm(packRoot, { recursive: true, force: true });
+    );
+} finally {
+    await rm(packRoot, { recursive: true, force: true });
+}
 const transcript = `${result.stdout ?? ""}${result.stderr ?? ""}`;
 process.stdout.write(transcript);
 await writeFile("test-results/summary.txt", transcript);
