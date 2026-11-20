@@ -34,12 +34,36 @@ async fn interrupted(portos: bool, json: bool) -> Result {
             .map_err(|error| error.to_string())
     });
     check_prompt(&lines.next_line().await?.ok_or("missing prompt")?, json, portos)?;
+    interrupt_and_check(child, &mut lines, json).await?;
+    server.await?.map_err(io::Error::other)?;
+    assert_eq!(fixture.0.join("process-user").exists(), portos);
+    failure_cleanup(&fixture)
+}
+
+async fn interrupt_and_check(
+    child: tokio::process::Child,
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    json: bool,
+) -> Result {
     assert!(
         std::process::Command::new("kill")
             .args(["-INT", &child.id().ok_or("missing child")?.to_string()])
             .status()?
             .success()
     );
+    cancelled_result(lines, json).await?;
+    let output = child.wait_with_output().await?;
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr)?;
+    assert_public(&stderr);
+    assert_eq!(stderr.contains("Setup cancelled. Installed files remain."), !json);
+    Ok(())
+}
+
+async fn cancelled_result(
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    json: bool,
+) -> Result {
     let line = lines.next_line().await?;
     if json {
         let result: serde_json::Value = serde_json::from_str(line.as_deref().ok_or("missing result")?)?;
@@ -51,12 +75,5 @@ async fn interrupted(portos: bool, json: bool) -> Result {
         assert_eq!(line, None);
     }
     assert_eq!(lines.next_line().await?, None);
-    let output = child.wait_with_output().await?;
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8(output.stderr)?;
-    assert_public(&stderr);
-    assert_eq!(stderr.contains("Setup cancelled. Installed files remain."), !json);
-    server.await?.map_err(io::Error::other)?;
-    assert_eq!(fixture.0.join("process-user").exists(), portos);
-    failure_cleanup(&fixture)
+    Ok(())
 }
