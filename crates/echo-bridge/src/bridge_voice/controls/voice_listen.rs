@@ -341,7 +341,7 @@ async fn listen<E: LinkEvents>(
             // turn still owns this reply; finish it before admitting cleanup.
             () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
             () = tokio::time::sleep_until(deadline) => return Ok(false),
-            result = listening_step(events, microphone, port, source, &mut turn_started, observe) => {
+            result = listening_step((events, microphone), port, source, &mut turn_started, observe) => {
                 if result? { return Ok(true); }
             },
             // Keep the same clock owner across replies. Acknowledge only after
@@ -353,8 +353,7 @@ async fn listen<E: LinkEvents>(
 }
 
 async fn listening_step<E: LinkEvents>(
-    events: &mut E,
-    microphone: &mut E::Run,
+    (events, microphone): (&mut E, &mut E::Run),
     port: &mut impl VoicePort,
     source: &mut Source,
     turn_started: &mut bool,

@@ -30,6 +30,7 @@ struct Input {
     events: Events,
     capture: mpsc::Sender<MicFrame>,
     controls: mpsc::Sender<LinkEvent<Run>>,
+    turn_started: bool,
 }
 impl Input {
     fn new() -> Self {
@@ -40,11 +41,19 @@ impl Input {
             events: Events(events),
             capture,
             controls,
+            turn_started: false,
         }
     }
 
     async fn step(&mut self, port: &mut Port, source: &mut Source) -> Result<bool, Error> {
-        super::super::listening_step(&mut self.events, &mut self.microphone, port, source, &mut |_| Ok(())).await
+        super::super::listening_step(
+            (&mut self.events, &mut self.microphone),
+            port,
+            source,
+            &mut self.turn_started,
+            &mut |_| Ok(()),
+        )
+        .await
     }
 
     async fn samples(&self, value: i16, count: usize) {
