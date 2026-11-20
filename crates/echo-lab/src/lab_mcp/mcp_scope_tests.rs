@@ -248,7 +248,7 @@ async fn t3_portos_full_grant_resolves_and_controls_only_twin_room() {
     )
     .await
     .unwrap();
-    let room: Value = serde_json::from_str(found["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let room = tool_content(&found);
     let mut action = control();
     action["arguments"]["waitForResult"] = json!(true);
     assert_eq!(room["results"][0]["id"], action["arguments"]["id"]);
@@ -260,10 +260,8 @@ async fn t3_portos_full_grant_resolves_and_controls_only_twin_room() {
     let controlled: Value = drive(h.request("tools/call", action.clone()).await.json())
         .await
         .unwrap();
-    assert_eq!(controlled["result"]["isError"], false);
-    let receipt: Value = serde_json::from_str(controlled["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(
-        receipt,
+        tool_content(&controlled),
         json!({"id":"request-twin-room","status":"SUCCEEDED","errors":[],
             "results":[{"targetId":"light-a","routeId":"route-light-a"},{"targetId":"light-b","routeId":"route-light-b"}],
             "deadline":"2026-11-19T00:00:30Z","syncDeadlineSeconds":30})
@@ -275,4 +273,14 @@ async fn t3_portos_full_grant_resolves_and_controls_only_twin_room() {
     ],"lights_on":[false,false],"plug_on":true})
     );
     h.fixture.shutdown().await.unwrap();
+}
+
+fn tool_content(reply: &Value) -> Value {
+    let result = &reply["result"];
+    assert_eq!(result["isError"], false);
+    let [item] = result["content"].as_array().unwrap().as_slice() else {
+        panic!("expected one text content item");
+    };
+    assert_eq!(item["type"], "text");
+    serde_json::from_str(item["text"].as_str().unwrap()).unwrap()
 }
