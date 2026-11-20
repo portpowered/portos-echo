@@ -9,6 +9,10 @@ use std::collections::VecDeque;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
+#[path = "controls/goodbye/intent.rs"]
+mod goodbye;
+use goodbye::GoodbyeHold;
+
 #[path = "earcon/voice_mouth.rs"]
 mod voice_mouth;
 pub use voice_mouth::Mouth;
@@ -30,6 +34,8 @@ pub(super) struct Source {
     pub meter: ReplyMeter,
     pub stats: Stats,
     pub session: super::session_tools::Grants,
+    pub built_in_voice: bool,
+    goodbye_hold: GoodbyeHold,
     /// Speech the bounded media sender has not taken yet, oldest first.
     uplink: VecDeque<PcmFrame>,
     /// The device was told a dispatch is running in silence.
@@ -51,6 +57,9 @@ impl Source {
         self.delegation = self.delegation.carried();
         self.mouth = Mouth::default();
         self.barge = Barge::default();
+        if self.goodbye_hold == GoodbyeHold::NextReply {
+            self.goodbye_hold = GoodbyeHold::Reply;
+        }
         Ok(())
     }
 
@@ -124,16 +133,6 @@ impl Source {
         self.ear.played(frame, now);
     }
 
-    /// A dispatch that finished while listening gives its answer a fresh
-    /// listen window, since the hold on idle ends with it.
-    pub fn dispatch_completed(&mut self) {
-        let waited = self.delegation.in_flight();
-        self.delegation.completed();
-        if waited && !self.delegation.in_flight() {
-            self.renew_idle();
-        }
-    }
-
     pub fn new(lead_ms: u16, muted: bool) -> Result<Self, Error> {
         Ok(Self {
             microphone: None,
@@ -148,6 +147,8 @@ impl Source {
             meter: meter(),
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),
+            built_in_voice: false,
+            goodbye_hold: GoodbyeHold::None,
             uplink: VecDeque::new(),
             barge: Barge::default(),
             stale: false,
@@ -170,14 +171,16 @@ impl Source {
             BargeTrigger::UserTranscript => self.question.transcribed(whole, replying && self.ear.sounded()),
             BargeTrigger::SpeechStarted => self.question.speech_started(),
         };
-        if !(over && replying) {
-            return;
+        if over && replying {
+            let now = Instant::now();
+            if self.barge.arm(now, trigger) {
+                self.meter.held(now);
+            }
+            self.barge.transcribed(said, whole);
         }
-        let now = Instant::now();
-        if self.barge.arm(now, trigger) {
-            self.meter.held(now);
+        if whole && trigger == BargeTrigger::UserTranscript {
+            self.consider_goodbye(said);
         }
-        self.barge.transcribed(said, whole);
     }
 
     /// When the pending barge-in fires unless the model is heard first.

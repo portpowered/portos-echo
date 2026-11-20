@@ -144,19 +144,29 @@ pub(super) fn publish(trace: &mut Trace) -> Result<(), Error> {
         .unwrap_or(Ok(()))
 }
 
-pub(super) fn snapshot(runner: &str, voice: &str, trace: &mut Option<Trace>) -> Result<(String, String), Error> {
+pub(super) fn snapshot(
+    runner: &str,
+    voice: &str,
+    trace: &mut Option<Trace>,
+) -> Result<((String, String), bool), Error> {
+    // Unscoped callers provide their own text. Retained text also starts
+    // without a known source, until a successful reload sets missing.
+    let supplied = || ((runner.into(), voice.into()), false);
     CURRENT
         .try_with(|current| {
             let mut current = current.borrow_mut();
             let Some(prompts) = current.as_mut() else {
-                return Ok((runner.into(), voice.into()));
+                return Ok(supplied());
             };
             let trace = trace.as_mut().ok_or(Error::Trace)?;
             prompts.runner.reload(&prompts.dir, trace)?;
             prompts.voice.reload(&prompts.dir, trace)?;
-            Ok((prompts.runner.text.clone(), prompts.voice.text.clone()))
+            Ok((
+                (prompts.runner.text.clone(), prompts.voice.text.clone()),
+                prompts.voice.missing,
+            ))
         })
-        .unwrap_or_else(|_| Ok((runner.into(), voice.into())))
+        .unwrap_or_else(|_| Ok(supplied()))
 }
 
 fn read(path: &Path) -> Result<Option<String>, &'static str> {

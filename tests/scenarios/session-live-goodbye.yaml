@@ -4,7 +4,7 @@ tiers: [T3]
 setup: {}
 steps:
   - say: "okay thanks, bye"
-  - say: "okay thanks, bye"
+  - say: "thanks, that's all"
 budgets:
   session_listen_seconds: 3
 negative: []

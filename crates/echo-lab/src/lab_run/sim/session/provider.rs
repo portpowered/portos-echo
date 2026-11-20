@@ -12,6 +12,7 @@ pub(super) enum Control {
     Delegate(usize),
     /// Tone payload indices of the current reply; transport identities continue.
     Audio(std::ops::Range<u16>),
+    ProbeAudio(oneshot::Sender<usize>),
     Transcripts(usize),
     Events(&'static str, Vec<Value>),
     ReleaseGoodbye,
@@ -72,6 +73,14 @@ impl Provider {
 
     pub fn count(&self, key: &str) -> usize {
         self.observed.borrow()[key].as_array().map_or(0, Vec::len)
+    }
+
+    pub async fn probe_audio(&self) -> Result<usize, String> {
+        let (sent, delivered) = oneshot::channel();
+        self.control(Control::ProbeAudio(sent)).await?;
+        delivered
+            .await
+            .map_err(|_| "session: missing probe RTP send receipt".into())
     }
 
     pub async fn quiesce(&self) -> Result<(), String> {
@@ -187,7 +196,13 @@ async fn conversation(
             Some(Control::Transcripts(turn)) => process.send(&json!({"transcripts":turn})).await?,
             Some(Control::Events(tag, events)) => process.send(&json!({"tag":tag,"events":events})).await?,
             Some(Control::ReleaseGoodbye) => process.send(&json!({"release_goodbye":true})).await?,
-            Some(Control::Audio(indices)) => sequence.send(peer, indices).await?,
+            Some(Control::Audio(indices)) => sequence.send(peer, indices, false).await?,
+            Some(Control::ProbeAudio(sent)) => {
+                let indices = 0..7;
+                let count = indices.len();
+                sequence.send(peer, indices, true).await?;
+                let _ = sent.send(count);
+            }
             Some(Control::Quiesce(done)) => {
                 quiesced = true;
                 let _ = done.send(());
@@ -235,13 +250,17 @@ struct Sequence {
 }
 
 impl Sequence {
-    async fn send(&mut self, peer: &mut LivePeer, indices: std::ops::Range<u16>) -> Result<(), String> {
+    async fn send(&mut self, peer: &mut LivePeer, indices: std::ops::Range<u16>, probe: bool) -> Result<(), String> {
         if !peer.ready() {
             return Err("session: reply before media readiness".into());
         }
         for index in indices {
             let mut frame =
                 crate::lab_run::sim::m2::codex::tone::packet(index).ok_or("session: invalid tone sequence")?;
+            // Give the shorter probe its own envelope around the audible tone.
+            if probe && matches!(index, 0 | 6) {
+                frame.payload = vec![0xf8, 0xff, 0xfe];
+            }
             frame.sequence = self.next;
             frame.timestamp = u32::from(self.next) * 960;
             self.next = self.next.wrapping_add(1);

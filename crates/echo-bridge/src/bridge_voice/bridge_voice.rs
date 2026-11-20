@@ -37,7 +37,7 @@ pub use voice_entry::execute_process;
 pub use voice_host::{HostOptions, with_device};
 pub use voice_runtime::{RuntimeCompletion, RuntimeOptions, execute, execute_with_settings};
 pub use voice_session::{
-    ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation, tool_conversation,
+    ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation, run, tool_conversation,
 };
 #[cfg(test)]
 mod voice_tests;
@@ -132,27 +132,12 @@ pub struct Stats {
     pub cut: Option<Box<crate::bridge_runtime::bridge_pacing::Cut>>,
 }
 
-/// Run an already connected call without creating a second process or IO reader.
-/// Success requires assistant transcript/done, local accepted-media drain, PCM
-/// handoff, the device Played event AND the playback operation's Played result.
-/// Poll control/capture while pacing, under playback backpressure and awaiting
-/// played. A stopped source, empty queue or transcript alone cannot finish.
-/// An admitted listen interval retains capture after each reply; ordered user
-/// speech or assistant activity starts the next response window. Idle media
-/// cannot renew it. None keeps the explicit one-reply lifetime.
-///
-/// # Errors
-/// Tools without a dispatcher, unexpected
-/// wake, EOF, cancellation and fixed deadlines fail closed. Error cleanup
-/// requests a bounded cut; the host must then await call and device close.
-/// Drop/cancellation also requires host cleanup. This owner does not close a
-/// healthy call, allowing the host to retain it for the idle conversation.
-pub async fn run<L: EchoLink>(
+async fn run_with_prompt<L: EchoLink>(
     client: &L,
     events: &mut L::Events,
     mut microphone: <L::Events as LinkEvents>::Run,
     port: &mut impl VoicePort,
-    options: Options,
+    (options, built_in_voice): (Options, bool),
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<Stats, Error> {
@@ -166,6 +151,7 @@ pub async fn run<L: EchoLink>(
         return Err(Error::Deadline);
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
+    source.built_in_voice = built_in_voice;
     source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
     port.bind_session(Some(source.session.run.clone()));
     source.controller.admit_response(options.response_deadline)?;

@@ -74,7 +74,9 @@ fn settle_cut(
 ) -> Result<bool, Error> {
     // An interrupted farewell cannot end the replacement reply's run.
     // A separate delegated end stays armed.
-    if source.session.goodbye.take().is_some() && !source.session.ending() {
+    let held = source.clear_goodbye_hold();
+    let native = source.session.goodbye.take().is_some();
+    if (held || native) && !source.session.ending() {
         retire_goodbye(source, port);
     }
     source.controller.cut_settled();
@@ -100,7 +102,7 @@ async fn after_reply<L: EchoLink>(
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<bool, Error> {
     tokio::pin!(cancelled);
-    if source.session.goodbye == Some(Goodbye::Pending) && !source.session.ending() {
+    if waiting_for_goodbye(source) {
         wait_goodbye(
             (events, microphone),
             port,
@@ -115,7 +117,9 @@ async fn after_reply<L: EchoLink>(
     if source.session.ending() {
         return Ok(false);
     }
-    source.session.goodbye = None;
+    if source.session.goodbye.take().is_some() {
+        retire_goodbye(source, port);
+    }
     let followup = options.listen_timeout.is_some();
     if !followup && !source.delegation.in_flight() {
         return Ok(false);
@@ -138,6 +142,7 @@ async fn after_reply<L: EchoLink>(
 
 pub(super) fn goodbye_handoff(source: &mut Source) {
     if !source.stale() && source.session.listen().is_some() && source.session.goodbye.is_none() {
+        source.clear_goodbye_hold();
         source.session.goodbye = Some(Goodbye::Pending);
         // The native turn can start before its hand-off notification arrives.
         // Its only audio is the farewell already owned by this reply.
@@ -158,6 +163,10 @@ fn retire_goodbye(source: &mut Source, port: &mut impl VoicePort) {
     port.bind_session(Some(source.session.run.clone()));
 }
 
+fn waiting_for_goodbye(source: &Source) -> bool {
+    (source.holds_goodbye() || source.session.goodbye == Some(Goodbye::Pending)) && !source.session.ending()
+}
+
 async fn wait_goodbye<E: LinkEvents>(
     (events, microphone): (&mut E, &mut E::Run),
     port: &mut impl VoicePort,
@@ -170,19 +179,21 @@ async fn wait_goodbye<E: LinkEvents>(
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     tokio::pin!(cancelled);
-    while source.session.goodbye == Some(Goodbye::Pending) && !source.session.ending() {
+    while waiting_for_goodbye(source) {
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
-            () = tokio::time::sleep_until(deadline) => {
-                // Retire this turn's run token before normal listening resumes.
-                retire_goodbye(source, port);
-                break;
-            },
+            () = tokio::time::sleep_until(deadline) => break,
             result = goodbye_step(events, microphone, port, source, observe) => result?,
             () = clock_step(drain) => {},
         }
         tokio::task::yield_now().await;
+    }
+    if !source.session.ending() {
+        // Retire this turn's run token before normal listening resumes.
+        source.clear_goodbye_hold();
+        source.session.goodbye = None;
+        retire_goodbye(source, port);
     }
     Ok(())
 }
@@ -207,6 +218,7 @@ async fn goodbye_step<E: LinkEvents>(
                 super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)
             }
             MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
+            MediaEvent::Control(Event::GoodbyeHandoff) => { goodbye_handoff(source); Ok(()) },
             MediaEvent::Control(Event::TurnCompleted { .. }) => { complete_turn(source); Ok(()) },
             _ => Ok(()),
         },
@@ -323,9 +335,6 @@ async fn listen<E: LinkEvents>(
                 observe,
             )
             .await?;
-            if !source.session.ending() {
-                source.session.goodbye = None;
-            }
         }
         let deadline = match hold {
             Some(hold) if source.delegation.in_flight() => idle.max(hold),
@@ -409,13 +418,23 @@ async fn listening_step<E: LinkEvents>(
                     super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
-                MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),
+                MediaEvent::Control(Event::TurnCompleted { .. }) => dispatch_completed(source),
                 // Continuous RTP and stale done frames cannot renew listening.
                 MediaEvent::Control(_) | MediaEvent::Audio(_) => (),
             }
         },
     }
     Ok(false)
+}
+
+/// A dispatch that finished while listening gives its answer a fresh
+/// listen window, since the hold on idle ends with it.
+fn dispatch_completed(source: &mut Source) {
+    let waited = source.delegation.in_flight();
+    source.delegation.completed();
+    if waited && !source.delegation.in_flight() {
+        source.renew_idle();
+    }
 }
 
 fn activity(event: &MediaEvent) -> bool {

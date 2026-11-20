@@ -365,7 +365,7 @@ pub(super) async fn conversation<L, R, W, P>(
     mut device: (&L, &mut L::Events, <L::Events as echo_link::LinkEvents>::Run),
     io: &mut echo_codex::codex_io::RpcIo<R, W>,
     peer: P,
-    options: (super::ConversationOptions<'_>, &mut Tools),
+    options: (super::ConversationOptions<'_>, &mut Tools, bool),
     cancelled: impl std::future::Future<Output = ()>,
     mut observe: impl FnMut(super::SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error>
@@ -375,7 +375,7 @@ where
     W: tokio::io::AsyncWrite + Unpin,
     P: echo_media::MediaPeer,
 {
-    let (options, tools) = options;
+    let (options, tools, built_in_voice) = options;
     let mut call = crate::bridge_codex::MediaCall::new(io, peer);
     tokio::pin!(cancelled);
     let work = async {
@@ -417,7 +417,7 @@ where
                 tools.budget.clone(),
             ),
             Some((receiver, run)),
-            options.session,
+            (options.session, built_in_voice),
             cancelled.as_mut(),
             &mut observe,
         ))

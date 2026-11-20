@@ -7,7 +7,7 @@ pub(super) fn farewell(
     wire: &Timing,
     provider: &Value,
     (run, turn, reply, late): (&str, usize, usize, bool),
-    endpoint: u64,
+    (endpoint, gap): (u64, Option<Value>),
     clock: &Value,
 ) -> Result<Value, String> {
     let played = rows(records, run, "reply.played");
@@ -20,7 +20,16 @@ pub(super) fn farewell(
     if end_at < farewell_at
         || end_at < time(receipt)?
         || end_at < endpoint
-        || (late && time(one(records, run, "delegation.created")?)? <= farewell_at)
+        || (late
+            && !late_order(
+                records,
+                run,
+                gap.as_ref(),
+                farewell_at,
+                time(tool)?,
+                time(receipt)?,
+                end_at,
+            )?)
         || (late && time(receipt)? <= farewell_at)
         || (!late && time(receipt)? > farewell_at)
         || receipt["tool"] != "end_session"
@@ -50,8 +59,75 @@ pub(super) fn farewell(
         "tool_after_played":late,"endpoint_epoch_ms":endpoint,"run_end_epoch_ms":end_at,
         "goodbye_to_run_end_ms":end_at - endpoint,"reply_played_ms":farewell_at,
         "played_replies":expected,"farewell_frames":frames[reply],"wire_ends_for_run":1,
-        "post_reply_admissions":0,"screen":"ready"
+        "pre_handoff_gap":gap,"post_reply_admissions":0,"screen":"ready"
     }))
+}
+
+fn late_order(
+    records: &[Value],
+    run: &str,
+    gap: Option<&Value>,
+    played: u64,
+    tool: u64,
+    receipt: u64,
+    end: u64,
+) -> Result<bool, String> {
+    let gap = gap.ok_or("goodbye: missing gap observations")?;
+    let initial_mic = one(records, "run-1", "mic.completed")?;
+    let final_mic = one(records, run, "mic.completed")?;
+    let expected_chunks = initial_mic["received_chunks"]
+        .as_u64()
+        .ok_or("goodbye: missing initial capture")?
+        + gap["capture_chunks"].as_u64().ok_or("goodbye: missing gap capture")?;
+    let handoff = time(one(records, run, "delegation.created")?)?;
+    Ok(gap["played_observed_ms"].as_u64().is_some_and(|time| time >= played)
+        && gap["serviced_through_ms"]
+            .as_u64()
+            .is_some_and(|time| time > played && time <= handoff)
+        && handoff <= tool
+        && tool <= receipt
+        && receipt <= end
+        && end.saturating_sub(played) < 3_000
+        && final_mic["received_chunks"] == expected_chunks
+        && final_mic["count"] == initial_mic["count"])
+}
+
+#[derive(Debug)]
+pub(super) struct GapBoundary {
+    pub capture: u64,
+    streams: usize,
+    pcm_bytes: u64,
+    bridge_pcm_frames: usize,
+    wire_ends: usize,
+}
+
+impl GapBoundary {
+    pub fn same_playback(&self, other: &Self) -> bool {
+        self.streams == other.streams
+            && self.pcm_bytes == other.pcm_bytes
+            && self.bridge_pcm_frames == other.bridge_pcm_frames
+            && self.wire_ends == other.wire_ends
+    }
+}
+
+pub(super) fn gap_boundary(wire: &Timing, clock: &Value) -> Result<GapBoundary, String> {
+    let state = wire.session_observation();
+    let streams = state["streams"].as_array().ok_or("goodbye: missing wire streams")?;
+    Ok(GapBoundary {
+        capture: state["capture_chunks_after_reply_played"]
+            .as_u64()
+            .ok_or("goodbye: missing wire capture")?,
+        streams: streams.len(),
+        pcm_bytes: streams.iter().filter_map(|stream| stream["pcm_bytes"].as_u64()).sum(),
+        bridge_pcm_frames: clock["pcm"]
+            .as_array()
+            .ok_or("goodbye: missing bridge PCM receipts")?
+            .len(),
+        wire_ends: state["explicit_end_us"]
+            .as_array()
+            .ok_or("goodbye: missing wire ends")?
+            .len(),
+    })
 }
 
 fn handback(records: &[Value], run: &str, turn: usize, provider: &Value) -> Result<(), String> {
@@ -136,8 +212,14 @@ fn wire_replies(wire: &Timing, clock: &Value, replies: usize, ends: usize) -> Re
     let mut frame_counts = vec![];
     for (index, (stream, frames)) in streams.iter().zip(&counts).enumerate() {
         let played = stream["played_us"].as_u64().ok_or("goodbye: missing device Played")?;
+        let started = stream["started_us"]
+            .as_u64()
+            .ok_or("goodbye: missing device audio-start")?;
+        let stopped = stream["stopped_us"]
+            .as_u64()
+            .ok_or("goodbye: missing device audio-stop")?;
         if stream["ending"] != "stop"
-            || played < last_played
+            || !(last_played <= started && started <= stopped && stopped <= played)
             // The first reply loses the decoder warm-up. A subsequent
             // reply can also contain the retained decoder tail.
             || !(10..=if index == 0 { 10 } else { 11 }).contains(&frames.len())

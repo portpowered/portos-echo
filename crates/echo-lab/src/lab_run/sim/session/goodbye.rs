@@ -1,4 +1,5 @@
 //! Live-originated goodbye through the shipped bridge and pinned app server.
+mod gap;
 mod satellite;
 
 use super::provider::{Control, Provider};
@@ -44,7 +45,7 @@ impl Journey {
 
     fn utterances(self) -> [&'static str; 2] {
         match self {
-            Self::Goodbye => [GOODBYE, GOODBYE],
+            Self::Goodbye => [GOODBYE, "thanks, that's all"],
             Self::Pending => ["what time is it?", GOODBYE],
             Self::Question => [QUESTION, FOLLOWUP],
         }
@@ -265,12 +266,8 @@ impl World {
     async fn farewell(&mut self, turn: usize, late: bool, endpoint: u64) -> Result<Value, String> {
         let reply = self.satellite.observed.borrow().replies_played();
         self.reply(FAREWELL, reply, Some((turn, late))).await?;
+        let gap = if late { Some(self.challenge_gap().await?) } else { None };
         if late {
-            if self.count("session.tool_receipt") != 0 || self.count("wyoming.run_ended") != 0 {
-                return Err("goodbye: end or receipt before the held runner was released".into());
-            }
-            // Advance the guarded clock so the hand-off is observably later than Played.
-            self.step(20).await?;
             self.provider.control(Control::Delegate(turn)).await?;
             self.wait("late native goodbye", |world| world.provider.count("waiting") == 1, 0)
                 .await?;
@@ -313,7 +310,7 @@ impl World {
             &self.satellite.observed.borrow(),
             &self.provider.observed.borrow(),
             (self.run_id, turn, reply, late),
-            endpoint,
+            (endpoint, gap),
             &self.clock,
         )
     }

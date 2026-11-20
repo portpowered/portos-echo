@@ -27,21 +27,23 @@ async fn settings_prompt_recovery_retains_text_until_valid_call_reload() {
         publish(trace.as_mut().unwrap()).unwrap();
         assert_eq!(
             snapshot("unused", "unused", &mut trace).unwrap(),
-            (retained.runner.clone(), retained.voice.clone())
+            ((retained.runner.clone(), retained.voice.clone()), false)
         );
         std::fs::write(dir.join("voice.md"), "next voice\n").unwrap();
         std::fs::write(dir.join("runner.md"), "next runner\n").unwrap();
         assert_eq!(accepted().unwrap(), retained);
         assert_eq!(
-            snapshot("unused", "unused", &mut trace).unwrap(),
+            snapshot("unused", "unused", &mut trace).unwrap().0,
             ("next runner\n".into(), "next voice\n".into())
         );
+        std::fs::remove_file(dir.join("voice.md")).unwrap();
+        assert!(snapshot("unused", "unused", &mut trace).unwrap().1);
         Ok(())
     })
     .await
     .unwrap();
     let refused = rows(&path);
-    assert_eq!(refused.len(), 2);
+    assert_eq!(refused.len(), 3);
     assert_eq!(refused[0]["event"], "prompt.reload_refused");
     assert_eq!(refused[0]["prompt"], "runner");
     assert_eq!(refused[0]["reason"], "oversized");
@@ -91,7 +93,7 @@ async fn agent_home_missing_defaults_once_per_kind_per_runtime_and_no_home_is_si
             publish(trace.as_mut().unwrap()).unwrap();
             for _ in 0..3 {
                 assert_eq!(
-                    snapshot("runner", "voice", &mut trace).unwrap(),
+                    snapshot("runner", "voice", &mut trace).unwrap().0,
                     if home.is_some() {
                         (RUNNER_INSTRUCTIONS.into(), LIVE_INSTRUCTIONS.into())
                     } else {
@@ -129,7 +131,7 @@ async fn agent_home_reload_refuses_bad_edits_and_missing_resets_only_its_kind() 
         ] {
             std::fs::write(dir.join("runner.md"), bytes).unwrap();
             assert_eq!(
-                snapshot("unused", "unused", &mut trace).unwrap(),
+                snapshot("unused", "unused", &mut trace).unwrap().0,
                 ("runner\n\u{8a9e} \n".into(), "voice".into())
             );
             assert_eq!(
@@ -141,7 +143,7 @@ async fn agent_home_reload_refuses_bad_edits_and_missing_resets_only_its_kind() 
         std::fs::remove_file(dir.join("runner.md")).unwrap();
         for _ in 0..2 {
             assert_eq!(
-                snapshot("unused", "unused", &mut trace).unwrap(),
+                snapshot("unused", "unused", &mut trace).unwrap().0,
                 (RUNNER_INSTRUCTIONS.into(), "voice".into())
             );
         }

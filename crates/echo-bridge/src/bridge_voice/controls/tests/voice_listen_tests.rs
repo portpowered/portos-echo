@@ -284,7 +284,13 @@ async fn clock_fence(
 }
 
 #[tokio::test(start_paused = true)]
-async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
+async fn voice_listen_cancellation_at_played_never_reports_successful_end() {
+    for provisional in [false, true] {
+        cancel_at_played(provisional).await;
+    }
+}
+
+async fn cancel_at_played(provisional: bool) {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -296,19 +302,22 @@ async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
     let mut port = Port(rx, std::rc::Rc::default());
     let (cancel, cancelled) = tokio::sync::oneshot::channel();
     let receipts = Cell::new(0);
-    let mut work = Box::pin(super::super::run(
+    let mut work = Box::pin(super::super::run_with_prompt(
         &client,
         &mut events,
         microphone,
         &mut port,
-        Options {
-            listen_timeout: Some(Duration::from_secs(3)),
-            session_max: Duration::from_secs(600),
-            reply_lead_ms: 200,
-            response_deadline: Instant::now() + Duration::from_secs(10),
-            played_timeout: Duration::from_secs(1),
-            muted: false,
-        },
+        (
+            Options {
+                listen_timeout: Some(Duration::from_secs(3)),
+                session_max: Duration::from_secs(600),
+                reply_lead_ms: 200,
+                response_deadline: Instant::now() + Duration::from_secs(10),
+                played_timeout: Duration::from_secs(1),
+                muted: false,
+            },
+            provisional,
+        ),
         async {
             cancelled.await.unwrap();
         },
@@ -319,6 +328,15 @@ async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
             Ok(())
         },
     ));
+    if provisional {
+        tx.send(MediaEvent::Control(Event::Transcript {
+            role: "user".into(),
+            text: "goodbye".into(),
+            done: true,
+        }))
+        .await
+        .unwrap();
+    }
     reply(&tx, 5000).await;
     settle(&mut work, &observer, &receipts, 1).await;
     cancel.send(()).unwrap();

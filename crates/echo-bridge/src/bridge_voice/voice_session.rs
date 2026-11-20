@@ -1,5 +1,5 @@
 //! One connected call spans wakes; every return awaits signaling/media cleanup.
-use super::{Notice, Options, Stats, VoicePort, run};
+use super::{Notice, Options, Stats, VoicePort, run_with_prompt};
 use crate::{
     Error,
     bridge_codex::{Event, MediaCall, MediaEvent},
@@ -176,7 +176,7 @@ where
     tokio::pin!(cancelled);
     let work = async {
         validate(&options)?;
-        drive(device, call, &mut options, cancelled.as_mut(), &mut observe).await
+        drive(device, call, (&mut options, false), cancelled.as_mut(), &mut observe).await
     };
     let result = work.await;
     // This cleanup is deliberately outside the cancelled operation. A ready
@@ -213,7 +213,7 @@ where
     P: MediaPeer,
     H: echo_agent_api::ToolHost + 'static,
 {
-    session_conversation(device, call, tools, None, options, cancelled, observe).await
+    session_conversation(device, call, tools, None, (options, false), cancelled, observe).await
 }
 
 /// Production composes a host that forwards session tool requests to this
@@ -228,7 +228,7 @@ pub(super) async fn session_conversation<L, R, W, P, H>(
         crate::bridge_codex::ToolBudget,
     ),
     requests: Option<SessionRequests>,
-    mut options: SessionOptions,
+    (mut options, built_in_voice): (SessionOptions, bool),
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error>
@@ -246,7 +246,14 @@ where
         if let Some((requests, run)) = requests {
             session = session.with_session(requests, run);
         }
-        let result = drive(device, &mut session, &mut options, cancelled, &mut observe).await;
+        let result = drive(
+            device,
+            &mut session,
+            (&mut options, built_in_voice),
+            cancelled,
+            &mut observe,
+        )
+        .await;
         if matches!(result, Err(Error::Deadline | Error::NoResponse)) {
             // The run deadline may precede the delegated turn's own timer.
             // Observe its cause before the unchanged cleanup drops dispatch.
@@ -301,10 +308,37 @@ pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
     Ok(())
 }
 
+/// Run an already connected call without creating a second process or IO reader.
+/// Success requires assistant transcript/done, local accepted-media drain, PCM
+/// handoff, the device Played event AND the playback operation's Played result.
+/// Poll control/capture while pacing, under playback backpressure and awaiting
+/// played. A stopped source, empty queue or transcript alone cannot finish.
+/// An admitted listen interval retains capture after each reply; ordered user
+/// speech or assistant activity starts the next response window. Idle media
+/// cannot renew it. None keeps the explicit one-reply lifetime.
+///
+/// # Errors
+/// Tools without a dispatcher, unexpected
+/// wake, EOF, cancellation and fixed deadlines fail closed. Error cleanup
+/// requests a bounded cut; the host must then await call and device close.
+/// Drop/cancellation also requires host cleanup. This owner does not close a
+/// healthy call, allowing the host to retain it for the idle conversation.
+pub async fn run<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
+    microphone: <L::Events as LinkEvents>::Run,
+    port: &mut impl VoicePort,
+    options: Options,
+    cancelled: impl Future<Output = ()>,
+    observe: impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<Stats, Error> {
+    run_with_prompt(client, events, microphone, port, (options, false), cancelled, observe).await
+}
+
 async fn drive<L: EchoLink>(
     device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
     call: &mut impl VoicePort,
-    options: &mut SessionOptions,
+    (options, built_in_voice): (&mut SessionOptions, bool),
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error> {
@@ -320,19 +354,20 @@ async fn drive<L: EchoLink>(
         if completed > 0 {
             super::earcon::start()?;
         }
-        let stats = run(
+        let run_options = Options {
+            listen_timeout: options.listen_timeout,
+            session_max: options.session_max,
+            response_deadline: deadline,
+            played_timeout: options.played_timeout,
+            reply_lead_ms: options.reply_lead_ms,
+            muted: options.muted,
+        };
+        let stats = run_with_prompt(
             client,
             events,
             microphone,
             call,
-            Options {
-                listen_timeout: options.listen_timeout,
-                session_max: options.session_max,
-                response_deadline: deadline,
-                played_timeout: options.played_timeout,
-                reply_lead_ms: options.reply_lead_ms,
-                muted: options.muted,
-            },
+            (run_options, built_in_voice),
             cancelled.as_mut(),
             |notice| project_reply(notice, &mut options.muted, observe),
         )

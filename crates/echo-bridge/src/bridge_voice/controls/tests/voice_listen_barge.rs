@@ -28,12 +28,19 @@ impl VoicePort for RunPort<'_> {
 
 #[tokio::test(start_paused = true)]
 async fn voice_listen_barge_after_settled_reply_retains_run_and_fresh_idle_deadline() {
-    for goodbye in [false, true] {
-        barge_after_settled_reply(goodbye).await;
+    for interrupted in [Interrupted::Ordinary, Interrupted::Native, Interrupted::Provisional] {
+        barge_after_settled_reply(interrupted).await;
     }
 }
 
-async fn barge_after_settled_reply(goodbye: bool) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Interrupted {
+    Ordinary,
+    Native,
+    Provisional,
+}
+
+async fn barge_after_settled_reply(interrupted: Interrupted) {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -50,19 +57,22 @@ async fn barge_after_settled_reply(goodbye: bool) {
     let receipts = Cell::new(0);
     let paused = Cell::new(0);
     let outcomes = RefCell::new(Vec::new());
-    let mut work = Box::pin(super::super::super::run(
+    let mut work = Box::pin(super::super::super::run_with_prompt(
         &client,
         &mut events,
         microphone,
         &mut port,
-        Options {
-            listen_timeout: Some(Duration::from_secs(3)),
-            session_max: Duration::from_secs(600),
-            reply_lead_ms: 200,
-            response_deadline: Instant::now() + Duration::from_secs(10),
-            played_timeout: Duration::from_secs(1),
-            muted: false,
-        },
+        (
+            Options {
+                listen_timeout: Some(Duration::from_secs(3)),
+                session_max: Duration::from_secs(600),
+                reply_lead_ms: 200,
+                response_deadline: Instant::now() + Duration::from_secs(10),
+                played_timeout: Duration::from_secs(1),
+                muted: false,
+            },
+            interrupted == Interrupted::Provisional,
+        ),
         std::future::pending(),
         |notice| {
             match notice {
@@ -74,14 +84,18 @@ async fn barge_after_settled_reply(goodbye: bool) {
             Ok(())
         },
     ));
-    let prefix = journey(&mut work, &tx, &observer, &receipts, &paused, goodbye.then_some(&owner)).await;
+    let prefix = journey(&mut work, &tx, &observer, &receipts, &paused, (interrupted, &owner)).await;
     tokio::time::advance(Duration::from_millis(1)).await;
     let stats = work.await.unwrap();
     assert_eq!(stats.reply_sent, u64::try_from(prefix + 12).unwrap());
     assert_eq!((receipts.get(), cuts(&observer)), (3, 1));
     assert_eq!(
         outcomes.into_inner().as_slice(),
-        if goodbye { &["applied"][..] } else { &[] }
+        match interrupted {
+            Interrupted::Ordinary => &[][..],
+            Interrupted::Native => &["applied"][..],
+            Interrupted::Provisional => &["session_stale"][..],
+        }
     );
     assert_eq!(observer.commands().last(), Some(&Command::EndRun));
     assert_replacement_pcm(&observer);
@@ -93,15 +107,25 @@ async fn journey(
     observer: &Observer,
     receipts: &Cell<usize>,
     paused: &Cell<usize>,
-    goodbye_owner: Option<&RefCell<Option<Arc<()>>>>,
+    (interrupted, owner): (Interrupted, &RefCell<Option<Arc<()>>>),
 ) -> usize {
     reply(tx, 5000).await;
     settle(work, observer, receipts, 1).await;
     // Start a new answer before idle expires. Its unsent converter tail must
     // be abandoned when speech cuts it, even after the old idle would expire.
     tokio::time::advance(Duration::from_secs(2)).await;
+    let old_owner = owner.borrow().clone().unwrap();
+    if interrupted == Interrupted::Provisional {
+        tx.send(MediaEvent::Control(Event::Transcript {
+            role: "user".into(),
+            text: "goodbye".into(),
+            done: true,
+        }))
+        .await
+        .unwrap();
+    }
     unfinished(tx).await;
-    if let Some(owner) = goodbye_owner {
+    if interrupted == Interrupted::Native {
         apply_end(work, tx, owner).await;
     }
     poll(work.as_mut()).await;
@@ -110,6 +134,15 @@ async fn journey(
     let prefix = frames(observer);
     assert!(prefix > 12);
     cut(work, tx, observer, receipts, paused, prefix).await;
+    if interrupted == Interrupted::Provisional {
+        let (request, mut answer) = session_request(crate::bridge_codex::SessionCommand::End, &old_owner, "cut");
+        tx.send(MediaEvent::Control(request)).await.unwrap();
+        poll(work.as_mut()).await;
+        assert_eq!(
+            answer.try_recv().unwrap().content,
+            serde_json::json!({"error":"session_stale"})
+        );
+    }
     replacement(work, tx, observer, receipts).await;
     assert_eq!(frames(observer), prefix + 12);
     before_expiry(work, observer).await;

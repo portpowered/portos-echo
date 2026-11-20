@@ -201,19 +201,19 @@ where
         .checked_add(options.connect_timeout)
         .ok_or(Error::Input)?;
     let mut setup_observer = |notice| observe(ServeNotice::Session(notice));
-    let (mut media, instructions) = tokio::select! {
+    let (mut media, instructions, built_in_voice) = tokio::select! {
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
         result = super::earcon::negotiating(device.1, super::earcon::capture_during(&mut device.2, async {
             // One clock sample: the delegated turn and the Live prompt carry the same snapshot.
-            let (runner, voice) = super::prompts::snapshot(options.call.instructions, options.call.prompt, &mut trace)?;
+            let ((runner, voice), built_in_voice) = super::prompts::snapshot(options.call.instructions, options.call.prompt, &mut trace)?;
             let (now, zone) = (clock(), options.call.time_zone);
             let instructions = (
                 super::voice_config::call_instructions(&runner, now, zone)?,
                 super::voice_config::call_instructions(&voice, now, zone)?,
             );
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
-            Ok::<_, Error>((media, instructions))
+            Ok::<_, Error>((media, instructions, built_in_voice))
         }), &mut setup_observer) => result?,
     };
     super::voice_session::peer_created(&mut media, &mut trace).await?;
@@ -229,7 +229,7 @@ where
             device,
             io,
             media,
-            (options_call, tools),
+            (options_call, tools, built_in_voice),
             cancelled.as_mut(),
             &mut observer,
         ))

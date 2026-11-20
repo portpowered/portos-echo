@@ -212,7 +212,11 @@ pub(super) async fn close<L: echo_link::EchoLink>(
                     None => return Err(Error::Wyoming),
                 },
                 frame = super::earcon::microphone(microphone) => {
-                    if source.capture(frame?, port)? {
+                    let frame = frame?;
+                    if frame.is_some() && source.session.goodbye == Some(super::session_tools::Goodbye::Ending) {
+                        continue;
+                    }
+                    if source.capture(frame, port)? {
                         observe(super::Notice::Device(LinkEvent::MicrophoneDropped(1)))?;
                     }
                 },
