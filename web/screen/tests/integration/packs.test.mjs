@@ -10,16 +10,18 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { archivePeer } from "./pack-peer.mjs";
+import { concurrentResources } from "./pack-resources.mjs";
 
 const token = "synthetic-pack-pair";
 const id = "template@0.1.0";
 const generated = process.env.SCREEN_PACK_FIXTURE;
 assert.ok(generated, "suite owner must prepare generated assets");
 
-async function open(t) {
+async function open(t, { prepare, beforeNavigate } = {}) {
     const root = await mkdtemp(join(tmpdir(), "screen-pack-journey-"));
     const home = join(root, "home");
     await mkdir(home);
+    await prepare?.(home, generated);
     const archive = await readFile(
         join(generated, "template-0.1.0.screenpack.tar.gz"),
     );
@@ -140,6 +142,7 @@ async function open(t) {
             );
     });
     page.setDefaultTimeout(5000);
+    await beforeNavigate?.(page);
     const query = new URLSearchParams({
         events: `/events?token=${token}`,
         actions: `/actions?token=${token}`,
@@ -159,6 +162,10 @@ async function open(t) {
     };
     return { page, context, home, peer, sha256, update, api, outside, origin };
 }
+
+test("R1 native CSS, generated character and multiple previews retain selection", async (t) => {
+    await concurrentResources(t, open, playing, refresh);
+});
 
 async function playing(page, name) {
     await page.waitForFunction((name) => {

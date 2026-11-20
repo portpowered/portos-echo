@@ -18,6 +18,8 @@ pub(crate) use worker::{Downloads, start};
 pub(crate) struct Files {
     pub root: std::sync::OnceLock<std::path::PathBuf>,
     pub busy: std::sync::Arc<tokio::sync::Mutex<()>>,
+    #[cfg(test)]
+    pub waiting: tokio::sync::Notify,
     pub jobs: tokio::sync::Mutex<jobs::Jobs>,
     pub requests: std::sync::OnceLock<tokio::sync::mpsc::Sender<jobs::Request>>,
     pub settings: std::sync::OnceLock<tokio::sync::mpsc::WeakSender<crate::SettingsRequest>>,

@@ -37,7 +37,7 @@ pub(crate) async fn file(State(state): State<HttpState>, request: Request) -> Re
     if relative(file).is_err() || extension(file).is_err() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let mut files = match read(&state, pack).await {
+    let mut files = match read(&state, request.uri(), pack).await {
         Ok(files) => files,
         Err(status) => return status.into_response(),
     };
@@ -60,13 +60,34 @@ pub(crate) async fn file(State(state): State<HttpState>, request: Request) -> Re
     response(bytes, file, request.headers())
 }
 
-async fn read(state: &HttpState, identity: &str) -> Result<std::collections::BTreeMap<String, Vec<u8>>, StatusCode> {
-    let permit = state
-        .packs
-        .busy
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+// HTTP/1 runs one handler per connection; the listener already bounds the
+// queue to 128 connections. Keep one off-runtime reader, with cancellable FIFO
+// admission rather than refusing a browser's parallel CSS/media/preview reads.
+pub(super) async fn permit(state: &HttpState, uri: &Uri) -> Result<tokio::sync::OwnedMutexGuard<()>, StatusCode> {
+    #[cfg(test)]
+    state.packs.waiting.notify_one();
+    let permit = tokio::select! {
+        biased;
+        () = crate::cancelled(state.stop.clone()) => Err(StatusCode::SERVICE_UNAVAILABLE),
+        () = crate::draining(state.drain.clone()) => Err(StatusCode::SERVICE_UNAVAILABLE),
+        permit = state.packs.busy.clone().lock_owned() => Ok(permit),
+    }?;
+    let core = state.core.lock().await;
+    if !authorized(&core, uri) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if !core.accepting() || *state.stop.borrow() || state.drain.borrow().is_some() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    Ok(permit)
+}
+
+async fn read(
+    state: &HttpState,
+    uri: &Uri,
+    identity: &str,
+) -> Result<std::collections::BTreeMap<String, Vec<u8>>, StatusCode> {
+    let permit = permit(state, uri).await?;
     let root = state.packs.root.get().cloned().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let identity = identity.to_owned();
     tokio::task::spawn_blocking(move || {

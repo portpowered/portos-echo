@@ -179,13 +179,8 @@ pub(super) fn scan(root: &Path) -> Result<PackCatalog, Error> {
     })
 }
 
-async fn read(state: &HttpState) -> Result<PackCatalog, StatusCode> {
-    let permit = state
-        .packs
-        .busy
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+async fn read(state: &HttpState, uri: &Uri) -> Result<PackCatalog, StatusCode> {
+    let permit = super::http::permit(state, uri).await?;
     let root = state.packs.root.get().cloned().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     // Observe completion before scanning: an installed job must never accompany
     // a catalog captured before that job's atomic directory publication.
@@ -222,7 +217,7 @@ pub(crate) async fn snapshot(State(state): State<HttpState>, request: Request) -
     if let Err(status) = guard(&state, request.uri(), request.headers()).await {
         return status.into_response();
     }
-    let catalog = match read(&state).await {
+    let catalog = match read(&state, request.uri()).await {
         Ok(catalog) => catalog,
         Err(status) => return status.into_response(),
     };
@@ -251,7 +246,7 @@ pub(crate) async fn selection(State(state): State<HttpState>, request: Request) 
     if body.version != 1 {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let catalog = match read(&state).await {
+    let catalog = match read(&state, &uri).await {
         Ok(catalog) => catalog,
         Err(status) => return status.into_response(),
     };

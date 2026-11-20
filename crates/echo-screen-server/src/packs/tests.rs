@@ -1,4 +1,4 @@
-//! T1 data validation and disk publication; no network or external art.
+//! T1 data validation/publication and T3 loopback serving; no external art.
 use super::*;
 use sha2::{Digest, Sha256};
 use std::{
@@ -6,6 +6,131 @@ use std::{
     io::Write,
     sync::{Arc, atomic::AtomicBool},
 };
+
+// T3: real authenticated HTTP requests, isolated home/port and an explicit
+// reader-admission barrier. Holding the sole reader models a slow validation;
+// no sleep or scheduler-dependent large fixture is needed to create overlap.
+async fn serving() -> (
+    crate::ScreenServer,
+    tokio::sync::mpsc::Sender<echo_screen_contract::UiState>,
+    tempfile::TempDir,
+) {
+    let home = tempfile::tempdir().unwrap();
+    let pack = home.path().join("template@0.1.0");
+    std::fs::create_dir(&pack).unwrap();
+    for (name, bytes) in valid_files() {
+        std::fs::write(pack.join(name), bytes).unwrap();
+    }
+    let (send, receive) = tokio::sync::mpsc::channel(1);
+    let (settings, mut requests) = crate::settings_channel();
+    let mut server = crate::serve_with_settings(
+        "127.0.0.1:0".parse().unwrap(),
+        echo_contracts::secret::Secret::new("synthetic-pair".into()),
+        receive,
+        Some(settings),
+    )
+    .await
+    .unwrap();
+    server.pack_files.root.set(home.path().to_owned()).unwrap();
+    server.tasks.push(tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            request
+                .commit(|operation| match operation {
+                    crate::SettingsOperation::PackCatalog(catalog) => {
+                        crate::SettingsReply::Packs(catalog.with_selection(None))
+                    }
+                    _ => crate::SettingsReply::InvalidPackSelection,
+                })
+                .await;
+        }
+    }));
+    (server, send, home)
+}
+
+async fn queued(
+    server: &crate::ScreenServer,
+    file: &str,
+) -> tokio::task::JoinHandle<Result<reqwest::Response, reqwest::Error>> {
+    let path = if file.is_empty() {
+        "/screen-packs/v1".into()
+    } else {
+        format!("/screen-packs/v1/template@0.1.0/{file}")
+    };
+    let url = format!("http://{}{path}?token=synthetic-pair", server.bound_addr);
+    let request = tokio::spawn(async move {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+    });
+    server.pack_files.waiting.notified().await;
+    request
+}
+
+#[tokio::test]
+async fn t3_pack_overlapping_authenticated_files_wait_for_one_reader() {
+    let (mut server, _states, _home) = serving().await;
+    let held = server.pack_files.busy.clone().lock_owned().await;
+    let still = queued(&server, "rest.png").await;
+    let clip = queued(&server, "idle.webm").await;
+    let catalog = queued(&server, "").await;
+    // Both files and the catalog reached admission while the reader is held.
+    drop(held);
+    let still = still.await.unwrap().unwrap();
+    let clip = clip.await.unwrap().unwrap();
+    assert_eq!(still.status(), 200);
+    assert_eq!(clip.status(), 200);
+    assert_eq!(still.bytes().await.unwrap().as_ref(), b"generated-rest");
+    assert_eq!(clip.bytes().await.unwrap().as_ref(), b"generated-loop");
+    let catalog = catalog.await.unwrap().unwrap();
+    assert_eq!(catalog.status(), 200);
+    let catalog: serde_json::Value = serde_json::from_slice(&catalog.bytes().await.unwrap()).unwrap();
+    assert_eq!(catalog["active"], "template@0.1.0");
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn t3_pack_queued_files_revalidate_and_recheck_revocation() {
+    for revoke in [false, true] {
+        let (mut server, _states, home) = serving().await;
+        let held = server.pack_files.busy.clone().lock_owned().await;
+        let request = queued(&server, "rest.png").await;
+        if revoke {
+            server.revoke_pairing().await.unwrap();
+        } else {
+            std::fs::write(home.path().join("template@0.1.0/pack.json"), b"{").unwrap();
+        }
+        drop(held);
+        let response = request.await.unwrap().unwrap();
+        assert_eq!(response.status(), if revoke { 401 } else { 404 });
+        assert_eq!(response.bytes().await.unwrap().len(), 0);
+        server.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn t3_pack_shutdown_cancels_waiting_file_and_catalog_without_reader_release() {
+    for graceful in [false, true] {
+        let (mut server, _states, _home) = serving().await;
+        let held = server.pack_files.busy.clone().lock_owned().await;
+        let still = queued(&server, "rest.png").await;
+        let catalog = queued(&server, "").await;
+        if graceful {
+            assert_eq!(server.shutdown_gracefully().await.unwrap(), 0);
+        } else {
+            server.shutdown().await.unwrap();
+        }
+        for response in [still.await.unwrap(), catalog.await.unwrap()].into_iter().flatten() {
+            assert_eq!(response.status(), 503);
+            assert_eq!(response.bytes().await.unwrap().len(), 0);
+        }
+        drop(held);
+        assert!(server.pack_files.busy.try_lock().is_ok());
+    }
+}
 
 const PACK: &[u8] = br#"{"format":1,"name":"template","version":"0.1.0","character":{"rest":"rest.png","states":{"idle":{"clip":{"webm":"idle.webm","mode":"loop"}}}}}"#;
 

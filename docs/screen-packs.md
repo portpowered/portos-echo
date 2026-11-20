@@ -88,9 +88,12 @@ response is returned; revoked tokens cannot read pack data.
 
 Every read revalidates the whole editable pack, references, CSS and size/file
 limits. Invalid packs, identity mismatches, symlinks, hardlinks and special
-files return an empty 404. Missing pack hosting and concurrent read saturation
-return 503. Validation runs outside the async executor, with one disk reader
-per server. Only json/css/png/webp/webm/mp4 are served, with exact MIME types and
+files return an empty 404. Missing pack hosting returns 503. Concurrent file,
+catalog and selection reads wait in FIFO order for one foreground disk reader per server,
+outside the async executor. The existing 128 HTTP/1 connection limit bounds
+waiting handlers; no extra reader or retry is created. Disconnect/shutdown
+cancels pending admission, and drain refuses queued work. Only
+json/css/png/webp/webm/mp4 are served, with exact MIME types and
 `nosniff`, `no-store`, `no-referrer` headers. Single byte ranges support explicit
 start/end, open end and suffix forms; malformed, multiple or unsatisfiable
 ranges return 416 with `Content-Range: bytes */<total>`.
