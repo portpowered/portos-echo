@@ -50,8 +50,13 @@ and media failures use fixed failure classes. Final agent-item text may populate
 `answer`, but never changes `handback=unobserved`. Duplicate handoffs and terminal
 notifications cannot produce additional lifetimes or resolutions.
 The native observer also writes `delegation.tool` for observed search, catalogued
-dynamic tools, MCP and command completions. Names recover the catalog's original
-names; MCP server identity is included when the item reports it. Reported durations
+dynamic tools, MCP, command and function completions. Catalogued notes/prompt
+tools have kind `agent`; session controls have kind `home`. Function outputs
+retain their reported namespace/name, with catalog aliases recovered when
+applicable. Native execution/wait/input and clock wrappers do not add rows.
+MCP server identity comes from the reported item or the configured single MCP
+host for dynamic tool results. A correlated request arriving after handoff but
+before `turn/started` supplies its observed turn identity and start time. Reported durations
 are preferred, otherwise a matching observed start supplies monotonic duration;
 missing starts do not imply zero duration. Search result counts are included only
 when the item reports results. RPC results and item completion for the same turn

@@ -16,6 +16,7 @@ struct Delegation {
 }
 
 pub(super) struct Native {
+    pub server: Option<String>,
     trace: Trace,
     seen: HashSet<String>,
     active: HashMap<String, Delegation>,
@@ -26,6 +27,7 @@ pub(super) struct Native {
 impl Native {
     pub fn new(trace: Trace) -> Self {
         Self {
+            server: None,
             trace,
             seen: HashSet::new(),
             active: HashMap::new(),
@@ -189,14 +191,39 @@ impl Native {
         names: &[(String, String)],
         request: Option<&echo_codex::codex_protocol::RequestId>,
     ) -> Result<(), Error> {
+        if !matches!(method, "item/started" | "item/completed")
+            || !super::native_tools::Tools::supports(&params["item"], names)
+        {
+            return Ok(());
+        }
+        let Ok(turn) = identifier(&params["turnId"]) else {
+            return Ok(());
+        };
+        if self.retired.contains(turn) {
+            return Ok(());
+        }
         for (id, entry) in &mut self.active {
-            if params["threadId"] != entry.thread || params["turnId"].as_str() != entry.turn.as_deref() {
+            if params["threadId"] != entry.thread {
+                continue;
+            }
+            // A correlated request can precede turn/started on the same reader.
+            if entry.turn.is_none() {
+                entry.turn = Some(turn.into());
+            }
+            if entry.turn.as_deref() != Some(turn) {
                 continue;
             }
             if let Some(mut fields) = entry.tools.observe(method, &params["item"], names)? {
                 fields["delegation_id"] = id.clone().into();
                 fields["thread_id"] = entry.thread.clone().into();
                 fields["turn_id"] = params["turnId"].clone();
+                if fields["kind"] == "mcp"
+                    && fields.get("server").is_none()
+                    && params["item"]["type"] != "mcpToolCall"
+                    && let Some(server) = &self.server
+                {
+                    fields["server"] = server.clone().into();
+                }
                 if let Some(request) = request {
                     fields["request_id"] = json!(request);
                     fields["call_id"] = params["item"]["id"].clone();

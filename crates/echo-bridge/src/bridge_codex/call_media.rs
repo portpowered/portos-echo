@@ -53,9 +53,12 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         &mut self,
         trace: crate::bridge_trace::Trace,
         catalog: &echo_delegation::codex_dispatch::Catalog,
+        server: Option<&str>,
     ) {
         self.trace = Some(trace.clone());
-        self.call.tool_trace = Some(crate::bridge_trace::ToolTrace::new(trace, catalog));
+        let mut observer = crate::bridge_trace::ToolTrace::new(trace, catalog);
+        observer.server(server);
+        self.call.tool_trace = Some(observer);
     }
 
     pub(crate) fn trace_setup(&mut self, trace: crate::bridge_trace::Trace) -> Result<(), Error> {

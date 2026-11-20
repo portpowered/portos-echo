@@ -12,6 +12,10 @@ pub(super) struct Tools {
 }
 
 impl Tools {
+    pub fn supports(item: &Value, names: &[(String, String)]) -> bool {
+        identity(item, names).is_some()
+    }
+
     pub fn observe(&mut self, method: &str, item: &Value, names: &[(String, String)]) -> Result<Option<Value>, Error> {
         let Some(id) = item["id"].as_str().filter(|id| valid(id)) else {
             return Ok(None);
@@ -58,20 +62,51 @@ fn valid(id: &str) -> bool {
     !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
 }
 
-fn identity<'a>(item: &'a Value, names: &'a [(String, String)]) -> Option<(&'static str, &'a str)> {
+fn identity(item: &Value, names: &[(String, String)]) -> Option<(&'static str, String)> {
     match item["type"].as_str()? {
-        "webSearch" => Some(("web_search", "web_search")),
-        "functionCallOutput" if item["name"] == "web.run" => Some(("web_search", "web.run")),
+        "webSearch" => Some(("web_search", "web_search".into())),
+        "functionCallOutput" => function_identity(item, names),
         "dynamicToolCall" => {
             let alias = item["tool"].as_str()?;
             let (_, name) = names.iter().find(|(candidate, _)| candidate == alias)?;
-            Some((local_kind(name), name))
+            Some((local_kind(name), name.clone()))
         }
-        "mcpToolCall" => Some(("mcp", item["tool"].as_str().filter(|name| valid(name))?)),
-        "commandExecution" => Some(("command", "command")),
-        // Unknown function names and native wrappers cannot invent completions.
+        "mcpToolCall" => Some(("mcp", item["tool"].as_str().filter(|name| valid(name))?.into())),
+        "commandExecution" => Some(("command", "command".into())),
         _ => None,
     }
+}
+
+fn function_identity(item: &Value, names: &[(String, String)]) -> Option<(&'static str, String)> {
+    let name = item["name"].as_str().filter(|name| valid(name))?;
+    let namespace = item["namespace"].as_str().unwrap_or("");
+    let qualified = if namespace.is_empty() {
+        name.into()
+    } else {
+        format!("{namespace}.{name}")
+    };
+    if !valid(&qualified) || wrapper(&qualified) {
+        return None;
+    }
+    if qualified == "web.run" {
+        return Some(("web_search", qualified));
+    }
+    if (namespace.is_empty() || namespace == "functions")
+        && let Some((_, original)) = names.iter().find(|(alias, _)| alias == name)
+    {
+        return Some((local_kind(original), original.clone()));
+    }
+    Some(("function", qualified))
+}
+
+fn wrapper(name: &str) -> bool {
+    matches!(
+        name.strip_prefix("functions.").unwrap_or(name),
+        "exec" | "wait" | "request_user_input_async"
+    ) || matches!(
+        name,
+        "clock.sleep" | "clock.curr_time" | "clock__sleep" | "clock__curr_time"
+    )
 }
 
 fn local_kind(name: &str) -> &'static str {
@@ -114,7 +149,12 @@ fn payloads(fields: &mut Value, item: &Value) {
             fields["request"] = json!({"command":item["command"],"cwd":item["cwd"]});
             fields["response"] = json!({"output":item["aggregatedOutput"],"exit_code":item["exitCode"]});
         }
-        Some("functionCallOutput") => fields["response"] = item["output"].clone(),
+        Some("functionCallOutput") => {
+            fields["response"] = item["output"].clone();
+            if let Some(arguments) = item.get("arguments") {
+                fields["request"] = arguments.clone();
+            }
+        }
         _ => {}
     }
 }
@@ -156,7 +196,7 @@ mod tests {
                 "declined",
             ),
             (
-                json!({"type":"functionCallOutput","name":"web.run","output":{"result":"seed"}}),
+                json!({"type":"functionCallOutput","name":"web.run","output":"seed"}),
                 "web_search",
                 "web.run",
                 "completed",
@@ -209,5 +249,50 @@ mod tests {
         assert!(row.get("response").is_none());
         assert_eq!(row["request"], json!({"query":"seed","action":null}));
         assert_eq!(tools.counts["web_search"], 1);
+    }
+
+    #[test]
+    fn delegation_trace_function_outputs_recover_local_identity_and_exclude_wrappers() {
+        let names = [
+            ("test_echo__c1".into(), "test.echo".into()),
+            ("notes_read".into(), "notes_read".into()),
+            ("end_session".into(), "end_session".into()),
+        ];
+        let mut tools = Tools::default();
+        for (index, (name, namespace, kind, original)) in [
+            ("test_echo__c1", "functions", "mcp", "test.echo"),
+            ("notes_read", "functions", "agent", "notes_read"),
+            ("end_session", "functions", "home", "end_session"),
+            ("run", "web", "web_search", "web.run"),
+            ("fixture_function", "fixture", "function", "fixture.fixture_function"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let item = json!({"type":"functionCallOutput","id":format!("item-{index}"),
+                "name":name,"namespace":namespace,"output":"synthetic-output"});
+            let row = tools.observe("item/completed", &item, &names).unwrap().unwrap();
+            assert_eq!(row["kind"], kind);
+            assert_eq!(row["name"], original);
+            assert_eq!(row["response"], item["output"]);
+            assert_eq!(row["status"], "completed");
+            assert!(row.get("request").is_none());
+            assert!(tools.observe("item/completed", &item, &names).unwrap().is_none());
+        }
+        for (name, namespace) in [
+            ("exec", "functions"),
+            ("wait", "functions"),
+            ("request_user_input_async", "functions"),
+            ("sleep", "clock"),
+            ("curr_time", "clock"),
+        ] {
+            let item = json!({"id":format!("{namespace}-{name}"),"type":"functionCallOutput",
+                "name":name,"namespace":namespace,"output":{}});
+            assert!(tools.observe("item/completed", &item, &names).unwrap().is_none());
+        }
+        assert_eq!(
+            serde_json::to_value(tools.counts).unwrap(),
+            json!({"mcp":1,"agent":1,"home":1,"web_search":1,"function":1})
+        );
     }
 }

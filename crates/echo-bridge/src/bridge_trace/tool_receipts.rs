@@ -58,6 +58,10 @@ pub(crate) struct ToolTrace {
 }
 
 impl ToolTrace {
+    pub fn server(&mut self, server: Option<&str>) {
+        self.native.server = server.map(str::to_owned);
+    }
+
     pub fn new(trace: Trace, catalog: &Catalog) -> Self {
         Self {
             native: super::native_delegation::Native::new(trace.clone()),
@@ -76,7 +80,19 @@ impl ToolTrace {
     }
 
     pub fn notification(&mut self, method: &str, params: &serde_json::Value) -> Result<(), Error> {
-        self.native.tool(method, params, &self.names, None)?;
+        let pending = self.pending.iter().find(|(_, request)| {
+            request["threadId"] == params["threadId"]
+                && request["turnId"] == params["turnId"]
+                && request["item"]["id"] == params["item"]["id"]
+        });
+        let mut observed = params.clone();
+        if let Some((_, request)) = pending
+            && observed["item"].get("arguments").is_none()
+        {
+            observed["item"]["arguments"] = request["item"]["arguments"].clone();
+        }
+        self.native
+            .tool(method, &observed, &self.names, pending.map(|(id, _)| id))?;
         self.native.notification(method, params)
     }
 

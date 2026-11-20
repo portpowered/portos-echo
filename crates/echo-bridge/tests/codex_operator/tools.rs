@@ -334,13 +334,19 @@ fn receipt(event: &str, name: &str) -> Value {
 #[tokio::test]
 #[ignore = "T3 requires local Python"]
 async fn delegation_trace_configured_search_and_mcp_complete_once_with_payload_switch() {
-    for payloads in [true, false] {
+    for (payloads, mode) in [
+        (true, "tool-trace"),
+        (false, "tool-trace"),
+        (true, "tool-trace-early"),
+        (false, "tool-trace-early"),
+    ] {
         let fixture = Fixture::new("chatgpt");
-        std::fs::write(fixture.home.join("mode"), "tool-trace").unwrap();
+        std::fs::write(fixture.home.join("mode"), mode).unwrap();
         let spoof = echo_spoof_mcp::Spoof::start(echo_spoof_mcp::Options::default())
             .await
             .unwrap();
         let mut config = config(&fixture, spoof.url());
+        config.mcp.server[0].name = "spoof-trace".into();
         config.trace.payloads = payloads;
         let output = generation(&fixture, config, None).await;
         assert_eq!(output["success"], true);
@@ -355,7 +361,7 @@ async fn delegation_trace_configured_search_and_mcp_complete_once_with_payload_s
             1
         );
         let raw = std::fs::read_to_string(fixture.directory.path().join("tool-trace")).unwrap();
-        let rows: Vec<Value> = raw
+        let mut rows: Vec<Value> = raw
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .filter(|row: &Value| {
@@ -365,12 +371,16 @@ async fn delegation_trace_configured_search_and_mcp_complete_once_with_payload_s
             })
             .collect();
         assert_eq!(rows.len(), 4);
+        rows[1..3].sort_by_key(|row| if row["kind"] == "web_search" { 0 } else { 1 });
         assert_eq!(rows[0]["event"], "delegation.created");
         assert_eq!(rows[1]["kind"], "web_search");
         assert_eq!(rows[1]["name"], "web_search");
         assert_eq!(rows[1]["result_count"], 1);
         assert_eq!(rows[2]["kind"], "mcp");
         assert_eq!(rows[2]["name"], "test.echo");
+        assert_eq!(rows[2]["server"], "spoof-trace");
+        assert_eq!(rows[2]["call_id"], "fixture-call");
+        assert_eq!(rows[2]["request_id"], "fixture-tool");
         for row in &rows[1..3] {
             assert_eq!(row["status"], "completed");
             assert!(row["duration_ms"].is_u64());

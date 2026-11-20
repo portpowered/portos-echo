@@ -40,11 +40,18 @@ def emit(value):
     print(json.dumps(value), flush=True)
 
 
+def tool_request(approval=False):
+    emit({"id": "fixture-tool", "method": "item/tool/call", "params": {
+        "threadId": "fixture-thread", "turnId": "fixture-turn", "callId": "fixture-call",
+        "tool": "test_requires_approval" if approval else "test_echo",
+        "arguments": {} if approval else {"text": "delegated echo"}, "namespace": None}})
+
+
 for line in sys.stdin:
     request = json.loads(line)
     if "method" not in request:
         assert request["id"] == "fixture-tool"
-        if home.joinpath("mode").read_text() == "tool-trace":
+        if home.joinpath("mode").read_text().startswith("tool-trace"):
             # The RPC result and item completion name the same logical call.
             emit({"method": "item/completed", "params": {
                 "threadId": "fixture-thread", "turnId": "fixture-turn", "item": {
@@ -171,13 +178,16 @@ for line in sys.stdin:
                 assert signaling.readline() == b"settle\n"
                 emit({"method": "turn/completed", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
             continue
-        if home.joinpath("mode").read_text() == "tool-trace":
+        if home.joinpath("mode").read_text().startswith("tool-trace"):
             emit({"method": "thread/realtime/itemAdded", "params": {
                 "threadId": "fixture-thread", "item": {"type": "handoff_request",
                     "handoff_id": "delegation-7", "item_id": "handoff-7",
                     "input_transcript": "synthetic-query-7", "active_transcript": []}}})
+        early = home.joinpath("mode").read_text() == "tool-trace-early"
+        if early:
+            tool_request()
         emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
-        if home.joinpath("mode").read_text() == "tool-trace":
+        if home.joinpath("mode").read_text().startswith("tool-trace"):
             search = {"type": "webSearch", "id": "search-7", "query": "synthetic-query-7",
                       "action": {"type": "search", "query": "synthetic-query-7", "queries": None}}
             emit({"method": "item/started", "params": {
@@ -186,11 +196,8 @@ for line in sys.stdin:
                                   "account_id": "synthetic-account", "authorization": "synthetic-auth"}]
             emit({"method": "item/completed", "params": {
                 "threadId": "fixture-thread", "turnId": "fixture-turn", "item": search}})
-        approval = home.joinpath("mode").read_text() == "tool-approval"
-        emit({"id": "fixture-tool", "method": "item/tool/call", "params": {
-            "threadId": "fixture-thread", "turnId": "fixture-turn", "callId": "fixture-call",
-            "tool": "test_requires_approval" if approval else "test_echo", "arguments": {} if approval else {"text": "delegated echo"},
-            "namespace": None}})
+        if not early:
+            tool_request(home.joinpath("mode").read_text() == "tool-approval")
     elif method == "thread/realtime/stop":
         if home.joinpath("mode").read_text() == "tool-binary-reply":
             signaling.write(b"closing\n")
