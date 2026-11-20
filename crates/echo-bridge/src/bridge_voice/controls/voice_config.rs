@@ -339,7 +339,7 @@ pub(super) fn session_guidance((runner, voice): (String, String), advertised: bo
 }
 
 /// Append a call-local snapshot. Std has no portable local-zone discovery.
-pub(super) fn call_instructions(prefix: &str, now: std::time::SystemTime, zone: Option<&str>) -> Result<String, Error> {
+pub(crate) fn call_instructions(prefix: &str, now: std::time::SystemTime, zone: Option<&str>) -> Result<String, Error> {
     let seconds = match now.duration_since(std::time::UNIX_EPOCH) {
         Ok(value) => i64::try_from(value.as_secs()).map_err(|_| Error::Input)?,
         Err(value) => {

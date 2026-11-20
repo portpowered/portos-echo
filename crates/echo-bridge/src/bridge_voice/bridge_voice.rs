@@ -16,6 +16,12 @@ mod tool_policy;
 mod voice_admission;
 #[path = "controls/voice_config.rs"]
 mod voice_config;
+#[cfg(test)]
+pub(crate) use voice_config::call_instructions;
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static TEST_WAKE_TIME: std::cell::Cell<std::time::SystemTime>;
+}
 #[path = "controls/voice_entry.rs"]
 pub(crate) mod voice_entry;
 mod voice_host;
