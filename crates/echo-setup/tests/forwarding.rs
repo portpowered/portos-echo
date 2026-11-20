@@ -28,8 +28,8 @@ impl Fixture {
         fs::copy(env!("CARGO_BIN_EXE_echo-setup-test-adb"), path.join("adb.exe"))?;
         fs::write(path.join("devices"), "SYNTHETIC-DEVICE\tdevice\r\n")?;
         fs::write(path.join("forward-replies.json"), serde_json::to_vec(replies)?)?;
-        fs::write(path.join("forwards.json"), br#"["tcp:49999"]"#)?;
-        fs::write(path.join("forward-targets.json"), br#"{"tcp:49999":"tcp:1"}"#)?;
+        fs::write(path.join("forwards.json"), br#"["tcp:49999"]"#)?; // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
+        fs::write(path.join("forward-targets.json"), br#"{"tcp:49999":"tcp:1"}"#)?; // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
         Ok(Self(path))
     }
 
@@ -86,9 +86,9 @@ async fn t3_forwards_allocate_without_rebind_and_close_only_their_own_ports() ->
     let session = ForwardSession::open(&fixture.options()?, [16900, 16901], deadline())
         .await
         .map_err(fixed)?;
-    assert_eq!(fixture.active()?, ["tcp:49999", "tcp:41001", "tcp:41002"]);
+    assert_eq!(fixture.active()?, ["tcp:49999", "tcp:41001", "tcp:41002"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     session.close().await.map_err(fixed)?;
-    assert_eq!(fixture.active()?, ["tcp:49999"]);
+    assert_eq!(fixture.active()?, ["tcp:49999"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     let calls = fixture.ledger()?;
     let forwarded: Vec<_> = calls
         .iter()
@@ -96,12 +96,12 @@ async fn t3_forwards_allocate_without_rebind_and_close_only_their_own_ports() ->
         .collect();
     assert_eq!(forwarded.len(), 6);
     for (args, expected) in forwarded.iter().zip([
-        vec!["forward", "--no-rebind", "tcp:0", "tcp:16900"],
-        vec!["forward", "--no-rebind", "tcp:0", "tcp:16901"],
+        vec!["forward", "--no-rebind", "tcp:0", "tcp:16900"], // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
+        vec!["forward", "--no-rebind", "tcp:0", "tcp:16901"], // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
         vec!["forward", "--list"],
-        vec!["forward", "--remove", "tcp:41002"],
+        vec!["forward", "--remove", "tcp:41002"], // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
         vec!["forward", "--list"],
-        vec!["forward", "--remove", "tcp:41001"],
+        vec!["forward", "--remove", "tcp:41001"], // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     ]) {
         assert_eq!(args[0], "-s");
         assert_eq!(args[1], "SYNTHETIC-DEVICE");
@@ -142,7 +142,7 @@ async fn t3_forward_lease_routes_real_health_and_authenticated_screen_requests()
     drop(stream);
     screen_server.await??;
     session.close().await.map_err(fixed)?;
-    assert_eq!(fixture.active()?, ["tcp:49999"]);
+    assert_eq!(fixture.active()?, ["tcp:49999"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     Ok(())
 }
 
@@ -171,11 +171,11 @@ async fn t3_partial_forward_allocation_failure_unwinds_the_first_allocation() ->
     for reply in ["FAIL", "SYNTHETIC-TOKEN\n", "0\n", "41001\n"] {
         let fixture = Fixture::new(&["41001\n", reply])?;
         let cleanup = fixture.listener("cleanup-notify")?;
-        let witness = tokio::spawn(async move { notification(&cleanup, "tcp:41001").await });
+        let witness = tokio::spawn(async move { notification(&cleanup, "tcp:41001").await }); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
         let result = ForwardSession::open(&fixture.options()?, [16900, 16901], deadline()).await;
         assert_eq!(result.err(), Some(Failure("setup_forward_failed")));
         witness.await??;
-        assert_eq!(fixture.active()?, ["tcp:49999"]);
+        assert_eq!(fixture.active()?, ["tcp:49999"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     }
     Ok(())
 }
@@ -202,9 +202,9 @@ async fn t3_forward_drop_and_inflight_cancellation_still_release_owned_allocatio
         .await
         .map_err(fixed)?;
     drop(session);
-    notification(&cleanup, "tcp:41002").await?;
-    notification(&cleanup, "tcp:41001").await?;
-    assert_eq!(fixture.active()?, ["tcp:49999"]);
+    notification(&cleanup, "tcp:41002").await?; // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
+    notification(&cleanup, "tcp:41001").await?; // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
+    assert_eq!(fixture.active()?, ["tcp:49999"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     cancelled_allocation(false).await?;
     cancelled_allocation(true).await
 }
@@ -227,15 +227,15 @@ async fn cancelled_allocation(expire: bool) -> Result {
     if expire {
         expire_before_cleanup(pending.as_mut()).await?;
         socket.write_all(&[1]).await?;
-        let (result, observed) = tokio::join!(pending, notification(&cleanup, "tcp:41001"));
+        let (result, observed) = tokio::join!(pending, notification(&cleanup, "tcp:41001")); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
         observed?;
         assert_eq!(result.err(), Some(Failure("setup_timeout")));
     } else {
         drop(pending);
         socket.write_all(&[1]).await?;
-        notification(&cleanup, "tcp:41001").await?;
+        notification(&cleanup, "tcp:41001").await?; // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     }
-    assert_eq!(fixture.active()?, ["tcp:49999"]);
+    assert_eq!(fixture.active()?, ["tcp:49999"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     let remaining: Value = serde_json::from_slice(&fs::read(fixture.0.join("forward-replies.json"))?)?;
     assert_eq!(remaining, serde_json::json!(["41002\n"]));
     Ok(())
@@ -266,7 +266,7 @@ async fn t3_forward_cleanup_failure_is_reported_without_removing_unrelated_forwa
     fs::write(fixture.0.join("remove-fails"), "")?;
     let failure = session.close().await.err().ok_or("cleanup unexpectedly succeeded")?;
     assert_eq!(fixed(failure), "Failure(\"setup_forward_cleanup_failed\")");
-    assert_eq!(fixture.active()?, ["tcp:49999", "tcp:41001", "tcp:41002"]);
+    assert_eq!(fixture.active()?, ["tcp:49999", "tcp:41001", "tcp:41002"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     let calls = fixture.ledger()?;
     assert_eq!(
         calls
@@ -286,17 +286,17 @@ async fn t3_forward_cleanup_refuses_a_replaced_mapping_and_still_cleans_other_ow
         .map_err(fixed)?;
     fs::write(
         fixture.0.join("forward-targets.json"),
-        br#"{"tcp:49999":"tcp:1","tcp:41001":"tcp:16900","tcp:41002":"tcp:12345"}"#,
+        br#"{"tcp:49999":"tcp:1","tcp:41001":"tcp:16900","tcp:41002":"tcp:12345"}"#, // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     )?;
     assert_eq!(session.close().await, Err(Failure("setup_forward_cleanup_failed")));
-    assert_eq!(fixture.active()?, ["tcp:49999", "tcp:41002"]);
+    assert_eq!(fixture.active()?, ["tcp:49999", "tcp:41002"]); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     let calls = fixture.ledger()?;
     let removed: Vec<_> = calls
         .iter()
         .filter(|args| args.iter().any(|value| value == "--remove"))
         .collect();
     assert_eq!(removed.len(), 1);
-    assert_eq!(removed[0].last().map(String::as_str), Some("tcp:41001"));
+    assert_eq!(removed[0].last().map(String::as_str), Some("tcp:41001")); // lint-rules: allow-literal inert adb forward selector fixture; sockets bind literal loopback only
     Ok(())
 }
 

@@ -4,10 +4,12 @@ mod events;
 mod forward;
 mod http;
 mod prompt;
+mod wake;
 
 pub use forward::ForwardSession;
 pub use http::{Health, ScreenEvents, health};
 pub use prompt::{Prompt, Provider};
+pub use wake::{WakeAttempt, WakeEvidence};
 
 #[cfg(test)]
 mod tests;

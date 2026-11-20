@@ -133,6 +133,16 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
             io::stdout().write_all(&fs::read(root.join("doctor"))?)?;
             return Ok(());
         }
+        if command == "sh -s -- --device wake-cursor" || command.starts_with("sh -s -- --device wake-check ") {
+            let name = if command.ends_with("wake-cursor") {
+                "wake-cursor"
+            } else {
+                "wake-evidence"
+            };
+            notify(root, "wake-barrier", b"ready")?;
+            io::stdout().write_all(&fs::read(root.join(name))?)?;
+            return Ok(());
+        }
         fs::write(root.join("last-operation"), command)?;
     }
     if command.contains("--device start") {
