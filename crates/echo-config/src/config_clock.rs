@@ -30,7 +30,11 @@ impl ClockConfig {
     }
 }
 
-pub(super) fn decode(value: toml::de::DeValue<'_>) -> Result<ClockConfig, ConfigError> {
+/// An absent `[clock]` table is the defaults.
+pub(super) fn decode(value: Option<toml::de::DeValue<'_>>) -> Result<ClockConfig, ConfigError> {
+    let Some(value) = value else {
+        return Ok(ClockConfig::default());
+    };
     let mut fields = Fields::new(value, "clock")?;
     let result = ClockConfig {
         servers: fields.optional("servers")?,
