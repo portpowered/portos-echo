@@ -40,19 +40,8 @@ fn catalog() -> Catalog {
     )
     .unwrap()
 }
-fn dispatcher(host: Host, limit: u32) -> Dispatcher<Host> {
-    let mut dispatcher = Dispatcher::new(
-        host,
-        catalog(),
-        "thread-1".into(),
-        AgentConfig {
-            model: None,
-            max_tool_calls: limit,
-            task_deadline_seconds: 5,
-            daily_request_cap: 1,
-        },
-    )
-    .unwrap();
+fn dispatcher(host: Host) -> Dispatcher<Host> {
+    let mut dispatcher = Dispatcher::new(host, catalog(), "thread-1".into()).unwrap();
     dispatcher.start_turn("thread-1", "turn-1").unwrap();
     dispatcher
 }
@@ -105,28 +94,27 @@ fn catalog_preserves_definitions_and_filters_authority_without_alias_ambiguity()
 #[tokio::test(start_paused = true)]
 async fn dispatch_preserves_result_and_reserves_duplicate_ids_before_effects() {
     let host = Host::default();
-    let mut dispatcher = dispatcher(host.clone(), 8);
+    let mut dispatcher = dispatcher(host.clone());
     let first = call(0);
     let outcome = dispatcher.dispatch(&first).await;
-    assert!(outcome.result.success);
-    assert!(outcome.interrupt.is_none());
+    assert!(outcome.success);
     assert_eq!(
-        serde_json::to_value(outcome.result).unwrap(),
+        serde_json::to_value(outcome).unwrap(),
         json!({"contentItems":[{"type":"inputText","text":first.arguments.to_string()}],"success":true})
     );
-    assert!(!dispatcher.dispatch(&first).await.result.success);
+    assert!(!dispatcher.dispatch(&first).await.success);
     assert_eq!(
         *host.calls.lock().unwrap(),
         vec![("test.echo".into(), first.arguments, "8:thread-16:turn-16:call-0".into())]
     );
-    assert!(dispatcher.dispatch(&call(1)).await.result.success);
+    assert!(dispatcher.dispatch(&call(1)).await.success);
     assert_eq!(host.calls.lock().unwrap().len(), 2);
 }
 
 #[tokio::test(start_paused = true)]
 async fn foreign_unknown_namespace_and_stale_requests_have_no_effect() {
     let host = Host::default();
-    let mut dispatcher = dispatcher(host.clone(), 8);
+    let mut dispatcher = dispatcher(host.clone());
     let mut requests = vec![call(0), call(1), call(2), call(3), call(4)];
     requests[0].thread_id = "foreign".into();
     requests[1].turn_id = "old-turn".into();
@@ -135,63 +123,29 @@ async fn foreign_unknown_namespace_and_stale_requests_have_no_effect() {
     requests[4].arguments = Value::Null;
     for request in requests {
         let outcome = dispatcher.dispatch(&request).await;
-        assert!(!outcome.result.success);
-        assert!(outcome.interrupt.is_none());
+        assert!(!outcome.success);
     }
     assert_eq!(*host.calls.lock().unwrap(), []);
     assert_eq!(dispatcher.finish_turn("thread-1", "foreign"), Err(DispatchError::Stale));
     dispatcher.finish_turn("thread-1", "turn-1").unwrap();
-    assert!(!dispatcher.dispatch(&call(5)).await.result.success);
+    assert!(!dispatcher.dispatch(&call(5)).await.success);
     assert_eq!(dispatcher.start_turn("thread-1", "turn-1"), Err(DispatchError::Stale));
     dispatcher.start_turn("thread-1", "turn-2").unwrap();
-    assert!(!dispatcher.dispatch(&call(6)).await.result.success);
+    assert!(!dispatcher.dispatch(&call(6)).await.success);
     assert_eq!(*host.calls.lock().unwrap(), []);
 }
 
 #[tokio::test(start_paused = true)]
-async fn configured_and_hard_limits_interrupt_exact_turn_without_extra_effects() {
-    for limit in [1, 8, 12] {
-        let host = Host::default();
-        let mut dispatcher = dispatcher(host.clone(), limit);
-        let admitted = limit.min(8) as usize;
-        for index in 0..admitted {
-            assert!(dispatcher.dispatch(&call(index)).await.result.success);
-        }
-        let outcome = dispatcher.dispatch(&call(admitted)).await;
-        assert!(!outcome.result.success);
-        assert_eq!(
-            serde_json::to_value(outcome.interrupt).unwrap(),
-            json!({"threadId":"thread-1","turnId":"turn-1"})
-        );
-        assert_eq!(host.calls.lock().unwrap().len(), admitted);
-        let terminal = dispatcher.dispatch(&call(admitted + 1)).await;
-        assert!(!terminal.result.success);
-        assert!(terminal.interrupt.is_none());
-        assert_eq!(host.calls.lock().unwrap().len(), admitted);
+async fn twelve_unique_calls_succeed_over_sixty_seconds() {
+    let host = Host::default();
+    let mut dispatcher = dispatcher(host.clone());
+    for index in 0..12 {
+        tokio::time::advance(std::time::Duration::from_secs(6)).await;
+        assert!(dispatcher.dispatch(&call(index)).await.success);
     }
-}
-
-#[tokio::test(start_paused = true)]
-async fn deadline_cancels_pending_work_and_never_admits_late_or_replayed_calls() {
-    let host = Host {
-        pending: true,
-        ..Host::default()
-    };
-    let mut dispatcher = dispatcher(host.clone(), 8);
-    let start = Instant::now();
-    let outcome = dispatcher.dispatch(&call(0)).await;
-    assert_eq!(start.elapsed(), Duration::from_secs(5));
-    assert!(!outcome.result.success);
-    assert_eq!(
-        serde_json::to_value(outcome.interrupt).unwrap(),
-        json!({"threadId":"thread-1","turnId":"turn-1"})
-    );
-    assert!(!dispatcher.dispatch(&call(1)).await.result.success);
-    assert_eq!(host.calls.lock().unwrap().len(), 1);
-    dispatcher.finish_turn("thread-1", "turn-1").unwrap();
-    dispatcher.start_turn("thread-1", "turn-2").unwrap();
-    assert!(!dispatcher.dispatch(&call(0)).await.result.success);
-    assert_eq!(host.calls.lock().unwrap().len(), 1);
+    assert_eq!(host.calls.lock().unwrap().len(), 12);
+    assert!(!dispatcher.dispatch(&call(11)).await.success);
+    assert_eq!(host.calls.lock().unwrap().len(), 12);
 }
 
 #[tokio::test(start_paused = true)]
@@ -200,7 +154,7 @@ async fn cancellation_and_error_results_cannot_replay_or_leak_remote_diagnostics
         pending: true,
         ..Host::default()
     };
-    let mut owner = dispatcher(host.clone(), 8);
+    let mut owner = dispatcher(host.clone());
     let request = call(0);
     {
         let future = owner.dispatch(&request);
@@ -211,7 +165,7 @@ async fn cancellation_and_error_results_cannot_replay_or_leak_remote_diagnostics
         })
         .await;
     }
-    assert!(!owner.dispatch(&request).await.result.success);
+    assert!(!owner.dispatch(&request).await.success);
     assert_eq!(host.calls.lock().unwrap().len(), 1);
     for (error, text) in [
         (ToolError::Denied, "tool request denied"),
@@ -223,19 +177,15 @@ async fn cancellation_and_error_results_cannot_replay_or_leak_remote_diagnostics
         ),
         (ToolError::Transport, "tool execution failed"),
     ] {
-        let mut owner = dispatcher(
-            Host {
-                error: Some(error),
-                ..Host::default()
-            },
-            8,
-        );
+        let mut owner = dispatcher(Host {
+            error: Some(error),
+            ..Host::default()
+        });
         let outcome = owner.dispatch(&call(0)).await;
         assert_eq!(
-            serde_json::to_value(outcome.result).unwrap(),
+            serde_json::to_value(outcome).unwrap(),
             json!({"contentItems":[{"type":"inputText","text":text}],"success":false})
         );
-        assert!(outcome.interrupt.is_none());
     }
 }
 
@@ -256,70 +206,29 @@ fn daily_budget_resets_only_on_forward_day_and_retains_cap_across_calls() {
 #[tokio::test(start_paused = true)]
 async fn daily_refusal_interrupts_once_and_prevents_every_tool_effect() {
     let host = Host::default();
-    let mut owner = dispatcher(host.clone(), 8);
+    let mut owner = dispatcher(host.clone());
     let interrupt = owner.refuse_budget().unwrap();
     assert_eq!(
         (interrupt.thread_id.as_str(), interrupt.turn_id.as_str()),
         ("thread-1", "turn-1")
     );
     assert!(owner.refuse_budget().is_none());
-    assert_eq!(owner.deadline(), None);
     for index in 0..2 {
         let outcome = owner.dispatch(&call(index)).await;
-        assert!(!outcome.result.success);
-        assert!(outcome.interrupt.is_none());
+        assert!(!outcome.success);
     }
     assert!(host.calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
-async fn silent_turn_expires_at_equality_once_and_cannot_clear_a_new_turn() {
-    let host = Host::default();
-    let mut owner = dispatcher(host.clone(), 8);
-    assert!(owner.expire().is_none());
-    let deadline = owner.deadline().unwrap();
-    tokio::time::advance(Duration::from_secs(5)).await;
-    assert_eq!(Instant::now(), deadline);
-    assert_eq!(
-        serde_json::to_value(owner.expire()).unwrap(),
-        json!({"threadId":"thread-1","turnId":"turn-1"})
-    );
-    assert!(owner.deadline().is_none());
-    assert!(owner.expire().is_none());
-    assert!(!owner.dispatch(&call(0)).await.result.success);
-    assert_eq!(*host.calls.lock().unwrap(), []);
-    owner.finish_turn("thread-1", "turn-1").unwrap();
-    owner.start_turn("thread-1", "turn-2").unwrap();
-    assert_eq!(owner.finish_turn("thread-1", "turn-1"), Err(DispatchError::Stale));
-    assert_eq!(owner.deadline(), Some(deadline + Duration::from_secs(5)));
-}
-
-#[tokio::test(start_paused = true)]
 async fn invalid_configuration_and_turn_admission_cannot_replace_live_work() {
-    let config = AgentConfig {
-        model: None,
-        max_tool_calls: 8,
-        task_deadline_seconds: 5,
-        daily_request_cap: 1,
-    };
     for thread in ["", "bad\nthread"] {
         assert!(matches!(
-            Dispatcher::new(Host::default(), catalog(), thread.into(), config.clone()),
+            Dispatcher::new(Host::default(), catalog(), thread.into()),
             Err(DispatchError::Configuration)
         ));
     }
-    for (limit, seconds) in [(0, 5), (1, 0), (1, u64::MAX)] {
-        let config = AgentConfig {
-            max_tool_calls: limit,
-            task_deadline_seconds: seconds,
-            ..config.clone()
-        };
-        assert!(matches!(
-            Dispatcher::new(Host::default(), catalog(), "thread-1".into(), config),
-            Err(DispatchError::Configuration)
-        ));
-    }
-    let mut owner = dispatcher(Host::default(), 8);
+    let mut owner = dispatcher(Host::default());
     assert_eq!(owner.start_turn("thread-1", "turn-2"), Err(DispatchError::Stale));
     owner.finish_turn("thread-1", "turn-1").unwrap();
     for (thread, turn) in [("foreign", "turn-2"), ("thread-1", ""), ("thread-1", "bad\nturn")] {
@@ -328,34 +237,20 @@ async fn invalid_configuration_and_turn_admission_cannot_replace_live_work() {
     owner.start_turn("thread-1", "turn-2").unwrap();
     let mut request = call(0);
     request.turn_id = "turn-2".into();
-    assert!(owner.dispatch(&request).await.result.success);
+    assert!(owner.dispatch(&request).await.success);
 }
 
 #[tokio::test(start_paused = true)]
-async fn deadline_before_dispatch_and_mcp_error_content_never_claim_success() {
-    let host = Host::default();
-    let mut owner = dispatcher(host.clone(), 8);
-    tokio::time::advance(Duration::from_secs(5)).await;
-    let outcome = owner.dispatch(&call(0)).await;
-    assert!(!outcome.result.success);
-    assert_eq!(
-        serde_json::to_value(outcome.interrupt).unwrap(),
-        json!({"threadId":"thread-1","turnId":"turn-1"})
-    );
-    assert_eq!(*host.calls.lock().unwrap(), []);
-    let mut owner = dispatcher(
-        Host {
-            is_error: true,
-            ..Host::default()
-        },
-        8,
-    );
+async fn mcp_error_content_never_claims_success() {
+    let mut owner = dispatcher(Host {
+        is_error: true,
+        ..Host::default()
+    });
     let outcome = owner.dispatch(&call(0)).await;
     assert_eq!(
-        serde_json::to_value(outcome.result).unwrap(),
+        serde_json::to_value(outcome).unwrap(),
         json!({"contentItems":[{"type":"inputText","text":"{\"text\":\"雪\"}"}],"success":false})
     );
-    assert!(outcome.interrupt.is_none());
 }
 
 #[test]

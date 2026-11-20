@@ -11,6 +11,7 @@ use tokio::time::Instant;
 
 #[path = "earcon/voice_mouth.rs"]
 mod voice_mouth;
+pub use super::voice_wait::Delegation;
 pub use voice_mouth::Mouth;
 #[cfg(test)]
 use voice_mouth::{FRAME, OUTPUT_DELAY};
@@ -34,6 +35,8 @@ pub(super) struct Source {
     uplink: VecDeque<PcmFrame>,
     /// The device was told a dispatch is running in silence.
     thinking: bool,
+    pub user_speaking: bool,
+    pub run_ceiling: Option<Instant>,
     /// User speech heard during the reply, until the model yields to it.
     barge: Barge,
     /// A barge-in cut the reply: call audio is its until the model speaks again.
@@ -126,9 +129,10 @@ impl Source {
 
     /// A dispatch that finished while listening gives its answer a fresh
     /// listen window, since the hold on idle ends with it.
-    pub fn dispatch_completed(&mut self) {
+    pub fn dispatch_completed(&mut self, answered: bool) {
         let waited = self.delegation.in_flight();
         self.delegation.completed();
+        self.delegation.expect_answer(answered);
         if waited && !self.delegation.in_flight() {
             self.renew_idle();
         }
@@ -145,6 +149,8 @@ impl Source {
             delegation: Delegation::default(),
             mouth: Mouth::default(),
             thinking: false,
+            user_speaking: false,
+            run_ceiling: None,
             meter: meter(),
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),
@@ -163,6 +169,9 @@ impl Source {
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
     pub fn heard_user(&mut self, trigger: BargeTrigger, said: &str, whole: bool) {
+        if trigger == BargeTrigger::SpeechStarted || whole {
+            self.user_speaking = !whole;
+        }
         let replying = !self.delegation.in_flight() && self.controller.speaking();
         // Nobody talks over a reply that has not sounded yet, and a reply
         // that has is not talked over by its own question.
@@ -218,6 +227,7 @@ impl Source {
     pub fn capture(&mut self, frame: Option<MicFrame>, port: &impl VoicePort) -> Result<bool, Error> {
         let Some(frame) = frame else {
             self.controller.microphone_ended();
+            self.user_speaking = false;
             if let Some(microphone) = &mut self.microphone {
                 let frames = microphone.finish()?;
                 self.stats.microphone_tail = microphone.tail_samples();
@@ -289,7 +299,7 @@ impl Source {
             Discard::Cut
         } else if !self.controller.accepts_audio() {
             Discard::Idle
-        } else if self.reply.finished() || self.delegation.abandoned {
+        } else if self.reply.finished() {
             Discard::AfterReply
         } else {
             // PCM has no utterance identity. Only ordered assistant control
@@ -392,107 +402,6 @@ pub(super) fn playback_failure(
         source.controller.has_played(),
         source.controller.pending_cut_receipts(),
     );
-}
-
-/// Delegated Codex turns and the assistant utterance they bracket. Each
-/// delegated turn has at most one filler ("one sec"): the utterance in progress
-/// when the turn starts, or else the first one begun while it runs. A filler's
-/// done holds the reply open; any later utterance is the answer, even when it
-/// begins before turn/completed arrives. A filler still speaking after its turn
-/// completed has run on into the answer, so its done ends the reply. The order
-/// of the filler's done, the answer's deltas and turn/completed varies by call.
-/// The assistant utterance in progress, by its role in a delegated turn.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum Utterance {
-    #[default]
-    None,
-    Filler,
-    /// A filler whose delegated turn completed before its done.
-    Settled,
-    Answer,
-}
-
-#[derive(Default)]
-pub struct Delegation {
-    turns: usize,
-    armed: bool,
-    utterance: Utterance,
-    held: bool,
-    abandoned: bool,
-}
-
-impl Delegation {
-    pub fn started(&mut self) {
-        self.turns += 1;
-        if self.utterance == Utterance::Answer {
-            self.utterance = Utterance::Filler;
-        } else {
-            self.armed = true;
-        }
-    }
-
-    pub fn completed(&mut self) {
-        self.turns = self.turns.saturating_sub(1);
-        if self.turns == 0 {
-            self.armed = false;
-            if self.utterance == Utterance::Filler {
-                self.utterance = Utterance::Settled;
-            }
-        }
-    }
-
-    /// A delegated turn has started and not yet completed.
-    #[must_use]
-    pub fn in_flight(&self) -> bool {
-        self.turns > 0
-    }
-
-    /// The next reply starts clean but still owes each running turn its
-    /// completion; an utterance after the reset is an answer, not a filler.
-    fn carried(&self) -> Self {
-        Self {
-            turns: self.turns,
-            ..Self::default()
-        }
-    }
-
-    pub fn spoke(&mut self) {
-        self.utterance = match self.utterance {
-            Utterance::None if self.armed && self.turns > 0 => {
-                self.armed = false;
-                Utterance::Filler
-            }
-            Utterance::None | Utterance::Settled => Utterance::Answer,
-            utterance => utterance,
-        };
-    }
-
-    /// True when this assistant done ends the reply rather than a filler.
-    pub fn answered(&mut self) -> bool {
-        let utterance = std::mem::take(&mut self.utterance);
-        self.held = matches!(utterance, Utterance::Filler | Utterance::Settled);
-        !self.held
-    }
-
-    /// No answer follows the completed turns: true when the reply finishes
-    /// now. A filler still being spoken finishes at its own done instead.
-    pub fn released(&mut self) -> bool {
-        let finish = std::mem::take(&mut self.held) || self.utterance == Utterance::None;
-        self.utterance = if finish { Utterance::None } else { Utterance::Answer };
-        finish
-    }
-
-    /// A filler done is holding the reply open for a delegated answer.
-    #[must_use]
-    pub fn held(&self) -> bool {
-        self.held && !self.abandoned
-    }
-
-    /// The response deadline passed first: the reply ends after the filler and
-    /// the answer, if it still comes, is dropped instead of failing the run.
-    pub fn abandon(&mut self) {
-        self.abandoned = true;
-    }
 }
 
 #[cfg(test)]

@@ -147,7 +147,6 @@ async fn tools_conversation_dispatches_during_run_and_idle_then_reuses_call() {
                     error: false,
                 },
                 catalog(),
-                config(8),
                 budget(),
             ),
             settings(),
@@ -203,7 +202,6 @@ async fn tools_conversation_cancels_pending_effect_before_stop_without_result_re
                     error: false,
                 },
                 catalog(),
-                config(8),
                 budget(),
             ),
             settings(),
@@ -300,7 +298,7 @@ async fn tools_daily_budget_survives_generations_interrupts_without_effect_and_r
                 stalled: false,
                 error: false,
             };
-            let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget.clone()).unwrap();
+            let mut session = ToolSession::new(&mut call, host, catalog(), budget.clone()).unwrap();
             finish(&mut session).await;
             drop(session);
             call.close(deadline()).await.unwrap();

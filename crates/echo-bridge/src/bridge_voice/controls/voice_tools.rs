@@ -11,7 +11,7 @@ use crate::{
     bridge_trace::{PortosReceipts, Trace},
 };
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
-use echo_config::{AgentConfig, BridgeConfig};
+use echo_config::BridgeConfig;
 use echo_delegation::codex_dispatch::Catalog;
 use echo_mcp_client::{McpClient, McpError};
 use echo_screen_contract::settings_v1::LinkStatusV1;
@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 
 /// Bounds Port OS catalog discovery well inside the call's connect deadline.
 const DISCOVERY: Duration = Duration::from_secs(5);
+const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) struct Mcp {
     client: Option<McpClient<Token>>,
@@ -182,7 +183,6 @@ impl<H: ToolHost + Sync> ToolHost for Session<H> {
 
 pub(super) struct Tools {
     pub host: Option<Local<Policy<Mcp>>>,
-    pub config: AgentConfig,
     pub budget: ToolBudget,
     allowed: Vec<String>,
     server: Option<String>,
@@ -197,7 +197,6 @@ impl Tools {
     pub fn new(config: &BridgeConfig, utc_day: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         Self {
             host: None,
-            config: config.agent.clone(),
             budget: ToolBudget::new(config.agent.daily_request_cap, move || Ok(utc_day())),
             allowed: config
                 .mcp
@@ -241,7 +240,7 @@ impl Tools {
                 McpClient::with_ca(
                     server.clone(),
                     Token::new(server.clone(), self.grant()),
-                    Duration::from_secs(config.agent.task_deadline_seconds),
+                    MCP_REQUEST_TIMEOUT,
                     ca_pem.as_deref(),
                 )
                 .map_err(|_| Error::Input)
@@ -365,7 +364,7 @@ pub(super) async fn conversation<L, R, W, P>(
     mut device: (&L, &mut L::Events, <L::Events as echo_link::LinkEvents>::Run),
     io: &mut echo_codex::codex_io::RpcIo<R, W>,
     peer: P,
-    options: (super::ConversationOptions<'_>, &mut Tools),
+    options: (super::ConversationOptions<'_>, &mut Tools, tokio::time::Instant),
     cancelled: impl std::future::Future<Output = ()>,
     mut observe: impl FnMut(super::SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error>
@@ -375,7 +374,7 @@ where
     W: tokio::io::AsyncWrite + Unpin,
     P: echo_media::MediaPeer,
 {
-    let (options, tools) = options;
+    let (options, tools, opened) = options;
     let mut call = crate::bridge_codex::MediaCall::new(io, peer);
     tokio::pin!(cancelled);
     let work = async {
@@ -413,11 +412,10 @@ where
             (
                 Session::new(tools.host.as_ref().ok_or(Error::Unavailable)?.clone(), requests, active),
                 catalog,
-                tools.config.clone(),
                 tools.budget.clone(),
             ),
             Some((receiver, run)),
-            options.session,
+            (options.session, opened),
             cancelled.as_mut(),
             &mut observe,
         ))
@@ -425,7 +423,7 @@ where
     };
     let result = work.await;
     let cleanup = call.close(tokio::time::Instant::now() + Duration::from_secs(2)).await;
-    if result == Err(Error::Control) {
+    if matches!(result, Err(Error::Control | Error::SessionCeiling)) {
         cleanup.and(result)
     } else {
         result.and_then(|completed| cleanup.map(|()| completed))

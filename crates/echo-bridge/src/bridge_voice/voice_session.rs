@@ -1,5 +1,5 @@
 //! One connected call spans wakes; every return awaits signaling/media cleanup.
-use super::{Notice, Options, Stats, VoicePort, run};
+use super::{Notice, Options, Stats, VoicePort, run_opened};
 use crate::{
     Error,
     bridge_codex::{Event, MediaCall, MediaEvent, RetainedCall},
@@ -18,11 +18,13 @@ type SessionRequests = (
     tokio::sync::watch::Sender<Option<std::sync::Arc<()>>>,
 );
 
+pub(super) const NO_ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Copy)]
 pub struct SessionOptions {
     /// None retains one reply per wake; Some retains capture between replies.
     pub listen_timeout: Option<Duration>,
-    /// Ceiling for tool-granted waiting, measured from each run's opening.
+    /// Ceiling for delegated waiting and listen grants from each run's opening.
     pub session_max: Duration,
     pub idle: Duration,
     pub response_timeout: Duration,
@@ -96,14 +98,14 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
-    open_traced(device, io, peer, (options, None), cancelled, observe).await
+    open_traced(device, io, peer, (options, None, Instant::now()), cancelled, observe).await
 }
 
 pub(super) async fn open_traced<L, R, W, P>(
     mut device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
     io: &mut RpcIo<R, W>,
     peer: P,
-    options: (ConversationOptions<'_>, Option<crate::bridge_trace::Trace>),
+    options: (ConversationOptions<'_>, Option<crate::bridge_trace::Trace>, Instant),
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error>
@@ -113,7 +115,7 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
-    let (options, trace) = options;
+    let (mut options, trace, opened) = options;
     let mut call = MediaCall::new(io, peer);
     tokio::pin!(cancelled);
     let work = async {
@@ -137,7 +139,14 @@ where
         )
         .await?;
         observe(SessionNotice::Connected)?;
-        conversation(device, &mut call, options.session, cancelled.as_mut(), &mut observe).await
+        drive(
+            device,
+            &mut call,
+            (&mut options.session, opened),
+            cancelled.as_mut(),
+            &mut observe,
+        )
+        .await
     };
     let result = work.await;
     // Also covers a cancelled start and a failed Connected observer. The
@@ -176,7 +185,14 @@ where
     tokio::pin!(cancelled);
     let work = async {
         validate(&options)?;
-        drive(device, call, &mut options, cancelled.as_mut(), &mut observe).await
+        drive(
+            device,
+            call,
+            (&mut options, Instant::now()),
+            cancelled.as_mut(),
+            &mut observe,
+        )
+        .await
     };
     let result = work.await;
     // This cleanup is deliberately outside the cancelled operation. A ready
@@ -199,7 +215,6 @@ pub async fn tool_conversation<L, R, W, P, H>(
     tools: (
         H,
         echo_delegation::codex_dispatch::Catalog,
-        echo_config::AgentConfig,
         crate::bridge_codex::ToolBudget,
     ),
     options: SessionOptions,
@@ -213,7 +228,7 @@ where
     P: MediaPeer,
     H: echo_agent_api::ToolHost + 'static,
 {
-    session_conversation(device, call, tools, None, options, cancelled, observe).await
+    session_conversation(device, call, tools, None, (options, Instant::now()), cancelled, observe).await
 }
 
 /// Production composes a host that forwards session tool requests to this
@@ -224,11 +239,10 @@ pub(super) async fn session_conversation<L, R, W, P, H>(
     tools: (
         H,
         echo_delegation::codex_dispatch::Catalog,
-        echo_config::AgentConfig,
         crate::bridge_codex::ToolBudget,
     ),
     requests: Option<SessionRequests>,
-    mut options: SessionOptions,
+    (mut options, opened): (SessionOptions, Instant),
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error>
@@ -241,15 +255,14 @@ where
 {
     let work = async {
         validate(&options)?;
-        let (host, catalog, config, budget) = tools;
-        let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, config, budget)?;
+        let (host, catalog, budget) = tools;
+        let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, budget)?;
         if let Some((requests, run)) = requests {
             session = session.with_session(requests, run);
         }
-        let result = drive(device, &mut session, &mut options, cancelled, &mut observe).await;
-        if matches!(result, Err(Error::Deadline | Error::NoResponse)) {
-            // The run deadline may precede the delegated turn's own timer.
-            // Observe its cause before the unchanged cleanup drops dispatch.
+        let result = drive(device, &mut session, (&mut options, opened), cancelled, &mut observe).await;
+        if result == Err(Error::SessionCeiling) {
+            // Record the expiry before cleanup drops dispatch and closes the call.
             session.trace_deadline();
         }
         result
@@ -263,7 +276,7 @@ where
 fn settled(result: Result<u64, Error>, cleanup: Result<(), Error>) -> Result<u64, Error> {
     // A kill may resume only after successful cleanup. Preserve other original
     // failures, but never normalize cancellation over an unsuccessful stop.
-    if result == Err(Error::Control) {
+    if matches!(result, Err(Error::Control | Error::SessionCeiling)) {
         cleanup.and(result)
     } else {
         result.and_then(|completed| cleanup.map(|()| completed))
@@ -304,7 +317,7 @@ pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
 async fn drive<L: EchoLink>(
     device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
     call: &mut impl RetainedCall,
-    options: &mut SessionOptions,
+    (options, mut opened): (&mut SessionOptions, Instant),
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(SessionNotice) -> Result<(), Error>,
 ) -> Result<u64, Error> {
@@ -320,19 +333,22 @@ async fn drive<L: EchoLink>(
         if completed > 0 {
             super::earcon::start()?;
         }
-        let stats = run(
+        let stats = run_opened(
             client,
             events,
             microphone,
             call,
-            Options {
-                listen_timeout: options.listen_timeout,
-                session_max: options.session_max,
-                response_deadline: deadline,
-                played_timeout: options.played_timeout,
-                reply_lead_ms: options.reply_lead_ms,
-                muted: options.muted,
-            },
+            (
+                Options {
+                    listen_timeout: options.listen_timeout,
+                    session_max: options.session_max,
+                    response_deadline: deadline,
+                    played_timeout: options.played_timeout,
+                    reply_lead_ms: options.reply_lead_ms,
+                    muted: options.muted,
+                },
+                opened,
+            ),
             cancelled.as_mut(),
             |notice| project_reply(notice, &mut options.muted, observe),
         )
@@ -349,6 +365,7 @@ async fn drive<L: EchoLink>(
             return Ok(completed);
         };
         microphone = next;
+        opened = Instant::now();
         prepare_wake(call, options.response_timeout, cancelled.as_mut()).await?;
     }
 }

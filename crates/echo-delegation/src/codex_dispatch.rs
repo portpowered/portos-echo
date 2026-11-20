@@ -2,7 +2,7 @@
 //!
 //! The single IO owner admits matching turn notifications, polls this work
 //! alongside IO/media, and writes the returned result under the original RPC
-//! request ID. It must deliver `interrupt` on terminal budget/deadline failure.
+//! request ID. It must deliver `interrupt` when daily admission is refused.
 //! Dropping a dispatch future never permits its call ID to execute again.
 //! The supplied `ToolHost` still owns confirmation policy and MCP authorization;
 //! catalog discovery and model intent cannot grant consent.
@@ -13,9 +13,7 @@ pub use catalog::Catalog;
 
 use echo_agent_api::{ToolError, ToolHost};
 use echo_codex::codex_protocol::{ToolCall, ToolContent, ToolResult, TurnInterrupt};
-use echo_config::AgentConfig;
-use std::{collections::HashSet, time::Duration};
-use tokio::time::{Instant, timeout_at};
+use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DispatchError {
@@ -27,8 +25,6 @@ pub enum DispatchError {
     Stale,
     #[error("delegated turn budget exhausted")]
     Budget,
-    #[error("delegated turn deadline exceeded")]
-    Deadline,
     #[error("tool request refused")]
     Refused,
 }
@@ -80,7 +76,6 @@ impl DailyBudget {
 
 struct Turn {
     id: String,
-    deadline: Instant,
     calls: HashSet<String>,
     terminal: bool,
 }
@@ -90,41 +85,27 @@ pub struct Dispatcher<H> {
     host: H,
     catalog: Catalog,
     thread: String,
-    config: AgentConfig,
     seen_turns: HashSet<String>,
     active: Option<Turn>,
 }
 
-/// Payloads intentionally have no Debug/Display implementation.
-pub struct Outcome {
-    pub result: ToolResult,
-    pub interrupt: Option<TurnInterrupt>,
-}
-
 impl<H: ToolHost> Dispatcher<H> {
     /// # Errors
-    /// Invalid thread, zero budget/deadline or overflowing deadline.
-    pub fn new(host: H, catalog: Catalog, thread: String, config: AgentConfig) -> Result<Self, DispatchError> {
-        if !valid_id(&thread)
-            || config.max_tool_calls == 0
-            || config.task_deadline_seconds == 0
-            || Instant::now()
-                .checked_add(Duration::from_secs(config.task_deadline_seconds))
-                .is_none()
-        {
+    /// Invalid thread identity.
+    pub fn new(host: H, catalog: Catalog, thread: String) -> Result<Self, DispatchError> {
+        if !valid_id(&thread) {
             return Err(DispatchError::Configuration);
         }
         Ok(Self {
             host,
             catalog,
             thread,
-            config,
             seen_turns: HashSet::new(),
             active: None,
         })
     }
 
-    /// Bind a matching turn once, without resetting its deadline on tool calls.
+    /// Bind a matching turn once.
     /// The IO owner must check daily admission and interrupt a refused turn.
     /// # Errors
     /// Invalid/foreign/duplicate turns, unfinished work or generation capacity.
@@ -135,13 +116,9 @@ impl<H: ToolHost> Dispatcher<H> {
         if self.seen_turns.len() == 1024 {
             return Err(DispatchError::Budget);
         }
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(self.config.task_deadline_seconds))
-            .ok_or(DispatchError::Configuration)?;
         self.seen_turns.insert(turn.to_owned());
         self.active = Some(Turn {
             id: turn.into(),
-            deadline,
             calls: HashSet::new(),
             terminal: false,
         });
@@ -172,39 +149,16 @@ impl<H: ToolHost> Dispatcher<H> {
         })
     }
 
-    /// The IO owner schedules this deadline even when no tool request arrives.
-    #[must_use]
-    pub fn deadline(&self) -> Option<Instant> {
-        self.active
-            .as_ref()
-            .filter(|turn| !turn.terminal)
-            .map(|turn| turn.deadline)
-    }
-
-    /// Interrupt an expired turn once, including while the model is silent.
-    /// No late tool can execute after this transition.
-    pub fn expire(&mut self) -> Option<TurnInterrupt> {
-        let turn = self.active.as_mut()?;
-        if turn.terminal || Instant::now() < turn.deadline {
-            return None;
-        }
-        turn.terminal = true;
-        Some(TurnInterrupt {
-            thread_id: self.thread.clone(),
-            turn_id: turn.id.clone(),
-        })
-    }
-
     /// Execute at most one authorized attempt; never retry ambiguous effects.
     /// A matching server request ID remains the IO owner's responsibility.
     /// This future must be polled alongside IO, not block its event reader.
-    pub async fn dispatch(&mut self, call: &ToolCall) -> Outcome {
+    pub async fn dispatch(&mut self, call: &ToolCall) -> ToolResult {
         let name = match self.admit(call) {
             Ok(name) => name,
-            Err(error) => return self.refusal(call, error),
+            Err(error) => return failed(&error.to_string()),
         };
         let Some(turn) = &self.active else {
-            return self.refusal(call, DispatchError::Stale);
+            return failed(&DispatchError::Stale.to_string());
         };
         // Length prefixes prevent ambiguous keys when opaque IDs contain colons.
         let key = format!(
@@ -216,27 +170,14 @@ impl<H: ToolHost> Dispatcher<H> {
             call.call_id.len(),
             call.call_id
         );
-        let result = timeout_at(
-            turn.deadline,
-            Box::pin(self.host.call_tool(&name, call.arguments.clone(), &key)),
-        )
-        .await;
-        if Instant::now() >= turn.deadline || result.is_err() {
-            return self.refusal(call, DispatchError::Deadline);
-        }
-        let result = match result {
-            Ok(Ok(result)) => ToolResult {
+        match Box::pin(self.host.call_tool(&name, call.arguments.clone(), &key)).await {
+            Ok(result) => ToolResult {
                 content_items: vec![ToolContent::InputText {
                     text: result.content.to_string(),
                 }],
                 success: !result.is_error,
             },
-            Ok(Err(error)) => failed(tool_error(&error)),
-            Err(_) => failed("tool deadline exceeded"),
-        };
-        Outcome {
-            result,
-            interrupt: None,
+            Err(error) => failed(tool_error(&error)),
         }
     }
 
@@ -250,12 +191,6 @@ impl<H: ToolHost> Dispatcher<H> {
         {
             return Err(DispatchError::Stale);
         }
-        if Instant::now() >= turn.deadline {
-            return Err(DispatchError::Deadline);
-        }
-        if turn.calls.len() >= self.config.max_tool_calls.min(8) as usize {
-            return Err(DispatchError::Budget);
-        }
         // Reserve even refused/cancelled requests, so they cannot be replayed.
         turn.calls.insert(call.call_id.clone());
         if call.namespace.is_some() || !call.arguments.is_object() {
@@ -265,24 +200,6 @@ impl<H: ToolHost> Dispatcher<H> {
             .resolve(&call.tool)
             .map(str::to_owned)
             .ok_or(DispatchError::Refused)
-    }
-
-    fn refusal(&mut self, call: &ToolCall, error: DispatchError) -> Outcome {
-        let interrupt = if matches!(error, DispatchError::Budget | DispatchError::Deadline) {
-            if let Some(turn) = &mut self.active {
-                turn.terminal = true;
-            }
-            Some(TurnInterrupt {
-                thread_id: self.thread.clone(),
-                turn_id: call.turn_id.clone(),
-            })
-        } else {
-            None
-        };
-        Outcome {
-            result: failed(&error.to_string()),
-            interrupt,
-        }
     }
 }
 

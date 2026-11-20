@@ -9,7 +9,7 @@ use tokio::time::{Duration, Instant};
 
 pub(super) const EXTEND: &str = "extend_session";
 pub(super) const END: &str = "end_session";
-/// Bounded idempotency memory; a run admits far fewer tool calls than this.
+/// Bound the run's session-tool idempotency memory.
 const ANSWERED: usize = 64;
 
 /// Payload-free projection of one settled session tool invocation.

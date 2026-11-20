@@ -65,7 +65,10 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
         Ok(if method == "turn/started" {
             Event::TurnStarted { thread, turn }
         } else {
-            let answered = self.answered.take().is_some_and(|answered| answered == turn);
+            let answered = self.answered.as_ref() == Some(&turn);
+            if answered {
+                self.answered = None;
+            }
             Event::TurnCompleted { thread, turn, answered }
         })
     }
@@ -85,6 +88,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
     fn realtime_item(&mut self, item: &serde_json::Value) -> Event {
         match item["type"].as_str() {
             Some("input_audio_buffer.speech_started") => Event::SpeechStarted,
+            Some("input_audio_buffer.speech_stopped") => Event::SpeechStopped,
             Some("handoff_request") => {
                 let id = item["handoff_id"]
                     .as_str()

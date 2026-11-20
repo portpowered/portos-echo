@@ -71,17 +71,15 @@ fn settings_cli_handoff_retains_single_startup_read() {
 
 #[test]
 fn configured_capture_watchdog_covers_wait_work_and_playback_with_saturation() {
-    for (maximum, response, played, expected) in [
-        (600, 30, 5, 605),
-        (60, 90, 5, 95),
-        (3, 3, 5, 8),
-        (2_147_483_647, 30, 5, 2_147_483_647),
-        (600, u64::MAX, 5, 2_147_483_647),
-        (600, 30, u64::MAX, 2_147_483_647),
+    for (maximum, played, expected) in [
+        (600, 5, 605),
+        (60, 5, 65),
+        (3, 5, 65),
+        (2_147_483_647, 5, 2_147_483_647),
+        (600, u64::MAX, 2_147_483_647),
     ] {
         let mut prepared = configured();
         prepared.config.voice.session_max_seconds = maximum;
-        prepared.config.agent.task_deadline_seconds = response;
         let mut options = prepared.options(None, vec![]);
         options.voice.session.played_timeout = Duration::from_secs(played);
         assert_eq!(options.capture_failsafe_seconds(), expected);

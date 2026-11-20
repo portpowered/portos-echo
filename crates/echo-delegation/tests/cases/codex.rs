@@ -1,6 +1,5 @@
 //! T3 adapter/MCP boundary; real-pin turn orchestration is proved separately by M4.
 use super::journey::Token;
-use crate::config;
 use echo_agent_api::ToolHost;
 use echo_codex::codex_protocol::ToolCall;
 use echo_config::{McpAuth, McpServer};
@@ -31,11 +30,10 @@ async fn codex_dynamic_catalog_dispatches_one_mcp_attempt_and_reports_http_failu
         .await
         .unwrap();
         let (host, catalog) = discovered(&spoof).await;
-        let mut dispatcher = Dispatcher::new(host, catalog, "thread-1".into(), config()).unwrap();
+        let mut dispatcher = Dispatcher::new(host, catalog, "thread-1".into()).unwrap();
         dispatcher.start_turn("thread-1", "turn-1").unwrap();
         let outcome = dispatcher.dispatch(&request(0)).await;
-        assert!(outcome.interrupt.is_none());
-        let result = serde_json::to_value(outcome.result).unwrap();
+        let result = serde_json::to_value(outcome).unwrap();
         let text = if fault == Fault::None {
             "[{\"text\":\"delegated echo\",\"type\":\"text\"}]"
         } else {
@@ -45,7 +43,7 @@ async fn codex_dynamic_catalog_dispatches_one_mcp_attempt_and_reports_http_failu
             result,
             json!({"contentItems":[{"type":"inputText","text":text}],"success":fault == Fault::None})
         );
-        assert!(!dispatcher.dispatch(&request(0)).await.result.success);
+        assert!(!dispatcher.dispatch(&request(0)).await.success);
         let snapshot = spoof.snapshot().unwrap();
         assert_eq!(
             snapshot.calls,
@@ -84,9 +82,9 @@ async fn codex_nonallowlisted_alias_never_reaches_mcp() {
     .unwrap();
     let catalog = Catalog::new(host.list_tools().await.unwrap(), &[]).unwrap();
     assert_eq!(catalog.tools(), []);
-    let mut dispatcher = Dispatcher::new(host, catalog, "thread-1".into(), config()).unwrap();
+    let mut dispatcher = Dispatcher::new(host, catalog, "thread-1".into()).unwrap();
     dispatcher.start_turn("thread-1", "turn-1").unwrap();
-    assert!(!dispatcher.dispatch(&request(0)).await.result.success);
+    assert!(!dispatcher.dispatch(&request(0)).await.success);
     assert_eq!(spoof.snapshot().unwrap().calls, []);
     assert_eq!(
         spoof

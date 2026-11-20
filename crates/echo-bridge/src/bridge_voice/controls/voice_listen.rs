@@ -2,6 +2,15 @@
 use super::{Error, Event, MediaEvent, Notice, Options, Source, VoicePort};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
 use std::{future::Future, time::Duration};
+use tokio::time::Instant;
+
+pub(super) async fn until(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline).await;
+    } else {
+        std::future::pending().await
+    }
+}
 
 pub(super) async fn replies<L: EchoLink>(
     client: &L,
@@ -98,7 +107,7 @@ async fn after_reply<L: EchoLink>(
         return Ok(false);
     }
     let followup = options.listen_timeout.is_some();
-    if !followup && !source.delegation.in_flight() {
+    if !followup && !source.delegation.waiting() {
         return Ok(false);
     }
     source.controller.listen_after_reply(window(source, options)?)?;
@@ -123,6 +132,7 @@ async fn after_reply<L: EchoLink>(
 /// owes no delegated answer: the farewell already spoken is all of it.
 pub(super) async fn complete_turn(answered: bool, port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
     source.delegation.completed();
+    source.delegation.expect_answer(answered);
     let silent = !answered && !source.delegation.in_flight();
     if silent && source.session.ending() && source.delegation.released() {
         close_reply(port, source).await?;
@@ -228,18 +238,17 @@ async fn listen<E: LinkEvents>(
     let (events, microphone) = input;
     let (source, drain) = context;
     tokio::pin!(cancelled);
-    // A dispatch still in flight holds the run open past idle. It started
-    // before this wait, so its own task deadline ends it inside this window.
-    let hold = source.controller.replacement_deadline().ok();
     let mut turn_started = false;
     loop {
         // A granted extension moves the deadline; a requested end closes now.
         let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
-        let deadline = match hold {
-            Some(hold) if source.delegation.in_flight() => idle.max(hold),
-            _ => idle,
+        let delegated = source.delegation.waiting();
+        let deadline = if delegated {
+            source.run_ceiling.filter(|_| !source.user_speaking)
+        } else {
+            Some(idle)
         };
-        if source.session.ending() || (!followup && !source.delegation.in_flight()) {
+        if source.session.ending() || (!followup && !delegated) {
             return Ok(false);
         }
         tokio::select! {
@@ -247,8 +256,8 @@ async fn listen<E: LinkEvents>(
             () = cancelled.as_mut() => return Err(Error::Control),
             // Playback has settled before entering listen. A running delegated
             // turn still owns this reply; finish it before admitting cleanup.
-            () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
-            () = tokio::time::sleep_until(deadline) => return Ok(false),
+            () = crate::bridge_settings::settings_restart::requested(), if !delegated => return Ok(false),
+            () = until(deadline) => return if delegated { Err(Error::SessionCeiling) } else { Ok(false) },
             result = listening_step((events, microphone), port, source, &mut turn_started, observe) => {
                 if result? { return Ok(true); }
             },
@@ -312,7 +321,8 @@ async fn listening_step<E: LinkEvents>(
                     super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
-                MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),
+                MediaEvent::Control(Event::TurnCompleted { answered, .. }) => source.dispatch_completed(answered),
+                MediaEvent::Control(Event::SpeechStopped) => source.user_speaking = false,
                 // Continuous RTP and stale done frames cannot renew listening.
                 MediaEvent::Control(_) | MediaEvent::Audio(_) => (),
             }
