@@ -21,6 +21,8 @@ pub enum PromptKind {
 /// Decoded input, with no arbitrary key/path or executable surface.
 pub enum SettingsOperation {
     Snapshot,
+    PackCatalog(crate::PackCatalog),
+    PackSelection(crate::PackCatalog, String),
     Save(SettingsPatchV1),
     Prompt(PromptKind, PromptSaveV1),
 }
@@ -28,6 +30,8 @@ pub enum SettingsOperation {
 /// Host diagnostics must contain only trusted field names and fixed categories.
 pub enum SettingsReply {
     Snapshot(SettingsSnapshotV1),
+    Packs(crate::PackCatalog),
+    InvalidPackSelection,
     Saved(SaveResultV1),
     Invalid(SettingsErrorV1),
     Persistence(SettingsErrorV1),
@@ -36,6 +40,12 @@ pub enum SettingsReply {
 impl SettingsReply {
     fn into_response(self) -> Response {
         match self {
+            Self::Packs(value) => Json(value).into_response(),
+            Self::InvalidPackSelection => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({"version":1,"reason":"invalid_selection"})),
+            )
+                .into_response(),
             Self::Snapshot(value) => Json(value).into_response(),
             Self::Saved(value) => Json(value).into_response(),
             Self::Invalid(value) => (StatusCode::UNPROCESSABLE_ENTITY, Json(value)).into_response(),

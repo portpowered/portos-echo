@@ -1,7 +1,7 @@
 //! Deliberately small CSS grammar: documented selectors and inert declarations.
 //! Reject escapes/comments instead of trying to normalize browser CSS parsing.
 use super::{Error, extension, relative};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Write};
 
 pub(super) fn validate(css: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<(), Error> {
     if !css.is_ascii() || css.contains(['\\', '@', '<', '>']) || css.contains("/*") || css.contains("*/") {
@@ -124,7 +124,7 @@ pub(super) fn render(css: &str, base: &str, query: &str) -> Result<String, Error
                     .and_then(|v| v.strip_suffix(')'))
                     .ok_or(Error::Css)?;
                 let path = path.trim().trim_matches(['\'', '"']);
-                output.push_str(&format!("url(\"{base}{path}?{query}\")"));
+                write!(output, "url(\"{base}{path}?{query}\")").map_err(|_| Error::Css)?;
             } else {
                 output.push_str(value.trim());
             }

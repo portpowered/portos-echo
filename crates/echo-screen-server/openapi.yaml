@@ -3,6 +3,59 @@ info: { title: Loopback screen server, version: 0.3.0 }
 servers:
   - url: http://127.0.0.1:16900
 paths:
+  /screen-packs/v1:
+    get:
+      security: [{ pairingToken: [] }]
+      description: Revalidated installed catalog resolved against the settings owner's accepted overlay. Supplied foreign Origin refused. No paths, tokens or submitted URLs. Revision/job publication is pending; this increment returns revision zero and no jobs.
+      responses:
+        '200':
+          description: Safe catalog and effective installed identity (or null for built-in)
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/PackSnapshotV1' } }
+        '401': { description: Missing, empty, wrong, duplicate or revoked pairing token }
+        '403': { description: Supplied foreign Origin }
+        '503': { description: Pack root or settings host absent, unavailable, saturated or stopping }
+  /screen-packs/v1/selection:
+    post:
+      security: [{ pairingToken: [] }]
+      description: Auth and Origin before parsing; final commit admission uses the existing single settings writer. Atomically save only screen_pack at 0600. Pack-only saves never request a voice restart; any pending voice restart remains reported. Reload publication is pending in this increment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [version, screen_pack]
+              properties:
+                version: { type: integer, const: 1 }
+                screen_pack: { type: string, description: Empty for built-in, template for highest installed template version, or exact validated directory identity }
+      responses:
+        '200':
+          description: Durable selection with existing restart status
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/SaveResultV1' } }
+        '400': { description: Invalid JSON/version/shape or unknown field; no write }
+        '401': { description: Invalid pairing token; no write }
+        '403': { description: Supplied foreign Origin; no write }
+        '413': { description: Body exceeds 65536 bytes; no write }
+        '415': { description: Requires application/json; no write }
+        '422':
+          description: Unknown or invalid installed selection; accepted choice and file retained
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [version, reason]
+                properties:
+                  version: { type: integer, const: 1 }
+                  reason: { const: invalid_selection }
+        '500':
+          description: Existing writer's fixed persistence diagnostic, including explicit post-rename durability uncertainty
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/SettingsErrorV1' } }
+        '503': { description: Pack root or settings host unavailable, saturated or stopping; no queued retry }
   /screen-packs/v1/{pack}/{file}:
     get:
       security: [{ pairingToken: [] }]
@@ -175,6 +228,28 @@ components:
   securitySchemes:
     pairingToken: { type: apiKey, in: query, name: token }
   schemas:
+    PackSnapshotV1:
+      type: object
+      additionalProperties: false
+      required: [version, revision, active, installed, jobs, warning]
+      properties:
+        version: { type: integer, const: 1 }
+        revision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        active: { type: [string, 'null'] }
+        installed:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name, version, manifest_url, rest_url]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              version: { type: string }
+              manifest_url: { type: string, description: Same-origin relative URL without token; caller appends pairing token }
+              rest_url: { type: [string, 'null'], description: Null for layout-only packs }
+        jobs: { type: array, items: { type: object }, description: Empty until interactive job publication is implemented }
+        warning: { type: [string, 'null'], enum: [null, invalid_selection] }
     SettingsValuesV1:
       type: object
       additionalProperties: false

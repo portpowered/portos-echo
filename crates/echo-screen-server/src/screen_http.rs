@@ -26,7 +26,7 @@ pub(super) struct HttpState {
     pub(crate) stop: watch::Receiver<bool>,
     pub(crate) drain: watch::Receiver<Option<tokio::time::Instant>>,
     pub(crate) packs: Arc<crate::packs::Files>,
-    origin: String,
+    pub(crate) origin: String,
     settings: Option<mpsc::Sender<SettingsRequest>>,
 }
 
@@ -47,6 +47,8 @@ pub(crate) fn router(
         .route("/actions", post(actions_post))
         .route("/settings/v1", get(settings_http::snapshot).post(settings_http::save))
         .route("/settings/v1/prompts/{kind}", post(settings_http::prompt))
+        .route("/screen-packs/v1", get(crate::packs::view::snapshot))
+        .route("/screen-packs/v1/selection", post(crate::packs::view::selection))
         .route("/screen-packs/v1/{pack}/{*file}", get(crate::packs::http::file))
         .layer(middleware::from_fn(headers))
         .with_state(HttpState {
@@ -87,7 +89,7 @@ async fn index(State(state): State<HttpState>) -> Response {
 }
 
 impl HttpState {
-    fn settings_dispatch(&self) -> SettingsDispatch {
+    pub(crate) fn settings_dispatch(&self) -> SettingsDispatch {
         SettingsDispatch {
             core: self.core.clone(),
             stop: self.stop.clone(),

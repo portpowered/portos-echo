@@ -7,6 +7,7 @@ pub(crate) mod http;
 mod manifest;
 #[cfg(test)]
 mod tests;
+pub(crate) mod view;
 mod worker;
 
 pub(crate) use worker::{Downloads, start};

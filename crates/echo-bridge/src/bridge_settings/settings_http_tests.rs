@@ -256,3 +256,6 @@ async fn t3_settings_host_http_prompt_exact_bytes_cache_and_validation_without_r
     assert!(!fixture.path("settings.toml").exists());
     fixture.close().await;
 }
+
+#[path = "settings_http_tests/pack_cases.rs"]
+mod pack_cases;
