@@ -1,4 +1,4 @@
-//! Closed event vocabulary and counters only. Never serialize provider events.
+//! Authored events and counters, with bounded redacted delegation payloads.
 //! `settings.saved` records only `restart_pending` after a committed save;
 //! `prompt.saved` records only the fixed voice|runner selector. A generation
 //! records `settings.reexec_pending` once when its first changed save commits.
@@ -80,7 +80,8 @@ impl Trace {
         Ok(())
     }
 
-    /// Callers supply only authored event names and safe, bounded fields.
+    /// Callers supply authored event names and safe metadata. Delegation payload
+    /// fields are redacted, capped or removed here before reaching the writer.
     /// # Errors
     /// A serialization/write/flush failure prevents claiming completion.
     pub fn record(&mut self, event: &str, run: Option<&str>, fields: Value) -> Result<(), Error> {
