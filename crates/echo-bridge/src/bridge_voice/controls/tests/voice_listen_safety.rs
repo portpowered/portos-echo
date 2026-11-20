@@ -1,5 +1,7 @@
 //! T1: idle capture/control boundaries with staged memory-only input.
+use super::super::super::session_tools::Grants;
 use super::*;
+use crate::bridge_codex::SessionCommand;
 use echo_link::{MicFrame, MicrophoneRun, RunStats};
 
 struct Run(mpsc::Receiver<MicFrame>);
@@ -74,8 +76,7 @@ async fn voice_listen_goodbye_timeout_retires_end_authority_without_admitting_sp
     let (tx, rx) = mpsc::channel(2);
     let mut port = Port(rx, std::rc::Rc::default());
     let mut source = Source::new(200, false).unwrap();
-    source.session =
-        super::super::super::session_tools::Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
+    source.session = Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
     source.controller.reply_started();
     source.controller.played(true).unwrap();
     goodbye_handoff(&mut source);
@@ -87,11 +88,7 @@ async fn voice_listen_goodbye_timeout_retires_end_authority_without_admitting_sp
         }
         Ok(())
     };
-    let (event, answer) = session_request(
-        crate::bridge_codex::SessionCommand::Invalid { end: true },
-        &old,
-        "refused",
-    );
+    let (event, answer) = session_request(SessionCommand::Invalid { end: true }, &old, "refused");
     tx.send(MediaEvent::Control(event)).await.unwrap();
     tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
     wait_goodbye(
@@ -110,7 +107,7 @@ async fn voice_listen_goodbye_timeout_retires_end_authority_without_admitting_sp
     );
     assert_eq!(source.controller.idle_deadline(), None);
     assert!(source.controller.has_played());
-    let (event, answer) = session_request(crate::bridge_codex::SessionCommand::End, &old, "obsolete");
+    let (event, answer) = session_request(SessionCommand::End, &old, "obsolete");
     tx.send(MediaEvent::Control(event)).await.unwrap();
     goodbye_step(
         &mut input.events,
@@ -135,8 +132,7 @@ async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playbac
     let (_tx, rx) = mpsc::channel(1);
     let mut port = Port(rx, std::rc::Rc::default());
     let mut source = Source::new(200, false).unwrap();
-    source.session =
-        super::super::super::session_tools::Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
+    source.session = Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
     source.spoke();
     goodbye_handoff(&mut source);
     source.audio(&[5000; 320]).unwrap();
@@ -382,13 +378,9 @@ async fn goodbye_with_end(order: GoodbyeOrder) {
         reply_lead_ms: 200,
         muted: false,
     };
-    source.session = super::super::session_tools::Grants::new(options.listen_timeout, options.session_max);
+    source.session = Grants::new(options.listen_timeout, options.session_max);
     source.controller.admit_response(options.response_deadline).unwrap();
-    let (end, answer) = session_request(
-        crate::bridge_codex::SessionCommand::End,
-        &source.session.run,
-        "farewell",
-    );
+    let (end, answer) = session_request(SessionCommand::End, &source.session.run, "farewell");
     let played = tokio::sync::Notify::new();
     let stopped = tokio::sync::Notify::new();
     let mut receipts = Vec::new();
@@ -424,10 +416,8 @@ async fn goodbye_with_end(order: GoodbyeOrder) {
     assert!(source.controller.ready_to_close(true, true));
     assert_eq!(source.stats.reply_sent, 12);
     let commands = device.commands();
-    assert_eq!(
-        commands.iter().filter(|cmd| matches!(cmd, Command::Start(..))).count(),
-        1
-    );
+    let starts = commands.iter().filter(|cmd| matches!(cmd, Command::Start(..))).count();
+    assert_eq!(starts, 1);
     assert!(!commands.iter().any(|cmd| matches!(cmd, Command::Cut(_))));
 }
 
@@ -445,7 +435,7 @@ async fn goodbye_run<T>(
             stop_seen = true;
             stopped.notify_one();
         }
-        result.map(|result| result.unwrap())
+        result.map(Result::unwrap)
     });
     let (_, answer) = tokio::join!(run, inputs);
     answer
