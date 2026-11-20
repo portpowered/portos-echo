@@ -87,7 +87,7 @@ release_publish() {
 done
 chown -R 0:0 '${device:?}/apk' '${device:?}/scripts' '${device:?}/MANIFEST'
 chmod 755 '${device:?}/apk' '${device:?}/scripts'
-chmod 644 '${device:?}/apk/echo-screen.apk' '${device:?}/scripts/echo-install.sh' '${device:?}/scripts/echo-install-release.sh' '${device:?}/MANIFEST'"
+chmod 644 '${device:?}/apk/echo-screen.apk' '${device:?}/scripts/echo-install.sh' '${device:?}/scripts/echo-install-release.sh' '${device:?}/scripts/echo-install-setup.sh' '${device:?}/MANIFEST'"
   fi
   current=${release_version:?}
   [ "$current" = null ] || current=\"$current\"

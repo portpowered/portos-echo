@@ -14,6 +14,7 @@ pub const REQUIRED: &[&str] = &[
     "apk/echo-screen.apk",
     "scripts/echo-install.sh",
     "scripts/echo-install-release.sh",
+    "scripts/echo-install-setup.sh",
     "examples/bridge.echo.toml",
     "examples/prompts/voice.md",
     "examples/prompts/runner.md",

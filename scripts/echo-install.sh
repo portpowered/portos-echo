@@ -5,11 +5,16 @@ set -eu
 if ! command -v release_metadata >/dev/null 2>&1; then
   . "$(dirname -- "$0")/echo-install-release.sh"
 fi
-release_bundle='' release_version=null
+# shellcheck source=scripts/echo-install-setup.sh
+if ! command -v setup_operator >/dev/null 2>&1; then
+  . "$(dirname -- "$0")/echo-install-setup.sh"
+fi
+release_bundle='' release_version=null device_mode=false
 # Native host adapter: retain one lifecycle implementation behind two transports.
 # Only the trusted, embedded copy accepts an archive; the validated bundle owns install.
 if [ "${1:-}" = --device ]; then
   shift
+  device_mode=true
   adb() {
     case $1 in
       devices) printf 'List of devices attached\nlocal\tdevice\n' ;;
@@ -34,7 +39,7 @@ if [ "${1:-}" = --device ]; then
     tar -tzf "$archive" >"$stage/names" 2>/dev/null || exit 1
     awk '
       /(^\/|(^|\/)\.\.?($|\/)|[^A-Za-z0-9_.\/-])/ { bad=1 }
-      !/^(MANIFEST|LICENSE|NOTICE|bin\/(echo-bridge|codex-app-server|cacert.pem)|apk\/echo-screen.apk|scripts\/echo-install(-release)?.sh|examples\/(bridge.echo.toml|prompts\/(voice|runner).md)|licenses\/[A-Za-z0-9_.\/-]+)$/ { bad=1 }
+      !/^(MANIFEST|LICENSE|NOTICE|bin\/(echo-bridge|codex-app-server|cacert.pem)|apk\/echo-screen.apk|scripts\/echo-install(-(release|setup))?.sh|examples\/(bridge.echo.toml|prompts\/(voice|runner).md)|licenses\/[A-Za-z0-9_.\/-]+)$/ { bad=1 }
       { if (seen[$0]++) bad=1 }
       END { exit bad }' "$stage/names" || exit 1
     tar -tvzf "$archive" >"$stage/types" 2>/dev/null || exit 1
@@ -42,7 +47,7 @@ if [ "${1:-}" = --device ]; then
     umask 077
     mkdir "$stage/bundle" || exit 1
     tar -xzf "$archive" -C "$stage/bundle" --no-same-owner --no-same-permissions 2>/dev/null || exit 1
-    for member in MANIFEST LICENSE NOTICE bin/echo-bridge bin/codex-app-server bin/cacert.pem apk/echo-screen.apk scripts/echo-install.sh scripts/echo-install-release.sh examples/bridge.echo.toml examples/prompts/voice.md examples/prompts/runner.md licenses/codex/LICENSE licenses/codex/NOTICE licenses/ca/MPL-2.0.txt licenses/ca/NOTICE; do
+    for member in MANIFEST LICENSE NOTICE bin/echo-bridge bin/codex-app-server bin/cacert.pem apk/echo-screen.apk scripts/echo-install.sh scripts/echo-install-release.sh scripts/echo-install-setup.sh examples/bridge.echo.toml examples/prompts/voice.md examples/prompts/runner.md licenses/codex/LICENSE licenses/codex/NOTICE licenses/ca/MPL-2.0.txt licenses/ca/NOTICE; do
       [ -f "$stage/bundle/$member" ] || exit 1
     done
     exit 0
@@ -131,7 +136,9 @@ if [ "$1" = --help ]; then
 fi
 command_name=$1
 shift
-case $command_name in install | start | stop | status | uninstall | doctor | rollback) ;; *) usage ;; esac
+case $command_name in signin | link) [ "$device_mode" = true ] || usage ;;
+esac
+case $command_name in install | start | stop | status | uninstall | doctor | rollback | signin | link) ;; *) usage ;; esac
 config='' bridge='' codex='' ca='' force=false purge=false seen=' '
 while [ "$#" -gt 0 ]; do
   flag=$1
@@ -230,24 +237,7 @@ selection=$(awk 'NR > 1 && NF { count++; if ($2 == "device") ready++ }
   END { print (count == 1 && ready == 1) ? "ready" : "refuse" }' "$log")
 [ "$selection" = ready ] || fail 'exactly one ready adb device is required'
 if [ "$command_name" = doctor ]; then
-  # Read-only, bounded probes. Only fixed labels and numeric observations escape.
-  run_adb shell "
-if test -x /data/local/hassmic/runas; then
-  printf 'hassmic=ok\\n'
-  if /data/local/hassmic/runas nobody 3990,inet nc -z -w 5 chatgpt.com 443 >/dev/null 2>&1; then
-    printf 'egress=ok\\n'
-  else printf 'egress=failed\\n'; fi
-else printf 'hassmic=failed\\negress=failed\\n'; fi
-epoch=\$(date +%s 2>/dev/null) || epoch=unavailable
-case \$epoch in '' | *[!0-9]*) epoch=unavailable ;; esac
-printf 'clock=%s\\n' \"\$epoch\"
-free=\$(df -k /data/local 2>/dev/null | awk 'NR > 1 { value=\$4 } END { print value }') || free=unavailable
-case \$free in '' | *[!0-9]*) free=unavailable ;; esac
-printf 'disk_free=%s\\n' \"\$free\"
-users=\$(ps -A -o PID,USER,NAME 2>/dev/null) || users=''
-user=\$(printf '%s\\n' \"\$users\" | awk '\$3 == \"echo-bridge\" { count++; user=\$2 } END { if (count == 1) print user }')
-case \$user in nobody | 9999 | root | 0) ;; *) user=unavailable ;; esac
-printf 'process_user=%s\\n' \"\$user\""
+  setup_doctor
   cat "$log"
   exit 0
 fi
@@ -379,6 +369,11 @@ for root in '$device/private' '$device/home'; do
     done' sh {} + || exit 1
 done"
 }
+case $command_name in signin | link)
+  setup_operator
+  exit 0
+  ;;
+esac
 write_launcher() {
   run_adb shell "test ! -L '$device/private/launch.sh'
 test ! -L '$device/private/bridge.log'

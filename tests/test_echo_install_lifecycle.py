@@ -31,9 +31,10 @@ def device_archive(box, kind):
                             "licenses/codex/NOTICE", "licenses/ca/MPL-2.0.txt",
                             "licenses/ca/NOTICE"), b"synthetic public bytes")
     payload["scripts/echo-install.sh"] = source.encode()
-    helper = box.script.with_name("echo-install-release.sh")
-    helper.write_text(helper.read_text().replace("/data/local", str(box.root / "remote")))
-    payload["scripts/echo-install-release.sh"] = helper.read_bytes()
+    for name in ("echo-install-release.sh", "echo-install-setup.sh"):
+        helper = box.script.with_name(name)
+        helper.write_text(helper.read_text().replace("/data/local", str(box.root / "remote")))
+        payload["scripts/" + name] = helper.read_bytes()
     archive = stage / "archive.tar.gz"
     with tarfile.open(archive, "w:gz", format=tarfile.USTAR_FORMAT) as target:
         for name, data in payload.items():
@@ -438,3 +439,55 @@ def release_stop(box):
     require(not (box.device / "private/run").exists(), "release stop leaked state")
     # A later start must prove its own held stdin rather than inherit this marker.
     (box.root / "eof").unlink()
+
+
+def setup_operator_cases():
+    # Real authored shell; substitute only Android filesystem/tools and bridge process.
+    cases = (("signin", "stopped", 0), ("link", "nobody", 0), ("link", "9999", 0),
+             ("signin", "nobody", 1), ("link", "stopped", 1), ("link", "root", 1),
+             ("link", "unavailable", 1), ("signin", "locked", 1),
+             ("signin", "dependency", 1), ("signin", "redirected", 1))
+    for verb, state, code in cases:
+        with Sandbox() as box:
+            box.install()
+            box.run([verb], 2)  # Private operations never grow the Linux host CLI.
+            for name in ("echo-install.sh", "echo-install-release.sh", "echo-install-setup.sh"):
+                path = box.script.with_name(name)
+                path.write_text(path.read_text().replace("/data/local", str(box.root / "remote")))
+            bridge = box.device / "bin/echo-bridge"
+            bridge.write_text("#!" + sys.executable + "\n" + """
+import json, os, sys
+from pathlib import Path
+root = Path(os.environ['FAKE_ROOT'])
+(root / 'operator-argv').write_text(json.dumps(sys.argv[1:]))
+(root / 'operator-user').write_text(os.environ.get('FAKE_UID', 'root'))
+print('synthetic-private-content-do-not-print')
+print('synthetic-private-content-do-not-print', file=sys.stderr)
+sys.exit(1 if (root / 'operator-fails').exists() else 0)
+""")
+            config = box.device / "private/bridge.toml"
+            original = config.read_bytes()
+            if state in ("nobody", "9999", "root", "unavailable"):
+                (box.root / "running").touch()
+                (box.root / "process-user").write_text(state)
+            if state == "locked":
+                (box.root / "remote/echo-bridge.lock").mkdir()
+            if state == "dependency":
+                (box.root / "operator-fails").touch()
+            if state == "redirected":
+                config.unlink()
+                config.symlink_to(box.files["config"])
+            box.env["PATH"] = str(box.root / "remote-tools") + ":/usr/bin:/bin"
+            result = box.run(["--device", verb], code)
+            called = box.root / "operator-argv"
+            require(called.exists() == (code == 0 or state == "dependency"), "operator admission differs")
+            if called.exists():
+                require(json.loads(called.read_text()) == [verb, "--config", str(config)], "operator argv differs")
+                require((box.root / "operator-user").read_text() == "9999", "operator ran as root")
+            require(not list(box.root.glob("holder-pid")), "operator started the runtime")
+            require((box.root / "remote/echo-bridge.lock").exists() == (state == "locked"), "operator lock leaked")
+            if state != "redirected":
+                require(config.read_bytes() == original, "operator changed config bytes")
+            require(result.stdout == ("echo-install: " + verb + " completed\n" if code == 0 else ""),
+                    "operator success/privacy differs")
+    print("echo-install setup: signin=PASS link=PASS identity=PASS lock=PASS privacy=PASS")

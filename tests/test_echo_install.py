@@ -97,7 +97,8 @@ class Sandbox:
         scripts.mkdir()
         self.script = scripts / "echo-install.sh"
         shutil.copyfile(ROOT / "scripts/echo-install.sh", self.script)
-        shutil.copyfile(ROOT / "scripts/echo-install-release.sh", scripts / "echo-install-release.sh")
+        for name in ("echo-install-release.sh", "echo-install-setup.sh"):
+            shutil.copyfile(ROOT / "scripts" / name, scripts / name)
         (self.root / "remote-tools").mkdir()
         ps = self.root / "remote-tools/ps"
         ps.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
@@ -458,12 +459,12 @@ def prepare_lifecycle(box, mode="ready"):
 def main():
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
     ownership_lifetime_case()
-    from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases
+    from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, setup_operator_cases
     from test_echo_install_status import status_cases, release_cases
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases,
-                       failure_cases, release_cases, lifecycle_cases, status_cases, nonroot_cases)))
+                       failure_cases, release_cases, lifecycle_cases, status_cases, nonroot_cases, setup_operator_cases)))
     print("echo-install tests: install=PASS lifecycle=PASS status=PASS retention=PASS privacy=PASS")
 
 
