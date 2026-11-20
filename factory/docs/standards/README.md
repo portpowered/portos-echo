@@ -33,6 +33,6 @@ to the surfaces they change.
 
 These files specialize, but do not replace, the repository's standing rules in
 `docs/program/rules.md` and `docs/program/baselines.md`. If two rules appear to
-conflict, the stricter rule applies unless the plan records a narrow, justified exception. Factory plans
-must never weaken repository architecture, testing, accessibility, security,
-or review requirements.
+conflict, the stricter rule applies unless the plan records a narrow, justified
+exception. Factory plans must never weaken repository architecture, testing,
+accessibility, security, or review requirements.
