@@ -235,5 +235,20 @@ the same pinned identity and failed installations emit nothing. Notifications
 use the existing bounded host inbox and recheck revocation and shutdown before
 commit; they neither save settings nor request a voice restart.
 
-The page renderer and file/settings watchers are still pending. Selecting data
-does not yet change the page's look.
+The home-backed pack owner also watches `settings.toml`: two matching bounded
+reads, 250 ms apart, settle an external edit or removal. It accepts at most
+64 KiB of regular UTF-8 data and refuses symlinks and special files. The existing
+settings owner validates the complete overlay and checks the read's file identity
+again at commit, so a newer HTTP save supersedes a stale read. Overload retries
+on a later poll rather than creating a queue. Invalid files retain accepted state
+and are reconsidered when the file changes. File removal restores overlay defaults.
+An effective pack change emits one reload; unchanged selections and the watcher's
+observation of an HTTP save emit none. The watcher does not write settings.
+
+Other externally edited values remain pending for the next normal startup;
+they appear in the editable settings snapshot but never change running voice
+policy or request a restart. A subsequent screen save preserves those accepted
+sibling values. Existing restart requests and durability uncertainty remain intact.
+
+The page renderer and active pack-file watcher are still pending. Selecting data
+does not yet change the main page's look.

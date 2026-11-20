@@ -126,14 +126,14 @@ impl Worker {
         else {
             return false;
         };
-        let Ok(_permit) = self.files.busy.try_lock() else {
+        let Ok(permit) = self.files.busy.try_lock() else {
             return false;
         };
         let root = self.root.clone();
         let Ok(Ok(catalog)) = tokio::task::spawn_blocking(move || view::scan(&root)).await else {
             return false;
         };
-        drop(_permit);
+        drop(permit);
         SettingsDispatch {
             core: self.core.clone(),
             stop: self.stop.clone(),

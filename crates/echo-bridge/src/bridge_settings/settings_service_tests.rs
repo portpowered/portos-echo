@@ -421,3 +421,39 @@ async fn pack_selection(fixture: &Fixture, selection: &str) -> Value {
     assert_eq!(response.status(), StatusCode::OK);
     response.json().await.unwrap()
 }
+
+#[tokio::test]
+async fn t3_screen_pack_external_settings_adoption_keeps_runtime_and_exec_unchanged() {
+    let (mut fixture, owner, _) = Fixture::open("").await;
+    let home = fixture.root.path().join("home");
+    let _jobs = fixture.server.install_configured_packs(home.clone(), None, vec![]);
+    let (finish, finished) = tokio::sync::oneshot::channel();
+    let edits = async {
+        fs::write(
+            home.join("settings.toml"),
+            "screen_pack=''\n[agent]\nmax_tool_calls=4\n",
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = fixture.snapshot().await;
+                assert!(!snapshot.restart_pending);
+                if snapshot.settings.agent.max_tool_calls == 4 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(fixture.overlay(), "screen_pack=''\n[agent]\nmax_tool_calls=4\n");
+        finish.send(()).unwrap();
+    };
+    let ((result, completion), ()) = tokio::join!(owner.scope(finished, || LinkStatusV1::Linked), edits);
+    assert_eq!(result, Ok(()));
+    assert!(!completion.restart_requested);
+    assert_eq!(completion.host.store.base.agent.max_tool_calls, 8);
+    assert_eq!(completion.host.store.effective.agent.max_tool_calls, 4);
+    assert_eq!(completion.host.store.overlay.screen_pack(), Some(""));
+    fixture.server.shutdown().await.unwrap();
+}
