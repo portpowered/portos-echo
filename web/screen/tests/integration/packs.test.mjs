@@ -52,16 +52,53 @@ async function open(t) {
         args: ["--disable-background-networking", "--no-proxy-server"],
     });
     t.after(async () => {
-        await browser.close();
-        command({ stop: true });
-        assert.deepEqual(await next(), {
-            stopped: true,
-            restart_requested: false,
-        });
-        assert.deepEqual(await exited, [0, null]);
-        assert.equal(diagnostic, "");
-        await peer.close();
-        await rm(root, { recursive: true, force: true });
+        try {
+            for (const context of browser.contexts()) {
+                for (const page of context.pages()) {
+                    console.log(
+                        "F25 final surface:",
+                        await page
+                            .locator(".settings-panel [role=status]")
+                            .textContent(),
+                    );
+                    console.log(
+                        "F25 final media:",
+                        await page.locator("video").evaluateAll((videos) =>
+                            videos.map((video) => ({
+                                file: video.src
+                                    ? new URL(video.src).pathname
+                                          .split("/")
+                                          .at(-1)
+                                    : null,
+                                hidden: video.hidden,
+                                ready: video.readyState,
+                                frames: video.getVideoPlaybackQuality()
+                                    .totalVideoFrames,
+                            })),
+                        ),
+                    );
+                    await mkdir("test-results/screenshots", {
+                        recursive: true,
+                    });
+                    await page.screenshot({
+                        path: "test-results/screenshots/generated-pack-final.png",
+                    });
+                }
+            }
+            await browser.close();
+            command({ stop: true });
+            assert.deepEqual(await next(), {
+                stopped: true,
+                restart_requested: false,
+            });
+            assert.deepEqual(await exited, [0, null]);
+            assert.equal(diagnostic, "");
+        } finally {
+            await browser.close();
+            child.kill();
+            await peer.close();
+            await rm(root, { recursive: true, force: true });
+        }
     });
     command({ home, ca: join(root, "ca.pem") });
     const { ready } = await next();
@@ -94,6 +131,14 @@ async function open(t) {
         };
     });
     const page = await context.newPage();
+    page.on("response", (response) => {
+        if (response.status() >= 400)
+            console.log(
+                "F25 refused response:",
+                response.status(),
+                new URL(response.url()).pathname,
+            );
+    });
     page.setDefaultTimeout(5000);
     const query = new URLSearchParams({
         events: `/events?token=${token}`,

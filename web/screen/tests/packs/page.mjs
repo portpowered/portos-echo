@@ -170,6 +170,42 @@ const reload = (page, revision) =>
         );
     }, revision);
 
+test("pack page: covered presentation coalesces reloads without racing settings reads", async (t) => {
+    const page = await packPage(t);
+    await page.locator(".screen-pack").waitFor();
+    const count = await page.evaluate(() => {
+        document.querySelector("section").hidden = true;
+        return window.packRequests.length;
+    });
+    await reload(page, 1);
+    await reload(page, 2);
+    assert.equal(await page.evaluate(() => window.packRequests.length), count);
+    await page.evaluate(() => {
+        document.querySelector("section").hidden = false;
+    });
+    await page.waitForFunction(
+        (count) => window.packRequests.length === count + 2,
+        count,
+    );
+    await page.waitForFunction(() =>
+        document
+            .querySelector(".pack-stage img")
+            ?.dataset.src.includes("revision=2"),
+    );
+    await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+    await page.evaluate(() => {
+        document.querySelector("section").hidden = true;
+    });
+    await reload(page, 3);
+    await page.evaluate(() => {
+        document.querySelector("section").hidden = false;
+    });
+    assert.equal(
+        await page.evaluate(() => window.packRequests.length),
+        count + 2,
+    );
+});
+
 test("pack page: state src sequence, first-frame handoff, urgent cuts and Emotion fallbacks", async (t) => {
     const page = await packPage(t);
     await page.locator(".screen-pack").waitFor();

@@ -23,6 +23,7 @@ export function mountPacks(
     let layout: ReturnType<typeof applyLayout> | undefined;
     let state: UiState = { state: "ready", message: "" };
     let revision = -1;
+    let refreshNeeded = false;
     function clear() {
         const changed = host.classList.contains("screen-pack");
         cleanup?.();
@@ -34,6 +35,14 @@ export function mountPacks(
     }
     async function reload() {
         pending?.abort();
+        // Settings owns the visible surface and its foreground reads. Coalesce
+        // named changes until Back exposes the presentation, rather than race
+        // its selection receipt/catalog or preload media behind the panel.
+        if (host.hidden) {
+            refreshNeeded = true;
+            return;
+        }
+        refreshNeeded = false;
         const controller = new AbortController();
         pending = controller;
         try {
@@ -144,6 +153,10 @@ export function mountPacks(
     const opened = () => {
         void reload();
     };
+    const visibility = new MutationObserver(() => {
+        if (!host.hidden && refreshNeeded) void reload();
+    });
+    visibility.observe(host, { attributes: true, attributeFilter: ["hidden"] });
     stream.addEventListener("screen-pack-reload", changed as EventListener);
     stream.addEventListener("open", opened);
     void reload();
@@ -164,6 +177,7 @@ export function mountPacks(
             stopped = true;
             pending?.abort();
             clear();
+            visibility.disconnect();
             stream.removeEventListener(
                 "screen-pack-reload",
                 changed as EventListener,
