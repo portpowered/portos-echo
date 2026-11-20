@@ -6,6 +6,7 @@ pub mod install;
 pub mod integrity;
 pub mod lifecycle;
 mod release;
+pub mod setup;
 mod version;
 
 /// Fixed public diagnostics never contain dependency output or caller data.

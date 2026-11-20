@@ -1011,6 +1011,8 @@ dependencies = [
 name = "echo-setup"
 version = "0.2.0"
 dependencies = [
+ "echo-contracts",
+ "echo-screen-contract",
  "reqwest",
  "serde",
  "serde_json",
