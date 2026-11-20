@@ -426,6 +426,7 @@ async fn pack_selection(fixture: &Fixture, selection: &str) -> Value {
 async fn t3_screen_pack_external_settings_adoption_keeps_runtime_and_exec_unchanged() {
     let (mut fixture, owner, _) = Fixture::open("").await;
     let home = fixture.root.path().join("home");
+    let base = fs::read(fixture.root.path().join("bridge.toml")).unwrap();
     let _jobs = fixture.server.install_configured_packs(home.clone(), None, vec![]);
     let (finish, finished) = tokio::sync::oneshot::channel();
     let edits = async {
@@ -452,8 +453,18 @@ async fn t3_screen_pack_external_settings_adoption_keeps_runtime_and_exec_unchan
     let ((result, completion), ()) = tokio::join!(owner.scope(finished, || LinkStatusV1::Linked), edits);
     assert_eq!(result, Ok(()));
     assert!(!completion.restart_requested);
-    assert_eq!(completion.host.store.base.agent.max_tool_calls, 8);
-    assert_eq!(completion.host.store.effective.agent.max_tool_calls, 4);
-    assert_eq!(completion.host.store.overlay.screen_pack(), Some(""));
+    assert_eq!(fs::read(fixture.root.path().join("bridge.toml")).unwrap(), base);
+    let mut host = completion.host;
+    let SettingsReply::Snapshot(snapshot) = host.transaction(SettingsOperation::Snapshot, LinkStatusV1::Linked) else {
+        panic!("expected accepted settings snapshot");
+    };
+    assert_eq!(snapshot.settings.agent.max_tool_calls, 4);
+    assert!(!snapshot.restart_pending);
+    assert_eq!(
+        SettingsOverlay::from_toml_str(&fixture.overlay())
+            .unwrap()
+            .screen_pack(),
+        Some("")
+    );
     fixture.server.shutdown().await.unwrap();
 }

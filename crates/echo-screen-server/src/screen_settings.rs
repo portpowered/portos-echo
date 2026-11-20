@@ -85,15 +85,23 @@ impl SettingsRequest {
         } else if *self.stop.borrow()
             || self.drain.borrow().is_some()
             || !core.accepting()
-            || (matches!(&self.operation, SettingsOperation::PackSelection(..))
-                && core.pack_revision == 9_007_199_254_740_991)
+            || (matches!(
+                &self.operation,
+                SettingsOperation::PackSelection(..) | SettingsOperation::PackRefresh(..)
+            ) && core.pack_revision == 9_007_199_254_740_991)
         {
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         } else {
             let mut reply = transaction(self.operation);
             match &mut reply {
-                SettingsReply::PackSaved(_, catalog, true) | SettingsReply::PackRefreshed(catalog, true) => {
+                SettingsReply::PackSaved(_, catalog, true) => {
                     core.pack_reload(catalog.active());
+                }
+                SettingsReply::PackRefreshed(catalog, changed) => {
+                    if *changed {
+                        core.pack_reload(catalog.active());
+                    }
+                    catalog.set_revision(core.pack_revision);
                 }
                 SettingsReply::Packs(catalog) => {
                     if self.installed {

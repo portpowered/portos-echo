@@ -43,7 +43,7 @@ paths:
   /screen-packs/v1/selection:
     post:
       security: [{ pairingToken: [] }]
-      description: Auth and Origin before parsing; final commit admission uses the existing single settings writer. Atomically save only screen_pack at 0600. Pack-only saves never request a voice restart; any pending voice restart remains reported. Reload publication is pending in this increment.
+      description: Auth and Origin before parsing; final commit admission uses the existing single settings writer. Atomically save only screen_pack at 0600. Pack-only saves never request a voice restart; any pending voice restart remains reported. Effective selection changes publish exactly one named reload; observing that write in the settings watcher adds none.
       requestBody:
         required: true
         content:
@@ -135,7 +135,7 @@ paths:
   /events:
     get:
       security: [{ pairingToken: [] }]
-      description: Current ordinary frame if present, then ordered updates; no history replay; revocation closes streams. Successful effective pack selection commits emit screen-pack-reload with PackReloadV1 data, once per change. No-op, alias and failed selections emit nothing. Install-completion and file-watcher notifications remain pending. Reconnect fetches the catalog for current pack revision.
+      description: Current ordinary frame if present, then ordered updates; no history replay; revocation closes streams. Effective pack selection commits and settled external settings changes emit screen-pack-reload with PackReloadV1 data once per change. Each new install publishes once before installed status. No-op, alias, duplicate install and failed mutations emit nothing. Active pack-file watching remains pending. Reconnect fetches the catalog for current pack revision.
       responses:
         '200':
           description: Unnamed messages contain canonical ScreenFrame JSON. Named screen-pack-reload messages contain PackReloadV1 JSON and do not consume ScreenFrame.seq. Each message ends with two newlines.
