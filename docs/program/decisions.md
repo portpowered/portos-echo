@@ -14,6 +14,10 @@ one place.
 
 ## Decided
 
+On 2026-11-20 the owner confirmed that `template@0.2.0` is the hassmic-style eyes
+appearance. The downloadable pack supplies the procedural art. The home page
+cleanup belongs to `el-w5-screen-home-eyes-v2`.
+
 | Date | Decision | By | Where it applies |
 | --- | --- | --- | --- |
 | 2026-11-20 | **hassmic records through Amazon's call pipeline, so the Echo's own echo canceller removes the reply from the microphone; `hassmic.pin` moves to the fork's `0ff4a56`.** Owner, after hearing an A/B replay: "we shoudl use the converastion mode but the audio should be boosted to be equivalent to the corresponding audio setup". hassmic captures with Android's VOICE_COMMUNICATION source (7), not VOICE_RECOGNITION (6). Source 7 puts libasp's speaker chain in VoIP mode, which plays silence until something sends the ASP a volume index (binder `audiosignalprocessor`, command 5); hassmic sends index 80 before the first open, after each reopen and every 60 s, which matched source 6's loudness on a test clip (amp -27 to -30 dBFS against -28 to -30). Rollback without a rebuild: `capture_source=voice_recognition` in `/data/local/hassmic/state/capture`. Validated by the owner on the Echo on 2026-11-20: the wake word fires on source-7 audio, replies are as loud as before ("Loud"), two replies played without cutting themselves off with the microphone's echo near zero (echo_max 5 to 8 in `reply.quality`, against the thousands seen on source 6), and the owner's own "wait" barged in. The bridge's WebRTC AEC3 (PR 264, `[audio] echo_cancel`, default off) stays unmerged as the fallback. The pin also takes fork #7 to #9 (bridge service, network wait, clock sync), already running on the Echo | Owner (choice and validation); coordinator (recipe) | `hassmic.pin`; hassmic fork `src/hassmic/capsrc.c`; plan sections 1-3 |
