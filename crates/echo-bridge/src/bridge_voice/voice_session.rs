@@ -65,6 +65,7 @@ impl<'o> super::ServeOptions<'o> {
                 model: self.call.model,
                 effort: self.call.effort,
                 time_zone: self.call.time_zone,
+                web_search: self.call.web_search,
             },
             tools: self.tools.clone(),
             deadline,

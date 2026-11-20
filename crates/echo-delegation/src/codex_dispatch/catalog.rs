@@ -186,6 +186,26 @@ mod local_tests {
     }
 
     #[test]
+    fn web_search_catalog_alias_cannot_shadow_hosted_tool() {
+        let catalog = Catalog::new(
+            vec![spec("web_search"), spec("test.echo")],
+            &["web_search".into(), "test.echo".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            catalog
+                .tools()
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["bridge_web_search", "test_echo"]
+        );
+        assert_eq!(catalog.resolve("web_search"), None);
+        assert_eq!(catalog.resolve("bridge_web_search"), Some("web_search"));
+        assert_eq!(catalog.resolve("test_echo"), Some("test.echo"));
+    }
+
+    #[test]
     fn agent_tools_catalog_reserves_disabled_local_names_and_aliases() {
         let reserved = ["notes_write", "notes_read", "notes_list", "prompt_read", "prompt_write"];
         for name in [

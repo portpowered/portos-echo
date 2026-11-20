@@ -28,6 +28,7 @@ pub(super) fn runtime_options<'a>(
                 model: None,
                 effort: None,
                 time_zone: None,
+                web_search: echo_config::WebSearch::default(),
             },
             tools: vec![],
             session: bridge_voice::SessionOptions {

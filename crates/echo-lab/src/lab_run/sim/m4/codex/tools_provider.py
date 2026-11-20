@@ -22,7 +22,7 @@ def function_tools(tools):
     # The same pin drops numeric minimum while lowering JSON schema to its
     # tool-schema type. Assert that measured representation exactly.
     expected[-2]['parameters']['properties']['seconds'].pop('minimum')
-    return expected
+    return expected + [{'type': 'web_search', 'external_web_access': True}]
 
 
 def exact(connection, count):
@@ -90,7 +90,7 @@ class Delegation:
             self.check_output(outputs[0]['output'])
             item = {'type': 'message', 'id': 'msg-local', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
-        self.models.append({'tools': [tool['name'] for tool in body['tools']], 'outputs': len(outputs)})
+        self.models.append({'tools': [tool['name'] for tool in body['tools'][:-1]], 'outputs': len(outputs)})
         response = {'id': f'response-{index}', 'status': 'completed', 'output': [item]}
         events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
                   {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
@@ -163,7 +163,7 @@ class McpDelegation:
         else:
             item = {'type': 'message', 'id': f'm5-msg-{index}', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
-        self.models.append({'tools': [tool['name'] for tool in body['tools']], 'outputs': len(outputs)})
+        self.models.append({'tools': [tool['name'] for tool in body['tools'][:-1]], 'outputs': len(outputs)})
         response = {'id': f'm5-response-{index}', 'status': 'completed', 'output': [item]}
         events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
                   {'type': 'response.output_item.done', 'output_index': 0, 'item': item},

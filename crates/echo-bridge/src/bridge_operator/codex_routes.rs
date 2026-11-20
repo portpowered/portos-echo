@@ -19,13 +19,14 @@ impl LocalRoutes {
         })
     }
 
-    pub(super) fn configure(&self, config: &mut SupervisorConfig) {
+    pub(super) fn configure(&self, config: &mut SupervisorConfig, web_search: echo_config::WebSearch) {
         let values = [
             ("model_provider", json!("local")),
             (
                 "model_providers.local",
                 json!({"name":"local", "base_url":format!("{}/v1", self.model),
                 "wire_api":"responses", "requires_openai_auth":true,
+                "supports_standalone_web_search":true,
                 "experimental_bearer_token":"dummy-local-only"}),
             ),
             (
@@ -49,7 +50,7 @@ impl LocalRoutes {
             };
             config.config_overrides.push((key.into(), value));
         }
-        restrictions(config);
+        restrictions(config, web_search);
     }
 
     pub(super) fn environment(&self, supervisor: &mut Supervisor) -> Result<(), Error> {
@@ -79,7 +80,7 @@ impl LocalRoutes {
     }
 }
 
-fn restrictions(config: &mut SupervisorConfig) {
+fn restrictions(config: &mut SupervisorConfig, web_search: echo_config::WebSearch) {
     for key in [
         "features.plugins",
         "features.recommended_plugins",
@@ -103,7 +104,8 @@ fn restrictions(config: &mut SupervisorConfig) {
     }
     for (key, value) in [
         ("features.skip_host_skill_discovery", "true"),
-        ("web_search", "\"disabled\""),
+        ("features.code_mode.direct_only_tool_namespaces", "[\"web\"]"),
+        ("web_search", &format!("\"{}\"", web_search.as_str())),
         ("mcp_servers", "{}"),
         ("cli_auth_credentials_store", "\"file\""),
     ] {
@@ -114,6 +116,54 @@ fn restrictions(config: &mut SupervisorConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_search_overrides_preserve_complete_local_restrictions() {
+        for mode in [
+            echo_config::WebSearch::Live,
+            echo_config::WebSearch::Cached,
+            echo_config::WebSearch::Disabled,
+        ] {
+            let mut config = SupervisorConfig::new("/unused/binary".into(), "/unused/home".into());
+            restrictions(&mut config, mode);
+            let mut expected = std::collections::BTreeMap::from([
+                ("features.skip_host_skill_discovery".to_owned(), "true".to_owned()),
+                (
+                    "features.code_mode.direct_only_tool_namespaces".into(),
+                    "[\"web\"]".into(),
+                ),
+                ("web_search".into(), format!("\"{}\"", mode.as_str())),
+                ("mcp_servers".into(), "{}".into()),
+                ("cli_auth_credentials_store".into(), "\"file\"".into()),
+            ]);
+            for key in [
+                "features.plugins",
+                "features.recommended_plugins",
+                "features.remote_models",
+                "features.apps",
+                "features.remote_control",
+                "features.skill_search",
+                "cloud.skills.enabled",
+                "analytics.enabled",
+                "feedback.enabled",
+                "features.multi_agent",
+                "features.multi_agent_v2",
+                "features.goals",
+                "tools.experimental_request_user_input.enabled",
+                "features.shell_tool",
+                "features.unified_exec",
+                "tools.update_plan.enabled",
+                "check_for_update_on_startup",
+            ] {
+                expected.insert(key.into(), "false".into());
+            }
+            let observed = config
+                .config_overrides
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(observed, expected);
+        }
+    }
 
     #[test]
     fn routes_reject_ambiguous_or_external_targets_before_runtime() {

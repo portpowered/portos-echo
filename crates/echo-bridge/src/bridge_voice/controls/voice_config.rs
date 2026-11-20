@@ -250,6 +250,7 @@ impl Configured {
                     model: self.config.codex_model(),
                     effort: self.config.codex.delegate_effort.as_deref(),
                     time_zone: self.config.codex.time_zone.as_deref(),
+                    web_search: self.config.codex.web_search,
                 },
                 tools,
                 session: SessionOptions {
