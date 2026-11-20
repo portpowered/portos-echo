@@ -32,8 +32,7 @@ jobs:
           set -eu
           sh scripts/make-template-screenpack.sh --version 0.2.0 --out "$RUNNER_TEMP/candidate"
           (cd "$RUNNER_TEMP/candidate" && sha256sum --check template-0.2.0.screenpack.tar.gz.sha256 && cat template-0.2.0.screenpack.tar.gz.sha256)
-          git show a7d0f49c:scripts/make-template-screenpack.sh > "$RUNNER_TEMP/old-generator.sh"
-          sh "$RUNNER_TEMP/old-generator.sh" --version 0.1.0 --out "$RUNNER_TEMP/older"
+          sh scripts/make-template-screenpack.sh --version 0.1.0 --out "$RUNNER_TEMP/older"
       - name: Exercise the production fixture and paired page
         shell: sh
         run: |
