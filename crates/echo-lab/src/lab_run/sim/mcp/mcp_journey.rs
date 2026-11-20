@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::mcp_session::Session;
-use super::{mcp_lights::Journey, mcp_peers::Control};
+use super::mcp_peers::Control;
 
 impl Session {
     pub fn expect_screen(&self, expected: &Value) -> Result<(), String> {
@@ -98,9 +98,6 @@ impl Session {
 
     pub(super) async fn dispatch(&self) -> Result<(), String> {
         let live = self.live.as_ref().ok_or("M5: missing Live fixture")?;
-        if self.journey != Journey::Lifecycle && live.observed.borrow()["media_ready"] != true {
-            return Err("M5: home delegation requires provider media readiness".into());
-        }
         live.events
             .send(Control::Delegate)
             .await
