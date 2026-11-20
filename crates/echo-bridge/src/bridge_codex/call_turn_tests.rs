@@ -223,3 +223,36 @@ async fn call_projects_only_matching_speech_items_and_ignores_unknown_items() {
     };
     tokio::join!(client, remote);
 }
+
+#[tokio::test(start_paused = true)]
+async fn voice_listen_goodbye_projects_only_exact_current_thread_handoff_once() {
+    let (mut io, mut server) = fixture();
+    let client = async {
+        let mut call = Call::new(&mut io);
+        call.start(&options(), vec![], "fixture-offer", deadline())
+            .await
+            .unwrap();
+        for expected in [false, false, true, false] {
+            let event = call.next().await.unwrap();
+            assert_eq!(matches!(event, Event::GoodbyeHandoff), expected);
+            if !expected {
+                assert!(matches!(event, Event::Other));
+            }
+        }
+        call.stop(deadline()).await.unwrap();
+    };
+    let remote = async {
+        start(&mut server).await;
+        for (thread, text) in [
+            ("foreign", "end the session"),
+            ("thread-1", "End the session"),
+            ("thread-1", "end the session"),
+            ("thread-1", "end the session"),
+        ] {
+            notification(&mut server, "thread/realtime/itemAdded",
+                json!({"threadId":thread,"item":{"type":"handoff_request","handoff_id":"synthetic","input_transcript":text}})).await;
+        }
+        stop(&mut server).await;
+    };
+    tokio::join!(client, remote);
+}

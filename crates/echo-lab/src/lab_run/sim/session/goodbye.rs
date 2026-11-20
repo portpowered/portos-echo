@@ -150,7 +150,8 @@ impl Driver for Goodbye<'_> {
             return Err("goodbye: expected two scripted turns through one local Live call".into());
         }
         for evidence in self.observations.drain(..) {
-            artifacts.measurement(evidence)?;
+            let event = evidence["event"].as_str().ok_or("goodbye: missing evidence event")?;
+            artifacts.event(event, None, Some(&evidence.to_string()))?;
         }
         artifacts.checks.insert("live_goodbye_journey".into(), true);
         Ok(())

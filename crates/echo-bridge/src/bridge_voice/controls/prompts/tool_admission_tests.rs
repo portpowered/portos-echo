@@ -24,6 +24,7 @@ async fn t3_agent_tools_prompt_writes_preserve_current_and_change_exact_next_rpc
     let home = root.path().join("home");
     prompts::write_base(&home, "voice", "voice old").unwrap();
     prompts::write_base(&home, "runner", "runner old").unwrap();
+    assert_prompt_bytes(&home, "runner old", "voice old");
     let path = root.path().join("trace");
     let mut trace = Trace::open(&path, "api_key").unwrap();
     trace.tool_run(Some("prompt-journey")).unwrap();
@@ -38,6 +39,7 @@ async fn t3_agent_tools_prompt_writes_preserve_current_and_change_exact_next_rpc
     .await
     .unwrap();
     tools.close().await;
+    assert_prompt_bytes(&home, RUNNER, VOICE);
     let history = home.join("prompts/.history");
     let mut old: Vec<_> = std::fs::read_dir(history)
         .unwrap()
@@ -46,6 +48,13 @@ async fn t3_agent_tools_prompt_writes_preserve_current_and_change_exact_next_rpc
     old.sort();
     assert_eq!(old, ["runner old", "voice old"]);
     privacy(&path);
+}
+
+fn assert_prompt_bytes(home: &Path, runner: &str, voice: &str) {
+    for (kind, expected) in [("runner", runner), ("voice", voice)] {
+        let bytes = std::fs::read(home.join(format!("prompts/{kind}.md"))).unwrap();
+        assert_eq!(bytes, expected.as_bytes());
+    }
 }
 
 async fn exercise(home: &Path, trace: &Trace, tools: &mut Tools) {
@@ -101,6 +110,7 @@ async fn remote(
     } else {
         (RUNNER, VOICE)
     };
+    assert_prompt_bytes(home, expected.0, expected.1);
     let thread = format!("thread-{index}");
     for method in ["thread/start", "thread/realtime/start", "thread/realtime/stop"] {
         let mut line = String::new();

@@ -69,6 +69,116 @@ fn source() -> Source {
 }
 
 #[tokio::test(start_paused = true)]
+async fn voice_listen_goodbye_timeout_retires_end_authority_without_admitting_speech() {
+    let mut input = Input::new();
+    let (tx, rx) = mpsc::channel(2);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let mut source = Source::new(200, false).unwrap();
+    source.session =
+        super::super::super::session_tools::Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
+    source.controller.reply_started();
+    source.controller.played(true).unwrap();
+    goodbye_handoff(&mut source);
+    let old = source.session.run.clone();
+    let mut receipts = vec![];
+    let mut observe = |notice| {
+        if let Notice::SessionTool(receipt) = notice {
+            receipts.push(receipt.outcome);
+        }
+        Ok(())
+    };
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    tx.send(MediaEvent::Control(Event::Session(
+        crate::bridge_codex::SessionRequest {
+            command: crate::bridge_codex::SessionCommand::Invalid { end: true },
+            key: "refused".into(),
+            run: Some(old.clone()),
+            reply,
+        },
+    )))
+    .await
+    .unwrap();
+    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+    wait_goodbye(
+        (&mut input.events, &mut input.microphone),
+        &mut port,
+        (&mut source, &mut None),
+        Instant::now() + Duration::from_secs(1),
+        std::future::pending(),
+        &mut observe,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        answer.await.unwrap().content,
+        serde_json::json!({"error":"invalid_arguments"})
+    );
+    assert_eq!(source.controller.idle_deadline(), None);
+    assert!(source.controller.has_played());
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    super::super::super::session_tools::answer(
+        crate::bridge_codex::SessionRequest {
+            command: crate::bridge_codex::SessionCommand::End,
+            key: "obsolete".into(),
+            run: Some(old),
+            reply,
+        },
+        &mut source.session,
+        &mut source.controller,
+        &mut observe,
+    )
+    .unwrap();
+    assert_eq!(
+        answer.await.unwrap().content,
+        serde_json::json!({"error":"session_stale"})
+    );
+    assert!(!source.session.ending());
+    assert_eq!(receipts, ["invalid_arguments", "session_stale"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playback() {
+    let mut input = Input::new();
+    let (_tx, rx) = mpsc::channel(1);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let mut source = Source::new(200, false).unwrap();
+    source.session =
+        super::super::super::session_tools::Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
+    source.spoke();
+    goodbye_handoff(&mut source);
+    source.audio(&[5000; 320]).unwrap();
+    let muted = Cell::new(false);
+    let mut observe = |notice| {
+        if matches!(notice, Notice::Device(LinkEvent::Mute(true))) {
+            muted.set(true);
+        }
+        Ok(())
+    };
+    input.controls.send(LinkEvent::Mute(true)).await.unwrap();
+    let event = input.events.recv().await.unwrap().unwrap();
+    super::super::super::device(&event, false, &mut source, &mut observe).unwrap();
+    input.samples(1234, 320).await;
+    let frame = input.microphone.recv().await.unwrap();
+    assert!(source.capture(frame, &port).unwrap());
+    assert!(muted.get());
+    assert!(port.1.borrow().is_empty());
+    super::super::super::media(
+        MediaEvent::Control(Event::ReplyDone {
+            text: "Goodbye.".into(),
+        }),
+        &mut port,
+        &mut source,
+        &mut observe,
+    )
+    .await
+    .unwrap();
+    assert!(source.reply.finished());
+    assert!(!source.controller.cutting());
+    assert_eq!(source.stats.reply_received, 1);
+    assert!(!source.session.ending());
+}
+
+#[tokio::test(start_paused = true)]
 async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
     let restart = crate::bridge_settings::settings_restart::Restart::default();
     restart

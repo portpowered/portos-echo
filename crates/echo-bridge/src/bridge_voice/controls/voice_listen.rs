@@ -33,75 +33,105 @@ pub(super) async fn replies<L: EchoLink>(
         )
         .await;
         if result == Err(Error::Control) && source.controller.cutting() {
-            if source.session.goodbye.take().is_some() && !source.session.ending() {
-                retire_goodbye(source, port);
-            }
-            source.controller.cut_settled();
-            observe(Notice::ReplyPaused)?;
-            if options.listen_timeout.is_none() {
+            if !settle_cut(source, port, options.listen_timeout.is_some(), observe)? {
                 generation_options.response_deadline = source.controller.replacement_deadline()?;
                 continue;
             }
-            // The model yielded and may say nothing more: the cut reply
-            // settles and the run listens, with no playback left open.
-            source.controller.cut_played();
         } else {
             result?;
         }
         if options.listen_timeout.is_some() {
             settled(source, port, &mut previous, observe)?;
         }
-        if source.session.goodbye == Some(Goodbye::Pending) && !source.session.ending() {
-            wait_goodbye(
-                (events, microphone),
-                port,
-                (source, drain),
-                generation_options.response_deadline,
-                cancelled.as_mut(),
-                observe,
-            )
-            .await?;
-        }
-        // A requested end closes right after this reply settles; no idle wait.
-        if source.session.ending() {
-            flush_end(port, options.played_timeout).await?;
-            return Ok(());
-        }
-        source.session.goodbye = None;
-        if options.listen_timeout.is_none() && !source.delegation.in_flight() {
-            return Ok(());
-        }
-        source.controller.listen_after_reply(window(source, options)?)?;
-        // Waiting granted during the reply outlives it, within the run's cap.
-        if let Some(granted) = source.session.granted() {
-            source.controller.extend_idle(granted);
-        }
-        // A dispatch that outlives its spoken acknowledgement shows as thinking.
-        think(client, source, observe).await?;
-        if !listen(
+        if !after_reply(
+            client,
             (events, microphone),
             port,
             (source, drain),
-            options.listen_timeout.is_some(),
+            &generation_options,
             cancelled.as_mut(),
             observe,
         )
         .await?
         {
-            return if source.session.ending() {
-                flush_end(port, options.played_timeout).await
-            } else {
-                Ok(())
-            };
+            break;
         }
         generation_options.response_deadline = source.controller.replacement_deadline()?;
     }
+    if source.session.ending() {
+        tokio::time::timeout(options.played_timeout, port.flush_session_answer())
+            .await
+            .map_err(|_| Error::Deadline)??;
+    }
+    Ok(())
 }
 
-async fn flush_end(port: &mut impl VoicePort, ceiling: Duration) -> Result<(), Error> {
-    tokio::time::timeout(ceiling, port.flush_session_answer())
-        .await
-        .map_err(|_| Error::Deadline)?
+fn settle_cut(
+    source: &mut Source,
+    port: &mut impl VoicePort,
+    followup: bool,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<bool, Error> {
+    if source.session.goodbye.take().is_some() && !source.session.ending() {
+        retire_goodbye(source, port);
+    }
+    source.controller.cut_settled();
+    observe(Notice::ReplyPaused)?;
+    if followup {
+        // The cut reply settles with no playback left open, even if the
+        // model says nothing more.
+        source.controller.cut_played();
+    }
+    Ok(followup)
+}
+
+async fn after_reply<L: EchoLink>(
+    client: &L,
+    (events, microphone): (&mut L::Events, &mut <L::Events as LinkEvents>::Run),
+    port: &mut impl VoicePort,
+    (source, drain): (
+        &mut Source,
+        &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
+    ),
+    options: &Options,
+    cancelled: impl Future<Output = ()>,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<bool, Error> {
+    tokio::pin!(cancelled);
+    if source.session.goodbye == Some(Goodbye::Pending) && !source.session.ending() {
+        wait_goodbye(
+            (events, microphone),
+            port,
+            (source, drain),
+            options.response_deadline,
+            cancelled.as_mut(),
+            observe,
+        )
+        .await?;
+    }
+    // A granted end closes at the settled reply boundary.
+    if source.session.ending() {
+        return Ok(false);
+    }
+    source.session.goodbye = None;
+    let followup = options.listen_timeout.is_some();
+    if !followup && !source.delegation.in_flight() {
+        return Ok(false);
+    }
+    source.controller.listen_after_reply(window(source, options)?)?;
+    if let Some(granted) = source.session.granted() {
+        source.controller.extend_idle(granted);
+    }
+    think(client, source, observe).await?;
+    listen(
+        (events, microphone),
+        port,
+        (source, drain),
+        followup,
+        cancelled.as_mut(),
+        observe,
+    )
+    .await
 }
 
 pub(super) fn goodbye_handoff(source: &mut Source) {

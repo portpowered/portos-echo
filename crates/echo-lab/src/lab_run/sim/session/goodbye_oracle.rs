@@ -133,11 +133,14 @@ fn wire_replies(wire: &Timing, clock: &Value, replies: usize, ends: usize) -> Re
     }
     let mut last_played = 0;
     let mut frame_counts = vec![];
-    for (index, (stream, frames)) in streams.iter().zip(counts).enumerate() {
+    for (index, (stream, frames)) in streams.iter().zip(&counts).enumerate() {
         let played = stream["played_us"].as_u64().ok_or("goodbye: missing device Played")?;
         if stream["ending"] != "stop"
             || played < last_played
-            || frames != vec![960; if index == 0 { 10 } else { 11 }]
+            // The first reply loses the decoder warm-up. A subsequent
+            // reply can also contain the retained decoder tail.
+            || !(10..=if index == 0 { 10 } else { 11 }).contains(&frames.len())
+            || frames.iter().any(|(bytes, _, _)| *bytes != 960)
             || stream["audible_samples"].as_u64().is_none_or(|samples| samples < 2_400)
         {
             return Err(format!(
@@ -155,7 +158,16 @@ fn wire_replies(wire: &Timing, clock: &Value, replies: usize, ends: usize) -> Re
         return Err("goodbye: Wyoming ended before farewell Played".into());
     }
     let submitted = clock["pcm"].as_array().ok_or("goodbye: missing bridge PCM receipts")?;
-    if submitted.len() != frame_counts.iter().sum::<usize>() || submitted.iter().any(|frame| frame["pcm_bytes"] != 960)
+    let observed = counts.into_iter().flatten();
+    if submitted.len() != frame_counts.iter().sum::<usize>()
+        || submitted
+            .iter()
+            .zip(observed)
+            .any(|(frame, &(bytes, nonzero, audible))| {
+                frame["pcm_bytes"] != bytes
+                    || frame["nonzero_samples"] != nonzero
+                    || frame["audible_samples"] != audible
+            })
     {
         return Err("goodbye: wire and bridge disagree on the farewell frame sequence".into());
     }

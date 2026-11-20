@@ -4,6 +4,12 @@ use super::*;
 
 #[tokio::test(start_paused = true)]
 async fn voice_listen_barge_after_settled_reply_retains_run_and_fresh_idle_deadline() {
+    for goodbye in [false, true] {
+        barge_after_settled_reply(goodbye).await;
+    }
+}
+
+async fn barge_after_settled_reply(goodbye: bool) {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -38,7 +44,7 @@ async fn voice_listen_barge_after_settled_reply_retains_run_and_fresh_idle_deadl
             Ok(())
         },
     ));
-    let prefix = journey(&mut work, &tx, &observer, &receipts, &paused).await;
+    let prefix = journey(&mut work, &tx, &observer, &receipts, &paused, goodbye).await;
     tokio::time::advance(Duration::from_millis(1)).await;
     let stats = work.await.unwrap();
     assert_eq!(stats.reply_sent, u64::try_from(prefix + 12).unwrap());
@@ -53,6 +59,7 @@ async fn journey(
     observer: &Observer,
     receipts: &Cell<usize>,
     paused: &Cell<usize>,
+    goodbye: bool,
 ) -> usize {
     reply(tx, 5000).await;
     settle(work, observer, receipts, 1).await;
@@ -60,6 +67,9 @@ async fn journey(
     // be abandoned when speech cuts it, even after the old idle would expire.
     tokio::time::advance(Duration::from_secs(2)).await;
     unfinished(tx).await;
+    if goodbye {
+        tx.send(MediaEvent::Control(Event::GoodbyeHandoff)).await.unwrap();
+    }
     poll(work.as_mut()).await;
     tokio::time::advance(Duration::from_secs(2)).await;
     poll(work.as_mut()).await;
