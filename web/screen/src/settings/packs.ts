@@ -43,7 +43,8 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
         refresh.textContent = "Refresh packs";
         const select = element("select");
         const label = element("label", "Screen pack");
-        label.append(select);
+        select.id = "screen-pack-selection";
+        label.htmlFor = select.id;
         const builtin = element("option", "Built-in appearance");
         builtin.value = "";
         select.append(builtin);
@@ -74,7 +75,7 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
         select.value = data.active ?? "";
         const save = element("button", "Use screen pack");
         const form = element("form");
-        form.append(label, save);
+        form.append(label, select, save);
         form.addEventListener("submit", (event) => {
             event.preventDefault();
             const selection = select.value;
