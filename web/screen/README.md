@@ -120,3 +120,39 @@ changed PNG and semantic snapshot before committing its golden hash; run normal
 `npm test` afterward. Linux pixel baselines protect rendering. This is isolated page proof; real
 authenticated bridge transport (W2-SCREEN), assembled W1 (W1-INTEGRATION),
 Android compatibility/density (S3-WEBVIEW), and device milestones remain unproved.
+
+## Render snapshots
+
+`tests/render-snapshots/` renders every screen state at 960x600 in headless
+Chromium, the size of the Echo panel in CSS pixels, so people can look at the
+whole screen: the generated `default@0.3.0` face, a full-page avatar fixture
+built from the same media over a full-bleed backdrop, and Settings with a
+linked, an unlinked and a link-required Port OS account. Requests go to a
+synthetic loopback origin answered in process; nothing leaves the browser.
+
+Each render asserts the layout as well: no state text over the face, the clock
+and date centred on one line, the gear present, cards only in link code,
+approval and error, every surface inside the page and clear of the face and of
+each other, round eyes of at least 220 CSS px spanning 60-70% of the width, and
+a centroid that moves at most 24 px when idle cuts to Speaking (five runs from
+different points of the idle loop).
+
+PNGs land in `test-results/screenshots/render/`, which CI uploads with the
+other screen evidence. Each set is also tiled into a half-size contact sheet,
+`<set>-sheet.png`, compared with the committed `references/<set>.png`. A pixel
+differs when a channel moves by more than 24; a set fails when more than 0.2% of
+its pixels differ, and the failure writes `<set>-diff.png` with the differing
+pixels in red. References hold generated art only.
+
+`npm test` runs the suite after generating the packs. To run it alone, in a
+Linux POSIX shell:
+
+```sh
+npm run build
+sh ../../scripts/make-template-screenpack.sh --version 0.3.0 --name default --out /tmp/default-pack
+SCREEN_PACK_DEFAULT_FIXTURE=/tmp/default-pack node --test --test-concurrency=1 tests/render-snapshots/render.test.mjs
+```
+
+To update the references after an intended change, run the same command with
+`UPDATE_RENDER_SNAPSHOTS=1`, look at every `*-sheet.png`, then commit the
+changed `references/*.png`.
