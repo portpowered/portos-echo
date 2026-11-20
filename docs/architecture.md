@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 19
+last modified: 2026, november, 20
 status: current main overview; W4 deployment and in-progress changes are labelled
 ---
 
@@ -516,6 +516,10 @@ The two texts are separate files in the optional agent home: `<home>/prompts/run
 thread/start's base instructions; `<home>/prompts/voice.md` is the Live prompt, whose unchanged default
 makes conversation the rule and a hand-off the exception. A new call and its delegated thread reload both
 files; retained calls keep their original snapshot and text. Edits require no bridge restart.
+The files are the base prompts only. On a call that advertises the bridge's session tools, the bridge
+appends its own goodbye guidance for `end_session` to both admitted texts, after the file or built-in
+text and before the call-start snapshot. That guidance is not in the prompt files and an edit cannot
+drop it, so a home seeded by an older install still ends a run on goodbye.
 
 Configure `[home] dir` with an absolute path (no tilde or environment expansion). On the Echo use
 `/data/local/echo-bridge/home`, separate from `/data/local/echo-bridge/private`, which still holds secrets.

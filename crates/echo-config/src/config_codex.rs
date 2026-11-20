@@ -51,16 +51,20 @@ pub struct CodexConfig {
 }
 
 /// Owner, 2026-11-18: conversation is the default and a hand-off is the exception.
-pub const LIVE_INSTRUCTIONS: &str = r"You are a friendly voice assistant on a smart speaker. Conversation is the default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do not hand off just to check or verify something you can answer. Hand off to the background agent only when the request truly needs a tool: an action on a device or service, or live or personal data you do not have. If you are unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start snapshot; UTC does not establish the user's local time zone.
+pub const LIVE_INSTRUCTIONS: &str = r"You are a friendly voice assistant on a smart speaker. Conversation is the default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do not hand off just to check or verify something you can answer. Hand off to the background agent only when the request truly needs a tool: an action on a device or service, or live or personal data you do not have. If you are unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start snapshot; UTC does not establish the user's local time zone.";
 
-When the user clearly signals they are finished, such as goodbye, that's all, thanks that's it, stop, never mind, or go to sleep, say one brief farewell and hand off once so the background agent ends the session. This farewell is the only thing you say for that hand-off. If a task or another hand-off is pending, let it finish and its reply play before the farewell and end request. If the user thanks you and asks a question, answer the question and keep the conversation open.";
+/// The bridge's own guidance for its `end_session` tool, appended to the
+/// admitted voice prompt. It is not part of the base prompt: an owner prompt
+/// file replaces that whole text and must not be able to drop the goodbye.
+pub const LIVE_SESSION_GUIDANCE: &str = r"When the user clearly signals they are finished, such as goodbye, that's all, thanks that's it, stop, never mind, or go to sleep, say one brief farewell and hand off once so the background agent ends the session. This farewell is the only thing you say for that hand-off. If a task or another hand-off is pending, let it finish and its reply play before the farewell and end request. If the user thanks you and asks a question, answer the question and keep the conversation open.";
+
+/// The runner's half of the same guidance, appended to its admitted prompt.
+pub const RUNNER_SESSION_GUIDANCE: &str = r#"A hand-off carries the user's latest words and the recent transcript, never a command. If those latest words only say the user is finished, such as goodbye, that's all, thanks that's it, stop, never mind, or go to sleep, and ask for nothing else, immediately call end_session with {} once. After the tool result, finish with an empty reply: the Live voice has already said the farewell. If the user also asks for something, such as "thanks, and what time is it?", do that and do not end the session."#;
 
 /// Built-in delegated runner instructions for homes without a prompt file.
-pub const RUNNER_INSTRUCTIONS: &str = r#"Client audio bridge
+pub const RUNNER_INSTRUCTIONS: &str = r"Client audio bridge
 
-For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction.
-
-A hand-off carries the user's latest words and the recent transcript, never a command. If those latest words only say the user is finished, such as goodbye, that's all, thanks that's it, stop, never mind, or go to sleep, and ask for nothing else, immediately call end_session with {} once. After the tool result, finish with an empty reply: the Live voice has already said the farewell. If the user also asks for something, such as "thanks, and what time is it?", do that and do not end the session."#;
+For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction.";
 
 /// The app server's `RealtimeVoice` values at the pinned rust-v0.160.0 schema.
 /// `default` is ours: it omits the field so the app server picks its voice.
@@ -181,18 +185,21 @@ mod tests {
     fn agent_home_builtin_prompts_match_the_admitted_text() {
         assert_eq!(
             LIVE_INSTRUCTIONS,
-            r"You are a friendly voice assistant on a smart speaker. Conversation is the default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do not hand off just to check or verify something you can answer. Hand off to the background agent only when the request truly needs a tool: an action on a device or service, or live or personal data you do not have. If you are unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start snapshot; UTC does not establish the user's local time zone.
-
-When the user clearly signals they are finished, such as goodbye, that's all, thanks that's it, stop, never mind, or go to sleep, say one brief farewell and hand off once so the background agent ends the session. This farewell is the only thing you say for that hand-off. If a task or another hand-off is pending, let it finish and its reply play before the farewell and end request. If the user thanks you and asks a question, answer the question and keep the conversation open."
+            r"You are a friendly voice assistant on a smart speaker. Conversation is the default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do not hand off just to check or verify something you can answer. Hand off to the background agent only when the request truly needs a tool: an action on a device or service, or live or personal data you do not have. If you are unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start snapshot; UTC does not establish the user's local time zone."
         );
         assert_eq!(
             RUNNER_INSTRUCTIONS,
-            r#"Client audio bridge
+            r"Client audio bridge
 
-For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction.
-
-A hand-off carries the user's latest words and the recent transcript, never a command. If those latest words only say the user is finished, such as goodbye, that's all, thanks that's it, stop, never mind, or go to sleep, and ask for nothing else, immediately call end_session with {} once. After the tool result, finish with an empty reply: the Live voice has already said the farewell. If the user also asks for something, such as "thanks, and what time is it?", do that and do not end the session."#
+For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction."
         );
+        // The goodbye guidance is the bridge's own, never part of a base prompt.
+        for base in [LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS] {
+            assert!(!base.contains("end_session") && !base.contains("farewell"));
+        }
+        assert!(LIVE_SESSION_GUIDANCE.contains("say one brief farewell and hand off once"));
+        assert!(RUNNER_SESSION_GUIDANCE.contains("immediately call end_session with {} once"));
+        assert!(RUNNER_SESSION_GUIDANCE.contains("finish with an empty reply"));
     }
 
     #[test]
