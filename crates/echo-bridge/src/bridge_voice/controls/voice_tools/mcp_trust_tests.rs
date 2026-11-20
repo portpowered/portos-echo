@@ -291,3 +291,6 @@ async fn t3_mcp_configured_oauth_refuses_missing_invalid_untrusted_and_wrong_hos
     })
     .await;
 }
+
+#[path = "settings_admission.rs"]
+mod settings_admission;

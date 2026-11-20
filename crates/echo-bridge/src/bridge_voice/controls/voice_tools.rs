@@ -7,6 +7,7 @@ use crate::{
     bridge_mcp::{self, Token},
     bridge_notes::{Local, NAMES, Notes},
     bridge_runtime::bridge_screen::Screen,
+    bridge_settings::portos_permissions::PortosPermissions,
     bridge_trace::{PortosReceipts, Trace},
 };
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
@@ -22,6 +23,7 @@ pub(super) struct Mcp {
     trace: Trace,
     receipts: Option<PortosReceipts>,
     grant: Option<Arc<bridge_mcp::Grant>>,
+    portos_permissions: Option<PortosPermissions>,
 }
 
 impl Mcp {
@@ -30,6 +32,7 @@ impl Mcp {
         trace: Trace,
         server: Option<&echo_config::McpServer>,
         grant: Option<Arc<bridge_mcp::Grant>>,
+        portos_permissions: Option<PortosPermissions>,
     ) -> Self {
         let receipts = server
             .filter(|server| server.auth == echo_config::McpAuth::PortosDeviceCode)
@@ -39,6 +42,7 @@ impl Mcp {
             trace,
             receipts,
             grant,
+            portos_permissions,
         }
     }
 
@@ -46,6 +50,14 @@ impl Mcp {
         let Some(grant) = &self.grant else {
             return client.call(name, args).await.map_err(Into::into);
         };
+        if let Some(permissions) = &self.portos_permissions
+            && permissions.managed()
+        {
+            let scopes = grant.granted_scopes().await;
+            if !permissions.permits(name, scopes.as_deref()) {
+                return Err(ToolError::Denied);
+            }
+        }
         let generation = grant.scope_generation().map_err(|_| ToolError::Transport)?;
         match client.call(name, args).await {
             Err(McpError::InsufficientScope { scope }) => {
@@ -172,6 +184,8 @@ pub(super) struct Tools {
     server: Option<String>,
     specs: Option<Vec<ToolSpec>>,
     runtime: Option<bridge_mcp::Runtime>,
+    shared_grant: Option<Arc<bridge_mcp::Grant>>,
+    portos_permissions: Option<PortosPermissions>,
     trace: Option<Trace>,
 }
 
@@ -189,8 +203,15 @@ impl Tools {
             specs: None,
             server: config.mcp.server.first().map(|server| server.name.clone()),
             runtime: None,
+            shared_grant: None,
+            portos_permissions: None,
             trace: None,
         }
+    }
+
+    pub(super) fn with_portos_permissions(mut self, permissions: Option<PortosPermissions>) -> Self {
+        self.portos_permissions = permissions;
+        self
     }
 
     pub async fn open(
@@ -200,16 +221,8 @@ impl Tools {
         trace: &mut Trace,
         epoch: Option<u64>,
     ) -> Result<(), Error> {
-        if let Some(settings) = bridge_mcp::Settings::configured(config)? {
-            self.runtime =
-                Some(bridge_mcp::Runtime::open(settings, screen.presentation.clone(), trace.clone(), epoch).await?);
-            trace.record(
-                "mcp.operator.listening",
-                None,
-                serde_json::json!({
-                    "address": self.runtime.as_ref().ok_or(Error::Unavailable)?.address.to_string()
-                }),
-            )?;
+        if self.shared_grant.is_none() {
+            self.runtime = open_portos(config, screen, trace, epoch).await?;
         }
         let client = config
             .mcp
@@ -223,7 +236,7 @@ impl Tools {
                 };
                 McpClient::with_ca(
                     server.clone(),
-                    Token::new(server.clone(), self.runtime.as_ref().map(|r| r.grant.clone())),
+                    Token::new(server.clone(), self.grant()),
                     Duration::from_secs(config.agent.task_deadline_seconds),
                     ca_pem.as_deref(),
                 )
@@ -231,7 +244,13 @@ impl Tools {
             })
             .transpose()?;
         let host = Policy::new(
-            Mcp::new(client, trace.clone(), config.mcp.server.first(), self.grant()),
+            Mcp::new(
+                client,
+                trace.clone(),
+                config.mcp.server.first(),
+                self.grant(),
+                self.portos_permissions.clone(),
+            ),
             &self.allowed,
             &config.audit.log_dir,
             screen.approvals.clone(),
@@ -247,7 +266,13 @@ impl Tools {
     }
 
     pub fn grant(&self) -> Option<Arc<bridge_mcp::Grant>> {
-        self.runtime.as_ref().map(|runtime| runtime.grant.clone())
+        self.shared_grant
+            .clone()
+            .or_else(|| self.runtime.as_ref().map(|runtime| runtime.grant.clone()))
+    }
+
+    pub(super) fn share_grant(&mut self, grant: Arc<bridge_mcp::Grant>) {
+        self.shared_grant = Some(grant);
     }
 
     pub async fn catalog(&mut self) -> Result<Catalog, Error> {
@@ -278,6 +303,27 @@ impl Tools {
             runtime.close().await;
         }
     }
+}
+
+pub(super) async fn open_portos(
+    config: &BridgeConfig,
+    screen: &Screen,
+    trace: &mut Trace,
+    epoch: Option<u64>,
+) -> Result<Option<bridge_mcp::Runtime>, Error> {
+    let Some(settings) = bridge_mcp::Settings::configured(config)? else {
+        return Ok(None);
+    };
+    let mut runtime = bridge_mcp::Runtime::open(settings, screen.presentation.clone(), trace.clone(), epoch).await?;
+    if let Err(error) = trace.record(
+        "mcp.operator.listening",
+        None,
+        json!({"address":runtime.address.to_string()}),
+    ) {
+        runtime.close().await;
+        return Err(error);
+    }
+    Ok(Some(runtime))
 }
 
 /// Append both builtins after discovery. A discovered tool may neither

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PortosOperationStartedV2",
+  "type": "object",
+  "properties": {
+    "operation": {
+      "$ref": "#/$defs/PortosActionV2"
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV2"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "operation"
+  ],
+  "$defs": {
+    "PortosActionV2": {
+      "type": "string",
+      "enum": [
+        "link",
+        "unlink"
+      ]
+    },
+    "SettingsVersionV2": {
+      "type": "integer",
+      "const": 2
+    }
+  }
+}

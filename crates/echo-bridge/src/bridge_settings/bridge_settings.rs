@@ -3,6 +3,10 @@
 use echo_config::{BridgeConfig, ConfigError, SettingsOverlay};
 use std::path::PathBuf;
 
+#[path = "settings_host/openai_account.rs"]
+pub(crate) mod openai_account;
+#[path = "settings_host/portos_permissions.rs"]
+pub(crate) mod portos_permissions;
 mod settings_atomic;
 mod settings_host;
 pub mod settings_process;
@@ -18,6 +22,8 @@ pub(crate) const RESTART_FAILED: &str = "Could not restart bridge; saved setting
 pub enum SettingsError {
     #[error("home.dir: settings unavailable")]
     Unavailable,
+    #[error("Settings change requires a bridge restart")]
+    RestartUnavailable,
     #[error("{0}")]
     Validation(#[from] ConfigError),
     #[error("{0}")]
@@ -64,6 +70,7 @@ pub struct SettingsStore {
     effective: BridgeConfig,
     home: PathBuf,
     uncertain: bool,
+    restart_allowed: bool,
 }
 
 impl SettingsStore {
@@ -84,6 +91,7 @@ impl SettingsStore {
             effective,
             home,
             uncertain: false,
+            restart_allowed: true,
         })
     }
 
@@ -113,6 +121,9 @@ impl SettingsStore {
         let candidate = self.overlay.merge(patch);
         let config = candidate.apply_to(&self.base)?;
         let changed = !same_values(&self.effective, &config);
+        if changed && !self.restart_allowed {
+            return Err(SettingsError::RestartUnavailable);
+        }
         if candidate != self.overlay {
             let text = candidate.to_toml_string()?;
             let result = settings_atomic::replace(&self.home, "settings.toml", text.as_bytes(), check);
@@ -142,6 +153,12 @@ fn same_values(first: &BridgeConfig, second: &BridgeConfig) -> bool {
         && first.codex_voice() == second.codex_voice()
         && first.agent.daily_request_cap == second.agent.daily_request_cap
         && first.agent.max_tool_calls == second.agent.max_tool_calls
+        && first.codex.web_search == second.codex.web_search
+        && first.codex_model() == second.codex_model()
+        && first.codex.delegate_effort == second.codex.delegate_effort
+        && first.agent.task_deadline_seconds == second.agent.task_deadline_seconds
+        && first.home == second.home
+        && first.mcp == second.mcp
 }
 
 #[cfg(test)]

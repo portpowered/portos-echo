@@ -4,10 +4,51 @@ use echo_config::LiveMode;
 use echo_screen_contract::UiState;
 use echo_signin::{
     OperatorCommand,
-    signin_codex::{self, AccountError},
+    signin_codex::{self, AccountError, Prompt},
 };
 use std::{io::Write, time::Duration};
 use tokio::time::Instant;
+
+const ACCOUNT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Run an account operation after the voice generation has released its home.
+pub(crate) async fn screen_account(
+    host: &crate::bridge_codex::HostOptions<'_>,
+    operation: OperatorCommand,
+    cancelled: impl std::future::Future<Output = ()>,
+    present: impl FnOnce(&Prompt, Duration) -> Result<(), AccountError>,
+) -> Result<(), Error> {
+    let deadline = Instant::now() + ACCOUNT_TIMEOUT;
+    tokio::pin!(cancelled);
+    let supervisor = tokio::select! {
+        biased;
+        () = &mut cancelled => return Err(Error::Control),
+        result = tokio::time::timeout_at(deadline, codex_host::routed_supervisor(host.config, host.routes)) => {
+            result.map_err(|_| Error::Deadline)??
+        }
+    };
+    codex_host::run(supervisor, cancelled, deadline, async |supervisor| {
+        signin_codex::execute(
+            supervisor.io().map_err(codex_host::process_error)?,
+            host.mode,
+            operation,
+            &mut std::io::sink(),
+            |prompt| present(prompt, deadline.saturating_duration_since(Instant::now())),
+            deadline,
+        )
+        .await
+        .map_err(account_error)
+    })
+    .await
+}
+
+fn account_error(error: AccountError) -> Error {
+    match error {
+        AccountError::Output => Error::Control,
+        AccountError::Deadline => Error::Deadline,
+        _ => Error::Authorization,
+    }
+}
 
 pub(super) async fn execute(
     command: Prepared,
@@ -28,7 +69,7 @@ pub(super) async fn execute(
     if let Some(release) = release {
         let _ = release.send(screen.release_observer());
     }
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = Instant::now() + ACCOUNT_TIMEOUT;
     let result = codex_host::run(supervisor, cancelled, deadline, async |supervisor| {
         let result = signin_codex::execute(
             supervisor.io().map_err(codex_host::process_error)?,
@@ -53,11 +94,7 @@ pub(super) async fn execute(
                 })
                 .await?;
         }
-        result.map_err(|error| match error {
-            AccountError::Output => Error::Control,
-            AccountError::Deadline => Error::Deadline,
-            _ => Error::Authorization,
-        })
+        result.map_err(account_error)
     })
     .await;
     // Screen cleanup still runs when process cleanup or the command fails.

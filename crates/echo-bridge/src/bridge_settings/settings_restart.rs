@@ -42,6 +42,13 @@ impl Restart {
 
 /// With no home-backed settings owner, keep the existing voice path unchanged.
 pub(crate) async fn requested() {
+    tokio::select! {
+        () = replacement_requested() => (),
+        () = super::openai_account::requested() => (),
+    }
+}
+
+pub(crate) async fn replacement_requested() {
     let Ok(mut receive) = CURRENT.try_with(Clone::clone) else {
         return std::future::pending().await;
     };
@@ -53,6 +60,10 @@ pub(crate) async fn requested() {
             return std::future::pending().await;
         }
     }
+}
+
+pub(crate) fn replacement_pending() -> bool {
+    CURRENT.try_with(|receive| *receive.borrow()).unwrap_or(false)
 }
 
 #[cfg(test)]

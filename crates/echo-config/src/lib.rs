@@ -15,7 +15,7 @@ pub use config_clock::{ClockConfig, DEFAULT_TIME_SERVERS};
 pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS, WebSearch, realtime_voices};
 pub use config_muse::{AgentBackend, MuseConfig};
 pub use config_screen::ScreenPackDownload;
-pub use config_settings::{EffectiveConfig, SettingsOverlay};
+pub use config_settings::{EffectiveConfig, SettingsOptions, SettingsOverlay, SettingsServerTools};
 pub use config_voice::VoiceConfig;
 
 #[cfg(test)]

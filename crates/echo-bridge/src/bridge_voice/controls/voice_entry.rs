@@ -90,24 +90,29 @@ fn process_generation(
 
 pub(crate) async fn execute<C: LinkConnector>(settings: Settings, control: Control, connector: C) -> Result<(), Error> {
     let local = settings.model_url.is_some();
+    let settings_witness = settings.sim_epoch.is_some();
     let configured = prepare(settings)?.with_clock(control.utc_day);
     let media = media_config(local);
     let clean_stop = Cell::new(true);
     let cancelled = async {
         clean_stop.set(matches!(control.shutdown.await, Ok(true)));
     };
-    let result = configured
-        .execute(
-            connector,
-            async || {
-                Box::pin(Peer::create(media.clone()))
-                    .await
-                    .map_err(|_| Error::Unavailable)
-            },
-            vec![],
-            cancelled,
-        )
-        .await;
+    let peer = async || {
+        Box::pin(Peer::create(media.clone()))
+            .await
+            .map_err(|_| Error::Unavailable)
+    };
+    // An explicit loopback epoch also drives the paired grant journey.
+    // The controlled owner cannot replace the process, so refuse changes that require it.
+    let result = if settings_witness {
+        configured
+            .without_settings_restart()
+            .execute_with_settings(connector, peer, vec![], cancelled)
+            .await
+            .map(|_| ())
+    } else {
+        configured.execute(connector, peer, vec![], cancelled).await
+    };
     if clean_stop.get() { result } else { Err(Error::Control) }
 }
 

@@ -1,14 +1,19 @@
 import {
     decodeSaved,
-    decodeSnapshot,
     request,
     settingsUrl,
+    type PatchV2,
     type Snapshot,
+    type SnapshotV2,
 } from "./api";
 import { element, promptForm, settingsForm } from "./forms";
 import { mountKeyboard } from "./keyboard";
 import type { UiState } from "../model";
 import { packControls } from "./packs";
+import { loadSettings, restartWarning, saveSettingsV2 } from "./api-v2";
+import { openAIOptions, portosForm } from "./forms-v2";
+import { mountPortos } from "./accounts/portos";
+import { mountOpenAI } from "./accounts/openai";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
@@ -19,6 +24,20 @@ const RELINK_RESULT: Record<Snapshot["link_status"], string> = {
     link_required: `Port OS needs linking again. ${LINK_FROM_PC}`,
     linked: "Port OS is already linked. Nothing changed.",
 };
+
+function settingsSection(title: string, body: HTMLElement) {
+    const section = element("details");
+    section.className = "settings-section";
+    section.append(element("summary", title), body);
+    return section;
+}
+
+function accountRow(title: string) {
+    const row = element("section");
+    row.setAttribute("aria-label", title);
+    row.append(element("h3", title));
+    return row;
+}
 
 // Navigation never constructs a ScreenFrame or emits a UiAction. The existing
 // presentation continues to accept authoritative SSE updates behind this view.
@@ -60,6 +79,8 @@ export function mountSettings(
     let pending: AbortController | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
+    let portos: ReturnType<typeof mountPortos> | undefined;
+    let openai: ReturnType<typeof mountOpenAI> | undefined;
 
     function close() {
         panel.hidden = true;
@@ -70,6 +91,10 @@ export function mountSettings(
         gear.hidden = false;
         gear.setAttribute("aria-expanded", "false");
         pending?.abort();
+        portos?.stop();
+        portos = undefined;
+        openai?.stop();
+        openai = undefined;
         pending = undefined;
         clearTimeout(timeout);
         gear.focus();
@@ -143,8 +168,101 @@ export function mountSettings(
                 : "Saved. Changes apply to the next conversation.";
         }, "Saving…");
     }
-    function render(data: Snapshot) {
+    function render(data: Snapshot | SnapshotV2) {
         fields.replaceChildren();
+        if (data.version === 1) renderV1(data);
+        else renderV2(data);
+        for (const warning of data.warnings)
+            fields.append(element("p", warning));
+    }
+    function renderShared(data: Snapshot | SnapshotV2) {
+        for (const kind of ["voice", "runner"] as const)
+            fields.append(
+                promptForm(kind, data.prompts[kind], (text) => {
+                    save(`/prompts/${kind}`, { version: 1, text }, () => {
+                        data.prompts[kind] = text;
+                    });
+                }),
+            );
+    }
+    function renderV2(data: SnapshotV2) {
+        const permissions = portosForm(data.portos, saveV2);
+        function saveV2(patch: PatchV2) {
+            if (!Object.keys(patch).length) {
+                status.textContent = "No settings changed";
+                return;
+            }
+            if (patch.portos?.scopes?.length === 0) {
+                status.textContent = "Select at least one requested scope.";
+                return;
+            }
+            void perform(async (signal) => {
+                const restarting = decodeSaved(
+                    await saveSettingsV2(actions, signal, patch),
+                    2,
+                );
+                if (signal.aborted) return "";
+                if (patch.voice)
+                    Object.assign(data.settings.voice, patch.voice);
+                if (patch.codex)
+                    Object.assign(data.settings.codex, patch.codex);
+                if (patch.agent)
+                    Object.assign(data.settings.agent, patch.agent);
+                if (patch.home && data.settings.home) {
+                    const groups = data.settings.home.agent_tools;
+                    groups.splice(0, groups.length, ...patch.home.agent_tools);
+                }
+                if (patch.portos && data.portos.server) {
+                    if (patch.portos.scopes)
+                        data.portos.server.requested_scopes.splice(
+                            0,
+                            data.portos.server.requested_scopes.length,
+                            ...patch.portos.scopes,
+                        );
+                    if (patch.portos.allow_tools)
+                        data.portos.server.allow_tools.splice(
+                            0,
+                            data.portos.server.allow_tools.length,
+                            ...patch.portos.allow_tools,
+                        );
+                }
+                if (restarting) portos?.settingsSaved(!!patch.portos?.scopes);
+                return restarting
+                    ? "Saved. The bridge will restart after the current reply finishes."
+                    : "Saved. Changes apply to the next conversation.";
+            }, "Saving…");
+        }
+        const accounts = element("section");
+        accounts.className = "settings-accounts";
+        accounts.setAttribute("aria-label", "Accounts");
+        const openaiRow = accountRow("OpenAI (GPT Live)");
+        const portosRow = accountRow("Port OS");
+        accounts.append(element("h2", "Accounts"), openaiRow, portosRow);
+        openai = mountOpenAI(openaiRow, actions, perform);
+        portos = mountPortos(
+            portosRow,
+            permissions,
+            actions,
+            data,
+            perform,
+            (message) => {
+                status.textContent = message;
+                void openai?.refresh();
+            },
+        );
+        fields.append(
+            accounts,
+            packControls(actions, perform),
+            settingsSection(
+                "OpenAI",
+                settingsForm(data, saveV2, openAIOptions(data.settings)),
+            ),
+            settingsSection("Port OS permissions", permissions),
+        );
+        renderShared(data);
+        fields.append(element("p", "Version: " + data.bridge_version));
+    }
+    function renderV1(data: Snapshot) {
         const form = settingsForm(data, (patch) => {
             if (!Object.keys(patch).length) {
                 status.textContent = "No settings changed";
@@ -160,14 +278,7 @@ export function mountSettings(
             });
         });
         fields.append(form, packControls(actions, perform));
-        for (const kind of ["voice", "runner"] as const)
-            fields.append(
-                promptForm(kind, data.prompts[kind], (text) => {
-                    save(`/prompts/${kind}`, { version: 1, text }, () => {
-                        data.prompts[kind] = text;
-                    });
-                }),
-            );
+        renderShared(data);
         fields.append(
             element("h2", "Bridge"),
             element("p", `Port OS: ${data.link_status.replace(/_/g, " ")}`),
@@ -186,8 +297,6 @@ export function mountSettings(
             });
         });
         fields.append(link);
-        for (const warning of data.warnings)
-            fields.append(element("p", warning));
     }
     gear.addEventListener("click", () => {
         if (disposed) return;
@@ -200,11 +309,10 @@ export function mountSettings(
         fields.replaceChildren();
         back.focus();
         void perform(async (signal) => {
-            const data = decodeSnapshot(
-                await request(settingsUrl(actions), signal),
-            );
+            const data = await loadSettings(actions, signal);
             if (signal.aborted) return "";
             render(data);
+            if (data.warnings.includes(restartWarning)) return restartWarning;
             return data.restart_pending
                 ? "Saved settings are waiting for a bridge restart."
                 : "Settings loaded";
@@ -228,6 +336,8 @@ export function mountSettings(
         dispose() {
             disposed = true;
             pending?.abort();
+            portos?.stop();
+            openai?.stop();
             clearTimeout(timeout);
             gear.remove();
             panel.remove();

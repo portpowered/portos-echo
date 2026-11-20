@@ -37,18 +37,34 @@ The installer does not rewrite the old binary/CA paths in the Echo example; use 
 the quickstart. It rejects unsafe paths and migrates retained private state to the fixed non-root owner.
 
 The base must validate first. If `[home]` is configured, `BridgeConfig::load_effective` then reads that home's
-optional `settings.toml` (maximum 65,536 bytes). Only these leaves override base:
-`voice.session_listen_enabled`, `voice.session_listen_seconds`, `codex.voice`,
-`agent.daily_request_cap`, `agent.max_tool_calls`. The separate root `screen_pack`
-selects installed screen data; it does not override a base voice setting. Missing leaves retain base values.
+optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leaves:
+
+- Voice and OpenAI use `voice.session_listen_enabled`, `voice.session_listen_seconds`,
+  `codex.voice`, `codex.web_search`, `codex.delegate_model` and `codex.delegate_effort`.
+  An empty delegated model or effort selects the pinned app server's default.
+- Agent settings include `agent.daily_request_cap`, `agent.max_tool_calls`, `agent.task_deadline_seconds`
+  and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
+- Port OS permissions use `mcp.scopes` and the `allow_tools` list under `[[mcp.server]]`, bound to the configured
+  Port OS server by its `name`. An empty tool list disables all Port OS tools.
+- The root `screen_pack` selects installed screen packs.
+
+Missing leaves retain base values. The Port OS server identity and URL are read-only in the panel.
+Open the Settings gear. Accounts shows OpenAI (GPT Live) and Port OS. To link either account, open the displayed
+verification URL on a phone or PC and enter the code before it expires. Confirm Unlink to remove the selected
+account's stored sign-in. OpenAI account changes wait for the current conversation to settle, then update the
+running bridge. If the bridge uses an API key, manage that credential in the host configuration.
+Port OS permissions shows the requested scopes next to the current grant. After saving scopes, wait for Settings
+to report that the saved values are active before linking again. Presentation lists the installed screen packs
+and puts Template eyes first. Omitting `screen_pack` uses the installed template.
 Unknown keys, bad types, unreadable/oversized files or invalid effective values reject the **whole overlay**;
 the validated base remains active and a warning is presented. An invalid base remains a startup error.
 The operator account/link commands load base directly; the voice runtime loads the effective configuration.
 
-Voice and cap edits persist first, then request replacement at an idle/between-call boundary.
-They do not interrupt an active conversation. Screen-pack selection saves use the same atomic writer
-and never request or retry replacement. Catalog and selection persistence are implemented; visible
-pack playback and hot reload remain pending (see [screen packs](screen-packs.md)).
+Settings edits persist first, then request replacement at an idle boundary between calls.
+Withdrawing Port OS scopes or tools also denies affected calls in the running bridge as soon as the save succeeds.
+Adding permissions takes effect after restart and still requires the applicable grant scopes.
+Settings edits let active conversations finish. Presentation saves use the same atomic writer and update the
+screen without restarting the bridge. See [screen packs](screen-packs.md).
 Pending/applied and failed-restart state are shown on screen. After replacement failure,
 the old active configuration remains usable; a later explicit stop/start loads the saved overlay.
 Other base edits need restart. To remove an override, stop and edit/remove the corresponding overlay entry;
@@ -135,7 +151,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `wake_earcon` | Wake sound; boolean, default true. | restart / no |
 | `home` | Optional agent-home table; absent disables home-backed settings/tools/prompts. | restart / no |
 | `home.dir` | Required when home present; nonempty absolute directory path. | restart / no |
-| `home.agent_tools` | Default true (notes and prompts); false or [] disables, or array containing unique `notes` and/or `prompts`. | restart / no |
+| `home.agent_tools` | Default true (notes and prompts); false or [] disables, or array containing unique `notes` and/or `prompts`. | boundary / yes |
 | `echo` | Required Wyoming table. | restart / no |
 | `echo.host` | Required string host; use literal loopback on device. No additional hostname validation in decoder. | restart / no |
 | `echo.wyoming_port` | Port integer 1–65535, default 16700. | restart / no |
@@ -156,7 +172,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `agent` | Required delegated-task policy table. | restart / no |
 | `agent.backend` | `client` (default) or `muse` parses; current Codex voice runtime admits only client. | restart / no |
 | `agent.max_tool_calls` | Integer 1–32, default 8, per delegated task. | boundary / yes |
-| `agent.task_deadline_seconds` | Integer 5–600, default 60, per delegated task. | restart / no |
+| `agent.task_deadline_seconds` | Integer 5–600, default 60, per delegated task. | boundary / yes |
 | `agent.daily_request_cap` | Unsigned 64-bit integer, default 500; UTC-day delegated-request cap. Overlay must also fit signed TOML integer. | boundary / yes |
 | `agent.model` | Optional nonblank runner-model alias, lowest precedence. | restart / no |
 | `muse` | Optional legacy backend table; required by muse selection; not used by current Codex voice path. | restart / no |
@@ -166,7 +182,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `mcp` | Required server/grant table. | restart / no |
 | `mcp.state_dir` | Optional nonempty path; runtime Port OS requires private state outside a repository, no parent traversal. | restart / no |
 | `mcp.client_id` | Default `port1/systems/zero/oauth-clients/command-line-interface` (public development client); nonblank text without controls. Use your registered client for broader deployment. | restart / no |
-| `mcp.scopes` | Default ["endpoint:read"]; nonempty array of nonempty names without whitespace/control characters. Grant consent can further constrain access. | restart / no |
+| `mcp.scopes` | Defaults to all seven supported Port OS scopes; nonempty array of nonempty names without whitespace/control characters. Grant consent can further constrain access. | withdraw immediately, other changes at boundary / yes |
 | `mcp.operator_listen` | Socket address on literal IPv4 loopback, default 127.0.0.1:16902; local grant-owner commands. | restart / no |
 | `mcp.server` | Optional array of tables, default empty. | restart / no |
 | `mcp.server[]` | One server table per element; runtime Port OS grant wiring selects the first server when it uses portos_device_code. | restart / no |
@@ -174,7 +190,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `mcp.server[].url` | Required HTTP(S) URL without inline credentials, whitespace or backslash; valid host/optional u16 port. | restart / no |
 | `mcp.server[].auth` | Required: `none`, `portos_device_code`, or `bearer_file`. | restart / no |
 | `mcp.server[].bearer_file` | Optional literal file path; required with bearer_file auth. Store credential privately. | restart / no |
-| `mcp.server[].allow_tools` | Array of exact tool-name strings, default empty; only listed tools exposed. | restart / no |
+| `mcp.server[].allow_tools` | Array of exact tool-name strings, defaults to all eleven Port OS tools for device-code auth and empty for other auth modes. An explicit empty array disables all tools. | withdraw immediately, other changes at boundary / yes |
 | `screen` | Required screen transport table. | restart / no |
 | `screen.listen` | Socket address; decoder defaults to all IPv4 interfaces on port 16900. Runtime device config must use 127.0.0.1:16900. | restart / no |
 | `screen.pairing_token_file` | Required literal private token-file path. | restart / no |
@@ -200,11 +216,11 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.binary` | Default unset (pinned host helper resolves multi-tool); if set absolute path. Device must name installed standalone app server. | restart / no |
 | `codex.launch` | `subcommand` default (`app-server --listen stdio://`) or `standalone` (`--listen stdio://`); standalone requires binary. | restart / no |
 | `codex.ca_file` | Default unset; absolute PEM path, child SSL_CERT_FILE and bridge Port OS OAuth/MCP additional trust roots. | restart / no |
-| `codex.web_search` | `live` default (also with table/key omitted), `cached` or `disabled`. Provider-backed search only (hosted or native `web.run`); all other tool restrictions stay intact. Invalid type/value: `codex.web_search: invalid type or value`, exit 2 before runtime effects. Set disabled and restart to turn off; remove key before restoring an older binary. | restart / no |
+| `codex.web_search` | `live` default (also with table/key omitted), `cached` or `disabled`. Provider-backed search only (hosted or native `web.run`); all other tool restrictions stay intact. Invalid type/value: `codex.web_search: invalid type or value`, exit 2 before runtime effects. Set disabled and restart to turn off; remove key before restoring an older binary. | boundary / yes |
 | `codex.voice` | Default unset; overrides live.voice. `default` omits outgoing field; other choices below, nonblank. | boundary / yes |
 | `codex.model` | Optional nonblank legacy runner-model alias; overrides agent.model. | restart / no |
-| `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. Unset leaves app-server default. | restart / no |
-| `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | restart / no |
+| `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. An empty screen override selects the pinned app server default even when a legacy model key is set. | boundary / yes |
+| `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | boundary / yes |
 | `codex.time_zone` | Default unset; IANA-name syntax (nonempty slash components using ASCII letters/digits/underscore/plus/minus). Not a lookup validating that zone exists. | restart / no |
 
 Safe legacy endpoint URLs use HTTPS or literal IPv4 loopback HTTP, with no inline credentials, query or fragment.

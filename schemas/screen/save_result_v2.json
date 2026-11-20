@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SaveResultV2",
+  "type": "object",
+  "properties": {
+    "restart_pending": {
+      "type": "boolean"
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV2"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "restart_pending"
+  ],
+  "$defs": {
+    "SettingsVersionV2": {
+      "type": "integer",
+      "const": 2
+    }
+  }
+}

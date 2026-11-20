@@ -125,15 +125,20 @@ async fn t3_settings_typed_transaction_and_prompt_encoded_limit() -> Result {
 
 #[tokio::test]
 async fn t3_settings_revocation_between_dispatch_and_commit_invokes_no_transaction() -> Result {
-    let (mut server, _states, mut inbox) = mounted().await?;
-    let addr = server.bound_addr;
-    let pending =
-        tokio::spawn(async move { request(addr, "POST", &format!("/settings/v1?token={TOKEN}"), PATCH, JSON).await });
-    let admitted = inbox.recv().await.ok_or("missing host request")?;
-    server.revoke_pairing().await?;
-    admitted.commit(|_| unreachable!("revoked request executed")).await;
-    assert_eq!(pending.await??, (401, String::new()));
-    server.shutdown().await?;
+    for (version, method, patch) in [
+        (1, "POST", PATCH),
+        (2, "PATCH", r#"{"version":2,"settings":{"agent":{"max_tool_calls":8}}}"#),
+    ] {
+        let (mut server, _states, mut inbox) = mounted().await?;
+        let addr = server.bound_addr;
+        let path = format!("/settings/v{version}?token={TOKEN}");
+        let pending = tokio::spawn(async move { request(addr, method, &path, patch, JSON).await });
+        let admitted = inbox.recv().await.ok_or("missing host request")?;
+        server.revoke_pairing().await?;
+        admitted.commit(|_| unreachable!("revoked request executed")).await;
+        assert_eq!(pending.await??, (401, String::new()));
+        server.shutdown().await?;
+    }
     Ok(())
 }
 

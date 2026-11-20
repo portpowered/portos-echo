@@ -38,6 +38,8 @@ pub(crate) struct Grant {
     operation: AtomicU64,
     reloaded: AtomicBool,
     scopes: Mutex<ScopeStatus>,
+    operator: bridge_operations::Operator,
+    screen_operation: Mutex<bridge_operations::ScreenOperation>,
 }
 
 #[derive(Default)]
@@ -64,6 +66,15 @@ impl Grant {
         } else {
             LinkStatusV1::LinkRequired
         }
+    }
+
+    /// Project only the usable grant scopes from the existing owner.
+    pub(crate) async fn granted_scopes(&self) -> Option<Vec<String>> {
+        if self.blocked() {
+            return None;
+        }
+        let scopes = self.client.granted_scopes().await;
+        if self.blocked() { None } else { scopes }
     }
 
     pub fn blocked(&self) -> bool {
@@ -136,6 +147,8 @@ impl Runtime {
             .await
             .map_err(|_| Error::Control)?;
         let address = listener.local_addr().map_err(|_| Error::Control)?;
+        let (send, receive) = mpsc::channel(1);
+        let operator = bridge_operations::Operator::new(send);
         let grant = Arc::new(Grant {
             client: AuthClient::open_with_ca(settings.options, epoch, settings.ca_pem.as_deref())
                 .await
@@ -156,9 +169,9 @@ impl Runtime {
             operation: AtomicU64::new(0),
             reloaded: AtomicBool::new(true),
             scopes: Mutex::default(),
+            operator: operator.clone(),
+            screen_operation: Mutex::default(),
         });
-        let (send, receive) = mpsc::channel(1);
-        let operator = bridge_operations::Operator::new(send);
         let mut runtime = Self {
             grant,
             address,

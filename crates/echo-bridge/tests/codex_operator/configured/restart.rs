@@ -165,7 +165,7 @@ async fn t3_settings_binary_idle_save_execs_same_image_argv_and_held_stdin_once(
     drop(replacement);
 }
 
-async fn binary_finished(fixture: &Fixture, process: &mut Process) {
+pub(super) async fn binary_finished(fixture: &Fixture, process: &mut Process) {
     drop(process.input.take());
     process.collect(0).await;
     assert_eq!(process.stderr().await, "");
@@ -193,7 +193,7 @@ pub(super) fn process_identity(pid: u32) -> (PathBuf, Vec<u8>, PathBuf) {
     )
 }
 
-fn owner_only(path: &Path) {
+pub(super) fn owner_only(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

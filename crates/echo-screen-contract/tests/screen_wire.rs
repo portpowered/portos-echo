@@ -1,6 +1,7 @@
 //! T2: real public types and `serde_json` with no transport.
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use serde::{Serialize, de::DeserializeOwned};
+use std::io::Write as _;
 use std::{error::Error, fmt::Debug};
 
 fn round_trip<T>(value: &T, wire: &str) -> Result<(), Box<dyn Error>>
@@ -227,4 +228,107 @@ fn settings_v1_rejects_versions_extras_nulls_and_lossy_caps() {
     ] {
         assert!(serde_json::from_str::<PromptSaveV1>(wire).is_err());
     }
+}
+
+#[test]
+fn settings_v2_sparse_wire_preserves_decimal_cap_and_refuses_other_shapes() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::settings_v1::SettingsPatchV1;
+    use echo_screen_contract::settings_v2::SettingsPatchV2;
+
+    let wire = r#"{"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner"},"agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":6},"portos":{"scopes":["endpoint:read"],"allow_tools":["endpoint_query"]}}}"#;
+    let patch = serde_json::from_str::<SettingsPatchV2>(wire)?;
+    assert!(patch.settings.valid_shape());
+    round_trip(&patch, wire)?;
+    assert!(serde_json::from_str::<SettingsPatchV1>(wire).is_err());
+    writeln!(std::io::stdout().lock(), "{wire}").unwrap();
+
+    for invalid in [
+        r#"{"version":1,"settings":{"agent":{"max_tool_calls":6}}}"#,
+        r#"{"version":2,"settings":{"codex":{"web_search":null}}}"#,
+        r#"{"version":2,"settings":{"portos":{"url":"synthetic"}}}"#,
+        r#"{"version":2,"settings":{"portos":{"scopes":["unknown"]}}}"#,
+        r#"{"version":2,"settings":{"portos":{"allow_tools":["unknown"]}}}"#,
+        r#"{"version":2,"settings":{"agent":{"max_tool_calls":6},"codex":{}}}"#,
+        r#"{"version":2,"settings":{"portos":{"scopes":[]}}}"#,
+        r#"{"version":2,"settings":{"portos":{"scopes":["endpoint:read","endpoint:read"]}}}"#,
+        r#"{"version":2,"settings":{"home":{"agent_tools":["notes","notes"]}}}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<SettingsPatchV2>(invalid).map_or(true, |value| !value.settings.valid_shape()),
+            "{invalid}"
+        );
+        writeln!(std::io::stdout().lock(), "Refused {invalid}").unwrap();
+    }
+    let clear = r#"{"version":2,"settings":{"codex":{"delegate_model":"","delegate_effort":""},"home":{"agent_tools":[]},"portos":{"allow_tools":[]}}}"#;
+    let patch = serde_json::from_str::<SettingsPatchV2>(clear)?;
+    assert!(patch.settings.valid_shape());
+    round_trip(&patch, clear)
+}
+
+#[test]
+fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::{settings_v1::SettingsSnapshotV1, settings_v2::SettingsSnapshotV2};
+
+    let wire = r#"{
+        "version":2,
+        "settings":{
+            "voice":{"session_listen_enabled":true,"session_listen_seconds":15},
+            "codex":{"voice":"marin","web_search":"cached","delegate_model":"synthetic-runner","delegate_effort":"low"},
+            "agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":6,"task_deadline_seconds":45},
+            "home":{"agent_tools":["notes","prompts"]}
+        },
+        "allowed_voices":["default","marin"],
+        "prompts":{"voice":"synthetic voice","runner":"synthetic runner"},
+        "portos":{
+            "link_status":"relink_for_scope","operation_state":"idle","link_waiting_for_restart":true,
+            "scope_choices":["endpoint:read","message:send"],"tool_choices":["endpoint_query","control"],
+            "server":{
+                "name":"portos","url":"http://127.0.0.1/mcp","requested_scopes":["endpoint:read","message:send"],
+                "granted_scopes":["endpoint:read"],"allow_tools":["endpoint_query","control"]
+            }
+        },
+        "bridge_version":"synthetic","restart_pending":true,"warnings":[]
+    }"#;
+    let snapshot = serde_json::from_str::<SettingsSnapshotV2>(wire)?;
+    let expected = serde_json::from_str::<serde_json::Value>(wire)?;
+    assert_eq!(serde_json::to_value(&snapshot)?, expected);
+    preserved(&snapshot)?;
+    assert!(serde_json::from_str::<SettingsSnapshotV1>(wire).is_err());
+    writeln!(std::io::stdout().lock(), "{}", serde_json::to_string(&snapshot)?)?;
+    Ok(())
+}
+#[test]
+fn t2_portos_v2_operation_requires_exact_version_and_confirmation() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::settings_v2::{
+        PortosActionV2, PortosOperationStartedV2, PortosOperationV2, SettingsVersionV2,
+    };
+    use serde_json::{from_value, json, to_value};
+
+    for body in [
+        json!({"version":2,"operation":"link"}),
+        json!({"version":2,"operation":"unlink","confirm":true}),
+    ] {
+        let request: PortosOperationV2 = from_value(body.clone())?;
+        assert_eq!(to_value(request)?, body);
+    }
+    for body in [
+        json!({"version":1,"operation":"link"}),
+        json!({"version":2,"operation":"refresh"}),
+        json!({"version":2,"operation":"link","confirm":true}),
+        json!({"version":2,"operation":"unlink"}),
+        json!({"version":2,"operation":"unlink","confirm":false}),
+        json!({"version":2,"operation":"unlink","confirm":true,"extra":true}),
+    ] {
+        assert!(from_value::<PortosOperationV2>(body).is_err());
+    }
+    let receipt = PortosOperationStartedV2 {
+        version: SettingsVersionV2,
+        operation: PortosActionV2::Unlink,
+    };
+    assert_eq!(to_value(receipt)?, json!({"version":2,"operation":"unlink"}));
+    writeln!(
+        std::io::stdout().lock(),
+        "paired Port OS wire: version=2 link=accepted unlink_confirm=true refused_shapes=6"
+    )?;
+    Ok(())
 }

@@ -82,6 +82,13 @@ pub async fn execute<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
             OperatorCommand::Signin { browser } if mode == LiveMode::Chatgpt => {
                 signin(io, browser, writer, present).await
             }
+            OperatorCommand::Signout if mode == LiveMode::Chatgpt => {
+                let id = io.begin_request("account/logout", &())?;
+                if io.wait_reply(&id).await? != json!({}) {
+                    return Err(AccountError::InvalidResponse);
+                }
+                Ok(())
+            }
             OperatorCommand::ImportCodex { .. } => Err(AccountError::ImportUnsupported),
             _ => Err(AccountError::UnsupportedMode),
         }

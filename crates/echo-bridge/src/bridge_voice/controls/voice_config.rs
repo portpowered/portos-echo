@@ -21,6 +21,7 @@ pub struct Configured {
     mcp_epoch: Option<u64>,
     settings_warning: Option<String>,
     startup: Option<Box<EffectiveConfig>>,
+    settings_restart_allowed: bool,
     time_servers: Vec<String>,
 }
 
@@ -46,6 +47,7 @@ impl Configured {
             mcp_epoch: None,
             settings_warning: None,
             startup: None,
+            settings_restart_allowed: true,
             utc_day: std::sync::Arc::new(|| {
                 crate::bridge_time::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -108,6 +110,11 @@ impl Configured {
 
     pub(crate) fn with_mcp_epoch(mut self, epoch: Option<u64>) -> Self {
         self.mcp_epoch = epoch;
+        self
+    }
+
+    pub(super) fn without_settings_restart(mut self) -> Self {
+        self.settings_restart_allowed = false;
         self
     }
 
@@ -185,9 +192,18 @@ impl Configured {
                         .transpose()?
                 };
                 let options = self.options(api_key.as_ref(), tools);
-                if let Some(settings) = settings {
+                if let Some((service, send)) = settings {
+                    let service = if self.settings_restart_allowed {
+                        service
+                    } else {
+                        service.without_restart()
+                    };
                     Box::pin(super::execute_with_settings(
-                        options, connector, peer, cancelled, settings,
+                        options,
+                        connector,
+                        peer,
+                        cancelled,
+                        (service, send),
                     ))
                     .await
                 } else {

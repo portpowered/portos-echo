@@ -29,6 +29,7 @@ struct State {
 
 pub enum OperatorCommand {
     Signin { browser: bool },
+    Signout,
     ImportCodex { path: PathBuf },
     Status,
     KillSwitch { enabled: bool },
