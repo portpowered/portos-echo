@@ -164,10 +164,10 @@ async fn complete_playback(
 impl<L: EchoLink> PlaybackContext<'_, L> {
     async fn service_delegation(
         &mut self,
-        source: &Source,
+        user_speaking: bool,
         call: &mut impl LivePort,
     ) -> Result<(Option<Instant>, Error), Error> {
-        let timing = self.wait.deadline(source.user_speaking);
+        let timing = self.wait.deadline(user_speaking);
         if timing.1 == Error::SessionCeiling && timing.0.is_some_and(|deadline| Instant::now() >= deadline) {
             self.delegation.abandon().await;
             return Err(Error::SessionCeiling);
@@ -322,7 +322,7 @@ async fn produce_turns<L: EchoLink>(
         if source.received > received {
             context.wait.media_started();
         }
-        let timing = context.service_delegation(source, call).await?;
+        let timing = context.service_delegation(source.user_speaking, call).await?;
         context.screen.presentation.expire_emotion()?;
         context.pressure(source, &mut pressure_reported)?;
         let echo_done = source.echo_done(lab);
