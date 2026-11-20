@@ -43,17 +43,29 @@ lint-self-tests:
 	python scripts/test_coverage_profiles.py
 	python scripts/test_build_echo.py
 
-test-unit:
-	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci
+# CI runs each nextest invocation below as parallel shards, one per runner, by passing
+# NEXTEST_PARTITION=count:K/N; the shards together run every test. Unset, a target runs all of them.
+NEXTEST_PARTITION ?=
+NEXTEST_SHARD = $(if $(NEXTEST_PARTITION),--partition $(NEXTEST_PARTITION) --no-tests=pass)
+
+.PHONY: test-unit-rust test-unit-python test-unit-screen
+test-unit: test-unit-rust test-unit-python test-unit-screen
+
+test-unit-rust:
+	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci $(NEXTEST_SHARD)
+
+test-unit-python:
 	python -m unittest discover -s crates/echo-lab/src/lab_run/sim/host_tests
 	python -m unittest discover -s crates/echo-lab/src/lab_run/device/clip_tests
+
+test-unit-screen:
 	if [ -f web/screen/package.json ]; then cd web/screen && npm ci && npm test; fi
 
 .PHONY: codex-app-server
 codex-app-server:
 	sh scripts/codex-app-server.sh
 
-test-unit coverage: codex-app-server
+test-unit-rust coverage: codex-app-server
 
 test-contract:
 	cargo test --offline --locked -p echo-contracts --lib --test contracts_wyoming --test contracts_events -- --nocapture
@@ -67,17 +79,25 @@ sim-prereqs: hassmic-host
 	cargo build --locked -p echo-bridge -p echo-muse-bridge --bins
 	cargo build --locked -p echo-lab --bins
 
-test-sim-suites: sim-prereqs
+# CI runs the three parts of test-sim-suites as parallel jobs; `make test-sim-suites` runs all three.
+.PHONY: test-sim-scenarios test-sim-bridge test-sim-components
+test-sim-suites: test-sim-scenarios test-sim-bridge test-sim-components
+
+test-sim-scenarios: sim-prereqs
 	cargo run --locked -p echo-lab -- validate
-	sh tests/hassmic_host_smoke.sh
+	python -c "import resource,subprocess,sys,time; t=time.time(); r=subprocess.run(['cargo','run','--locked','-p','echo-lab','--','run','--all','--driver','sim']); u=resource.getrusage(resource.RUSAGE_CHILDREN); print(f'TIMING wall={time.time()-t:.1f} user={u.ru_utime:.1f} sys={u.ru_stime:.1f}'); sys.exit(r.returncode)"
+
+test-sim-bridge: sim-prereqs
 	cargo nextest run -p echo-bridge --test bridge_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
+
+test-sim-components: sim-prereqs
+	sh tests/hassmic_host_smoke.sh
 	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
 	cargo nextest run -p echo-lab --test sim_bridge_cli --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
-	cargo run --locked -p echo-lab -- run --all --driver sim
 
 test-sim-host: sim-prereqs
-	cargo nextest run -p echo-lab --test sim_host --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
-	cargo nextest run -p echo-lab --bin echo-lab --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate
+	cargo nextest run -p echo-lab --test sim_host --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate $(NEXTEST_SHARD)
+	cargo nextest run -p echo-lab --bin echo-lab --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate $(NEXTEST_SHARD)
 
 .PHONY: hassmic-host capture-wyoming measure-barge-in
 hassmic-host:
@@ -120,15 +140,18 @@ coverage: hassmic-host
 deps-fresh:
 	cargo deny fetch && cargo deny check
 
-build-host:
+# CI runs the two halves of build-host as parallel jobs; `make build-host` runs both.
+.PHONY: build-host-workspace
+build-host: build-host-workspace test-echo-install
+
+build-host-workspace:
 	cargo build --workspace --locked
 	git diff --exit-code HEAD -- Cargo.lock
 	$(MAKE) check-echo-screen
-	$(MAKE) test-echo-install
 
 .PHONY: test-echo-install
 test-echo-install:
-	python tests/test_echo_install.py
+	python -c "import resource,subprocess,sys,time; t=time.time(); r=subprocess.run([sys.executable,'tests/test_echo_install.py']); u=resource.getrusage(resource.RUSAGE_CHILDREN); print(f'TIMING wall={time.time()-t:.1f} user={u.ru_utime:.1f} sys={u.ru_stime:.1f} cpus={__import__(\"os\").cpu_count()}'); sys.exit(r.returncode)"
 
 .PHONY: build-echo-screen test-echo-screen-jvm test-echo-screen-url
 build-echo-screen:

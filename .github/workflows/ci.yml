@@ -9,6 +9,134 @@ defaults:
   run:
     shell: sh
 jobs:
+  test-unit-rust:
+    name: test-unit-rust ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-unit-rust
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/portos-echo/codex
+          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
+      - name: Provision verified pinned Codex
+        run: sh scripts/codex-app-server.sh
+      - name: Enable isolated Codex network namespace
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: test-unit-rust
+        run: make test-unit-rust NEXTEST_PARTITION=count:${{ matrix.shard }}/4
+  test-unit-screen:
+    name: test-unit-screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-unit-screen
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/ms-playwright
+          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
+      - name: Provision locked screen npm cache
+        run: npm --prefix web/screen ci --offline=false
+      - name: Provision pinned screen Chromium
+        run: cd web/screen && npx --offline playwright install --with-deps chromium
+      - name: Chromium sandbox user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: test-unit-screen
+        run: make test-unit-python test-unit-screen
+      - name: Publish screen screenshot evidence
+        if: always()
+        id: screen-evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: screen-evidence-${{ github.sha }}
+          path: |
+            web/screen/test-results/screenshots/**
+            web/screen/test-results/summary.txt
+          if-no-files-found: error
+  test-sim-suites-parts:
+    name: ${{ matrix.part }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [test-sim-scenarios, test-sim-bridge, test-sim-components]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-sim-suites
+          sim: 'true'
+      - name: test-sim-suites
+        run: make ${{ matrix.part }}
+  test-sim-host-shards:
+    name: test-sim-host ${{ matrix.shard }}/3
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-sim-host
+          sim: 'true'
+      - name: test-sim-host
+        run: make test-sim-host NEXTEST_PARTITION=count:${{ matrix.shard }}/3
+  build-host-workspace:
+    name: build-host-workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: build-host
+      - name: build-host-workspace
+        run: make build-host-workspace
+  test-echo-install:
+    name: test-echo-install
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: test-echo-install
+        run: make test-echo-install
   format:
     name: format
     runs-on: ubuntu-latest
@@ -153,46 +281,13 @@ jobs:
         run: make lint-self-tests
   test-unit:
     name: test-unit
+    needs: [test-unit-rust, test-unit-screen]
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: test-unit
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ~/.npm
-            ~/.cache/ms-playwright
-          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
-      - name: Provision locked screen npm cache
-        run: npm --prefix web/screen ci --offline=false
-      - name: Provision pinned screen Chromium
-        run: cd web/screen && npx --offline playwright install --with-deps chromium
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ~/.cache/portos-echo/codex
-          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
-      - name: Provision verified pinned Codex
-        run: sh scripts/codex-app-server.sh
-      - name: Enable isolated Codex network namespace
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: test-unit
-        run: make test-unit
-      - name: Publish screen screenshot evidence
-        if: always()
-        id: screen-evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: screen-evidence-${{ github.sha }}
-          path: |
-            web/screen/test-results/screenshots/**
-            web/screen/test-results/summary.txt
-          if-no-files-found: error
+        run: test '${{ needs.test-unit-rust.result }}' = success && test '${{ needs.test-unit-screen.result }}' = success
   test-contract:
     name: test-contract
     runs-on: ubuntu-latest
@@ -209,34 +304,22 @@ jobs:
         run: make test-contract
   test-sim-suites:
     name: test-sim-suites
+    needs: [test-sim-suites-parts]
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: test-sim-suites
-          sim: 'true'
       - name: test-sim-suites
-        run: make test-sim-suites
+        run: test '${{ needs.test-sim-suites-parts.result }}' = success
   test-sim-host:
     name: test-sim-host
+    needs: [test-sim-host-shards]
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: test-sim-host
-          sim: 'true'
       - name: test-sim-host
-        run: make test-sim-host
+        run: test '${{ needs.test-sim-host-shards.result }}' = success
   test-concurrency:
     name: test-concurrency
     runs-on: ubuntu-latest
@@ -253,18 +336,13 @@ jobs:
         run: make test-concurrency
   build-host:
     name: build-host
+    needs: [build-host-workspace, test-echo-install]
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: build-host
       - name: build-host
-        run: make build-host
+        run: test '${{ needs.build-host-workspace.result }}' = success && test '${{ needs.test-echo-install.result }}' = success
   build-echo:
     name: build-echo
     runs-on: ubuntu-latest
