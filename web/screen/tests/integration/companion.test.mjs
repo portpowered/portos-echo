@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { open, playing, refresh, token } from "./pack-session.mjs";
+import { activeVideo, open, playing, refresh, token } from "./pack-session.mjs";
 
 const id = "companion@0.1.0";
 const template = "template@0.1.0";
@@ -72,8 +72,8 @@ async function installedBytes(home) {
 }
 
 async function geometry(page, state) {
-    const { character, slots, buttons } = await page.evaluate(() => {
-        const video = document.querySelector(".pack-stage video:not([hidden])");
+    const { character, slots, buttons } = await page.evaluate((selector) => {
+        const video = document.querySelector(selector);
         const box = video.getBoundingClientRect();
         const scale = Math.min(
             box.width / video.videoWidth,
@@ -99,7 +99,7 @@ async function geometry(page, state) {
             slots: visible(".screen-pack [data-pack-slot]"),
             buttons: visible(".screen-pack button, .settings-gear"),
         };
-    });
+    }, activeVideo);
     const overlap = (a, b) =>
         a.x < b.x + b.width &&
         b.x < a.x + a.width &&
@@ -203,9 +203,9 @@ async function playPresentations(f) {
         await geometry(f.page, state.state);
         if (["ready", "approval", "link_code"].includes(state.state)) {
             await f.page.waitForFunction(
-                () =>
-                    document.querySelector("video:not([hidden])")
-                        ?.currentTime >= 0.5,
+                (selector) =>
+                    document.querySelector(selector)?.currentTime >= 0.5,
+                activeVideo,
             );
             await f.page.screenshot({
                 path: `${screenshots}/companion-${state.state}-960x600.png`,
@@ -262,7 +262,7 @@ async function alternatePlayback(f) {
     await mp4.goto(f.page.url());
     await playing(mp4, "idle.mp4", id);
     const { pixel, pageColor } = await mp4
-        .locator("video:not([hidden])")
+        .locator(activeVideo)
         .evaluate((video) => {
             const canvas = document.createElement("canvas");
             canvas.width = video.videoWidth;
@@ -283,10 +283,10 @@ async function alternatePlayback(f) {
     await mp4.close();
     await f.page.emulateMedia({ reducedMotion: "reduce" });
     await f.update({ state: "listening" });
-    assert.equal(
-        await f.page.getByRole("heading", { name: "listening" }).isVisible(),
-        true,
-    );
+    const presentation = f.page.getByRole("region", {
+        name: "Screen presentation",
+    });
+    assert.equal(await presentation.getAttribute("data-ui-state"), "listening");
     await f.page
         .locator(".pack-stage video:not([hidden])")
         .waitFor({ state: "detached" });

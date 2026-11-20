@@ -11,6 +11,8 @@ import { chromium } from "playwright";
 import { archivePeer } from "./pack-peer.mjs";
 
 export const token = "synthetic-pack-pair";
+export const activeVideo =
+    ".pack-stage video:not([hidden]):not([data-leaving])";
 
 // Use the prebuilt production bridge/settings fixture and the existing TLS peer.
 // Each journey owns its local home, listener, browser context and shutdown.
@@ -121,8 +123,8 @@ export async function open(
 
 export async function playing(page, name, identity) {
     await page.waitForFunction(
-        ({ name, identity }) => {
-            const video = document.querySelector("video:not([hidden])");
+        ({ selector, name, identity }) => {
+            const video = document.querySelector(selector);
             return (
                 video &&
                 new URL(video.src).pathname.endsWith(`/${identity}/${name}`) &&
@@ -130,10 +132,10 @@ export async function playing(page, name, identity) {
                 video.getVideoPlaybackQuality().totalVideoFrames > 0
             );
         },
-        { name, identity },
+        { selector: activeVideo, name, identity },
     );
     return page
-        .locator("video:not([hidden])")
+        .locator(activeVideo)
         .evaluate((node) => new URL(node.src).pathname.split("/").at(-1));
 }
 
