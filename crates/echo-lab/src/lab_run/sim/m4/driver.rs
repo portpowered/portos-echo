@@ -132,7 +132,7 @@ impl<'a> M4<'a> {
             .trace
             .records
             .iter()
-            .find(|record| record["event"] == "delegation.created")
+            .find(|record| record["event"] == "delegation.created" && record["source"] == "provider.sideband")
             .and_then(|record| record["delegation_id"].as_str())
             .ok_or("m4: missing native delegation identity")?;
         let evidence = json!({"event":"m4.case","case":case,"run_id":self.run,"delegation_id":delegation,

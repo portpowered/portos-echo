@@ -351,6 +351,10 @@ fn stages(trace: &Trace) {
         .records
         .iter()
         .filter(|r| {
+            // Only the independent provider receipt proves native creation.
+            if r["event"] == "delegation.created" {
+                return r["source"] == "provider.sideband";
+            }
             matches!(
                 r["event"].as_str(),
                 Some("delegation.created" | "item/tool/call" | "tools/call" | "delegation.context.append")

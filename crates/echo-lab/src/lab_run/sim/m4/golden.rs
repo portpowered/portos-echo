@@ -1,4 +1,4 @@
-//! Lossless semantic comparison after replacing only incidental trace fields.
+//! Semantic comparison of milestone receipts, excluding independent diagnostics.
 //! No recording/update path: callers must explicitly retain an observed trace.
 use std::collections::BTreeMap;
 
@@ -73,7 +73,9 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
         // Reply quality and the bridge's `timing` samples are measurements with
         // their own budgets, not steps: their values follow the run's pace.
         .filter(|record| {
-            !incidental_probe(record) && !matches!(record["event"].as_str(), Some("reply.quality" | "timing"))
+            !incidental_probe(record)
+                && !delegation_diagnostic(record)
+                && !matches!(record["event"].as_str(), Some("reply.quality" | "timing"))
         })
         .map(|record| {
             let mut record = record.clone();
@@ -82,6 +84,18 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
             serde_json::to_string(&record).map_err(|_| "golden: cannot encode record".into())
         })
         .collect()
+}
+
+fn delegation_diagnostic(record: &Value) -> bool {
+    // The milestone's delegation receipts come from its independent sideband
+    // observer. Bridge diagnostics remain in the raw trace and have dedicated
+    // configured-owner assertions; they cannot stand in for that native proof.
+    record.get("source").is_none()
+        && match record["event"].as_str() {
+            Some("delegation.created") => record.get("task").is_some(),
+            Some("delegation.tool" | "delegation.resolved") => true,
+            _ => false,
+        }
 }
 
 fn incidental_probe(record: &Value) -> bool {
