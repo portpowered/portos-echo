@@ -63,6 +63,10 @@ pub(super) async fn thread(server: &mut Server) -> Value {
 }
 
 pub(super) async fn start(server: &mut Server) -> Value {
+    start_with_prompt(server, "Live prompt").await
+}
+
+pub(super) async fn start_with_prompt(server: &mut Server, prompt: &str) -> Value {
     let params = thread(server).await;
     let request = read(server).await;
     assert_eq!(request["method"], "thread/realtime/start");
@@ -71,8 +75,8 @@ pub(super) async fn start(server: &mut Server) -> Value {
         json!({
             "threadId":"thread-1","outputModality":"audio","transport":{"type":"webrtc","sdp":"fixture-offer"},
             "version":"v3","includeStartupContext":false,"clientManagedHandoffs":false,
-            "voice":"alloy","prompt":"Live prompt",
-            "initialItems":[{"role":"developer","text":"Live prompt"}]
+            "voice":"alloy","prompt":prompt,
+            "initialItems":[{"role":"developer","text":prompt}]
         })
     );
     // Real app servers can emit SDP before the request's reply.

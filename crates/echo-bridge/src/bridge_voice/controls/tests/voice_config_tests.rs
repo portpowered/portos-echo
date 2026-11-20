@@ -275,6 +275,9 @@ async fn retained_replies(
     started: &tokio::sync::Notify,
 ) {
     for count in 1..=2 {
+        if count == 2 {
+            ack_retained_context(server, "thread-1").await;
+        }
         started.notified().await;
         let done = serde_json::json!({"method":"thread/realtime/transcript/done",
             "params":{"threadId":"thread-1","role":"assistant","text":"fixture reply"}});
@@ -293,6 +296,24 @@ async fn retained_replies(
         assert_eq!(stops(), count);
         observer.finish(Ok(()));
     }
+}
+
+pub(in crate::bridge_voice) async fn ack_retained_context(
+    server: &mut BufReader<tokio::io::DuplexStream>,
+    thread: &str,
+) {
+    let mut line = String::new();
+    server.read_line(&mut line).await.unwrap();
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["method"], "thread/realtime/appendText");
+    assert_eq!(request["params"]["threadId"], thread);
+    assert_eq!(request["params"]["role"], "developer");
+    let response = serde_json::json!({"id":request["id"],"result":{}});
+    server
+        .get_mut()
+        .write_all(format!("{response}\n").as_bytes())
+        .await
+        .unwrap();
 }
 fn configured() -> Configured {
     let mut config =

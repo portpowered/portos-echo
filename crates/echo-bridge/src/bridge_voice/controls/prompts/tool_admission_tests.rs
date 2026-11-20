@@ -143,8 +143,7 @@ async fn remote(
         send(server, &json!({"id":request["id"],"result":result})).await;
         if method == "thread/realtime/start" {
             turn(server, &thread, index, home).await;
-            // Two replies on this retained call must produce no new start or
-            // instruction RPC. The next loop iteration checks both exact texts.
+            // These two wakes reuse the call. The next call checks both new prompt texts.
             replies(server, run.0, run.1, &thread).await;
         }
     }

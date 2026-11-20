@@ -82,11 +82,28 @@ async fn two_replies(
     turn(server, "turn/started", "turn-2").await;
     echo(server, "idle-request", "call-2", "turn-2").await;
     turn(server, "turn/completed", "turn-2").await;
+    reused_reply(server, starts, completion, observer).await;
+}
+
+async fn reused_reply(
+    server: &mut Server,
+    starts: &mut mpsc::UnboundedReceiver<()>,
+    completion: &mut mpsc::UnboundedReceiver<()>,
+    observer: &Observer,
+) {
     wake(observer);
+    ack_refresh(server).await;
     starts.recv().await.unwrap();
     done(server).await;
     completion.recv().await.unwrap();
     stop(server).await;
+}
+
+async fn ack_refresh(server: &mut Server) {
+    let request = read(server).await;
+    assert_eq!(request["method"], "thread/realtime/appendText");
+    assert_eq!(request["params"]["threadId"], "thread-1");
+    write(server, json!({"id":request["id"],"result":{}})).await;
 }
 
 fn assert_calls(host: &HostState) {

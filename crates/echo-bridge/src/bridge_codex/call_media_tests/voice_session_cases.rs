@@ -1,6 +1,8 @@
 //! T1: conversation owner, controlled JSONL/media/device ports, paused time.
 #[path = "voice_open_cases.rs"]
 mod opening;
+#[path = "voice_wake_time.rs"]
+mod wake_time;
 use super::*;
 use crate::bridge_voice::{SessionNotice, SessionOptions, conversation};
 use echo_link::{
@@ -164,85 +166,6 @@ async fn device() -> (
     (link, events, microphone, observer)
 }
 
-fn assert_no_reply(stats: &[crate::bridge_voice::Stats], observer: &Observer) {
-    assert_eq!(
-        stats
-            .iter()
-            .map(|s| (s.reply_received, s.reply_sent))
-            .collect::<Vec<_>>(),
-        vec![(0, 0); 2]
-    );
-    assert_eq!(
-        observer
-            .commands()
-            .iter()
-            .filter(|command| matches!(command, Command::Frame(_)))
-            .count(),
-        0
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn session_reuses_one_call_resets_idle_deadline_and_discards_old_pcm() {
-    let (mut io, mut server) = fixture();
-    let (peer, state, audio) = peer(true, None);
-    let (link, mut events, microphone, observer) = device().await;
-    let (again, mut receive) = mpsc::unbounded_channel::<()>();
-    let completed = Arc::new(Mutex::new(Vec::new()));
-    let client = async {
-        let mut call = MediaCall::new(&mut io, peer);
-        call.start(&options(), vec![], deadline()).await.unwrap();
-        conversation(
-            (&link, &mut events, microphone),
-            &mut call,
-            session_options(),
-            std::future::pending(),
-            |notice| {
-                match notice {
-                    SessionNotice::Completed(outcome) => completed.lock().unwrap().push(outcome),
-                    SessionNotice::Started => again.send(()).unwrap(),
-                    SessionNotice::Connected
-                    | SessionNotice::Run(_)
-                    | SessionNotice::ReplyCompleted(_)
-                    | SessionNotice::MicrophoneCompleted(_) => (),
-                }
-                Ok(())
-            },
-        )
-        .await
-    };
-    let remote = async {
-        start(&mut server).await;
-        receive.recv().await.unwrap();
-        reply(&mut server).await;
-        receive.recv().await.unwrap();
-        reply(&mut server).await;
-        stop(&mut server).await;
-    };
-    let mut work = Box::pin(async { tokio::join!(client, remote).0 });
-    pump(work.as_mut()).await;
-    assert_eq!(observer.commands().last(), Some(&Command::Stop));
-    observer.finish(Ok(()));
-    pump(work.as_mut()).await;
-    assert_eq!(completed.lock().unwrap().len(), 1);
-    tokio::time::advance(Duration::from_secs(4)).await;
-    audio.send([123; 320]).await.unwrap(); // belongs to the prior, idle reply
-    wake(&observer);
-    pump(work.as_mut()).await;
-    observer.finish(Ok(()));
-    pump(work.as_mut()).await;
-    assert_eq!(completed.lock().unwrap().len(), 2);
-    tokio::time::advance(Duration::from_secs(4)).await;
-    pump(work.as_mut()).await;
-    assert_eq!(state.closes.load(Ordering::SeqCst), 0);
-    tokio::time::advance(Duration::from_secs(1)).await;
-    assert_eq!(work.await, Ok(2));
-    assert_eq!(state.closes.load(Ordering::SeqCst), 1);
-    assert_eq!(*state.sent.lock().unwrap(), vec![[0; 320]; 2]);
-    assert_no_reply(&completed.lock().unwrap(), &observer);
-    assert!(io.begin_request("account/read", &json!({})).is_ok());
-}
-
 #[tokio::test(start_paused = true)]
 async fn session_idle_process_eof_is_failure_without_replay_and_closes_media_once() {
     let (mut io, mut server) = fixture();
@@ -348,7 +271,7 @@ async fn session_cancellation_during_reply_or_idle_stops_once_before_return() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_expiry_wins_queued_wake_at_equality_and_muted_wakes_do_not_renew() {
+async fn voice_retained_wake_time_refresh_skips_muted_and_expired_wakes() {
     for muted in [false, true] {
         let (mut io, mut server) = fixture();
         let (peer, state, _audio) = peer(true, None);

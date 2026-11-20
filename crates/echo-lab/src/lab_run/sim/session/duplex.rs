@@ -164,9 +164,19 @@ impl World {
     }
 
     pub async fn step(&mut self, milliseconds: u64) -> Result<(), String> {
-        collect_playout_for(&mut self.bridge, &mut self.clock, milliseconds, self.run_id).await?;
+        let result = collect_playout_for(&mut self.bridge, &mut self.clock, milliseconds, self.run_id).await;
         self.trace = read_trace(&self.root.0)?;
-        Ok(())
+        result.map(|_| ()).map_err(|error| {
+            let recent: Vec<_> = self
+                .trace
+                .records
+                .iter()
+                .rev()
+                .take(8)
+                .map(|row| &row["event"])
+                .collect();
+            format!("{error}; recent bridge events={recent:?}")
+        })
     }
 
     pub async fn wait(&mut self, phase: &str, done: impl Fn(&Self) -> bool, milliseconds: u64) -> Result<(), String> {

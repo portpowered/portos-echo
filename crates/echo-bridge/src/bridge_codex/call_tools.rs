@@ -1,5 +1,5 @@
 //! Caller-driven tool work shares the media owner's single process reader.
-use super::{Event, MediaCall, MediaEvent};
+use super::{Event, MediaCall, MediaEvent, RetainedCall};
 use crate::{Error, bridge_voice::VoicePort};
 use echo_agent_api::ToolHost;
 use echo_codex::codex_protocol::{RequestId, ToolContent, ToolResult};
@@ -321,6 +321,14 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             self.port.interrupt(&params, Instant::now() + Duration::from_secs(2))?;
         }
         Ok(())
+    }
+}
+
+impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static> RetainedCall
+    for ToolSession<'_, '_, R, W, P, H>
+{
+    async fn refresh_wake_time(&mut self, deadline: Instant, cancelled: impl Future<Output = ()>) -> Result<(), Error> {
+        self.port.refresh_wake_time(deadline, cancelled).await
     }
 }
 
