@@ -63,7 +63,11 @@ setup_log_evidence() {
   if [ "$1" = run-check ]; then
     { tail -c +$((bytes + 1)) "$wake_log" && printf '\001'; } | awk '
       index($0, "\001") { complete=1; if (index($0, "\001")>1) run=0; next }
-      /^\{"elapsed_ms":(0|[1-9][0-9]*),"event":"wyoming\.run_started","provider_auth_mode":"(chatgpt|api_key)","run_id":"run-[1-9][0-9]*"\}$/ { run=1 }
+      function number(value) { return length(value)<20 || (length(value)==20 && "x" value <= "x18446744073709551615") }
+      /^\{"elapsed_ms":(0|[1-9][0-9]*),"event":"wyoming\.run_started","provider_auth_mode":"(chatgpt|api_key)","run_id":"run-[1-9][0-9]*"\}$/ {
+        elapsed=$0; sub(/^\{"elapsed_ms":/, "", elapsed); sub(/,.*/, "", elapsed)
+        sequence=$0; sub(/^.*"run_id":"run-/, "", sequence); sub(/"\}$/, "", sequence)
+        if (number(elapsed) && number(sequence)) run=1 }
       END { if (!complete) exit 1; printf "run=%s\n", run ? "started" : "pending" }'
   else
     { tail -c +$((bytes + 1)) "$wake_log" && printf '\001'; } | awk '

@@ -191,7 +191,13 @@ async fn t3_wake_deadline_cancels_owned_adb_child_without_reporting_success() ->
     let fixture = Fixture::new(&cursor())?;
     let attempt = WakeAttempt::begin(&fixture.options()?, deadline())
         .await
-        .map_err(fixed)?;
+        .map_err(|error| {
+            format!(
+                "{} after {} adb commands",
+                fixed(error),
+                fixture.calls().map_or(0, |calls| calls.len())
+            )
+        })?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     fs::write(
         fixture.0.join("wake-barrier"),

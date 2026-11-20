@@ -8,8 +8,7 @@ import subprocess
 import time
 from test_echo_install import Sandbox, prepare_lifecycle, require, set_owner
 def owner_state(box):
-    values = {"private/bridge.toml": "owner config", "private/credential": "owner private",
-              "home/prompts/voice.md": "owner voice", "home/settings.toml": "owner settings"}
+    values = {"private/bridge.toml": "owner config", "private/credential": "owner private", "home/prompts/voice.md": "owner voice", "home/settings.toml": "owner settings"}
     for name, value in values.items():
         (box.device / name).write_text(value)
         # These are files authored by the existing nobody-owned runtime.
@@ -125,8 +124,7 @@ def uninstall_failures():
             box.run(["uninstall", "--purge"], 1)
             box.install(code=1)
             require(sentinel.read_text() == "outside owner state", "symlink escaped owned root")
-    for fault in ("rm -rf '/data/local/echo-bridge/bin'", "rm -f '/data/local/echo-bridge/private/launch.sh'",
-                  "rm -rf '/data/local/echo-bridge/private'"):
+    for fault in ("rm -rf '/data/local/echo-bridge/bin'", "rm -f '/data/local/echo-bridge/private/launch.sh'", "rm -rf '/data/local/echo-bridge/private'"):
         with Sandbox() as box:
             box.install()
             values = owner_state(box)
@@ -139,10 +137,8 @@ def uninstall_failures():
 def full_journey():
     with Sandbox() as box:
         help_text = box.run(["--help"]).stdout
-        require("not yet" not in help_text and "next implementation" not in help_text,
-                "help advertises incomplete command")
-        for result in ("process=running|stopped", "uptime_seconds=INTEGER|unavailable",
-                       "hassmic_link=SANITIZED_LINE|unavailable",
+        require("not yet" not in help_text and "next implementation" not in help_text, "help advertises incomplete command")
+        for result in ("process=running|stopped", "uptime_seconds=INTEGER|unavailable", "hassmic_link=SANITIZED_LINE|unavailable",
                        "echo-install: uninstalled (state retained)", "echo-install: uninstalled (purged)"):
             require(result in help_text, "help omits declared result: " + result)
         box.prompt("voice.md", "default voice")
@@ -467,6 +463,10 @@ def confirmation_cases():
              "partial": (wake, row.rstrip(), "confirmed", "connected", "pending"),
              "partial-after": (wake, row + "{", "confirmed", "connected", "pending"),
              "invalid": (wake, row.replace('"elapsed_ms":4', '"elapsed_ms":04'), "confirmed", "connected", "pending")}
+    for value in ("18446744073709551616", "9" * 21):
+        cases["range-" + value] = (wake, row.replace('"elapsed_ms":4', '"elapsed_ms":' + value), "confirmed", "connected", "pending")
+        cases["sequence-" + value] = (wake, row.replace("run-1", "run-" + value), "confirmed", "connected", "pending")
+    cases["maximum"] = (wake, row.replace('"elapsed_ms":4', '"elapsed_ms":18446744073709551615').replace("run-1", "run-18446744073709551615"), "confirmed", "connected", "started")
     faults = ("rotate", "truncate", "rewrite", "symlink", "parent-link", "hardlink", "owner", "mode", "missing", "inject")
     for kind in (*cases, *faults):
         with Sandbox() as box:
