@@ -4,13 +4,29 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, watch};
 
+#[derive(Clone)]
+pub(crate) struct Publication {
+    pub name: Option<&'static str>,
+    pub data: String,
+}
+
+impl Publication {
+    pub fn event(self) -> axum::response::sse::Event {
+        let event = axum::response::sse::Event::default().data(self.data);
+        match self.name {
+            Some(name) => event.event(name),
+            None => event,
+        }
+    }
+}
+
 pub(crate) struct Client {
-    pub frames: mpsc::Receiver<String>,
+    pub frames: mpsc::Receiver<Publication>,
     pub cancelled: watch::Receiver<bool>,
 }
 
 struct Writer {
-    frames: mpsc::Sender<String>,
+    frames: mpsc::Sender<Publication>,
     cancel: watch::Sender<bool>,
 }
 
@@ -19,6 +35,7 @@ pub(crate) struct Core {
     revoked: bool,
     draining: bool,
     seq: u64,
+    pub pack_revision: u64,
     current: Option<String>,
     clients: Vec<Writer>,
 }
@@ -30,6 +47,7 @@ impl Core {
             revoked: false,
             draining: false,
             seq: 0,
+            pack_revision: 0,
             current: None,
             clients: Vec::new(),
         }
@@ -74,7 +92,10 @@ impl Core {
         let (tx, frames) = mpsc::channel(32);
         let cancelled = cancel.subscribe();
         if let Some(current) = &self.current {
-            let _ = tx.try_send(current.clone());
+            let _ = tx.try_send(Publication {
+                name: None,
+                data: current.clone(),
+            });
         }
         self.clients.push(Writer { frames: tx, cancel });
         Some(Client { frames, cancelled })
@@ -92,15 +113,31 @@ impl Core {
         if self.draining {
             return true;
         }
+        self.broadcast(Publication { name: None, data: wire });
+        true
+    }
+
+    pub fn pack_reload(&mut self, active: Option<String>) -> bool {
+        if !self.accepting() || self.pack_revision == 9_007_199_254_740_991 {
+            return false;
+        }
+        self.pack_revision += 1;
+        self.broadcast(Publication {
+            name: Some("screen-pack-reload"),
+            data: serde_json::json!({"version":1,"revision":self.pack_revision,"active":active}).to_string(),
+        });
+        true
+    }
+
+    fn broadcast(&mut self, publication: Publication) {
         self.clients.retain(|client| {
-            if client.frames.try_send(wire.clone()).is_ok() {
+            if client.frames.try_send(publication.clone()).is_ok() {
                 true
             } else {
                 client.cancel.send_replace(true);
                 false
             }
         });
-        true
     }
 }
 
@@ -176,7 +213,7 @@ mod tests {
             }
             assert_eq!(*client.cancelled.borrow(), !graceful);
             for (index, state) in states.into_iter().enumerate() {
-                let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap()).unwrap();
+                let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data).unwrap();
                 assert_eq!(
                     frame,
                     ScreenFrame {
@@ -214,13 +251,13 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ));
         let mut stale = held.attach(watch::channel(false).0).unwrap();
-        let stale: ScreenFrame = serde_json::from_str(&stale.frames.recv().await.unwrap()).unwrap();
+        let stale: ScreenFrame = serde_json::from_str(&stale.frames.recv().await.unwrap().data).unwrap();
         assert_eq!(stale.state, UiState::Listening); // Queue admission alone reproduces the old race.
         drop(held);
         assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
         assert_eq!(done.try_recv(), Ok(()));
         let mut late = core.lock().await.attach(watch::channel(false).0).unwrap();
-        let frame: ScreenFrame = serde_json::from_str(&late.frames.recv().await.unwrap()).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&late.frames.recv().await.unwrap().data).unwrap();
         assert_eq!(frame.seq, 3);
         assert_eq!(
             frame.state,
@@ -276,11 +313,11 @@ mod tests {
         tokio::pin!(pump);
         assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
         let mut client = core.lock().await.attach(watch::channel(false).0).unwrap();
-        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap()).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data).unwrap();
         assert_eq!(frame.state, UiState::Muted);
         states.try_send(UiState::Connected).unwrap();
         assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
-        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap()).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data).unwrap();
         assert_eq!(frame.state, UiState::Connected);
         stop.send_replace(true);
         pump.await;
@@ -296,7 +333,7 @@ mod tests {
             assert!(core.publish(UiState::Connected));
             let wire = healthy.frames.recv().await.unwrap();
             assert_eq!(
-                serde_json::from_str::<ScreenFrame>(&wire).unwrap(),
+                serde_json::from_str::<ScreenFrame>(&wire.data).unwrap(),
                 ScreenFrame {
                     seq,
                     state: UiState::Connected
@@ -308,7 +345,7 @@ mod tests {
         assert_eq!(core.clients.len(), 1);
         let mut late = core.attach(watch::channel(false).0).unwrap();
         assert_eq!(
-            serde_json::from_str::<ScreenFrame>(&late.frames.recv().await.unwrap())
+            serde_json::from_str::<ScreenFrame>(&late.frames.recv().await.unwrap().data)
                 .unwrap()
                 .seq,
             33
@@ -316,7 +353,7 @@ mod tests {
         core.seq = u64::MAX - 1;
         assert!(core.publish(UiState::Muted));
         assert_eq!(
-            serde_json::from_str::<ScreenFrame>(&healthy.frames.recv().await.unwrap())
+            serde_json::from_str::<ScreenFrame>(&healthy.frames.recv().await.unwrap().data)
                 .unwrap()
                 .seq,
             u64::MAX
@@ -346,5 +383,35 @@ mod tests {
         assert!(core.attach(watch::channel(false).0).is_some());
         core.revoke();
         assert!(clients.iter().all(|client| *client.cancelled.borrow()));
+    }
+
+    #[tokio::test]
+    async fn pack_reload_is_named_bounded_and_independent_of_frame_snapshot() {
+        let mut core = Core::new(&Secret::new("synthetic-screen-pair".into()));
+        let mut client = core.attach(watch::channel(false).0).unwrap();
+        assert!(core.publish(UiState::Listening));
+        assert_eq!(client.frames.recv().await.unwrap().name, None);
+        assert!(core.pack_reload(Some("local".into())));
+        let message = client.frames.recv().await.unwrap();
+        assert_eq!(message.name, Some("screen-pack-reload"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&message.data).unwrap(),
+            serde_json::json!({"version":1,"revision":1,"active":"local"})
+        );
+        let mut late = core.attach(watch::channel(false).0).unwrap();
+        let snapshot = late.frames.recv().await.unwrap();
+        assert_eq!(snapshot.name, None);
+        assert_eq!(serde_json::from_str::<ScreenFrame>(&snapshot.data).unwrap().seq, 1);
+        assert!(late.frames.try_recv().is_err());
+        core.pack_revision = 9_007_199_254_740_990;
+        assert!(core.pack_reload(None));
+        assert_eq!(core.pack_revision, 9_007_199_254_740_991);
+        assert!(!core.pack_reload(None));
+        assert!(core.publish(UiState::Muted));
+        assert_eq!(core.seq, 2);
+        core.drain();
+        assert!(!core.pack_reload(Some("local".into())));
+        core.revoke();
+        assert!(!core.pack_reload(None));
     }
 }

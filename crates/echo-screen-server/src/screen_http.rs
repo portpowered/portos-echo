@@ -11,7 +11,7 @@ use axum::{
     extract::{Query, Request, State},
     http::{StatusCode, Uri},
     middleware::{self, Next},
-    response::{IntoResponse, Response, Sse, sse::Event},
+    response::{IntoResponse, Response, Sse},
     routing::{get, post},
 };
 use echo_screen_contract::UiAction;
@@ -128,9 +128,9 @@ async fn events(
                 () = cancelled(client.cancelled.clone()) => None,
                 () = crate::draining(drain.clone()), if !client.frames.is_closed() => {
                     client.frames.close();
-                    client.frames.recv().await.map(|wire| (Ok::<_, Infallible>(Event::default().data(wire)), (client, stop, drain)))
+                    client.frames.recv().await.map(|wire| (Ok::<_, Infallible>(wire.event()), (client, stop, drain)))
                 },
-                frame = client.frames.recv() => frame.map(|wire| (Ok::<_, Infallible>(Event::default().data(wire)), (client, stop, drain))),
+                frame = client.frames.recv() => frame.map(|wire| (Ok::<_, Infallible>(wire.event()), (client, stop, drain))),
             }
         },
     );

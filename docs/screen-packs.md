@@ -189,6 +189,26 @@ Jobs are transient, with no automatic retry or selection write. A failed job
 keeps installed data and the current selection intact. Shutdown cancels active
 work, joins validation and discards queued requests.
 
-The page renderer, file/settings watchers and named reload event are still
-pending. Snapshots report revision 0; selecting data does not yet change the
-page's look.
+## Reload notifications
+
+A successful effective selection change publishes one named
+`screen-pack-reload` event on the existing authenticated `/events` stream:
+
+```text
+event: screen-pack-reload
+data: {"version":1,"revision":1,"active":"template@0.1.0"}
+
+```
+
+`active` is the resolved installed identity or null for the built-in look.
+Revision increases independently of `ScreenFrame.seq` and is also returned by
+catalog snapshots. Saving the same resolved identity (including changing from
+`template` to its exact selected version) publishes nothing. Invalid choices,
+pre-rename persistence failures and rejected admission leave revision unchanged.
+Mounting or reading the catalog emits no event. Reconnecting returns only the
+latest ordinary screen frame; fetch the catalog again for current pack state.
+Pairing revocation closes both kinds of publication. Slow clients share the
+existing bounded queue and are disconnected rather than blocking voice state.
+
+The page renderer, file/settings watchers and install-completion reloads are
+still pending. Selecting data does not yet change the page's look.

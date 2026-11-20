@@ -57,10 +57,18 @@ impl SettingsHost {
                 if !catalog.accepts(&selection) {
                     return SettingsReply::InvalidPackSelection;
                 }
+                let catalog = catalog.with_selection(self.store.overlay.screen_pack());
+                let changed = catalog.selection_changes(&selection);
                 SettingsOverlay::from_toml_str(&format!("screen_pack='{selection}'"))
                     .map_err(SettingsError::from)
                     .and_then(|patch| self.store.save(&patch))
-                    .map(|_| saved(self.restart_pending))
+                    .map(|_| {
+                        SettingsReply::PackSaved(
+                            save_result(self.restart_pending),
+                            catalog.with_selection(Some(&selection)),
+                            changed,
+                        )
+                    })
             }
             SettingsOperation::Snapshot => self.snapshot(link).map(SettingsReply::Snapshot),
             SettingsOperation::Save(patch) => self.save(patch.settings).map(saved),
@@ -133,10 +141,14 @@ impl SettingsHost {
 }
 
 fn saved(restart_pending: bool) -> SettingsReply {
-    SettingsReply::Saved(SaveResultV1 {
+    SettingsReply::Saved(save_result(restart_pending))
+}
+
+fn save_result(restart_pending: bool) -> SaveResultV1 {
+    SaveResultV1 {
         version: SettingsVersionV1,
         restart_pending,
-    })
+    }
 }
 
 fn error_reply(error: &SettingsError) -> SettingsReply {

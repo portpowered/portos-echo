@@ -34,6 +34,20 @@ pub struct PackCatalog {
 }
 
 impl PackCatalog {
+    /// Compare resolved looks, so saving an alias for the same pack is a no-op.
+    #[must_use]
+    pub fn selection_changes(&self, selection: &str) -> bool {
+        self.active.as_deref() != self.resolve(Some(selection)).map(|pack| pack.id.as_str())
+    }
+
+    pub(crate) fn active(&self) -> Option<String> {
+        self.active.clone()
+    }
+
+    pub(crate) fn set_revision(&mut self, revision: u64) {
+        self.revision = revision;
+    }
+
     /// Resolve the last accepted sparse overlay without reading settings again.
     #[must_use]
     pub fn with_selection(mut self, selection: Option<&str>) -> Self {

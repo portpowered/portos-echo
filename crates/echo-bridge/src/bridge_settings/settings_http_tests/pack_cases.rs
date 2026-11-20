@@ -260,3 +260,103 @@ async fn t3_screen_pack_catalog_selection_guards_and_failed_writer_retain_choice
     );
     fixture.close().await;
 }
+
+struct Events {
+    response: reqwest::Response,
+    pending: Vec<u8>,
+}
+
+impl Events {
+    async fn open(fixture: &Fixture) -> Self {
+        let response = fixture.client.get(fixture.url("/events")).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        Self {
+            response,
+            pending: vec![],
+        }
+    }
+
+    async fn next(&mut self) -> String {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(end) = self.pending.windows(2).position(|bytes| bytes == b"\n\n") {
+                    return String::from_utf8(self.pending.drain(..end + 2).collect()).unwrap();
+                }
+                self.pending
+                    .extend_from_slice(&self.response.chunk().await.unwrap().unwrap());
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn reload(&mut self, revision: u64, active: Value) {
+        let wire = self.next().await;
+        let mut lines = wire.lines();
+        assert_eq!(lines.next(), Some("event: screen-pack-reload"));
+        let payload: Value = serde_json::from_str(lines.next().unwrap().strip_prefix("data: ").unwrap()).unwrap();
+        assert_eq!(payload, json!({"version":1,"revision":revision,"active":active}));
+        assert_eq!(lines.next(), Some(""));
+        assert_eq!(lines.next(), None);
+    }
+}
+
+// Frame publication is a positive FIFO barrier: a duplicate reload or a reload
+// from any preceding no-op/refusal would appear before this exact frame.
+async fn frame_barrier(fixture: &Fixture, events: &mut Events, seq: u64) {
+    fixture
+        ._states
+        .send(echo_screen_contract::UiState::Listening)
+        .await
+        .unwrap();
+    fixture
+        .server
+        .flush(tokio::time::Instant::now() + Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        events.next().await,
+        format!("data: {{\"seq\":{seq},\"state\":{{\"state\":\"listening\"}}}}\n\n")
+    );
+}
+
+#[tokio::test]
+async fn t3_screen_pack_selection_reload_once_noop_alias_failure_and_reconnect() {
+    let mut fixture = Fixture::open().await;
+    pack(&fixture, "template@1.0.0", "template", "1.0.0");
+    pack(&fixture, "local", "local", "1.0.0");
+    let _jobs = fixture.server.install_configured_packs(fixture.path(""), None, vec![]);
+    let mut events = Events::open(&fixture).await;
+    assert_eq!(catalog(&fixture).await["revision"], 0);
+    frame_barrier(&fixture, &mut events, 1).await;
+    assert_eq!(select(&fixture, "local").await.0, StatusCode::OK);
+    events.reload(1, json!("local")).await;
+    assert_eq!(catalog(&fixture).await["revision"], 1);
+    assert_eq!(select(&fixture, "local").await.0, StatusCode::OK);
+    assert_eq!(select(&fixture, "missing").await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    frame_barrier(&fixture, &mut events, 2).await;
+    assert_eq!(select(&fixture, "template").await.0, StatusCode::OK);
+    events.reload(2, json!("template@1.0.0")).await;
+    assert_eq!(select(&fixture, "template@1.0.0").await.0, StatusCode::OK);
+    frame_barrier(&fixture, &mut events, 3).await;
+    assert_eq!(select(&fixture, "").await.0, StatusCode::OK);
+    events.reload(3, Value::Null).await;
+    fs::remove_file(fixture.path("settings.toml")).unwrap();
+    fs::create_dir(fixture.path("settings.toml")).unwrap();
+    assert_eq!(select(&fixture, "local").await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(catalog(&fixture).await["revision"], 3);
+    assert_eq!(catalog(&fixture).await["active"], Value::Null);
+    frame_barrier(&fixture, &mut events, 4).await;
+    let mut reconnected = Events::open(&fixture).await;
+    assert_eq!(
+        reconnected.next().await,
+        "data: {\"seq\":4,\"state\":{\"state\":\"listening\"}}\n\n"
+    );
+    frame_barrier(&fixture, &mut reconnected, 5).await;
+    assert!(!fixture.snapshot().await.restart_pending);
+    fixture.server.revoke_pairing().await.unwrap();
+    assert!(reconnected.response.chunk().await.unwrap().is_none());
+    drop(events);
+    drop(reconnected);
+    fixture.close().await;
+}

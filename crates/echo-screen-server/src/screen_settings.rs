@@ -33,6 +33,8 @@ pub enum SettingsReply {
     Packs(crate::PackCatalog),
     InvalidPackSelection,
     Saved(SaveResultV1),
+    /// Durable pack-only save, resolved against the same validated catalog.
+    PackSaved(SaveResultV1, crate::PackCatalog, bool),
     Invalid(SettingsErrorV1),
     Persistence(SettingsErrorV1),
 }
@@ -47,7 +49,7 @@ impl SettingsReply {
             )
                 .into_response(),
             Self::Snapshot(value) => Json(value).into_response(),
-            Self::Saved(value) => Json(value).into_response(),
+            Self::Saved(value) | Self::PackSaved(value, _, _) => Json(value).into_response(),
             Self::Invalid(value) => (StatusCode::UNPROCESSABLE_ENTITY, Json(value)).into_response(),
             Self::Persistence(value) => (StatusCode::INTERNAL_SERVER_ERROR, Json(value)).into_response(),
         }
@@ -70,16 +72,29 @@ impl SettingsRequest {
     /// are serialized. The host must not schedule work outside this closure.
     /// A failed precommit check invokes no host code; there is no queued retry.
     pub async fn commit(self, transaction: impl FnOnce(SettingsOperation) -> SettingsReply) {
-        let core = self.core.lock().await;
+        let mut core = self.core.lock().await;
         if self.reply.is_closed() {
             return;
         }
         let response = if !authorized(&core, &self.uri) {
             StatusCode::UNAUTHORIZED.into_response()
-        } else if *self.stop.borrow() || self.drain.borrow().is_some() || !core.accepting() {
+        } else if *self.stop.borrow()
+            || self.drain.borrow().is_some()
+            || !core.accepting()
+            || (matches!(&self.operation, SettingsOperation::PackSelection(..))
+                && core.pack_revision == 9_007_199_254_740_991)
+        {
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         } else {
-            transaction(self.operation).into_response()
+            let mut reply = transaction(self.operation);
+            match &mut reply {
+                SettingsReply::PackSaved(_, catalog, true) => {
+                    core.pack_reload(catalog.active());
+                }
+                SettingsReply::Packs(catalog) => catalog.set_revision(core.pack_revision),
+                _ => {}
+            }
+            reply.into_response()
         };
         let _ = self.reply.send(response);
     }

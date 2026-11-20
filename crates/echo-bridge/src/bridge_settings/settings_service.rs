@@ -119,7 +119,7 @@ fn commit(
         _ => None,
     };
     let reply = host.transaction(operation, link);
-    let SettingsReply::Saved(saved) = &reply else {
+    let (SettingsReply::Saved(saved) | SettingsReply::PackSaved(saved, _, _)) = &reply else {
         return reply;
     };
     let pending = !pack_only && prompt.is_none() && saved.restart_pending && !restart.pending();
