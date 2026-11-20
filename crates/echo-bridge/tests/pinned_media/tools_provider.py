@@ -178,6 +178,54 @@ class Delegation:
         return {'delegations': self.delegations, 'models': self.models, 'appends': self.appends}
 
 
+class RunnerSkills(Delegation):
+    names = ('brief', 'unused', 'unlisted')
+    expected = ({'body': 'Summarize the answer in one sentence.\n'},
+                {'error': 'skill_not_enabled'}, {'error': 'skill_not_enabled'})
+
+    def __init__(self, tools):
+        super().__init__(tools, False, model='gpt-6.1-sol', web_search='disabled', identity='runner-skills')
+        self.prompt = 'Fixture delegation runner-skills. Call read_skill for brief, unused, and unlisted.'
+        self.reply = 'Finished checking the enabled skill.'
+
+    def respond(self, body):
+        assert body['model'] == self.model
+        expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
+                     'parameters': deepcopy(tool['inputSchema']), 'strict': False} for tool in self.tools]
+        expected[0]['parameters']['properties']['seconds'].pop('minimum')
+        tools = self.check_tools(body, expected)
+        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
+        index = len(self.models)
+        assert index <= len(self.names) and len(outputs) == index, 'wrong skill output count'
+        for name, item, result in zip(self.names, outputs, self.expected):
+            assert item['call_id'] == f'skill-{name}', 'wrong skill call ID'
+            assert json.loads(item['output']) == result, 'wrong skill result: ' + json.dumps(item)
+        self.outputs = outputs
+        if index < len(self.names):
+            name = self.names[index]
+            item = {'type': 'function_call', 'id': f'fc-{name}', 'call_id': f'skill-{name}',
+                    'namespace': 'functions', 'name': 'read_skill', 'arguments': json.dumps({'name': name}),
+                    'status': 'completed'}
+        else:
+            item = {'type': 'message', 'id': 'msg-skills', 'role': 'assistant', 'status': 'completed',
+                    'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
+        self.models.append({'tools': tools, 'outputs': index})
+        response = {'id': f'skills-{index}', 'status': 'completed', 'output': [item]}
+        events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
+                  {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
+                  {'type': 'response.completed', 'response': response}]
+        return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
+
+    def append(self, value):
+        assert not self.appends and len(self.models) == 4, 'unexpected skill append'
+        assert value['delegation_item_id'] == self.identity
+        assert value['content'] == [{'type': 'input_text', 'text': self.reply}]
+        self.appends.append(self.identity)
+
+    def snapshot(self):
+        return {**super().snapshot(), 'skill_outputs': self.outputs}
+
+
 def model_identity(body):
     # The pin includes earlier turns in Responses input. The latest marked
     # delegation owns this request, even if the fixture has started another one.

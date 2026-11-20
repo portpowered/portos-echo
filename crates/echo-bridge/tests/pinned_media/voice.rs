@@ -5,6 +5,7 @@ use std::io::Write as _;
 mod fast_mode;
 mod first_wake;
 pub(super) mod lifecycle;
+mod runner_skills;
 mod unanswered;
 use echo_contracts::wyoming::{Event as WireEvent, Header, encode};
 use lifecycle::Ending;

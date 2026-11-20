@@ -23,6 +23,7 @@ use tokio::{
 };
 
 pub struct RuntimeOptions<'a> {
+    pub runner_skills: Option<&'a super::RunnerSkills>,
     pub host: HostOptions<'a>,
     pub voice: ServeOptions<'a>,
     pub screen: Option<&'a ScreenConfig>,
@@ -389,8 +390,10 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                 let mut tools = options
                     .delegation
                     .map(|config| {
-                        super::voice_tools::Tools::new(config, options.utc_day.clone())
-                            .with_portos_permissions(grant.permissions.clone())
+                        let mut tools = super::voice_tools::Tools::new(config, options.utc_day.clone())
+                            .with_portos_permissions(grant.permissions.clone());
+                        tools.skills = options.runner_skills.cloned().unwrap_or_default();
+                        tools
                     });
                 let setup = grant.open_tools(view, options, &mut tools);
                 let prepared = tokio::select! {

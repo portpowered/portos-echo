@@ -211,8 +211,12 @@ where
             let (runner, voice) = super::prompts::snapshot(options.call.instructions, options.call.prompt, &mut trace)?;
             let (runner, voice) = super::voice_config::session_guidance((runner, voice), advertised);
             let (now, zone) = (clock(), options.call.time_zone);
+            let mut runner = super::voice_config::call_instructions(&runner, now, zone)?;
+            if let Some(tools) = &tools {
+                tools.skills.append_instructions(&mut runner);
+            }
             let instructions = (
-                super::voice_config::call_instructions(&runner, now, zone)?,
+                runner,
                 super::voice_config::call_instructions(&voice, now, zone)?,
             );
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
