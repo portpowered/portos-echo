@@ -336,3 +336,56 @@ fn t3_rollback_starts_only_after_shell_owned_restore_succeeds() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn t3_rollback_refuses_unobserved_or_unsafe_started_process_without_signalling_it() -> Result {
+    let healthy = "version_current=0.1.0\nversion_previous=0.2.0\nprocess=running\nprocess_user=nobody\nuptime_seconds=1\nhassmic_link=unavailable\n";
+    for (raw, refused, error) in [
+        (healthy.replace("nobody", "9999"), false, None),
+        (healthy.replace("nobody", "root"), false, Some("unsafe_process_user")),
+        (
+            healthy.replace("nobody", "SYNTHETIC-ACCOUNT"),
+            true,
+            Some("unsafe_process_user"),
+        ),
+        (
+            healthy.replace("process=running", "process=stopped"),
+            false,
+            Some("start_failed"),
+        ),
+        ("SYNTHETIC-TOKEN".to_owned(), false, Some("start_failed")),
+        (healthy.to_owned(), true, Some("start_failed")),
+    ] {
+        let fixture = Fixture::new()?;
+        fs::write(fixture.0.join("status"), raw)?;
+        if refused {
+            fs::write(fixture.0.join("status-refused"), b"")?;
+        }
+        let output = fixture.run("rollback", &[])?;
+        assert_eq!(output.status.code(), Some(i32::from(error.is_some())));
+        let result = event(&output)?;
+        assert_eq!(result["ok"], error.is_none());
+        if let Some(error) = error {
+            assert_eq!(result["error"], error);
+        }
+        let commands: Vec<Vec<String>> = fs::read_to_string(fixture.0.join("ledger"))?
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<std::result::Result<_, _>>()?;
+        let operations: Vec<_> = commands
+            .iter()
+            .filter_map(|args| args.last())
+            .filter(|arg| arg.contains("--device"))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            operations,
+            [
+                "sh -s -- --device rollback",
+                "sh -s -- --device start",
+                "sh -s -- --device status"
+            ]
+        );
+    }
+    Ok(())
+}

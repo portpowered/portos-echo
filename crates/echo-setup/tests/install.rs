@@ -144,10 +144,11 @@ fn t3_verified_release_pushes_then_dispatches_bundled_install_start() -> Result 
         .filter_map(|args| args.last())
         .filter(|arg| arg.contains("--device"))
         .collect();
-    assert_eq!(dispatch.len(), 3);
+    assert_eq!(dispatch.len(), 4);
     assert!(dispatch[0].contains("--device prepare-archive"));
     assert!(dispatch[1].contains("/bundle/scripts/echo-install.sh' --device install --bundle"));
     assert!(dispatch[2].contains("/bundle/scripts/echo-install.sh' --device start"));
+    assert_eq!(dispatch[3], "sh -s -- --device status");
     assert!(ledger.iter().any(|args| args.get(2).is_some_and(|arg| arg == "push")));
     assert_eq!(fs::read_to_string(fixture.0.join("process-user"))?, "nobody");
     Ok(())
@@ -380,10 +381,11 @@ fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result
         .filter_map(|args| args.last())
         .filter(|arg| arg.contains("--device"))
         .collect();
-    assert_eq!(commands.len(), 3);
+    assert_eq!(commands.len(), 4);
     assert_eq!(commands[0], "sh -s -- --device stop");
     assert!(commands[1].contains("--release-version '0.2.0'"));
     assert!(commands[2].ends_with("--device start"));
+    assert_eq!(commands[3], "sh -s -- --device status");
     fs::remove_file(fixture.0.join("ledger"))?;
     fs::write(bundle.join("bin/echo-bridge"), "tampered")?;
     let output = Command::new(env!("CARGO_BIN_EXE_echo-setup"))
@@ -401,4 +403,75 @@ fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result
     assert_eq!(private_output(&output)?["error"], "manifest_mismatch");
     assert_eq!(fixture.ledger()?, Vec::<Vec<String>>::new());
     Ok(())
+}
+
+#[test]
+fn t3_install_and_update_require_observed_identity_and_matching_release_after_start() -> Result {
+    let healthy = "version_current=0.2.0\nversion_previous=null\nprocess=running\nprocess_user=nobody\nuptime_seconds=1\nhassmic_link=unavailable\n";
+    for command in ["install", "update"] {
+        for (raw, refused, error) in [
+            (healthy.replace("nobody", "9999"), false, None),
+            (healthy.replace("nobody", "root"), false, Some("unsafe_process_user")),
+            (healthy.replace("nobody", "0"), true, Some("unsafe_process_user")),
+            (
+                healthy.replace("nobody", "SYNTHETIC-ACCOUNT"),
+                false,
+                Some("unsafe_process_user"),
+            ),
+            (
+                healthy.replace("process=running", "process=stopped"),
+                false,
+                Some("start_failed"),
+            ),
+            (healthy.replace("0.2.0", "0.1.0"), false, Some("start_failed")),
+            (healthy.replace("0.2.0", "null"), false, Some("start_failed")),
+            (
+                healthy.replace("version_current=0.2.0\nversion_previous=null\n", ""),
+                false,
+                Some("start_failed"),
+            ),
+            ("SYNTHETIC-TOKEN".to_owned(), false, Some("start_failed")),
+            (healthy.to_owned(), true, Some("start_failed")),
+        ] {
+            let fixture = Fixture::new()?;
+            let bundle = fixture.bundle()?;
+            fs::write(fixture.0.join("status"), raw.replace('\n', "\r\n"))?;
+            if refused {
+                fs::write(fixture.0.join("status-refused"), b"")?;
+            }
+            let output = fixture
+                .command()
+                .args([
+                    command,
+                    "--json",
+                    "--adb",
+                    env!("CARGO_BIN_EXE_echo-setup-test-adb"),
+                    "--from-dir",
+                ])
+                .arg(bundle)
+                .output()?;
+            assert_eq!(output.status.code(), Some(i32::from(error.is_some())));
+            let result = private_output(&output)?;
+            assert_eq!(result["ok"], error.is_none());
+            if let Some(error) = error {
+                assert_eq!(result["error"], error);
+                assert!(result["setup"].is_null());
+            }
+            assert_started_then_observed_then_cleaned(&fixture.ledger()?);
+        }
+    }
+    Ok(())
+}
+
+fn assert_started_then_observed_then_cleaned(ledger: &[Vec<String>]) {
+    let commands: Vec<_> = ledger.iter().filter_map(|args| args.last()).collect();
+    let end = commands.len();
+    assert!(commands[end - 3].ends_with("--device start"));
+    assert_eq!(commands[end - 2], "sh -s -- --device status");
+    assert!(commands[end - 1].starts_with("rm -rf '/data/local/tmp/echo-setup-"));
+    assert!(
+        !commands
+            .iter()
+            .any(|arg| arg.contains("kill ") || arg.ends_with("--device uninstall"))
+    );
 }

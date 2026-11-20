@@ -96,6 +96,9 @@ fn fix(error: &str) -> &'static str {
         }
         "stop_failed" => "The bridge did not stop safely. Inspect status before retrying the update.",
         "start_failed" => "The installed files remain available. Run doctor to diagnose startup.",
+        "unsafe_process_user" => {
+            "The running bridge identity is unsafe. Run status and doctor before retrying; no process was signalled."
+        }
         "command_not_implemented" => "This installer command is still under development.",
         _ => "Check device connectivity and prerequisites, then run install again.",
     }

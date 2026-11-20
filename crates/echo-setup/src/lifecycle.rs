@@ -36,9 +36,26 @@ pub async fn execute(options: &Options) -> Result<Value> {
         if !adb.script("start").await?.0 {
             return Err(Failure("start_failed"));
         }
+        require_started(&adb, None).await?;
         return Ok(json!({"type":"result", "command":"rollback", "ok":true}));
     }
     Ok(json!({"type":"result", "command":"uninstall", "ok":true, "purged":options.purge}))
+}
+
+// A successful launcher exit is not an observation of the resulting process.
+pub(crate) async fn require_started(adb: &Adb, version: Option<&str>) -> Result<()> {
+    let (success, output) = adb.script("status").await.map_err(|_| Failure("start_failed"))?;
+    let observed = status(&output).map_err(|_| Failure("start_failed"))?;
+    if observed["process"] == "running" && observed["process_user"] != "nobody" {
+        return Err(Failure("unsafe_process_user"));
+    }
+    if !success
+        || observed["process"] != "running"
+        || version.is_some_and(|version| observed["versions"]["current"] != version)
+    {
+        return Err(Failure("start_failed"));
+    }
+    Ok(())
 }
 
 fn fields(output: &str) -> Result<BTreeMap<&str, &str>> {

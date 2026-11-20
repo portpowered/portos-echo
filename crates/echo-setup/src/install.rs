@@ -131,5 +131,6 @@ async fn stage_install(
     adb.shell(&format!("sh '{bundle}/scripts/echo-install.sh' --device start"))
         .await
         .map_err(|_| Failure("start_failed"))?;
+    crate::lifecycle::require_started(adb, Some(&version)).await?;
     Ok(version)
 }

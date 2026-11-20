@@ -47,7 +47,17 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
             std::process::exit(1);
         }
         if command == "sh -s -- --device status" {
-            io::stdout().write_all(&fs::read(root.join("status"))?)?;
+            let status = root.join("status");
+            if status.exists() {
+                io::stdout().write_all(&fs::read(status)?)?;
+            } else if root.join("process-user").exists() {
+                write!(
+                    io::stdout(),
+                    "version_current=0.2.0\r\nversion_previous=null\r\nprocess=running\r\nprocess_user=nobody\r\nuptime_seconds=1\r\nhassmic_link=unavailable\r\n"
+                )?;
+            } else {
+                std::process::exit(1);
+            }
             if root.join("status-refused").exists() {
                 std::process::exit(1);
             }
