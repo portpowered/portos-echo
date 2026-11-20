@@ -21,6 +21,9 @@ session_idle_seconds = 120
 # time_zone = "America/Los_Angeles"
 # Provider-backed read-only search: live (default), cached, or disabled.
 web_search = "live"
+# Owner skills are read from [home].dir/skills/<name>/SKILL.md. Omit or use [] to disable.
+# Skill files in the private Codex home are unsupported.
+skills = []
 # The bridge creates this home with mode 0700 and refuses one whose mode differs.
 home = "/data/local/echo-bridge/private/codex-home"
 # `make build-codex-armv7` produces a standalone app server, not the `codex` multi-tool:

@@ -1,5 +1,5 @@
 use super::super::{
-    Notice,
+    Notice, RunnerSkills,
     voice_tools::{Session, session_catalog},
 };
 use super::*;
@@ -272,7 +272,7 @@ async fn session_tools_host_parses_strictly_and_routes_other_names_to_mcp() {
     let (requests, mut receiver) = mpsc::channel(1);
     let token = Arc::new(());
     let (_run, active) = tokio::sync::watch::channel(Some(token.clone()));
-    let host = Session::new(inner.clone(), requests, active);
+    let host = Session::new(inner.clone(), RunnerSkills::default(), requests, active);
     let cases = [
         (EXTEND, json!({"seconds":5}), SessionCommand::Extend(5)),
         (EXTEND, json!({"seconds":0}), SessionCommand::Invalid { end: false }),
@@ -403,7 +403,7 @@ async fn session_tools_dispatch_timeout_before_controller_delivery_cannot_apply(
     let deadline = controller.idle_deadline();
     let (requests, mut receiver) = mpsc::channel(1);
     let (_run, active) = tokio::sync::watch::channel(Some(grants.run.clone()));
-    let host = Session::new(Inner::default(), requests, active);
+    let host = Session::new(Inner::default(), RunnerSkills::default(), requests, active);
     let catalog = session_catalog(vec![], &[]).unwrap();
     let config = echo_config::AgentConfig {
         task_deadline_seconds: 1,

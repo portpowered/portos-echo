@@ -42,6 +42,7 @@ pub use voice_runtime::{RuntimeCompletion, RuntimeOptions, execute, execute_with
 pub use voice_session::{
     ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation, tool_conversation,
 };
+pub use voice_tools::RunnerSkills;
 #[cfg(test)]
 mod voice_tests;
 

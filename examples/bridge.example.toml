@@ -18,6 +18,9 @@ session_idle_seconds = 120
 # With no home, built-in defaults remain: conversation first, a hand-off as the exception.
 # Optional keys in that same codex table; all default to unset:
 # [codex]
+# Owner skills are read from [home].dir/skills/<name>/SKILL.md. Omit or use [] to disable.
+# Skill files in the private Codex home are unsupported.
+# skills = ["brief"]
 # delegate_model = "fixture-model"
 # delegate_effort = "low"
 # Sets the operator's IANA time zone for time answers. Run `adb shell getprop persist.sys.timezone` to see the device zone.

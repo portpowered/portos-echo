@@ -184,6 +184,11 @@ try:
             if identity:
                 manual_cases[identity] = delegation
                 emit({'initialized': identity})
+        elif 'runner_skills' in command:
+            assert delegation is None
+            delegation = tools_provider.RunnerSkills(command['runner_skills'])
+            manual_cases[delegation.identity] = delegation
+            emit({'initialized': delegation.identity})
         elif command == {'transcripts': True}:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:

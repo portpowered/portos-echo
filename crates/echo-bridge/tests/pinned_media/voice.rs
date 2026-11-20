@@ -3,6 +3,7 @@ use super::*;
 use std::io::Write as _;
 mod first_wake;
 pub(super) mod lifecycle;
+mod runner_skills;
 mod unanswered;
 use echo_contracts::wyoming::{Event as WireEvent, Header, encode};
 use lifecycle::Ending;
