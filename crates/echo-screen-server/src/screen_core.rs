@@ -37,6 +37,8 @@ pub(crate) struct Core {
     draining: bool,
     seq: u64,
     pub pack_revision: u64,
+    pub pack_publication: Option<([u8; 32], Option<String>)>,
+    pub pack_identity: Option<Option<(String, [u8; 32])>>,
     current: Option<String>,
     clients: Vec<Writer>,
 }
@@ -49,6 +51,8 @@ impl Core {
             draining: false,
             seq: 0,
             pack_revision: 0,
+            pack_identity: None,
+            pack_publication: None,
             current: None,
             clients: Vec::new(),
         }

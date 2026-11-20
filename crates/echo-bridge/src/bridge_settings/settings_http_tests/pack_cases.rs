@@ -418,3 +418,44 @@ async fn t3_screen_pack_selection_reload_once_noop_alias_failure_and_reconnect()
     drop(reconnected);
     fixture.close().await;
 }
+
+#[tokio::test]
+async fn t3_screen_pack_settled_active_edits_touch_replacement_and_invalid_fallback() {
+    let mut fixture = Fixture::open().await;
+    pack(&fixture, "local", "local", "1.0.0");
+    pack(&fixture, "other", "other", "1.0.0");
+    let _jobs = fixture.server.install_configured_packs(fixture.path(""), None, vec![]);
+    let mut events = Events::open(&fixture).await;
+    assert_eq!(select(&fixture, "local").await.0, StatusCode::OK);
+    events.reload(1, json!("local")).await;
+    let settings = fs::read(fixture.path("settings.toml")).unwrap();
+    fs::write(fixture.path("screens/other/rest.png"), "inactive-edit").unwrap();
+    fs::write(fixture.path("screens/local/rest.png"), "new-rest").unwrap();
+    events.reload(2, json!("local")).await;
+    assert_eq!(catalog(&fixture).await["revision"], 2);
+    // A metadata-only touch must reload even though serving bytes are identical.
+    let path = fixture.path("screens/local/rest.png");
+    let file = fs::File::options().write(true).open(&path).unwrap();
+    file.set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + Duration::from_secs(10)))
+        .unwrap();
+    events.reload(3, json!("local")).await;
+    let replacement = fixture.path("replacement.png");
+    fs::write(&replacement, "new-rest").unwrap();
+    fs::rename(replacement, &path).unwrap();
+    events.reload(4, json!("local")).await;
+    // A bad active manifest resolves to built-in; restoring it hot-loads again.
+    let manifest = fixture.path("screens/local/pack.json");
+    let original = fs::read(&manifest).unwrap();
+    fs::write(&manifest, "invalid").unwrap();
+    events.reload(5, Value::Null).await;
+    fs::write(&manifest, original).unwrap();
+    events.reload(6, json!("local")).await;
+    // Later changed observations are positive barriers for duplicate events
+    // from all earlier polls. Named reloads never advance ordinary frame seq.
+    frame_barrier(&fixture, &mut events, 1).await;
+    assert_eq!(catalog(&fixture).await["revision"], 6);
+    assert_eq!(fs::read(fixture.path("settings.toml")).unwrap(), settings);
+    assert!(!fixture.snapshot().await.restart_pending);
+    drop(events);
+    fixture.close().await;
+}

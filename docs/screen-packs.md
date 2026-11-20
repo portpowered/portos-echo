@@ -250,5 +250,15 @@ they appear in the editable settings snapshot but never change running voice
 policy or request a restart. A subsequent screen save preserves those accepted
 sibling values. Existing restart requests and durability uncertainty remain intact.
 
-The page renderer and active pack-file watcher are still pending. Selecting data
-does not yet change the main page's look.
+The same lifetime also polls validated pack files off the runtime thread, using
+that bounded file reader. Two matching observations settle content and file
+metadata, so a touch or atomic replacement with identical bytes counts as an edit.
+Only changes to the resolved active pack emit a reload; inactive edits do not.
+An invalid active pack falls back to the built-in look and restoration reloads it.
+Selection, installation and settled file observation share publication identity,
+so an installation seen by the watcher emits one event. Shutdown joins reads;
+revocation and draining still refuse final publication. Watching never writes
+settings or requests a restart.
+
+The page renderer is still pending. Selecting data does not yet change the main
+page's look.

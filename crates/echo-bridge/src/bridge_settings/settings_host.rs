@@ -50,9 +50,9 @@ impl SettingsHost {
     /// The returned pending flag records a request, not proof of an actual exec.
     pub fn transaction(&mut self, operation: SettingsOperation, link: LinkStatusV1) -> SettingsReply {
         let result = match operation {
-            SettingsOperation::PackCatalog(catalog) => Ok(SettingsReply::Packs(
-                catalog.with_selection(self.store.overlay.screen_pack()),
-            )),
+            SettingsOperation::PackCatalog(catalog) | SettingsOperation::PackWatch(catalog, _) => Ok(
+                SettingsReply::Packs(catalog.with_selection(self.store.overlay.screen_pack())),
+            ),
             SettingsOperation::PackRefresh(catalog, snapshot) => self.refresh_pack(catalog, &snapshot),
             SettingsOperation::PackSelection(catalog, selection) => {
                 if !catalog.accepts(&selection) {

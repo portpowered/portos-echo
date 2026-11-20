@@ -122,3 +122,32 @@ fn admitted_file(file: &fs::File, pack: &Path) -> Result<(), Error> {
     }
     Ok(())
 }
+
+// Include content and file identity: a touch/replacement of identical bytes is
+// an edit too. Only bounded, validated regular files participate in the digest.
+pub(super) fn fingerprint(root: &Path, id: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<[u8; 32], Error> {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for (name, bytes) in files {
+        let meta = fs::symlink_metadata(root.join(id).join(name)).map_err(|_| Error::Storage)?;
+        digest.update((name.len() as u64).to_le_bytes());
+        digest.update(name.as_bytes());
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+        if let Ok(time) = meta.modified().and_then(|time| {
+            time.duration_since(std::time::UNIX_EPOCH)
+                .map_err(std::io::Error::other)
+        }) {
+            digest.update(time.as_nanos().to_le_bytes());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            digest.update(meta.dev().to_le_bytes());
+            digest.update(meta.ino().to_le_bytes());
+            digest.update(meta.ctime().to_le_bytes());
+            digest.update(meta.ctime_nsec().to_le_bytes());
+        }
+    }
+    Ok(digest.finalize().into())
+}

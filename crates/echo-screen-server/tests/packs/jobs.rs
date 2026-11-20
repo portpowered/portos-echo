@@ -32,7 +32,7 @@ async fn hosted(selection: Option<String>) -> Result<echo_screen_server::ScreenS
         while let Some(request) = inbox.recv().await {
             request
                 .commit(|operation| match operation {
-                    SettingsOperation::PackCatalog(catalog) => {
+                    SettingsOperation::PackCatalog(catalog) | SettingsOperation::PackWatch(catalog, _) => {
                         SettingsReply::Packs(catalog.with_selection(selection.as_deref()))
                     }
                     _ => SettingsReply::InvalidPackSelection,

@@ -1,3 +1,4 @@
+mod active;
 pub(crate) mod jobs;
 mod notification;
 pub(crate) mod settings;
@@ -60,6 +61,7 @@ pub(crate) async fn start(
             worker.interactive(requests).await;
         },
         worker.watch_settings(),
+        worker.watch_active(),
     );
 }
 

@@ -22,6 +22,8 @@ pub enum PromptKind {
 pub enum SettingsOperation {
     Snapshot,
     PackCatalog(crate::PackCatalog),
+    /// Settled local files, resolved by the same accepted settings owner.
+    PackWatch(crate::PackCatalog, u64),
     PackSelection(crate::PackCatalog, String),
     /// Settled fixed-home file read; the host rechecks its identity at commit.
     PackRefresh(crate::PackCatalog, crate::PackSettings),
@@ -85,6 +87,7 @@ impl SettingsRequest {
         } else if *self.stop.borrow()
             || self.drain.borrow().is_some()
             || !core.accepting()
+            || matches!(&self.operation, SettingsOperation::PackWatch(_, revision) if *revision != core.pack_revision)
             || (matches!(
                 &self.operation,
                 SettingsOperation::PackSelection(..) | SettingsOperation::PackRefresh(..)
@@ -92,28 +95,41 @@ impl SettingsRequest {
         {
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         } else {
+            let watching = matches!(&self.operation, SettingsOperation::PackWatch(..));
             let mut reply = transaction(self.operation);
-            match &mut reply {
-                SettingsReply::PackSaved(_, catalog, true) => {
-                    core.pack_reload(catalog.active());
-                }
-                SettingsReply::PackRefreshed(catalog, changed) => {
-                    if *changed {
-                        core.pack_reload(catalog.active());
-                    }
-                    catalog.set_revision(core.pack_revision);
-                }
-                SettingsReply::Packs(catalog) => {
-                    if self.installed {
-                        core.pack_reload(catalog.active());
-                    }
-                    catalog.set_revision(core.pack_revision);
-                }
-                _ => {}
-            }
+            publish_reply(&mut core, &mut reply, self.installed, watching);
             reply.into_response()
         };
         let _ = self.reply.send(response);
+    }
+}
+
+// Selection, install completion and watching observe one publication identity.
+// A scan racing atomic install publication therefore cannot emit a second event.
+fn publish_reply(core: &mut Core, reply: &mut SettingsReply, installed: bool, watching: bool) {
+    match reply {
+        SettingsReply::PackSaved(_, catalog, changed) | SettingsReply::PackRefreshed(catalog, changed) => {
+            if *changed {
+                core.pack_reload(catalog.active());
+                core.pack_publication = Some((catalog.signature(), catalog.active().map(str::to_owned)));
+            }
+            core.pack_identity = Some(catalog.identity());
+            catalog.set_revision(core.pack_revision);
+        }
+        SettingsReply::Packs(catalog) => {
+            let identity = catalog.identity();
+            let changed = watching && core.pack_identity.as_ref().is_some_and(|old| *old != identity);
+            let publication = (catalog.signature(), catalog.active().map(str::to_owned));
+            if (installed || changed) && core.pack_publication.as_ref() != Some(&publication) {
+                core.pack_reload(catalog.active());
+                core.pack_publication = Some(publication);
+            }
+            if installed || watching || core.pack_identity.is_none() {
+                core.pack_identity = Some(identity);
+            }
+            catalog.set_revision(core.pack_revision);
+        }
+        _ => {}
     }
 }
 
@@ -151,6 +167,13 @@ impl SettingsDispatch {
         // A malformed settled file is observed once. Capacity/stale-read
         // refusal retries on the next poll, without an unbounded queued task.
         status.is_success() || status == StatusCode::UNPROCESSABLE_ENTITY
+    }
+
+    pub(crate) async fn watched(self, catalog: crate::PackCatalog, revision: u64) -> bool {
+        self.dispatch(None, SettingsOperation::PackWatch(catalog, revision), false)
+            .await
+            .status()
+            .is_success()
     }
 
     async fn dispatch(self, uri: Option<Uri>, operation: SettingsOperation, installed: bool) -> Response {

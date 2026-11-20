@@ -20,6 +20,8 @@ struct Installed {
     version: String,
     manifest_url: String,
     rest_url: Option<String>,
+    #[serde(skip)]
+    fingerprint: [u8; 32],
 }
 
 /// Safe, versioned catalog. Entries can only be created by validating local data.
@@ -38,6 +40,24 @@ impl PackCatalog {
     #[must_use]
     pub fn selection_changes(&self, selection: &str) -> bool {
         self.active.as_deref() != self.resolve(Some(selection)).map(|pack| pack.id.as_str())
+    }
+
+    pub(crate) fn identity(&self) -> Option<(String, [u8; 32])> {
+        self.installed
+            .iter()
+            .find(|pack| Some(&pack.id) == self.active.as_ref())
+            .map(|pack| (pack.id.clone(), pack.fingerprint))
+    }
+
+    pub(crate) fn signature(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        for pack in &self.installed {
+            digest.update((pack.id.len() as u64).to_le_bytes());
+            digest.update(pack.id.as_bytes());
+            digest.update(pack.fingerprint);
+        }
+        digest.finalize().into()
     }
 
     pub(crate) fn active(&self) -> Option<&str> {
@@ -134,7 +154,9 @@ pub(super) fn scan(root: &Path) -> Result<PackCatalog, Error> {
                 if let Ok(files) = catalog::read(root, &id) {
                     let pack = manifest::parse(&files)?;
                     let base = format!("/screen-packs/v1/{id}/");
+                    let fingerprint = catalog::fingerprint(root, &id, &files)?;
                     installed.push(Installed {
+                        fingerprint,
                         id,
                         name: pack.name,
                         version: pack.version,
