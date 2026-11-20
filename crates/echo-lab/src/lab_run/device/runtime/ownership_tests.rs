@@ -194,6 +194,18 @@ fn t3_on_device_partial_acquisition_does_not_clean_a_replaced_owner_directory() 
     fixture.preserved();
 }
 
+#[tokio::test]
+async fn t3_on_device_unacknowledged_launch_without_holder_retains_uncertain_residue() {
+    let mut fixture = Fixture::new();
+    fixture.stage().unwrap();
+    fixture.remote.attempted = true;
+    assert!(fixture.remote.stop().await.is_err());
+    assert!(fixture.remote.release().unwrap_err().contains("residue retained"));
+    assert_eq!(fs::read(fixture.path("bench.toml")).unwrap(), b"bench config\n");
+    assert!(fixture.path("lab-stdin").exists());
+    fixture.preserved();
+}
+
 #[test]
 fn t3_on_device_partial_acquisition_and_cleanup_errors_attempt_independent_entries() {
     for failure in ["chown ", "chmod ", "mkfifo ", "lab-stdout.log"] {

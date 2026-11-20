@@ -58,9 +58,9 @@ class World:
         self.condition.notify_all()
 
     def boot(self):
+        (self.remote / "lab-holder.pid").write_text("123\n")
         if (self.generation and self.mode == "launch") or self.mode == "initial-launch":
             raise ValueError("nominated launch failed")
-        (self.remote / "lab-holder.pid").write_text("123\n")
         self.alive = True
         self.pid += 1
         self.generation += 1

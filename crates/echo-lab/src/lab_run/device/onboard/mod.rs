@@ -31,7 +31,9 @@ setsid sh -c \"sleep 2147483647 >lab-stdin & echo \\$! >lab-holder.pid; \
 exec {binary} --config {config} --trace {trace} <lab-stdin >lab-stdout.log 2>lab-stderr.log\" \
 </dev/null >/dev/null 2>&1 &";
 // Closing the FIFO's write end is the bridge's clean-stop request.
-const STOP: &str = "cd {private_dir} && if test -s lab-holder.pid; then kill $(cat lab-holder.pid); fi";
+// An empty PID file cannot prove that the detached launch has finished acquiring
+// its holder. Refuse cleanup rather than race a late launch after a lost reply.
+const STOP: &str = "cd {private_dir} && if test -s lab-holder.pid; then kill $(cat lab-holder.pid); else exit 1; fi";
 
 /// Every device effect of on-device mode crosses this boundary; tests supply a fake.
 pub trait Shell {
