@@ -27,6 +27,7 @@ pub(super) fn runtime_options<'a>(
                 prompt: "synthetic fixture",
                 model: None,
                 effort: None,
+                fast: false,
                 time_zone: None,
                 web_search: echo_config::WebSearch::default(),
             },

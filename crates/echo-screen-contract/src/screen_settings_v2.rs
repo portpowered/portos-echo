@@ -179,6 +179,9 @@ pub struct CodexPatchV2 {
     #[schemars(with = "String")]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub delegate_effort: Option<String>,
+    #[schemars(with = "bool")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub delegate_fast: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -287,6 +290,7 @@ pub struct CodexValuesV2 {
     pub web_search: WebSearchV2,
     pub delegate_model: String,
     pub delegate_effort: String,
+    pub delegate_fast: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

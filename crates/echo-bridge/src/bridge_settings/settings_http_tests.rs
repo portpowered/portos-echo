@@ -6,7 +6,7 @@ use echo_screen_contract::settings_v1::{LinkStatusV1, PromptTextsV1, SettingsSna
 use echo_screen_server::{ScreenServer, serve_with_settings, settings_channel};
 use reqwest::{Client, StatusCode};
 use std::io::Write as _;
-use std::{fs, time::Duration};
+use std::{fs, path::Path, time::Duration};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 const TOKEN: &str = "synthetic-settings-pair";
@@ -266,6 +266,7 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
     use serde_json::{Value, json};
     let fixture = Fixture::open().await;
     let url = fixture.url("/settings/v2");
+    let before = snapshot_v2(&fixture, &url).await;
     assert_v2_guards(&fixture, &url).await;
     let response = fixture
         .client
@@ -283,6 +284,7 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
     writeln!(std::io::stdout().lock(), "Refused invalid config with {body}").unwrap();
     assert!(!fixture.path("settings.toml").exists());
     assert!(!fixture.snapshot().await.restart_pending);
+    assert_eq!(snapshot_v2(&fixture, &url).await, before);
     fixture.close().await;
 }
 
@@ -290,10 +292,11 @@ async fn assert_v2_guards(fixture: &Fixture, url: &str) {
     use serde_json::json;
 
     let unauthenticated = url.split('?').next().unwrap();
+    let fast = |version| json!({"version":version,"settings":{"codex":{"delegate_fast":true}}});
     for (request, expected) in [
         (fixture.client.get(unauthenticated), StatusCode::UNAUTHORIZED),
         (
-            fixture.client.patch(unauthenticated).body("invalid"),
+            fixture.client.patch(unauthenticated).json(&fast(2)),
             StatusCode::UNAUTHORIZED,
         ),
         (
@@ -301,7 +304,7 @@ async fn assert_v2_guards(fixture: &Fixture, url: &str) {
                 .client
                 .patch(url)
                 .header("Origin", "http://127.0.0.1:1")
-                .body("invalid"),
+                .json(&fast(2)),
             StatusCode::FORBIDDEN,
         ),
         (
@@ -325,32 +328,50 @@ async fn assert_v2_guards(fixture: &Fixture, url: &str) {
         (
             fixture
                 .client
-                .post(fixture.url("/settings/v1"))
-                .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":6}}})),
+                .patch(url)
+                .json(&json!({"version":2,"settings":{"codex":{"delegate_fast":null}}})),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            fixture
+                .client
+                .patch(url)
+                .json(&json!({"version":2,"settings":{"codex":{"delegate_fast":"false"}}})),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            fixture.client.post(fixture.url("/settings/v1")).json(&fast(1)),
             StatusCode::BAD_REQUEST,
         ),
     ] {
-        let response = request.send().await.unwrap();
-        assert_eq!(response.status(), expected);
-        assert!(response.bytes().await.unwrap().is_empty());
-        writeln!(
-            std::io::stdout().lock(),
-            "Refused paired boundary request with {expected}"
-        )
-        .unwrap();
+        assert_empty_refusal(request, expected).await;
     }
 }
+
+async fn assert_empty_refusal(request: reqwest::RequestBuilder, expected: StatusCode) {
+    let response = request.send().await.unwrap();
+    assert_eq!(response.status(), expected);
+    assert_eq!(response.bytes().await.unwrap().as_ref(), b"");
+    writeln!(
+        std::io::stdout().lock(),
+        "Refused paired boundary request with {expected}"
+    )
+    .unwrap();
+}
+
 #[tokio::test]
 async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     use serde_json::{Value, json};
     let fixture = Fixture::open().await;
     let v1 = fixture.snapshot().await;
+    let url = fixture.url("/settings/v2");
+    let before = snapshot_v2(&fixture, &url).await;
+    assert_eq!(before["settings"]["codex"]["delegate_fast"], false);
     let base = fixture.root.path().join("bridge.toml");
     let original_base = fs::read(&base).unwrap();
     let path = fixture.path("settings.toml");
     fs::create_dir(&path).unwrap();
-    let url = fixture.url("/settings/v2");
-    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner"},"agent":{"max_tool_calls":6}}});
+    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner","delegate_fast":true},"agent":{"max_tool_calls":6}}});
     let response = fixture.client.patch(&url).json(&fields).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body: Value = response.json().await.unwrap();
@@ -359,6 +380,7 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
         json!({"version":2,"message":"Could not save file; previous file retained"})
     );
     assert_eq!(fixture.snapshot().await, v1);
+    assert_eq!(snapshot_v2(&fixture, &url).await, before);
     assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
     fs::remove_dir(&path).unwrap();
     let response = fixture.client.patch(&url).json(&fields).send().await.unwrap();
@@ -367,10 +389,9 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
         response.json::<Value>().await.unwrap(),
         json!({"version":2,"restart_pending":true})
     );
-    let snapshot = fixture.client.get(url).send().await.unwrap();
-    assert_eq!(snapshot.status(), StatusCode::OK);
-    assert_eq!(snapshot.headers().get("cache-control").unwrap(), "no-store");
-    let data: Value = snapshot.json().await.unwrap();
+    let data = snapshot_v2(&fixture, &url).await;
+    assert_eq!(data["settings"]["codex"]["delegate_fast"], true);
+    assert_eq!(data["restart_pending"], true);
     assert_eq!(data["settings"]["agent"]["max_tool_calls"], 6);
     assert_eq!(data["settings"]["codex"]["delegate_model"], "synthetic-runner");
     assert_eq!(data["settings"]["codex"]["web_search"], "cached");
@@ -382,6 +403,7 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     );
     assert_eq!(data["prompts"], serde_json::to_value(&v1.prompts).unwrap());
     assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 6);
+    disable_fast_mode(&fixture, &url, &path).await;
     assert_eq!(fs::read(base).unwrap(), original_base);
     owner_only(&path);
     writeln!(
@@ -391,4 +413,34 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     )
     .unwrap();
     fixture.close().await;
+}
+
+async fn disable_fast_mode(fixture: &Fixture, url: &str, path: &Path) {
+    use serde_json::{Value, json};
+    let response = fixture
+        .client
+        .patch(url)
+        .json(&json!({"version":2,"settings":{"codex":{"delegate_fast":false}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.json::<Value>().await.unwrap(),
+        json!({"version":2,"restart_pending":true})
+    );
+    let after = snapshot_v2(fixture, url).await;
+    assert_eq!(after["settings"]["codex"]["delegate_fast"], false);
+    assert_eq!(after["settings"]["codex"]["delegate_model"], "synthetic-runner");
+    assert_eq!(after["settings"]["codex"]["web_search"], "cached");
+    assert_eq!(after["settings"]["agent"]["max_tool_calls"], 6);
+    let overlay = fs::read_to_string(path).unwrap();
+    assert!(overlay.contains("delegate_fast = false\n"));
+}
+
+async fn snapshot_v2(fixture: &Fixture, url: &str) -> serde_json::Value {
+    let response = fixture.client.get(url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+    response.json().await.unwrap()
 }

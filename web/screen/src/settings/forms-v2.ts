@@ -42,6 +42,9 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
     const effort = element("input");
     effort.value = codex.delegate_effort;
     effort.placeholder = "Pin default";
+    const fast = element("input");
+    fast.type = "checkbox";
+    fast.checked = codex.delegate_fast;
     const deadline = number(
         "Task deadline (seconds)",
         agent.task_deadline_seconds,
@@ -56,6 +59,7 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
             field("Web search", search),
             field("Delegated model", model),
             field("Delegated reasoning effort", effort),
+            field("Delegated fast mode", fast),
             deadline.label,
             local?.fieldset ?? element("p", "Local agent tools unavailable"),
         ],
@@ -67,6 +71,8 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
                 (patch.codex ??= {}).delegate_model = model.value;
             if (effort.value !== codex.delegate_effort)
                 (patch.codex ??= {}).delegate_effort = effort.value;
+            if (fast.checked !== codex.delegate_fast)
+                (patch.codex ??= {}).delegate_fast = fast.checked;
             if (deadline.input.valueAsNumber !== agent.task_deadline_seconds)
                 (patch.agent ??= {}).task_deadline_seconds =
                     deadline.input.valueAsNumber;

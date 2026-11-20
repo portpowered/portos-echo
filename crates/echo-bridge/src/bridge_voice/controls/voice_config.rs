@@ -291,6 +291,7 @@ impl Configured {
                     prompt: echo_config::LIVE_INSTRUCTIONS,
                     model: self.config.codex_model(),
                     effort: self.config.codex.delegate_effort.as_deref(),
+                    fast: self.config.codex.delegate_fast,
                     time_zone: self.config.codex.time_zone.as_deref(),
                     web_search: self.config.codex.web_search,
                 },

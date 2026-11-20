@@ -40,7 +40,7 @@ The base must validate first. If `[home]` is configured, `BridgeConfig::load_eff
 optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leaves:
 
 - Voice and OpenAI use `voice.session_listen_enabled`, `voice.session_listen_seconds`,
-  `codex.voice`, `codex.web_search`, `codex.delegate_model` and `codex.delegate_effort`.
+  `codex.voice`, `codex.web_search`, `codex.delegate_model`, `codex.delegate_effort` and `codex.delegate_fast`.
   An empty delegated model or effort selects the pinned app server's default.
 - Agent settings include `agent.daily_request_cap`, `agent.max_tool_calls`, `agent.task_deadline_seconds`
   and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
@@ -92,6 +92,18 @@ The repository has no established subscription-tier guarantee for Live. Third-pa
 terms and account entitlement remain open under [plan section 4.5](program/plan.md#45-risks-the-operator-accepts-with-the-chatgpt-mode).
 Do not assume that a particular paid plan, API subscription or a working Codex login guarantees Live eligibility.
 The pinned server owns its realtime model; `codex.delegate_model` chooses the runner model, not the voice model.
+
+In paired Settings, open OpenAI, select **Delegated fast mode**, and choose **Save settings**. Wait for
+Settings to report that the saved values are active. The next runner thread starts with the saved tier.
+Fast mode requests priority processing for a supported runner model. The pin's bundled catalog advertises
+priority for `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`,
+`gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5`. The provider controls eligibility, cost and speed.
+The Live voice uses its own start parameters.
+
+For standard processing, clear the checkbox and save, or set `delegate_fast = false` under `[codex]` in TOML.
+A saved false overrides a true base value. To return to the base preference, stop the bridge, remove just
+`delegate_fast` from the home's `settings.toml`, and start the bridge again. Before downgrading to a bridge
+without this key, remove it from both TOML files.
 
 In the current backend, desktop `import-codex` is refused. `signin --browser` is an alternate app-server flow
 for a browser-capable host. `api_key` is an alternate credential mode: the bridge reads the nominated
@@ -221,6 +233,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.model` | Optional nonblank legacy runner-model alias; overrides agent.model. | restart / no |
 | `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. An empty screen override selects the pinned app server default even when a legacy model key is set. | boundary / yes |
 | `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | boundary / yes |
+| `codex.delegate_fast` | Boolean, default false. True requests priority processing for the delegated model. False selects standard routing. | boundary / yes |
 | `codex.time_zone` | Default unset; IANA-name syntax (nonempty slash components using ASCII letters/digits/underscore/plus/minus). Not a lookup validating that zone exists. | restart / no |
 
 Set `codex.time_zone` to the operator's IANA time zone for time answers.

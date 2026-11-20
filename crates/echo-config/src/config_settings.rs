@@ -23,6 +23,7 @@ pub struct SettingsOptions {
     pub web_search: Option<WebSearch>,
     pub delegate_model: Option<String>,
     pub delegate_effort: Option<String>,
+    pub delegate_fast: Option<bool>,
     pub task_deadline_seconds: Option<u64>,
     pub agent_tools: Option<Vec<String>>,
     pub scopes: Option<Vec<String>>,
@@ -108,6 +109,7 @@ impl SettingsOverlay {
             result.options.web_search = codex.optional("web_search")?;
             result.options.delegate_model = codex.optional("delegate_model")?;
             result.options.delegate_effort = codex.optional("delegate_effort")?;
+            result.options.delegate_fast = codex.optional("delegate_fast")?;
             codex.finish()?;
         }
         if let Some(mut agent) = fields.section("agent")? {
@@ -261,6 +263,9 @@ impl SettingsOptions {
         if let Some(effort) = &self.delegate_effort {
             config.codex.delegate_effort = nonempty_override(effort);
         }
+        if let Some(fast) = self.delegate_fast {
+            config.codex.delegate_fast = fast;
+        }
         if let Some(deadline) = self.task_deadline_seconds {
             config.agent.task_deadline_seconds = deadline;
         }
@@ -301,6 +306,7 @@ impl SettingsOptions {
             web_search: patch.web_search.or(self.web_search),
             delegate_model: patch.delegate_model.clone().or_else(|| self.delegate_model.clone()),
             delegate_effort: patch.delegate_effort.clone().or_else(|| self.delegate_effort.clone()),
+            delegate_fast: patch.delegate_fast.or(self.delegate_fast),
             task_deadline_seconds: patch.task_deadline_seconds.or(self.task_deadline_seconds),
             agent_tools: patch.agent_tools.clone().or_else(|| self.agent_tools.clone()),
             scopes: patch.scopes.clone().or_else(|| self.scopes.clone()),
@@ -317,6 +323,7 @@ impl SettingsOptions {
         leaf("codex", "web_search", self.web_search.map(|mode| mode.as_str().into()));
         leaf("codex", "delegate_model", self.delegate_model.clone().map(Into::into));
         leaf("codex", "delegate_effort", self.delegate_effort.clone().map(Into::into));
+        leaf("codex", "delegate_fast", self.delegate_fast.map(Into::into));
         let deadline = self
             .task_deadline_seconds
             .map(i64::try_from)

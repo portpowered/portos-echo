@@ -93,6 +93,7 @@ fn documented_profile_can_be_enabled_without_changing_defaults() {
         .replace("# [codex]\n", "[codex]\n")
         .replace("# delegate_model =", "delegate_model =")
         .replace("# delegate_effort =", "delegate_effort =")
+        .replace("# delegate_fast =", "delegate_fast =")
         .replace("# time_zone =", "time_zone =");
     let directory = Directory::new().unwrap();
     let path = directory.write(&input).unwrap();
@@ -102,7 +103,38 @@ fn documented_profile_can_be_enabled_without_changing_defaults() {
     ] {
         assert_eq!(config.codex_model(), Some("fixture-model"));
         assert_eq!(config.codex.delegate_effort.as_deref(), Some("low"));
+        assert!(!config.codex.delegate_fast);
         assert_eq!(config.codex.time_zone.as_deref(), Some("America/Los_Angeles"));
+    }
+}
+
+#[test]
+fn fast_mode_defaults_off_and_loads_both_examples() {
+    let directory = Directory::new().unwrap();
+    let device_example = include_str!("../../../../examples/bridge.echo.toml");
+    for input in [MINIMAL, EXAMPLE, device_example] {
+        let parsed = BridgeConfig::from_toml_str(input).unwrap();
+        assert!(!parsed.codex.delegate_fast);
+        assert_eq!(BridgeConfig::load(directory.write(input).unwrap()).unwrap(), parsed);
+    }
+    for (value, expected) in [("true", true), ("false", false)] {
+        let input = format!("{MINIMAL}\n[codex]\ndelegate_fast={value}");
+        for config in [
+            BridgeConfig::from_toml_str(&input).unwrap(),
+            BridgeConfig::load(directory.write(&input).unwrap()).unwrap(),
+        ] {
+            assert_eq!(config.codex.delegate_fast, expected);
+        }
+    }
+    let input = format!("{MINIMAL}\n[codex]\ndelegate_fast='synthetic'");
+    for result in [
+        BridgeConfig::from_toml_str(&input),
+        BridgeConfig::load(directory.write(&input).unwrap()),
+    ] {
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "codex.delegate_fast: invalid type or value"
+        );
     }
 }
 

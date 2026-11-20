@@ -64,6 +64,7 @@ impl<'o> super::ServeOptions<'o> {
                 prompt: texts.1,
                 model: self.call.model,
                 effort: self.call.effort,
+                fast: self.call.fast,
                 time_zone: self.call.time_zone,
                 web_search: self.call.web_search,
             },

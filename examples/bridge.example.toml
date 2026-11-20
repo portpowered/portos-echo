@@ -20,6 +20,7 @@ session_idle_seconds = 120
 # [codex]
 # delegate_model = "fixture-model"
 # delegate_effort = "low"
+# delegate_fast = false # Request priority processing for a supported runner model when true.
 # Sets the operator's IANA time zone for time answers. Run `adb shell getprop persist.sys.timezone` to see the device zone.
 # time_zone = "America/Los_Angeles"
 # delegate_model selects the Codex thread model used by delegated turns.

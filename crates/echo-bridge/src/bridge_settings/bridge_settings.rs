@@ -156,6 +156,7 @@ fn same_values(first: &BridgeConfig, second: &BridgeConfig) -> bool {
         && first.codex.web_search == second.codex.web_search
         && first.codex_model() == second.codex_model()
         && first.codex.delegate_effort == second.codex.delegate_effort
+        && first.codex.delegate_fast == second.codex.delegate_fast
         && first.agent.task_deadline_seconds == second.agent.task_deadline_seconds
         && first.home == second.home
         && first.mcp == second.mcp

@@ -126,6 +126,7 @@ function decodeV2(value: unknown): SnapshotV2 {
         "voice",
         "delegate_model",
         "delegate_effort",
+        "delegate_fast",
         "web_search",
     ]);
     assertShape(agent, [
@@ -138,6 +139,7 @@ function decodeV2(value: unknown): SnapshotV2 {
         data.version !== 2 ||
         typeof codex.delegate_model !== "string" ||
         typeof codex.delegate_effort !== "string" ||
+        typeof codex.delegate_fast !== "boolean" ||
         !searchModes.some((mode) => mode === codex.web_search) ||
         !Number.isSafeInteger(agent.task_deadline_seconds)
     )

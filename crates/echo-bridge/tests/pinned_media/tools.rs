@@ -302,6 +302,7 @@ async fn client(
                     prompt: "Client audio bridge",
                     model: Some(model),
                     effort: None,
+                    fast: false,
                     time_zone: None,
                     web_search: config.web_search,
                 },

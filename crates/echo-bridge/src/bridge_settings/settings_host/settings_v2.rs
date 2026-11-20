@@ -84,6 +84,7 @@ impl SettingsHost {
             }),
             delegate_model: codex.delegate_model,
             delegate_effort: codex.delegate_effort,
+            delegate_fast: codex.delegate_fast,
             task_deadline_seconds: agent.task_deadline_seconds,
             agent_tools: fields.home.map(|home| {
                 home.agent_tools
@@ -132,6 +133,7 @@ impl SettingsHost {
                     },
                     delegate_model: config.codex_model().unwrap_or_default().into(),
                     delegate_effort: config.codex.delegate_effort.clone().unwrap_or_default(),
+                    delegate_fast: config.codex.delegate_fast,
                 },
                 agent: AgentValuesV2 {
                     daily_request_cap: accepted.settings.agent.daily_request_cap,
