@@ -1166,7 +1166,7 @@ Binding answer B extends the single search exception to the pin's standalone `we
 (namespace `web`, tool `run`, `codex-rs/ext/web-search`) for Responses Lite models. This supersedes the
 native absence limitation above. Production OpenAI providers already support it; the loopback fake
 opts into `supports_standalone_web_search`. Both configuration paths set
-`code_mode.direct_only_tool_namespaces=["web"]` to keep search outside nested `exec` callables.
+`features.code_mode.direct_only_tool_namespaces=["web"]` to keep search outside nested `exec` callables.
 No pin, model metadata or schema changes are needed.
 Live and cached add exactly `web.run` to the previous direct native catalog, leaving nested `exec`
 callables unchanged; disabled preserves the previous catalog. Conventional models retain exactly the

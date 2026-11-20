@@ -276,7 +276,7 @@ including `gpt-6.1-sol`, receive the pin's standalone `web.run` extension instea
 provider search API. Neither form adds local fetch, process, browser or file authority.
 The complete bridge dynamic catalog and nested `exec` callables remain unchanged; native direct tools
 add exactly `web.run` when enabled. Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
-Thread settings and local overrides set `code_mode.direct_only_tool_namespaces=["web"]` so search
+Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["web"]` so search
 remains direct. The local-fake provider opts into `supports_standalone_web_search` to reproduce
 production support.
 

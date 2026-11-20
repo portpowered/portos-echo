@@ -17,7 +17,7 @@ voice = "default"
 session_idle_seconds = 120
 
 [codex]
-# Hosted read-only search: live (default), cached, or disabled.
+# Provider-backed read-only search: live (default), cached, or disabled.
 web_search = "live"
 # The bridge creates this home with mode 0700 and refuses one whose mode differs.
 home = "/data/local/echo-bridge/private/codex-home"

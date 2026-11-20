@@ -87,7 +87,7 @@ owner to revoke its grant; it does not remove the ChatGPT login.
 
 The voice model answers conversation, explanations and general knowledge directly. It delegates when a request
 needs an effect or unavailable live/personal data. The runner gets bridge-declared tools, with native shell,
-unified execution and independent Codex MCP discovery disabled. Hosted read-only web search is the sole
+unified execution and independent Codex MCP discovery disabled. Provider-backed read-only web search is the sole
 exception: `codex.web_search` defaults to `live`, accepts `cached` or `disabled`, and adds no local authority.
 Conventional models use hosted search; native Responses Lite models use the pin's provider-backed `web.run`.
 Cached sets `external_web_access` false for both forms; disabled omits search.

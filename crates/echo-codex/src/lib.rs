@@ -50,7 +50,7 @@ impl ThreadSettings {
                 "features.goals": false,
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
-                "code_mode.direct_only_tool_namespaces": ["web"],
+                "features.code_mode.direct_only_tool_namespaces": ["web"],
                 "web_search": "live",
                 "mcp_servers": {},
             }),
@@ -109,7 +109,7 @@ mod tests {
                 "features.goals": false,
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
-                "code_mode.direct_only_tool_namespaces": ["web"],
+                "features.code_mode.direct_only_tool_namespaces": ["web"],
                 "web_search": "live",
                 "mcp_servers": {},
             })
