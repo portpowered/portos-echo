@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, stat, utimes } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, stat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,13 +17,13 @@ const id = "template@0.1.0";
 const generated = process.env.SCREEN_PACK_FIXTURE;
 assert.ok(generated, "suite owner must prepare generated assets");
 
-async function open(t, { prepare, beforeNavigate, initialState } = {}) {
+async function open(t, { prepare, beforeNavigate, initialState, archivePath, viewport } = {}) {
     const root = await mkdtemp(join(tmpdir(), "screen-pack-journey-"));
     const home = join(root, "home");
     await mkdir(home);
     await prepare?.(home, generated);
     const archive = await readFile(
-        join(generated, "template-0.1.0.screenpack.tar.gz"),
+        archivePath ?? join(generated, "template-0.1.0.screenpack.tar.gz"),
     );
     const sha256 = createHash("sha256").update(archive).digest("hex");
     const peer = await archivePeer(root, archive);
@@ -110,7 +110,7 @@ async function open(t, { prepare, beforeNavigate, initialState } = {}) {
     }
     const origin = `http://127.0.0.1:${ready}`;
     const context = await browser.newContext({
-        viewport: { width: 1280, height: 800 },
+        viewport: viewport ?? { width: 1280, height: 800 },
         serviceWorkers: "block",
     });
     const outside = [];
@@ -156,7 +156,7 @@ async function open(t, { prepare, beforeNavigate, initialState } = {}) {
         command({ state });
         assert.deepEqual(await next(), { sent: true });
         await page
-            .getByRole("heading", { name: state.state, exact: true })
+            .getByRole("heading", { name: state.state.replaceAll("_", " "), exact: true })
             .waitFor();
     };
     const api = async (path) => {
@@ -427,3 +427,103 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
         `F25 production: ${sources.join(" -> ")}; happy once -> idle; unknown -> frames; MP4 decoded; reloads=5; restart_requests=0; checksum refused; same page/server alive`,
     );
 });
+
+test("FACE candidate installs over the baseline and fits the paired 960x600 page", { skip: !process.env.FACE_CANDIDATE, timeout: 45000 }, async (t) => {
+    const candidate = process.env.FACE_CANDIDATE;
+    const latest = "template@0.2.0";
+    const f = await open(t, {
+        viewport: { width: 960, height: 600 },
+        archivePath: join(candidate, "template-0.2.0.screenpack.tar.gz"),
+        prepare: async (home) => {
+            await mkdir(join(home, "screens"));
+            await cp(join(process.env.FACE_OLDER, id), join(home, "screens", id), { recursive: true });
+        },
+        initialState: { state: "ready", message: "Ready to help whenever you need me. Try asking about your timers, the weather, or a quick reminder." },
+    });
+    const { page } = f;
+    const catalog = () => f.api("/screen-packs/v1");
+    assert.equal((await catalog()).active, id);
+    const status = await page.evaluate(async ({ url, sha256, token }) => (await fetch(`/screen-packs/v1/install?token=${token}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: 1, url, sha256 }),
+    })).status, { url: f.peer.url, sha256: f.sha256, token });
+    assert.equal(status, 202);
+    await reloads(page, 1);
+    const installed = await catalog();
+    assert.equal(installed.active, latest);
+    assert.deepEqual(installed.installed.map((pack) => pack.id).sort(), [id, latest]);
+    for (const [key, filename] of [["manifest_url", "pack.json"], ["rest_url", "rest.png"]]) {
+        const url = new URL(installed.installed.find((pack) => pack.id === latest)[key], f.origin);
+        url.searchParams.set("token", token);
+        const asset = await fetch(url);
+        assert.equal(asset.status, 200);
+        assert.deepEqual(Buffer.from(await asset.arrayBuffer()), await readFile(join(candidate, latest, filename)));
+    }
+    await page.waitForFunction(() => document.querySelector(".pack-stage img")?.src.includes("template@0.2.0"));
+    await playing(page, "idle.webm");
+    const stateCases = [
+        [{ state: "ready", message: "Ready to help whenever you need me. Try asking about your timers, the weather, or a quick reminder." }, "idle"],
+        [{ state: "connected" }, "idle"],
+        [{ state: "listening" }, "listening"],
+        [{ state: "thinking" }, "thinking"],
+        [{ state: "speaking" }, "speaking"],
+        [{ state: "muted" }, "muted"],
+        [{ state: "connecting" }, "connecting"],
+        [{ state: "link_code", user_code: "FAKE-CODE", verification_uri: "https://127.0.0.1/link", expires_at_unix: 1 }, "setup"],
+        [{ state: "approval", id: "synthetic-approval", prompt: "Allow this action to continue?", accept_label: "Allow", deny_label: "Deny" }, "approval"],
+        [{ state: "error", message: "Could not finish the request. Please try again.", relink: true }, "error"],
+    ];
+    const overlaps = [];
+    for (const [state, clip] of stateCases) {
+        await f.update(state);
+        const file = await playing(page, clip + ".webm");
+        const layout = await page.evaluate(() => {
+            const boxes = {};
+            const selectors = [".pack-stage", ".screen-pack h1", ".pack-clock", ".pack-date", ".screen-pack .details p", ".screen-pack .controls button"];
+            for (const selector of selectors) {
+                const nodes = [...document.querySelectorAll(selector)].filter((node) => !node.hidden && node.getClientRects().length);
+                for (const [i, node] of nodes.entries()) {
+                    let bounds = node.getBoundingClientRect();
+                    if (node.tagName === "P" && node.closest(".details")) {
+                        const range = document.createRange();
+                        range.selectNodeContents(node);
+                        bounds = range.getBoundingClientRect();
+                    }
+                    boxes[selector + i] = [bounds.left, bounds.top, bounds.right, bounds.bottom];
+                }
+            }
+            return { boxes, stage: getComputedStyle(document.querySelector(".pack-stage")).backgroundColor, page: getComputedStyle(document.documentElement).backgroundColor };
+        });
+        assert.equal(layout.stage, layout.page);
+        console.log("FACE 960x600", state.state, file, JSON.stringify(layout));
+        const boxes = Object.entries(layout.boxes);
+        for (const [i, [name, box]] of boxes.entries()) {
+            for (const [other, candidate] of boxes.slice(i + 1)) {
+                if (Math.min(box[2], candidate[2]) - Math.max(box[0], candidate[0]) > 0 &&
+                    Math.min(box[3], candidate[3]) - Math.max(box[1], candidate[1]) > 0) overlaps.push(`${state.state}: ${name} overlaps ${other}`);
+            }
+        }
+    }
+    await mkdir("test-results/screenshots", { recursive: true });
+    await page.screenshot({ path: "test-results/screenshots/template-face-960x600.png" });
+    const settings = page.getByRole("button", { name: "Settings", exact: true });
+    await settings.focus();
+    await page.keyboard.press("Enter");
+    await refresh(page);
+    for (const chosen of [id, ""]) {
+        await page.getByLabel("Screen pack", { exact: true }).selectOption(chosen);
+        await page.getByRole("button", { name: "Use screen pack", exact: true }).click();
+        await page.waitForFunction(async ({ chosen, token }) => {
+            const result = await fetch("/screen-packs/v1?token=" + token);
+            return result.ok && (await result.json()).active === (chosen || null);
+        }, { chosen, token });
+    }
+    await page.getByRole("button", { name: "Back", exact: true }).press("Enter");
+    await page.locator(".pack-stage").waitFor({ state: "detached" });
+    const rollback = await catalog();
+    assert.deepEqual(rollback.installed.map((pack) => pack.id).sort(), [id, latest]);
+    assert.equal((await f.api("/settings/v1")).restart_pending, false);
+    console.log("FACE-UPGRADE both_versions=PASS auto_template_0.2.0=PASS media_bytes=PASS rollback=PASS voice_restart=false");
+    assert.deepEqual(overlaps, []);
+});
+
