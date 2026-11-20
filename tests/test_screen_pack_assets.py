@@ -122,7 +122,8 @@ def media_cases(pack):
             first, middle, last = raw[:size], raw[size:2 * size], raw[2 * size:]
             require(first != middle, 'state does not animate')
             if extension == 'webm':
-                require(stream['tags'].get('alpha_mode') == '1', 'VP9 alpha metadata absent')
+                tags = {key.lower(): value for key, value in stream['tags'].items()}
+                require(tags.get('alpha_mode') == '1', 'VP9 alpha metadata absent: ' + json.dumps(tags))
                 require(first == last, 'VP9 loop does not join on rest')
                 require(first[3] == 0 and first[(290 * 640 + 320) * 4 + 3] == 255,
                         'VP9 alpha did not decode')
