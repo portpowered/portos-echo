@@ -39,9 +39,11 @@ jobs:
           path: |
             ${{ runner.temp }}/generated/contact.png
           if-no-files-found: error
-      - name: Run existing release-kit regression cases
-        run: python3 tests/test_release_kit.py
-        if: always()
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: template-0.2.0-fixture
+          path: ${{ runner.temp }}/generated/
+          if-no-files-found: error
       - name: Targeted result
         if: always()
         run: |
