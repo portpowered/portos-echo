@@ -113,7 +113,7 @@ async function assertRemoveBesideTitle(row, remove) {
     assert.ok(button.y + button.height <= status.y, "above the status line");
     assert.ok(button.x > title.x + title.width, "beside the title");
     assert.ok(
-        Math.abs(box.x + box.width - 12 - (button.x + button.width)) <= 1,
+        Math.abs(box.x + box.width - (button.x + button.width)) <= 1,
         "right-aligned in the row",
     );
 }
@@ -243,5 +243,137 @@ async function chooseDefault(page, section, catalog) {
     assert.deepEqual(JSON.parse(saves.at(-1).body), {
         version: 1,
         screen_pack: "default",
+    });
+}
+
+// Settings at 960x600 is one column: text starts on the title's left edge and
+// every right-side control ends on Back's right edge.
+for (const [state, portos, label, action] of [
+    ["linked", "linked", "Linked", "Remove Port OS link"],
+    ["unlinked", "unconfigured", "Unconfigured", "Link Port OS"],
+    ["link-required", "link_required", "Link required", "Link Port OS"],
+])
+    test(`960�600 Settings is one column with Port OS ${state}`, async (t) => {
+        const data = v2Snapshot();
+        data.portos.link_status = portos;
+        const page = await open(t, data, 200, {
+            context: { viewport: { width: 960, height: 600 } },
+            openAI: {
+                version: 2,
+                link_status: "linked",
+                operation_state: "idle",
+            },
+        });
+        const row = page.getByRole("region", { name: "Port OS" });
+        await row.getByText(label, { exact: true }).waitFor();
+        await pixelSnapshot(page, "settings-portos-" + state);
+        const edges = await columnEdges(page);
+        assert.deepEqual(edges.column, { left: 24, right: 936 });
+        const off = (list, edge) =>
+            list.filter(([, x]) => Math.abs(x - edge) > 1);
+        assert.deepEqual(off(edges.lefts, 24), [], "left edges");
+        assert.deepEqual(off(edges.rights, 936), [], "right edges");
+        assert.equal(new Set(edges.controls.map(Math.round)).size, 1);
+        const widths = new Set(edges.actions.map(([, width]) => width));
+        assert.deepEqual(
+            edges.actions.map(([name]) => name),
+            ["Remove OpenAI link", action],
+        );
+        assert.equal(widths.size, 1, JSON.stringify(edges.actions));
+        for (const [name, , centre] of edges.actions)
+            assert.ok(Math.abs(centre) <= 1, name + " centred on its title");
+        const load = await page
+            .getByRole("button", { name: "Load screen packs" })
+            .boundingBox();
+        assert.deepEqual([load.x, load.x + load.width], [24, 936]);
+    });
+
+// With every section open, the left text edge of each text block, the left
+// edge of each left-anchored block and of each row control, and the right edge
+// of each right-side control.
+async function columnEdges(page) {
+    await page.evaluate(() => {
+        for (const details of document.querySelectorAll(".settings-section"))
+            details.open = true;
+    });
+    const fields = ".settings-fields ";
+    const [[, left]] = await edges(page, ".settings-panel h1", "textLeft");
+    const [[, right]] = await edges(page, ".corner-control", "right");
+    const text =
+        ".settings-panel :is(h1, h2, h3, p, legend, .settings-row > label)";
+    const blocks =
+        ":is(section, form, fieldset, .settings-row, textarea, button:not(.settings-item-header > *, .settings-stepper > *))";
+    const ends =
+        ":is(section, .settings-row, .settings-row > :last-child, .settings-item-header > button, select, textarea, input:not([type=checkbox], .settings-stepper > *))";
+    const controls =
+        ".settings-row:not(.settings-row-wide) > :last-child:not([type=checkbox])";
+    return {
+        column: { left, right },
+        lefts: [
+            ...(await edges(page, text, "textLeft")),
+            ...(await edges(page, fields + "summary", "textLeft")),
+            ...(await edges(page, fields + blocks, "left")),
+        ],
+        rights: [
+            ...(await edges(page, fields + ends, "right")),
+            ...(await edges(page, fields + "summary", "textRight")),
+        ],
+        controls: (await edges(page, fields + controls, "left")).map(
+            ([, x]) => x,
+        ),
+        actions: await accountActions(page),
+    };
+}
+
+// [name, x] for each visible node matching `selector`; `edge` is the box's
+// "left" or "right", or "textLeft"/"textRight" inside border and padding.
+function edges(page, selector, edge) {
+    return page.evaluate(
+        ([selector, edge]) =>
+            [...document.querySelectorAll(selector)]
+                .filter(
+                    (node) =>
+                        node.checkVisibility() &&
+                        node.getBoundingClientRect().width > 0,
+                )
+                .map((node) => {
+                    const box = node.getBoundingClientRect();
+                    const style = getComputedStyle(node);
+                    const inner = (side) =>
+                        parseFloat(style["border" + side + "Width"]) +
+                        parseFloat(style["padding" + side]);
+                    const name =
+                        node.getAttribute("aria-label") || node.textContent;
+                    return [
+                        node.tagName.toLowerCase() +
+                            " " +
+                            name.trim().slice(0, 32),
+                        {
+                            left: box.left,
+                            right: box.right,
+                            textLeft: box.left + inner("Left"),
+                            textRight: box.right - inner("Right"),
+                        }[edge],
+                    ];
+                }),
+        [selector, edge],
+    );
+}
+
+// Each visible account action's name, width, and how far its centre sits
+// from its title's.
+function accountActions(page) {
+    return page.evaluate(() => {
+        const centre = (node) => {
+            const box = node.getBoundingClientRect();
+            return box.top + box.height / 2;
+        };
+        return [...document.querySelectorAll(".settings-item-header > button")]
+            .filter((node) => node.checkVisibility())
+            .map((node) => [
+                node.getAttribute("aria-label") || node.textContent,
+                node.getBoundingClientRect().width,
+                centre(node) - centre(node.parentElement.querySelector("h3")),
+            ]);
     });
 }

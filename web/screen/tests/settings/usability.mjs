@@ -77,7 +77,8 @@ test("settings usability: at 960x600 Back sits exactly where the gear was and th
     );
     assert.ok(title.x + title.width <= back.x);
     const fields = await page.locator(".settings-fields").boundingBox();
-    assert.deepEqual(fields, { x: 24, y: 132, width: 912, height: 460 });
+    // The scroll area spans the screen; its content sits on the 24..936 column.
+    assert.deepEqual(fields, { x: 0, y: 132, width: 960, height: 460 });
     assert.ok(fields.height >= 0.7 * ECHO.height);
     // Label at the left, control at the right, on one line.
     for (const name of [
@@ -94,14 +95,18 @@ test("settings usability: at 960x600 Back sits exactly where the gear was and th
             .locator("label")
             .filter({ hasText: name })
             .boundingBox();
-        assert.equal(text.x, 32, name);
+        assert.equal(text.x, 24, name);
         assert.ok(text.x + text.width <= box.x, name);
         assert.ok(
             text.y + text.height / 2 > box.y &&
                 text.y + text.height / 2 < box.y + box.height,
             name,
         );
-        assert.ok(box.x + box.width <= fields.x + fields.width, name);
+        // Every row's control (a stepper's + button) ends on Back's right edge.
+        const end = await row(page, name)
+            .locator(":scope > :last-child")
+            .boundingBox();
+        assert.ok(Math.abs(end.x + end.width - 936) <= 1, name);
         assert.ok(box.height >= 64, name);
     }
     for (const button of await page

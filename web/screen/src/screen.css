@@ -5,6 +5,8 @@
     --corner-size: 72px;
     --corner-icon: 40px;
     --corner-gap: 16px;
+    /* Settings' account actions (Link, Relink, Remove) share one width. */
+    --account-action-width: 264px;
     color-scheme: dark;
     font-family: system-ui, sans-serif;
     background: #101827;
@@ -214,11 +216,21 @@ main.settings-open {
     font-size: 22px;
     margin: 4px 0;
 }
+/* Settings is one column: from the title's left edge to Back's right edge.
+   The scroll area bleeds to the screen edges so focus rings and the open
+   section band have room, and pads its content back onto the column. */
 .settings-fields {
     flex: 1 1 0;
     overflow: auto;
     min-height: 0;
-    padding: 8px;
+    margin-inline: calc(-1 * var(--corner-right));
+    padding: 8px var(--corner-right);
+    /* Text ink that spills a pixel left of the column repaints with the
+       fields, never as a stale dot when they scroll. */
+    will-change: scroll-position;
+}
+.settings-fields section {
+    padding-inline: 0;
 }
 .settings-fields > section {
     max-height: none;
@@ -228,23 +240,37 @@ main.settings-open {
 }
 .settings-section summary {
     min-height: 64px;
-    padding: 16px;
+    margin-inline: calc(-1 * var(--corner-right));
+    padding: 16px var(--corner-right);
     font-size: 26px;
     font-weight: 600;
     cursor: pointer;
     touch-action: manipulation;
+    /* The open band is the tap's feedback; no fading highlight over it. */
+    -webkit-tap-highlight-color: transparent;
 }
 .settings-section[open] summary {
     background: #243b61;
+}
+.settings-section summary:focus-visible {
+    outline-offset: -6px;
 }
 .settings-section > section {
     max-height: none;
 }
 .settings-choices {
+    margin: 0;
+    padding: 0;
+    border: 0;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 8px;
     min-width: 0;
+}
+.settings-choices legend {
+    padding: 0;
+    margin-bottom: 8px;
+    font-size: 24px;
 }
 .settings-choices label {
     display: flex;
@@ -305,7 +331,11 @@ main.settings-open {
 .settings-fields input[type="checkbox"] {
     width: 64px;
     height: 64px;
+    margin: 0;
     accent-color: #c4d5ff;
+}
+.settings-row > input[type="checkbox"] {
+    justify-self: end;
 }
 .settings-fields textarea {
     display: block;
@@ -372,14 +402,14 @@ main.settings-open {
     outline-offset: 2px;
 }
 .settings-accounts > section {
-    padding: 4px 12px;
+    padding: 4px 0;
     margin-bottom: 8px;
 }
 .settings-accounts > section > p {
     margin: 0;
 }
 /* A deletable item's first line: its title at the left, its action (Link or
-   Remove) at the top right. */
+   Remove) at the top right, on the column's right edge. */
 .settings-item-header {
     display: flex;
     align-items: center;
@@ -394,7 +424,8 @@ main.settings-open {
 }
 .settings-item-header > button {
     flex-shrink: 0;
-    min-width: 120px;
+    width: var(--account-action-width);
+    min-width: 0;
     min-height: 64px;
     margin: 4px 0;
     padding: 8px 24px;
