@@ -206,14 +206,29 @@ impl World {
         }
         // The pin has acknowledged all twelve calls and is waiting on its
         // last model response. Advance only the bridge's injected clock.
-        self.step(60_000).await?;
-        self.step(super::LONG_WAIT_MS - 60_000).await?;
+        self.advance_live(super::LONG_WAIT_MS).await?;
         self.provider
             .as_ref()
             .ok_or("session: missing provider")?
             .control(Control::ReleaseGoodbye)
             .await?;
         self.wait_for_long_answer = false;
+        Ok(())
+    }
+
+    /// Advance the injected run clock in increments while the real local
+    /// media peer services ICE. A single jump would manufacture consent loss.
+    async fn advance_live(&mut self, mut remaining: u64) -> Result<(), String> {
+        while remaining > 0 {
+            let step = remaining.min(500);
+            self.provider
+                .as_mut()
+                .ok_or("session: missing provider")?
+                .tick()
+                .await?;
+            self.step(step).await?;
+            remaining -= step;
+        }
         Ok(())
     }
 

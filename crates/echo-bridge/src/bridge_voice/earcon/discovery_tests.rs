@@ -81,7 +81,7 @@ async fn exercise(mute: bool) {
             (&client, &mut events, run),
             &mut io,
             MemoryPeer,
-            (options, &mut tools),
+            (options, &mut tools, Instant::now()),
             std::future::pending(),
             |notice| {
                 observe(&notice, &acknowledged, mute);

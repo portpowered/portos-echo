@@ -228,7 +228,7 @@ async fn tools_conversation_cancels_pending_effect_before_stop_without_result_re
 }
 
 #[tokio::test(start_paused = true)]
-async fn tools_conversation_invalid_dispatch_or_observer_still_stops_media() {
+async fn tools_conversation_invalid_session_or_observer_still_stops_media() {
     for invalid in [false, true] {
         let (mut io, mut server) = fixture();
         let (peer, media, _audio) = peer(true, None);
@@ -238,6 +238,10 @@ async fn tools_conversation_invalid_dispatch_or_observer_still_stops_media() {
             call.start(&options(), catalog().tools().to_vec(), deadline())
                 .await
                 .unwrap();
+            let mut session = settings();
+            if invalid {
+                session.session_max = Duration::ZERO;
+            }
             tool_conversation(
                 (&link, &mut events, microphone),
                 &mut call,
@@ -248,10 +252,9 @@ async fn tools_conversation_invalid_dispatch_or_observer_still_stops_media() {
                         error: false,
                     },
                     catalog(),
-                    config(if invalid { 0 } else { 8 }),
                     budget(),
                 ),
-                settings(),
+                session,
                 std::future::pending(),
                 |_| Err(Error::Screen),
             )

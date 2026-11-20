@@ -30,7 +30,7 @@ impl World {
         let before = cutoff
             .checked_sub(self.epoch() + 1)
             .ok_or("session: stall was admitted after cutoff")?;
-        self.step(before).await?;
+        self.advance_live(before).await?;
         self.read_trace()?;
         if self.count("run.ended") != 0 || self.count("delegation.resolved") != 0 {
             return Err("session: stalled delegation ended before the run cutoff".into());
