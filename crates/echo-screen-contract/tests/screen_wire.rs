@@ -264,3 +264,34 @@ fn settings_v2_sparse_wire_preserves_decimal_cap_and_refuses_other_shapes() -> R
     assert!(patch.settings.valid_shape());
     round_trip(&patch, clear)
 }
+
+#[test]
+fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::{settings_v1::SettingsSnapshotV1, settings_v2::SettingsSnapshotV2};
+
+    let wire = r#"{
+        "version":2,
+        "settings":{
+            "voice":{"session_listen_enabled":true,"session_listen_seconds":15},
+            "codex":{"voice":"marin","web_search":"cached","delegate_model":"synthetic-runner","delegate_effort":"low"},
+            "agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":6,"task_deadline_seconds":45},
+            "home":{"agent_tools":["notes","prompts"]}
+        },
+        "allowed_voices":["default","marin"],
+        "prompts":{"voice":"synthetic voice","runner":"synthetic runner"},
+        "portos":{
+            "link_status":"relink_for_scope","operation_state":"idle","link_waiting_for_restart":true,
+            "scope_choices":["endpoint:read","message:send"],"tool_choices":["endpoint_query","control"],
+            "server":{
+                "name":"portos","url":"http://127.0.0.1/mcp","requested_scopes":["endpoint:read","message:send"],
+                "granted_scopes":["endpoint:read"],"allow_tools":["endpoint_query","control"]
+            }
+        },
+        "bridge_version":"synthetic","restart_pending":true,"warnings":[]
+    }"#;
+    let snapshot = serde_json::from_str::<SettingsSnapshotV2>(wire)?;
+    round_trip(&snapshot, wire)?;
+    assert!(serde_json::from_str::<SettingsSnapshotV1>(wire).is_err());
+    writeln!(std::io::stdout().lock(), "{}", serde_json::to_string(&snapshot)?)?;
+    Ok(())
+}

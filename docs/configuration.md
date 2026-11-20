@@ -145,7 +145,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `wake_earcon` | Wake sound; boolean, default true. | restart / no |
 | `home` | Optional agent-home table; absent disables home-backed settings/tools/prompts. | restart / no |
 | `home.dir` | Required when home present; nonempty absolute directory path. | restart / no |
-| `home.agent_tools` | Default true (notes and prompts); false or [] disables, or array containing unique `notes` and/or `prompts`. | restart / no |
+| `home.agent_tools` | Default true (notes and prompts); false or [] disables, or array containing unique `notes` and/or `prompts`. | boundary / yes |
 | `echo` | Required Wyoming table. | restart / no |
 | `echo.host` | Required string host; use literal loopback on device. No additional hostname validation in decoder. | restart / no |
 | `echo.wyoming_port` | Port integer 1–65535, default 16700. | restart / no |
@@ -166,7 +166,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `agent` | Required delegated-task policy table. | restart / no |
 | `agent.backend` | `client` (default) or `muse` parses; current Codex voice runtime admits only client. | restart / no |
 | `agent.max_tool_calls` | Integer 1–32, default 8, per delegated task. | boundary / yes |
-| `agent.task_deadline_seconds` | Integer 5–600, default 60, per delegated task. | restart / no |
+| `agent.task_deadline_seconds` | Integer 5–600, default 60, per delegated task. | boundary / yes |
 | `agent.daily_request_cap` | Unsigned 64-bit integer, default 500; UTC-day delegated-request cap. Overlay must also fit signed TOML integer. | boundary / yes |
 | `agent.model` | Optional nonblank runner-model alias, lowest precedence. | restart / no |
 | `muse` | Optional legacy backend table; required by muse selection; not used by current Codex voice path. | restart / no |
@@ -176,7 +176,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `mcp` | Required server/grant table. | restart / no |
 | `mcp.state_dir` | Optional nonempty path; runtime Port OS requires private state outside a repository, no parent traversal. | restart / no |
 | `mcp.client_id` | Default `port1/systems/zero/oauth-clients/command-line-interface` (public development client); nonblank text without controls. Use your registered client for broader deployment. | restart / no |
-| `mcp.scopes` | Default ["endpoint:read"]; nonempty array of nonempty names without whitespace/control characters. Grant consent can further constrain access. | restart / no |
+| `mcp.scopes` | Defaults to all seven supported Port OS scopes; nonempty array of nonempty names without whitespace/control characters. Grant consent can further constrain access. | withdraw immediately, other changes at boundary / yes |
 | `mcp.operator_listen` | Socket address on literal IPv4 loopback, default 127.0.0.1:16902; local grant-owner commands. | restart / no |
 | `mcp.server` | Optional array of tables, default empty. | restart / no |
 | `mcp.server[]` | One server table per element; runtime Port OS grant wiring selects the first server when it uses portos_device_code. | restart / no |
@@ -184,7 +184,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `mcp.server[].url` | Required HTTP(S) URL without inline credentials, whitespace or backslash; valid host/optional u16 port. | restart / no |
 | `mcp.server[].auth` | Required: `none`, `portos_device_code`, or `bearer_file`. | restart / no |
 | `mcp.server[].bearer_file` | Optional literal file path; required with bearer_file auth. Store credential privately. | restart / no |
-| `mcp.server[].allow_tools` | Array of exact tool-name strings, default empty; only listed tools exposed. | restart / no |
+| `mcp.server[].allow_tools` | Array of exact tool-name strings, defaults to all eleven Port OS tools for device-code auth and empty for other auth modes. An explicit empty array disables all tools. | withdraw immediately, other changes at boundary / yes |
 | `screen` | Required screen transport table. | restart / no |
 | `screen.listen` | Socket address; decoder defaults to all IPv4 interfaces on port 16900. Runtime device config must use 127.0.0.1:16900. | restart / no |
 | `screen.pairing_token_file` | Required literal private token-file path. | restart / no |
@@ -210,11 +210,11 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.binary` | Default unset (pinned host helper resolves multi-tool); if set absolute path. Device must name installed standalone app server. | restart / no |
 | `codex.launch` | `subcommand` default (`app-server --listen stdio://`) or `standalone` (`--listen stdio://`); standalone requires binary. | restart / no |
 | `codex.ca_file` | Default unset; absolute PEM path, child SSL_CERT_FILE and bridge Port OS OAuth/MCP additional trust roots. | restart / no |
-| `codex.web_search` | `live` default (also with table/key omitted), `cached` or `disabled`. Provider-backed search only (hosted or native `web.run`); all other tool restrictions stay intact. Invalid type/value: `codex.web_search: invalid type or value`, exit 2 before runtime effects. Set disabled and restart to turn off; remove key before restoring an older binary. | restart / no |
+| `codex.web_search` | `live` default (also with table/key omitted), `cached` or `disabled`. Provider-backed search only (hosted or native `web.run`); all other tool restrictions stay intact. Invalid type/value: `codex.web_search: invalid type or value`, exit 2 before runtime effects. Set disabled and restart to turn off; remove key before restoring an older binary. | boundary / yes |
 | `codex.voice` | Default unset; overrides live.voice. `default` omits outgoing field; other choices below, nonblank. | boundary / yes |
 | `codex.model` | Optional nonblank legacy runner-model alias; overrides agent.model. | restart / no |
-| `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. Unset leaves app-server default. | restart / no |
-| `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | restart / no |
+| `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. An empty screen override selects the pinned app server default even when a legacy model key is set. | boundary / yes |
+| `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | boundary / yes |
 | `codex.time_zone` | Default unset; IANA-name syntax (nonempty slash components using ASCII letters/digits/underscore/plus/minus). Not a lookup validating that zone exists. | restart / no |
 
 Safe legacy endpoint URLs use HTTPS or literal IPv4 loopback HTTP, with no inline credentials, query or fragment.

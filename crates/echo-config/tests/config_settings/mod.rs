@@ -91,6 +91,26 @@ fn screen_settings_voices_preserve_precedence_and_the_pinned_default() {
 }
 
 #[test]
+fn screen_settings_empty_model_and_effort_select_pin_defaults_over_legacy_aliases() {
+    let mut base = BridgeConfig::from_toml_str(MINIMAL).unwrap();
+    base.agent.model = Some("agent-alias".into());
+    base.codex.model = Some("codex-alias".into());
+    base.codex.delegate_effort = Some("low".into());
+
+    let untouched = overlay("[agent]\nmax_tool_calls=4").apply_to(&base).unwrap();
+    assert_eq!(untouched.codex_model(), Some("codex-alias"));
+    assert_eq!(untouched.codex.delegate_effort.as_deref(), Some("low"));
+
+    let cleared = overlay("[codex]\ndelegate_model=''\ndelegate_effort=''");
+    let effective = cleared.apply_to(&base).unwrap();
+    assert_eq!(effective.codex_model(), None);
+    assert_eq!(effective.codex.delegate_effort, None);
+    assert_eq!(overlay(&cleared.to_toml_string().unwrap()), cleared);
+    assert_eq!(base.codex_model(), Some("codex-alias"));
+    assert_eq!(base.agent.model.as_deref(), Some("agent-alias"));
+}
+
+#[test]
 fn screen_settings_range_boundaries_and_cross_field_validation_use_real_config() {
     let base = BridgeConfig::from_toml_str(MINIMAL).unwrap();
     for (setting, expected) in [

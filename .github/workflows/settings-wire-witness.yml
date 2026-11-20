@@ -51,6 +51,7 @@ jobs:
         if: always()
         run: cargo clippy --offline --locked -p echo-config -p echo-screen-contract -p echo-screen-server -p echo-bridge --all-targets -- -D warnings
 
+      - run: make lint-shape
   settings-browser:
     runs-on: ubuntu-latest
     timeout-minutes: 10

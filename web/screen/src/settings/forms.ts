@@ -60,6 +60,7 @@ export function settingsForm(
     extra?: { rows: HTMLElement[]; addPatch: (patch: PatchV2) => void },
 ) {
     const form = element("form");
+    if (extra) form.setAttribute("aria-label", "OpenAI");
     const values = snapshot.settings;
     const enabled = element("input");
     enabled.type = "checkbox";

@@ -104,7 +104,6 @@ async fn exercise_running_catalog(host: &impl ToolHost, client: &Client, url: &s
 }
 
 async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
-    let overlay = config.home.as_ref().unwrap().dir.join("settings.toml");
     let initial = get(client, url).await;
     assert_eq!(initial["portos"]["link_status"], "linked");
     assert_eq!(
@@ -134,6 +133,17 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
     assert_eq!(saved["portos"]["server"]["allow_tools"], json!(["endpoint_query"]));
     assert_eq!(saved["portos"]["link_waiting_for_restart"], true);
     assert_eq!(saved["prompts"], initial["prompts"]);
+    let file = assert_disk_overlay(config);
+    writeln!(
+        std::io::stdout().lock(),
+        "Saved settings.toml (0600) {file}\nNarrow status {}",
+        saved["portos"]
+    )
+    .unwrap();
+}
+
+fn assert_disk_overlay(config: &BridgeConfig) -> String {
+    let overlay = config.home.as_ref().unwrap().dir.join("settings.toml");
     let file = fs::read_to_string(&overlay).unwrap();
     let decoded = SettingsOverlay::from_toml_str(&file).unwrap();
     let effective = decoded.apply_to(config).unwrap();
@@ -145,12 +155,7 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
     assert_eq!(effective.mcp.scopes, ["endpoint:read"]);
     assert_eq!(effective.mcp.server[0].allow_tools, ["endpoint_query"]);
     assert_private(&overlay);
-    writeln!(
-        std::io::stdout().lock(),
-        "Saved settings.toml (0600) {file}\nNarrow status {}",
-        saved["portos"]
-    )
-    .unwrap();
+    file
 }
 
 async fn assert_wider_save(client: &Client, url: &str) {

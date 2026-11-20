@@ -98,7 +98,7 @@ impl SettingsHost {
                         WebSearch::Cached => WebSearchV2::Cached,
                         WebSearch::Disabled => WebSearchV2::Disabled,
                     },
-                    delegate_model: config.codex.delegate_model.clone().unwrap_or_default(),
+                    delegate_model: config.codex_model().unwrap_or_default().into(),
                     delegate_effort: config.codex.delegate_effort.clone().unwrap_or_default(),
                 },
                 agent: AgentValuesV2 {

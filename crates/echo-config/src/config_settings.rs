@@ -252,6 +252,11 @@ impl SettingsOptions {
         }
         if let Some(model) = &self.delegate_model {
             config.codex.delegate_model = nonempty_override(model);
+            if model.is_empty() {
+                // An explicit screen default outranks both legacy aliases.
+                config.codex.model = None;
+                config.agent.model = None;
+            }
         }
         if let Some(effort) = &self.delegate_effort {
             config.codex.delegate_effort = nonempty_override(effort);

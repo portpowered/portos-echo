@@ -266,6 +266,29 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
     use serde_json::{Value, json};
     let fixture = Fixture::open().await;
     let url = fixture.url("/settings/v2");
+    assert_v2_guards(&fixture, &url).await;
+    let response = fixture
+        .client
+        .patch(&url)
+        .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":33}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(
+        body,
+        json!({"version":2,"message":"agent.max_tool_calls: must be within 1..=32"})
+    );
+    writeln!(std::io::stdout().lock(), "Refused invalid config with {body}").unwrap();
+    assert!(!fixture.path("settings.toml").exists());
+    assert!(!fixture.snapshot().await.restart_pending);
+    fixture.close().await;
+}
+
+async fn assert_v2_guards(fixture: &Fixture, url: &str) {
+    use serde_json::json;
+
     let unauthenticated = url.split('?').next().unwrap();
     for (request, expected) in [
         (fixture.client.get(unauthenticated), StatusCode::UNAUTHORIZED),
@@ -276,26 +299,26 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
         (
             fixture
                 .client
-                .patch(&url)
+                .patch(url)
                 .header("Origin", "http://127.0.0.1:1")
                 .body("invalid"),
             StatusCode::FORBIDDEN,
         ),
         (
-            fixture.client.patch(&url).body("invalid"),
+            fixture.client.patch(url).body("invalid"),
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ),
         (
             fixture
                 .client
-                .patch(&url)
+                .patch(url)
                 .json(&json!({"version":1,"settings":{"agent":{"max_tool_calls":6}}})),
             StatusCode::BAD_REQUEST,
         ),
         (
             fixture
                 .client
-                .patch(&url)
+                .patch(url)
                 .json(&json!({"version":2,"settings":{"agent":{}}})),
             StatusCode::BAD_REQUEST,
         ),
@@ -316,25 +339,7 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
         )
         .unwrap();
     }
-    let response = fixture
-        .client
-        .patch(&url)
-        .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":33}}}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(
-        body,
-        json!({"version":2,"message":"agent.max_tool_calls: must be within 1..=32"})
-    );
-    writeln!(std::io::stdout().lock(), "Refused invalid config with {body}").unwrap();
-    assert!(!fixture.path("settings.toml").exists());
-    assert!(!fixture.snapshot().await.restart_pending);
-    fixture.close().await;
 }
-
 #[tokio::test]
 async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     use serde_json::{Value, json};

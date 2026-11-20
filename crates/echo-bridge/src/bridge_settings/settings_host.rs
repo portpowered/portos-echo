@@ -80,10 +80,10 @@ impl SettingsHost {
             SettingsOperation::PackSelection(catalog, selection) => self.select_pack(catalog, &selection),
             SettingsOperation::Snapshot => self.snapshot(link).map(SettingsReply::Snapshot),
             SettingsOperation::SnapshotV2 => {
-                return self
-                    .snapshot_v2(link, scopes)
-                    .map(|snapshot| SettingsReply::SnapshotV2(Box::new(snapshot)))
-                    .unwrap_or_else(|error| error_reply_v2(&error));
+                return self.snapshot_v2(link, scopes).map_or_else(
+                    |error| error_reply_v2(&error),
+                    |snapshot| SettingsReply::SnapshotV2(Box::new(snapshot)),
+                );
             }
             SettingsOperation::SaveV2(patch) => {
                 return self
@@ -296,7 +296,7 @@ mod tests {
             })
             .unwrap_err();
         let SettingsReply::PersistenceV2(body) = error_reply_v2(&err) else {
-            panic!("expected V2 persistence reply");
+            unreachable!("expected V2 persistence reply");
         };
         assert_eq!(
             body.message,

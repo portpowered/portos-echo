@@ -145,7 +145,7 @@ fn same_values(first: &BridgeConfig, second: &BridgeConfig) -> bool {
         && first.agent.daily_request_cap == second.agent.daily_request_cap
         && first.agent.max_tool_calls == second.agent.max_tool_calls
         && first.codex.web_search == second.codex.web_search
-        && first.codex.delegate_model == second.codex.delegate_model
+        && first.codex_model() == second.codex_model()
         && first.codex.delegate_effort == second.codex.delegate_effort
         && first.agent.task_deadline_seconds == second.agent.task_deadline_seconds
         && first.home == second.home
