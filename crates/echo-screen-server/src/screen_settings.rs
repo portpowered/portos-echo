@@ -113,7 +113,9 @@ fn publish_reply(core: &mut Core, reply: &mut SettingsReply, installed: bool, wa
                 core.pack_reload(catalog.active());
                 core.pack_publication = Some((catalog.signature(), catalog.active().map(str::to_owned)));
             }
-            core.pack_identity = Some(catalog.identity());
+            if *changed || core.pack_identity.is_none() {
+                core.pack_identity = Some(catalog.identity());
+            }
             catalog.set_revision(core.pack_revision);
         }
         SettingsReply::Packs(catalog) => {

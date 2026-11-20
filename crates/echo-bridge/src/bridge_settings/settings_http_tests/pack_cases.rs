@@ -431,6 +431,8 @@ async fn t3_screen_pack_settled_active_edits_touch_replacement_and_invalid_fallb
     let settings = fs::read(fixture.path("settings.toml")).unwrap();
     fs::write(fixture.path("screens/other/rest.png"), "inactive-edit").unwrap();
     fs::write(fixture.path("screens/local/rest.png"), "new-rest").unwrap();
+    // An alias/no-op save racing the disk observer must not swallow the edit.
+    assert_eq!(select(&fixture, "local").await.0, StatusCode::OK);
     events.reload(2, json!("local")).await;
     assert_eq!(catalog(&fixture).await["revision"], 2);
     // A metadata-only touch must reload even though serving bytes are identical.
