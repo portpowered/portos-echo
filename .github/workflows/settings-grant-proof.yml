@@ -1,0 +1,38 @@
+name: Focused Settings Grant Proof
+on:
+  push:
+    branches: [witness/el-w5-screen-settings-panel-grant-proof]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-unit
+      - run: npm --prefix web/screen ci
+      - run: npx --prefix web/screen playwright install --with-deps chromium
+      - run: npm --prefix web/screen run build
+      - name: Verify Chromium settings controls
+        working-directory: web/screen
+        run: node --test --test-timeout=30000 tests/render.test.mjs
+      - run: npm --prefix web/screen test
+  rust-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: lint-rust
+      - run: npm --prefix web/screen ci
+      - run: cargo fmt --check
+      - run: cargo clippy --offline --locked -p echo-screen-contract -p echo-screen-server -p echo-bridge --all-targets -- -D warnings
+      - run: make lint-shape
