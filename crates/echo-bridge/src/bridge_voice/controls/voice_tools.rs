@@ -232,6 +232,11 @@ impl Tools {
         self
     }
 
+    pub(super) fn with_runner_skills(mut self, skills: Option<&RunnerSkills>) -> Self {
+        self.skills = skills.cloned().unwrap_or_default();
+        self
+    }
+
     pub async fn open(
         &mut self,
         config: &BridgeConfig,

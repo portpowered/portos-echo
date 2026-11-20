@@ -180,6 +180,7 @@ fn settings(directory: &Path, live: &str, port: u16) -> bridge_input::Settings {
     let origin = "http://127.0.0.1";
     bridge_input::Settings {
         startup: None,
+        runner_skills: Default::default(),
         config: None,
         settings_warning: None,
         sim_clock: false,
