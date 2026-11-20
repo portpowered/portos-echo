@@ -19,6 +19,16 @@ async fn t3_portos_full_and_narrow_grants_preserve_scopes_across_rotation_and_re
             let (_, claims, _, _) = mcp_proof::decode(token.expose()).unwrap();
             assert_eq!(claims["scope"], scopes.join(" "));
             assert_eq!(h.request(token.expose(), "initialize").await.status(), 200);
+            let other_resource = drive(
+                http()
+                    .post(format!("{}/mcp", h.fixture.base()))
+                    .bearer_auth(token.expose())
+                    .json(&json!({"method":"tools/call","params":control()}))
+                    .send(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(other_resource.status(), 401);
             assert_eq!(h.record()["grant"]["scope"], scopes.join(" "));
         }
         let mut options = h.options();

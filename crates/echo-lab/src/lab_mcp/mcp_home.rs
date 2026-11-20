@@ -85,7 +85,10 @@ pub(super) async fn request(State(shared): State<Shared>, headers: HeaderMap, Js
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    if headers.contains_key("dpop") || !bearer.is_some_and(|v| mcp_tokens::accepts(&state, v)) {
+    if state.resource != format!("{}/mcp", state.issuer)
+        || headers.contains_key("dpop")
+        || !bearer.is_some_and(|v| mcp_tokens::accepts(&state, v))
+    {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let method = body["method"].as_str().unwrap_or_default();
