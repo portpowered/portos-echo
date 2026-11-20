@@ -292,4 +292,42 @@ mod tests {
             assert_eq!(fixture.dispatch.core.lock().await.pack_revision, 0);
         }
     }
+
+    #[tokio::test]
+    async fn settings_installer_notification_waits_for_bounded_host_capacity() {
+        let mut fixture = fixture();
+        let first = fixture
+            .dispatch
+            .clone()
+            .send(URI.parse().unwrap(), SettingsOperation::Snapshot);
+        tokio::pin!(first);
+        assert!(std::future::poll_fn(|cx| Poll::Ready(first.as_mut().poll(cx).is_pending())).await);
+        let installed = fixture
+            .dispatch
+            .clone()
+            .dispatch(None, SettingsOperation::Snapshot, true);
+        tokio::pin!(installed);
+        assert!(std::future::poll_fn(|cx| Poll::Ready(installed.as_mut().poll(cx).is_pending())).await);
+        fixture
+            .inbox
+            .recv()
+            .await
+            .unwrap()
+            .commit(|_| SettingsReply::InvalidPackSelection)
+            .await;
+        assert_eq!(first.await.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(std::future::poll_fn(|cx| Poll::Ready(installed.as_mut().poll(cx).is_pending())).await);
+        fixture
+            .inbox
+            .recv()
+            .await
+            .unwrap()
+            .commit(|_| SettingsReply::InvalidPackSelection)
+            .await;
+        assert_eq!(installed.await.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(matches!(
+            fixture.inbox.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
 }

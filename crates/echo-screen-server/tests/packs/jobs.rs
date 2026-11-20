@@ -15,9 +15,16 @@ async fn mounted_selection(
     ca: Option<std::path::PathBuf>,
     selection: Option<String>,
 ) -> Result<echo_screen_server::ScreenServer> {
+    let mut server = hosted(selection).await?;
+    let mut configured = server.install_configured_packs(home.into(), ca, vec![]);
+    assert!(configured.recv().await.is_none());
+    Ok(server)
+}
+
+async fn hosted(selection: Option<String>) -> Result<echo_screen_server::ScreenServer> {
     let (send, receive) = tokio::sync::mpsc::channel(1);
     let (host, mut inbox) = echo_screen_server::settings_channel();
-    let mut server =
+    let server =
         echo_screen_server::serve_with_settings("127.0.0.1:0".parse()?, Secret::new(TOKEN.into()), receive, Some(host))
             .await?;
     tokio::spawn(async move {
@@ -33,9 +40,33 @@ async fn mounted_selection(
                 .await;
         }
     });
-    let mut configured = server.install_configured_packs(home.into(), ca, vec![]);
-    assert!(configured.recv().await.is_none());
     Ok(server)
+}
+
+#[tokio::test]
+async fn t3_screen_pack_configured_completion_notifies_before_result_and_skips_duplicate() -> Result {
+    use tokio::io::AsyncReadExt;
+    let peer = Peer::start().await?;
+    let home = tempfile::tempdir()?;
+    let mut server = hosted(None).await?;
+    let mut events = crate::support::events(server.bound_addr).await?;
+    let pin = (format!("{}/good", peer.base), peer.digest());
+    let mut results = server.install_configured_packs(home.path().into(), Some(peer.ca()), vec![pin.clone(), pin]);
+    for _ in 0..2 {
+        let result = results.recv().await.ok_or("missing configured result")?;
+        assert_eq!(result.installed.as_deref(), Some("template@0.1.0"));
+        assert_eq!(result.reason, None);
+        assert_eq!(catalog(server.bound_addr).await?["revision"], 1);
+    }
+    assert!(results.recv().await.is_none());
+    server.revoke_pairing().await?;
+    let mut wire = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(2), events.read_to_string(&mut wire)).await??;
+    assert_eq!(wire.matches("event: screen-pack-reload").count(), 1);
+    assert!(wire.contains(r#"data: {"active":"template@0.1.0","revision":1,"version":1}"#));
+    assert!(!home.path().join("settings.toml").exists());
+    server.shutdown().await?;
+    peer.stop().await
 }
 
 #[tokio::test]
