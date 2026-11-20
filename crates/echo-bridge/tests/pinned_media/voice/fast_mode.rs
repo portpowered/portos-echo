@@ -1,18 +1,22 @@
 //! T3: paired Settings commit and replacement, then real pinned start requests.
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+
+type Lines = tokio::io::Lines<BufReader<ChildStdout>>;
+const SIM_EPOCH: &str = "1800000000";
 
 #[tokio::test]
 async fn t3_pinned_runner_fast_mode() {
-    let cases = async { tokio::join!(exercise(true), exercise(false)) };
+    let cases = Box::pin(async { tokio::join!(exercise(true), exercise(false)) });
     let (on, off) = tokio::time::timeout(Duration::from_secs(25), cases).await.unwrap();
-    let (priority, live_on) = compared_start(on, "priority".into(), "priority");
-    let (standard, live_off) = compared_start(off, Value::Null, "default");
+    let (priority, live_on) = compared_start(&on, "priority".into(), "priority");
+    let (standard, live_off) = compared_start(&off, Value::Null, "default");
     assert_eq!(priority, standard);
     assert_eq!(live_on, live_off);
     writeln!(
         std::io::stdout(),
-        "Paired on/off: each saved pending, reloaded, then returned no-op. Pinned runner accepts priority and present null (standard). Runner and Live request comparisons match."
+        "Paired on/off: each saved pending, reloaded, then returned no-op. Pinned runner accepts priority and present null (standard). Full Live prompts match at the fixed epoch."
     )
     .unwrap();
 }
@@ -26,35 +30,19 @@ async fn exercise(fast: bool) -> Vec<Value> {
     let home = root.join("agent-home");
     let settings = home.join("settings.toml");
     let original = configure_fast_mode(&mut config, &base, &settings, fast);
-    let mut provider = Command::new("python3")
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+    let (mut provider, origin, mut provider_output) = start_provider().await;
+    save_and_reload(root, &listener, &config, &origin, fast).await;
+    assert_persisted(&base, &settings, &original, fast);
     let mut provider_input = provider.stdin.take().unwrap();
-    let mut provider_output = BufReader::new(provider.stdout.take().unwrap()).lines();
-    let ready: Value = serde_json::from_str(&provider_output.next_line().await.unwrap().unwrap()).unwrap();
-    let mut bridge = run_bridge(root, ready["origin"].as_str().unwrap());
-    let stdin = bridge.stdin.take().unwrap();
-    let mut output = BufReader::new(bridge.stdout.take().unwrap()).lines();
-    let satellite = listener.accept().await.unwrap().0;
-    let mut active = replace(root, &listener, satellite, &mut output, &config, fast).await;
-    assert_eq!(fs::read(base).unwrap(), original.into_bytes());
-    assert_eq!(fs::metadata(&settings).unwrap().permissions().mode() & 0o777, 0o600);
-    assert_eq!(
-        fs::read_to_string(settings).unwrap(),
-        format!("[codex]\ndelegate_fast = {fast}\n\n[voice]\nsession_listen_seconds = 4\n")
-    );
-    let mut peer = connect_call(root, &mut active, &mut provider_input, &mut provider_output).await;
-    drop(stdin);
-    acknowledge_cut(&mut active).await;
-    let result = bridge.wait_with_output().await.unwrap();
-    peer.close();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-    assert_eq!(count(root, "settings.restart_prepared"), 1);
-    assert_eq!(count(root, "bridge.ready"), 2);
+    Box::pin(pinned_call(
+        root,
+        &listener,
+        &config,
+        &origin,
+        fast,
+        (&mut provider_input, &mut provider_output),
+    ))
+    .await;
     drop(provider_input);
     assert!(provider.wait().await.unwrap().success());
     drop(
@@ -65,6 +53,71 @@ async fn exercise(fast: bool) -> Vec<Value> {
         .unwrap(),
     );
     observations(root)
+}
+
+async fn start_provider() -> (Child, String, Lines) {
+    let mut provider = Command::new("python3")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut provider_output = BufReader::new(provider.stdout.take().unwrap()).lines();
+    let ready: Value = serde_json::from_str(&provider_output.next_line().await.unwrap().unwrap()).unwrap();
+    (provider, ready["origin"].as_str().unwrap().to_owned(), provider_output)
+}
+
+async fn save_and_reload(root: &Path, listener: &TcpListener, config: &CodexConfig, origin: &str, fast: bool) {
+    // A Settings change that requires real exec is refused in fixed-clock mode.
+    let mut bridge = run_bridge(root, origin, false);
+    let mut output = BufReader::new(bridge.stdout.take().unwrap()).lines();
+    let satellite = listener.accept().await.unwrap().0;
+    let replacement = replace(root, listener, satellite, &mut output, config, fast).await;
+    drop(bridge.stdin.take());
+    assert_clean_exit(bridge).await;
+    drop(replacement);
+    assert_eq!(count(root, "settings.restart_prepared"), 1);
+    assert_eq!(count(root, "bridge.ready"), 2);
+}
+
+fn assert_persisted(base: &Path, settings: &Path, original: &str, fast: bool) {
+    assert_eq!(fs::read(base).unwrap(), original.as_bytes());
+    assert_eq!(fs::metadata(settings).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        fs::read_to_string(settings).unwrap(),
+        format!("[codex]\ndelegate_fast = {fast}\n\n[voice]\nsession_listen_seconds = 4\n")
+    );
+}
+
+async fn pinned_call(
+    root: &Path,
+    listener: &TcpListener,
+    config: &CodexConfig,
+    origin: &str,
+    fast: bool,
+    (provider_input, provider_output): (&mut ChildStdin, &mut Lines),
+) {
+    let mut bridge = run_bridge(root, origin, true);
+    let mut output = BufReader::new(bridge.stdout.take().unwrap()).lines();
+    let mut satellite = listener.accept().await.unwrap().0;
+    admit(&mut satellite, &mut output, config).await;
+    assert_snapshot(
+        &reqwest::Client::builder().no_proxy().build().unwrap(),
+        &settings_url(root),
+        fast,
+    )
+    .await;
+    let mut peer = connect_call(root, &mut satellite, provider_input, provider_output).await;
+    drop(bridge.stdin.take());
+    acknowledge_cut(&mut satellite).await;
+    assert_clean_exit(bridge).await;
+    peer.close();
+}
+
+async fn assert_clean_exit(bridge: Child) {
+    let result = bridge.wait_with_output().await.unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
 }
 
 fn configure_fast_mode(config: &mut CodexConfig, base: &Path, settings: &Path, fast: bool) -> String {
@@ -95,21 +148,24 @@ fn configure_fast_mode(config: &mut CodexConfig, base: &Path, settings: &Path, f
     text
 }
 
-fn run_bridge(root: &Path, origin: &str) -> tokio::process::Child {
-    Command::new(env!("CARGO_BIN_EXE_echo-bridge"))
-        .current_dir(root)
-        .args([
-            "--config",
-            "bridge.toml",
-            "--trace",
-            "trace",
-            "--health-listen",
-            "127.0.0.1:0",
-            "--live-loopback",
-            origin,
-            "--model-loopback",
-            origin,
-        ])
+fn run_bridge(root: &Path, origin: &str, fixed_clock: bool) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_echo-bridge"));
+    command.current_dir(root).args([
+        "--config",
+        "bridge.toml",
+        "--trace",
+        "trace",
+        "--health-listen",
+        "127.0.0.1:0",
+        "--live-loopback",
+        origin,
+        "--model-loopback",
+        origin,
+    ]);
+    if fixed_clock {
+        command.args(["--sim-clock", "--sim-epoch", SIM_EPOCH]);
+    }
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -122,7 +178,7 @@ async fn replace(
     root: &Path,
     listener: &TcpListener,
     mut old: TcpStream,
-    output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    output: &mut Lines,
     config: &CodexConfig,
     fast: bool,
 ) -> TcpStream {
@@ -170,12 +226,7 @@ async fn assert_snapshot(client: &reqwest::Client, url: &str, fast: bool) {
     assert_eq!(data["restart_pending"], false);
 }
 
-async fn connect_call(
-    root: &Path,
-    satellite: &mut TcpStream,
-    input: &mut tokio::process::ChildStdin,
-    output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
-) -> LivePeer {
+async fn connect_call(root: &Path, satellite: &mut TcpStream, input: &mut ChildStdin, output: &mut Lines) -> LivePeer {
     let mut screen = lifecycle::screen(root).await;
     wake(satellite).await;
     let request: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
@@ -202,15 +253,12 @@ async fn connect_call(
 async fn acknowledge_cut(satellite: &mut TcpStream) {
     loop {
         let (header, payload) = read_wire(satellite).await;
-        match header["type"].as_str().unwrap() {
-            "audio-start" => assert!(payload.is_empty()),
-            "hassmic-flush" => {
-                assert!(payload.is_empty());
-                send(satellite, "played", json!({}), vec![]).await;
-                return;
-            }
-            unexpected => panic!("unexpected Wyoming frame before shutdown flush: {unexpected}"),
+        assert_eq!(payload, [] as [u8; 0]);
+        if header["type"] == "hassmic-flush" {
+            send(satellite, "played", json!({}), vec![]).await;
+            return;
         }
+        assert_eq!(header["type"], "audio-start");
     }
 }
 
@@ -222,10 +270,8 @@ fn observations(root: &Path) -> Vec<Value> {
         .collect()
 }
 
-fn compared_start(rows: Vec<Value>, sent: Value, accepted: &str) -> (Value, Value) {
-    let [runner, live] = rows.as_slice() else {
-        panic!("expected one runner and one Live start");
-    };
+fn compared_start(rows: &[Value], sent: Value, accepted: &str) -> (Value, Value) {
+    let [runner, live]: &[Value; 2] = rows.try_into().expect("one runner and one Live start");
     let mut runner_start = runner["request"].clone();
     let mut live_start = live["request"].clone();
     assert_eq!(runner_start["method"], "thread/start");
@@ -235,7 +281,7 @@ fn compared_start(rows: Vec<Value>, sent: Value, accepted: &str) -> (Value, Valu
     assert_eq!(runner["reply"]["result"]["serviceTier"], accepted);
     assert_eq!(live["reply"]["result"], json!({}));
     let thread = runner["reply"]["result"]["thread"]["id"].as_str().unwrap();
-    assert!(!thread.is_empty());
+    assert_ne!(thread, "");
     assert_eq!(live_start["params"]["threadId"], thread);
     for (row, request) in [(runner, &mut runner_start), (live, &mut live_start)] {
         assert_eq!(row["reply"]["id"], request["id"]);
@@ -246,7 +292,7 @@ fn compared_start(rows: Vec<Value>, sent: Value, accepted: &str) -> (Value, Valu
         Some(sent)
     );
     live_start["params"]["threadId"] = "<generated thread>".into();
-    normalize_context(&mut runner_start, &mut live_start);
+    assert_fixed_context(&runner_start, &live_start);
     let sdp = &mut live_start["params"]["transport"]["sdp"];
     *sdp = normalized_sdp(sdp.as_str().unwrap()).into();
     writeln!(
@@ -257,26 +303,13 @@ fn compared_start(rows: Vec<Value>, sent: Value, accepted: &str) -> (Value, Valu
     (runner_start, live_start)
 }
 
-fn normalize_context(runner: &mut Value, live: &mut Value) {
-    // The delivered binary appends its current wall-clock sample to both prompts.
-    // Compare the sample within each generation, then compare all authored text
-    // and context formatting across generations. The fixed-input T1 holds it exact.
-    fn timestamp(prompt: &str) -> &str {
-        let date = prompt.rsplit_once("\n[Call-start context: ").unwrap().1;
-        date.split_once(" UTC+00:00; ").unwrap().0
-    }
+fn assert_fixed_context(runner: &Value, live: &Value) {
+    let context = "[Call-start context: 2027-01-15 Friday 08:00:00 UTC+00:00; local offset unavailable]"; // lint-rules: allow-literal UTC calendar expectation, never an endpoint
     let base = runner["params"]["baseInstructions"].as_str().unwrap();
     let prompt = live["params"]["prompt"].as_str().unwrap();
-    let time = timestamp(base);
-    assert_eq!(timestamp(prompt), time);
+    assert_eq!(base.lines().last(), Some(context));
+    assert_eq!(prompt.lines().last(), Some(context));
     assert_eq!(live["params"]["initialItems"][0]["text"], prompt);
-    let (base, prompt) = (
-        base.replacen(time, "<clock sample>", 1),
-        prompt.replacen(time, "<clock sample>", 1),
-    );
-    runner["params"]["baseInstructions"] = base.into();
-    live["params"]["prompt"] = prompt.clone().into();
-    live["params"]["initialItems"][0]["text"] = prompt.into();
 }
 
 fn normalized_sdp(offer: &str) -> String {
@@ -310,12 +343,12 @@ fn normalize_sdp_line(line: &str, ssrc: &str, track: &str) -> String {
     };
     match key {
         "a=ice-ufrag" | "a=ice-pwd" => {
-            assert!(!value.is_empty());
+            assert_ne!(value, "");
             format!("{key}:<generated>")
         }
         "a=fingerprint" => {
             let (algorithm, fingerprint) = value.split_once(' ').unwrap();
-            assert!(!fingerprint.is_empty());
+            assert_ne!(fingerprint, "");
             format!("{key}:{algorithm} <generated>")
         }
         "a=candidate" => {

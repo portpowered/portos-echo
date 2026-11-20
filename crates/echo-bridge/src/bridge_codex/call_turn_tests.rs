@@ -1,6 +1,7 @@
 //! T1: delegated lifecycle and cancellation-safe interrupt delivery on JSONL.
 use super::{call_tests::*, *};
 use serde_json::Value;
+use std::io::Write as _;
 use std::{future::Future, task::Poll, time::Duration};
 
 async fn pending<T>(future: std::pin::Pin<&mut impl Future<Output = T>>) {
@@ -297,7 +298,6 @@ async fn runner_fast_mode_does_not_change_live_request() {
     assert_eq!(standard, fast);
     assert_eq!(live_standard, live_fast);
     assert_eq!(live_fast["method"], "thread/realtime/start");
-    use std::io::Write as _;
     writeln!(
         std::io::stdout(),
         "Fixed-input signaling: runner priority versus present null, complete Live request equal"

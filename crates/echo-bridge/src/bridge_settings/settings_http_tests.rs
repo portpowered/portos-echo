@@ -344,16 +344,21 @@ async fn assert_v2_guards(fixture: &Fixture, url: &str) {
             StatusCode::BAD_REQUEST,
         ),
     ] {
-        let response = request.send().await.unwrap();
-        assert_eq!(response.status(), expected);
-        assert!(response.bytes().await.unwrap().is_empty());
-        writeln!(
-            std::io::stdout().lock(),
-            "Refused paired boundary request with {expected}"
-        )
-        .unwrap();
+        assert_empty_refusal(request, expected).await;
     }
 }
+
+async fn assert_empty_refusal(request: reqwest::RequestBuilder, expected: StatusCode) {
+    let response = request.send().await.unwrap();
+    assert_eq!(response.status(), expected);
+    assert_eq!(response.bytes().await.unwrap().as_ref(), b"");
+    writeln!(
+        std::io::stdout().lock(),
+        "Refused paired boundary request with {expected}"
+    )
+    .unwrap();
+}
+
 #[tokio::test]
 async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     use serde_json::{Value, json};
