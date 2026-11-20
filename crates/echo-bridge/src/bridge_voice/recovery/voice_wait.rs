@@ -6,6 +6,11 @@ pub(super) fn deadline(source: &Source, options: &Options, played: Option<Instan
     if played.is_some() {
         return (played, Error::Deadline);
     }
+    if source.reply.finished() {
+        // The answer has arrived. Its queued media is still owned by the
+        // playback operation until the Played timer takes over.
+        return (None, Error::Deadline);
+    }
     if source.delegation.waiting() {
         let active = source.user_speech == UserSpeech::Active
             || source.mouth.voiced()
@@ -187,6 +192,11 @@ mod tests {
             deadline(&source, &options, None),
             (Some(ceiling), Error::SessionCeiling)
         );
+        source.delegation.completed();
+        source.spoke();
+        assert!(source.delegation.answered());
+        source.reply.finish().unwrap();
+        assert_eq!(deadline(&source, &options, None), (None, Error::Deadline));
         let played = Instant::now() + options.played_timeout;
         assert_eq!(
             deadline(&source, &options, Some(played)),
