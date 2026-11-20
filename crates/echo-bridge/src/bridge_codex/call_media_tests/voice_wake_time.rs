@@ -111,18 +111,7 @@ async fn failed(failure: Failure) {
         )
         .await
     };
-    let remote = async {
-        start(&mut server).await;
-        reply(&mut server).await;
-        let item = read(&mut server).await;
-        assert_refresh(
-            &item,
-            "[Wake-time context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; local offset unavailable]",
-        );
-        request.send(()).unwrap();
-        refuse(&mut server, &item, failure).await;
-        stop(&mut server).await;
-    };
+    let remote = failed_request(&mut server, request, failure);
     let mut work = Box::pin(async { tokio::join!(client, remote).0 });
     pump(work.as_mut()).await;
     observer.finish(Ok(()));
@@ -136,9 +125,10 @@ async fn failed(failure: Failure) {
         receipt = admitted.recv() => {
             receipt.unwrap();
             if matches!(failure, Failure::Cancelled) { cancel.send(()).unwrap(); }
-            work.await
+            (&mut work).await
         }
     };
+    drop(work);
     let expected = match failure {
         Failure::Refused | Failure::Realtime => Error::Unavailable,
         Failure::Deadline => Error::Deadline,
@@ -149,6 +139,19 @@ async fn failed(failure: Failure) {
     assert_eq!(*media.sent.lock().unwrap(), vec![[0; 320]]);
     assert_eq!(media.closes.load(Ordering::SeqCst), 1);
     assert!(io.begin_request("account/read", &json!({})).is_ok());
+}
+
+async fn failed_request(server: &mut Server, admitted: mpsc::UnboundedSender<()>, failure: Failure) {
+    start(server).await;
+    reply(server).await;
+    let item = read(server).await;
+    assert_refresh(
+        &item,
+        "[Wake-time context: 2026-02-03 Tuesday 03:30:05 UTC+00:00; local offset unavailable]",
+    );
+    admitted.send(()).unwrap();
+    refuse(server, &item, failure).await;
+    stop(server).await;
 }
 
 async fn refuse(server: &mut Server, item: &serde_json::Value, failure: Failure) {

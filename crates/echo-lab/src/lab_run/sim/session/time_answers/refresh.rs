@@ -86,10 +86,12 @@ pub(super) fn check(
             .filter(|row| row["event"] == event && run.is_none_or(|id| row["run_id"] == id))
             .count()
     };
+    let runs = ["run-1", "run-2"].map(|id| {
+        json!({"id":id,"started":bridge("wyoming.run_started", Some(id)),"played":bridge("reply.played", Some(id))})
+    });
     let evidence = json!({"wire":wire,"decisions":decisions,
         "bridge_peer_created":bridge("call.peer_created", None),"bridge_realtime_start_sent":bridge("call.realtime_start_sent", None),
-        "runs":["run-1","run-2"].map(|id| json!({"id":id,"started":bridge("wyoming.run_started", Some(id)),
-            "played":bridge("reply.played", Some(id))})),
+        "runs":runs,
     });
     artifacts.event("session.live_time_refresh", None, Some(&evidence.to_string()))?;
     // Preserve evidence on a partial run; the failed step reports its own cause.
