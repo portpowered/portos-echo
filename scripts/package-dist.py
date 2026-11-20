@@ -18,7 +18,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?"
-COMPANION_VERSION = "0.2.0"
+COMPANION_VERSION = "0.2.1"
 COMPANION_ASSET = f"companion-{COMPANION_VERSION}.screenpack.tar.gz"
 REQUIRED = {
     "bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem", "apk/echo-screen.apk",
@@ -115,13 +115,13 @@ def screen_pack_payload(archive, name, release):
     if (archive.name != f"{name}-{release}.screenpack.tar.gz" or archive.is_symlink()
             or not archive.is_file() or archive.stat().st_size > 65 * 1024**2):
         raise BundleError(f"invalid {name} archive")
+    clock_css = "companion-clock.css" if (name, release) == ("companion", COMPANION_VERSION) else None
+    stylesheet = "pack.css" if name == "default" else clock_css
     with tarfile.open(archive, "r:gz") as source:
         members = source.getmembers()
         if (len(members) > 64 or sum(m.size for m in members) > 64 * 1024**2
-                or any(not m.isfile() or m.name != PurePosixPath(m.name).name
-                       or (not (name == "default" and m.name == "pack.css")
-                           and not re.fullmatch(r"[a-z][a-z0-9-]*\.(?:json|png|webm|mp4)", m.name))
-                       or m.size > 8 * 1024**2 for m in members)):
+                or any(not m.isfile() or m.size > 8 * 1024**2 or (m.name != stylesheet
+                       and not re.fullmatch(r"[a-z][a-z0-9-]*\.(?:json|png|webm|mp4)", m.name)) for m in members)):
             raise BundleError(f"invalid {name} members")
         files = {m.name: source.extractfile(m).read() for m in members}
     if len(files) != len(members):
@@ -132,6 +132,9 @@ def screen_pack_payload(archive, name, release):
             or manifest.get("format") != 1 or manifest.get("name") != name
             or manifest.get("version") != release):
         raise BundleError(f"invalid {name} identity")
+    layout = manifest.get("layout")
+    if clock_css and (clock_css not in files or not isinstance(layout, dict) or layout.get("css") != clock_css):
+        raise BundleError("invalid companion stylesheet")
     return files
 
 
@@ -285,12 +288,10 @@ def verify_asset_digests(archive, checksums, release, has_setup, require_compani
             raise BundleError("invalid checksums")
         actual[match[2]] = match[1]
     # Historical distributions keep their original asset name and TOML pin.
-    legacy_name = "template"
-    pack_name = legacy_name if f"{legacy_name}-{release}.screenpack.tar.gz" in actual else "default"
+    pack_name = "template" if f"template-{release}.screenpack.tar.gz" in actual else "default"
     pack_asset = f"{pack_name}-{release}.screenpack.tar.gz"
     names = checksum_assets(archive, release, pack_asset, has_setup)
-    if not has_setup and any(os.path.lexists(checksums.parent / name)
-                             for name in (*installer_names(release), "install.ps1")):
+    if not has_setup and any(os.path.lexists(checksums.parent / name) for name in (*installer_names(release), "install.ps1")):
         raise BundleError("invalid setup asset membership")
     companion = checksums.parent / COMPANION_ASSET
     if require_companion or COMPANION_ASSET in actual or os.path.lexists(companion):
@@ -299,8 +300,7 @@ def verify_asset_digests(archive, checksums, release, has_setup, require_compani
             raise BundleError("invalid companion asset membership")
         names += (COMPANION_ASSET,)
     paths = {name: archive if name == archive.name else checksums.parent / name for name in names}
-    if actual.keys() != paths.keys() or any(path.is_symlink() or not path.is_file()
-                                            for path in paths.values()):
+    if actual.keys() != paths.keys() or any(path.is_symlink() or not path.is_file() for path in paths.values()):
         raise BundleError("asset checksum mismatch")
     if paths[pack_asset].stat().st_size > 65 * 1024**2:
         raise BundleError(f"invalid {pack_name} archive")

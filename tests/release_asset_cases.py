@@ -1,6 +1,7 @@
 """Release verifier witnesses for optional assets and sanitized diagnostics."""
 import hashlib
 import io
+from itertools import chain
 import json
 from pathlib import Path
 import shutil
@@ -16,8 +17,28 @@ from test_echo_install import require
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def companion_stylesheet_faults(data, sums, row, name):
+    for remove_stylesheet in (True, False):
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=io.BytesIO(data)) as source, \
+                tarfile.open(fileobj=archive, mode='w:gz', compresslevel=1) as target:
+            for member in source:
+                if remove_stylesheet and member.name == 'companion-clock.css':
+                    continue
+                contents = source.extractfile(member).read()
+                if not remove_stylesheet and member.name == 'pack.json':
+                    manifest = json.loads(contents)
+                    del manifest['layout']['css']
+                    contents = json.dumps(manifest).encode()
+                    member.size = len(contents)
+                target.addfile(member, io.BytesIO(contents))
+        content = archive.getvalue()
+        substitute = f'{hashlib.sha256(content).hexdigest()}  {name}\n'
+        yield content, sums.replace(row, substitute), 'invalid companion stylesheet'
+
+
 def companion_cases(assets, pack, witness):
-    name = 'companion-0.2.0.screenpack.tar.gz'
+    name = 'companion-0.2.1.screenpack.tar.gz'
     archive = next(assets.glob('echo-*-armv7.tar.gz')).name
     sums = (assets / 'SHA256SUMS').read_text()
     data = (assets / name).read_bytes()
@@ -26,7 +47,7 @@ def companion_cases(assets, pack, witness):
     require(sums.count(row) == 1, 'expected one exact Companion digest row')
     with tarfile.open(assets / name) as source:
         manifest = json.load(source.extractfile('pack.json'))
-    require((manifest['format'], manifest['name'], manifest['version']) == (1, 'companion', '0.2.0'),
+    require((manifest['format'], manifest['name'], manifest['version']) == (1, 'companion', '0.2.1'),
             'Companion identity differs')
     default_pack = next(assets.glob('default-*.screenpack.tar.gz')).read_bytes()
     substitute = f'{hashlib.sha256(default_pack).hexdigest()}  {name}\n'
@@ -39,7 +60,8 @@ def companion_cases(assets, pack, witness):
         (None, sums.replace(row, ''), None),
     )
     with tempfile.TemporaryDirectory(prefix='companion-faults-') as temporary:
-        for index, (content, checksums, diagnostic) in enumerate(faults):
+        cases = chain(faults, companion_stylesheet_faults(data, sums, row, name))
+        for index, (content, checksums, diagnostic) in enumerate(cases):
             variant = Path(temporary) / str(index)
             shutil.copytree(assets, variant)
             (variant / 'SHA256SUMS').write_text(checksums)
@@ -62,6 +84,7 @@ def companion_cases(assets, pack, witness):
                 pre_setup_cases(variant, variant / archive, verify)
             require(result.returncode == 1 and result.stdout == ''
                     and result.stderr == f'release-kit: {diagnostic}\n', 'Companion refusal changed')
+    print('RELEASE-CSS missing_member=REFUSED missing_manifest_reference=REFUSED matching_digests=2')
     try:
         pack.build(SimpleNamespace(out=assets))
     except pack.BundleError as error:

@@ -33,8 +33,8 @@ def manifest(version):
         "layout": {
             "safe_area": {"x": 0, "y": 0, "width": 100, "height": 100},
             "slots": {
-                "clock": {"x": 46, "y": 82},
-                "date": {"x": 45, "y": 91},
+                "clock": {"x": 50, "y": 82},
+                "date": {"x": 50, "y": 91},
                 "status": {"x": 70, "y": 35, "font_scale": 1},
                 "link_code": {"x": 70, "y": 53},
                 "approval": {"x": 70, "y": 53},
@@ -42,6 +42,7 @@ def manifest(version):
             },
             "stage": {"anchor": {"x": 42, "y": 41}, "scale": 1.62,
                       "background": BACKGROUND},
+            "css": "companion-clock.css",
         },
         "character": {
             "rest": "rest.png",
@@ -83,6 +84,8 @@ def build(version, out):
         pack = payload / f"companion@{version}"
         pack.mkdir(parents=True)
         render(pack, stage)
+        stylesheet = Path(__file__).with_name("companion-clock.css")
+        (pack / stylesheet.name).write_bytes(stylesheet.read_bytes())
         (pack / "pack.json").write_text(json.dumps(manifest(version), indent=2) + "\n",
                                        encoding="utf-8")
         archive_pack(pack, payload / f"companion-{version}.screenpack.tar.gz")

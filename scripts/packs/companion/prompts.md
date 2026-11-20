@@ -1,7 +1,8 @@
 # Companion art provenance
 
-The four source sheets were generated with built-in Codex image generation using
-transparent output. The offline builder crops and composites these selected PNGs.
+The source sheets and Listening sprite were generated with built-in Codex image
+generation using transparent output. The offline builder crops and composites
+these selected PNGs.
 
 ## reference.png
 
@@ -14,6 +15,17 @@ New character reference.
 Edit of reference.png.
 
 > Edit this original character reference for an animation sprite atlas. Keep the SAME adult woman, proportions, brown skin, wavy indigo bob, teal hair clip, amber eyes, high-collar teal-and-cream jacket, cinnamon cuff and clean cel shading. Draw exactly six equally spaced separate WAIST-UP front or shallow three-quarter cutouts on a wide landscape canvas, precise 3 columns by 2 rows, each with clear transparent margins, true alpha, complete hair and arms within its own cell. Every cutout should have consistent head height and waist-level crop with arms resting unless requested. Upper left: relaxed idle facing front, hands lowered, open eyes, pleasant closed mouth. Upper center: connecting, head tilted slightly and gaze to one side. Upper right: listening, leaning forward slightly, wide attentive eyes. Lower left: thinking, gazing diagonally up, hand to chin, with three small pale mint thinking dots near her temple. Lower center: worried, brows knitted and small apologetic frown. Lower right: happy, beaming warm smile, eyes crinkled, shoulders perked upward. Distinct readable expressions, restrained movement. No lettering, guides, lines, props, borders, or background.
+
+## listening.png
+
+Edit of poses.png, upper-left Ready pose, then a refinement of that output.
+
+> Edit the upper-left Ready pose in this original Companion atlas to create one very distinct attentive Listening pose. Keep the exact head and face from Ready, at the same scale with the lips fully closed, warm brown skin, golden eyes, indigo wavy bob and mint barrette. Below the head rotate her shoulders and waist decisively toward viewer-left, leaning slightly diagonally, so the cream shoulder panel and dark zipper are strongly off-center. Draw the arm at viewer-right lifted with bare hand cupped behind the ear and elbow visibly jutting sideways at shoulder height, leaving a little transparent air between her arm and jacket. The rust-red cuff and fingers should make the listening gesture obvious. Match the original jacket colors, high collar and restrained anime cel shading. Render a single original waist-up cutout, complete hair and arms, transparent margins and actual transparent alpha, with original proportions and the face clear. No props, extra characters, letters or backdrop.
+
+> Edit this original adult Companion Listening sprite. Keep the face and pose recognizable, lips fully closed, warm brown skin, amber eyes, indigo wavy bob, mint hair clip, deep teal high collar and cream shoulder panels, red cuff and the existing cel shading. Make the cutout more slender while preserving the normal face and body proportions: keep the strongly sideways, diagonal lean of the torso with its obvious off-center cream panel and zipper, but tuck the raised elbow closer to the hip so the hand still clearly cups the ear above a diagonal forearm. Waist-up with complete hair and arms, the entire visible silhouette should be no wider than about 70 percent of its crown-to-waist height. Same head size relative to the torso. Single portrait-format cutout with actual transparent background, leave clear transparent space on all sides and no props, text or backdrop.
+
+The offline renderer registers the closed mouth from the Ready pose in the
+Listening sprite with the same feathered compositing used for facial animation.
 
 ## expression.png
 
