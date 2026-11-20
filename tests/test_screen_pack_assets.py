@@ -114,7 +114,7 @@ def independent_bundle(assets, pack, asset_names):
         require(pack.safe_name(name), 'forbidden member')
     version = manifest['version']
     default_pack = assets / f'default-{version}.screenpack.tar.gz'
-    companion = assets / 'companion-0.1.0.screenpack.tar.gz'
+    companion = assets / 'companion-0.2.0.screenpack.tar.gz'
     require(set(assets.glob('*.screenpack.tar.gz')) == {default_pack, companion}, 'release screen pack set differs')
     art = independent_template(default_pack, 'default')
     require(all(data not in files['bin/echo-bridge'] for data in art.values()), 'art embedded in bridge')

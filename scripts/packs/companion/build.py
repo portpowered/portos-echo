@@ -23,16 +23,21 @@ def clip(name, mode):
 
 
 def manifest(version):
-    slots = {"clock": (46, 82), "date": (45, 91), "status": (6, 35),
-             "link_code": (6, 53), "approval": (6, 53), "error": (6, 53)}
     return {
         "format": 1,
         "name": "companion",
         "version": version,
         "layout": {
             "safe_area": {"x": 0, "y": 0, "width": 100, "height": 100},
-            "slots": {name: {"x": x, "y": y} for name, (x, y) in slots.items()},
-            "stage": {"anchor": {"x": 73, "y": 29}, "scale": 0.80,
+            "slots": {
+                "clock": {"x": 46, "y": 82},
+                "date": {"x": 45, "y": 91},
+                "status": {"x": 70, "y": 35, "font_scale": 1},
+                "link_code": {"x": 70, "y": 53},
+                "approval": {"x": 70, "y": 53},
+                "error": {"x": 70, "y": 53},
+            },
+            "stage": {"anchor": {"x": 42, "y": 41}, "scale": 1.62,
                       "background": BACKGROUND},
         },
         "character": {

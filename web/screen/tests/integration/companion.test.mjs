@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import {
+    checkCompanionDisplay,
+    visibleCharacterBoxes,
+} from "./companion-geometry.mjs";
 import { activeVideo, open, playing, refresh, token } from "./pack-session.mjs";
 
-const id = "companion@0.1.0";
+const id = "companion@0.2.0";
 const template = "template@0.1.0";
 const screenshots = "test-results/screenshots";
 const viewport = { width: 960, height: 600 };
@@ -72,15 +76,16 @@ async function installedBytes(home) {
 }
 
 async function geometry(page, state) {
-    const { character, slots, buttons } = await page.evaluate((selector) => {
-        const video = document.querySelector(selector);
-        const box = video.getBoundingClientRect();
-        const scale = Math.min(
-            box.width / video.videoWidth,
-            box.height / video.videoHeight,
-        );
-        const width = video.videoWidth * scale;
-        const height = video.videoHeight * scale;
+    const art = await visibleCharacterBoxes(page);
+    assert.ok(art.length, `${state}: decoded character is visible`);
+    const characters = art.map(({ left, top, right, bottom }) => ({
+        label: "character",
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    }));
+    const { slots, buttons } = await page.evaluate(() => {
         const visible = (selector) =>
             [...document.querySelectorAll(selector)]
                 .filter((element) => element.getClientRects().length)
@@ -89,23 +94,16 @@ async function geometry(page, state) {
                     ...element.getBoundingClientRect().toJSON(),
                 }));
         return {
-            character: {
-                label: "character",
-                x: box.x + (box.width - width) / 2,
-                y: box.y + (box.height - height) / 2,
-                width,
-                height,
-            },
             slots: visible(".screen-pack [data-pack-slot]"),
             buttons: visible(".screen-pack button, .settings-gear"),
         };
-    }, activeVideo);
+    });
     const overlap = (a, b) =>
         a.x < b.x + b.width &&
         b.x < a.x + a.width &&
         a.y < b.y + b.height &&
         b.y < a.y + a.height;
-    for (const box of [character, ...slots, ...buttons]) {
+    for (const box of [...characters, ...slots, ...buttons]) {
         assert.ok(
             box.x >= 0 &&
                 box.y >= 0 &&
@@ -119,7 +117,11 @@ async function geometry(page, state) {
         (button) => state !== "ready" || button.label !== "home-tap",
     );
     for (const [i, a] of slots.entries()) {
-        for (const b of [character, ...slots.slice(i + 1), ...paintedButtons]) {
+        for (const b of [
+            ...characters,
+            ...slots.slice(i + 1),
+            ...paintedButtons,
+        ]) {
             // The approval and error actions are native children of their card.
             if (
                 ["approval", "error"].includes(state) &&
@@ -130,13 +132,13 @@ async function geometry(page, state) {
                 continue;
             assert.ok(
                 !overlap(a, b),
-                `${state}: ${a.label} overlaps ${b.label}`,
+                `${state}: ${a.label} overlaps ${JSON.stringify(b)}`,
             );
         }
     }
     for (const button of paintedButtons)
         assert.ok(
-            !overlap(button, character),
+            characters.every((character) => !overlap(button, character)),
             `${state}: ${button.label} overlaps character`,
         );
     if (["ready", "connected"].includes(state)) {
@@ -148,6 +150,7 @@ async function geometry(page, state) {
             );
         }
     }
+    console.log(`B2 art state=${state} boxes=${JSON.stringify(art)} overlap=0`);
 }
 
 async function checkReadyTap(f) {
@@ -221,17 +224,27 @@ async function playPresentations(f) {
                 ),
             };
             await f.update(long);
-            const card = f.page.locator(".pack-approval");
+            const prompt = f.page.locator(".pack-approval > p");
+            const allow = f.page.getByRole("button", {
+                name: "Allow",
+                exact: true,
+            });
             assert.equal(
-                await card.evaluate(
+                await prompt.evaluate(
                     (element) => element.scrollHeight > element.clientHeight,
                 ),
                 true,
             );
-            await f.page.locator("body").click({ position: { x: 1, y: 1 } });
+            await prompt.hover();
+            await f.page.mouse.wheel(0, 260);
+            await f.page.waitForFunction(
+                () =>
+                    document.querySelector(".pack-approval > p").scrollTop > 0,
+            );
+            await allow.click({ trial: true });
+            await prompt.focus();
             await f.page.keyboard.press("Tab");
             assert.equal(await f.page.locator(":focus").textContent(), "Allow");
-            assert.ok(await card.evaluate((element) => element.scrollTop > 0));
             await f.page.keyboard.press("Enter");
             assert.deepEqual(await f.next(), {
                 action: { action: "approve", id: long.id },
@@ -301,7 +314,7 @@ async function alternatePlayback(f) {
                 new URL(img.src).pathname.split("/").at(-1),
             ];
         }),
-        [256, 320, "rest.png"],
+        [768, 720, "rest.png"],
     );
     console.log(
         `B3 h264=decoded background=${pixel.join(",")} reduced_motion=rest.png state=listening`,
@@ -337,7 +350,7 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
             await img.decode();
             return img.naturalWidth;
         }),
-        256,
+        768,
     );
     await selection(page).selectOption(id);
     await save(page).click();
@@ -384,7 +397,7 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
         `screen_pack = "${id}"\n`,
     );
     console.log(
-        "B4 checksum_mismatch selected=companion@0.1.0 bytes=preserved",
+        "B4 checksum_mismatch selected=companion@0.2.0 bytes=preserved",
     );
 
     await selection(page).focus();
@@ -418,9 +431,14 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
     assert.deepEqual(f.outside, []);
     assert.deepEqual(
         f.peer.requests,
-        Array(2).fill("/companion-0.1.0.screenpack.tar.gz"),
+        Array(2).fill("/companion-0.2.0.screenpack.tar.gz"),
     );
     console.log(
         "B5 keyboard=visible selection=empty navigation=0 restart_requests=0",
     );
 });
+
+test(
+    "T3 Companion visible art fills the display while leaving room for native content",
+    checkCompanionDisplay,
+);

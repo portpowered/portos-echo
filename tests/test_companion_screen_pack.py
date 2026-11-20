@@ -20,19 +20,19 @@ from render import keyframes  # noqa: E402
 
 ROLES = ("idle", "connecting", "listening", "thinking", "speaking", "muted",
          "setup", "approval", "error", "happy")
-ARCHIVE = "companion-0.1.0.screenpack.tar.gz"
-SUCCESS = "screenpack: companion=0.1.0 generated=PASS checksum=PASS\n"
+ARCHIVE = "companion-0.2.0.screenpack.tar.gz"
+SUCCESS = "screenpack: companion=0.2.0 generated=PASS checksum=PASS\n"
 FAILURE = "screenpack: generation failed; output was not published\n"
-WIDTH, HEIGHT = 256, 320
+WIDTH, HEIGHT = 768, 720
 FRAME_BYTES = WIDTH * HEIGHT * 4
-EYES = (.39, .221, .62, .267)
-MOUTH = (.449, .312, .534, .354)
+EYES = (.5735, .2233, .7520, .2709)
+MOUTH = (.6193, .3174, .6852, .3609)
 BACKGROUND = (16, 24, 39)
 
 
 def invoke(out, *, env=None):
     return subprocess.run(["sh", "scripts/make-companion-screenpack.sh",
-                           "--version", "0.1.0", "--out", str(out)],
+                           "--version", "0.2.0", "--out", str(out)],
                           cwd=ROOT, capture_output=True, text=True, env=env)
 
 
@@ -125,10 +125,10 @@ class CompanionPack(unittest.TestCase):
                 if member.name.endswith((".mp4", ".webm")):
                     self.assertLessEqual(member.size, 8 * 1024 ** 2)
                 self.assertEqual((self.extracted / member.name).read_bytes(),
-                                 (self.first / "companion@0.1.0" / member.name).read_bytes())
+                                 (self.first / "companion@0.2.0" / member.name).read_bytes())
         manifest = json.loads((self.extracted / "pack.json").read_bytes())
         self.assertEqual((manifest["format"], manifest["name"], manifest["version"]),
-                         (1, "companion", "0.1.0"))
+                         (1, "companion", "0.2.0"))
         character = manifest["character"]
         self.assertEqual(character["rest"], "rest.png")
         self.assertEqual(character["states"], {
@@ -136,7 +136,7 @@ class CompanionPack(unittest.TestCase):
             for role in ROLES if role != "happy"})
         self.assertEqual(character["emotes"], {
             "happy": {"mode": "once", "webm": "happy.webm", "mp4": "happy.mp4"}})
-        print(f"PACK identity=companion@0.1.0 files={len(expected)} sha256={checksum} "
+        print(f"PACK identity=companion@0.2.0 files={len(expected)} sha256={checksum} "
               f"archive_bytes={self.archive.stat().st_size} repeat=identical", flush=True)
 
     def test_occupied_and_failed_encoder(self):
@@ -188,7 +188,7 @@ class CompanionPack(unittest.TestCase):
                 blink = [classify(frame, EYES, eyes, (0,)) for frame in frames[57:70]]
                 self.assertEqual(blink, ["idle"] * 5 + ["blink"] * 4 + ["idle"] * 4)
             if role == "speaking":
-                speech = [classify(frame, MOUTH, mouths, range(-2, 3))
+                speech = [classify(frame, MOUTH, mouths, range(-5, 6))
                           for frame in frames[12:-12]]
                 self.assertEqual(set(speech), {"idle", "half", "open"})
                 self.assertFalse(any(speech[p:] == speech[:-p] for p in range(1, len(speech) // 2)))
@@ -197,7 +197,7 @@ class CompanionPack(unittest.TestCase):
                 self.assertEqual(len({hashlib.sha256(frame).digest() for frame in frames}), 1)
             if with_alpha:
                 self.assertLess(frames[0][3], 16)
-                self.assertGreater(frames[0][(100 * WIDTH + 128) * 4 + 3], 240)
+                self.assertGreater(frames[0][(229 * WIDTH + 506) * 4 + 3], 240)
         pairs = tuple(itertools.combinations(representatives, 2))
         differences = [delta(representatives[a], representatives[b]) for a, b in pairs]
         self.assertEqual(sum(value > 1.5 for value in differences), 45,

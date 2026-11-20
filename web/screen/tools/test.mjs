@@ -60,7 +60,7 @@ try {
         generations.push(
             generate("make-companion-screenpack.sh", [
                 "--version",
-                "0.1.0",
+                "0.2.0",
                 "--out",
                 companionDir,
             ]),
@@ -93,7 +93,7 @@ try {
                 SCREEN_PACK_DEFAULT_FIXTURE: join(packRoot, "0.3.0"),
                 SCREEN_COMPANION_ARCHIVE:
                     stagedCompanion ??
-                    join(companionDir, "companion-0.1.0.screenpack.tar.gz"),
+                    join(companionDir, "companion-0.2.0.screenpack.tar.gz"),
             },
         },
     );

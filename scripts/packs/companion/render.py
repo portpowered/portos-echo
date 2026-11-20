@@ -5,29 +5,37 @@ from pathlib import Path
 import subprocess
 
 ART = Path(__file__).with_name("art")
-WIDTH, HEIGHT, FPS = 256, 320, 30
+WIDTH, HEIGHT, FPS = 768, 720, 30
 SIZE = f"{WIDTH}x{HEIGHT}"
 BACKGROUND = "#101827"
 FRAME_BYTES = WIDTH * HEIGHT * 4
 FFMPEG = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
           "-filter_threads", "1", "-filter_complex_threads", "1"]
+POSE_HEIGHT = 680
+POSE_TOP = 24
+POSE_SCALE = POSE_HEIGHT / 292
+# Inside the fixed stage, these centers map to the middle of the home
+# screen and the middle of the left two thirds at 1280 × 748.
+HOME_CENTER = 506
+CARD_CENTER = 252
+CARD_ROLES = {"setup", "approval", "error"}
 
 # Artwork rectangles (x, y, w, h), with atlas gutters removed. Keep the head
-# crown and waist aligned when changing poses. The setup hand extends left.
+# crown and waist aligned when changing poses.
 POSES = {
-    "rest": ("reference", (166, 6, 564, 881), 0),
-    "idle": ("poses", (97, 11, 327, 491), 0),
-    "connecting": ("poses", (634, 12, 287, 490), 0),
-    "listening": ("poses", (1136, 21, 278, 481), 0),
-    "thinking": ("poses", (113, 524, 309, 490), 0),
-    "error": ("poses", (613, 523, 320, 491), 0),
-    "happy": ("poses", (1159, 524, 264, 490), 0),
-    "setup": ("cards", (103, 18, 610, 852), -12),
-    "approval": ("cards", (1068, 16, 525, 856), 0),
+    "rest": ("reference", (166, 6, 564, 881)),
+    "idle": ("poses", (97, 11, 327, 491)),
+    "connecting": ("poses", (634, 12, 287, 490)),
+    "listening": ("poses", (1136, 21, 278, 481)),
+    "thinking": ("poses", (113, 524, 309, 490)),
+    "error": ("poses", (613, 523, 320, 491)),
+    "happy": ("poses", (1159, 524, 264, 490)),
+    "setup": ("cards", (103, 18, 610, 852)),
+    "approval": ("cards", (1068, 16, 525, 856)),
 }
 
 # The lip/eyelid patches are feathered inside the face. Their placements are
-# in the registered raster of the idle sprite; motion shifts the entire head.
+# in the original 256 × 320 registered raster, scaled with the idle sprite.
 PATCHES = {
     "blink": ((718, 300, 252, 72), (96, 67, 66, 22)),
     "half": ((1329, 394, 110, 80), (111, 94, 29, 23)),
@@ -58,6 +66,7 @@ def raw_input(path):
 def raster(sheet, rect, output_size, pad=""):
     x, y, width, height = rect
     out_width, out_height = output_size
+    # Lanczos resamples the existing atlas cutouts directly at the new size.
     filters = (f"format=rgba,crop={width}:{height}:{x}:{y},"
                f"lutrgb=a='if(lt(val,16),0,val)',"
                f"scale={out_width}:{out_height}:flags=lanczos{pad}")
@@ -67,6 +76,9 @@ def raster(sheet, rect, output_size, pad=""):
 
 def face_patch(idle, source, placement):
     x, y, width, height = placement
+    x = HOME_CENTER + round((x - 128) * POSE_SCALE)
+    y = POSE_TOP + round((y - 12) * POSE_SCALE)
+    width, height = round(width * POSE_SCALE), round(height * POSE_SCALE)
     pixels = raster("expression", source, (width, height))
     pose = bytearray(idle)
     for row in range(height):
@@ -74,7 +86,7 @@ def face_patch(idle, source, placement):
             i = (row * width + column) * 4
             j = ((y + row) * WIDTH + x + column) * 4
             edge = min(row, height - 1 - row, column, width - 1 - column)
-            alpha = min(1, edge / 4) * (pixels[i + 3] / 255)
+            alpha = min(1, edge / (4 * POSE_SCALE)) * (pixels[i + 3] / 255)
             for channel in range(3):
                 pose[j + channel] = round(
                     pose[j + channel] * (1 - alpha) + pixels[i + channel] * alpha)
@@ -83,11 +95,11 @@ def face_patch(idle, source, placement):
 
 def keyframes():
     frames = {}
-    for name, (sheet, rect, offset) in POSES.items():
-        width = round(rect[2] * 292 / rect[3])
-        x = (WIDTH - width) // 2 + offset
-        frames[name] = raster(sheet, rect, (width, 292),
-                              f",pad={WIDTH}:{HEIGHT}:{x}:12:color=black@0")
+    for name, (sheet, rect) in POSES.items():
+        width = round(rect[2] * POSE_HEIGHT / rect[3])
+        x = HOME_CENTER - width // 2
+        frames[name] = raster(sheet, rect, (width, POSE_HEIGHT),
+                              f",pad={WIDTH}:{HEIGHT}:{x}:{POSE_TOP}:color=black@0")
     for name, (source, placement) in PATCHES.items():
         frames[name] = face_patch(frames["idle"], source, placement)
     return frames
@@ -96,8 +108,7 @@ def keyframes():
 def shift(frame, x, y):
     if x == 0 and y == 0:
         return frame
-    # Each registered full pose has at least 12 transparent pixels on each
-    # moving edge, so row slices can translate without clipping visible art.
+    # The registered poses leave room for these small translations.
     stride = WIDTH * 4
     start = max(0, -y) * stride
     stop = FRAME_BYTES - max(y, 0) * stride
@@ -131,19 +142,33 @@ def timeline(role, frames):
         elif role in ("connecting", "listening", "thinking"):
             x = round(2 * math.sin(cycle))
             y = -round(3 * math.sin(cycle / 2) ** 2)
-        yield shift(frames[name], x, y)
+        yield shift(frames[name], round(x * POSE_SCALE), round(y * POSE_SCALE))
+
+
+def ease_in_out(frame, count):
+    amount = f"max(0,min(1,min({frame},{count}-1-({frame}))/{TRANSITION}))"
+    return f"(1-cos(PI*({amount})))/2"
+
+
+def card_pan(role, count):
+    if role not in CARD_ROLES:
+        return ""
+    # Translate the composited art as one silhouette, preserving the common
+    # neutral first and last frames. Padding keeps the revealed area clear.
+    shift = HOME_CENTER - CARD_CENTER
+    return (f",pad={WIDTH + shift}:{HEIGHT}:0:0:color=black@0,"
+            f"crop={SIZE.replace('x', ':')}:x='{shift}*({ease_in_out('n', count)})':y=0:exact=1")
 
 
 def encode(pack, raw, role, count):
     # Blend premultiplied colors so the short transitions have clean edges
     # on the alpha path. Both outputs derive from the exact same frames.
-    amount = f"max(0,min(1,min(N-1,{count}-N)/{TRANSITION}))"
-    transition = f"(1-cos(PI*({amount})))/2"
+    transition = ease_in_out("N-1", count)
     graph = (
         "[0:v]format=gbrap,premultiply=inplace=1[rest];"
         "[1:v]format=gbrap,premultiply=inplace=1[pose];"
         f"[rest][pose]blend=all_expr='A+(B-A)*({transition})':shortest=1,"
-        "unpremultiply=inplace=1,format=yuva420p,split[webm][alpha];"
+        f"unpremultiply=inplace=1{card_pan(role, count)},format=yuva420p,split[webm][alpha];"
         f"color=c={BACKGROUND}:s={SIZE}:r={FPS}[background];"
         "[background][alpha]overlay=shortest=1,format=yuv420p[mp4]"
     )
