@@ -12,6 +12,7 @@ struct Delegation {
     started: Instant,
     answer: Option<String>,
     timed_out: bool,
+    tools: super::native_tools::Tools,
 }
 
 pub(super) struct Native {
@@ -73,6 +74,7 @@ impl Native {
                 started: Instant::now(),
                 answer: None,
                 timed_out: false,
+                tools: super::native_tools::Tools::default(),
             },
         );
         Ok(())
@@ -154,7 +156,7 @@ impl Native {
         };
         let mut fields = json!({"delegation_id":id,"thread_id":entry.thread,
             "outcome":if entry.timed_out { "timed_out" } else { outcome },
-            "handback":"unobserved", "tool_counts":{},
+            "handback":"unobserved", "tool_counts":entry.tools.counts,
             "duration_ms":u64::try_from(entry.started.elapsed().as_millis()).unwrap_or(u64::MAX)});
         if let Some(turn) = entry.turn {
             fields["turn_id"] = turn.into();
@@ -178,6 +180,21 @@ impl Native {
         }
         self.turn = None;
         result
+    }
+
+    pub fn tool(&mut self, method: &str, params: &Value, names: &[(String, String)]) -> Result<(), Error> {
+        for (id, entry) in &mut self.active {
+            if params["threadId"] != entry.thread || params["turnId"].as_str() != entry.turn.as_deref() {
+                continue;
+            }
+            if let Some(mut fields) = entry.tools.observe(method, &params["item"], names)? {
+                fields["delegation_id"] = id.clone().into();
+                fields["thread_id"] = entry.thread.clone().into();
+                fields["turn_id"] = params["turnId"].clone();
+                self.trace.record("delegation.tool", entry.run.as_deref(), fields)?;
+            }
+        }
+        Ok(())
     }
 }
 

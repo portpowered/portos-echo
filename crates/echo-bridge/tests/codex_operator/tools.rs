@@ -119,6 +119,17 @@ async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accept
             }
         }
         let output = result(fixture).await;
+        if std::fs::read_to_string(fixture.home.join("mode")).unwrap() == "tool-trace" {
+            loop {
+                let raw = std::fs::read_to_string(fixture.directory.path().join("tool-trace")).unwrap();
+                if raw.lines().any(|line| {
+                    serde_json::from_str::<Value>(line).is_ok_and(|row| row["event"] == "delegation.resolved")
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
         stop.send(()).unwrap();
         while !observer
             .commands()
@@ -312,4 +323,87 @@ fn receipt(event: &str, name: &str) -> Value {
         value["request_id"] = json!("fixture-tool");
     }
     value
+}
+
+#[tokio::test]
+#[ignore = "T3 requires local Python"]
+async fn delegation_trace_configured_search_and_mcp_complete_once_with_payload_switch() {
+    for payloads in [true, false] {
+        let fixture = Fixture::new("chatgpt");
+        std::fs::write(fixture.home.join("mode"), "tool-trace").unwrap();
+        let spoof = echo_spoof_mcp::Spoof::start(echo_spoof_mcp::Options::default())
+            .await
+            .unwrap();
+        let mut config = config(&fixture, spoof.url());
+        config.trace.payloads = payloads;
+        let output = generation(&fixture, config, None).await;
+        assert_eq!(output["success"], true);
+        assert_eq!(
+            spoof
+                .snapshot()
+                .unwrap()
+                .calls
+                .iter()
+                .map(|call| call.count)
+                .sum::<u64>(),
+            1
+        );
+        let raw = std::fs::read_to_string(fixture.directory.path().join("tool-trace")).unwrap();
+        let rows: Vec<Value> = raw
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|row: &Value| {
+                row["event"]
+                    .as_str()
+                    .is_some_and(|event| event.starts_with("delegation."))
+            })
+            .collect();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0]["event"], "delegation.created");
+        assert_eq!(rows[1]["kind"], "web_search");
+        assert_eq!(rows[1]["name"], "web_search");
+        assert_eq!(rows[1]["result_count"], 1);
+        assert_eq!(rows[2]["kind"], "mcp");
+        assert_eq!(rows[2]["name"], "test.echo");
+        for row in &rows[1..3] {
+            assert_eq!(row["status"], "completed");
+            assert!(row["duration_ms"].is_u64());
+            assert_eq!(row["turn_id"], "fixture-turn");
+            assert_eq!(row["thread_id"], "fixture-thread");
+        }
+        assert_eq!(rows[3]["event"], "delegation.resolved");
+        assert_eq!(rows[3]["outcome"], "completed");
+        assert_eq!(rows[3]["tool_counts"], json!({"mcp":1,"web_search":1}));
+        assert_eq!(rows[3]["handback"], "unobserved");
+        assert_trace_payloads(&raw, &rows, payloads);
+        for row in rows {
+            use std::io::Write;
+            writeln!(std::io::stdout(), "{row}").unwrap();
+        }
+        spoof.shutdown().await.unwrap();
+    }
+}
+
+fn assert_trace_payloads(raw: &str, rows: &[Value], payloads: bool) {
+    assert!(!raw.contains("synthetic-account"));
+    assert!(!raw.contains("synthetic-auth"));
+    for seed in [
+        "synthetic-query-7",
+        "http://127.0.0.1/synthetic-source",
+        "synthetic-result-7",
+        "delegated echo",
+    ] {
+        assert_eq!(raw.contains(seed), payloads, "{seed}");
+    }
+    if payloads {
+        assert_eq!(rows[1]["response"]["results"][0]["account_id"], "[redacted]");
+        assert_eq!(rows[2]["request"], json!({"text":"delegated echo"}));
+        assert_eq!(rows[3]["answer"], json!({"text":"synthetic-result-7"}));
+    } else {
+        for row in rows {
+            for key in ["task", "request", "response", "answer"] {
+                assert!(row.get(key).is_none());
+            }
+        }
+    }
 }

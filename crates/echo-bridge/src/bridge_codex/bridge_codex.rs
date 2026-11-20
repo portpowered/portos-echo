@@ -275,7 +275,11 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if self.phase != Phase::Active {
             return Err(Error::Unavailable);
         }
-        self.io.respond(id, result).map_err(rpc_error)
+        self.io.respond(id, result).map_err(rpc_error)?;
+        if let Some(trace) = &mut self.tool_trace {
+            trace.answer(id, result)?;
+        }
+        Ok(())
     }
 
     /// The negotiated thread belongs to this process generation only.

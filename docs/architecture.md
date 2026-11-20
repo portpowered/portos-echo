@@ -49,9 +49,16 @@ closure and owner abandonment cancel outstanding lifetimes. Control, child EOF
 and media failures use fixed failure classes. Final agent-item text may populate
 `answer`, but never changes `handback=unobserved`. Duplicate handoffs and terminal
 notifications cannot produce additional lifetimes or resolutions.
-The retained Client, native tool completion/count observer, full managed-exit
-matrix and real-pin append witness remain in progress. Native counts currently
-describe emitted tool rows (none), not an assertion that no tool ran.
+The native observer also writes `delegation.tool` for observed search, catalogued
+dynamic tools, MCP and command completions. Names recover the catalog's original
+names; MCP server identity is included when the item reports it. Reported durations
+are preferred, otherwise a matching observed start supplies monotonic duration;
+missing starts do not imply zero duration. Search result counts are included only
+when the item reports results. RPC results and item completion for the same turn
+and item share one receipt and count. Wrappers do not imply nested tool calls.
+Native counts describe emitted rows, not an assertion that no other tool ran.
+The retained Client, full managed-exit matrix and real-pin append witness remain
+in progress.
 
 ## Purpose and placement
 

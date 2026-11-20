@@ -44,6 +44,20 @@ for line in sys.stdin:
     request = json.loads(line)
     if "method" not in request:
         assert request["id"] == "fixture-tool"
+        if home.joinpath("mode").read_text() == "tool-trace":
+            # The RPC result and item completion name the same logical call.
+            emit({"method": "item/completed", "params": {
+                "threadId": "fixture-thread", "turnId": "fixture-turn", "item": {
+                    "type": "dynamicToolCall", "id": "fixture-call", "tool": "test_echo",
+                    "arguments": {"text": "delegated echo"}, "status": "completed",
+                    "contentItems": request["result"]["contentItems"], "success": True}}})
+            emit({"method": "item/completed", "params": {
+                "threadId": "fixture-thread", "turnId": "fixture-turn", "item": {
+                    "type": "agentMessage", "id": "answer-7", "phase": "final_answer",
+                    "text": "synthetic-result-7"}}})
+            for _ in range(2):
+                emit({"method": "turn/completed", "params": {
+                    "threadId": "fixture-thread", "turn": {"id": "fixture-turn", "status": "completed"}}})
         home.joinpath("tool-result").write_text(json.dumps(request["result"]))
         continue
     method = request["method"]
@@ -157,7 +171,21 @@ for line in sys.stdin:
                 assert signaling.readline() == b"settle\n"
                 emit({"method": "turn/completed", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
             continue
+        if home.joinpath("mode").read_text() == "tool-trace":
+            emit({"method": "thread/realtime/itemAdded", "params": {
+                "threadId": "fixture-thread", "item": {"type": "handoff_request",
+                    "handoff_id": "delegation-7", "item_id": "handoff-7",
+                    "input_transcript": "synthetic-query-7", "active_transcript": []}}})
         emit({"method": "turn/started", "params": {"threadId": "fixture-thread", "turn": {"id": "fixture-turn"}}})
+        if home.joinpath("mode").read_text() == "tool-trace":
+            search = {"type": "webSearch", "id": "search-7", "query": "synthetic-query-7",
+                      "action": {"type": "search", "query": "synthetic-query-7", "queries": None}}
+            emit({"method": "item/started", "params": {
+                "threadId": "fixture-thread", "turnId": "fixture-turn", "item": search}})
+            search["results"] = [{"url": "http://127.0.0.1/synthetic-source", "text": "synthetic-result-7",
+                                  "account_id": "synthetic-account", "authorization": "synthetic-auth"}]
+            emit({"method": "item/completed", "params": {
+                "threadId": "fixture-thread", "turnId": "fixture-turn", "item": search}})
         approval = home.joinpath("mode").read_text() == "tool-approval"
         emit({"id": "fixture-tool", "method": "item/tool/call", "params": {
             "threadId": "fixture-thread", "turnId": "fixture-turn", "callId": "fixture-call",
