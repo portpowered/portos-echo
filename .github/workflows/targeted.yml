@@ -53,7 +53,11 @@ jobs:
           npm ci --offline
           npx --offline playwright install --with-deps chromium
           npm run lint
-          npm test
+          npm run build
+          (cd ../.. && cargo build --offline --locked -p echo-bridge --example screen_pack_fixture)
+          SCREEN_PACK_EYES_FIXTURE="$RUNNER_TEMP/candidate" \
+            SCREEN_PACK_FIXTURE="$RUNNER_TEMP/candidate/older" \
+            node --test --test-timeout=30000 --test-name-pattern='FACE 960' tests/integration/packs.test.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
