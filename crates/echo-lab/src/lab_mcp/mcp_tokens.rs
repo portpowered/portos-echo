@@ -19,19 +19,23 @@ impl BearerValidator for Admission {
         let Ok(state) = self.0.lock() else {
             return false;
         };
-        let Some((header, claims, input, signature)) = mcp_proof::decode(bearer) else {
-            return false;
-        };
-        header["alg"] == "ES256"
-            && header["typ"] == "JWT"
-            && state
-                .key
-                .expose()
-                .verifying_key()
-                .verify(input.as_bytes(), &signature)
-                .is_ok()
-            && valid_claims(&state, &claims)
+        accepts(&state, bearer)
     }
+}
+
+pub(super) fn accepts(state: &State, bearer: &str) -> bool {
+    let Some((header, claims, input, signature)) = mcp_proof::decode(bearer) else {
+        return false;
+    };
+    header["alg"] == "ES256"
+        && header["typ"] == "JWT"
+        && state
+            .key
+            .expose()
+            .verifying_key()
+            .verify(input.as_bytes(), &signature)
+            .is_ok()
+        && valid_claims(state, &claims)
 }
 
 fn valid_claims(state: &State, claims: &Value) -> bool {

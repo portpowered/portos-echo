@@ -1,5 +1,6 @@
 //! Strict section-9 authorization counterpart for isolated T3 M5 sessions.
 //! The scenario owns approval and fake UTC; no real principal or service exists.
+mod mcp_home;
 mod mcp_observations;
 mod mcp_proof;
 mod mcp_routes;
@@ -49,6 +50,7 @@ struct State {
     revoked: bool,
     used_refreshes: BTreeSet<String>,
     counts: Counts,
+    home: mcp_home::Home,
     #[cfg(test)]
     token_reply: Option<Arc<tokio::sync::Notify>>,
 }
@@ -91,6 +93,7 @@ impl Fixture {
             revoked: true,
             used_refreshes: BTreeSet::new(),
             counts: Counts::default(),
+            home: mcp_home::Home::default(),
             #[cfg(test)]
             token_reply: None,
         }));
@@ -165,6 +168,13 @@ impl Fixture {
     #[must_use]
     pub fn validator(&self) -> Arc<dyn BearerValidator> {
         Arc::new(mcp_tokens::Admission(self.shared.clone()))
+    }
+
+    /// Synthetic room state and admitted calls; never includes credentials.
+    /// # Errors
+    /// A poisoned fixture returns a fixed local error.
+    pub fn home_snapshot(&self) -> std::io::Result<Value> {
+        Ok(self.shared.lock().map_err(|_| invalid())?.home.snapshot())
     }
 
     /// Close and join the scenario-owned listener.

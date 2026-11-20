@@ -21,6 +21,7 @@ pub(super) fn router(state: Shared) -> Router {
         .route(LINK, post(link))
         .route(TOKEN, post(token))
         .route(REVOKE, post(revoke))
+        .route("/mcp", post(super::mcp_home::request))
         .with_state(state)
 }
 
