@@ -75,10 +75,14 @@ It uses curl or wget and sha256sum. The raw source bootstrap needs an explicit `
 `echo-setup install --from-dir ./bundle --config ./bridge.toml`.
 
 Approve the ChatGPT and Port OS codes at the URLs displayed in the terminal, then say **Computer** when
-prompted. If setup times out, run the plain `install --config FILE` command again to resume.
+prompted. If setup times out, a code expires or you cancel, repeat your original native `install` command.
+Keep the same release source options (`--from-dir DIR` for an unpacked bundle, or any `--version VERSION`
+and `--release-base URL` you used) and device options (`--adb PATH`, `--serial DEVICE`). Omit `--force` to
+resume with the installed base config.
+
 `status --json` shows the installed version and runtime identity. `update --version VERSION` installs
-another release and keeps the previous public files for `rollback`. Both commands retain the installed
-base config and prompts. `uninstall` retains credentials and settings. Use `uninstall --purge` to remove
+another release, retains the installed base config and prompts, and keeps the previous public files for
+`rollback`. `uninstall` retains credentials and settings. Use `uninstall --purge` to remove
 them as well. The installer uses the bundled shell to maintain the device and reuses an installed screen APK.
 
 ### Build from source
@@ -207,12 +211,22 @@ On Linux run:
 ./echo-setup-VERSION-linux-x86_64 install --config ./bridge.toml --force
 ```
 
-The installer stops the bridge, replaces `private/bridge.toml`, and guides startup and setup. Existing
-prompts, the saved settings overlay, credentials and grants are retained. A saved overlay still wins for
-its five keys. Native `rollback` restores the previous verified public files and starts the bridge.
-Restore a previous base config separately from its private backup.
-For a Linux source build, use the source install command above with `--force`, followed by the source
-`start` command.
+Include the release source and device options you used for the original install. The installer stops
+the bridge, replaces `private/bridge.toml`, and guides startup and setup. Existing prompts, the saved
+settings overlay, credentials and grants are retained. A saved overlay still wins for its five keys.
+Native `rollback` restores the previous verified public files and starts the bridge. Restore a previous
+base config separately from its private backup.
+
+For a Linux source build, run the following from the checkout. Continue after each command succeeds.
+
+```sh
+sh scripts/echo-install.sh stop
+sh scripts/echo-install.sh install --config ./bridge.toml \
+  --bridge target/armv7-linux-androideabi/release/echo-bridge \
+  --codex "$CODEX_ARMV7_OUTPUT_DIR/codex-app-server" \
+  --ca "$CODEX_ARMV7_OUTPUT_DIR/cacert.pem" --force
+sh scripts/echo-install.sh start
+```
 
 For an optional screen pack, use the [local directory push](screen-packs.md#local-push) from a Linux
 authoring host. It places a validated `<name>@<version>` directory under the installed home’s `screens/`.
@@ -251,7 +265,7 @@ Neither bridge uninstall nor screen uninstall removes hassmic.
 | Network deadline despite working root networking | The non-root launch needs Android network group 3990 as well as inet. Use `runas nobody 3990,inet`; do not switch to root to hide the error. |
 | TLS/certificate failure | The child has a cleared environment and cannot discover the Echo's system CA bundle. Set absolute `codex.ca_file` to the installed PEM bundle; it also supplies bridge OAuth/MCP trust roots. |
 | Echo asks to link Port OS again, or `/healthz` shows `"mcp":"relink_for_scope"` | The current grant lacks a permission required by a called tool. Run the link command above and review the requested permissions. Then ask for the action again. |
-| Native `start_failed` | Installed files remain available. Run `doctor` with the same installer to diagnose startup and `status --json` to check runtime identity and version. Correct the reported prerequisite, then run plain `install` to resume. |
+| Native `start_failed` | Installed files remain available. Use the same installer and device options with `doctor` to diagnose startup and `status --json` to check runtime identity and version. After fixing the prerequisite, repeat the original `install` with the same release source and device options and omit `--force`. If the installed base config is invalid, correct your local file and use the [forced reinstall](#change-settings-update-or-remove) to replace it. |
 | Home already owned / second start refused | Stop the existing owner and wait for cleanup before sign-in/start. Do not delete the lease or blindly kill an unknown process. |
 | Invalid base / rejected settings | An invalid base prevents startup. An invalid overlay is rejected wholly and the validated base is retained with a warning. Correct the reported field and retry. |
 
