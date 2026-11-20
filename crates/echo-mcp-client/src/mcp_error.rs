@@ -11,6 +11,8 @@ pub enum McpError {
     InvalidConfiguration,
     #[error("HTTP status {0}")]
     HttpStatus(u16),
+    #[error("insufficient MCP scope: {scope}")]
+    InsufficientScope { scope: &'static str },
     #[error("JSON-RPC code {0}")]
     JsonRpc(i64),
     #[error("invalid protocol response")]
@@ -27,7 +29,9 @@ impl From<McpError> for ToolError {
     fn from(error: McpError) -> Self {
         match error {
             McpError::Refused => Self::Denied,
-            McpError::TokenUnavailable | McpError::HttpStatus(401 | 403) => Self::Unauthorized,
+            McpError::TokenUnavailable | McpError::HttpStatus(401 | 403) | McpError::InsufficientScope { .. } => {
+                Self::Unauthorized
+            }
             McpError::Timeout => Self::Timeout,
             McpError::HttpStatus(n) => Self::Server(format!("http_status:{n}")),
             McpError::JsonRpc(n) => Self::Server(format!("json_rpc:{n}")),

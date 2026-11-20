@@ -61,7 +61,9 @@ short acknowledgement and wait for its result; never hand off the same request t
 snapshot; UTC does not establish the user's local time zone.";
 
 /// Built-in delegated runner instructions, unchanged by the file migration.
-pub const RUNNER_INSTRUCTIONS: &str = "Client audio bridge";
+pub const RUNNER_INSTRUCTIONS: &str = "Client audio bridge
+
+For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Report what changed in one short sentence, or state the failure or uncertainty without repeating the action. If the tool says to relink Port OS, relay that instruction.";
 
 /// The app server's `RealtimeVoice` values at the pinned rust-v0.160.0 schema.
 /// `default` is ours: it omits the field so the app server picks its voice.
@@ -320,7 +322,7 @@ mod tests {
 
     #[test]
     fn agent_home_unchanged_builtin_runner_default() {
-        assert_eq!(RUNNER_INSTRUCTIONS, "Client audio bridge");
+        assert!(RUNNER_INSTRUCTIONS.starts_with("Client audio bridge\n\nFor Port OS device control,"));
     }
 
     #[test]

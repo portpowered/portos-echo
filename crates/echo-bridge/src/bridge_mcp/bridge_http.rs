@@ -1,31 +1,30 @@
 //! Bounded HTTP parser and sessions; browser origins cannot operate the grant.
-use super::bridge_operations::{Operation, Request};
+use super::bridge_operations::{Operation, Operator, StartError};
 use echo_contracts::secret::Secret;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{Semaphore, mpsc, oneshot},
+    sync::{mpsc, oneshot},
     task::JoinSet,
 };
 
-pub(super) async fn serve(listener: TcpListener, token: Secret<String>, send: mpsc::Sender<Request>) {
+pub(super) async fn serve(listener: TcpListener, token: Secret<String>, operator: Operator) {
     let token = Arc::new(token);
-    let slot = Arc::new(Semaphore::new(1));
     let mut sessions = JoinSet::new();
     loop {
         tokio::select! {
             result = listener.accept(), if sessions.len() < 16 => {
                 let Ok((stream, _)) = result else { break };
-                sessions.spawn(session(stream, token.clone(), send.clone(), slot.clone()));
+                sessions.spawn(session(stream, token.clone(), operator.clone()));
             }
             _ = sessions.join_next(), if !sessions.is_empty() => (),
         }
     }
 }
 
-async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, send: mpsc::Sender<Request>, slot: Arc<Semaphore>) {
+async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, operator: Operator) {
     let read = tokio::time::timeout(Duration::from_secs(1), read(&mut stream, token.expose())).await;
     let (operation, streaming) = match read {
         Ok(Ok(operation)) => operation,
@@ -35,24 +34,15 @@ async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, send: mpsc::
         }
         Err(_) => return,
     };
-    let Ok(permit) = slot.try_acquire_owned() else {
-        let _ = respond(&mut stream, 409, Value::Null).await;
-        return;
+    let receipt = match operator.start(operation) {
+        Ok(receipt) => receipt,
+        Err(StartError::Busy) => {
+            let _ = respond(&mut stream, 409, Value::Null).await;
+            return;
+        }
+        Err(StartError::Closed) => return,
     };
-    let (reply, receive) = oneshot::channel();
-    let (progress, updates) = mpsc::channel(1);
-    if send
-        .try_send(Request {
-            operation,
-            reply,
-            permit,
-            progress,
-        })
-        .is_err()
-    {
-        return;
-    }
-    let result = completion(&mut stream, receive, updates, streaming).await;
+    let result = completion(&mut stream, receipt.result, receipt.progress, streaming).await;
     let (code, body) = match result {
         Ok(Ok(outcome)) => (200, json!({"outcome":outcome})),
         Ok(Err(error)) => (422, json!({"error":super::category(&error)})),

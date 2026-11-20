@@ -121,6 +121,23 @@ impl AuthClient {
         self.linked.load(Ordering::Acquire)
     }
 
+    /// Copy only the scopes of the locally committed usable grant.
+    pub async fn granted_scopes(&self) -> Option<Vec<String>> {
+        let state = self.state.lock().await;
+        if !self.has_grant() {
+            return None;
+        }
+        let grant = state.record.grant.as_ref()?;
+        Some(
+            grant
+                .expose()
+                .scope
+                .split_ascii_whitespace()
+                .map(str::to_owned)
+                .collect(),
+        )
+    }
+
     fn now(&self) -> u64 {
         self.epoch.saturating_add(self.started.elapsed().as_secs())
     }

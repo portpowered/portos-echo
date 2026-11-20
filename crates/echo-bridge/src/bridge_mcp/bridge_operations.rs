@@ -3,7 +3,7 @@ use echo_mcp_auth::AuthError;
 use echo_screen_contract::UiState;
 use serde_json::json;
 use std::sync::{Arc, atomic::Ordering};
-use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Operation {
@@ -39,11 +39,54 @@ impl Operation {
     }
 }
 
-pub(crate) struct Request {
+pub(super) struct Request {
     pub operation: Operation,
     pub reply: oneshot::Sender<Result<&'static str, AuthError>>,
     pub permit: OwnedSemaphorePermit,
     pub progress: mpsc::Sender<UiState>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Operator {
+    send: mpsc::Sender<Request>,
+    slot: Arc<Semaphore>,
+}
+
+pub(crate) struct OperationReceipt {
+    pub result: oneshot::Receiver<Result<&'static str, AuthError>>,
+    pub progress: mpsc::Receiver<UiState>,
+}
+
+pub(crate) enum StartError {
+    Busy,
+    Closed,
+}
+
+impl Operator {
+    pub(super) fn new(send: mpsc::Sender<Request>) -> Self {
+        Self {
+            send,
+            slot: Arc::new(Semaphore::new(1)),
+        }
+    }
+
+    pub(crate) fn start(&self, operation: Operation) -> Result<OperationReceipt, StartError> {
+        let permit = self.slot.clone().try_acquire_owned().map_err(|_| StartError::Busy)?;
+        let (reply, result) = oneshot::channel();
+        let (progress, updates) = mpsc::channel(1);
+        self.send
+            .try_send(Request {
+                operation,
+                reply,
+                permit,
+                progress,
+            })
+            .map_err(|_| StartError::Closed)?;
+        Ok(OperationReceipt {
+            result,
+            progress: updates,
+        })
+    }
 }
 
 pub(super) async fn serve(grant: Arc<Grant>, mut receive: mpsc::Receiver<Request>) {
@@ -119,6 +162,7 @@ async fn link(grant: &Grant, progress: mpsc::Sender<UiState>) -> Result<(), Auth
     grant.client.await_approval(link).await?;
     grant.reloaded.store(false, Ordering::Release);
     grant.presentation.overlay(None).map_err(|_| AuthError::Storage)?;
+    grant.reset_scope_status()?;
     grant.rejected.store(false, Ordering::Release);
     Ok(())
 }

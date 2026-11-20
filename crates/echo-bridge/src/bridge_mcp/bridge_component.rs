@@ -185,6 +185,7 @@ impl TlsPeer {
                 .unwrap();
         let origin = "https://127.0.0.1";
         config.mcp.server[0].url = format!("{origin}:{port}/mcp");
+        config.mcp.scopes = vec!["endpoint:read".into()];
         config.mcp.state_dir = Some(root.join("grant"));
         config.mcp.operator_listen = ([127, 0, 0, 1], 0).into();
         config.codex.ca_file = Some(root.join("ca.pem"));

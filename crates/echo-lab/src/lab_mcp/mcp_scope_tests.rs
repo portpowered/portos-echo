@@ -34,6 +34,7 @@ async fn t3_portos_full_and_narrow_grants_preserve_scopes_across_rotation_and_re
         let mut options = h.options();
         options.scopes.clone_from(&scopes);
         let reloaded = drive(AuthClient::open_at_epoch(options, 1_800_000_005)).await.unwrap();
+        assert_eq!(reloaded.granted_scopes().await, Some(scopes.clone()));
         let token = drive(reloaded.access_token()).await.unwrap();
         let (_, claims, _, _) = mcp_proof::decode(token.expose()).unwrap();
         assert_eq!(claims["scope"], scopes.join(" "));
