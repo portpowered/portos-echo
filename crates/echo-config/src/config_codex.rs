@@ -61,7 +61,9 @@ short acknowledgement and wait for its result; never hand off the same request t
 snapshot; UTC does not establish the user's local time zone.";
 
 /// Built-in delegated runner instructions, unchanged by the file migration.
-pub const RUNNER_INSTRUCTIONS: &str = "Client audio bridge";
+pub const RUNNER_INSTRUCTIONS: &str = "Client audio bridge
+
+For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction.";
 
 /// The app server's `RealtimeVoice` values at the pinned rust-v0.160.0 schema.
 /// `default` is ours: it omits the field so the app server picks its voice.
@@ -255,8 +257,34 @@ mod tests {
         assert_eq!(server.url, "https://api.portoperatingsystem.com/mcp"); // lint-rules: allow-literal offline example assertion, never contacted
         assert_eq!(server.auth, crate::McpAuth::PortosDeviceCode);
         assert_eq!(server.bearer_file, None);
-        assert_eq!(server.allow_tools, ["endpoint_list", "endpoint_query", "control"]);
-        assert_eq!(config.mcp.scopes, ["endpoint:read"]);
+        assert_eq!(
+            server.allow_tools,
+            [
+                "control",
+                "endpoint_query",
+                "endpoint_show",
+                "endpoint_manage",
+                "group_query",
+                "group_manage",
+                "guide",
+                "subscription_list",
+                "subscription_inspect",
+                "subscription_cancel",
+                "subscription_label_edit"
+            ]
+        );
+        assert_eq!(
+            config.mcp.scopes,
+            [
+                "endpoint:read",
+                "endpoint:write",
+                "message:send",
+                "group:read",
+                "group:manage",
+                "subscription:read",
+                "subscription:write"
+            ]
+        );
         assert_eq!(
             config.mcp.state_dir,
             Some(PathBuf::from("/data/local/echo-bridge/private/portos"))
@@ -294,7 +322,7 @@ mod tests {
 
     #[test]
     fn agent_home_unchanged_builtin_runner_default() {
-        assert_eq!(RUNNER_INSTRUCTIONS, "Client audio bridge");
+        assert!(RUNNER_INSTRUCTIONS.starts_with("Client audio bridge\n\nFor Port OS device control,"));
     }
 
     #[test]

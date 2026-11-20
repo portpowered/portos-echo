@@ -43,14 +43,14 @@ daily_request_cap = 500
 [mcp]
 state_dir = "/data/local/echo-bridge/private/portos"
 client_id = "port1/systems/zero/oauth-clients/command-line-interface"
-scopes = ["endpoint:read"]
+scopes = ["endpoint:read", "endpoint:write", "message:send", "group:read", "group:manage", "subscription:read", "subscription:write"]
 operator_listen = "127.0.0.1:16902"
 
 [[mcp.server]]
 name = "portos"
 url = "https://api.portoperatingsystem.com/mcp"
 auth = "portos_device_code"
-allow_tools = ["endpoint_list", "endpoint_query", "control"]
+allow_tools = ["control", "endpoint_query", "endpoint_show", "endpoint_manage", "group_query", "group_manage", "guide", "subscription_list", "subscription_inspect", "subscription_cancel", "subscription_label_edit"]
 
 # The screen app on the same device loads the page from loopback; nothing on the LAN reaches it.
 [screen]

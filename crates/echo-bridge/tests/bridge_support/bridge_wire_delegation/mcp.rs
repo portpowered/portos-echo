@@ -233,6 +233,12 @@ fn completed(output: &std::process::Output, code: i32, stdout: &str, stderr: &st
 fn record(directory: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(directory.join("portos/grant.json")).unwrap()).unwrap()
 }
+fn linked_output(issuer: &str) -> String {
+    format!("{}MCP linked\n", link_guidance(issuer))
+}
+fn link_guidance(issuer: &str) -> String {
+    format!("Verification URL: {issuer}/approve\nUser code: TEST-CODE\n")
+}
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
 async fn mcp_link_cli_screen_rotation_reload_and_healthy_unlink() {
@@ -244,7 +250,7 @@ async fn mcp_link_cli_screen_rotation_reload_and_healthy_unlink() {
         session.prompt(&mock).await;
         tokio::time::advance(Duration::from_secs(5)).await;
         session.advance(5000).await;
-        completed(&link.await.unwrap(), 0, "MCP linked\n", "");
+        completed(&link.await.unwrap(), 0, &linked_output(&mock.base), "");
         assert_eq!(bridge_wire_screen::state(&mut session.screen).await, json!({"state":"ready","message":"Echo Live ready"}));
         let first = record(directory.path());
         for generation in [2, 3] {
@@ -298,7 +304,7 @@ async fn mcp_link_crash_after_rotation_reloads_durable_generation_before_use() {
         session.prompt(&mock).await;
         tokio::time::advance(Duration::from_secs(5)).await;
         session.advance(5000).await;
-        completed(&link.await.unwrap(), 0, "MCP linked\n", "");
+        completed(&link.await.unwrap(), 0, &linked_output(&mock.base), "");
         let initial = record(directory.path());
         completed(
             &operator(directory.path(), "--refresh-now").await.unwrap(),
@@ -364,7 +370,12 @@ async fn mcp_link_denial_and_expiry_are_fixed_and_stop_polling() {
             session.prompt(&mock).await;
             tokio::time::advance(Duration::from_secs(5)).await;
             session.advance(5000).await;
-            completed(&link.await.unwrap(), 1, "", &format!("echo-bridge: {message}\n"));
+            completed(
+                &link.await.unwrap(),
+                1,
+                &link_guidance(&mock.base),
+                &format!("echo-bridge: {message}\n"),
+            );
             assert_eq!(
                 bridge_wire_screen::state(&mut session.screen).await,
                 json!({"state":"error","message":message,"relink":true})

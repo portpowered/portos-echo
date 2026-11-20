@@ -115,6 +115,15 @@ Configure your deployment's MCP resource URL and only the needed scopes/tools. T
 endpoints and the development CLI OAuth client; it is not proof of account access or a production registration.
 Review the [full reference](configuration.md#configuration-reference) before granting effects.
 
+The Port OS device-code default requests `endpoint:read`, `endpoint:write`, `message:send`, `group:read`,
+`group:manage`, `subscription:read` and `subscription:write`, and permits the eleven Port OS MCP tools:
+`control`, `endpoint_query`, `endpoint_show`, `endpoint_manage`, `group_query`, `group_manage`, `guide`,
+`subscription_list`, `subscription_inspect`, `subscription_cancel` and `subscription_label_edit`.
+You can set narrower `mcp.scopes` and `mcp.server.allow_tools` lists; an explicit empty tool list permits no tools.
+An existing grant keeps its granted permissions until you explicitly link again. These defaults request
+subscription permissions but do not start an event subscription consumer. Real-light control is authorized for
+installed use; factory validation uses local synthetic devices and never acts on real lamps.
+
 For source builds, from the checkout:
 
 ```sh
@@ -157,10 +166,10 @@ adb shell /data/local/hassmic/runas nobody 3990,inet /data/local/echo-bridge/bin
 Start requires the exact `echo-bridge` process name and a fresh hassmic `client connected` line within 20 seconds.
 Status shows process identity, uptime, the sanitized hassmic link and five bridge log lines.
 It is an observation command: exit 0 alone does not mean the bridge is running.
-`link` talks to the running bridge's loopback control endpoint. The Echo shows the Port OS verification URL/code;
-approve it on a phone under the intended Port OS account and review the requested scope consent there.
-The CLI waits for the operation and reports `MCP linked` on success.
-Wait for the screen's linked state. A denied or expired code needs a new link attempt.
+`link` talks to the running bridge's loopback control endpoint. The CLI prints `Verification URL: ...` and
+`User code: ...` as soon as the Echo screen shows the fresh code. Open that URL on your phone, enter the code,
+and review the requested permissions under the intended Port OS account. The CLI prints `MCP linked` after it
+stores the approved grant. Run the same command for a fresh code if approval is denied or expires.
 
 Say **“Computer, what time is it?”** and check that the screen and spoken reply agree.
 Conversation is the default; requests needing tools are delegated to the runner. Further speech during the
@@ -209,6 +218,7 @@ Neither bridge uninstall nor screen uninstall removes hassmic.
 | SIGTERM around 17 seconds after an adb-launched start | The recorded attached-shell launch died with its adb session. Use the installer start path: `setsid` detaches and the launcher holds stdin open. Redirecting stdin to EOF also stops the bridge. |
 | Network deadline despite working root networking | The non-root launch needs Android network group 3990 as well as inet. Use `runas nobody 3990,inet`; do not switch to root to hide the error. |
 | TLS/certificate failure | The child has a cleared environment and cannot discover the Echo's system CA bundle. Set absolute `codex.ca_file` to the installed PEM bundle; it also supplies bridge OAuth/MCP trust roots. |
+| Echo asks to link Port OS again, or `/healthz` shows `"mcp":"relink_for_scope"` | The current grant lacks a permission required by a called tool. Run the link command above and review the requested permissions. Then ask for the action again. |
 | Fresh release `start failed; installed files retained` | Complete the stopped-bridge sign-in and screen setup above, then start. Files may be installed even though the wrapper did not print success. |
 | Home already owned / second start refused | Stop the existing owner and wait for cleanup before sign-in/start. Do not delete the lease or blindly kill an unknown process. |
 | Invalid base / rejected settings | An invalid base prevents startup. An invalid overlay is rejected wholly and the validated base is retained with a warning. Correct the reported field and retry. |

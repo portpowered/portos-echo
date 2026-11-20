@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
-  title: Echo bridge local health
-  version: 1.1.0
+  title: Echo bridge local HTTP API
+  version: 1.2.0
 paths:
   /healthz:
     get:
@@ -13,21 +13,33 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [status, wyoming, live, relink_required, kill_switch]
+                required: [status, wyoming, live, relink_required, kill_switch, mcp]
                 properties:
                   status: {const: running}
                   wyoming: {enum: [connecting, connected, reconnecting, error]}
                   live: {enum: [idle, connecting, connected, error]}
                   relink_required: {type: boolean}
                   kill_switch: {type: boolean}
-              example: {status: running, wyoming: connected, live: error, relink_required: true, kill_switch: false}
+                  mcp: {enum: [disabled, unlinked, linked, relink_for_scope]}
+                  startup_waiting_reason: {const: dependency_unavailable}
+              example:
+                status: running
+                wyoming: connected
+                live: idle
+                relink_required: true
+                kill_switch: false
+                mcp: relink_for_scope
         '404':
           description: Unknown path; empty body.
         '405':
           description: Method other than GET; empty body, Allow GET.
   /operator/mcp:
     post:
-      description: On mcp.operator_listen only; one active operation; link waits for approval.
+      description: |
+        On mcp.operator_listen only. The owner runs one operation at a time.
+        Send the header line `Accept: text/event-stream` to opt in to progress frames.
+        The default JSON response waits for the operation to finish.
+        Closing the connection during approval cancels polling.
       security: [{operatorToken: []}]
       requestBody:
         required: true
@@ -41,15 +53,31 @@ paths:
                 operation: {enum: [link, refresh, unlink]}
       responses:
         '200':
-          description: Durable operation completed.
+          description: JSON reports durable completion. The opt-in stream opens when the owner admits the operation.
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: false
-                required: [outcome]
-                properties:
-                  outcome: {enum: [linked, refreshed, unlinked]}
+                $ref: '#/components/schemas/McpOutcome'
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Each event is a `data: ` line containing one JSON object and ends with a blank line.
+                  The payload conforms to McpEvent. A link may send one fresh code before approval.
+                  A terminal outcome or error ends the stream. EOF before either frame is incomplete.
+              examples:
+                approved:
+                  value: |+
+                    data: {"state":{"state":"link_code","user_code":"TEST-CODE","verification_uri":"http://127.0.0.1:18081/approve","expires_at_unix":1800}}
+
+                    data: {"outcome":"linked"}
+
+                denied:
+                  value: |+
+                    data: {"state":{"state":"link_code","user_code":"TEST-CODE","verification_uri":"http://127.0.0.1:18081/approve","expires_at_unix":1800}}
+
+                    data: {"error":"access_denied"}
+
         '400':
           description: Invalid payload or request over 4096 bytes; no mutation.
         '401':
@@ -59,20 +87,46 @@ paths:
         '409':
           description: Another operation is active; no queued duplicate mutation.
         '422':
-          description: Fixed OAuth category, never remote response text.
+          description: Terminal error in JSON mode. The stream sends the same error object as its last frame under HTTP 200.
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: false
-                required: [error]
-                properties:
-                  error: {enum: [discovery, transport, protocol, access_denied, expired, relink_required, storage]}
+                $ref: '#/components/schemas/McpError'
         '404':
           description: Unknown path; empty body.
         '405':
           description: Wrong method; empty body, Allow POST.
 components:
+  schemas:
+    McpOutcome:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome: {enum: [linked, refreshed, unlinked]}
+    McpError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error: {enum: [discovery, transport, protocol, access_denied, expired, relink_required, storage]}
+    McpEvent:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [state]
+          properties:
+            state:
+              type: object
+              additionalProperties: false
+              required: [state, user_code, verification_uri, expires_at_unix]
+              properties:
+                state: {const: link_code}
+                user_code: {type: string}
+                verification_uri: {type: string}
+                expires_at_unix: {type: integer, minimum: 0, maximum: 18446744073709551615}
+        - $ref: '#/components/schemas/McpOutcome'
+        - $ref: '#/components/schemas/McpError'
   securitySchemes:
     operatorToken:
       type: http

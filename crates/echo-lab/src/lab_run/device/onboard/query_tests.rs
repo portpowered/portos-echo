@@ -85,7 +85,7 @@ async fn t3_on_device_mcp_query_error_arrival_and_unrelated_success_cannot_pass(
     for (name, run, outcome) in [
         ("endpoint_query", "query-run", Some("error")),
         ("endpoint_query", "query-run", None),
-        ("endpoint_list", "query-run", Some("success")),
+        ("endpoint_show", "query-run", Some("success")),
         ("endpoint_query", "other-run", Some("success")),
     ] {
         let (world, mut state) = runtime();

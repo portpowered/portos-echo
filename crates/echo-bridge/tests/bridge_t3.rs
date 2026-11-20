@@ -88,7 +88,8 @@ async fn assert_health(address: &str) {
     let response = health(address, "GET", "/healthz").await;
     assert_eq!(
         serde_json::from_str::<Value>(response.split_once("\r\n\r\n").unwrap().1).unwrap(),
-        json!({"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false})
+        json!({"status":"running","wyoming":"connected","live":"idle","relink_required":false,"kill_switch":false,
+            "mcp":"disabled"})
     );
     assert!(
         health(address, "POST", "/healthz")

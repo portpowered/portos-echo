@@ -225,12 +225,13 @@ fn mcp(value: Value<'_>) -> Result<McpConfig, ConfigError> {
 
 fn server(value: Value<'_>, index: usize) -> Result<McpServer, ConfigError> {
     let mut f = Fields::new(value, &format!("mcp.server[{index}]"))?;
+    let auth: crate::McpAuth = f.required("auth")?;
     let result = McpServer {
         name: f.required("name")?,
         url: f.required("url")?,
-        auth: f.required("auth")?,
+        auth,
         bearer_file: f.optional("bearer_file")?,
-        allow_tools: f.optional("allow_tools")?.unwrap_or_default(),
+        allow_tools: f.optional("allow_tools")?.unwrap_or_else(|| auth.default_tools()),
     };
     f.finish()?;
     Ok(result)

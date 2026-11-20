@@ -78,8 +78,34 @@ mod tests {
         assert_eq!(server.name, "portos");
         assert_eq!(server.auth, McpAuth::PortosDeviceCode);
         assert_eq!(server.url, "https://api.portoperatingsystem.com/mcp"); // lint-rules: allow-literal offline example projection, never contacted
-        assert_eq!(server.allow_tools, ["endpoint_list", "endpoint_query", "control"]);
-        assert_eq!(config.mcp.scopes, ["endpoint:read"]);
+        assert_eq!(
+            server.allow_tools,
+            [
+                "control",
+                "endpoint_query",
+                "endpoint_show",
+                "endpoint_manage",
+                "group_query",
+                "group_manage",
+                "guide",
+                "subscription_list",
+                "subscription_inspect",
+                "subscription_cancel",
+                "subscription_label_edit"
+            ]
+        );
+        assert_eq!(
+            config.mcp.scopes,
+            [
+                "endpoint:read",
+                "endpoint:write",
+                "message:send",
+                "group:read",
+                "group:manage",
+                "subscription:read",
+                "subscription:write"
+            ]
+        );
         let private = Path::new("/data/local/echo-bridge/private");
         assert_eq!(config.mcp.state_dir, Some(private.join("portos")));
         assert_eq!(config.screen.pairing_token_file, private.join("screen-pairing.txt"));

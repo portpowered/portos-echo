@@ -1,0 +1,16 @@
+id: m5-twin-room-lights
+milestone: M5
+tiers: [T3, T5]
+setup:
+  mcp: portos-pilot
+  backend: client
+steps:
+  - mcp: {action: link}
+  - mcp: {action: approve}
+  - say: "Computer, turn off twin room lights"
+  - expect_speech_contains: ["Twin room", "off"]
+  - expect_trace:
+      - "tools/call {name: group_query, count: 1}"
+      - "tools/call {name: control, count: 1}"
+budgets: {}
+negative: []

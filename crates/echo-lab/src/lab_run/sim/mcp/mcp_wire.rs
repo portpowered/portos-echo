@@ -1,14 +1,36 @@
+use super::mcp_lights::Journey;
 use std::path::Path;
 
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines},
     net::TcpStream,
     process::Command,
 };
 
 pub type Screen = Lines<BufReader<TcpStream>>;
 const PAIR: &str = "synthetic-m5-screen";
+
+pub(super) async fn health(address: std::net::SocketAddr) -> Result<Value, String> {
+    let mut socket = TcpStream::connect(address)
+        .await
+        .map_err(|_| "M5: health connection failed")?;
+    socket
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: local\r\nConnection: close\r\n\r\n")
+        .await
+        .map_err(|_| "M5: health request failed")?;
+    let mut response = String::new();
+    socket
+        .take(4096)
+        .read_to_string(&mut response)
+        .await
+        .map_err(|_| "M5: health read failed")?;
+    let (headers, body) = response.split_once("\r\n\r\n").ok_or("M5: malformed health response")?;
+    if !headers.starts_with("HTTP/1.1 200 OK\r\n") {
+        return Err("M5: health observation failed".into());
+    }
+    serde_json::from_str(body).map_err(|_| "M5: invalid health".into())
+}
 
 pub fn command(binary: &Path, root: &Path) -> Command {
     let mut command = Command::new(binary);
@@ -64,7 +86,7 @@ pub async fn state(lines: &mut Screen) -> Result<Value, String> {
     }
 }
 
-pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str) -> Result<(), String> {
+pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str, journey: Journey) -> Result<(), String> {
     let template = include_str!("../../../../../../examples/bridge.example.toml");
     let text = template
         .replace("echo.example.invalid", "127.0.0.1")
@@ -80,6 +102,16 @@ pub fn configure(root: &Path, host: std::net::SocketAddr, resource: &str) -> Res
         .replace("http://127.0.0.1:18080/mcp", resource)
         .replace("auth = \"none\"", "auth = 'portos_device_code'")
         .replace(&format!("{}:16900", std::net::Ipv4Addr::UNSPECIFIED), "127.0.0.1:0");
+    let mut text = match journey {
+        Journey::Lifecycle => text,
+        Journey::Twin | Journey::ReadOnly => text.replace(
+            "allow_tools = [\"test.echo\"]",
+            "allow_tools = ['control', 'endpoint_query', 'group_query']",
+        ),
+    };
+    if journey == Journey::ReadOnly {
+        text = text.replace("[mcp]\n", "[mcp]\nscopes = ['endpoint:read']\n");
+    }
     let text = format!("{text}\n[codex]\nhome = '{}'\n", root.join("home").display());
     std::fs::create_dir(root.join("credentials")).map_err(|_| "M5: cannot create pairing directory")?;
     for (name, content) in [
@@ -97,6 +129,46 @@ pub fn completion(output: &std::process::Output, expected: &str) -> Result<(), S
         return Err("M5: operator completion mismatch".into());
     }
     Ok(())
+}
+
+pub fn link_command(
+    binary: &Path,
+    root: &Path,
+) -> (
+    tokio::task::JoinHandle<std::io::Result<std::process::Output>>,
+    tokio::sync::oneshot::Receiver<Vec<u8>>,
+) {
+    let mut command = command(binary, root);
+    command.args(["link", "--config", "bridge.toml"]);
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut child = command.spawn()?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("missing link stdout"))?;
+        let mut prefix = Vec::new();
+        let mut lines = 0;
+        while lines != 2 {
+            if prefix.len() == 4096 {
+                return Err(std::io::Error::other("oversized link guidance"));
+            }
+            let byte = stdout.read_u8().await?;
+            lines += usize::from(byte == b'\n');
+            prefix.push(byte);
+        }
+        send.send(prefix.clone())
+            .map_err(|_| std::io::Error::other("link observer closed"))?;
+        child.stdout = Some(stdout);
+        let mut output = child.wait_with_output().await?;
+        prefix.extend_from_slice(&output.stdout);
+        output.stdout = prefix;
+        Ok(output)
+    });
+    (task, receive)
 }
 
 pub fn link_code(epoch: u64, issuer: &str) -> Value {

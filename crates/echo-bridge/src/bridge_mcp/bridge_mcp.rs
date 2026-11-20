@@ -5,7 +5,7 @@ pub(crate) mod bridge_component;
 mod bridge_control;
 mod bridge_events;
 mod bridge_http;
-mod bridge_operations;
+pub(crate) mod bridge_operations;
 pub(crate) mod bridge_presentation;
 mod bridge_settings;
 mod bridge_token;
@@ -17,6 +17,7 @@ pub use bridge_settings::Settings;
 pub(crate) use bridge_token::Token;
 use echo_mcp_auth::{AuthClient, AuthError};
 use std::{
+    collections::HashSet,
     net::SocketAddr,
     sync::{
         Arc, Mutex,
@@ -36,6 +37,13 @@ pub(crate) struct Grant {
     trace_failed: AtomicBool,
     operation: AtomicU64,
     reloaded: AtomicBool,
+    scopes: Mutex<ScopeStatus>,
+}
+
+#[derive(Default)]
+struct ScopeStatus {
+    generation: u64,
+    denials: HashSet<(String, &'static str)>,
 }
 
 impl Grant {
@@ -62,6 +70,42 @@ impl Grant {
         self.rejected.load(Ordering::Acquire)
     }
 
+    pub fn scope_generation(&self) -> Result<u64, Error> {
+        self.scopes
+            .lock()
+            .map(|state| state.generation)
+            .map_err(|_| Error::Control)
+    }
+
+    pub fn scope_denied(&self, generation: u64, tool: &str, scope: &'static str) -> Result<(), Error> {
+        let mut state = self.scopes.lock().map_err(|_| Error::Control)?;
+        if state.generation == generation && !self.blocked() && state.denials.insert((tool.into(), scope)) {
+            self.event(
+                "mcp.scope_insufficient",
+                serde_json::json!({"tool":tool,"missing_scope":scope}),
+            )
+            .map_err(Error::Mcp)?;
+        }
+        Ok(())
+    }
+
+    pub fn health_status(&self) -> &'static str {
+        if self.blocked() || !self.client.has_grant() {
+            "unlinked"
+        } else if self.scopes.lock().is_ok_and(|state| !state.denials.is_empty()) {
+            "relink_for_scope"
+        } else {
+            "linked"
+        }
+    }
+
+    fn reset_scope_status(&self) -> Result<(), AuthError> {
+        let mut state = self.scopes.lock().map_err(|_| AuthError::Storage)?;
+        state.generation = state.generation.checked_add(1).ok_or(AuthError::Storage)?;
+        state.denials.clear();
+        Ok(())
+    }
+
     pub fn check(&self) -> Result<(), Error> {
         if self.trace_failed.load(Ordering::Acquire) {
             Err(Error::Trace)
@@ -76,6 +120,7 @@ impl Grant {
 pub(crate) struct Runtime {
     pub grant: Arc<Grant>,
     pub address: SocketAddr,
+    pub operator: bridge_operations::Operator,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -110,13 +155,21 @@ impl Runtime {
             trace_failed: AtomicBool::new(false),
             operation: AtomicU64::new(0),
             reloaded: AtomicBool::new(true),
+            scopes: Mutex::default(),
         });
         let (send, receive) = mpsc::channel(1);
-        let tasks = vec![
-            tokio::spawn(bridge_operations::serve(grant.clone(), receive)),
-            tokio::spawn(bridge_http::serve(listener, token, send)),
+        let operator = bridge_operations::Operator::new(send);
+        let mut runtime = Self {
+            grant,
+            address,
+            operator,
+            tasks: Vec::new(),
+        };
+        runtime.tasks = vec![
+            tokio::spawn(bridge_operations::serve(runtime.grant.clone(), receive)),
+            tokio::spawn(bridge_http::serve(listener, token, runtime.operator.clone())),
         ];
-        Ok(Self { grant, address, tasks })
+        Ok(runtime)
     }
 
     pub async fn close(&mut self) {

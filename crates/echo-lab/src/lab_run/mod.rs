@@ -92,6 +92,7 @@ fn ordinary_say(value: &str, scenario: &str, options: &Options) -> Result<Step, 
             Some("m3-full-duplex" | "session-barge-continues") => return sim::m3::utterance(value),
             Some(id) if sim::session::admits(id) => return sim::session::utterance(value),
             Some("m4-spoof-tool") => return sim::m4::utterance(value),
+            Some("m5-twin-room-lights") => return sim::mcp::utterance(value),
             Some("m6-emotion") => return sim::m4::emotion_utterance(value),
             Some("m7-muse") => return sim::m7::utterance(value),
             _ => {}
@@ -196,7 +197,9 @@ fn sim_setup(scenario: &serde_json::Value) -> Result<(), String> {
             !(matches!(
                 (k.as_str(), v.as_str()),
                 ("mcp", Some("spoof")) | ("backend", Some("client"))
-            ) || scenario["id"] == "m5-port-os-link" && k == "mcp" && v == "portos-pilot")
+            ) || matches!(scenario["id"].as_str(), Some("m5-port-os-link" | "m5-twin-room-lights"))
+                && k == "mcp"
+                && v == "portos-pilot")
         })
     }) {
         return Err("sim: unsupported setup mode".into());
@@ -377,7 +380,10 @@ fn driver<'a>(
         return Ok(Box::new(sim::session::Persistent::new(options)?));
     }
     if scenario["milestone"] == "M5" {
-        return Ok(Box::new(sim::mcp::M5::new(options)?));
+        return Ok(Box::new(sim::mcp::M5::new(
+            options,
+            scenario["id"] == "m5-twin-room-lights",
+        )?));
     }
     if scenario["id"] == "m7-muse" {
         return Ok(Box::new(sim::m7::M7::new(options)?));
