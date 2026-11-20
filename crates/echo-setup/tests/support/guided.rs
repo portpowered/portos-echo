@@ -167,7 +167,7 @@ async fn t3_guided_existing_account_needs_no_screen_and_ambiguous_completion_set
 
 #[tokio::test]
 async fn t3_guided_observation_and_output_failures_settle_before_returning() -> Result {
-    for output_failure in [false, true] {
+    for output_failure in [true, false] {
         let fixture = Fixture::new()?;
         let connection = fixture.connection(deadline()).await?;
         let screen = TcpListener::bind("127.0.0.1:0").await?;
@@ -184,9 +184,10 @@ async fn t3_guided_observation_and_output_failures_settle_before_returning() -> 
             count += 1;
             Err(Failure("output_failed"))
         }));
-        let child = tokio::select! {
+        let child: TcpStream = tokio::select! {
+            biased;
             result = &mut guided => return Err(format!("early result: {result:?}").into()),
-            socket = ready(&barrier) => socket?,
+            () = std::future::pending::<()>() => unreachable!("readiness intentionally withheld"),
         };
         let result = guided.await;
         assert_eq!(
