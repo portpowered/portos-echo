@@ -1,4 +1,4 @@
-//! T1: user speech during a reply cuts it only once the model has yielded.
+//! T1: user speech during a reply holds it and cuts it only once the model has yielded.
 use super::*;
 use crate::bridge_runtime::bridge_pacing::BARGE_WINDOW;
 
@@ -9,7 +9,7 @@ fn cuts(observer: &Observer) -> usize {
 }
 
 /// One call frame per 20 ms, as the peer delivers a reply in real time.
-async fn stream<F: Future>(
+pub(super) async fn stream<F: Future>(
     work: &mut Pin<Box<F>>,
     tx: &mpsc::Sender<Result<MediaEvent, Error>>,
     count: usize,
@@ -23,7 +23,8 @@ async fn stream<F: Future>(
 
 /// T1, the device's dropout: the microphone hears speech while the model
 /// talks on. Each sign of it used to cut the reply and drop audio until the
-/// model's next transcript fragment. Now the reply plays whole.
+/// model's next transcript fragment. Now the reply pauses while the barge-in
+/// is pending and then plays whole.
 #[tokio::test(start_paused = true)]
 async fn voice_user_speech_under_a_talking_model_cuts_nothing() {
     let talking = usize::try_from((BARGE_WINDOW + BARGE_QUIET * 2).as_millis() / FRAME.as_millis()).unwrap();
@@ -45,18 +46,26 @@ async fn voice_user_speech_under_a_talking_model_cuts_nothing() {
         ));
         send(&tx, [said("A long answer")]).await;
         stream(&mut work, &tx, 25, 123).await;
-        // Signs of speech keep coming for a second; the model never pauses.
-        for _ in 0..5 {
+        // Two signs of speech; the model never pauses.
+        for _ in 0..2 {
             send(&tx, [heard(signal)]).await;
             stream(&mut work, &tx, 10, 123).await;
         }
+        // Held from the first sign: at most the frame already on its way.
+        assert!(frames(&observer).len() <= 26);
         stream(&mut work, &tx, talking, 123).await;
         send(&tx, [done()]).await;
-        tick(work.as_mut(), 20).await;
+        // The held stretch plays late: wait for the reply to drain.
+        for _ in 0..150 {
+            if observer.commands().last() == Some(&Command::Stop) {
+                break;
+            }
+            tick(work.as_mut(), 1).await;
+        }
         assert_eq!(observer.commands().last(), Some(&Command::Stop));
         observer.finish(Ok(()));
         let stats = work.await.unwrap();
-        let received = 75 + talking;
+        let received = 45 + talking;
         assert_eq!(cuts(&observer), 0);
         assert_eq!(frames(&observer).len(), received);
         assert_eq!(
@@ -64,8 +73,9 @@ async fn voice_user_speech_under_a_talking_model_cuts_nothing() {
             (received as u64, received as u64)
         );
         let quality = stats.quality;
-        assert_eq!((quality.cuts, quality.cut_trigger), (0, None));
+        assert_eq!((quality.cuts, quality.cut_trigger, quality.holds), (0, None, 1));
         assert_eq!((quality.discarded_cut, quality.discarded_audible), (0, 0));
+        assert_eq!(stats.reply_dropped, 0);
         assert_eq!((quality.underruns, quality.arrival_gap_max_ms), (0, 20));
     }
 }

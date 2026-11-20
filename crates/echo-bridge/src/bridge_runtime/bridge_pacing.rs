@@ -86,6 +86,8 @@ pub struct ReplyQuality {
     /// Barge-ins that cut this reply, and what armed the last of them.
     pub cuts: u32,
     pub cut_trigger: Option<BargeTrigger>,
+    /// Times a sign of user speech held the reply back from the device.
+    pub holds: u32,
     /// The `timing` sample; none when no endpoint preceded the reply's audio.
     pub first_audio: Option<FirstAudio>,
 }
@@ -241,6 +243,17 @@ impl ReplyMeter {
         self.quality.cuts += 1;
         self.quality.cut_trigger = Some(trigger);
         self.arrived = None;
+        self.restarted = self.playout.is_some();
+    }
+
+    /// A sign of user speech holds the reply back from the device.
+    pub(crate) fn held(&mut self) {
+        self.quality.holds += 1;
+    }
+
+    /// The model talked through the hold: the held audio plays from here. The
+    /// device ran dry on purpose, which is not an underrun.
+    pub(crate) fn released(&mut self) {
         self.restarted = self.playout.is_some();
     }
 

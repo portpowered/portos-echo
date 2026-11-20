@@ -27,6 +27,8 @@ pub(super) struct Source {
     thinking: bool,
     /// User speech heard during the reply, until the model yields to it.
     barge: Barge,
+    /// A barge-in cut the reply: call audio is its until the model speaks again.
+    stale: bool,
 }
 
 impl Source {
@@ -61,10 +63,32 @@ impl Source {
     }
 
     /// The reply has a frame to pace out, or has stalled mid-speech and is
-    /// owed a fade-out. A filler that is done has ended, not stalled.
+    /// owed a fade-out. A filler that is done has ended, not stalled. A
+    /// pending barge-in holds the reply: the device plays out what it has.
     #[must_use]
     pub fn playable(&self) -> bool {
-        self.reply.has_frames() || (self.reply.stalled() && !self.delegation.held())
+        !self.barge.pending() && (self.reply.has_frames() || (self.reply.stalled() && !self.delegation.held()))
+    }
+
+    /// The assistant began an utterance: call audio is a reply's again.
+    pub fn spoke(&mut self) {
+        self.stale = false;
+        self.controller.reply_started();
+        self.delegation.spoke();
+    }
+
+    /// Call audio and a done still belong to a reply that was cut.
+    #[must_use]
+    pub fn stale(&self) -> bool {
+        self.stale || self.controller.retired()
+    }
+
+    /// Give the configured listen window from now.
+    pub fn renew_idle(&mut self) {
+        let listen = self.session.listen();
+        if let Some(deadline) = listen.and_then(|listen| Instant::now().checked_add(listen)) {
+            self.controller.extend_idle(deadline);
+        }
     }
 
     /// Close the reply's quality window. `lost` is the call's cumulative RTP loss.
@@ -78,14 +102,8 @@ impl Source {
     pub fn dispatch_completed(&mut self) {
         let waited = self.delegation.in_flight();
         self.delegation.completed();
-        if waited
-            && !self.delegation.in_flight()
-            && let Some(deadline) = self
-                .session
-                .listen()
-                .and_then(|listen| Instant::now().checked_add(listen))
-        {
-            self.controller.extend_idle(deadline);
+        if waited && !self.delegation.in_flight() {
+            self.renew_idle();
         }
     }
 
@@ -105,17 +123,18 @@ impl Source {
             session: super::session_tools::Grants::default(),
             uplink: VecDeque::new(),
             barge: Barge::default(),
+            stale: false,
         })
     }
 
-    /// A sign of user speech during a reply arms a barge-in; it cuts nothing
-    /// yet, because the model may talk on (`Barge`).
+    /// A sign of user speech during a reply arms a barge-in. The reply is
+    /// held from the device at once, but not cut: the model may talk on (`Barge`).
     /// A dispatch in flight is thinking, not a reply to talk over: user speech
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
     pub fn heard_user(&mut self, trigger: BargeTrigger) {
-        if !self.delegation.in_flight() && self.controller.speaking() {
-            self.barge.arm(Instant::now(), trigger);
+        if !self.delegation.in_flight() && self.controller.speaking() && self.barge.arm(Instant::now(), trigger) {
+            self.meter.held();
         }
     }
 
@@ -136,6 +155,7 @@ impl Source {
             return Ok(());
         }
         self.meter.cut(trigger);
+        self.stale = true;
         port.retire_audio();
         self.fresh_reply()?;
         self.delegation = Delegation::default();
@@ -214,7 +234,7 @@ impl Source {
     /// converter. Discard both quiet and audible media at that boundary.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
         self.stats.reply_received += 1;
-        let reason = if self.controller.cutting() || self.controller.retired() {
+        let reason = if self.controller.cutting() || self.stale() {
             Discard::Cut
         } else if !self.controller.accepts_audio() {
             Discard::Idle
@@ -224,7 +244,11 @@ impl Source {
             // PCM has no utterance identity. Only ordered assistant control
             // opens Speaking; the initial user transcript can lag audible RTP.
             let now = Instant::now();
+            let held = self.barge.pending();
             self.barge.heard(now, audible(frame));
+            if held && !self.barge.pending() {
+                self.meter.released();
+            }
             let wanted = self.meter.arrived(now);
             self.meter.targeted(self.reply.retarget(wanted));
             return self.reply.push(frame);

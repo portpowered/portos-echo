@@ -18,7 +18,9 @@
 //! Release events acknowledge acquired listener owners after shutdown is joined.
 //! Voice runtime `screen.released` also counts clients dropped at the drain bound.
 //! `reply.quality` counts in `cuts` the barge-ins that cut the reply, with the
-//! `trigger` of the last: `user_transcript`, `speech_started` or null.
+//! `trigger` of the last: `user_transcript`, `speech_started` or null, and in
+//! `holds` the times a sign of user speech held the reply back from the Echo.
+//! A reply a barge-in cut settles with `reply.played` `outcome` `cut`.
 //! `timing` follows a settled reply's `reply.quality` when that reply has a
 //! sample: `name` is `first_audio_after_endpoint_ms`, `duration_ms` is whole
 //! milliseconds on the bridge clock from the endpoint to the first reply frame

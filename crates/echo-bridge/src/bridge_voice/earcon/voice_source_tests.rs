@@ -215,7 +215,7 @@ async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
         [target(100, 300, 280), 1.into(), 20.into(), 2.into(), 3.into()]
     );
     let cuts = [&rows[3], &rows[5]].map(|row| row["cuts"].clone());
-    let cut = |count: u32, trigger: Option<&str>| serde_json::json!({"count":count, "trigger":trigger});
+    let cut = |count: u32, trigger: Option<&str>| serde_json::json!({"count":count, "trigger":trigger, "holds":0});
     assert_eq!(cuts, [cut(0, None), cut(2, Some("user_transcript"))]);
     assert_eq!(
         rows[6],

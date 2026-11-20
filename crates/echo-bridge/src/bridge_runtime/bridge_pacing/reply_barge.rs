@@ -1,4 +1,4 @@
-//! A barge-in takes effect only once the model yields to the user.
+//! A barge-in silences the reply at once and cuts it once the model yields.
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -37,11 +37,15 @@ struct Armed {
 
 /// The Live session transcribes whatever the microphone hears while a reply
 /// plays: the user, other voices in the room, the Echo's own speaker. The
-/// model decides for itself whether to yield. A sign of user speech therefore
-/// only arms a barge-in. It fires when the model's reply audio then stays
-/// quiet for `BARGE_QUIET`, counted from the sign or from the last audible
-/// frame after it. A model still talking when `BARGE_WINDOW` has passed was
-/// not interrupted: the barge-in is dropped and the reply plays on untouched.
+/// model decides for itself whether to yield, and the pinned session has no
+/// request that makes it. A sign of user speech therefore arms a barge-in.
+/// While it is pending the reply is held: nothing more is written to the
+/// device, so the user hears it stop, and the model's audio waits in the
+/// reply queue. It fires when the model's reply audio then stays quiet for
+/// `BARGE_QUIET`, counted from the sign or from the last audible frame after
+/// it: the reply is cut and the held audio dropped. A model still talking
+/// when `BARGE_WINDOW` has passed was not interrupted: the barge-in is
+/// dropped and the held audio plays, late but whole.
 /// A model that has ended its turn has said so itself: there is no stretch to
 /// wait out, and a pending barge-in fires at once.
 #[derive(Default)]
@@ -50,19 +54,26 @@ pub(crate) struct Barge {
 }
 
 impl Barge {
-    /// A sign of user speech came at `now` during a reply.
-    pub(crate) fn arm(&mut self, now: Instant, trigger: BargeTrigger) {
+    /// A sign of user speech came at `now` during a reply. True when it
+    /// armed a barge-in, false when it renewed the pending one.
+    pub(crate) fn arm(&mut self, now: Instant, trigger: BargeTrigger) -> bool {
         let until = now + BARGE_WINDOW;
-        match &mut self.armed {
-            Some(armed) => armed.until = until,
-            None => {
-                self.armed = Some(Armed {
-                    trigger,
-                    until,
-                    quiet_since: now,
-                });
-            }
+        if let Some(armed) = &mut self.armed {
+            armed.until = until;
+            return false;
         }
+        self.armed = Some(Armed {
+            trigger,
+            until,
+            quiet_since: now,
+        });
+        true
+    }
+
+    /// A barge-in is armed and has neither fired nor been dropped.
+    #[must_use]
+    pub(crate) fn pending(&self) -> bool {
+        self.armed.is_some()
     }
 
     /// One reply frame from the model was accepted at `now`.
@@ -107,7 +118,7 @@ mod tests {
         let start = Instant::now();
         let mut barge = Barge::default();
         assert_eq!((barge.due(start, true), barge.fire(start, true)), (None, None));
-        barge.arm(start, BargeTrigger::UserTranscript);
+        assert!(!barge.pending() && barge.arm(start, BargeTrigger::UserTranscript));
         assert_eq!(barge.due(start, false), Some(start + BARGE_QUIET));
         let mut now = start;
         while now < start + BARGE_WINDOW {
@@ -115,6 +126,7 @@ mod tests {
             assert_eq!(barge.fire(now, false), None);
             barge.heard(now, true);
         }
+        assert!(!barge.pending());
         assert_eq!(barge.due(now, false), None);
         assert_eq!(barge.fire(now + BARGE_QUIET, false), None);
     }
@@ -129,7 +141,8 @@ mod tests {
         barge.arm(start, BargeTrigger::SpeechStarted);
         barge.heard(start + FRAME * 5, true);
         barge.heard(start + FRAME * 6, false);
-        barge.arm(start + FRAME * 7, BargeTrigger::UserTranscript);
+        assert!(!barge.arm(start + FRAME * 7, BargeTrigger::UserTranscript));
+        assert!(barge.pending());
         let due = start + FRAME * 5 + BARGE_QUIET;
         assert_eq!(barge.due(start, false), Some(due));
         assert_eq!(barge.fire(due - Duration::from_millis(1), false), None);

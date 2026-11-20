@@ -135,6 +135,12 @@ impl Controller {
         self.played = false;
     }
 
+    /// A persistent run settles a cut reply as over: nothing more of it will
+    /// play, and the next reply opens its own playback.
+    pub fn cut_played(&mut self) {
+        (self.played, self.unanswered) = (true, true);
+    }
+
     /// False consumes a delayed cut receipt; true acknowledges this reply.
     /// After a barge-in the model may say nothing more. The device then ends
     /// the replacement playback itself, and the cut reply settles as played:

@@ -1,4 +1,4 @@
-//! T1: a settled persistent reply, another reply, a cut and its replacement.
+//! T1: a settled persistent reply, another reply, a cut and the next reply.
 //! Memory-only ports and paused time; native flush remains a T3 obligation.
 use super::*;
 
@@ -42,7 +42,7 @@ async fn voice_listen_barge_after_settled_reply_retains_run_and_fresh_idle_deadl
     tokio::time::advance(Duration::from_millis(1)).await;
     let stats = work.await.unwrap();
     assert_eq!(stats.reply_sent, u64::try_from(prefix + 12).unwrap());
-    assert_eq!((receipts.get(), cuts(&observer)), (2, 1));
+    assert_eq!((receipts.get(), cuts(&observer)), (3, 1));
     assert_eq!(observer.commands().last(), Some(&Command::EndRun));
     assert_replacement_pcm(&observer);
 }
@@ -90,7 +90,8 @@ async fn cut(
     let before = paused.get();
     observer.finish(Ok(()));
     poll(work.as_mut()).await;
-    assert_eq!(paused.get(), before + 1);
+    // The cut reply settles at once: its receipt does not wait for a successor.
+    assert_eq!((paused.get(), receipts.get()), (before + 1, 2));
     idle_noise(tx).await;
     poll(work.as_mut()).await;
     assert_eq!(frames(observer), prefix);
@@ -137,12 +138,12 @@ async fn replacement(
     observer.finish(Ok(()));
     for _ in 0..50 {
         poll(work.as_mut()).await;
-        if receipts.get() == 2 {
+        if receipts.get() == 3 {
             return;
         }
         tokio::time::advance(Duration::from_millis(20)).await;
     }
-    assert_eq!(receipts.get(), 2);
+    assert_eq!(receipts.get(), 3);
 }
 
 fn frames(observer: &Observer) -> usize {
