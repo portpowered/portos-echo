@@ -4,7 +4,7 @@ import { pageFor, emit, calls, bounds } from "./browser.mjs";
 import { states, frame } from "./fixtures.mjs";
 
 const controls = [
-    [states[0], "Start", { action: "tap", target: "primary" }],
+    [states[0], "Begin session", { action: "tap", target: "primary" }],
     [states[8], "Allow", { action: "approve", id: "approval-1" }],
     [states[8], "Deny", { action: "deny", id: "approval-1" }],
     [states[10], "Relink", { action: "relink" }],
@@ -12,6 +12,22 @@ const controls = [
     [states[11], "Dismiss", { action: "dismiss" }],
     [states[9], "Dismiss", { action: "dismiss" }],
 ];
+test("ready at 960x600: one touchscreen tap on the empty stage posts one primary action", async (t) => {
+    const page = await pageFor(t, undefined, true, undefined, {
+        viewport: { width: 960, height: 600 },
+        hasTouch: true,
+    });
+    await emit(page, frame(1));
+    await page.getByRole("button", { name: "Begin session" }).tap();
+    assert.deepEqual(await calls(page), [
+        {
+            url: "http://127.0.0.1:4173/actions",
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: '{"action":"tap","target":"primary"}',
+        },
+    ]);
+});
 test("F03 F04 F05 F18: exact POST at all inside corners/edges; outside edges emit none", async (t) => {
     const page = await pageFor(t);
     let seq = 0;

@@ -21,6 +21,7 @@ const layout = {
     safe_area: { x: 10, y: 10, width: 80, height: 80 },
     slots: {
         clock: { x: 5, y: 5 },
+        date: { x: 5, y: 12 },
         link_code: { x: 20, y: 25 },
         status: { x: 0, y: 0 },
         approval: { x: 95, y: 95 },
@@ -336,6 +337,12 @@ test("pack page: layout clock/link coordinates, safe-area approval containment a
     const clock = await page.locator(".pack-clock").boundingBox();
     assert.equal(Math.round(clock.x), 179);
     assert.equal(Math.round(clock.y), 112);
+    assert.equal(await page.locator(".pack-clock").textContent(), "12:00 AM");
+    const date = page.locator(".pack-date");
+    const dateBox = await date.boundingBox();
+    assert.equal(Math.round(dateBox.x), 179);
+    assert.equal(Math.round(dateBox.y), 157);
+    assert.equal(await date.textContent(), "1/1/1970");
     await send(page, 2, {
         state: "link_code",
         user_code: "ABCD",
@@ -411,7 +418,7 @@ test("pack page: reload freshness, reconnect, safe failures and disposal", async
     await loaded(page);
     await reload(page, 1);
     await page.waitForFunction(() => window.packRequests.length === 4);
-    assert.equal(await page.locator("h1").textContent(), "ready");
+    assert.equal(await page.locator("[data-ui-state=ready]").count(), 1);
     await page.waitForFunction(() =>
         document
             .querySelector(".pack-stage img")
@@ -456,7 +463,7 @@ test("pack page: reload freshness, reconnect, safe failures and disposal", async
         window.streams[0].dispatchEvent(new Event("open"));
     });
     await page.waitForFunction(() => !document.querySelector(".screen-pack"));
-    assert.equal(await page.locator("h1").textContent(), "ready");
+    assert.equal(await page.locator("[data-ui-state=ready]").count(), 1);
     await page.evaluate(() => {
         window.packStatus = 200;
     });

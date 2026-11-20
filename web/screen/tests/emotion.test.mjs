@@ -29,12 +29,10 @@ test("F12 F18: Emotion a,a,b,a at 0/79/80/160ms; Dismiss awaits authoritative re
     assert.equal(await page.evaluate(() => Date.now()), 160);
     assert.equal(await shown(), "frame-a");
     await emit(page, frame(2));
-    assert.equal(await page.evaluate(() => window.timers.size), 0);
+    assert.equal(await page.evaluate(() => window.timers.size), 1);
     await page.clock.runFor(160);
-    assert.equal(
-        await page.locator("section p").textContent(),
-        "Echo Live ready",
-    );
+    assert.equal(await page.locator("[data-ui-state=ready]").count(), 1);
+    assert.equal(await page.getByLabel("Animation frame").count(), 0);
 });
 
 test("F13: empty/single/zero/u64-max animations stay bounded and teardown stops callbacks", async (t) => {
