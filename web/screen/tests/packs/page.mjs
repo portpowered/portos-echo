@@ -267,10 +267,17 @@ test("pack page: MP4 capability fallback, idle/rest, character-only, and reduced
     await send(page, 1, { state: "muted" });
     await loaded(page);
     assert.equal(await visible(page), "idle.mp4");
+    await page.evaluate(() => {
+        window.motionSettled = new Promise((resolve) => {
+            matchMedia("(prefers-reduced-motion: reduce)").addEventListener(
+                "change",
+                resolve,
+                { once: true },
+            );
+        });
+    });
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.waitForFunction(
-        () => document.querySelectorAll("video:not([hidden])").length === 0,
-    );
+    await page.evaluate(() => window.motionSettled.then(() => undefined));
     assert.equal(await page.locator("video:not([hidden])").count(), 0);
     await send(page, 2, { state: "speaking" });
     assert.equal(await page.locator(".pack-stage img").isVisible(), true);
