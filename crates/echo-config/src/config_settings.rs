@@ -216,7 +216,11 @@ impl SettingsOverlay {
         if let Some(value) = self.screen_pack() {
             root.insert("screen_pack", value.into());
         }
-        toml::to_string(&root).map_err(|_| ConfigError::new("settings.toml", "cannot encode overlay"))
+        let text = toml::to_string(&root).map_err(|_| ConfigError::new("settings.toml", "cannot encode overlay"))?;
+        if text.len() as u64 > MAX_OVERLAY_BYTES {
+            return Err(ConfigError::new("settings.toml", "overlay exceeds 65536 bytes"));
+        }
+        Ok(text)
     }
 
     /// Omitted means automatic template selection; empty explicitly disables it.

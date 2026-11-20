@@ -111,6 +111,16 @@ fn screen_settings_empty_model_and_effort_select_pin_defaults_over_legacy_aliase
 }
 
 #[test]
+fn screen_settings_sparse_merge_cannot_encode_an_overlay_that_startup_would_refuse() {
+    let model = overlay(&format!("[codex]\ndelegate_model='{}'", "m".repeat(33_000)));
+    let effort = overlay(&format!("[codex]\ndelegate_effort='{}'", "e".repeat(33_000)));
+    assert_eq!(overlay(&model.to_toml_string().unwrap()), model);
+    assert_eq!(overlay(&effort.to_toml_string().unwrap()), effort);
+    let error = model.merge(&effort).to_toml_string().unwrap_err();
+    assert_eq!(error.to_string(), "settings.toml: overlay exceeds 65536 bytes");
+}
+
+#[test]
 fn screen_settings_range_boundaries_and_cross_field_validation_use_real_config() {
     let base = BridgeConfig::from_toml_str(MINIMAL).unwrap();
     for (setting, expected) in [
