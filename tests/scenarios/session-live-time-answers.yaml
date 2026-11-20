@@ -1,0 +1,12 @@
+id: session-live-time-answers
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "What time is it?"
+  - say: "What is today's date?"
+  - say: "What day of the week is it?"
+  - say: "What time is it in my time zone?"
+budgets:
+  session_listen_seconds: 3
+negative: []
