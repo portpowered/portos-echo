@@ -39,6 +39,7 @@ class World:
         self.elapsed, self.refreshes, self.plays = 0, 0, 0
         self.grant = json.loads((root / "grant.json").read_text())
         self.calls, self.replays = [], []
+        (root / "calls.json").write_text("[]")
         self.linked = threading.Event()
         self.remote = root / "remote"
         self.remote.mkdir()
