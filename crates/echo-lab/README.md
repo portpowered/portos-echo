@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 18
+last modified: 2026, november, 20
 status: active
 ---
 
@@ -612,9 +612,11 @@ sign that the user's turn is over, named in `endpoint`: `user_transcript`, or
 before either sign has no sample. The M4 golden comparison skips `timing`, as it
 skips `reply.quality`: the value follows the run's pace.
 
-`make test-sim` runs two halves, which CI runs as parallel jobs. Both build the
+`make test-sim` runs two halves. Both build the
 lab binaries once. `make test-sim-suites` validates scenarios, runs the
-host/Wyoming component tests and discovers all T3 scenarios.
+host/Wyoming component tests and discovers all T3 scenarios. CI runs both halves
+as parallel part jobs. `run --all --partition K/N` runs every Nth T3 scenario in
+sorted order, starting at the Kth, so partitions 1/N to N/N run each scenario once.
 `make test-sim-host` runs the ignored `sim_host` integration cases and the
 binary's ignored T3 cases, each with two workers. Discovery prints pass/fail/not-runnable
 outcomes and `executed`, `passed`, `failed`, `not_runnable` totals. A runnable

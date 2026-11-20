@@ -2,9 +2,25 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub fn execute(args: &[String], output: &mut impl Write) -> Result<(), String> {
-    let (extras, root) = options(args)?;
+    let (extras, root, partition) = options(args)?;
     let (bridge, paths) = discover()?;
-    run_suite(&bridge, paths, &extras, root.as_deref(), output)
+    run_suite(&bridge, paths, &extras, root.as_deref(), partition, output)
+}
+
+/// `--partition K/N` keeps every Nth T3 scenario, starting at the Kth, in sorted order, so the
+/// partitions 1/N to N/N together run each T3 scenario exactly once.
+fn partition(value: &str) -> Result<(usize, usize), String> {
+    let parsed = value
+        .split_once('/')
+        .and_then(|(k, n)| Some((k.parse::<usize>().ok()?, n.parse::<usize>().ok()?)));
+    match parsed {
+        Some((k, n)) if (1..=n).contains(&k) => Ok((k, n)),
+        _ => Err("sim suite: --partition expects K/N with 1 <= K <= N".into()),
+    }
+}
+
+const fn selected(runnable: usize, (shard, shards): (usize, usize)) -> bool {
+    runnable % shards == shard - 1
 }
 
 fn discover() -> Result<(PathBuf, Vec<PathBuf>), String> {
@@ -75,11 +91,13 @@ fn run_suite(
     paths: Vec<PathBuf>,
     extras: &[String],
     root: Option<&Path>,
+    (shard, shards): (usize, usize),
     output: &mut impl Write,
 ) -> Result<(), String> {
     let mut passed = 0;
     let mut failed = 0;
     let unavailable = 0;
+    let mut runnable = 0;
     for path in paths {
         let name = path.to_str().ok_or("sim suite: invalid scenario path")?;
         let scenario = crate::lab_validate::load(name)?;
@@ -87,6 +105,10 @@ fn run_suite(
             .as_array()
             .is_some_and(|tiers| tiers.iter().any(|t| t == "T3"))
         {
+            continue;
+        }
+        runnable += 1;
+        if !selected(runnable - 1, (shard, shards)) {
             continue;
         }
         let mut command = scenario_command(bridge, name, &scenario)?;
@@ -146,9 +168,12 @@ fn scenario_command(bridge: &Path, name: &str, scenario: &serde_json::Value) -> 
     ])
 }
 
-fn options(args: &[String]) -> Result<(Vec<String>, Option<PathBuf>), String> {
+type SuiteOptions = (Vec<String>, Option<PathBuf>, (usize, usize));
+
+fn options(args: &[String]) -> Result<SuiteOptions, String> {
     let mut extras = Vec::new();
     let mut root = None;
+    let mut shard = (1, 1);
     let mut seen = std::collections::BTreeSet::new();
     let mut index = 0;
     while let Some(arg) = args.get(index) {
@@ -170,6 +195,10 @@ fn options(args: &[String]) -> Result<(Vec<String>, Option<PathBuf>), String> {
                         .clone(),
                 ]);
             }
+            "--partition" => {
+                index += 1;
+                shard = partition(args.get(index).ok_or("sim suite: missing option value")?)?;
+            }
             "--out" => {
                 index += 1;
                 let path = args.get(index).ok_or("sim suite: missing artifact root")?;
@@ -184,7 +213,7 @@ fn options(args: &[String]) -> Result<(Vec<String>, Option<PathBuf>), String> {
     if !seen.contains(&"--driver".to_owned()) {
         return Err("sim suite: requires --driver sim".into());
     }
-    Ok((extras, root))
+    Ok((extras, root, shard))
 }
 
 pub fn destination(root: &Path, milestone: &str) -> Result<PathBuf, String> {
@@ -212,4 +241,42 @@ pub fn scenario_bridge(scenario: &serde_json::Value) -> Result<PathBuf, String> 
         return Err("m4: missing prebuilt echo-bridge; run cargo build -p echo-bridge --bins --locked".into());
     }
     Ok(bridge)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{options, partition, selected};
+
+    fn args(text: &str) -> Vec<String> {
+        text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn partitions_cover_each_runnable_index_exactly_once() {
+        for shards in 1..=4 {
+            let mut seen = [0_usize; 17];
+            for shard in 1..=shards {
+                let parsed = partition(&format!("{shard}/{shards}")).unwrap();
+                assert_eq!(parsed, (shard, shards));
+                for (index, count) in seen.iter_mut().enumerate() {
+                    *count += usize::from(selected(index, parsed));
+                }
+            }
+            assert!(seen.iter().all(|count| *count == 1));
+        }
+    }
+
+    #[test]
+    fn partition_option_is_strict_and_defaults_to_everything() {
+        assert_eq!(options(&args("--all --driver sim")).unwrap().2, (1, 1));
+        assert_eq!(options(&args("--all --driver sim --partition 2/3")).unwrap().2, (2, 3));
+        for bad in ["0/2", "3/2", "1/0", "1", "a/b", "1/2/3", "-1/2", "--out"] {
+            assert!(
+                options(&args(&format!("--all --driver sim --partition {bad}"))).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(options(&args("--all --driver sim --partition")).is_err());
+        assert!(options(&args("--all --driver sim --partition 1/2 --partition 2/2")).is_err());
+    }
 }
