@@ -125,6 +125,8 @@ pub struct Stats {
     pub reply_dropped: u64,
     /// The settled reply's pacing and discard facts.
     pub quality: ReplyQuality,
+    /// The barge-in that cut the settled reply.
+    pub cut: Option<Box<crate::bridge_runtime::bridge_pacing::Cut>>,
 }
 
 /// Run an already connected call without creating a second process or IO reader.
@@ -470,7 +472,7 @@ async fn media(
         MediaEvent::Control(Event::Transcript { role, text, done }) => {
             if role == "user" {
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
-                source.heard_user(BargeTrigger::UserTranscript);
+                source.heard_user(BargeTrigger::UserTranscript, &text, done);
             } else if role == "assistant" && !done {
                 source.spoke();
             }
@@ -486,7 +488,7 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStarted) => {
-            source.heard_user(BargeTrigger::SpeechStarted);
+            source.heard_user(BargeTrigger::SpeechStarted, "", false);
             Ok(())
         }
         MediaEvent::Control(Event::Session(request)) => {

@@ -165,6 +165,15 @@ async fn first_audio_is_timed_from_the_user_transcript_or_the_delegated_turn() {
     }
 }
 
+/// The session heard "Stop."; the Echo played 160 ms more; the model yielded.
+fn stopped() -> crate::bridge_runtime::bridge_pacing::Cut {
+    crate::bridge_runtime::bridge_pacing::Cut {
+        text: "Stop.".into(),
+        silent_ms: 160,
+        yield_ms: 900,
+    }
+}
+
 /// The view writes one `timing` record per settled reply that has a sample.
 #[tokio::test(start_paused = true)]
 async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
@@ -188,6 +197,7 @@ async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
     stats.quality.target_max_ms = 300;
     stats.quality.target_final_ms = 280;
     stats.quality.reprimes = 1;
+    stats.cut = Some(Box::new(stopped()));
     stats.quality.concealment_ms = 20;
     stats.quality.fade_ins = 2;
     stats.quality.drained_frames = 3;
@@ -217,8 +227,9 @@ async fn settled_reply_with_a_first_audio_sample_records_one_timing_row() {
         [target(100, 300, 280), 1.into(), 20.into(), 2.into(), 3.into()]
     );
     let cuts = [&rows[3], &rows[5]].map(|row| row["cuts"].clone());
-    let cut = |count: u32, trigger: Option<&str>| serde_json::json!({"count":count, "trigger":trigger, "holds":0, "hold_ms":0});
-    assert_eq!(cuts, [cut(0, None), cut(2, Some("user_transcript"))]);
+    let cut = |count: u32, trigger: Option<&str>, at: Option<(u32, u32, &str)>| serde_json::json!({"count":count, "trigger":trigger, "holds":0, "hold_ms":0, "silent_ms":at.map(|at| at.0), "cut_ms":at.map(|at| at.1), "text":at.map(|at| at.2)});
+    let stopped = cut(2, Some("user_transcript"), Some((160, 900, "Stop.")));
+    assert_eq!(cuts, [cut(0, None, None), stopped]);
     assert_eq!(
         rows[6],
         serde_json::json!({"event":"timing", "elapsed_ms":0, "provider_auth_mode":"chatgpt", "run_id":"run-1",
@@ -251,12 +262,13 @@ async fn replying(source: &mut Source, port: &Narrow, level: i16, voice: i16) {
     tokio::time::advance(Duration::from_millis(20)).await;
 }
 
-/// T1, the device's overflow: the owner talked over a reply and it played on
-/// until the Live session's transcript of the speech arrived. Speech at the
-/// microphone now holds the reply within 100 ms, and the transcript that
-/// follows keeps it held until the model yields.
+/// T1, the owner's decision: the Live session alone judges a barge-in. On
+/// the Echo the microphone hears the reply louder than the user, so 7 of 8
+/// cuts came with nobody speaking. Speech at the microphone holds nothing and
+/// every frame of it still goes up; the session's transcript holds the reply,
+/// the model's yield cuts it, and the cut says what the session heard.
 #[tokio::test(start_paused = true)]
-async fn barge_in_holds_the_reply_on_speech_at_the_microphone_before_its_transcript() {
+async fn barge_in_is_judged_by_the_session_alone_and_its_cut_says_what_was_heard() {
     let mut source = Source::new(200, false).unwrap();
     let mut port = Narrow::default();
     port.room.set(usize::MAX);
@@ -264,16 +276,15 @@ async fn barge_in_holds_the_reply_on_speech_at_the_microphone_before_its_transcr
     for _ in 0..50 {
         replying(&mut source, &port, 2000, 0).await;
     }
-    assert!(source.playable());
-    // The user speaks. The model has not heard it yet and talks on.
-    let mut held = None;
-    for step in 0..35 {
+    // The user speaks. The session has given no sign of it: nothing is held.
+    for _ in 0..35 {
         replying(&mut source, &port, 2000, 6000).await;
-        held = held.or((!source.playable()).then_some(step));
+        assert!(!source.barge.pending() && source.playable());
     }
-    assert!(held.is_some_and(|step| step < 5), "{held:?}");
-    // The session's transcript of that speech comes 700 ms after it began.
-    source.heard_user(BargeTrigger::UserTranscript);
+    // The session's transcript of that speech: the reply is held at once.
+    source.heard_user(BargeTrigger::UserTranscript, "Sto", false);
+    assert!(source.barge.pending() && !source.playable());
+    source.heard_user(BargeTrigger::UserTranscript, "p.", false);
     for _ in 0..26 {
         replying(&mut source, &port, 0, 6000).await;
     }
@@ -282,14 +293,17 @@ async fn barge_in_holds_the_reply_on_speech_at_the_microphone_before_its_transcr
     let quality = source.settle(0);
     assert_eq!(
         (quality.cuts, quality.cut_trigger, quality.holds),
-        (1, Some(BargeTrigger::MicSpeech), 1)
+        (1, Some(BargeTrigger::UserTranscript), 1)
     );
-    assert_eq!((quality.mic.onsets, quality.mic.mistakes), (1, 0));
-    let lead = quality.mic_lead_ms.unwrap();
-    assert!(
-        (600..=700).contains(&lead) && quality.hold_ms >= lead + 500,
-        "{quality:?}"
-    );
+    let cut = source.stats.cut.take().unwrap();
+    assert_eq!((cut.text.as_str(), quality.mic.onsets), ("Stop.", 1));
+    // The Echo played out what it had, at most its 200 ms lead, and the cut
+    // came with the model's yield.
+    assert!(cut.silent_ms <= 200 && (500..=540).contains(&cut.yield_ms), "{cut:?}");
+    // Nothing was kept from the session: all 111 microphone frames went up.
+    assert_eq!((source.stats.microphone_frames, source.uplink_pending()), (111, false));
+    // The next reply is cut by nothing and carries no transcript.
+    assert!(source.settle(0).cuts == 0 && source.stats.cut.is_none());
 }
 
 /// 200 ms of noise under 1.6 s of reply: the steps the reply was held for.
@@ -302,14 +316,12 @@ async fn noise(source: &mut Source, port: &Narrow) -> u32 {
     held
 }
 
-/// T1: the reply's own echo never holds it, however loud the reply gets. A
-/// noise the Live session transcribes as nothing holds it for under a second;
-/// the model talks on, nothing is lost, and the same noise against the same
-/// reply holds nothing again.
+/// T1: no sound at the microphone holds the reply or cuts it: not its own
+/// echo, not a noise, not a voice as the model ends its turn.
 #[tokio::test(start_paused = true)]
-async fn barge_in_echo_never_holds_the_reply_and_a_noise_holds_it_once() {
+async fn barge_in_sound_at_the_microphone_never_holds_or_cuts_the_reply() {
     let mut source = Source::new(200, false).unwrap();
-    let port = Narrow::default();
+    let mut port = Narrow::default();
     port.room.set(usize::MAX);
     source.spoke();
     for level in [2000, 6000, 2000] {
@@ -318,14 +330,16 @@ async fn barge_in_echo_never_holds_the_reply_and_a_noise_holds_it_once() {
             assert!(!source.barge.pending(), "{level}");
         }
     }
-    // 200 ms of noise: held for its length and the 800 ms after it.
-    let held = noise(&mut source, &port).await;
-    assert!((40..=55).contains(&held), "{held}");
     assert_eq!(noise(&mut source, &port).await, 0);
+    for _ in 0..10 {
+        replying(&mut source, &port, 2000, 6000).await;
+    }
+    source.reply.finish().unwrap();
+    source.interrupt(&mut port).unwrap();
+    assert!(source.barge_due().is_none() && !source.stale());
     let quality = source.settle(0);
-    assert_eq!((quality.cuts, quality.holds, quality.discarded_audible), (0, 1, 0));
-    assert_eq!((quality.mic.onsets, quality.mic.mistakes), (1, 1));
-    assert_eq!((source.stats.reply_dropped, quality.mic_lead_ms), (0, None));
+    assert_eq!((quality.cuts, quality.holds, quality.discarded_audible), (0, 0, 0));
+    assert_eq!((source.stats.reply_dropped, source.stats.cut.is_none()), (0, true));
 }
 
 /// T1, the device's lost start: a short answer was held from its first
@@ -337,38 +351,12 @@ async fn reply_start_is_not_held_by_the_transcript_of_the_turn_it_answers() {
     port.room.set(usize::MAX);
     source.spoke();
     // The question's transcript comes late: the answer has not sounded yet.
-    source.heard_user(BargeTrigger::UserTranscript);
+    source.heard_user(BargeTrigger::UserTranscript, "", false);
     assert!(!source.barge.pending());
     for _ in 0..30 {
         replying(&mut source, &port, 2000, 0).await;
     }
     // A transcript now is the user talking over the answer.
-    source.heard_user(BargeTrigger::UserTranscript);
+    source.heard_user(BargeTrigger::UserTranscript, "", false);
     assert!(source.barge.pending());
-}
-
-/// T1: a sound at the microphone as the model ends its turn held the reply
-/// and cut its last words. The microphone alone holds, and cuts nothing.
-#[tokio::test(start_paused = true)]
-async fn barge_in_from_the_microphone_alone_never_cuts_the_reply() {
-    let mut source = Source::new(200, false).unwrap();
-    let mut port = Narrow::default();
-    port.room.set(usize::MAX);
-    source.spoke();
-    for _ in 0..50 {
-        replying(&mut source, &port, 2000, 0).await;
-    }
-    for _ in 0..10 {
-        replying(&mut source, &port, 2000, 6000).await;
-    }
-    assert!(source.barge.pending());
-    // The model ends its turn: with a transcript that would be its yield.
-    source.reply.finish().unwrap();
-    source.interrupt(&mut port).unwrap();
-    assert!(source.barge.pending() && !source.stale());
-    tokio::time::advance(Duration::from_millis(900)).await;
-    source.interrupt(&mut port).unwrap();
-    assert!(!source.barge.pending() && !source.stale() && source.playable());
-    let quality = source.settle(0);
-    assert_eq!((quality.cuts, quality.holds, quality.mic.mistakes), (0, 1, 1));
 }

@@ -1,4 +1,5 @@
-//! Speech at the microphone that the reply's own echo cannot explain.
+//! A passive measurement of the microphone under a reply, for `reply.quality`.
+//! It decides nothing: the Live session alone judges a barge-in (`Barge`).
 use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -28,9 +29,6 @@ const WARMUP: u32 = 25;
 pub struct Heard {
     /// Times speech at the microphone began under this reply.
     pub onsets: u32,
-    /// Onsets the Live session did not bear out: the reply was held, the
-    /// model talked on and no transcript came.
-    pub mistakes: u32,
     /// Loudest microphone frame that the reply's echo explained.
     pub echo_max: u32,
     /// Loudest microphone frame of all.
@@ -49,9 +47,9 @@ pub struct Heard {
 /// left differs by device, volume and room, so the ear learns it: the most
 /// microphone level per reply level it has heard, taken freely during the
 /// first half second of reply audio and afterwards only from frames it did
-/// not take for speech, and then by at most 5% a frame. A wrong guess errs
-/// towards deafness: the ear then never fires and the Live session's own
-/// transcript remains the sign of user speech.
+/// not take for speech, and then by at most 5% a frame. On the Echo the
+/// microphone path cancels nothing and the reply is the loudest thing it
+/// hears, so the ear holds and cuts nothing: it reports what it measured.
 #[derive(Default)]
 pub(crate) struct Ear {
     /// Start of playout and RMS of each frame recently written to the Echo.
@@ -63,8 +61,6 @@ pub(crate) struct Ear {
     /// The room with the speaker silent: falls at once, rises 2% a frame.
     noise: u32,
     run: u8,
-    /// The most microphone level per reply level among the loud frames.
-    suspect: u32,
     speaking: bool,
     /// Audible reply audio has been written since `rest`.
     voiced: bool,
@@ -114,9 +110,6 @@ impl Ear {
         self.heard.level_max = self.heard.level_max.max(level);
         if loud {
             self.run = (self.run + 1).min(NEED);
-            if reference >= REFERENCE_AUDIBLE {
-                self.suspect = self.suspect.max(per_mille(level, reference));
-            }
         } else {
             self.run = self.run.saturating_sub(1);
             self.learn(level, reference, warm);
@@ -160,17 +153,6 @@ impl Ear {
         self.learned = self.learned.saturating_add(1);
     }
 
-    /// The Live session heard nobody where the ear heard speech: it may
-    /// have been the echo. The ear takes twice the echo for granted from
-    /// here, or as much as it heard if that is less, so an echo it has
-    /// misjudged stops holding replies after a mistake or two and one cough
-    /// does not deafen it.
-    pub(crate) fn mistaken(&mut self) {
-        let suspect = std::mem::take(&mut self.suspect);
-        self.coupling = self.coupling.max(suspect.min(self.coupling * 2 + 1));
-        self.heard.mistakes += 1;
-    }
-
     /// Reply audio has been written to the Echo since `rest`.
     pub(crate) fn sounded(&self) -> bool {
         self.sounded
@@ -183,7 +165,6 @@ impl Ear {
         self.sounded = false;
         self.speaking = false;
         self.run = 0;
-        self.suspect = 0;
         let mut heard = std::mem::take(&mut self.heard);
         let (sum, count) = std::mem::take(&mut self.ratios);
         heard.echo_mean = u32::try_from(sum / u64::from(count.max(1))).unwrap_or(u32::MAX);

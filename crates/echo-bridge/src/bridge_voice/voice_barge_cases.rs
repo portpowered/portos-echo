@@ -264,7 +264,7 @@ async fn voice_barge_is_not_armed_while_a_dispatch_is_in_flight() {
     // during its filler. Barge-in returns once it completes.
     for event in [turn(true), said("One sec")] {
         media(event, &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
-        source.heard_user(BargeTrigger::SpeechStarted);
+        source.heard_user(BargeTrigger::SpeechStarted, "", false);
         assert!(source.delegation.in_flight() && source.barge_due().is_none());
     }
     assert!(source.controller.speaking());
@@ -272,7 +272,7 @@ async fn voice_barge_is_not_armed_while_a_dispatch_is_in_flight() {
     media(turn(false), &mut port, &mut source, &mut |_| Ok(()))
         .await
         .unwrap();
-    source.heard_user(BargeTrigger::SpeechStarted);
+    source.heard_user(BargeTrigger::SpeechStarted, "", false);
     source.interrupt(&mut port).unwrap();
     assert!(source.controller.speaking());
     tokio::time::advance(BARGE_QUIET).await;

@@ -93,13 +93,21 @@ pub struct ReplyQuality {
     /// and for how long in all: to the cut, or to the release.
     pub holds: u32,
     pub hold_ms: u32,
-    /// From speech heard at the microphone to the Live session's own sign
-    /// of it, for the last hold the microphone began.
-    pub mic_lead_ms: Option<u32>,
     /// What the microphone heard under this reply.
     pub mic: Heard,
     /// The `timing` sample; none when no endpoint preceded the reply's audio.
     pub first_audio: Option<FirstAudio>,
+}
+
+/// The barge-in that cut a reply, from the Live session's sign of user speech.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Cut {
+    /// The session's transcript of the user under it, bounded.
+    pub text: String,
+    /// To the last reply frame the Echo played, by the modelled playout queue.
+    pub silent_ms: u32,
+    /// To the cut: the model's yield.
+    pub yield_ms: u32,
 }
 
 /// How the bridge learned the user's turn had ended. The pinned V3 session
@@ -147,8 +155,8 @@ pub(crate) struct ReplyMeter {
     endpoint: Option<(Instant, Endpoint)>,
     /// A cut flushed the device: the next write starts its clock again.
     restarted: bool,
-    /// When the pending hold began, and whether its lead has been measured.
-    holding: Option<(Instant, bool)>,
+    /// When the pending hold began, and how long the Echo then still played.
+    holding: Option<(Instant, u32)>,
     /// The call's arrival lateness; it outlives each reply's window.
     jitter: reply_jitter::Jitter,
     targeted: bool,
@@ -260,25 +268,25 @@ impl ReplyMeter {
     /// A barge-in cut the reply: the device was flushed and plays again from
     /// the replacement's first frame. The retired stretch between the two is
     /// neither an arrival gap nor an underrun; `cuts` and the discards say it.
-    pub(crate) fn cut(&mut self, trigger: BargeTrigger) {
+    /// Returns how long the Echo still played after the sign that held the
+    /// reply, and how long after that sign the cut came.
+    pub(crate) fn cut(&mut self, trigger: BargeTrigger) -> (u32, u32) {
         self.quality.cuts += 1;
         self.quality.cut_trigger = Some(trigger);
         self.arrived = None;
-        self.released(Instant::now());
+        let now = Instant::now();
+        let (since, silent) = self.holding.unwrap_or((now, 0));
+        self.released(now);
+        (silent, millis(now.saturating_duration_since(since)))
     }
 
     /// A sign of user speech holds the reply back from the device at `now`.
     pub(crate) fn held(&mut self, now: Instant) {
         self.quality.holds += 1;
-        self.holding = Some((now, false));
-    }
-
-    /// The Live session gave its sign of speech `lead` after the microphone.
-    pub(crate) fn mic_led(&mut self, lead: Duration) {
-        if let Some((_, led @ false)) = &mut self.holding {
-            *led = true;
-            self.quality.mic_lead_ms = Some(millis(lead));
-        }
+        let playing = self
+            .playout
+            .map_or(Duration::ZERO, |end| end.saturating_duration_since(now));
+        self.holding = Some((now, millis(playing)));
     }
 
     /// The hold ended at `now`. If the model talked through it, the held

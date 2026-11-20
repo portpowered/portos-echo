@@ -269,6 +269,24 @@ Third owner run, `echo-bridge` at c2844e60 (the microphone holds; cushion kept 1
 | Microphone | `coupling` 4855 per mille; `echo_max` equals `level_max` in all three (15576, 6354, 5788); `onsets` 1, 0, 1; `lead_ms` null |
 | Echo load during the run | load average 14; audio HAL 72% and hassmic 62% of one core, of eight |
 
+Fourth owner run, same build, the owner mostly silent: one call, 5 replies, all cut.
+
+| Fact | Value |
+| --- | --- |
+| Cuts | 5 of 5 by `user_transcript`; over this run and the third, 7 of 8 |
+| Microphone speech onsets under those replies | 0 in all 5 |
+| Frames played of received | 104 of 175, 107 of 214, 185 of 282, 0 of 30, 12 of 99 |
+| `hold_ms` | 1305, 2045, 2002, 611, 1637 |
+| Loudest microphone frame under each reply (RMS) | 7214, 12950, 7600, 5595, 15104 |
+
+The session transcribed the Echo's own speaker as the user and interrupted its replies. The transcripts
+were not in the trace; `reply.quality` `cuts.text` now carries them.
+
+T3 on the scripted timeline with the session as the only judge (`bridge_barge_mic.rs`): from the session's
+transcript to a silent device 187 ms (`cuts.silent_ms` 179, the 200 ms lead less one frame); from the
+transcript to the cut 796 ms (`cuts.cut_ms`), which is the model talking on for 300 ms and the 500 ms
+quiet stretch. A voice at the microphone alone holds nothing.
+
 ## Milestones
 
 | Fact | Value | Measured |

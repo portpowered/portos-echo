@@ -1,6 +1,6 @@
 use super::{Error, Stats, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
-use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
+use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Cut, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
@@ -35,7 +35,7 @@ pub(super) struct Source {
     barge: Barge,
     /// A barge-in cut the reply: call audio is its until the model speaks again.
     stale: bool,
-    /// Tells speech at the microphone from the reply's own echo.
+    /// Measures the microphone under the reply for `reply.quality`; decides nothing.
     ear: Ear,
 }
 
@@ -104,6 +104,9 @@ impl Source {
         self.meter.paced(self.reply.take_playout());
         let mut quality = self.meter.settle(lost);
         quality.mic = self.ear.rest();
+        if quality.cuts == 0 {
+            self.stats.cut = None;
+        }
         quality
     }
 
@@ -146,12 +149,13 @@ impl Source {
         })
     }
 
-    /// A sign of user speech during a reply arms a barge-in. The reply is
+    /// The Live session's sign of user speech during a reply arms a barge-in:
+    /// `said` is its transcript, a fragment or the `whole` turn. The reply is
     /// held from the device at once, but not cut: the model may talk on (`Barge`).
     /// A dispatch in flight is thinking, not a reply to talk over: user speech
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
-    pub fn heard_user(&mut self, trigger: BargeTrigger) {
+    pub fn heard_user(&mut self, trigger: BargeTrigger, said: &str, whole: bool) {
         if self.delegation.in_flight() || !self.controller.speaking() {
             return;
         }
@@ -164,12 +168,7 @@ impl Source {
         if self.barge.arm(now, trigger) {
             self.meter.held(now);
         }
-        // The Live session's sign of speech the microphone heard first.
-        if trigger != BargeTrigger::MicSpeech
-            && let Some(sign) = self.barge.backed()
-        {
-            self.meter.mic_led(now.saturating_duration_since(sign));
-        }
+        self.barge.transcribed(said, whole);
     }
 
     /// When the pending barge-in fires unless the model is heard first.
@@ -182,19 +181,19 @@ impl Source {
     /// Retire all old playback state together; never flush an abandoned tail.
     /// Stream order identifies the replacement at its next assistant delta.
     pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
-        let (now, alone) = (Instant::now(), self.barge.unbacked());
-        let Some(trigger) = self.barge.fire(now, self.reply.finished()) else {
-            // The microphone's hold ran out with no word from the session.
-            if alone == Some(true) && !self.barge.pending() {
-                self.meter.released(now);
-                self.ear.mistaken();
-            }
+        let Some(trigger) = self.barge.fire(Instant::now(), self.reply.finished()) else {
             return Ok(());
         };
         if self.delegation.in_flight() || !self.controller.speaking() {
             return Ok(());
         }
-        self.meter.cut(trigger);
+        let (silent_ms, yield_ms) = self.meter.cut(trigger);
+        let text = self.barge.said();
+        self.stats.cut = Some(Box::new(Cut {
+            text,
+            silent_ms,
+            yield_ms,
+        }));
         self.stale = true;
         port.retire_audio();
         self.fresh_reply()?;
@@ -227,9 +226,8 @@ impl Source {
         }
         let microphone = self.microphone.as_mut().ok_or(Error::Audio)?;
         for frame in microphone.process(&frame.format, &frame.payload)? {
-            if self.ear.heard(&frame, Instant::now()) {
-                self.heard_user(BargeTrigger::MicSpeech);
-            }
+            // The microphone is measured, never judged: every frame goes up.
+            self.ear.heard(&frame, Instant::now());
             self.forward(&frame, port)?;
         }
         Ok(false)
@@ -287,14 +285,10 @@ impl Source {
             // PCM has no utterance identity. Only ordered assistant control
             // opens Speaking; the initial user transcript can lag audible RTP.
             let now = Instant::now();
-            let held = self.barge.unbacked();
+            let held = self.barge.pending();
             self.barge.heard(now, audible(frame));
-            if let (Some(alone), false) = (held, self.barge.pending()) {
+            if held && !self.barge.pending() {
                 self.meter.released(now);
-                // The session heard nobody: the ear took the echo for speech.
-                if alone {
-                    self.ear.mistaken();
-                }
             }
             let wanted = self.meter.arrived(now);
             self.meter.targeted(self.reply.retarget(wanted));

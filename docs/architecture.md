@@ -968,18 +968,22 @@ is still talking after the 2 s was not interrupted: the held audio plays, late b
 given back in the reply's silent frames. The times are constants in
 [reply_barge.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_barge.rs).
 
-The session's transcript of the user is its earliest sign of speech at the pin, and it comes some hundred
-milliseconds after the speech. The bridge therefore also listens to the microphone frames it forwards
-([reply_ear.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_ear.rs)): a level three times
-above what the reply audio written in the last 700 ms can explain, for 80 ms, is speech. How much of the
-reply the microphone hears is learned per call, from the reply's first half second and from every frame not
-taken for speech. Speech at the microphone holds the reply for 800 ms; the transcript that follows extends
-the hold as before. A hold the session does not bear out is released with nothing lost, and the ear raises
-its estimate of the echo. The ear never cuts a reply by itself: a hold that only the microphone armed
-lapses after its 800 ms whether the model paused, talked on or ended its turn. The echo is learned only
-from reply audio above RMS 1500, with the room's noise taken off: against quiet reply audio the noise the
-Echo amplifies read as an echo several times the reply. Its calibration on the Echo is unmeasured;
-`reply.quality` `mic` reports what it heard.
+The Live session alone judges a barge-in (owner, 2026-11-19). The bridge runs no speech detector of its
+own and never gates or alters the microphone audio it forwards. The session's transcript of the user is its
+earliest sign of speech at the pin: the V3 session forwards no speech-start, no voice-activity event and no
+notice that a response was interrupted. That transcript comes some hundred milliseconds after the speech,
+and that delay is the session's. From the sign the Echo plays out only the lead it holds
+(`audio.reply_lead_ms`, 200 ms by default; 180 ms on the scripted timeline). `reply.quality` `cuts` reports
+it per cut: `silent_ms` from the sign to the last reply frame the Echo played, `cut_ms` from the sign to the
+cut, and `text`, the transcript the session gave, which shows whether it heard the user or the Echo's own
+speaker. The bridge still measures the microphone under each reply
+([reply_ear.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_ear.rs)) and reports it in
+`reply.quality` `mic`; the measurement decides nothing.
+
+The pinned session's turn detection and noise reduction cannot be set by a client. The V3 session update
+carries the instructions, the voice, the delegation mode and the initial items, and `thread/realtime/start`
+has no field for either. The Echo's microphone path has no echo cancellation, so the session hears the
+Echo's speaker and can interrupt its own reply.
 
 A transcript of the user that comes before any audio of the reply has been written to the Echo arms
 nothing: it is of the turn the reply answers. A call's first reply starts on a 300 ms jitter cushion, the
