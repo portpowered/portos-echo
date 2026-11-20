@@ -297,3 +297,38 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
     writeln!(std::io::stdout().lock(), "{}", serde_json::to_string(&snapshot)?)?;
     Ok(())
 }
+#[test]
+fn t2_portos_v2_operation_requires_exact_version_and_confirmation() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::settings_v2::{
+        PortosActionV2, PortosOperationStartedV2, PortosOperationV2, SettingsVersionV2,
+    };
+    use serde_json::{from_value, json, to_value};
+
+    for body in [
+        json!({"version":2,"operation":"link"}),
+        json!({"version":2,"operation":"unlink","confirm":true}),
+    ] {
+        let request: PortosOperationV2 = from_value(body.clone())?;
+        assert_eq!(to_value(request)?, body);
+    }
+    for body in [
+        json!({"version":1,"operation":"link"}),
+        json!({"version":2,"operation":"refresh"}),
+        json!({"version":2,"operation":"link","confirm":true}),
+        json!({"version":2,"operation":"unlink"}),
+        json!({"version":2,"operation":"unlink","confirm":false}),
+        json!({"version":2,"operation":"unlink","confirm":true,"extra":true}),
+    ] {
+        assert!(from_value::<PortosOperationV2>(body).is_err());
+    }
+    let receipt = PortosOperationStartedV2 {
+        version: SettingsVersionV2,
+        operation: PortosActionV2::Unlink,
+    };
+    assert_eq!(to_value(receipt)?, json!({"version":2,"operation":"unlink"}));
+    writeln!(
+        std::io::stdout().lock(),
+        "paired Port OS wire: version=2 link=accepted unlink_confirm=true refused_shapes=6"
+    )?;
+    Ok(())
+}

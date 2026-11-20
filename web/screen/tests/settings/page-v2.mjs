@@ -194,3 +194,75 @@ test("settings V2 refuses invalid and unauthorized replies without falling back"
         );
     }
 });
+
+async function portosStatus(page, updates) {
+    await page.evaluate((updates) => {
+        Object.assign(window.settingsV2Body.portos, updates);
+    }, updates);
+}
+
+test("settings V2 shows Port OS approval and confirms unlink exactly once", async (t) => {
+    const data = v2Snapshot();
+    data.portos.link_status = "link_required";
+    data.portos.server.granted_scopes = [];
+    const page = await open(t, data);
+    const model = page.getByLabel("Delegated model");
+    await model.fill("unsaved-local-model");
+    await response(page, { version: 2, operation: "link" }, 202);
+    await page
+        .getByRole("button", { name: "Link Port OS", exact: true })
+        .click();
+    await portosStatus(page, {
+        operation_state: "linking",
+        challenge: {
+            verification_uri: "https://127.0.0.1/approve",
+            user_code: "TEST-CODE",
+            expires_at_unix: 2000000000,
+        },
+    });
+    const code = page.getByText(/^Code: TEST-CODE · Expires at /);
+    await code.waitFor();
+    await page
+        .getByText("On a phone or PC, open https://127.0.0.1/approve")
+        .waitFor();
+    assert.equal(await model.inputValue(), "unsaved-local-model");
+    await page.evaluate(() => {
+        const portos = window.settingsV2Body.portos;
+        portos.operation_state = "idle";
+        portos.link_status = "linked";
+        portos.server.granted_scopes = ["endpoint:read"];
+        delete portos.challenge;
+    });
+    await code.waitFor({ state: "hidden" });
+    const unlink = page.getByRole("button", { name: "Unlink Port OS" });
+    await unlink.click();
+    const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+    assert.equal(
+        await cancel.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    await cancel.press("Escape");
+    assert.equal(
+        await unlink.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    const mutations = async () =>
+        (await calls(page))
+            .filter(({ method }) => method === "POST")
+            .map(({ url, body }) => [new URL(url).pathname, JSON.parse(body)]);
+    assert.deepEqual(await mutations(), [
+        ["/settings/v2/portos", { version: 2, operation: "link" }],
+    ]);
+    await unlink.click();
+    await response(page, { version: 2, operation: "unlink" }, 202);
+    await page.getByRole("button", { name: "Confirm unlink" }).click();
+    await portosStatus(page, { link_status: "link_required" });
+    await page.getByText("Link required", { exact: true }).waitFor();
+    assert.deepEqual(await mutations(), [
+        ["/settings/v2/portos", { version: 2, operation: "link" }],
+        [
+            "/settings/v2/portos",
+            { version: 2, operation: "unlink", confirm: true },
+        ],
+    ]);
+});

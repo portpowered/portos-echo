@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
-// Schema SHA-256: a2375ff7a2bee9aef6d79486f5022f4e145bfdbe28cb9327781886d8e2b8e183
+// Schema SHA-256: a86450f4daa1e3e3181cb5551b72373cf638f0e7c62fd9e3f5059ac15902ff1c
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -158,3 +158,16 @@ export type SaveResultV2 = {
     restart_pending: boolean;
 };
 export type SettingsErrorV2 = { version: SettingsVersionV2; message: string };
+export type ConfirmUnlink = true;
+export type PortosOperationV2 =
+    | { operation: "link"; version: SettingsVersionV2 }
+    | {
+          operation: "unlink";
+          version: SettingsVersionV2;
+          confirm: ConfirmUnlink;
+      };
+export type PortosActionV2 = "link" | "unlink";
+export type PortosOperationStartedV2 = {
+    version: SettingsVersionV2;
+    operation: PortosActionV2;
+};

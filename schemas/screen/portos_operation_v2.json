@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PortosOperationV2",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "const": "link"
+        },
+        "version": {
+          "$ref": "#/$defs/SettingsVersionV2"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "version"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "confirm": {
+          "$ref": "#/$defs/ConfirmUnlink"
+        },
+        "operation": {
+          "type": "string",
+          "const": "unlink"
+        },
+        "version": {
+          "$ref": "#/$defs/SettingsVersionV2"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "version",
+        "confirm"
+      ]
+    }
+  ],
+  "$defs": {
+    "ConfirmUnlink": {
+      "type": "boolean",
+      "const": true
+    },
+    "SettingsVersionV2": {
+      "type": "integer",
+      "const": 2
+    }
+  }
+}

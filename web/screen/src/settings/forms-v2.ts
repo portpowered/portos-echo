@@ -73,25 +73,17 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
     };
 }
 
-const statusLabels: Record<SnapshotV2["portos"]["link_status"], string> = {
-    unconfigured: "Unconfigured",
-    link_required: "Link required",
-    linked: "Linked",
-    relink_for_scope: "Relink needed for scope",
-};
-
 export function portosForm(
     status: SnapshotV2["portos"],
     save: (patch: PatchV2) => void,
 ) {
     const section = element("section");
     section.setAttribute("aria-label", "Port OS");
-    section.append(
-        element("h2", "Port OS"),
-        element("p", statusLabels[status.link_status]),
-    );
+    section.append(element("h2", "Port OS"));
+    const controls = element("div");
+    section.append(controls);
     const server = status.server;
-    if (!server) return section;
+    if (!server) return { section, controls };
     const form = element("form");
     const scopes = choices(
         "Requested scopes",
@@ -106,10 +98,6 @@ export function portosForm(
     form.append(
         element("p", server.name),
         element("p", server.url),
-        element(
-            "p",
-            "Granted scopes: " + (server.granted_scopes.join(", ") || "None"),
-        ),
         scopes.fieldset,
         tools.fieldset,
         element("button", "Save Port OS permissions"),
@@ -136,5 +124,5 @@ export function portosForm(
         save(Object.keys(patch).length ? { portos: patch } : {});
     });
     section.append(form);
-    return section;
+    return { section, controls };
 }

@@ -13,6 +13,7 @@ import {
     type Snapshot,
     type SnapshotV2,
 } from "./api";
+import type { PortosOperationV2 } from "./model";
 
 export async function loadSettings(
     actions: string,
@@ -34,6 +35,38 @@ export async function saveSettingsV2(
         settings: patch,
     });
     return readResponse(response, 2);
+}
+
+export async function loadPortos(actions: string, signal: AbortSignal) {
+    const response = await send(settingsUrl(actions, "", 2), signal, "GET");
+    const snapshot = decodeV2(await readResponse(response, 2));
+    return {
+        status: snapshot.portos,
+        restartFailed: snapshot.warnings.includes(
+            "Could not restart bridge; saved settings remain pending",
+        ),
+    };
+}
+
+export async function operatePortos(
+    actions: string,
+    signal: AbortSignal,
+    body: PortosOperationV2,
+) {
+    const response = await send(
+        settingsUrl(actions, "/portos", 2),
+        signal,
+        "POST",
+        body,
+    );
+    if (response.status !== 202) {
+        await readResponse(response, 2);
+        invalid();
+    }
+    const receipt = record(await response.json());
+    assertShape(receipt, ["version", "operation"]);
+    if (receipt.version !== 2 || receipt.operation !== body.operation)
+        invalid();
 }
 
 function invalid(): never {

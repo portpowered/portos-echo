@@ -393,3 +393,58 @@ pub struct SettingsErrorV2 {
     pub version: SettingsVersionV2,
     pub message: String,
 }
+
+/// An unlink requires explicit acknowledgement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "bool", into = "bool")]
+pub struct ConfirmUnlink;
+
+impl TryFrom<bool> for ConfirmUnlink {
+    type Error = &'static str;
+
+    fn try_from(value: bool) -> Result<Self, Self::Error> {
+        value.then_some(Self).ok_or("unlink requires confirmation")
+    }
+}
+
+impl From<ConfirmUnlink> for bool {
+    fn from(_: ConfirmUnlink) -> Self {
+        true
+    }
+}
+
+impl JsonSchema for ConfirmUnlink {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ConfirmUnlink".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"type": "boolean", "const": true})
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PortosOperationV2 {
+    Link {
+        version: SettingsVersionV2,
+    },
+    Unlink {
+        version: SettingsVersionV2,
+        confirm: ConfirmUnlink,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PortosActionV2 {
+    Link,
+    Unlink,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PortosOperationStartedV2 {
+    pub version: SettingsVersionV2,
+    pub operation: PortosActionV2,
+}

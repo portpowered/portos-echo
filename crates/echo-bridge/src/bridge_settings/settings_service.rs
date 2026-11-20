@@ -1,12 +1,13 @@
 //! Runtime-owned dispatch: no detached transactions survive the voice owner.
 use super::{SettingsError, SettingsHost, portos_permissions::PortosPermissions, settings_restart::Restart};
+use crate::bridge_mcp::Grant;
 use echo_config::EffectiveConfig;
 use echo_screen_contract::{
     settings_v1::{LinkStatusV1, PromptTextsV1, SettingsErrorV1, SettingsVersionV1},
-    settings_v2::{SettingsErrorV2, SettingsVersionV2},
+    settings_v2::{PortosChallengeV2, PortosOperationStateV2, SettingsErrorV2, SettingsVersionV2},
 };
 use echo_screen_server::{SettingsOperation, SettingsReply, SettingsRequest, settings_channel};
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 use tokio::sync::mpsc;
 
 /// One serialized host and one restart request per service generation.
@@ -24,6 +25,25 @@ pub struct SettingsService {
 pub struct SettingsCompletion {
     pub restart_requested: bool,
     pub host: Box<SettingsHost>,
+}
+
+#[derive(Default)]
+struct GrantView {
+    scopes: Option<Vec<String>>,
+    operation: Option<(PortosOperationStateV2, Option<PortosChallengeV2>)>,
+}
+
+impl GrantView {
+    async fn read(owner: Option<&Grant>, snapshot: bool) -> Self {
+        if let Some(owner) = owner.filter(|_| snapshot) {
+            // Sample the receipt before the grant. A terminal receipt implies
+            // the subsequent read can observe the committed grant.
+            let operation = Some(owner.screen_operation());
+            let scopes = owner.granted_scopes().await;
+            return Self { scopes, operation };
+        }
+        Self::default()
+    }
 }
 
 impl SettingsService {
@@ -77,15 +97,14 @@ impl SettingsService {
         work: impl Future<Output = T>,
         link_status: impl Fn() -> LinkStatusV1,
     ) -> (T, SettingsCompletion) {
-        self.scope_with_grant(work, link_status, || std::future::ready(None))
-            .await
+        self.scope_with_grant(work, link_status, || None).await
     }
 
-    pub(crate) async fn scope_with_grant<T, F: Future<Output = Option<Vec<String>>>>(
+    pub(crate) async fn scope_with_grant<T>(
         self,
         work: impl Future<Output = T>,
         link_status: impl Fn() -> LinkStatusV1,
-        grant_scopes: impl Fn() -> F,
+        current_grant: impl Fn() -> Option<Arc<Grant>>,
     ) -> (T, SettingsCompletion) {
         let Self {
             mut host,
@@ -102,9 +121,14 @@ impl SettingsService {
                         result = &mut work => return result,
                         Some(request) = inbox.recv() => {
                             let handle = async {
-                                let scopes = if request.reads_portos() { grant_scopes().await } else { None };
+                                let grant = current_grant();
+                                let view = GrantView::read(grant.as_deref(), request.reads_portos()).await;
                                 request.commit(|operation| {
-                                    commit(&mut host, &restart, trace.as_mut(), operation, (link_status(), scopes))
+                                    let current = current_grant();
+                                    let same_owner = grant.as_ref().zip(current.as_ref())
+                                        .is_some_and(|(before, now)| Arc::ptr_eq(before, now));
+                                    let view = if same_owner { view } else { GrantView::default() };
+                                    commit(&mut host, &restart, trace.as_mut(), operation, (link_status(), view, current.as_deref()))
                                 }).await;
                             };
                             // Work may itself hold the grant lock during refresh.
@@ -136,15 +160,23 @@ fn commit(
     restart: &Restart,
     trace: Option<&mut crate::bridge_trace::Trace>,
     operation: SettingsOperation,
-    grant: (LinkStatusV1, Option<Vec<String>>),
+    grant: (LinkStatusV1, GrantView, Option<&Grant>),
 ) -> SettingsReply {
+    let (link, view, owner) = grant;
+    if let SettingsOperation::PortosV2(request) = operation {
+        return host.portos_operation(request, owner);
+    }
     let pack_only = matches!(&operation, SettingsOperation::PackSelection(..));
     let prompt = match &operation {
         SettingsOperation::Prompt(echo_screen_server::PromptKind::Voice, _) => Some("voice"),
         SettingsOperation::Prompt(echo_screen_server::PromptKind::Runner, _) => Some("runner"),
         _ => None,
     };
-    let reply = host.transaction_with_grant(operation, grant.0, grant.1);
+    let mut reply = host.transaction_with_grant(operation, link, view.scopes);
+    if let (SettingsReply::SnapshotV2(snapshot), Some((state, challenge))) = (&mut reply, view.operation) {
+        snapshot.portos.operation_state = state;
+        snapshot.portos.challenge = challenge;
+    }
     let (restart_pending, v2) = match &reply {
         SettingsReply::Saved(saved) | SettingsReply::PackSaved(saved, _, _) => (saved.restart_pending, false),
         SettingsReply::SavedV2(saved) => (saved.restart_pending, true),
