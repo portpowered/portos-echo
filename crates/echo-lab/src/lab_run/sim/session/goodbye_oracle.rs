@@ -14,10 +14,19 @@ pub(super) fn farewell(
     let end = one(records, run, "wyoming.run_ended")?;
     let receipt = one(records, run, "session.tool_receipt")?;
     let tool = one(records, run, "item/tool/call")?;
-    let last = played.last().ok_or("goodbye: missing bridge Played")?;
+    // A hand-off after Played opens one more reply like any other hand-off.
+    // The runner's silent end closes it before any audio: it must stay empty.
+    let expected = if late || (run == "run-1" && reply == 1) { 2 } else { 1 };
+    let spoken = played.len().checked_sub(1 + usize::from(late));
+    let last = spoken
+        .and_then(|index| played.get(index))
+        .ok_or("goodbye: missing bridge Played")?;
     let farewell_at = time(last)?;
     let end_at = time(end)?;
     if end_at < farewell_at
+        // No ordinary listen window ran between the farewell and the end.
+        || end_at - farewell_at >= 3_000
+        || (late && played.last().is_some_and(|empty| empty["received_frames"] != 0 || empty["frames"] != 0))
         || end_at < time(receipt)?
         || end_at < endpoint
         || (late && time(one(records, run, "delegation.created")?)? <= farewell_at)
@@ -29,7 +38,6 @@ pub(super) fn farewell(
     {
         return Err("goodbye: incorrect receipt, tool or playback ordering".into());
     }
-    let expected = if run == "run-1" && reply == 1 { 2 } else { 1 };
     if played.len() != expected || played.iter().any(|row| row["outcome"] != "played") {
         return Err("goodbye: extra, missing or cut bridge reply".into());
     }
@@ -43,12 +51,13 @@ pub(super) fn farewell(
     }
     handback(records, run, turn, provider)?;
     let ends = if run == "run-2" { 2 } else { 1 };
-    let frames = wire_replies(wire, clock, reply + 1, ends)?;
+    let frames = wire_replies(wire, clock, (reply + 1, late), ends)?;
     Ok(json!({
-        "event":"session.live_goodbye","run_id":run,"handoff":super::goodbye::REQUEST,
+        "event":"session.live_goodbye","run_id":run,"handoff":super::goodbye::GOODBYE,
         "runner_tool_answer":{"ending_after_reply":true},"applied_receipts":1,
         "tool_after_played":late,"endpoint_epoch_ms":endpoint,"run_end_epoch_ms":end_at,
         "goodbye_to_run_end_ms":end_at - endpoint,"reply_played_ms":farewell_at,
+        "farewell_to_run_end_ms":end_at - farewell_at,"pcm_after_farewell_bytes":0,
         "played_replies":expected,"farewell_frames":frames[reply],"wire_ends_for_run":1,
         "post_reply_admissions":0,"screen":"ready"
     }))
@@ -67,7 +76,8 @@ fn handback(records: &[Value], run: &str, turn: usize, provider: &Value) -> Resu
         .filter(|model| model["turn"] == turn)
         .collect();
     if created.len() != 1
-        || provider["requests"][turn] != super::goodbye::REQUEST
+        || provider["requests"][turn] != super::goodbye::GOODBYE
+        || !real_handoff(&created[0]["task"])
         || models.len() != 2
         || models[0]["outputs"] != json!([])
         || models[1]["outputs"].as_array().map(Vec::len) != Some(1)
@@ -79,6 +89,20 @@ fn handback(records: &[Value], run: &str, turn: usize, provider: &Value) -> Resu
         return Err("goodbye: expected one fixed hand-off, one tool answer and a silent runner".into());
     }
     Ok(())
+}
+
+/// The pinned app server's hand-off: the user's words and the transcript
+/// since the last hand-off. Nothing in it is written by the voice model.
+fn real_handoff(task: &Value) -> bool {
+    let words = super::goodbye::GOODBYE;
+    task.as_object().is_some_and(|fields| fields.len() == 5)
+        && task["type"] == "handoff_request"
+        && task["handoff_id"].is_string()
+        && task["item_id"].is_string()
+        && task["input_transcript"] == words
+        && task["active_transcript"]
+            .as_array()
+            .is_some_and(|entries| entries.contains(&json!({"role":"user","text":words})))
 }
 
 fn tool_result(output: &Value) -> Option<Value> {
@@ -104,7 +128,7 @@ pub(super) fn question(records: &[Value], wire: &Timing, clock: &Value) -> Resul
     {
         return Err("goodbye: question did not retain an uninterrupted run through ordinary idle".into());
     }
-    let frames = wire_replies(wire, clock, 2, 1)?;
+    let frames = wire_replies(wire, clock, (2, false), 1)?;
     Ok(
         json!({"event":"session.live_thanks_question","run_id":"run-1","played_replies":2,
         "reply_frames":frames,"early_ends":0,"end_tool_calls":0,"end_receipts":0,
@@ -112,7 +136,14 @@ pub(super) fn question(records: &[Value], wire: &Timing, clock: &Value) -> Resul
     )
 }
 
-fn wire_replies(wire: &Timing, clock: &Value, replies: usize, ends: usize) -> Result<Vec<usize>, String> {
+/// Check `spoken` audible replies, then one empty stream when `empty_tail`.
+fn wire_replies(
+    wire: &Timing,
+    clock: &Value,
+    (spoken, empty_tail): (usize, bool),
+    ends: usize,
+) -> Result<Vec<usize>, String> {
+    let replies = spoken + usize::from(empty_tail);
     let state = wire.session_observation();
     let streams: Vec<_> = state["streams"]
         .as_array()
@@ -136,6 +167,13 @@ fn wire_replies(wire: &Timing, clock: &Value, replies: usize, ends: usize) -> Re
     let mut frame_counts = vec![];
     for (index, (stream, frames)) in streams.iter().zip(&counts).enumerate() {
         let played = stream["played_us"].as_u64().ok_or("goodbye: missing device Played")?;
+        if index == spoken {
+            if stream["ending"] != "stop" || stream["pcm_bytes"] != 0 || !frames.is_empty() || played < last_played {
+                return Err(format!("goodbye: audio followed the farewell: {stream}"));
+            }
+            last_played = played;
+            continue;
+        }
         if stream["ending"] != "stop"
             || played < last_played
             // The first reply loses the decoder warm-up. A subsequent
@@ -158,9 +196,15 @@ fn wire_replies(wire: &Timing, clock: &Value, replies: usize, ends: usize) -> Re
     if last_end < last_played {
         return Err("goodbye: Wyoming ended before farewell Played".into());
     }
+    wire_matches_bridge(clock, counts, frame_counts.iter().sum())?;
+    Ok(frame_counts)
+}
+
+/// Every PCM frame the bridge submitted is the frame the device received.
+fn wire_matches_bridge(clock: &Value, counts: Vec<&[(usize, usize, usize)]>, total: usize) -> Result<(), String> {
     let submitted = clock["pcm"].as_array().ok_or("goodbye: missing bridge PCM receipts")?;
     let observed = counts.into_iter().flatten();
-    if submitted.len() != frame_counts.iter().sum::<usize>()
+    if submitted.len() != total
         || submitted
             .iter()
             .zip(observed)
@@ -172,7 +216,7 @@ fn wire_replies(wire: &Timing, clock: &Value, replies: usize, ends: usize) -> Re
     {
         return Err("goodbye: wire and bridge disagree on the farewell frame sequence".into());
     }
-    Ok(frame_counts)
+    Ok(())
 }
 
 fn rows<'a>(records: &'a [Value], run: &str, event: &str) -> Vec<&'a Value> {

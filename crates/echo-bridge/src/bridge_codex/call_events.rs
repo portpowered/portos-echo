@@ -28,36 +28,57 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                 if method == "thread/realtime/itemAdded" {
                     return Ok(self.realtime_item(&params["item"]));
                 }
+                if method == "item/completed" {
+                    self.agent_item(&params);
+                    return Ok(Event::Other);
+                }
                 if matches!(method.as_str(), "turn/started" | "turn/completed") {
-                    let turn = params["turn"]["id"]
-                        .as_str()
-                        .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
-                        .ok_or(Error::Decode)?
-                        .to_owned();
-                    let thread = self.thread.clone().ok_or(Error::Decode)?;
-                    if method == "turn/completed"
-                        && self
-                            .interrupted
-                            .as_ref()
-                            .is_some_and(|interrupted| interrupted.thread_id == thread && interrupted.turn_id == turn)
-                    {
-                        if params["turn"]["status"] == "interrupted"
-                            && let Some(trace) = &mut self.tool_trace
-                            && let Some(interrupted) = &self.interrupted
-                        {
-                            trace.interrupt("turn.interrupted", interrupted)?;
-                        }
-                        self.interrupted = None;
-                    }
-                    return Ok(if method == "turn/started" {
-                        Event::TurnStarted { thread, turn }
-                    } else {
-                        Event::TurnCompleted { thread, turn }
-                    });
+                    return self.turn_lifecycle(&method, &params);
                 }
                 self.notification(&method, raw)
             }
             _ => Ok(Event::Other),
+        }
+    }
+
+    fn turn_lifecycle(&mut self, method: &str, params: &serde_json::Value) -> Result<Event, Error> {
+        let turn = params["turn"]["id"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+            .ok_or(Error::Decode)?
+            .to_owned();
+        let thread = self.thread.clone().ok_or(Error::Decode)?;
+        if method == "turn/completed"
+            && self
+                .interrupted
+                .as_ref()
+                .is_some_and(|interrupted| interrupted.thread_id == thread && interrupted.turn_id == turn)
+        {
+            if params["turn"]["status"] == "interrupted"
+                && let Some(trace) = &mut self.tool_trace
+                && let Some(interrupted) = &self.interrupted
+            {
+                trace.interrupt("turn.interrupted", interrupted)?;
+            }
+            self.interrupted = None;
+        }
+        Ok(if method == "turn/started" {
+            Event::TurnStarted { thread, turn }
+        } else {
+            let answered = self.answered.take().is_some_and(|answered| answered == turn);
+            Event::TurnCompleted { thread, turn, answered }
+        })
+    }
+
+    /// Final runner text is handed back to the voice; commentary is not.
+    fn agent_item(&mut self, params: &serde_json::Value) {
+        let item = &params["item"];
+        if item["type"] == "agentMessage"
+            && item["phase"].as_str().is_none_or(|phase| phase == "final_answer")
+            && item["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+            && let Some(turn) = params["turnId"].as_str()
+        {
+            self.answered = Some(turn.into());
         }
     }
 
@@ -72,11 +93,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                     && self.handoffs.len() < 1024
                     && self.handoffs.insert(id.into())
                 {
-                    return if item["input_transcript"] == "end the session" {
-                        Event::GoodbyeHandoff
-                    } else {
-                        Event::ReplyHandoff
-                    };
+                    // The item carries the user's words and the transcript, never a
+                    // model-authored request, so it cannot name the turn's purpose.
+                    return Event::ReplyHandoff;
                 }
                 Event::Other
             }

@@ -80,62 +80,6 @@ fn source() -> Source {
 }
 
 #[tokio::test(start_paused = true)]
-async fn voice_listen_goodbye_timeout_retires_end_authority_without_admitting_speech() {
-    let mut input = Input::new();
-    let (tx, rx) = mpsc::channel(2);
-    let mut port = Port(rx, std::rc::Rc::default());
-    let mut source = Source::new(200, false).unwrap();
-    source.session = Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
-    source.controller.reply_started();
-    source.controller.played(true).unwrap();
-    goodbye_handoff(&mut source);
-    let old = source.session.run.clone();
-    let mut receipts = vec![];
-    let mut observe = |notice| {
-        if let Notice::SessionTool(receipt) = notice {
-            receipts.push(receipt.outcome);
-        }
-        Ok(())
-    };
-    let (event, answer) = session_request(SessionCommand::Invalid { end: true }, &old, "refused");
-    tx.send(MediaEvent::Control(event)).await.unwrap();
-    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
-    wait_goodbye(
-        (&mut input.events, &mut input.microphone),
-        &mut port,
-        (&mut source, &mut None),
-        Instant::now() + Duration::from_secs(1),
-        std::future::pending(),
-        &mut observe,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        answer.await.unwrap().content,
-        serde_json::json!({"error":"invalid_arguments"})
-    );
-    assert_eq!(source.controller.idle_deadline(), None);
-    assert!(source.controller.has_played());
-    let (event, answer) = session_request(SessionCommand::End, &old, "obsolete");
-    tx.send(MediaEvent::Control(event)).await.unwrap();
-    goodbye_step(
-        &mut input.events,
-        &mut input.microphone,
-        &mut port,
-        &mut source,
-        &mut observe,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        answer.await.unwrap().content,
-        serde_json::json!({"error":"session_stale"})
-    );
-    assert!(!source.session.ending());
-    assert_eq!(receipts, ["invalid_arguments", "session_stale"]);
-}
-
-#[tokio::test(start_paused = true)]
 async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playback() {
     let mut input = Input::new();
     let (_tx, rx) = mpsc::channel(1);
@@ -143,7 +87,6 @@ async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playbac
     let mut source = Source::new(200, false).unwrap();
     source.session = Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
     source.spoke();
-    goodbye_handoff(&mut source);
     source.audio(&[5000; 320]).unwrap();
     let muted = Cell::new(false);
     let mut observe = |notice| {
@@ -207,6 +150,7 @@ async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
                 tx.send(MediaEvent::Control(Event::TurnCompleted {
                     thread: "fixture".into(),
                     turn: "turn".into(),
+                    answered: true,
                 }))
                 .await
                 .unwrap();
@@ -347,28 +291,55 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
     }
 }
 
+/// The hand-off is an ordinary one: only the runner's applied `end_session`
+/// and its silent finish end the run, at the farewell's playback boundary.
 #[tokio::test(start_paused = true)]
-async fn voice_listen_goodbye_settles_without_arming_idle_in_either_tool_order() {
-    for order in [GoodbyeOrder::Early, GoodbyeOrder::LateTool] {
-        goodbye_with_end(order).await;
+async fn voice_listen_runner_end_closes_at_the_farewell_in_either_tool_order() {
+    use Step::{End, Handoff, Played, Reply, Silent};
+    goodbye_with_end(&[Handoff(true), End, Reply, Silent, Played], (1, 12)).await;
+    goodbye_with_end(&[Handoff(true), Reply, End, Silent, Played], (1, 12)).await;
+}
+
+/// A hand-off after Played opens a reply like any other. It gets no audio:
+/// the silent end closes it and the run, with or without speech in the gap.
+#[tokio::test(start_paused = true)]
+async fn voice_listen_runner_end_after_played_closes_without_another_listen_window() {
+    use Step::{Asked, End, Handoff, Heard, Played, Reply, Silent};
+    for first in [false, true] {
+        goodbye_with_end(&[Reply, Played, Heard, Handoff(first), End, Silent, Played], (2, 12)).await;
+        goodbye_with_end(
+            &[Reply, Played, Heard, Asked, Handoff(first), End, Silent, Played],
+            (2, 12),
+        )
+        .await;
     }
 }
 
+/// The hand-off carries no sign that it is a goodbye, so a follow-up the
+/// voice model already answered before the receipt plays to its end. The run
+/// still closes at that boundary, not after another listen window.
 #[tokio::test(start_paused = true)]
-async fn voice_listen_goodbye_handoff_after_played_uses_the_settled_reply() {
-    for turn_first in [false, true] {
-        goodbye_with_end(GoodbyeOrder::LateHandoff { turn_first }).await;
+async fn voice_listen_runner_end_after_an_answered_gap_follow_up_closes_at_that_reply() {
+    use Step::{Asked, End, Handoff, Heard, Played, Reply, Silent};
+    for first in [false, true] {
+        let steps = [Reply, Played, Heard, Asked, Handoff(first), Reply, End, Silent, Played];
+        goodbye_with_end(&steps, (2, 24)).await;
     }
 }
 
+/// One scripted input. `Handoff(true)` sends the turn start before the marker.
 #[derive(Clone, Copy)]
-enum GoodbyeOrder {
-    Early,
-    LateTool,
-    LateHandoff { turn_first: bool },
+enum Step {
+    Handoff(bool),
+    End,
+    Reply,
+    Silent,
+    Played,
+    Heard,
+    Asked,
 }
 
-async fn goodbye_with_end(order: GoodbyeOrder) {
+async fn goodbye_with_end(steps: &[Step], (starts, sent): (usize, u64)) {
     let device = Observer::default();
     let mut client = FakeConnector::new(device.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -401,6 +372,7 @@ async fn goodbye_with_end(order: GoodbyeOrder) {
         }
         Ok(())
     };
+    let started = Instant::now();
     let answer = goodbye_run(
         replies(
             &client,
@@ -413,19 +385,19 @@ async fn goodbye_with_end(order: GoodbyeOrder) {
         ),
         &device,
         &stopped,
-        goodbye_inputs(&device, &tx, (&stopped, &played), (end, answer), order),
+        goodbye_inputs(&device, &tx, (&stopped, &played), (end, answer), steps),
     )
     .await;
     assert_eq!(answer.content, serde_json::json!({"ending_after_reply": true}));
     assert_eq!(receipts, ["applied"]);
-    if !matches!(order, GoodbyeOrder::LateHandoff { .. }) {
-        assert_eq!(source.controller.idle_deadline(), None);
-    }
+    // Neither the response deadline nor an idle window ended the run.
+    assert!(started.elapsed() < Duration::from_secs(3));
     assert!(source.controller.ready_to_close(true, true));
-    assert_eq!(source.stats.reply_sent, 12);
+    assert_eq!(source.stats.reply_sent, sent);
     let commands = device.commands();
-    let starts = commands.iter().filter(|cmd| matches!(cmd, Command::Start(..))).count();
-    assert_eq!(starts, 1);
+    let opened = commands.iter().filter(|cmd| matches!(cmd, Command::Start(..))).count();
+    let frames = commands.iter().filter(|cmd| matches!(cmd, Command::Frame(_))).count();
+    assert_eq!((opened, u64::try_from(frames)), (starts, Ok(sent)));
     assert!(!commands.iter().any(|cmd| matches!(cmd, Command::Cut(_))));
 }
 
@@ -436,11 +408,16 @@ async fn goodbye_run<T>(
     inputs: impl Future<Output = T>,
 ) -> T {
     tokio::pin!(run);
-    let mut stop_seen = false;
+    let mut stops = 0;
     let run = poll_fn(|cx| {
         let result = run.as_mut().poll(cx);
-        if !stop_seen && device.commands().last() == Some(&Command::Stop) {
-            stop_seen = true;
+        let seen = device
+            .commands()
+            .iter()
+            .filter(|cmd| matches!(cmd, Command::Stop))
+            .count();
+        if seen > stops {
+            stops = seen;
             stopped.notify_one();
         }
         result.map(Result::unwrap)
@@ -454,32 +431,34 @@ async fn goodbye_inputs(
     tx: &mpsc::Sender<MediaEvent>,
     (stopped, played): (&tokio::sync::Notify, &tokio::sync::Notify),
     (end, answer): (Event, tokio::sync::oneshot::Receiver<echo_agent_api::ToolResult>),
-    order: GoodbyeOrder,
+    steps: &[Step],
 ) -> echo_agent_api::ToolResult {
-    if !matches!(order, GoodbyeOrder::LateHandoff { .. }) {
-        handoff(tx, true).await;
+    let mut end = Some(end);
+    for step in steps {
+        match step {
+            Step::Handoff(turn_first) => handoff(tx, *turn_first).await,
+            Step::End => send_control(tx, end.take().unwrap()).await,
+            Step::Reply => reply(tx, 5000).await,
+            Step::Silent => send_control(tx, silent_turn()).await,
+            Step::Played => {
+                stopped.notified().await;
+                device.finish(Ok(()));
+            }
+            Step::Heard => played.notified().await,
+            Step::Asked => {
+                let (role, text) = ("user".into(), "what day is it?".into());
+                send_control(tx, Event::Transcript { role, text, done: true }).await;
+            }
+        }
     }
-    let end = if matches!(order, GoodbyeOrder::Early) {
-        send_control(tx, end).await;
-        None
-    } else {
-        Some(end)
-    };
-    reply(tx, 5000).await;
-    stopped.notified().await;
-    device.finish(Ok(()));
-    played.notified().await;
-    after_goodbye_played(tx, order, end).await;
     answer.await.unwrap()
 }
 
-async fn after_goodbye_played(tx: &mpsc::Sender<MediaEvent>, order: GoodbyeOrder, end: Option<Event>) {
-    if let GoodbyeOrder::LateHandoff { turn_first } = order {
-        handoff(tx, turn_first).await;
-    }
-    if let Some(end) = end {
-        send_control(tx, Event::SpeechStarted).await;
-        send_control(tx, end).await;
+fn silent_turn() -> Event {
+    Event::TurnCompleted {
+        thread: "thread".into(),
+        turn: "turn".into(),
+        answered: false,
     }
 }
 
@@ -488,7 +467,7 @@ async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {
         thread: "thread".into(),
         turn: "turn".into(),
     };
-    let marker = Event::GoodbyeHandoff;
+    let marker = Event::ReplyHandoff;
     let events = if turn_first { [turn, marker] } else { [marker, turn] };
     for event in events {
         send_control(tx, event).await;

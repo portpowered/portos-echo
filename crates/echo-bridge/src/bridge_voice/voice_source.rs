@@ -474,6 +474,14 @@ impl Delegation {
         !self.held
     }
 
+    /// No answer follows the completed turns: true when the reply finishes
+    /// now. A filler still being spoken finishes at its own done instead.
+    pub fn released(&mut self) -> bool {
+        let finish = std::mem::take(&mut self.held) || self.utterance == Utterance::None;
+        self.utterance = if finish { Utterance::None } else { Utterance::Answer };
+        finish
+    }
+
     /// A filler done is holding the reply open for a delegated answer.
     #[must_use]
     pub fn held(&self) -> bool {

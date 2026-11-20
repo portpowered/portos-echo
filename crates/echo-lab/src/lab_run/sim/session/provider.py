@@ -65,9 +65,17 @@ class Script:
         for position, item in enumerate(mine):
             assert item['call_id'] == f'session-{turn}-{position}', 'tool identity mismatch'
         step = steps[self.step]
-        if steps[0].get('request') == 'end the session':
-            assert ('If the hand-off request is exactly "end the session", immediately call end_session with {} once.'
-                    in body.get('instructions', '')), 'missing goodbye runner instructions'
+        if 'request' in steps[0]:
+            # The pinned app server gives the runner the user's words and the
+            # transcript, never a request the voice model wrote.
+            request = steps[0]['request']
+            assert ('If those latest words only say the user is finished' in body.get('instructions', '')
+                    and 'immediately call end_session with {} once' in body['instructions']), \
+                'missing goodbye runner instructions'
+            delegated = json.dumps(body['input'])
+            assert f'<input>{request}</input>' in delegated and f'user: {request}' in delegated, \
+                'runner did not receive the user words'
+            assert 'end the session' not in delegated, 'synthetic end request reached the runner'
         if step.get('wait_for_release'):
             emit({'event': 'provider.waiting', 'turn': turn})
             assert release_goodbye.wait(20), 'runner was not released at the scripted boundary'
@@ -158,8 +166,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             observed['external'] += 1
             self.respond(403, b'{}')
             return
-        if script and any(turn[0].get('request') == 'end the session' for turn in script.turns):
-            if 'hand off exactly "end the session" once' not in body['session'].get('instructions', ''):
+        if script and any('request' in turn[0] for turn in script.turns):
+            if 'hand off once so the background agent ends the session' not in body['session'].get('instructions', ''):
                 emit({'event': 'provider.failure', 'failure': 'missing goodbye Live prompt'})
         observed['calls'] += 1
         emit({'event': 'provider.offer', 'offer': body['sdp']})

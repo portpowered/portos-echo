@@ -29,15 +29,7 @@ pub(super) struct Grants {
     max: Duration,
     granted: Option<Instant>,
     ending: bool,
-    pub(super) goodbye: Option<Goodbye>,
     answered: Vec<(String, ToolResult)>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Goodbye {
-    Pending,
-    Finished,
-    Ending,
 }
 
 impl Grants {
@@ -50,9 +42,9 @@ impl Grants {
         }
     }
 
-    /// The run ends at the playback boundary unless a goodbye is cut.
+    /// The run ends at the playback boundary.
     pub fn ending(&self) -> bool {
-        self.ending || self.goodbye == Some(Goodbye::Ending)
+        self.ending
     }
 
     /// The configured listen window after a reply.
@@ -154,11 +146,7 @@ fn decide(
             let outcome = if grants.ending() {
                 "duplicate"
             } else {
-                if grants.goodbye.is_some() {
-                    grants.goodbye = Some(Goodbye::Ending);
-                } else {
-                    grants.ending = true;
-                }
+                grants.ending = true;
                 "applied"
             };
             let result = ToolResult {

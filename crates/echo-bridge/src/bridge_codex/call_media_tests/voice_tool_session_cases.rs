@@ -353,7 +353,7 @@ where
                 assert_eq!(thread, "thread-1");
                 events.push((true, turn));
             }
-            MediaEvent::Control(Event::TurnCompleted { thread, turn }) => {
+            MediaEvent::Control(Event::TurnCompleted { thread, turn, .. }) => {
                 assert_eq!(thread, "thread-1");
                 events.push((false, turn));
             }
