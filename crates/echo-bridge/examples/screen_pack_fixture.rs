@@ -65,7 +65,7 @@ async fn open(home: PathBuf) -> Result<(SettingsService, ScreenServer, mpsc::Sen
     let mut base = BridgeConfig::from_toml_str(BASE)?;
     base.home = Some(HomeConfig {
         dir: home,
-        agent_tools: Default::default(),
+        agent_tools: echo_config::AgentTools::default(),
     });
     let host = SettingsHost::open(
         base,

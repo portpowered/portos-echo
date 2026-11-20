@@ -2,7 +2,7 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 19
-status: in progress; installer, controls and renderer implemented; generated template proof pending
+status: implemented; downloadable bridge-rendered layouts and characters
 ---
 
 # Screen packs
@@ -384,6 +384,36 @@ selection automatically adopts an installed template; an explicitly empty
 selection keeps the built-in appearance. Select **Built-in appearance** to roll
 back without deleting downloaded data.
 
-The assembled production download/browser journey remains pending. Controlled
-media-event tests do not establish physical WebView behavior. Device playback
-remains coordinator-owned T5 proof.
+## Device-free verification
+
+On Linux with the repository's pinned Rust/Node tools, Python 3, OpenSSL, ffmpeg
+(VP9 and H.264 encoders), and the pinned Playwright Chromium already provisioned:
+
+```sh
+cd web/screen
+npm ci --offline
+npm test
+```
+
+The suite owner builds the screen fixtures and runs the generation command above
+once in a fresh temporary directory. The integration journey consumes those
+prebuilt artifacts, a fresh home and a local HTTPS archive peer. It follows the
+paired controls above: download with the generated digest, refresh, disable,
+select the template, refuse a wrong digest, observe a touched clip, and roll back
+to **Built-in appearance**. It checks the atomic selection file and native SSE,
+fetch and decoded video frames; only the incoming voice states and external
+archive peer are controlled. The production settings service reports whether a
+restart was requested when the fixture shuts down.
+
+The existing release-helper test entry point exercises the generation/checksum
+and local-push instructions with a recording fake adb:
+
+```sh
+python3 tests/test_release_kit.py
+```
+
+These procedures never contact a device or account. Generated data and temporary
+homes are removed after the suite. Hosted Linux evidence belongs in the PR;
+independent release-artifact and clean-room checks remain review-owned. Chromium
+decoding does not establish physical WebView behavior: device playback remains
+coordinator-owned T5 proof.
