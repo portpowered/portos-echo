@@ -151,7 +151,7 @@ fn t3_verified_release_pushes_then_dispatches_bundled_install_start() -> Result 
     let dispatch: Vec<_> = ledger
         .iter()
         .filter_map(|args| args.last())
-        .filter(|arg| arg.contains("--device"))
+        .filter(|arg| arg.contains("--device") && !arg.starts_with("sh -s -- --device setup-"))
         .collect();
     assert_eq!(dispatch[0], "sh -s -- --device stop");
     assert!(dispatch[1].contains("--device prepare-archive"));
@@ -396,7 +396,7 @@ fn t3_update_verifies_before_stop_and_dispatches_shell_install_start() -> Result
     let commands: Vec<_> = ledger
         .iter()
         .filter_map(|args| args.last())
-        .filter(|arg| arg.contains("--device"))
+        .filter(|arg| arg.contains("--device") && !arg.starts_with("sh -s -- --device setup-"))
         .collect();
     assert_eq!(commands[0], "sh -s -- --device stop");
     assert!(commands[1].contains("--release-version '0.2.0'"));

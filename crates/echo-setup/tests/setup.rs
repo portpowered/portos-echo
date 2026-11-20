@@ -2,7 +2,7 @@
 //! This does not stand in for the retained CLI setup/forward/wake journey.
 use echo_contracts::secret::Secret;
 use echo_setup::Failure;
-use echo_setup::setup::{Provider, ScreenEvents, health};
+use echo_setup::setup::{Provider, ScreenEvents, health, link_required};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -281,5 +281,67 @@ async fn t3_setup_health_body_limit_and_deadline_are_enforced() -> Result {
             Some(Failure("setup_pairing_invalid"))
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_settings_link_projection_is_authenticated_and_refuses_ambiguous_status() -> Result {
+    for (body, expected) in [
+        (
+            r#"{"version":1,"link_status":"linked","future":"SYNTHETIC-TOKEN"}"#,
+            Ok(false),
+        ),
+        (r#"{"version":1,"link_status":"link_required"}"#, Ok(true)),
+        (
+            r#"{"version":1,"link_status":"unconfigured"}"#,
+            Err(Failure("setup_link_unconfigured")),
+        ),
+        (
+            r#"{"version":2,"link_status":"linked"}"#,
+            Err(Failure("setup_settings_invalid")),
+        ),
+        (
+            r#"{"version":1,"link_status":"SYNTHETIC-ACCOUNT"}"#,
+            Err(Failure("setup_settings_invalid")),
+        ),
+        (
+            r#"{"version":1,"link_status":"linked","link_status":"link_required"}"#,
+            Err(Failure("setup_settings_invalid")),
+        ),
+        (r#"{"link_status":"linked"}"#, Err(Failure("setup_settings_invalid"))),
+        ("{}", Err(Failure("setup_settings_invalid"))),
+    ] {
+        let server = Server::one("200 OK", &format!("Content-Length: {}\r\n", body.len()), body, false)?;
+        assert_eq!(link_required(server.port, &pairing(), deadline()).await, expected);
+        server.finish("/settings/v1?token=SYNTHETIC-PAIR+%2B%26%3F")?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_settings_refuses_redirect_auth_failure_oversize_and_expired_admission() -> Result {
+    for status in ["302 Found", "401 Unauthorized"] {
+        let server = Server::one(status, "Location: /other\r\nContent-Length: 0\r\n", "", false)?;
+        assert_eq!(
+            link_required(server.port, &pairing(), deadline()).await,
+            Err(Failure("setup_observation_failed"))
+        );
+        server.finish("/settings/v1?token=SYNTHETIC-PAIR+%2B%26%3F")?;
+    }
+    let body = "x".repeat(262_145);
+    let server = Server::one("200 OK", &format!("Content-Length: {}\r\n", body.len()), &body, false)?;
+    assert_eq!(
+        link_required(server.port, &pairing(), deadline()).await,
+        Err(Failure("setup_settings_invalid"))
+    );
+    server.finish("/settings/v1?token=SYNTHETIC-PAIR+%2B%26%3F")?;
+    assert_eq!(
+        link_required(1, &pairing(), Instant::now()).await,
+        Err(Failure("setup_timeout"))
+    );
+    assert_eq!(
+        link_required(1, &Secret::new("bad\ntoken".into()), deadline()).await,
+        Err(Failure("setup_pairing_invalid"))
+    );
     Ok(())
 }

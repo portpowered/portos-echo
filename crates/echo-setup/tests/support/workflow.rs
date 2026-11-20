@@ -3,7 +3,10 @@
 //! with lifecycle, health admission and paired fresh wake/run observations.
 use super::*;
 
-fn prepare(fixture: &Fixture, health: u16) -> Result {
+fn prepare(fixture: &Fixture, health: u16) -> Result<TcpListener> {
+    let screen = std::net::TcpListener::bind("127.0.0.1:0")?;
+    screen.set_nonblocking(true)?;
+    let port = screen.local_addr()?.port();
     fs::write(fixture.0.join("stop-reply"), "echo-install: stopped\r\n")?;
     for verb in ["ensure-signin", "signin", "link"] {
         fs::write(
@@ -12,7 +15,7 @@ fn prepare(fixture: &Fixture, health: u16) -> Result {
         )?;
     }
     fs::write(fixture.0.join("setup-pairing"), "SYNTHETIC-PAIR\n")?;
-    let replies: Vec<_> = (0..8).flat_map(|_| ["41001".to_owned(), health.to_string()]).collect();
+    let replies: Vec<_> = (0..8).flat_map(|_| [port.to_string(), health.to_string()]).collect();
     fs::write(fixture.0.join("forward-replies.json"), serde_json::to_vec(&replies)?)?;
     fs::write(fixture.0.join("forwards.json"), "[]")?;
     fs::write(fixture.0.join("forward-targets.json"), "{}")?;
@@ -24,23 +27,40 @@ fn prepare(fixture: &Fixture, health: u16) -> Result {
         fixture.0.join("confirm-evidence"),
         "wake=pending\nlink=pending\nrun=pending\n",
     )?;
-    Ok(())
+    Ok(TcpListener::from_std(screen)?)
 }
 
-async fn health_server(listener: TcpListener, states: Vec<(bool, bool)>) -> Result {
-    for (relink, kill) in states {
-        let (mut socket, _) = listener.accept().await?;
+async fn health_server(listener: TcpListener, screen: TcpListener, states: Vec<(bool, bool)>) -> Result {
+    health_settings_server(listener, screen, states, "link_required").await
+}
+
+async fn health_settings_server(
+    listener: TcpListener,
+    screen: TcpListener,
+    states: Vec<(bool, bool)>,
+    link_state: &str,
+) -> Result {
+    let mut states = states.into_iter();
+    while let Some(&(relink, kill)) = states.as_slice().first() {
+        let (mut socket, _) = tokio::select! {
+            accepted = listener.accept() => accepted?,
+            accepted = screen.accept() => accepted?,
+        };
         let mut request = Vec::new();
         while !request.ends_with(b"\r\n\r\n") {
             let mut byte = [0];
             socket.read_exact(&mut byte).await?;
             request.push(byte[0]);
         }
-        assert_eq!(
-            String::from_utf8(request)?.lines().next(),
-            Some("GET /healthz HTTP/1.1")
-        );
-        let body = serde_json::json!({"status":"running", "wyoming":"connected", "live":"idle", "relink_required":relink, "kill_switch":kill}).to_string();
+        let request = String::from_utf8(request)?;
+        let settings = request.starts_with("GET /settings/v1?token=SYNTHETIC-PAIR ");
+        let body = if settings {
+            serde_json::json!({"version":1,"link_status":link_state,"ignored":"SYNTHETIC-TOKEN"}).to_string()
+        } else {
+            assert_eq!(request.lines().next(), Some("GET /healthz HTTP/1.1"));
+            states.next();
+            serde_json::json!({"status":"running", "wyoming":"connected", "live":"idle", "relink_required":relink, "kill_switch":kill}).to_string()
+        };
         socket
             .write_all(
                 format!(
@@ -50,6 +70,9 @@ async fn health_server(listener: TcpListener, states: Vec<(bool, bool)>) -> Resu
                 .as_bytes(),
             )
             .await?;
+        if settings && !matches!(link_state, "linked" | "link_required") {
+            break;
+        }
     }
     Ok(())
 }
@@ -86,8 +109,8 @@ async fn t3_installed_setup_orders_signin_required_link_and_fresh_confirmation_o
     let connection = fixture.connection(deadline()).await?;
     fs::write(fixture.0.join("devices"), "SYNTHETIC-OTHER\tdevice\n")?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    prepare(&fixture, listener.local_addr()?.port())?;
-    let server = tokio::spawn(health_server(listener, vec![(false, false); 2]));
+    let screen = prepare(&fixture, listener.local_addr()?.port())?;
+    let server = tokio::spawn(health_server(listener, screen, vec![(false, false); 2]));
     let mut prompts = 0;
     let mut instructions = 0;
     connection
@@ -133,13 +156,13 @@ async fn t3_installed_setup_reauthenticates_once_and_refuses_persistent_relink()
         let fixture = Fixture::new()?;
         let connection = fixture.connection(deadline()).await?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
-        prepare(&fixture, listener.local_addr()?.port())?;
+        let screen = prepare(&fixture, listener.local_addr()?.port())?;
         let states = if persistent {
             vec![(true, false); 2]
         } else {
             vec![(true, false), (false, false), (false, false)]
         };
-        let server = tokio::spawn(health_server(listener, states));
+        let server = tokio::spawn(health_server(listener, screen, states));
         let result = connection
             .guide(100, |_| Ok(()), || Err(Failure("instruction_barrier")))
             .await;
@@ -182,7 +205,7 @@ async fn t3_installed_setup_stops_on_unsafe_start_kill_switch_or_stop_refusal() 
         let fixture = Fixture::new()?;
         let connection = fixture.connection(deadline()).await?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
-        prepare(&fixture, listener.local_addr()?.port())?;
+        let screen = prepare(&fixture, listener.local_addr()?.port())?;
         if failure == "identity" {
             fs::write(
                 fixture.0.join("status"),
@@ -192,7 +215,7 @@ async fn t3_installed_setup_stops_on_unsafe_start_kill_switch_or_stop_refusal() 
             fs::write(fixture.0.join("stop-reply"), "SYNTHETIC-ACCOUNT")?;
         }
         let server = if failure == "kill" {
-            Some(tokio::spawn(health_server(listener, vec![(false, true)])))
+            Some(tokio::spawn(health_server(listener, screen, vec![(false, true)])))
         } else {
             None
         };
@@ -230,9 +253,9 @@ async fn t3_installed_setup_one_sided_wake_evidence_expires_without_rebaselining
         let fixture = Fixture::new()?;
         let connection = fixture.connection(deadline()).await?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
-        prepare(&fixture, listener.local_addr()?.port())?;
+        let screen = prepare(&fixture, listener.local_addr()?.port())?;
         fs::write(fixture.0.join("confirm-evidence"), evidence)?;
-        let server = tokio::spawn(health_server(listener, vec![(false, false); 2]));
+        let server = tokio::spawn(health_server(listener, screen, vec![(false, false); 2]));
         let barrier = fixture.listener("wake-barrier")?;
         let mut instructions = 0;
         let mut guided = Box::pin(connection.guide(
@@ -266,6 +289,64 @@ async fn t3_installed_setup_one_sided_wake_evidence_expires_without_rebaselining
                 .count(),
             1
         );
+        no_forwards(&fixture)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_linked_resume_preserves_grant_and_still_requires_fresh_confirmation() -> Result {
+    let fixture = Fixture::new()?;
+    let connection = fixture.connection(deadline()).await?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let screen = prepare(&fixture, listener.local_addr()?.port())?;
+    let server =
+        tokio::spawn(async move { health_settings_server(listener, screen, vec![(false, false); 2], "linked").await });
+    // An existing account completes ensure-signin without a public prompt.
+    // Even linked settings cannot replace the fresh wake/run requirement.
+    let result = connection
+        .guide(
+            100,
+            |_| Err(Failure("unexpected_prompt")),
+            || Err(Failure("fresh_confirmation_required")),
+        )
+        .await;
+    assert_eq!(result, Err(Failure("fresh_confirmation_required")));
+    server.await??;
+    assert_eq!(
+        operations(&fixture)?,
+        ["stop", "ensure-signin", "start", "status", "confirm-cursor"]
+    );
+    no_forwards(&fixture)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_unconfigured_or_invalid_link_state_refuses_grant_mutation_and_drains_forwards() -> Result {
+    for (link_state, error) in [
+        ("unconfigured", "setup_link_unconfigured"),
+        ("SYNTHETIC-ACCOUNT", "setup_settings_invalid"),
+    ] {
+        let fixture = Fixture::new()?;
+        let connection = fixture.connection(deadline()).await?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let screen = prepare(&fixture, listener.local_addr()?.port())?;
+        let server =
+            tokio::spawn(
+                async move { health_settings_server(listener, screen, vec![(false, false); 2], link_state).await },
+            );
+        assert_eq!(
+            connection
+                .guide(
+                    100,
+                    |_| Err(Failure("unexpected_prompt")),
+                    || Err(Failure("unexpected_wake"))
+                )
+                .await,
+            Err(Failure(error))
+        );
+        server.await??;
+        assert_eq!(operations(&fixture)?, ["stop", "ensure-signin", "start", "status"]);
         no_forwards(&fixture)?;
     }
     Ok(())

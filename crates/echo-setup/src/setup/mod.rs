@@ -13,7 +13,7 @@ pub use account::AccountCommand;
 pub use confirmation::{ConfirmationEvidence, WakeConfirmation};
 pub use connection::InstalledConnection;
 pub use forward::ForwardSession;
-pub use http::{Health, ScreenEvents, health};
+pub use http::{Health, ScreenEvents, health, link_required};
 pub use prompt::{Prompt, Provider};
 pub use wake::{WakeAttempt, WakeEvidence};
 
@@ -45,8 +45,17 @@ impl InstalledConnection {
                 return Err(Failure("setup_relink_required"));
             }
         }
-        let now = now_unix.saturating_add(started.elapsed().as_secs());
-        self.guide_account(AccountCommand::Link, now, &mut present).await?;
+        let forwards = self.forward().await?;
+        let required = async {
+            let pairing = self.pairing().await?;
+            forwards.link_required(&pairing, self.deadline).await
+        }
+        .await;
+        let required = forwards.close().await.and(required)?;
+        if required {
+            let now = now_unix.saturating_add(started.elapsed().as_secs());
+            self.guide_account(AccountCommand::Link, now, &mut present).await?;
+        }
         if !self.runtime().await?.runtime_ready() {
             return Err(Failure("setup_relink_required"));
         }

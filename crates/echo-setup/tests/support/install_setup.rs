@@ -3,21 +3,19 @@ use super::*;
 
 pub struct Service {
     address: std::net::SocketAddr,
+    screen_address: std::net::SocketAddr,
+    screen_worker: Option<thread::JoinHandle<io::Result<()>>>,
     worker: Option<thread::JoinHandle<io::Result<()>>>,
 }
 
 impl Service {
     pub fn new(root: &std::path::Path) -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
-        let screen = TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
+        let screen = TcpListener::bind("127.0.0.1:0")?;
+        let screen_address = screen.local_addr()?;
         let replies: Vec<_> = (0..8)
-            .flat_map(|_| {
-                [
-                    screen.local_addr().map(|addr| addr.port().to_string()),
-                    Ok(address.port().to_string()),
-                ]
-            })
+            .flat_map(|_| [Ok(screen_address.port().to_string()), Ok(address.port().to_string())])
             .collect::<io::Result<_>>()?;
         fs::write(root.join("forward-replies.json"), serde_json::to_vec(&replies)?)?;
         fs::write(root.join("forwards.json"), "[]")?;
@@ -41,34 +39,54 @@ impl Service {
             root.join("confirm-evidence"),
             "wake=confirmed\r\nlink=connected\r\nrun=started\r\n",
         )?;
-        let worker = thread::spawn(move || {
-            // Keep the screen fixture port reserved. Missing private pairing
-            // prevents SSE use for these already-authenticated account cases.
-            let _screen = screen;
-            serve(&listener)
-        });
+        fs::write(root.join("setup-pairing"), "SYNTHETIC-PAIR\n")?;
+        let health_root = root.to_owned();
+        let screen_root = root.to_owned();
+        let worker = thread::spawn(move || serve(&listener, &health_root));
+        let screen_worker = thread::spawn(move || serve(&screen, &screen_root));
         Ok(Self {
             address,
+            screen_address,
+            screen_worker: Some(screen_worker),
             worker: Some(worker),
         })
     }
 }
 
-fn serve(listener: &TcpListener) -> io::Result<()> {
+fn serve(listener: &TcpListener, root: &std::path::Path) -> io::Result<()> {
     loop {
         let (mut stream, _) = listener.accept()?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         let mut request = Vec::new();
         while !request.ends_with(b"\r\n\r\n") {
             let mut byte = [0];
-            stream.read_exact(&mut byte)?;
+            if stream.read_exact(&mut byte).is_err() {
+                break;
+            }
             request.push(byte[0]);
+        }
+        if !request.ends_with(b"\r\n\r\n") {
+            continue;
+        }
+        if request.starts_with(b"GET /events?token=SYNTHETIC-PAIR ") {
+            // Immediate account completion can cancel the observer at any point.
+            // Keep its SSE stream pending until that owner drops the response.
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n");
+            let mut byte = [0];
+            let _ = stream.read(&mut byte);
+            continue;
         }
         if request.starts_with(b"GET /stop ") {
             return Ok(());
         }
-        assert!(request.starts_with(b"GET /healthz "));
-        let body = serde_json::json!({"status":"running", "wyoming":"connected", "live":"idle", "relink_required":false, "kill_switch":false}).to_string();
+        let settings = request.starts_with(b"GET /settings/v1?token=SYNTHETIC-PAIR ");
+        assert!(settings || request.starts_with(b"GET /healthz "));
+        let body = if settings {
+            serde_json::json!({"version":1,"link_status":fs::read_to_string(root.join("link-state")).unwrap_or_else(|_| "link_required".into())}).to_string()
+        } else {
+            serde_json::json!({"status":"running", "wyoming":"connected", "live":"idle", "relink_required":false, "kill_switch":false}).to_string()
+        };
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -82,10 +100,42 @@ impl Drop for Service {
         if let Ok(mut socket) = std::net::TcpStream::connect(self.address) {
             let _ = socket.write_all(b"GET /stop HTTP/1.1\r\n\r\n");
         }
+        if let Ok(mut socket) = std::net::TcpStream::connect(self.screen_address) {
+            let _ = socket.write_all(b"GET /stop HTTP/1.1\r\n\r\n");
+        }
+        if let Some(worker) = self.screen_worker.take() {
+            let _ = worker.join();
+        }
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
     }
+}
+
+async fn settings_reply(listener: &tokio::net::TcpListener) -> Result {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (mut socket, _) = listener.accept().await?;
+    let mut request = Vec::new();
+    while !request.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        socket.read_exact(&mut byte).await?;
+        request.push(byte[0]);
+    }
+    assert_eq!(
+        String::from_utf8(request)?.lines().next(),
+        Some("GET /settings/v1?token=SYNTHETIC-PAIR HTTP/1.1")
+    );
+    let body = r#"{"version":1,"link_status":"link_required"}"#;
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await?;
+    Ok(())
 }
 
 async fn screen_prompt(listener: &tokio::net::TcpListener, portos: bool) -> Result {
@@ -136,7 +186,7 @@ async fn start_prompted(
 )> {
     let screen = std::sync::Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
     let health = fixture.1.as_ref().ok_or("missing service")?.address.port();
-    let replies: Vec<_> = (0..4)
+    let replies: Vec<_> = (0..8)
         .flat_map(|_| {
             [
                 screen.local_addr().map(|addr| addr.port().to_string()),
@@ -210,6 +260,9 @@ async fn both_prompts(
 ) -> Result {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     for portos in [false, true] {
+        if portos {
+            settings_reply(screen).await?;
+        }
         let (mut account, _) = barrier.accept().await?;
         let mut ready = [0; 5];
         account.read_exact(&mut ready).await?;
@@ -285,6 +338,48 @@ fn t3_cli_unrepresentable_setup_deadline_returns_exit_three_and_cleans_only_stag
             .filter_map(|args| args.last())
             .any(|call| call.contains("--device ensure-signin") || call.contains("--device uninstall"))
     );
+    let remaining: Vec<String> = serde_json::from_slice(&fs::read(fixture.0.join("forwards.json"))?)?;
+    assert_eq!(remaining, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+fn t3_linked_update_cli_preserves_grant_and_completes_after_fresh_confirmation() -> Result {
+    let fixture = Fixture::new()?;
+    fs::write(fixture.0.join("link-state"), "linked")?;
+    let output = fixture
+        .command()
+        .args([
+            "update",
+            "--json",
+            "--adb",
+            env!("CARGO_BIN_EXE_echo-setup-test-adb"),
+            "--from-dir",
+        ])
+        .arg(fixture.bundle()?)
+        .output()?;
+    let result = private_output(&output)?;
+    assert_eq!(output.status.code(), Some(0), "{result}");
+    assert_eq!(
+        private_output(&output)?,
+        serde_json::json!({"type":"result", "command":"update",
+        "ok":true, "version":"0.2.0", "setup":"complete"})
+    );
+    let calls = fixture.ledger()?;
+    let operations: Vec<_> = calls.iter().filter_map(|args| args.last()).collect();
+    assert!(
+        !operations
+            .iter()
+            .any(|call| call.ends_with("--device link") || call.ends_with("--device signin"))
+    );
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|call| call.ends_with("--device ensure-signin"))
+            .count(),
+        1
+    );
+    assert!(operations.iter().any(|call| call.contains("--device confirm-check '")));
     let remaining: Vec<String> = serde_json::from_slice(&fs::read(fixture.0.join("forwards.json"))?)?;
     assert_eq!(remaining, Vec::<String>::new());
     Ok(())

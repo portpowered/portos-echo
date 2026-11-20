@@ -45,12 +45,7 @@ impl ScreenEvents {
     /// # Errors
     /// Fixed categories for HTTP, pairing, protocol or deadline failures.
     pub async fn connect(port: u16, pairing: &Secret<String>, deadline: Instant) -> Result<Self> {
-        if pairing.expose().trim().is_empty()
-            || pairing.expose().len() > 16_384
-            || pairing.expose().chars().any(char::is_control)
-        {
-            return Err(Failure("setup_pairing_invalid"));
-        }
+        validate_pairing(pairing)?;
         let mut url = endpoint(port, "/events")?;
         url.query_pairs_mut().append_pair("token", pairing.expose());
         let response = request(url, deadline).await?;
@@ -111,20 +106,72 @@ impl ScreenEvents {
 /// # Errors
 /// Fixed HTTP/schema/deadline categories. Response size is bounded.
 pub async fn health(port: u16, deadline: Instant) -> Result<Health> {
+    json_response(endpoint(port, "/healthz")?, deadline, 16_384, "setup_health_invalid").await
+}
+
+/// Read only the existing authenticated settings projection. An unavailable or
+/// malformed observation never authorizes replacing an existing grant.
+/// # Errors
+/// Fixed pairing, HTTP, settings, unconfigured or absolute deadline categories.
+pub async fn link_required(port: u16, pairing: &Secret<String>, deadline: Instant) -> Result<bool> {
+    validate_pairing(pairing)?;
+    let mut url = endpoint(port, "/settings/v1")?;
+    url.query_pairs_mut().append_pair("token", pairing.expose());
+    let snapshot: LinkSnapshot = json_response(url, deadline, 262_144, "setup_settings_invalid").await?;
+    if snapshot.version != 1 {
+        return Err(Failure("setup_settings_invalid"));
+    }
+    match snapshot.link_status {
+        LinkStatus::Linked => Ok(false),
+        LinkStatus::LinkRequired => Ok(true),
+        LinkStatus::Unconfigured => Err(Failure("setup_link_unconfigured")),
+    }
+}
+
+#[derive(Deserialize)]
+struct LinkSnapshot {
+    version: u8,
+    link_status: LinkStatus,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LinkStatus {
+    Unconfigured,
+    LinkRequired,
+    Linked,
+}
+
+fn validate_pairing(pairing: &Secret<String>) -> Result<()> {
+    if pairing.expose().trim().is_empty()
+        || pairing.expose().len() > 16_384
+        || pairing.expose().chars().any(char::is_control)
+    {
+        return Err(Failure("setup_pairing_invalid"));
+    }
+    Ok(())
+}
+
+async fn json_response<T: serde::de::DeserializeOwned>(
+    url: Url,
+    deadline: Instant,
+    limit: usize,
+    invalid: &'static str,
+) -> Result<T> {
     tokio::time::timeout_at(deadline, async {
-        let mut response = request(endpoint(port, "/healthz")?, deadline).await?;
+        let mut response = request(url, deadline).await?;
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
             .map_err(|_| Failure("setup_observation_failed"))?
         {
-            if chunk.len() > 16_384_usize.saturating_sub(bytes.len()) {
-                return Err(Failure("setup_health_invalid"));
+            if chunk.len() > limit.saturating_sub(bytes.len()) {
+                return Err(Failure(invalid));
             }
             bytes.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&bytes).map_err(|_| Failure("setup_health_invalid"))
+        serde_json::from_slice(&bytes).map_err(|_| Failure(invalid))
     })
     .await
     .map_err(|_| Failure("setup_timeout"))?

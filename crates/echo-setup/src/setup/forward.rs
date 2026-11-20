@@ -77,6 +77,13 @@ impl ForwardSession {
         ScreenEvents::connect(self.screen, pairing, deadline).await
     }
 
+    /// Observe existing grant status on this lease's authenticated screen port.
+    /// # Errors
+    /// Fixed settings, pairing, HTTP or deadline categories.
+    pub async fn link_required(&self, pairing: &Secret<String>, deadline: Instant) -> Result<bool> {
+        super::link_required(self.screen, pairing, deadline).await
+    }
+
     /// Wait for cleanup before reporting an operation's result. Dropping this
     /// session also releases the lease, with cleanup continuing on the runtime.
     /// # Errors
