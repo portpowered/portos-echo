@@ -342,29 +342,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
 
 
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-server.daemon_threads = True
-threading.Thread(target=server.serve_forever, daemon=True).start()
-emit({'event': 'provider.ready', 'origin': f'http://127.0.0.1:{server.server_port}'})
-try:
-    for line in sys.stdin:
-        command = json.loads(line)
-        if 'answer' in command:
-            answers.put(command['answer'])
-        elif 'script' in command:
-            assert script is None
-            script = Script(command['script'])
-        elif any(key in command for key in ('delegate', 'transcripts', 'events', 'time_question', 'media_question')):
-            commands.put(command)
-            wake_write.sendall(b'e')
-        elif command == {'release_goodbye': True}:
-            release_goodbye.set()
-        elif command == {'snapshot': True}:
-            emit({'event': 'provider.snapshot', **observed})
-        else:
-            raise AssertionError('unknown fixture command')
-finally:
-    server.shutdown()
-    server.server_close()
-    wake_read.close()
-    wake_write.close()
+def main():
+    global script
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    emit({'event': 'provider.ready', 'origin': f'http://127.0.0.1:{server.server_port}'})
+    try:
+        for line in sys.stdin:
+            command = json.loads(line)
+            if 'answer' in command:
+                answers.put(command['answer'])
+            elif 'script' in command:
+                assert script is None
+                script = Script(command['script'])
+            elif any(key in command for key in ('delegate', 'transcripts', 'events', 'time_question', 'media_question')):
+                commands.put(command)
+                wake_write.sendall(b'e')
+            elif command == {'release_goodbye': True}:
+                release_goodbye.set()
+            elif command == {'snapshot': True}:
+                emit({'event': 'provider.snapshot', **observed})
+            else:
+                raise AssertionError('unknown fixture command')
+    finally:
+        server.shutdown()
+        server.server_close()
+        wake_read.close()
+        wake_write.close()
+
+
+if __name__ == '__main__':
+    main()

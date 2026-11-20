@@ -53,6 +53,7 @@ status: active; documentation index
 - [S2 Wyoming reply cancellation](spikes/s2-barge-in.md)
 - [S3 The screen client](spikes/s3-screen-client.md)
 - [The Codex app server as the voice backend](spikes/codex-app-server.md)
+- [Port OS tool catalog measurement](design/tool-catalog-spike.md)
 
 ## Original drafts
 
