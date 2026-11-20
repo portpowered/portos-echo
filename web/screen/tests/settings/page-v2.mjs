@@ -71,6 +71,7 @@ function v2Snapshot() {
 
 async function open(t, settingsV2Body, settingsV2Status = 200) {
     const page = await pageFor(t, query, true);
+    page.setDefaultTimeout(5000);
     await page.setViewportSize({ width: 960, height: 480 });
     await response(page, snapshot);
     await page.evaluate(
@@ -86,6 +87,10 @@ async function open(t, settingsV2Body, settingsV2Status = 200) {
 
 test("settings V2 displays configured options and submits only changed requested scopes", async (t) => {
     const page = await open(t, v2Snapshot());
+    assert.equal(
+        await page.getByRole("status").textContent(),
+        "Settings loaded",
+    );
     for (const name of ["OpenAI", "Port OS"])
         assert.equal(
             await page.getByRole("heading", { name, exact: true }).count(),
@@ -206,6 +211,10 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
     data.portos.link_status = "link_required";
     data.portos.server.granted_scopes = [];
     const page = await open(t, data);
+    assert.equal(
+        await page.getByRole("status").textContent(),
+        "Settings loaded",
+    );
     const model = page.getByLabel("Delegated model");
     await model.fill("unsaved-local-model");
     await response(page, { version: 2, operation: "link" }, 202);
@@ -220,6 +229,7 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
             expires_at_unix: 2000000000,
         },
     });
+    await page.clock.runFor(500);
     const code = page.getByText(/^Code: TEST-CODE · Expires at /);
     await code.waitFor();
     await page
@@ -233,6 +243,7 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
         portos.server.granted_scopes = ["endpoint:read"];
         delete portos.challenge;
     });
+    await page.clock.runFor(500);
     await code.waitFor({ state: "hidden" });
     const unlink = page.getByRole("button", { name: "Unlink Port OS" });
     await unlink.click();
@@ -257,6 +268,7 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
     await response(page, { version: 2, operation: "unlink" }, 202);
     await page.getByRole("button", { name: "Confirm unlink" }).click();
     await portosStatus(page, { link_status: "link_required" });
+    await page.clock.runFor(500);
     await page.getByText("Link required", { exact: true }).waitFor();
     assert.deepEqual(await mutations(), [
         ["/settings/v2/portos", { version: 2, operation: "link" }],
