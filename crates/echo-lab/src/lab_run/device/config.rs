@@ -96,7 +96,7 @@ mod tests {
     fn device_staging_revalidates_before_writing_synthetic_inputs() {
         let root = tempfile::tempdir().unwrap();
         let contents = include_str!("../../../../../examples/bridge.example.toml")
-            .replace("max_tool_calls = 8", "max_tool_calls = 0");
+            .replace("daily_request_cap = 500", "daily_request_cap = -1");
         assert_eq!(
             stage(root.path(), &contents),
             Err("device: invalid staged configuration".into())

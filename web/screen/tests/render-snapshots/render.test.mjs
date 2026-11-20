@@ -216,6 +216,9 @@ test("render: Settings with linked, unlinked and link-required accounts", async 
                 .getByText("OpenAI", { exact: true })
                 .and(page.locator("summary"))
                 .tap();
+            await page
+                .getByLabel("Web search", { exact: true })
+                .scrollIntoViewIfNeeded();
         }
         renders.push(await shoot(page, `settings-${status}`));
     }

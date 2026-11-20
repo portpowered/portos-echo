@@ -206,7 +206,6 @@ fn retained_settings(host: &mut echo_bridge::bridge_settings::SettingsHost, rest
     assert_eq!(snapshot.prompts.voice, "saved voice\n");
     assert_eq!(snapshot.prompts.runner, "admitted runner");
 }
-
 pub(super) fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Url {
     assert_eq!(fixture.screen.ip(), std::net::Ipv4Addr::LOCALHOST);
     let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();

@@ -112,7 +112,7 @@ impl SettingsOverlay {
         }
         if let Some(mut agent) = fields.section("agent")? {
             result.daily_cap = agent.optional("daily_request_cap")?;
-            result.tool_cap = agent.optional("max_tool_calls")?;
+            result.tool_cap = agent.compatibility_value("max_tool_calls")?;
             agent.discard("task_deadline_seconds");
             agent.finish()?;
         }

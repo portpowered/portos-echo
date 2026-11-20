@@ -62,6 +62,11 @@ impl<'a> Fields<'a> {
         self.table.remove(key).is_some()
     }
 
+    // Decode stored compatibility metadata alongside the supported settings.
+    pub(super) fn compatibility_value<T: DeserializeOwned>(&mut self, key: &str) -> Result<Option<T>, ConfigError> {
+        self.optional(key)
+    }
+
     pub(super) fn reject(&self, key: &str, message: &str) -> Result<(), ConfigError> {
         if self.table.contains_key(key) {
             return Err(ConfigError::new(self.field(key), message));
@@ -188,12 +193,15 @@ fn audio(value: Value<'_>) -> Result<crate::AudioConfig, ConfigError> {
 
 fn agent(value: Value<'_>, warnings: &mut Vec<ConfigError>) -> Result<(AgentConfig, crate::AgentBackend), ConfigError> {
     let mut f = Fields::new(value, "agent")?;
-    let backend = f.optional("backend")?.unwrap_or_default();
-    for key in ["max_tool_calls", "task_deadline_seconds"] {
-        if f.discard(key) {
-            warnings.push(ConfigError::new(f.field(key), "deprecated and ignored"));
+    for (present, field) in [
+        (f.discard("max_tool_calls"), "agent.max_tool_calls"),
+        (f.discard("task_deadline_seconds"), "agent.task_deadline_seconds"),
+    ] {
+        if present {
+            warnings.push(ConfigError::new(field, "deprecated and ignored"));
         }
     }
+    let backend = f.optional("backend")?.unwrap_or_default();
     let result = AgentConfig {
         max_tool_calls: 8,
         task_deadline_seconds: 60,

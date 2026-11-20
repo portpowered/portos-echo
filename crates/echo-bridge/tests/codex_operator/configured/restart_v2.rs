@@ -27,7 +27,7 @@ async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
         json!([
             "live",
             "original-runner",
-            8,
+            "500",
             ["endpoint:read", "message:send"],
             ["endpoint_query", "control"]
         ])

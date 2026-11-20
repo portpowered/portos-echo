@@ -44,8 +44,6 @@ voice = "alloy"
 session_idle_seconds = 120
 [agent]
 model = "fixture-model"
-max_tool_calls = 8
-task_deadline_seconds = 10
 daily_request_cap = 10
 [[mcp.server]]
 name = "synthetic"
