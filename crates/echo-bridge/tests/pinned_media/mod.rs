@@ -56,11 +56,7 @@ async fn journey() {
     );
     // The pinned server must hand the provider the Live prompt both as session
     // instructions and as the developer item that opens the Live history.
-    input
-        .write_all(b"{\"session\":true}
-")
-        .await
-        .unwrap();
+    input.write_all(b"{\"session\":true}\n").await.unwrap();
     let session: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     assert_eq!(
         session,
