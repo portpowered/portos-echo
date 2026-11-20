@@ -367,8 +367,7 @@ pub(super) async fn controlled_grant(
 }
 
 async fn follow_subprocess_clock(mock: &echo_lab::lab_mcp::Fixture, mut epoch: u64) {
-    // The delivered process signs with wall time, while the mock's DPoP
-    // validator measures against its explicitly controlled clock.
+    // Align the mock's DPoP validator with the normal subprocess clock.
     let mut ticks = tokio::time::interval(Duration::from_millis(50));
     loop {
         ticks.tick().await;
@@ -398,6 +397,14 @@ async fn replacement_journey(
     let expires = journey.begin().await;
     mock.approve(echo_lab::lab_mcp::Approval::Approved).unwrap();
     observe_expiry(expires).await;
+    wait_for_link(&mut journey).await;
+    unlink_paired_grant(&mut journey).await;
+    let grant: Value =
+        serde_json::from_slice(&std::fs::read(fixture.directory.path().join("grant/grant.json")).unwrap()).unwrap();
+    assert_eq!(grant["grant"], Value::Null);
+}
+
+async fn wait_for_link(journey: &mut PairedGrant<'_>) {
     let mut reads = tokio::time::interval(Duration::from_millis(50));
     let mut status = journey.portos().await;
     while status["operation_state"] == "linking" {
@@ -408,10 +415,6 @@ async fn replacement_journey(
     assert_eq!(status["link_status"], "linked");
     assert_eq!(status["server"]["granted_scopes"], json!(["endpoint:read"]));
     assert_eq!(status.get("challenge"), None);
-    unlink_paired_grant(&mut journey).await;
-    let grant: Value =
-        serde_json::from_slice(&std::fs::read(fixture.directory.path().join("grant/grant.json")).unwrap()).unwrap();
-    assert_eq!(grant["grant"], Value::Null);
 }
 
 fn assert_private(journey: &PairedGrant<'_>, path: &std::path::Path, stored: &Value) {
