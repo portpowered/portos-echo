@@ -388,7 +388,18 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
         .getByRole("button", { name: "Use screen pack", exact: true })
         .click();
     await reloads(page, 5);
+    await page
+        .getByText(
+            "Screen pack saved. Appearance updates without restarting the bridge.",
+            { exact: true },
+        )
+        .waitFor();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
     await page.waitForFunction(() => !document.querySelector(".screen-pack"));
+    assert.equal(
+        await readFile(join(home, "settings.toml"), "utf8"),
+        'screen_pack = ""\n',
+    );
     assert.equal((await f.api("/settings/v1")).restart_pending, false);
     assert.deepEqual(f.peer.requests, [
         "/template.screenpack.tar.gz",

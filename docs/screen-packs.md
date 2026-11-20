@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 19
+last modified: 2026, november, 20
 status: implemented; downloadable bridge-rendered layouts and characters
 ---
 
@@ -58,6 +58,9 @@ installed identities and their authenticated rest previews (layout-only packs ha
 no preview). Select **Built-in appearance** to disable packs or an installed pack,
 then **Use screen pack** to save through the existing settings owner. Pack saves
 require no restart and update the page without navigation.
+While Settings covers the presentation, its catalog and preview reads take
+priority. Appearance refreshes coalesce until **Back** exposes the presentation;
+the saved selection takes effect then, without another save or reload event.
 
 **Add from URL** requires an HTTPS URL and exactly 64 hexadecimal SHA-256 digits.
 **Download pack** queues a background job; it does not wait for the download.
