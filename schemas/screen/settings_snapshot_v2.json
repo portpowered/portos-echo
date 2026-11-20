@@ -78,6 +78,9 @@
         "delegate_effort": {
           "type": "string"
         },
+        "delegate_fast": {
+          "type": "boolean"
+        },
         "delegate_model": {
           "type": "string"
         },
@@ -93,7 +96,8 @@
         "voice",
         "web_search",
         "delegate_model",
-        "delegate_effort"
+        "delegate_effort",
+        "delegate_fast"
       ]
     },
     "DailyCapV1": {

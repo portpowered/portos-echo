@@ -219,6 +219,7 @@ async fn setup_thread_preparation_finishes_before_held_offer_and_realtime_waits_
         let mut expected = serde_json::to_value(echo_codex::ThreadSettings::new(vec![])).unwrap();
         expected["baseInstructions"] = options().instructions.into();
         expected["model"] = options().model.unwrap().into();
+        expected["serviceTier"] = serde_json::Value::Null;
         assert_eq!(request["params"], expected);
         assert_eq!(state.offers.load(Ordering::SeqCst), 1);
         assert_eq!(began.elapsed(), std::time::Duration::ZERO);

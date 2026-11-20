@@ -24,6 +24,7 @@ pub(super) fn options() -> Options<'static> {
         prompt: "Live prompt",
         model: Some("fixture-model"),
         effort: None,
+        fast: false,
         time_zone: None,
         web_search: echo_config::WebSearch::default(),
     }
@@ -106,6 +107,7 @@ pub(super) async fn admitted_start(server: &mut Server, began: std::time::System
     let mut expected = serde_json::to_value(ThreadSettings::new(vec![])).unwrap();
     expected["model"] = "fixture-model".into();
     expected["baseInstructions"] = prompt.into();
+    expected["serviceTier"] = Value::Null;
     assert_eq!(params, expected);
     assert_eq!(request["method"], "thread/realtime/start");
     let live = prompt.replacen("Client audio bridge", "Live prompt", 1);
@@ -230,6 +232,7 @@ async fn call_start_preserves_trimmed_thread_v3_options_and_exact_tool_schema() 
         let mut exact = serde_json::to_value(ThreadSettings::new(vec![expected])).unwrap();
         exact["model"] = "fixture-model".into();
         exact["baseInstructions"] = "Client audio bridge".into();
+        exact["serviceTier"] = Value::Null;
         assert_eq!(params, exact);
         stop(&mut server).await;
     };
@@ -343,6 +346,7 @@ async fn call_start_deadline_includes_sdp_wait_and_prevents_generation_reuse() {
             call.start(
                 &Options {
                     effort: Some("low"),
+                    fast: false,
                     ..options()
                 },
                 vec![],

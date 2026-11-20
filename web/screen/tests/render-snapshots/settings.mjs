@@ -16,6 +16,7 @@ export function settingsBody(portos) {
                     web_search: "cached",
                     delegate_model: "synthetic-runner",
                     delegate_effort: "low",
+                    delegate_fast: false,
                 },
                 agent: {
                     daily_request_cap: "1000",

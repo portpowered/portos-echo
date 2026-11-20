@@ -111,6 +111,25 @@ fn screen_settings_empty_model_and_effort_select_pin_defaults_over_legacy_aliase
 }
 
 #[test]
+fn screen_settings_fast_mode_preserves_inheritance_and_explicit_false() {
+    let base = BridgeConfig::from_toml_str(&format!("{MINIMAL}\n[codex]\ndelegate_fast=true")).unwrap();
+    let other = overlay("[codex]\ndelegate_effort='low'");
+    assert!(other.apply_to(&base).unwrap().codex.delegate_fast);
+    let settings = other.merge(&overlay("[codex]\ndelegate_fast=false"));
+    let encoded = settings.to_toml_string().unwrap();
+    assert_eq!(encoded, "[codex]\ndelegate_effort = \"low\"\ndelegate_fast = false\n");
+    let effective = overlay(&encoded).apply_to(&base).unwrap();
+    assert!(!effective.codex.delegate_fast);
+    assert_eq!(effective.codex.delegate_effort.as_deref(), Some("low"));
+    assert!(base.codex.delegate_fast);
+    let bad = "[agent]\nmax_tool_calls=3\n[codex]\ndelegate_fast='false'";
+    assert_eq!(
+        SettingsOverlay::from_toml_str(bad).unwrap_err().to_string(),
+        "codex.delegate_fast: invalid type or value"
+    );
+}
+
+#[test]
 fn screen_settings_sparse_merge_cannot_encode_an_overlay_that_startup_would_refuse() {
     let model = overlay(&format!("[codex]\ndelegate_model='{}'", "m".repeat(33_000)));
     let effort = overlay(&format!("[codex]\ndelegate_effort='{}'", "e".repeat(33_000)));

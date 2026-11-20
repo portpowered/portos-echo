@@ -266,6 +266,25 @@ fn settings_v2_sparse_wire_preserves_decimal_cap_and_refuses_other_shapes() -> R
 }
 
 #[test]
+fn settings_v2_fast_mode_patch_is_sparse_and_strict() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::{settings_v1::SettingsPatchV1, settings_v2::SettingsPatchV2};
+    use serde_json::{Value, from_value, json, to_value};
+
+    let body = |version, value| json!({"version":version,"settings":{"codex":{"delegate_fast":value}}});
+    for value in [json!(true), json!(false)] {
+        let wire = body(2, value.clone());
+        let patch: SettingsPatchV2 = from_value(wire.clone())?;
+        assert!(patch.settings.valid_shape());
+        assert_eq!(to_value(patch)?, wire);
+        assert!(from_value::<SettingsPatchV1>(body(1, value)).is_err());
+    }
+    for value in [Value::Null, json!("false"), json!(0)] {
+        assert!(from_value::<SettingsPatchV2>(body(2, value)).is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>> {
     use echo_screen_contract::{settings_v1::SettingsSnapshotV1, settings_v2::SettingsSnapshotV2};
 
@@ -273,7 +292,7 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
         "version":2,
         "settings":{
             "voice":{"session_listen_enabled":true,"session_listen_seconds":15},
-            "codex":{"voice":"marin","web_search":"cached","delegate_model":"synthetic-runner","delegate_effort":"low"},
+            "codex":{"voice":"marin","web_search":"cached","delegate_model":"synthetic-runner","delegate_effort":"low","delegate_fast":false},
             "agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":6,"task_deadline_seconds":45},
             "home":{"agent_tools":["notes","prompts"]}
         },
@@ -290,9 +309,24 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
         "bridge_version":"synthetic","restart_pending":true,"warnings":[]
     }"#;
     let snapshot = serde_json::from_str::<SettingsSnapshotV2>(wire)?;
-    let expected = serde_json::from_str::<serde_json::Value>(wire)?;
+    let mut expected = serde_json::from_str::<serde_json::Value>(wire)?;
     assert_eq!(serde_json::to_value(&snapshot)?, expected);
     preserved(&snapshot)?;
+    let codex = "/settings/codex";
+    expected.pointer_mut(codex).unwrap()["delegate_fast"] = true.into();
+    let enabled: SettingsSnapshotV2 = serde_json::from_value(expected.clone())?;
+    assert_eq!(serde_json::to_value(enabled)?, expected);
+    for invalid in [serde_json::Value::Null, "false".into()] {
+        expected.pointer_mut(codex).unwrap()["delegate_fast"] = invalid;
+        assert!(serde_json::from_value::<SettingsSnapshotV2>(expected.clone()).is_err());
+    }
+    expected
+        .pointer_mut(codex)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("delegate_fast");
+    assert!(serde_json::from_value::<SettingsSnapshotV2>(expected).is_err());
     assert!(serde_json::from_str::<SettingsSnapshotV1>(wire).is_err());
     writeln!(std::io::stdout().lock(), "{}", serde_json::to_string(&snapshot)?)?;
     Ok(())

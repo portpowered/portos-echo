@@ -85,6 +85,7 @@ async fn call_bad_thread_or_remote_failure_closes_before_realtime_start() {
                 call.start(
                     &Options {
                         effort: Some("low"),
+                        fast: false,
                         ..options()
                     },
                     vec![],
@@ -110,6 +111,7 @@ async fn call_bad_thread_or_remote_failure_closes_before_realtime_start() {
             call.start(
                 &Options {
                     effort: Some("low"),
+                    fast: false,
                     ..options()
                 },
                 vec![],

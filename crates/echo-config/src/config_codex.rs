@@ -46,6 +46,7 @@ pub struct CodexConfig {
     pub model: Option<String>,
     pub delegate_model: Option<String>,
     pub delegate_effort: Option<String>,
+    pub delegate_fast: bool,
     pub time_zone: Option<String>,
     pub web_search: WebSearch,
 }
@@ -114,6 +115,7 @@ pub(super) fn decode(value: DeValue<'_>) -> Result<CodexConfig, ConfigError> {
         model: fields.optional("model")?,
         delegate_model: fields.optional("delegate_model")?,
         delegate_effort: fields.optional("delegate_effort")?,
+        delegate_fast: fields.optional("delegate_fast")?.unwrap_or_default(),
         time_zone: fields.optional("time_zone")?,
         web_search: fields.optional("web_search")?.unwrap_or_default(),
     };

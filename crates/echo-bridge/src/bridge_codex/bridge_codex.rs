@@ -73,6 +73,7 @@ pub struct Options<'a> {
     pub prompt: &'a str,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
+    pub fast: bool,
     pub time_zone: Option<&'a str>,
     pub web_search: echo_config::WebSearch,
 }
@@ -187,6 +188,8 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if let Some(effort) = options.effort {
             params["config"]["model_reasoning_effort"] = effort.into();
         }
+        // Present null clears an inherited tier and explicitly selects standard routing.
+        params["serviceTier"] = json!(options.fast.then_some("priority"));
         let request = self.io.begin_request("thread/start", &params).map_err(rpc_error)?;
         let response: ThreadStartResult =
             serde_json::from_value(self.io.wait_reply(&request).await.map_err(rpc_error)?)
