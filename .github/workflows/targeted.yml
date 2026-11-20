@@ -85,7 +85,7 @@ jobs:
               if selection:
                   command = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-targets",
                              "--config-file", ".github/nextest.toml", "--profile", "ci",
-                             "--no-tests", "fail", "-E", selection]
+                             "--no-tests", "fail", "--success-output", "immediate", "-E", selection]
                   if ignored == "true":
                       command += ["--run-ignored", "all"]
                   code = subprocess.run(command).returncode
