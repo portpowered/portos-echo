@@ -55,7 +55,7 @@ async fn exercise(muted: bool) -> Result<(), String> {
         .wait(async { (&mut peer).await.map_err(|_| "held Wyoming peer did not finish".into()) })
         .await;
     peer.abort();
-    result?;
+    result.map_err(|error| case.failure(&error))?;
     assert_eq!(bytes?, 9600);
     assert_observations(&case, muted);
     Ok(())
