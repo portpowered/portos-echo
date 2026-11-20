@@ -396,7 +396,7 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
         ),
         true,
     );
-    await page.keyboard.press("Home");
+    await page.keyboard.press("End");
     assert.equal(await selection(page).inputValue(), "");
     await page.keyboard.press("Tab");
     assert.equal(
