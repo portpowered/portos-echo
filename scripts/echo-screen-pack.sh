@@ -212,7 +212,7 @@ def stylesheet(data, files):
 
 def validate(files):
     check('pack.json' in files)
-    pack = json.loads(files['pack.json'])
+    pack = json.loads(files['pack.json'], object_pairs_hook=unique_fields)
     fields(pack, ('format', 'name', 'version'), ('layout', 'character'))
     check(type(pack['format']) is int and pack['format'] == 1)
     check(type(pack['name']) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,47}', pack['name']))
@@ -226,6 +226,14 @@ def validate(files):
         if name.endswith('.css'):
             stylesheet(data, files)
     return pack['name'] + '@' + pack['version']
+
+
+def unique_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        check(key not in result, 'duplicate pack.json field')
+        result[key] = value
+    return result
 
 
 ROOT = '/data/local/echo-bridge/home/screens'

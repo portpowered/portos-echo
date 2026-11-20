@@ -3,8 +3,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import selectors
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -174,6 +176,11 @@ def push_adb():
     if args[0] == 'push':
         count = int((base / 'pushes').read_text()) + 1
         (base / 'pushes').write_text(str(count))
+        if os.environ.get('PACK_HOLD_PUSH') and count == 2:
+            with (base / 'push-ready').open('w') as ready:
+                ready.write('ready')
+            with (base / 'push-release').open('r') as release:
+                release.read()
         if count == int(os.environ.get('PACK_FAIL_PUSH', '0')):
             return 1
         target = base / ('device' + args[2])
@@ -301,6 +308,7 @@ def push_cases(generated):
         box.run(okay=False)
         box.settled(['.push-lock'])
     invalid_push_cases()
+    interrupted_push_case()
     print('F24 local push: generated_bytes=PASS atomic=PASS duplicate=REFUSED failure_retention=PASS cleanup=PASS symlinks=REFUSED')
 
 
@@ -344,10 +352,40 @@ def invalid_push_cases():
         box.run(okay=False)
         require(box.ledger() == [], 'malformed JSON reached adb')
     with PushBox() as box:
+        (box.pack / 'pack.json').write_text('{"format":1,"name":"one","name":"two"}')
+        result = box.run(okay=False)
+        require(result.stderr == 'screen-pack: duplicate pack.json field\n' and box.ledger() == [],
+                'duplicate JSON field reached adb')
+    with PushBox() as box:
         (box.pack / 'style.css').write_text('.pack-stage { background-image: url("nested/rest.png"); opacity: 0.5; }')
         box.run()
         box.settled(['template@0.1.0'])
     print('F24 preflight: identity=PASS schema=PASS references=PASS limits=PASS inert_CSS=PASS invalid_adb_calls=0')
+
+
+def interrupted_push_case():
+    with PushBox() as box:
+        os.mkfifo(box.base / 'push-ready')
+        os.mkfifo(box.base / 'push-release')
+        box.env['PACK_HOLD_PUSH'] = '1'
+        ready = os.open(box.base / 'push-ready', os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            with subprocess.Popen(['sh', str(ROOT / 'scripts/echo-screen-pack.sh'),
+                                   'push', str(box.pack)], env=box.env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(ready, selectors.EVENT_READ)
+                    require(bool(selector.select(15)), 'transfer did not reach interruption barrier')
+                require(os.read(ready, 5) == b'ready', 'transfer readiness differs')
+                process.send_signal(signal.SIGTERM)
+                stdout, stderr = process.communicate(timeout=15)
+                require(process.returncode == 1 and stdout == b''
+                        and stderr == b'screen-pack: push interrupted\n', 'interrupted push diagnostic differs')
+        finally:
+            os.close(ready)
+        box.settled([])
+        require(int((box.base / 'pushes').read_text()) == 2, 'interrupted transfer continued')
+    print('F24 cancellation: interrupted=PASS cleanup=PASS publication=0')
 
 
 if __name__ == '__main__' and sys.argv[1:2] == ['--fake-adb']:
