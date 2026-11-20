@@ -166,6 +166,35 @@ test("render: idle to speaking glides from any point of the idle loop, five time
     console.log(`RENDER glide ${JSON.stringify(runs)}`);
 });
 
+async function settingsLayout(page) {
+    const panel = page.getByRole("region", { name: "Settings", exact: true });
+    await panel
+        .getByRole("heading", { name: "Accounts", exact: true })
+        .waitFor();
+    await panel.locator('.settings-fields[aria-busy="false"]').waitFor();
+    return panel.evaluate((node) => {
+        const rect = (selector) =>
+            node.querySelector(selector).getBoundingClientRect();
+        const titleBottom = rect(".settings-header").bottom;
+        const accountsTop = rect(".settings-accounts h2").top;
+        const status = rect(':scope > [role="status"]');
+        return {
+            accountsGap: accountsTop - titleBottom,
+            statusTopGap: status.top - titleBottom,
+            statusHeight: status.height,
+            statusBottomGap: accountsTop - status.bottom,
+        };
+    });
+}
+
+function assertCompactSettings({ accountsGap, statusHeight }) {
+    assert.equal(statusHeight, 0);
+    assert.ok(
+        accountsGap >= 0 && accountsGap <= 24,
+        `Accounts gap: ${accountsGap} CSS px`,
+    );
+}
+
 test("render: Settings with linked, unlinked and link-required accounts", async (t) => {
     const renders = [];
     for (const status of ["linked", "unconfigured", "link_required"]) {
@@ -174,11 +203,10 @@ test("render: Settings with linked, unlinked and link-required accounts", async 
             settings: settingsBody(status),
         });
         await page.getByRole("button", { name: "Settings", exact: true }).tap();
-        await page.getByRole("region", { name: "Accounts" }).waitFor();
+        const layout = await settingsLayout(page);
+        console.log(`RENDER Settings ${status} ${JSON.stringify(layout)}`);
+        assertCompactSettings(layout);
         await page.getByRole("region", { name: "Port OS" }).waitFor();
-        await page.waitForFunction(
-            () => !document.querySelector(".settings-fields[aria-busy=true]"),
-        );
         assert.doesNotMatch(
             await page.locator("main").innerText(),
             /settings loaded/i,
@@ -186,4 +214,76 @@ test("render: Settings with linked, unlinked and link-required accounts", async 
         renders.push(await shoot(page, `settings-${status}`));
     }
     await matchReference("settings", await sheet(renders));
+});
+
+test("render: keyboard Settings keeps status above Accounts and returns to the live Link Code", async (t) => {
+    const settings = settingsBody("linked");
+    settings.body.restart_pending = true;
+    const page = await openScreen(t, {
+        pack: { id, dir, manifest },
+        settings,
+        pauseClock: true,
+    });
+    const challenge = STATES.find(([name]) => name === "link-code")[1];
+    await emit(page, challenge);
+    const lines = page.locator(".details p");
+    assert.equal(await lines.last().textContent(), "Expires in 9 min");
+
+    const gear = page.getByRole("button", { name: "Settings", exact: true });
+    await page.keyboard.press("Tab");
+    assert.equal(
+        await gear.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    await page.keyboard.press("Enter");
+    const back = page.getByRole("button", { name: "Back", exact: true });
+    assert.equal(
+        await back.evaluate((node) => node === document.activeElement),
+        true,
+    );
+
+    const status = page
+        .getByRole("region", { name: "Settings", exact: true })
+        .getByRole("status");
+    const populated = await settingsLayout(page);
+    assert.equal(
+        await status.innerText(),
+        "Saved settings are waiting for a bridge restart.",
+    );
+    assert.equal(await status.isVisible(), true);
+    console.log(`RENDER Settings restart pending ${JSON.stringify(populated)}`);
+    assert.ok(populated.statusHeight > 0);
+    assert.ok(populated.statusTopGap >= 0 && populated.statusBottomGap >= 0);
+
+    await page
+        .getByRole("button", { name: "Load screen packs", exact: true })
+        .click();
+    await status.filter({ hasText: /^Screen packs loaded$/ }).waitFor();
+    const refresh = page.getByRole("button", {
+        name: "Refresh packs",
+        exact: true,
+    });
+    const selection = page.getByLabel("Screen pack", { exact: true });
+    await selection.selectOption("default");
+    await page.clock.runFor(4000);
+    assert.equal(await status.textContent(), "");
+    assertCompactSettings(await settingsLayout(page));
+    assert.equal(await selection.inputValue(), "default");
+    assert.equal(
+        await refresh.evaluate((node) => node === document.activeElement),
+        true,
+    );
+
+    await page.clock.runFor(56000);
+    await page.keyboard.press("Escape");
+    assert.equal(
+        await gear.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    assert.deepEqual(await lines.allTextContents(), [
+        challenge.user_code,
+        challenge.verification_uri,
+        "Expires in 8 min",
+    ]);
+    assert.equal(await lines.last().isVisible(), true);
 });

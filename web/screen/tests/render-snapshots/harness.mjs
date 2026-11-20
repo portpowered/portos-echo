@@ -93,7 +93,7 @@ async function serve(route, { pack, settings }) {
     return route.fulfill({ status: 404, body: "" });
 }
 
-export async function openScreen(t, { pack, settings } = {}) {
+export async function openScreen(t, { pack, settings, pauseClock } = {}) {
     const context = await browser.newContext({
         viewport: { width, height },
         locale: "en-US",
@@ -102,8 +102,14 @@ export async function openScreen(t, { pack, settings } = {}) {
         serviceWorkers: "block",
     });
     t.after(() => context.close());
-    // Date is fixed for the clock; timers and media keep running.
-    await context.clock.setFixedTime(new Date("2026-11-21T09:41:00Z"));
+    const time = Date.parse("2026-11-21T09:41:00Z");
+    if (pauseClock) {
+        await context.clock.install({ time: 0 });
+        await context.clock.pauseAt(time);
+    } else {
+        // Date is fixed for screenshots while timers and media keep running.
+        await context.clock.setFixedTime(time);
+    }
     await context.addInitScript(() => {
         window.streams = [];
         window.EventSource = class extends EventTarget {
