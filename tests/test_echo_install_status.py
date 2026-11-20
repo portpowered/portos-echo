@@ -203,6 +203,77 @@ def status_cases():
     uninstall_failures()
     full_journey()
     doctor_cases()
+    release_status_cases()
+
+
+def release_status_cases():
+    """Read the shell's own canonical metadata without mutating retained state."""
+    with Sandbox() as box:
+        box.install()
+        metadata = box.device / "release.json"
+        for current, previous in (("0.2.0", "0.1.0"), ("0.2.0-rc.1", None), (None, None)):
+            for indent in (None, 2):
+                metadata.write_text(json.dumps({"format": 1, "current": current,
+                                                "previous": previous}, indent=indent))
+                metadata.chmod(0o644)
+                set_owner(box.root, metadata, "0:0")
+                before = snapshot(box)
+                output = box.run(["status"]).stdout
+                require(output.startswith(f"version_current={current or 'null'}\n"
+                                          f"version_previous={previous or 'null'}\n"),
+                        "canonical release versions differ")
+                require(snapshot(box) == before, "release observation mutated installed state")
+        valid = '{"format":1,"current":"0.2.0","previous":null}'
+        malformed = ("", valid + valid, valid.replace('"format":1', '"format":2'),
+                     valid.replace('"0.2.0"', '"v0.2.0"'), valid.replace('"0.2.0"', '"0.02.0"'),
+                     valid.replace('"0.2.0"', '"0.2.0-01"'), valid.replace('"0.2.0"', '"0.2.0-rc.01"'),
+                     valid.replace('"0.2.0"', '"0.2.0\nrc1"'),
+                     valid.replace('"0.2.0"', '"SYNTHETIC-TOKEN"'),
+                     valid.replace('"previous":null', '"previous":null,"previous":"0.1.0"'),
+                     valid.replace('"current"', '"cur\nrent"'), " " * 1025 + valid)
+        for contents in malformed:
+            metadata.write_text(contents)
+            metadata.chmod(0o644)
+            set_owner(box.root, metadata, "0:0")
+            before = snapshot(box)
+            for command in (["status"], ["start"], ["stop"], ["uninstall", "--purge"],
+                            box.install_args()):
+                result = box.run(command, 1)
+                require("SYNTHETIC-TOKEN" not in result.stdout + result.stderr,
+                        "malformed metadata leaked")
+                require(snapshot(box) == before, "malformed release state permitted mutation")
+                require(not (box.root / "remote/echo-bridge.lock").exists(),
+                        "malformed release state took mutation lock")
+        metadata.write_text(valid)
+        for kind in ("owner", "mode", "link", "hardlink", "directory", "fifo"):
+            metadata.unlink()
+            metadata.write_text(valid)
+            metadata.chmod(0o644)
+            set_owner(box.root, metadata, "0:0")
+            outside = box.root / ("metadata-" + kind)
+            outside.write_text(valid)
+            if kind == "owner":
+                set_owner(box.root, metadata, "9999:9999")
+            elif kind == "mode":
+                metadata.chmod(0o666)
+            else:
+                metadata.unlink()
+                if kind == "link":
+                    metadata.symlink_to(outside)
+                elif kind == "hardlink":
+                    os.link(outside, metadata)
+                elif kind == "directory":
+                    metadata.mkdir()
+                else:
+                    os.mkfifo(metadata)
+            for command in (["status"], ["uninstall", "--purge"], box.install_args()):
+                box.run(command, 1)
+                require(outside.read_text() == valid, "redirected release state changed outside file")
+                require((box.device / "bin/echo-bridge").is_file(), "unsafe metadata allowed uninstall")
+            if kind == "directory":
+                metadata.rmdir()
+                metadata.touch()
+    print("echo-install release status: versions=PASS malformed=PASS redirected=PASS readonly=PASS")
 
 
 def doctor_tools(box):
@@ -277,6 +348,17 @@ def native_lifecycle_cases(binary):
                     "native stopped observation differs")
             require(result["versions"] == {"current": None, "previous": None}, "invented versions")
             require(snapshot(box) == before, "native status mutated state")
+            metadata = box.device / "release.json"
+            metadata.write_text('{"format":1,"current":"0.2.0","previous":"0.1.0"}')
+            metadata.chmod(0o644)
+            set_owner(box.root, metadata, "0:0")
+            before = snapshot(box)
+            require(native("status")["versions"] == {"current": "0.2.0", "previous": "0.1.0"},
+                    "native release versions differ")
+            require(snapshot(box) == before, "native version observation mutated state")
+            metadata.write_text('{"format":1,"current":"SYNTHETIC-TOKEN","previous":null}')
+            require(native("status", code=1)["error"] == "status_failed", "native metadata refusal differs")
+            metadata.unlink()
             (box.root / "running").touch()
             doctor_tools(box)
             checks = native("doctor")["checks"]

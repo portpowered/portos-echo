@@ -34,16 +34,38 @@ fn fields(output: &str) -> Result<BTreeMap<&str, &str>> {
     let mut fields = BTreeMap::new();
     for line in output.lines().take_while(|line| *line != "bridge.log (last 5):") {
         let (key, value) = line.split_once('=').ok_or(Failure("status_failed"))?;
-        if !["process", "process_user", "uptime_seconds", "hassmic_link"].contains(&key)
+        if ![
+            "process",
+            "process_user",
+            "uptime_seconds",
+            "hassmic_link",
+            "version_current",
+            "version_previous",
+        ]
+        .contains(&key)
             || fields.insert(key, value).is_some()
         {
             return Err(Failure("status_failed"));
         }
     }
-    if fields.len() != 4 {
+    if !["process", "process_user", "uptime_seconds", "hassmic_link"]
+        .iter()
+        .all(|key| fields.contains_key(key))
+        || fields.contains_key("version_current") != fields.contains_key("version_previous")
+    {
         return Err(Failure("status_failed"));
     }
     Ok(fields)
+}
+
+fn release_version(value: Option<&&str>) -> Result<Option<String>> {
+    match value.copied() {
+        None | Some("null") => Ok(None),
+        Some(value) => crate::version::normalized(value)
+            .filter(|normalized| normalized == value)
+            .map(Some)
+            .ok_or(Failure("status_failed")),
+    }
 }
 
 fn status(output: &str) -> Result<Value> {
@@ -67,7 +89,10 @@ fn status(output: &str) -> Result<Value> {
     };
     Ok(json!({
         "type":"result", "command":"status", "ok":error.is_none(),
-        "versions":{"current":null,"previous":null},
+        "versions":{
+            "current":release_version(fields.get("version_current"))?,
+            "previous":release_version(fields.get("version_previous"))?
+        },
         "process":if running {"running"} else {"stopped"},
         "process_user":user, "uptime_seconds":uptime,
         "hassmic_link":link, "last_error":error

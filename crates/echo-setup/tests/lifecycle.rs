@@ -123,6 +123,47 @@ fn t3_stopped_status_has_no_invented_values_and_malformed_or_failed_observation_
 }
 
 #[test]
+fn t3_status_projects_only_paired_canonical_versions_before_the_log_boundary() -> Result {
+    let fixture = Fixture::new()?;
+    let raw = "process=stopped\nprocess_user=unavailable\nuptime_seconds=unavailable\nhassmic_link=unavailable\n";
+    for (current, previous) in [("0.2.0", "0.1.0"), ("0.2.0-rc.1", "null"), ("null", "null")] {
+        let frames = format!("version_current={current}\nversion_previous={previous}\n");
+        fs::write(
+            fixture.0.join("status"),
+            format!("{frames}{raw}bridge.log (last 5):\nversion_current=SYNTHETIC-TOKEN\n"),
+        )?;
+        let output = fixture.run("status", &[])?;
+        assert_eq!(output.status.code(), Some(0));
+        let versions = event(&output)?["versions"].clone();
+        for (key, expected) in [("current", current), ("previous", previous)] {
+            assert_eq!(
+                versions[key],
+                if expected == "null" {
+                    serde_json::Value::Null
+                } else {
+                    expected.into()
+                }
+            );
+        }
+    }
+    for frames in [
+        "version_current=0.2.0\n",
+        "version_previous=0.1.0\n",
+        "version_current=v0.2.0\nversion_previous=null\n",
+        "version_current=0.02.0\nversion_previous=null\n",
+        "version_current=0.2.0-01\nversion_previous=null\n",
+        "version_current=0.2.0\nversion_previous=SYNTHETIC-TOKEN\n",
+        "version_current=0.2.0\nversion_previous=null\nversion_current=0.1.0\n",
+    ] {
+        fs::write(fixture.0.join("status"), format!("{frames}{raw}"))?;
+        let output = fixture.run("status", &[])?;
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(event(&output)?["error"], "status_failed");
+    }
+    Ok(())
+}
+
+#[test]
 fn t3_uninstall_dispatches_only_authored_shell_and_does_not_report_failed_removal_as_success() -> Result {
     for purge in [false, true] {
         let fixture = Fixture::new()?;

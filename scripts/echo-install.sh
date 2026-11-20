@@ -1,7 +1,6 @@
 #!/bin/sh
 # Manual Linux operator command. Hardware use belongs to the coordinator.
 set -eu
-
 # Native host adapter: retain one lifecycle implementation behind two transports.
 # Only the trusted, embedded copy accepts an archive; the validated bundle owns install.
 if [ "${1:-}" = --device ]; then
@@ -55,14 +54,12 @@ if [ "${1:-}" = --device ]; then
     set -- install --config "$config" --bridge "$bundle/bin/echo-bridge" --codex "$bundle/bin/codex-app-server" --ca "$bundle/bin/cacert.pem"
   fi
 fi
-
 # Fixed product identity, never a caller override or evaluated shell fragment.
 ECHO_RUN_AS='nobody 3990,inet'
 ECHO_RUN_OWNER='9999:9999'
 readonly ECHO_RUN_AS ECHO_RUN_OWNER
 run_user=${ECHO_RUN_AS%% *}
 run_groups=${ECHO_RUN_AS#* }
-
 help() {
   cat <<'HELP'
 Usage: sh scripts/echo-install.sh --help
@@ -72,7 +69,6 @@ Usage: sh scripts/echo-install.sh --help
        sh scripts/echo-install.sh status
        sh scripts/echo-install.sh doctor
        sh scripts/echo-install.sh uninstall [--purge]
-
 Linux only; requires adb on PATH and exactly one ready device with hassmic.
 --config FILE: required readable operator config; never printed or rewritten.
 --bridge FILE: default ${CARGO_TARGET_DIR:-target}/armv7-linux-androideabi/release/echo-bridge
@@ -81,7 +77,6 @@ Linux only; requires adb on PATH and exactly one ready device with hassmic.
 --ca FILE: default $CODEX_ARMV7_OUTPUT_DIR/cacert.pem; otherwise required.
 --force: replace bridge.toml only; existing prompts are always retained.
 --purge: also remove private/ and home/ after a verified stop.
-
 Device root: /data/local/echo-bridge
 Artifacts: bin/echo-bridge, bin/codex-app-server, bin/cacert.pem
 Config: private/bridge.toml (0600); private/ and home/ are 0700.
@@ -122,7 +117,6 @@ usage() {
   printf '%s\n' 'echo-install: invalid usage; see --help' >&2
   exit 2
 }
-
 [ "$#" -gt 0 ] || usage
 if [ "$1" = --help ]; then
   [ "$#" = 1 ] || usage
@@ -265,7 +259,34 @@ for p in launch.sh bridge.log bridge.toml bridge.trace; do test ! -L '$device/pr
 if test -d '$device/private/run'; then
   for p in stdin control stop finished deadline log-inode log-prefix; do test ! -L '$device/private/run/'\$p || exit 1; done
 fi"
+run_adb shell "if test -e '$device/release.json' || test -L '$device/release.json'; then
+  test ! -L '$device/release.json' && test -f '$device/release.json' || exit 1
+  test \"\$(stat -c %u '$device')\" = 0 && test \"\$(stat -c %a '$device')\" = 755 || exit 1
+  test \"\$(stat -c %u '$device/release.json')\" = 0 && test \"\$(stat -c %h '$device/release.json')\" = 1 || exit 1
+  case \$(stat -c %a '$device/release.json') in 600 | 644) ;; *) exit 1 ;; esac
+  test \"\$(stat -c %s '$device/release.json')\" -le 1024 || exit 1
+  awk '
+    function version(v, parts, n, i) {
+      if (v == \"null\") return 1
+      if (v !~ /^\"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?\"$/) return 0
+      sub(/^.*-/, \"\", v); sub(/\"$/, \"\", v)
+      n=split(v, parts, /[.]/)
+      for (i=1; i<=n; i++) if (parts[i] ~ /^0[0-9]+$/) return 0
+      return 1
+    }
+    { data=data \$0 \"\\n\" }
+    END {
+      if (data !~ /^[ \t\r\n]*\{[ \t\r\n]*\"format\"[ \t\r\n]*:[ \t\r\n]*1[ \t\r\n]*,[ \t\r\n]*\"current\"[ \t\r\n]*:[ \t\r\n]*(null|\"[A-Za-z0-9.-]+\")[ \t\r\n]*,[ \t\r\n]*\"previous\"[ \t\r\n]*:[ \t\r\n]*(null|\"[A-Za-z0-9.-]+\")[ \t\r\n]*\}[ \t\r\n]*$/) exit 1
+      gsub(/[ \t\r\n{}]/, \"\", data); split(data, fields, \",\")
+      sub(/^\"current\":/, \"\", fields[2]); sub(/^\"previous\":/, \"\", fields[3])
+      if (!version(fields[2]) || !version(fields[3])) exit 1
+      gsub(/\"/, \"\", fields[2]); gsub(/\"/, \"\", fields[3])
+      printf \"version_current=%s\\nversion_previous=%s\\n\", fields[2], fields[3]
+    }' '$device/release.json'
+fi"
+versions=$(cat "$log")
 if [ "$command_name" = status ]; then
+  [ -z "$versions" ] || printf '%s\n' "$versions"
   # Read-only observation. Optional unsupported/missing proc data is explicit.
   run_adb shell "observed=\$(ps -A -o PID,NAME)
 pid=\$(printf '%s\\n' \"\$observed\" | awk '\$2 == \"echo-bridge\" { print \$1; exit }')
@@ -444,7 +465,6 @@ chown 0:0 '$device' '$device/bin' &&
 chmod 755 '$device' '$device/bin'"
 safe_paths=true
 migrate_state
-
 # Each copy is staged privately; failed transfers never replace an existing file.
 # The destination leaf is fixed or a restricted prompt basename, never shell input.
 copy_file() {
