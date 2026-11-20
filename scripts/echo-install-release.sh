@@ -46,12 +46,10 @@ screen_pack_prepare() {
   # Bound both listings before using tar's reported member sizes to admit extraction.
   export LC_ALL=C
   (
-    ulimit -f 128
-    tar -tzf "$archive"
+    ulimit -f 128 && tar -tzf "$archive"
   ) >"$stage/pack.names" 2>/dev/null || return 1
   (
-    ulimit -f 128
-    tar -tvzf "$archive"
+    ulimit -f 128 && tar -tvzf "$archive"
   ) >"$stage/pack.types" 2>/dev/null || return 1
   awk '
     /(^\/|\/\/|(^|\/)\.\.?($|\/)|[^A-Za-z0-9_.\/-])/ { bad=1 }

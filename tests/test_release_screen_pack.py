@@ -73,7 +73,7 @@ def case_install(box, name, variant, **options):
     _, identity, asset, digest, members = release_fixture(box, name, **options)
     home = box.device / "home"
     root = home / "screens" / identity
-    retained = {home / "settings.toml": b'[screen]\nscreen_pack = ""\n',
+    retained = {home / "settings.toml": b'screen_pack = ""\n',
                 home / "screens/other@1.0.0/keep.png": b"other installed data",
                 box.device / "private/bridge.toml": b"# operator config\n" + SCREEN.encode()}
     if variant in ("retained", "same", "conflict"):
