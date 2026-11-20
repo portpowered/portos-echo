@@ -423,12 +423,13 @@ fn t1_on_device_incomplete_acquisition_cannot_launch_and_release_consumes_author
 
 #[test]
 fn t1_on_device_malformed_directory_identity_retains_uncertain_residue_without_launch() {
-    for identity in ["", "invalid:identity:shape", "1:bad", "1:2;rm", ":2"] {
+    let identities = ["", "invalid:identity:shape", "1:bad", ":2"].map(String::from);
+    for identity in identities.into_iter().chain([format!("{OWNER};rm")]) {
         let root = tempfile::tempdir().unwrap();
         let local = root.path().join("config");
         std::fs::write(&local, "derived").unwrap();
         let world = world();
-        world.borrow_mut().directory_identity = Some(identity.into());
+        world.borrow_mut().directory_identity = Some(identity);
         let mut remote = remote(&world);
         assert!(
             remote
