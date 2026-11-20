@@ -399,17 +399,15 @@ async fn replacement_journey(
     mock.approve(echo_lab::lab_mcp::Approval::Approved).unwrap();
     observe_expiry(expires).await;
     let mut reads = tokio::time::interval(Duration::from_millis(50));
-    loop {
+    let mut status = journey.portos().await;
+    while status["operation_state"] == "linking" {
         reads.tick().await;
-        let status = journey.portos().await;
-        if status["operation_state"] != "linking" {
-            assert_eq!(status["operation_state"], "idle");
-            assert_eq!(status["link_status"], "linked");
-            assert_eq!(status["server"]["granted_scopes"], json!(["endpoint:read"]));
-            assert_eq!(status.get("challenge"), None);
-            break;
-        }
+        status = journey.portos().await;
     }
+    assert_eq!(status["operation_state"], "idle");
+    assert_eq!(status["link_status"], "linked");
+    assert_eq!(status["server"]["granted_scopes"], json!(["endpoint:read"]));
+    assert_eq!(status.get("challenge"), None);
     unlink_paired_grant(&mut journey).await;
     let grant: Value =
         serde_json::from_slice(&std::fs::read(fixture.directory.path().join("grant/grant.json")).unwrap()).unwrap();

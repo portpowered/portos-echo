@@ -285,7 +285,7 @@ paths:
         '401': { description: Invalid or revoked pairing token. Empty body. }
         '403': { description: Supplied foreign Origin. Empty body. }
         '409':
-          description: Account already busy or operation unavailable for the current link status
+          description: An account operation is already active, Link was requested outside link_required, or Unlink was requested outside linked.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SettingsErrorV2' }
