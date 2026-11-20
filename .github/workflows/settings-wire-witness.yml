@@ -20,7 +20,7 @@ jobs:
           UPDATE_SCHEMAS=1 cargo test --offline --locked -p echo-screen-contract --test screen_schema settings_v2_schema_snapshots
           npm --prefix web/screen ci
           npm --prefix web/screen run generate:schema
-      - uses: actions/upload-artifact@ea1659d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: settings-wire
           path: |
