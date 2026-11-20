@@ -174,6 +174,7 @@ fn assert_presentation(frames: &[Value], negative: bool, emotion: bool) {
                 json!({"state":"connected"}),
                 json!({"state":"thinking"}),
                 json!({"state":"speaking"}),
+                json!({"state":"connected"}),
                 json!({"state":"ready","message":"Echo Live ready"})
             ]
         );
@@ -351,6 +352,7 @@ async fn presentation(
     }
     observe(screen, &mut states, "speaking").await?;
     phases.seen("screen.speaking");
+    observe(screen, &mut states, "connected").await?;
     observe(screen, &mut states, "ready").await?;
     phases.seen("screen.ready");
     Ok(states)

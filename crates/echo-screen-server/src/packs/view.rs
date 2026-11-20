@@ -78,7 +78,7 @@ impl PackCatalog {
         self
     }
 
-    /// A save may disable packs, choose an exact directory, or resolve template.
+    /// A save may disable packs, choose an exact directory, or resolve the default.
     /// No caller-supplied path or arbitrary TOML string is accepted.
     #[must_use]
     pub fn accepts(&self, selection: &str) -> bool {
@@ -86,17 +86,28 @@ impl PackCatalog {
     }
 
     fn resolve(&self, selection: Option<&str>) -> Option<&Installed> {
-        match selection.unwrap_or("template") {
-            "" => None,
-            "template" => self
-                .installed
-                .iter()
-                .filter(|pack| pack.name == "template")
-                .max_by(|a, b| version_cmp(&a.version, &b.version).then_with(|| a.id.cmp(&b.id))),
-            id => self.installed.iter().find(|pack| pack.id == id),
+        match selection {
+            Some("") => None,
+            // No selection, or either default name: the newest "default" pack,
+            // else the newest pack from before the rename ("template").
+            None | Some(DEFAULT | LEGACY_DEFAULT) => self.newest(DEFAULT).or_else(|| self.newest(LEGACY_DEFAULT)),
+            Some(id) => self.installed.iter().find(|pack| pack.id == id),
         }
     }
+
+    fn newest(&self, name: &str) -> Option<&Installed> {
+        self.installed
+            .iter()
+            .filter(|pack| pack.name == name)
+            .max_by(|a, b| version_cmp(&a.version, &b.version).then_with(|| a.id.cmp(&b.id)))
+    }
 }
+
+/// The name of the default eyes pack.
+pub const DEFAULT: &str = "default";
+/// The default eyes' name before the rename; a saved selection of it still
+/// resolves, and an Echo with only this pack installed keeps its eyes.
+const LEGACY_DEFAULT: &str = "template";
 
 fn number_cmp(a: &str, b: &str) -> Ordering {
     let (a, b) = (a.trim_start_matches('0'), b.trim_start_matches('0'));
@@ -340,5 +351,40 @@ mod tests {
         let bad = scan(root).unwrap().with_selection(Some("missing"));
         assert_eq!(bad.active, None);
         assert_eq!(bad.warning, Some("invalid_selection"));
+    }
+
+    fn install(root: &Path, id: &str, name: &str, version: &str) {
+        let pack = root.join(id);
+        std::fs::create_dir(&pack).unwrap();
+        let layout = r##"{"safe_area":{"x":0,"y":0,"width":100,"height":100},"slots":{},
+            "stage":{"anchor":{"x":50,"y":50},"scale":1,"background":"#000000"}}"##;
+        let manifest = format!(r#"{{"format":1,"name":"{name}","version":"{version}","layout":{layout}}}"#);
+        std::fs::write(pack.join("pack.json"), manifest).unwrap();
+    }
+
+    #[test]
+    fn pack_default_prefers_default_name_and_keeps_legacy_template() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        install(root, "template@0.2.0", "template", "0.2.0");
+        install(root, "sample@9.0.0", "sample", "9.0.0");
+        // An Echo with only the pre-rename pack keeps its eyes, by default or by name.
+        for selection in [None, Some("default"), Some("template")] {
+            let value = scan(root).unwrap().with_selection(selection);
+            assert_eq!(value.active.as_deref(), Some("template@0.2.0"), "{selection:?}");
+            assert_eq!(value.warning, None);
+        }
+        install(root, "default@0.1.0", "default", "0.1.0");
+        install(root, "default@0.3.0", "default", "0.3.0");
+        // Once installed, the newest "default" wins over any "template" version.
+        for selection in [None, Some("default"), Some("template")] {
+            let value = scan(root).unwrap().with_selection(selection);
+            assert_eq!(value.active.as_deref(), Some("default@0.3.0"), "{selection:?}");
+        }
+        let catalog = scan(root).unwrap().with_selection(Some("template@0.2.0"));
+        assert_eq!(catalog.active.as_deref(), Some("template@0.2.0"));
+        assert!(!catalog.selection_changes("template@0.2.0"));
+        assert!(catalog.selection_changes("default"));
+        assert!(!scan(root).unwrap().with_selection(None).selection_changes(DEFAULT));
     }
 }

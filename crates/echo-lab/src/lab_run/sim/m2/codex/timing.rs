@@ -152,7 +152,7 @@ fn audio(pcm: &[Value]) -> Result<Value, String> {
 
 fn check(pcm: &[Value], states: &[Value]) -> Result<Value, String> {
     let mut report = audio(pcm)?;
-    let expected = ["ready", "listening", "connected", "speaking", "ready"];
+    let expected = ["ready", "listening", "connected", "speaking", "connected", "ready"];
     let actual: Vec<_> = states.iter().map(|row| row["state"]["state"].as_str()).collect();
     if actual != expected.map(Some) {
         return Err(format!("mouth: expected {expected:?}, observed {actual:?}"));
@@ -191,7 +191,8 @@ fn fixture() -> (Vec<Value>, Vec<Value>) {
         ("listening", 0),
         ("connected", 0),
         ("speaking", 200),
-        ("ready", 400),
+        ("connected", 400),
+        ("ready", 440),
     ]
     .map(|(state, epoch)| json!({"epoch_ms":epoch,"state":{"state":state}}))
     .to_vec();

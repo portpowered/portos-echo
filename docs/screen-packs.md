@@ -289,16 +289,32 @@ to rest after completion. Enter and exit clips play once. Every clip must begin
 and end at the same rest pose; loop clips must join seamlessly.
 
 Two muted inline videos share one stage. The old video stays visible while the
-next loads; the page reveals the next video on its first decoded frame. State
-changes wait for the current clip's end, except Listening, Error and Approval,
-which cut immediately. Superseded media callbacks cannot advance newer clips.
+next loads; the page reveals the next video on its first decoded frame. Every
+state change cuts at once, without waiting for the current clip's end. When the
+character's bright pixels sit in a different place in the next clip, the new
+video glides from the old position (240 ms) while the old one fades out, so a
+cut never jumps. Superseded media callbacks cannot advance newer clips.
 VP9-capable browsers choose WebM; otherwise they choose MP4. Reduced-motion
-preference shows the rest still. Speaking follows state duration without audio
-level or lip synchronization.
+preference applies states at once with no glide.
+
+Connected (the awake gaps of a session) plays the `wake` state when a pack has
+one, else stays on `idle`. Speaking follows the bridge, which publishes Speaking
+while reply audio plays and Connected in the gaps. The page debounces it in one
+place: Speaking starts 100 ms after it arrives, and the mouth keeps moving
+through gaps shorter than 500 ms; a longer silence closes it once. Listening,
+Error, Approval, Muted and setup end Speaking at once.
+
+The page never shows a state name or the Ready message over a pack's face; only
+the link code, approval and error cards keep their heading. A known emote is
+dismissed by a tap anywhere, with no visible button.
 
 Safe-area coordinates are percentages of the viewport. Slot coordinates are
-percentages within that safe area. Clock and date appear on idle; the clock
-updates once a second. The stage anchor is its center within the safe area;
+percentages within that safe area. Clock and date stay on screen in every state;
+the clock updates once a second. Their slot `x` is the line their `text-align`
+anchors to, so centred text centres on `x`. Card slots right of the stage, or in
+the right half over a full-page stage, are fitted to the right edge. Action
+feedback floats at the top centre, between the corners, and neither takes
+layout space. The stage anchor is its center within the safe area;
 scale 1 occupies half its width and height. Text is clamped inside the area,
 with oversized cards scrollable and native approval controls retained. Character
 only packs keep default positions; layout only packs retain built-in content.
@@ -310,14 +326,32 @@ On Linux with Python 3 and ffmpeg (libvpx-vp9 and libx264 enabled):
 
 ```sh
 pack_root=$(mktemp -d)
-sh scripts/make-template-screenpack.sh --version 0.2.0 --out "$pack_root/generated"
+sh scripts/make-template-screenpack.sh --version 0.3.0 --name default --out "$pack_root/generated"
 cd "$pack_root/generated"
-sha256sum --check template-0.2.0.screenpack.tar.gz.sha256
+sha256sum --check default-0.3.0.screenpack.tar.gz.sha256
 ```
+
+`--name` is `template` (the default) or `default`; it sets the pack name, the
+`name@version` directory and the `name-version.screenpack.tar.gz` archive.
 
 The output directory must not exist. Generation publishes it only after every
 file and archive succeeds; failure leaves an existing output untouched. No media,
-fonts or artwork are downloaded. Template 0.2.0 draws two glowing eyes in a
+fonts or artwork are downloaded.
+
+Default 0.3.0 is a big friendly face that fills the page. Its stage is the whole
+960 × 600 page (anchor 50/50, scale 2) and its eleven silent clips are 960 × 600
+at 30 fps, one frame pixel per CSS pixel. Two round eyes, each 240 px across,
+span 65% of the width; blinks and lids squash the circle vertically and glances
+move it. Idle wanders and blinks with no mouth. Once woken (`wake`, listening,
+thinking, speaking) a closed mouth sits below the eyes; only speaking opens it.
+Listening widens the eyes in cyan, thinking narrows them and looks up, muted
+holds two red slits and error narrows them in red-orange. The link code,
+approval and error clips draw a smaller face on the left so the card has the
+right 40% of the page. Frames are transparent outside the face; nothing covers
+the rest still, so no static eyes show behind a glance. The clock and date share
+the page's centre line along the bottom (`pack.css` centres them).
+
+Template 0.2.0 draws two glowing eyes in a
 transparent still and ten silent 640 × 400 clips at 30 fps. The 16-second idle
 loop looks around and blinks. Listening holds a cyan gaze at center, thinking
 looks upward, and speaking animates a small mouth. Muted holds two still red

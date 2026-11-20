@@ -1,4 +1,12 @@
 :root {
+    /* The corner control: the gear on the home screen, Back in Settings. */
+    --corner-top: 12px;
+    --corner-right: 24px;
+    --corner-size: 72px;
+    --corner-icon: 40px;
+    --corner-gap: 16px;
+    /* Settings' account actions (Link, Relink, Remove) share one width. */
+    --account-action-width: 264px;
     color-scheme: dark;
     font-family: system-ui, sans-serif;
     background: #101827;
@@ -129,25 +137,65 @@ button:disabled {
     + [role="status"] {
     position: fixed;
     top: 12px;
-    inset-inline: 48px 112px;
+    inset-inline: 48px
+        calc(var(--corner-right) + var(--corner-size) + var(--corner-gap));
     margin: 0;
     pointer-events: none;
 }
+/* Action feedback floats at the top centre, between the corners, so it
+   clears the gear and a corner clock; it takes no layout space and shows no
+   box while empty. A side status slot overrides. */
 .screen-pack + [role="status"] {
+    position: fixed;
+    top: var(--corner-top);
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: calc(
+        100vw - 2 *
+            (var(--corner-right) + var(--corner-size) + var(--corner-gap))
+    );
+    min-height: 0;
+    margin: 0;
     z-index: 1;
     width: fit-content;
     background: #101827;
     pointer-events: none;
 }
-.settings-gear {
+.screen-pack + [role="status"]:empty {
+    visibility: hidden;
+}
+/* The gear and Back share one corner: a plain icon with no box, border or
+   fill, floating over any presentation without taking layout space. Quiet at
+   rest, fully visible while focused or pressed, with the focus ring. */
+.corner-control {
     position: fixed;
-    top: 12px;
-    right: 24px;
-    min-width: 72px;
-    padding: 12px;
+    top: var(--corner-top);
+    right: var(--corner-right);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--corner-size);
+    min-width: 0;
+    height: var(--corner-size);
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    color: #c4d5ff;
+    font-size: var(--corner-icon);
+    line-height: 1;
+    opacity: 0.55;
+    touch-action: manipulation;
+}
+.corner-control:focus-visible,
+.corner-control:active {
+    opacity: 1;
 }
 main.settings-open {
-    padding: 12px 24px 8px;
+    padding: var(--corner-top) var(--corner-right) 8px;
     justify-content: flex-start;
 }
 .settings-panel {
@@ -155,32 +203,37 @@ main.settings-open {
     max-height: none;
     padding: 0;
 }
+/* The title row is as tall as the corner control and stops short of it. */
 .settings-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
     flex-shrink: 0;
+    min-height: var(--corner-size);
+    padding-right: calc(var(--corner-size) + var(--corner-gap));
 }
 .settings-panel h1 {
     font-size: 32px;
     margin: 0;
 }
-.settings-back {
-    min-width: 120px;
-    min-height: 64px;
-    margin: 0;
-    padding: 8px 24px;
-}
 .settings-panel p {
     font-size: 22px;
     margin: 4px 0;
 }
+/* Settings is one column: from the title's left edge to Back's right edge.
+   The scroll area bleeds to the screen edges so focus rings and the open
+   section band have room, and pads its content back onto the column. */
 .settings-fields {
     flex: 1 1 0;
     overflow: auto;
     min-height: 0;
-    padding: 8px;
+    margin-inline: calc(-1 * var(--corner-right));
+    padding: 8px var(--corner-right);
+    /* Text ink that spills a pixel left of the column repaints with the
+       fields, never as a stale dot when they scroll. */
+    will-change: scroll-position;
+}
+.settings-fields section {
+    padding-inline: 0;
 }
 .settings-fields > section {
     max-height: none;
@@ -190,23 +243,37 @@ main.settings-open {
 }
 .settings-section summary {
     min-height: 64px;
-    padding: 16px;
+    margin-inline: calc(-1 * var(--corner-right));
+    padding: 16px var(--corner-right);
     font-size: 26px;
     font-weight: 600;
     cursor: pointer;
     touch-action: manipulation;
+    /* The open band is the tap's feedback; no fading highlight over it. */
+    -webkit-tap-highlight-color: transparent;
 }
 .settings-section[open] summary {
     background: #243b61;
+}
+.settings-section summary:focus-visible {
+    outline-offset: -6px;
 }
 .settings-section > section {
     max-height: none;
 }
 .settings-choices {
+    margin: 0;
+    padding: 0;
+    border: 0;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 8px;
     min-width: 0;
+}
+.settings-choices legend {
+    padding: 0;
+    margin-bottom: 8px;
+    font-size: 24px;
 }
 .settings-choices label {
     display: flex;
@@ -250,10 +317,28 @@ main.settings-open {
     border: 2px solid #c4d5ff;
     border-radius: 0;
 }
+/* Every Settings select draws its arrow like a stepper button: a 72 px box at
+   the right edge, button fill, a white chevron of the +/− glyphs' weight. The
+   whole 64 px tall select stays the touch target. */
+.settings-fields select {
+    appearance: none;
+    padding-right: 84px;
+    background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 8l8 8 8-8' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='square'/%3E%3C/svg%3E")
+            right 20px center / 28px 28px no-repeat,
+        linear-gradient(#c4d5ff, #c4d5ff) right 70px top 0 / 2px 100% no-repeat,
+        linear-gradient(#243b61, #243b61) right 0 top 0 / 70px 100% no-repeat,
+        #101827;
+    cursor: pointer;
+}
 .settings-fields input[type="checkbox"] {
     width: 64px;
     height: 64px;
+    margin: 0;
     accent-color: #c4d5ff;
+}
+.settings-row > input[type="checkbox"] {
+    justify-self: end;
 }
 .settings-fields textarea {
     display: block;
@@ -320,28 +405,46 @@ main.settings-open {
     outline-offset: 2px;
 }
 .settings-accounts > section {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    column-gap: 16px;
-    padding: 4px 12px;
+    padding: 4px 0;
     margin-bottom: 8px;
 }
-.settings-accounts > section > h3,
 .settings-accounts > section > p {
-    grid-column: 1;
     margin: 0;
 }
-.settings-accounts > section > div {
-    grid-column: 2;
-    grid-row: 1 / span 2;
+/* A deletable item's first line: its title at the left, its action (Link or
+   Remove) at the top right, on the column's right edge. */
+.settings-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 72px;
 }
-.settings-accounts button {
-    margin: 4px 0;
-}
-.settings-accounts > section > p:nth-last-child(-n + 3) {
-    grid-column: 1 / -1;
+.settings-item-header > h3 {
+    min-width: 0;
+    margin: 0;
     overflow-wrap: anywhere;
+}
+.settings-item-header > button {
+    flex-shrink: 0;
+    width: var(--account-action-width);
+    min-width: 0;
+    min-height: 64px;
+    margin: 4px 0;
+    padding: 8px 24px;
+}
+.settings-account-confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 16px;
+}
+.settings-account-confirm > p {
+    flex-basis: 100%;
+}
+.settings-account-confirm > button {
+    min-height: 64px;
+    margin: 4px 0;
 }
 .settings-packs img {
     display: block;

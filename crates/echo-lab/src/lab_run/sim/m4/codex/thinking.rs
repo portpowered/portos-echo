@@ -97,6 +97,7 @@ async fn work(
         commands.send(Control::Reply).await.map_err(|_| "model gate closed")?;
         if !muted {
             observe(screen, states, "speaking").await?;
+            observe(screen, states, "connected").await?;
             observe(screen, states, "ready").await?;
         }
         Ok::<_, String>(())
@@ -170,17 +171,19 @@ fn assert_observations(case: &Case, muted: bool) {
     assert_eq!(receipts::screen(journey, &case.clock), Ok(()));
     let ready = json!({"state":"ready","message":"Echo Live ready"});
     let frames: Vec<_> = journey.iter().map(|frame| frame["state"].clone()).collect();
-    assert_eq!(
-        frames,
-        [
-            ready.clone(),
-            json!({"state":"listening"}),
-            json!({"state":"connected"}),
-            json!({"state":"thinking"}),
-            json!({"state":if muted {"muted"} else {"speaking"}}),
-            ready
-        ]
-    );
+    let mut expected = vec![
+        ready.clone(),
+        json!({"state":"listening"}),
+        json!({"state":"connected"}),
+        json!({"state":"thinking"}),
+    ];
+    if muted {
+        expected.push(json!({"state":"muted"}));
+    } else {
+        expected.extend([json!({"state":"speaking"}), json!({"state":"connected"})]);
+    }
+    expected.push(ready);
+    assert_eq!(frames, expected);
     assert_eq!(case.transcript.as_deref(), Some(text(false)));
     stages(&case.trace);
     if muted {

@@ -33,10 +33,11 @@ export async function settingsPage(t) {
     await emit(page, frame(1));
     await response(page, snapshot);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("status").filter({ visible: true }).waitFor();
+    await page.locator('.settings-fields[aria-busy="false"]').waitFor();
+    // A successful load needs no message: the status line stays empty.
     assert.equal(
         await page.locator(".settings-panel [role=status]").textContent(),
-        "Settings loaded",
+        "",
     );
     return page;
 }
@@ -114,6 +115,53 @@ test("settings: gear/back preserves the exact authoritative frame and focus, wit
             .getAttribute("data-seq"),
         "2",
     );
+});
+
+test("settings: a save result fades after 4 s, and Back cancels the fade", async (t) => {
+    const page = await settingsPage(t);
+    const status = page.locator(".settings-panel [role=status]");
+    const timers = () => page.evaluate(() => window.timers.size);
+    await page.getByLabel("Tool calls per task").fill("9");
+    await response(page, { version: 1, restart_pending: false });
+    const save = page.getByRole("button", { name: "Save settings" });
+    await save.click();
+    const saved = "Saved. Changes apply to the next conversation.";
+    assert.equal(await status.textContent(), saved);
+    await page.clock.runFor(3999);
+    assert.equal(await status.textContent(), saved);
+    await page.clock.runFor(1);
+    assert.equal(await status.textContent(), "");
+    await page.getByLabel("Tool calls per task").fill("10");
+    await save.click();
+    assert.equal(await status.textContent(), saved);
+    const pending = await timers();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    assert.equal(await timers(), pending - 1);
+    assert.equal(await status.textContent(), "");
+});
+
+test("settings: the Live voice arrow is drawn like the stepper buttons", async (t) => {
+    const page = await settingsPage(t);
+    const voice = page.getByLabel("Live voice");
+    const look = await voice.evaluate((select) => {
+        const style = getComputedStyle(select);
+        const plus = select
+            .closest(".settings-fields")
+            .querySelector(".settings-stepper button");
+        return {
+            appearance: style.appearance,
+            paddingRight: style.paddingRight,
+            background: style.backgroundImage,
+            height: select.getBoundingClientRect().height,
+            stepper: plus.getBoundingClientRect().height,
+            stepperWidth: plus.getBoundingClientRect().width,
+        };
+    });
+    assert.equal(look.appearance, "none", "no native arrow");
+    assert.equal(look.paddingRight, "84px");
+    assert.match(look.background, /^url\("data:image\/svg\+xml/);
+    assert.equal(look.height, look.stepper);
+    assert.equal(look.stepperWidth, 72);
 });
 
 test("settings: sparse saves preserve decimal caps and report exact validation without automatic retry", async (t) => {

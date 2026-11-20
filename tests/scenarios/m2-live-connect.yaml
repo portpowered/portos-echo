@@ -12,6 +12,7 @@ steps:
         - {state: listening}
         - {state: connected}
         - {state: speaking}
+        - {state: connected}
         - {state: ready, message: "Echo Live ready"}
         - {state: ready, message: "Echo Live ready"}
 budgets: {}

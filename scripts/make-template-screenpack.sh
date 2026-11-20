@@ -4,6 +4,8 @@ set -eu
 exec python3 - "$@" <<'PY'
 import argparse
 import binascii
+import concurrent.futures
+import functools
 import gzip
 import hashlib
 import io
@@ -84,8 +86,8 @@ def interpolate(keys, frame):
     return tuple(keys[-1][1:])
 
 
-def rounded(frame, x, y, width, height, radius, color, arch=0):
-    stride = EYE_SIZE[0] * 4
+def rounded(frame, x, y, width, height, radius, color, arch=0, size=EYE_SIZE):
+    stride = size[0] * 4
     pixel = bytes(color)
     if not arch:
         for dy in range(-height, height + 1):
@@ -153,6 +155,141 @@ def eyes(name, number, last, still=False):
     return bytes(frame)
 
 
+# Default 0.3 is a big friendly face that fills the 960 x 600 page: a full-page
+# stage at one frame pixel per CSS pixel, two round eyes 240 CSS px across whose
+# pair spans 65% of the width, and a mouth scaled to match. Frames are
+# transparent outside the eyes and mouth; nothing covers the rest still.
+FACE_SIZE = (960, 600)
+FACE = {'half': 120, 'centers': (288, 672), 'y': 240, 'mouth': (445, 70, 5),
+        'gaze': (0.8, 0.5), 'speech': 2.6}
+# Card states (link code, approval, error) keep the face left of the card.
+FACE_CARD = {'half': 90, 'centers': (158, 418)}
+# A soft halo: many thin steps, so no ring shows at 1280 x 800.
+FACE_GLOW = ((20, 0.03), (17, 0.06), (14, 0.09), (11, 0.13), (8, 0.18), (5, 0.24), (3, 0.30), (1, 0.36))
+SESSION = ('wake', 'listening', 'thinking', 'speaking')
+CARDS = ('setup', 'approval', 'error')
+FACE_COUNTS = {'idle': 480, 'wake': 150, 'speaking': 71, 'thinking': 91, 'happy': 43}
+FACE_COLORS = {**EYE_COLORS, 'speaking': PALE, 'wake': PALE}
+
+
+def half_width(t, width, height, radius):
+    """Exact half width of a rounded box (half extents width x height) at offset t."""
+    if t >= height:
+        return 0.0
+    corner = max(0.0, t - height + radius)
+    return width - radius + math.sqrt(max(0.0, radius * radius - corner * corner))
+
+
+def blend(frame, offset, color, cover):
+    """Straight-alpha "over" of color at coverage cover onto one pixel."""
+    red, green, blue, alpha = frame[offset:offset + 4]
+    below = alpha / 255 * (1 - cover)
+    total = cover + below
+    frame[offset:offset + 4] = bytes((
+        *(round((c * cover + e * below) / total) for c, e in zip(color, (red, green, blue))),
+        round(total * 255)))
+
+
+def smooth(frame, x, y, width, height, radius, color):
+    """An anti-aliased rounded box: four samples per row, exact horizontal cover."""
+    stride = FACE_SIZE[0] * 4
+    solid = bytes((*color, 255))
+    w, h, r = width + 0.5, height + 0.5, min(radius + 0.5, width + 0.5, height + 0.5)
+    for dy in range(-height - 1, height + 2):
+        halves = [half_width(abs(dy - 0.375 + k * 0.25), w, h, r) for k in range(4)]
+        outer = max(halves)
+        if outer <= 0:
+            continue
+        row = (y + dy) * stride
+        full = math.floor(min(halves) - 0.5)
+        if full >= 0:
+            frame[row + (x - full) * 4:row + (x + full + 1) * 4] = solid * (2 * full + 1)
+        for distance in range(max(0, full + 1), math.ceil(outer + 0.5)):
+            cover = sum(max(0.0, min(half, distance + 0.5) - max(-half, distance - 0.5))
+                        for half in halves) / 4
+            if cover <= 0:
+                continue
+            for column in {x - distance, x + distance}:
+                offset = row + column * 4
+                if cover >= 1:
+                    frame[offset:offset + 4] = solid
+                else:
+                    blend(frame, offset, color, cover)
+
+
+def face_glow(frame, x, y, width, height, color, arch=0, radius=None):
+    radius = min(width if radius is None else radius, height)
+    spread = FACE_GLOW[0][0]
+    if (x - width - spread < 0 or x + width + spread >= FACE_SIZE[0]
+            or y - height - spread - arch < 0 or y + height + spread >= FACE_SIZE[1]):
+        raise ValueError('face leaves the stage')
+    for grow, strength in FACE_GLOW:
+        tint = tuple(round(a + (b - a) * strength) for a, b in zip(BACKGROUND, color))
+        if arch:
+            rounded(frame, x, y, width + grow, height + grow, radius + grow, tint + (255,), arch, FACE_SIZE)
+        else:
+            smooth(frame, x, y, width + grow, height + grow, radius + grow, tint)
+    if arch:
+        rounded(frame, x, y, width, height, radius, color + (255,), arch, FACE_SIZE)
+    else:
+        # Smooth edges stay clean when the panel scales the clip up.
+        smooth(frame, x, y, width, height, radius, color)
+
+
+def face_pose(name, number, last):
+    """Half width, half height, gaze offset and arch of each round eye."""
+    half = FACE_CARD['half'] if name in CARDS else FACE['half']
+    width = height = half
+    dx = dy = arch = 0
+    phase = math.tau * number / last
+    if name == 'idle':
+        dx, dy = (value * scale for value, scale in zip(interpolate(IDLE_PATH, number), FACE['gaze']))
+        for blink in BLINKS:
+            if blink <= number < blink + len(BLINK_SHAPE):
+                height = round(half * BLINK_SHAPE[number - blink])
+    elif name == 'wake' and 100 <= number < 100 + len(BLINK_SHAPE):
+        height = round(half * BLINK_SHAPE[number - 100])
+    elif name == 'listening':
+        width = height = round(half * 1.08)
+    elif name == 'thinking':
+        dx, dy, height = 30 * math.sin(phase), -40, round(half * 0.6)
+    elif name == 'muted':
+        height = 12
+    elif name == 'error':
+        height = round(half * 0.55)
+    elif name == 'connecting':
+        dy = -20 * (1 - math.cos(phase))
+    elif name == 'happy':
+        smile, = interpolate(((0, 0), (10, 1), (22, 1), (34, 0), (last, 0)), number)
+        height, arch = round(half - 0.8 * half * smile), round(0.45 * half * smile)
+    return width, height, dx, dy, arch
+
+
+def face(name, number, last):
+    width, height, dx, dy, arch = face_pose(name, number, last)
+    mouth = None
+    if name in SESSION:
+        # Awake faces keep a closed mouth; only speaking opens it.
+        _, _, closed = FACE['mouth']
+        opening = interpolate(SPEECH, number)[0] * FACE['speech'] if name == 'speaking' else 0
+        mouth = max(closed, round(opening))
+    centers = FACE_CARD['centers'] if name in CARDS else FACE['centers']
+    return drawn(centers, FACE_COLORS[name], width, height, round(dx), round(dy), arch, mouth)
+
+
+@functools.lru_cache(maxsize=64)
+def drawn(centers, color, width, height, dx, dy, arch, mouth):
+    """One face frame; held poses repeat, so identical frames are drawn once."""
+    frame = bytearray(bytes(BACKGROUND + (0,)) * math.prod(FACE_SIZE))
+    for center in centers:
+        # Round eyes: a blink or a lid squashes the circle vertically.
+        face_glow(frame, center + dx, FACE['y'] + dy, width, height, color, arch)
+    if mouth is not None:
+        y, half, _ = FACE['mouth']
+        face_glow(frame, FACE_SIZE[0] // 2, y, half, mouth, color)
+    return bytes(frame)
+
+
 def png(raw, size):
     def chunk(kind, content):
         return (struct.pack('!I', len(content)) + kind + content
@@ -163,7 +300,7 @@ def png(raw, size):
             + chunk(b'IDAT', zlib.compress(scanlines)) + chunk(b'IEND', b''))
 
 
-def generate_clips(pack, work, use_eyes):
+def generate_clips(pack, work, style):
     colors = {
         'idle': (100, 200, 220), 'connecting': (160, 160, 245),
         'listening': (100, 235, 180), 'thinking': (205, 160, 240),
@@ -171,43 +308,73 @@ def generate_clips(pack, work, use_eyes):
         'setup': (245, 210, 110), 'approval': (255, 190, 100),
         'error': (255, 110, 120), 'happy': (255, 210, 120),
     }
-    size = EYE_SIZE if use_eyes else (640, 640)
-    rest = eyes('idle', 0, 479, still=True) if use_eyes else picture((160, 210, 230), 0)
+    if style >= 3:
+        colors['wake'] = PALE
+    size = FACE_SIZE if style >= 3 else EYE_SIZE if style >= 2 else (640, 640)
+    counts = FACE_COUNTS if style >= 3 else FRAME_COUNTS
+    if style >= 3:
+        rest = face('idle', 0, 479)
+    else:
+        rest = eyes('idle', 0, 479, still=True) if style == 2 else picture((160, 210, 230), 0)
     (pack / 'rest.png').write_bytes(png(rest, size))
-    for name, color in colors.items():
-        count = FRAME_COUNTS.get(name, 31) if use_eyes else 31
-        raw = work / 'frames.rgba'
-        with raw.open('wb') as frames:
-            for number in range(count):
-                if use_eyes:
-                    frames.write(eyes(name, number, count - 1))
-                else:
-                    # Preserve prior release poses and exact neutral boundaries.
-                    amount = 0 if number in (0, 30) else math.sin(math.pi * number / 30) ** 2
-                    frames.write(rest if amount == 0 else picture(color, amount))
+
+    def frames(name, color):
+        count = counts.get(name, 31) if style >= 2 else 31
+        for number in range(count):
+            if style >= 3:
+                yield face(name, number, count - 1)
+            elif style == 2:
+                yield eyes(name, number, count - 1)
+            else:
+                # Preserve prior release poses and exact neutral boundaries.
+                amount = 0 if number in (0, 30) else math.sin(math.pi * number / 30) ** 2
+                yield rest if amount == 0 else picture(color, amount)
+
+    def encode(name):
         common = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
                   '-f', 'rawvideo', '-pixel_format', 'rgba', '-video_size', f'{size[0]}x{size[1]}',
-                  '-framerate', '30', '-i', str(raw), '-an', '-threads', '1']
-        subprocess.run([*common, '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p',
-                        '-auto-alt-ref', '0', '-lossless', '1', '-metadata:s:v:0',
-                        'alpha_mode=1', str(pack / (name + '.webm'))],
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        quality = ['-g', '1', '-qp', '18'] if use_eyes and name == 'muted' else ['-crf', '18']
-        subprocess.run([*common, '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-                        *quality, '-movflags', '+faststart', str(pack / (name + '.mp4'))],
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                  '-framerate', '30', '-i', 'pipe:0', '-an', '-threads', '1']
+        # Lossless VP9 decodes to the same pixels at any speed setting.
+        speed = ['-deadline', 'good', '-cpu-used', '5'] if style >= 3 else []
+        quality = ['-g', '1', '-qp', '18'] if style >= 2 and name == 'muted' else ['-crf', '18']
+        commands = (
+            [*common, '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', *speed,
+             '-auto-alt-ref', '0', '-lossless', '1', '-metadata:s:v:0',
+             'alpha_mode=1', str(pack / (name + '.webm'))],
+            [*common, '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+             *quality, '-movflags', '+faststart', str(pack / (name + '.mp4'))])
+        encoders = [subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL) for command in commands]
+        try:
+            for frame in frames(name, colors[name]):
+                for encoder in encoders:
+                    encoder.stdin.write(frame)
+        finally:
+            for encoder in encoders:
+                encoder.stdin.close()
+        for command, encoder in zip(commands, encoders):
+            if encoder.wait():
+                raise subprocess.CalledProcessError(encoder.returncode, command)
+
+    # Each encoder is single-threaded and deterministic; clips encode in
+    # parallel, longest first.
+    order = sorted(colors, key=lambda name: -counts.get(name, 31))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
+        for done in [pool.submit(encode, name) for name in order]:
+            done.result()
     return colors
 
 
-def generate(stage, work, version):
-    pack = stage / ('template@' + version)
+def generate(stage, work, version, name='template'):
+    pack = stage / (name + '@' + version)
     pack.mkdir()
-    use_eyes = tuple(map(int, version.split('-', 1)[0].split('.')[:2])) >= (0, 2)
-    names = generate_clips(pack, work, use_eyes)
+    release = tuple(map(int, version.split('-', 1)[0].split('.')[:2]))
+    style = 3 if release >= (0, 3) else 2 if release >= (0, 2) else 1
+    names = generate_clips(pack, work, style)
     def clip(name, mode='loop'):
         return {'webm': name + '.webm', 'mp4': name + '.mp4', 'mode': mode}
     manifest = {
-        'format': 1, 'name': 'template', 'version': version,
+        'format': 1, 'name': name, 'version': version,
         'layout': {
             'safe_area': {'x': 0, 'y': 0, 'width': 100, 'height': 100},
             'slots': {},
@@ -217,7 +384,7 @@ def generate(stage, work, version):
                       'states': {name: {'clip': clip(name)} for name in names if name != 'happy'},
                       'emotes': {'happy': clip('happy', 'once')}},
     }
-    if use_eyes:
+    if style >= 2:
         manifest['layout']['slots'] = {
             'clock': {'x': 45, 'y': 86.5, 'font_scale': 1.1},
             'date': {'x': 44.8, 'y': 94, 'font_scale': 0.7},
@@ -229,12 +396,24 @@ def generate(stage, work, version):
             'anchor': {'x': 37, 'y': 45}, 'scale': 1.45,
             'background': '#' + bytes(BACKGROUND).hex(),
         }
+    if style >= 3:
+        # The face fills the page; time and date share its centre line at the
+        # bottom, and cards take the right 40% while the face moves left.
+        slots = manifest['layout']['slots']
+        slots['clock']['x'] = slots['date']['x'] = 50
+        slots['status']['x'] = 60
+        for state in ('link_code', 'approval', 'error'):
+            slots[state]['x'] = 60
+        manifest['layout']['stage'].update({'anchor': {'x': 50, 'y': 50}, 'scale': 2})
+        manifest['layout']['css'] = 'pack.css'
+        (pack / 'pack.css').write_text('.pack-clock, .pack-date { text-align: center; }\n',
+                                       encoding='utf-8')
     (pack / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     files = sorted(pack.iterdir())
     if (len(files) > 64 or sum(path.stat().st_size for path in files) > 64 * 1024**2
             or any(path.stat().st_size > 8 * 1024**2 for path in files if path.suffix in ('.webm', '.mp4'))):
         raise ValueError('generated pack exceeds limits')
-    archive = stage / ('template-' + version + '.screenpack.tar.gz')
+    archive = stage / (name + '-' + version + '.screenpack.tar.gz')
     # Regular USTAR entries at the archive root; fixed metadata, no path leakage.
     with archive.open('wb') as output, gzip.GzipFile(filename='', mode='wb', fileobj=output, mtime=0) as compressed:
         with tarfile.open(fileobj=compressed, mode='w', format=tarfile.USTAR_FORMAT) as target:
@@ -252,6 +431,7 @@ def main():
     parser = argparse.ArgumentParser(description='Generate original template screen-pack data (Linux only).')
     parser.add_argument('--version', required=True)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--name', choices=('template', 'default'), default='template')
     args = parser.parse_args()
     if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?', args.version):
         parser.error('invalid version')
@@ -262,9 +442,9 @@ def main():
         raise ValueError('output already exists')
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.template-', dir=out.parent) as stage, tempfile.TemporaryDirectory() as work:
-        generate(Path(stage), Path(work), args.version)
+        generate(Path(stage), Path(work), args.version, args.name)
         os.rename(stage, out)
-    print('screenpack: template=' + args.version + ' generated=PASS checksum=PASS')
+    print('screenpack: ' + args.name + '=' + args.version + ' generated=PASS checksum=PASS')
 
 
 try:

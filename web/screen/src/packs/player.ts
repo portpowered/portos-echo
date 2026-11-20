@@ -20,6 +20,14 @@ export interface Playback {
     // A ticket admits only completion of the currently requested clip.
     ticket: number;
 }
+export type Schedule = (run: () => void, ms: number) => () => void;
+
+// Speaking follows reply audio, which pauses between words. The mouth starts
+// once audio has lasted SPEAK_START_MS and keeps moving through gaps shorter
+// than SPEAK_HOLD_MS, so short pauses never snap it shut and open again.
+export const SPEAK_START_MS = 100;
+export const SPEAK_HOLD_MS = 500;
+const urgent = ["listening", "error", "approval", "muted", "setup"];
 
 function own<T>(
     values: Record<string, T> | undefined,
@@ -33,8 +41,11 @@ function own<T>(
 export function stateName(state: UiState): string {
     switch (state.state) {
         case "ready":
-        case "connected":
             return "idle";
+        // Connected is the awake face between turns: the pack's `wake` clip,
+        // or idle for packs without one.
+        case "connected":
+            return "wake";
         case "link_code":
             return "setup";
         default:
@@ -42,59 +53,77 @@ export function stateName(state: UiState): string {
     }
 }
 
-// Media events, rather than timers, drive the rest-pose boundary. Videos do not
-// use native loop: ended is the documented neutral frame at either end.
+const timer: Schedule = (run, ms) => {
+    const id = setTimeout(run, ms);
+    return () => clearTimeout(id);
+};
+
+// State changes take effect at once; the media stage eases between clips.
+// Media events, not timers, advance a clip: loops replay on ended.
 export class Player {
     private state = "idle";
     private shown = "";
+    private entered = false;
     private ticket = 0;
-    private boundary: (() => void) | undefined;
     private completion: (() => void) | undefined;
     private emote = false;
-    private playing = false;
+    private pending: (() => void) | undefined;
 
     constructor(
         private character: Character,
         private show: (playback: Playback) => void,
+        private schedule: Schedule = timer,
     ) {}
 
     update(state: UiState, immediate = false): boolean {
         if (state.state === "emotion") {
             const clip = own(this.character.emotes, state.name);
             if (!clip) return false;
-            this.boundary = undefined;
+            this.cancel();
             this.emote = true;
             this.play(clip, () => {
                 this.emote = false;
-                this.loop(this.state);
+                this.shown = "";
+                this.settle(true);
             });
             return true;
         }
-        const next = stateName(state);
-        if (next === this.state && this.shown && !this.emote) return false;
-        this.state = next;
-        const urgent = ["listening", "error", "approval"].includes(next);
-        if (!this.shown || !this.playing || urgent || immediate) {
-            this.boundary = undefined;
+        this.state = stateName(state);
+        const cut = immediate || urgent.includes(this.state);
+        if (!this.emote || cut) {
             this.emote = false;
-            this.enter(next);
-        } else {
-            // Replacing this closure coalesces states received before rest.
-            this.boundary = () => {
-                this.emote = false;
-                const exit = this.clips(this.shown)?.exit;
-                if (exit) this.play(exit, () => this.enter(this.state));
-                else this.enter(this.state);
-            };
+            this.settle(immediate);
         }
         return false;
     }
 
     ended(ticket: number): void {
         if (ticket !== this.ticket) return;
-        const next = this.boundary ?? this.completion;
-        this.boundary = undefined;
-        next?.();
+        this.completion?.();
+    }
+
+    private cancel(): void {
+        this.pending?.();
+        this.pending = undefined;
+    }
+
+    private later(ms: number): void {
+        this.pending = this.schedule(() => {
+            this.pending = undefined;
+            this.transition(this.state);
+        }, ms);
+    }
+
+    private settle(immediate: boolean): void {
+        this.cancel();
+        const next = this.state;
+        if (next === this.shown) return;
+        if (this.shown && !immediate) {
+            if (next === "speaking") return this.later(SPEAK_START_MS);
+            if (this.shown === "speaking" && !urgent.includes(next))
+                return this.later(SPEAK_HOLD_MS);
+        }
+        this.transition(next);
     }
 
     private clips(name: string): StateClip | undefined {
@@ -104,8 +133,24 @@ export class Player {
         );
     }
 
+    private transition(next: string): void {
+        const previous = this.shown;
+        this.shown = next;
+        // A state that resolves to the same clips keeps playing undisturbed.
+        if (
+            previous &&
+            this.entered &&
+            this.clips(previous) === this.clips(next)
+        )
+            return;
+        const exit = this.entered ? this.clips(previous)?.exit : undefined;
+        this.entered = false;
+        if (previous && exit) this.play(exit, () => this.enter(this.shown));
+        else this.enter(next);
+    }
+
     private enter(name: string): void {
-        this.shown = name;
+        this.entered = true;
         const clips = this.clips(name);
         if (clips?.enter) this.play(clips.enter, () => this.loop(name));
         else this.loop(name);
@@ -120,7 +165,6 @@ export class Player {
     }
 
     private play(clip: Clip | undefined, completion?: () => void): void {
-        this.playing = clip !== undefined;
         this.completion = completion;
         this.show({ clip, ticket: ++this.ticket });
     }

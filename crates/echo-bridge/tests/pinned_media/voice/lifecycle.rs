@@ -156,10 +156,16 @@ pub(super) async fn presentation(screen: &mut Screen, ending: Ending) {
         json!({"state":"listening"}),
         json!({"state":"connected"}),
         json!({"state":"speaking"}),
+        json!({"state":"connected"}),
         ready.clone(),
     ];
     if ending.runs() == 2 {
-        expected.extend([json!({"state":"listening"}), json!({"state":"speaking"}), ready.clone()]);
+        expected.extend([
+            json!({"state":"listening"}),
+            json!({"state":"speaking"}),
+            json!({"state":"connected"}),
+            ready.clone(),
+        ]);
     }
     match ending {
         Ending::Eof => (),

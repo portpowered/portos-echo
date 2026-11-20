@@ -40,6 +40,9 @@ async function load(page, data = empty) {
 test("packs: explicit empty catalog, queued install, safe failure and pairing states", async (t) => {
     const page = await settingsPage(t);
     await load(page);
+    // "Screen packs loaded" is a result: it clears itself after 4 s.
+    await page.clock.runFor(4000);
+    assert.equal(await status(page).textContent(), "");
     assert.equal(
         await page
             .getByText("No screen packs installed", { exact: true })
@@ -120,6 +123,11 @@ test("packs: explicit empty catalog, queued install, safe failure and pairing st
     const count = (await calls(page)).length;
     await page.clock.runFor(10000);
     assert.equal((await calls(page)).length, count, "no polling/retry");
+    // An error stays until the next action.
+    assert.equal(
+        await status(page).textContent(),
+        "Screen packs are unavailable or busy. Refresh packs to try again.",
+    );
 });
 
 test("packs: authenticated preview, layout-only, selection and focus preserve voice edits", async (t) => {

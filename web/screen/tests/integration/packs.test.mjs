@@ -191,7 +191,9 @@ test("FACE 960×600 generated template keeps stage and native controls apart", a
 
 async function playing(page, name) {
     await page.waitForFunction((name) => {
-        const video = document.querySelector("video:not([hidden])");
+        const video = document.querySelector(
+            "video:not([hidden]):not([data-leaving])",
+        );
         return (
             video &&
             new URL(video.src).pathname.endsWith(`/${name}`) &&
@@ -200,7 +202,7 @@ async function playing(page, name) {
         );
     }, name);
     return page
-        .locator("video:not([hidden])")
+        .locator("video:not([hidden]):not([data-leaving])")
         .evaluate((node) => new URL(node.src).pathname.split("/").at(-1));
 }
 
@@ -393,7 +395,7 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     await playing(page, "idle.webm");
     await page.waitForFunction(() =>
         document
-            .querySelector("video:not([hidden])")
+            .querySelector("video:not([hidden]):not([data-leaving])")
             ?.src.includes("revision=4"),
     );
     await mkdir("test-results/screenshots", { recursive: true });
@@ -408,7 +410,8 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     }
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.waitForFunction(
-        () => !document.querySelector("video:not([hidden])"),
+        () =>
+            !document.querySelector("video:not([hidden]):not([data-leaving])"),
     );
     assert.equal(await page.locator(".pack-stage img").isVisible(), true);
     assert.equal(

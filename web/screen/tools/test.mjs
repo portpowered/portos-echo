@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,18 +26,36 @@ if (fixture.status !== 0) process.exit(fixture.status ?? 1);
 // Fixture preparation belongs to the suite owner. Integration tests consume
 // prebuilt executables and generated data; they never compile a binary.
 const packRoot = await mkdtemp(join(tmpdir(), "screen-pack-test-"));
-for (const version of ["0.1.0", "0.2.0"]) {
-    const generated = spawnSync(
-        "sh",
-        [
-            "scripts/make-template-screenpack.sh",
-            "--version",
-            version,
-            "--out",
-            join(packRoot, version),
-        ],
-        { cwd: new URL("../../../", import.meta.url), stdio: "inherit" },
-    );
+// The three generated packs encode in parallel; each encoder stays
+// single-threaded and deterministic.
+const generations = [
+    ["0.1.0", "template"],
+    ["0.2.0", "template"],
+    ["0.3.0", "default"],
+].map(
+    ([version, name]) =>
+        new Promise((resolve) => {
+            const child = spawn(
+                "sh",
+                [
+                    "scripts/make-template-screenpack.sh",
+                    "--version",
+                    version,
+                    "--name",
+                    name,
+                    "--out",
+                    join(packRoot, version),
+                ],
+                {
+                    cwd: new URL("../../../", import.meta.url),
+                    stdio: "inherit",
+                },
+            );
+            child.on("error", (error) => resolve({ error }));
+            child.on("exit", (status) => resolve({ status }));
+        }),
+);
+for (const generated of await Promise.all(generations)) {
     if (generated.error || generated.status !== 0) {
         await rm(packRoot, { recursive: true, force: true });
         if (generated.error) throw generated.error;
@@ -52,6 +70,7 @@ const result = spawnSync(
         "--test-concurrency=2",
         "tests/*.test.mjs",
         "tests/integration/*.test.mjs",
+        "tests/render-snapshots/*.test.mjs",
     ],
     {
         encoding: "utf8",
@@ -59,6 +78,7 @@ const result = spawnSync(
             ...process.env,
             SCREEN_PACK_FIXTURE: join(packRoot, "0.1.0"),
             SCREEN_PACK_EYES_FIXTURE: join(packRoot, "0.2.0"),
+            SCREEN_PACK_DEFAULT_FIXTURE: join(packRoot, "0.3.0"),
         },
     },
 );

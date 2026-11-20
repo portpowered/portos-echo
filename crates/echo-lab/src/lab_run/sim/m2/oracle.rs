@@ -10,6 +10,7 @@ pub fn expected(case: &str) -> Value {
         sequence.extend([
             json!({"state":"connected"}),
             json!({"state":"speaking"}),
+            json!({"state":"connected"}),
             json!({"state":"ready","message":"Echo Live ready"}),
             json!({"state":"ready","message":"Echo Live ready"}),
         ]);

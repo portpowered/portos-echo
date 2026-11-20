@@ -82,15 +82,13 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             node.style.fontSize = `${28 * value.font_scale}px`;
         return value;
     }
-    function besideStage(value: Slot | undefined): value is Slot {
-        return !!(
-            value &&
-            value.x < 100 &&
-            value.y < 100 &&
-            layout &&
-            host.querySelector(".pack-stage") &&
-            value.x >= layout.stage.anchor.x + 25 * layout.stage.scale
-        );
+    // A slot right of the stage is beside it. Over a full-page stage, a card
+    // slot in the right half is fitted to the right edge as well.
+    function besideStage(value: Slot | undefined, card = false): value is Slot {
+        if (!value || value.x >= 100 || value.y >= 100 || !layout) return false;
+        if (!host.querySelector(".pack-stage")) return false;
+        const right = layout.stage.anchor.x + 25 * layout.stage.scale;
+        return value.x >= (card ? Math.min(50, right) : right);
     }
     function placeFeedback(status?: Slot) {
         // The page keeps its live region immediately after the presentation.
@@ -102,6 +100,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
         const { style } = feedback;
         if (!status) {
             style.position = style.inset = style.width = style.margin = "";
+            style.transform = "";
             return;
         }
         const left = area.x + (status.x / 100) * area.width;
@@ -111,9 +110,19 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
         style.inset = `${top}dvh calc(${right}vw + 12px) auto ${left}vw`;
         style.width = "auto";
         style.margin = "0";
+        style.transform = "none";
     }
     slot(clock, "clock");
     slot(date, "date");
+    clock.style.width = date.style.width = "max-content";
+    // Time and date anchor at their slot x by their own text-align: centred
+    // text centres its box on x, so both lines share one centre line.
+    function anchor(node: HTMLElement, width: number) {
+        if (node !== clock && node !== date) return 0;
+        const align = getComputedStyle(node).textAlign;
+        if (align === "center") return width / 2;
+        return align === "right" || align === "end" ? width : 0;
+    }
     function clamp() {
         for (const node of host.querySelectorAll<HTMLElement>(
             "[data-pack-slot]",
@@ -121,7 +130,14 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             node.style.transform = "";
             const box = node.getBoundingClientRect();
             const bounds = host.getBoundingClientRect();
-            const x = Math.min(0, bounds.right - box.right);
+            const left = box.left - anchor(node, box.width);
+            const x =
+                left -
+                box.left +
+                Math.max(
+                    Math.min(0, bounds.right - (left + box.width)),
+                    bounds.left - left,
+                );
             const y = Math.min(0, bounds.bottom - box.bottom);
             node.style.transform = `translate(${x}px, ${y}px)`;
         }
@@ -143,7 +159,8 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
     return {
         render(state: string) {
             const idle = ["ready", "connected"].includes(state);
-            clock.hidden = date.hidden = !idle;
+            // Time and date stay put through every state.
+            clock.hidden = date.hidden = false;
             const feedbackSlot = layout?.slots.status;
             placeFeedback(
                 idle && besideStage(feedbackSlot) ? feedbackSlot : undefined,
@@ -153,7 +170,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             if (heading) {
                 const status = slot(heading, "status");
                 heading.dataset.packSlot = "";
-                if (besideStage(status)) {
+                if (besideStage(status, true)) {
                     fitSideSlot(heading, status);
                     heading.style.lineHeight = "1.4";
                 }
@@ -167,7 +184,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
                 // Native buttons stay with their prompt inside one scrollable card.
                 const controls = host.querySelector<HTMLElement>(".controls");
                 if (controls) details.append(controls);
-                if (besideStage(anchor)) {
+                if (besideStage(anchor, true)) {
                     fitSideSlot(details, anchor);
                     fitSideCard(details, controls);
                 }
@@ -189,6 +206,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             node.style.height = `${50 * layout.stage.scale}%`;
             node.style.backgroundColor = layout.stage.background;
         },
+        refresh: clamp,
         dispose() {
             observer.disconnect();
             clearInterval(timer);

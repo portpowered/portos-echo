@@ -310,12 +310,8 @@ pub(super) fn complete(view: &mut View<'_>, receive: &mut mpsc::Receiver<UiState
     }
     view.observe(ServeNotice::Session(SessionNotice::Run(Notice::ReplyPaused)))
         .unwrap();
-    assert_eq!(
-        receive.try_recv().unwrap(),
-        UiState::Ready {
-            message: "Echo Live ready".into()
-        }
-    );
+    // Awake with a closed mouth until the run ends.
+    assert_eq!(receive.try_recv().unwrap(), UiState::Connected);
     let stats = Stats {
         received_chunks: 7,
         microphone_frames: 3,
@@ -330,6 +326,10 @@ pub(super) fn complete(view: &mut View<'_>, receive: &mut mpsc::Receiver<UiState
         .unwrap();
     view.observe(ServeNotice::Session(SessionNotice::Completed(stats)))
         .unwrap();
+    let ready = UiState::Ready {
+        message: "Echo Live ready".into(),
+    };
+    assert_eq!(receive.try_recv().unwrap(), ready);
     assert!(receive.try_recv().is_err());
 }
 
