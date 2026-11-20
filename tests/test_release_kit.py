@@ -19,12 +19,14 @@ from unittest.mock import patch
 
 from test_echo_install import Sandbox, fake_adb, require, SENTINEL
 from test_echo_install_lifecycle import configure_lifecycle, release_started, release_stop
+from test_screen_pack_assets import generate, independent_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("package_dist", ROOT / "scripts/package-dist.py")
 PACK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PACK)
 ASSETS = None
+TEMPLATE = None
 
 
 def sha(data):
@@ -98,6 +100,7 @@ class ReleaseBox(Sandbox):
             codex.mkdir()
             for name in ("codex-app-server", "cacert.pem", "LICENSE", "NOTICE"):
                 (codex / name).write_text("synthetic public " + name)
+            shutil.copyfile(TEMPLATE, self.assets / TEMPLATE.name)
             PACK.assemble(self.assets, "0.1.0", "a" * 40, "b" * 40, codex, self.files["bridge"], self.files["ca"],
                           {"licenses/ca/MPL-2.0.txt": b"synthetic license", "licenses/ca/NOTICE": b"CA attribution"})
         self.archive = next(self.assets.glob("echo-*-armv7.tar.gz"))
@@ -124,31 +127,13 @@ class ReleaseBox(Sandbox):
         return result
 
     def rehash(self):
-        (self.assets / "SHA256SUMS").write_text(f"{sha(self.archive.read_bytes())}  {self.archive.name}\n{sha(self.wrapper.read_bytes())}  install.sh\n")
-
-
-def independent_bundle(assets):
-    archive = next(assets.glob("echo-*-armv7.tar.gz"))
-    with tarfile.open(archive) as bundle:
-        members = bundle.getmembers()
-        require(all(m.isfile() for m in members), "non-file payload")
-        files = {m.name: bundle.extractfile(m).read() for m in members}
-        require(len(files) == len(members), "duplicate member")
-    manifest = json.loads(files.pop("MANIFEST"))
-    require(set(files) == set(manifest["files"]), "manifest membership differs")
-    for name, content in files.items():
-        require(sha(content) == manifest["files"][name], "payload hash differs")
-        require(PACK.safe_name(name), "forbidden member")
-    hashes = dict((name, value) for value, name in (line.split() for line in (assets / "SHA256SUMS").read_text().splitlines()))
-    require(hashes == {archive.name: sha(archive.read_bytes()), "install.sh": sha((assets / "install.sh").read_bytes())}, "asset hashes differ")
-    require(manifest["components"]["ca_bundle"]["sha256"] == sha(files["bin/cacert.pem"]), "CA provenance differs")
-    PACK.verify(archive, assets / "SHA256SUMS")
+        (self.assets / "SHA256SUMS").write_text("".join(f"{sha(p.read_bytes())}  {p.name}\n" for p in (self.archive, self.wrapper, next(self.assets.glob("template-*.screenpack.tar.gz")))))
 
 
 def happy_cases():
     for wget, pipe in ((False, False), (True, False), (False, True)):
         with ReleaseBox(wget) as box:
-            independent_bundle(box.assets)
+            independent_bundle(box.assets, PACK)
             result = box.invoke(pipe=pipe)
             require("ChatGPT sign-in" in result.stdout and "Port OS link" in result.stdout, "next steps absent")
             calls = box.calls()
@@ -309,7 +294,7 @@ def package_cases():
         except ValueError:
             pass
     with ReleaseBox() as box:
-        independent_bundle(box.assets)
+        independent_bundle(box.assets, PACK)
         for marker in (b"/home/example/private/file", b"C:\\Users\\example\\private", b"-----BEGIN PRIVATE KEY-----"):
             require(PACK.PRIVATE.search(marker) is not None, "private marker missed")
         for name in ("../escape", "licenses/token.txt", "credentials.json", "/absolute", "licenses/../escape"):
@@ -320,6 +305,7 @@ def package_cases():
         original = PACK.tomllib.loads((ROOT / "examples/bridge.echo.toml").read_text())
         original["codex"]["binary"] = "/data/local/echo-bridge/bin/codex-app-server"
         original["codex"]["ca_file"] = "/data/local/echo-bridge/bin/cacert.pem"
+        original["screen"]["packs"] = parsed["screen"]["packs"]
         require(parsed == original, "projection changed unrelated config")
     for name, content, update in (("licenses/extra.txt", b"/home/example/private/file", True),
                                   ("licenses/secret.txt", b"seed", True),
@@ -380,6 +366,7 @@ def path_diagnostic_cases():
         for name in ("codex-app-server", "cacert.pem", "LICENSE", "NOTICE"):
             (codex / name).write_bytes(b"synthetic public input")
         (codex / "codex-app-server").write_bytes(b'\x00'.join(paths))
+        shutil.copyfile(TEMPLATE, assets / TEMPLATE.name)
         try:
             PACK.assemble(assets, "0.1.0", "a" * 40, "b" * 40, codex,
                           codex / "LICENSE", codex / "NOTICE",
@@ -472,7 +459,7 @@ def configure_native():
 
 
 def main():
-    global ASSETS
+    global ASSETS, TEMPLATE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path)
     parser.add_argument("--configure-native", action="store_true")
@@ -482,12 +469,20 @@ def main():
         configure_native()
         return
     ASSETS = args.assets.resolve() if args.assets else None
+    with tempfile.TemporaryDirectory(prefix="template-witness-") as temporary:
+        generated = Path(temporary) / "generated"
+        generate(generated)
+        TEMPLATE = generated / "template-0.1.0.screenpack.tar.gz"
+        run_cases()
+
+
+def run_cases():
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(), (package_cases, happy_cases, integrity_cases, failure_cases, retention_cases, interruption_case)))
     from test_release_redirects import redirect_cases
     redirect_cases(ReleaseBox)
     if ASSETS:
-        independent_bundle(ASSETS)
+        independent_bundle(ASSETS, PACK)
         print("release-kit: bundle=PASS manifest=PASS privacy=PASS")
     print("release-kit tests: integrity=PASS install=PASS failures=PASS retention=PASS privacy=PASS")
 

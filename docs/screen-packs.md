@@ -48,7 +48,7 @@ their own bounded decoding budget. Only json/css/png/webp/webm/mp4 files are
 accepted. Validation stages files under `screens` before an atomic directory
 rename to `<home>/screens/<name>@<version>/`; an existing conflicting identity is
 retained. Paired installation is available from the settings panel.
-Installed data does not yet activate a renderer.
+An installed template activates automatically when selection is omitted.
 
 ## Paired controls
 
@@ -57,7 +57,7 @@ pack-hosting failure independent of conversation settings. The panel lists valid
 installed identities and their authenticated rest previews (layout-only packs have
 no preview). Select **Built-in appearance** to disable packs or an installed pack,
 then **Use screen pack** to save through the existing settings owner. Pack saves
-require no restart. The renderer remains pending in this lane.
+require no restart and update the page without navigation.
 
 **Add from URL** requires an HTTPS URL and exactly 64 hexadecimal SHA-256 digits.
 **Download pack** queues a background job; it does not wait for the download.
@@ -95,7 +95,7 @@ ranges return 416 with `Content-Range: bytes */<total>`.
 CSS is served with selectors scoped to `.screen-pack`. Validated image
 references are rooted at this pack and acquire the encoded pairing token;
 authors never include credentials in their stylesheet. These rewritten bytes
-are the representation used for CSS ranges. Page activation is still pending.
+are the representation used for CSS ranges.
 
 ## Pack data validation
 
@@ -298,6 +298,51 @@ with oversized cards scrollable and native approval controls retained. Character
 only packs keep default positions; layout only packs retain built-in content.
 Pack CSS is scoped to this presentation, never to Settings.
 
-Generated-template media, artifact packaging and the assembled installation
-journey remain pending; controlled media-event tests do not establish codec or
-physical WebView behavior. Device playback remains coordinator-owned T5 proof.
+## Generate the template and release asset
+
+On Linux with Python 3 and ffmpeg (libvpx-vp9 and libx264 enabled):
+
+```sh
+pack_root=$(mktemp -d)
+sh scripts/make-template-screenpack.sh --version 0.1.0 --out "$pack_root/generated"
+cd "$pack_root/generated"
+sha256sum --check template-0.1.0.screenpack.tar.gz.sha256
+```
+
+The output directory must not exist. Generation publishes it only after every
+file and archive succeeds; failure leaves an existing output untouched. No media,
+fonts or artwork are downloaded. Python draws a labelled REST pose and ten silent
+clips: the nine current states and the `happy` emote. Each clip has 31 frames at
+30 fps and 640 × 640 pixels. Shapes and colors change smoothly between exactly
+equal neutral endpoints. The default layout retains page positions and centers
+the character stage. Generated files are data, never source assets to commit.
+
+WebM uses lossless VP9 with alpha (`yuva420p`, `-auto-alt-ref 0`); MP4 uses H.264
+`yuv420p`, CRF 18 and fast-start metadata. MP4 has no alpha: transparent portions
+are rendered against the layout's `#101820` stage background. Authors must use the
+same neutral silhouette and colors at both ends of every clip, including enter,
+exit and emote clips. Loop endpoints must join seamlessly. Keep silent clips
+short and within the limits above; 640 × 640 at 30 fps is guidance, not a schema
+restriction. Export a PNG/WebP of that same neutral pose as `rest`.
+
+`make dist DIST_VERSION=0.1.0` generates a separate
+`template-0.1.0.screenpack.tar.gz`, adds its exact digest to `SHA256SUMS`, and pins
+that version's release URL and digest in the runtime archive's example config
+before computing `MANIFEST`. The checked-in example's zero digest is a placeholder;
+replace it from the release's `SHA256SUMS` when using that example directly.
+The runtime archive contains no template media. Packaging refuses full generated
+payloads embedded in the real bridge binary or the built JavaScript. The existing
+release workflow uploads the separate pack and publishes it on tag releases;
+workers use manual workflow runs, never create release tags.
+
+For a local installation without device access, place the generated
+`template@0.1.0` directory under a fresh bridge home's `screens/` directory, then
+start the bridge with that home and open its paired page. Omitted selection uses
+the template; selecting **Built-in appearance** writes an empty selection to
+revert immediately. A download test must serve the generated archive from a
+local HTTPS peer trusted exclusively by the configured CA; never use public
+release downloads in tests.
+
+The local-push helper and the assembled production download/browser journey remain
+pending. Controlled media-event tests do not establish physical WebView behavior.
+Device playback remains coordinator-owned T5 proof.

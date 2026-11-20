@@ -57,8 +57,9 @@ allow_tools = ["endpoint_list", "endpoint_query", "control"]
 listen = "127.0.0.1:16900"
 pairing_token_file = "/data/local/echo-bridge/private/screen-pairing.txt"
 # Optional pinned screen-pack archives require [home]. Downloads are bridge-owned.
-# Keep empty until the screen-pack installer is available in the deployed release.
-packs = []
+# Release packaging replaces the version and zero SHA placeholder with generated pins.
+# For source use, replace sha256 from that release's SHA256SUMS, or set packs = [].
+packs = [{ url = "https://github.com/portpowered/portos-echo/releases/download/v0.1.0/template-0.1.0.screenpack.tar.gz", sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }]
 
 # Created by the bridge with mode 0700, and the files in it with mode 0600, whatever the umask.
 [audit]
