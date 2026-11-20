@@ -17,7 +17,7 @@ const id = "template@0.1.0";
 const generated = process.env.SCREEN_PACK_FIXTURE;
 assert.ok(generated, "suite owner must prepare generated assets");
 
-async function open(t, { prepare, beforeNavigate, initialState, archivePath, viewport } = {}) {
+async function open(t, { prepare, beforeNavigate, initialState, archivePath, viewport, locale } = {}) {
     const root = await mkdtemp(join(tmpdir(), "screen-pack-journey-"));
     const home = join(root, "home");
     await mkdir(home);
@@ -111,6 +111,7 @@ async function open(t, { prepare, beforeNavigate, initialState, archivePath, vie
     const origin = `http://127.0.0.1:${ready}`;
     const context = await browser.newContext({
         viewport: viewport ?? { width: 1280, height: 800 },
+        locale,
         serviceWorkers: "block",
     });
     const outside = [];
@@ -164,7 +165,7 @@ async function open(t, { prepare, beforeNavigate, initialState, archivePath, vie
         assert.equal(response.status, 200);
         return response.json();
     };
-    return { page, context, home, peer, sha256, update, api, outside, origin };
+    return { page, context, home, peer, sha256, update, api, outside, origin, next };
 }
 
 test("R1 native CSS, generated character and multiple previews retain selection", async (t) => {
@@ -433,6 +434,7 @@ test("FACE candidate installs over the baseline and fits the paired 960x600 page
     const latest = "template@0.2.0";
     const f = await open(t, {
         viewport: { width: 960, height: 600 },
+        locale: "en-GB",
         archivePath: join(candidate, "template-0.2.0.screenpack.tar.gz"),
         prepare: async (home) => {
             await mkdir(join(home, "screens"));
@@ -506,20 +508,40 @@ test("FACE candidate installs over the baseline and fits the paired 960x600 page
     }
     await mkdir("test-results/screenshots", { recursive: true });
     await page.screenshot({ path: "test-results/screenshots/template-face-960x600.png" });
-    const settings = page.getByRole("button", { name: "Settings", exact: true });
-    await settings.focus();
+    await f.update({ state: "approval", id: "synthetic-keyboard", prompt: "Use the native keys?", accept_label: "Allow", deny_label: "Deny" });
+    await page.getByRole("button", { name: "Allow", exact: true }).focus();
+    await page.keyboard.press("Tab");
     await page.keyboard.press("Enter");
-    await refresh(page);
+    assert.deepEqual((await f.next()).action, { action: "deny", id: "synthetic-keyboard" });
+    await f.update({ state: "connected" });
+    await playing(page, "idle.webm");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.waitForFunction(() => !document.querySelector("video:not([hidden])"));
+    assert.equal(await page.locator(".pack-stage img").evaluate((node) => node.naturalWidth), 640);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const mp4 = await f.context.newPage();
+    await mp4.addInitScript(() => { HTMLMediaElement.prototype.canPlayType = () => ""; });
+    await mp4.goto(page.url());
+    await playing(mp4, "idle.mp4");
+    await mp4.close();
+    const settings = page.getByRole("button", { name: "Settings", exact: true });
     for (const chosen of [id, ""]) {
+        await settings.press("Enter");
+        await refresh(page);
         await page.getByLabel("Screen pack", { exact: true }).selectOption(chosen);
         await page.getByRole("button", { name: "Use screen pack", exact: true }).click();
         await page.waitForFunction(async ({ chosen, token }) => {
             const result = await fetch("/screen-packs/v1?token=" + token);
             return result.ok && (await result.json()).active === (chosen || null);
         }, { chosen, token });
+        await page.getByRole("button", { name: "Back", exact: true }).press("Enter");
+        if (chosen) {
+            await page.waitForFunction((id) => document.querySelector(".pack-stage img")?.src.includes(id), id);
+            await playing(page, "idle.webm");
+        } else {
+            await page.locator(".pack-stage").waitFor({ state: "detached" });
+        }
     }
-    await page.getByRole("button", { name: "Back", exact: true }).press("Enter");
-    await page.locator(".pack-stage").waitFor({ state: "detached" });
     const rollback = await catalog();
     assert.deepEqual(rollback.installed.map((pack) => pack.id).sort(), [id, latest]);
     assert.equal((await f.api("/settings/v1")).restart_pending, false);
@@ -527,3 +549,22 @@ test("FACE candidate installs over the baseline and fits the paired 960x600 page
     assert.deepEqual(overlaps, []);
 });
 
+
+test("FACE published fake-adb tree serves identical 0.2.0 assets", { skip: !process.env.FACE_CANDIDATE }, async (t) => {
+    const candidate = process.env.FACE_CANDIDATE;
+    const latest = "template@0.2.0";
+    const f = await open(t, {
+        prepare: (home) => cp(join(candidate, "pushed-home", "screens"), join(home, "screens"), { recursive: true }),
+        initialState: { state: "connected" },
+    });
+    const catalog = await f.api("/screen-packs/v1");
+    assert.equal(catalog.active, latest);
+    assert.deepEqual(catalog.installed.map((pack) => pack.id).sort(), [id, latest]);
+    for (const file of ["pack.json", "rest.png", "idle.webm", "muted.mp4"]) {
+        const res = await fetch(`${f.origin}/screen-packs/v1/${latest}/${file}?token=${token}`);
+        assert.equal(res.status, 200);
+        assert.deepEqual(Buffer.from(await res.arrayBuffer()), await readFile(join(candidate, latest, file)));
+    }
+    await playing(f.page, "idle.webm");
+    console.log("FACE-ADB production_catalog=PASS both_versions=PASS media_bytes=PASS");
+});

@@ -26,13 +26,24 @@ jobs:
             ~/.npm
             ~/.cache/ms-playwright
           key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
-      - name: Prepare original and updated packages
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
+        with:
+          tool: shellcheck@0.11.0,shfmt@3.14.0
+          fallback: none
+      - name: Verify and prepare both versions
         shell: sh
         run: |
           set -eu
-          sh scripts/make-template-screenpack.sh --version 0.2.0 --out "$RUNNER_TEMP/candidate"
+          command -v ffprobe || { sudo apt-get update && sudo apt-get install -y ffmpeg; }
+          shellcheck scripts/make-template-screenpack.sh scripts/echo-screen-pack.sh
+          shfmt -d scripts/make-template-screenpack.sh scripts/echo-screen-pack.sh
+          python3 tests/test_screen_pack_assets.py --template-witness "$RUNNER_TEMP/candidate"
           (cd "$RUNNER_TEMP/candidate" && sha256sum --check template-0.2.0.screenpack.tar.gz.sha256 && cat template-0.2.0.screenpack.tar.gz.sha256)
-          sh scripts/make-template-screenpack.sh --version 0.1.0 --out "$RUNNER_TEMP/older"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: template-0.2.0-contact
+          path: ${{ runner.temp }}/candidate/contact.png
+          if-no-files-found: error
       - name: Exercise the production fixture and paired page
         shell: sh
         run: |
@@ -41,7 +52,7 @@ jobs:
           npm ci --offline=false
           npm ci --offline
           npx --offline playwright install --with-deps chromium
-          FACE_CANDIDATE="$RUNNER_TEMP/candidate" FACE_OLDER="$RUNNER_TEMP/older" npm test
+          FACE_CANDIDATE="$RUNNER_TEMP/candidate" FACE_OLDER="$RUNNER_TEMP/candidate/older" npm test
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
