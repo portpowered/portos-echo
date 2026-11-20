@@ -12,8 +12,12 @@ const REACH: Duration = Duration::from_millis(700);
 const RATIO: u32 = 3;
 /// Microphone RMS below this is never speech, however quiet the room.
 const MIN_LEVEL: u32 = 250;
-/// Reply audio quieter than this teaches nothing about the echo.
+/// Reply audio quieter than this is not playing, as far as the ear goes.
 const REFERENCE_AUDIBLE: u32 = 300;
+/// Reply audio quieter than this teaches nothing about the echo: against a
+/// quiet frame the room's own noise, which the Echo amplifies by up to 35 dB,
+/// reads as several times the reply level.
+const REFERENCE_LOUD: u32 = 1500;
 /// Loud frames, less quiet ones, before a sound counts as speech: 80 ms.
 const NEED: u8 = 4;
 /// Microphone frames heard under audible reply audio before the echo is known.
@@ -33,6 +37,10 @@ pub struct Heard {
     pub level_max: u32,
     /// Echo at the microphone per thousand of reply level, as learned so far.
     pub coupling: u32,
+    /// The mean of that ratio over the frames it was learned from in this
+    /// reply, and the room's noise level at the reply's end.
+    pub echo_mean: u32,
+    pub noise: u32,
 }
 
 /// A double-talk detector after Geigel: the microphone holds speech when it
@@ -60,7 +68,11 @@ pub(crate) struct Ear {
     speaking: bool,
     /// Audible reply audio has been written since `rest`.
     voiced: bool,
+    /// Any reply audio has.
+    sounded: bool,
     heard: Heard,
+    /// Sum and count of the ratios learned from in this reply.
+    ratios: (u64, u32),
 }
 
 fn per_mille(level: u32, reference: u32) -> u32 {
@@ -83,6 +95,7 @@ impl Ear {
         let start = self.clock.filter(|end| *end > now).unwrap_or(now);
         self.clock = Some(start + PERIOD);
         self.voiced |= level >= REFERENCE_AUDIBLE;
+        self.sounded = true;
         self.played.push_back((start, level));
         while self.played.front().is_some_and(|(at, _)| *at + REACH < now) {
             self.played.pop_front();
@@ -133,7 +146,11 @@ impl Ear {
             return;
         }
         self.heard.echo_max = self.heard.echo_max.max(level);
-        let ratio = per_mille(level, reference);
+        if reference < REFERENCE_LOUD {
+            return;
+        }
+        let ratio = per_mille(level.saturating_sub(self.noise), reference);
+        self.ratios = (self.ratios.0 + u64::from(ratio), self.ratios.1 + 1);
         let most = if warm {
             self.coupling + self.coupling / 20 + 1
         } else {
@@ -154,14 +171,23 @@ impl Ear {
         self.heard.mistakes += 1;
     }
 
+    /// Reply audio has been written to the Echo since `rest`.
+    pub(crate) fn sounded(&self) -> bool {
+        self.sounded
+    }
+
     /// The reply ended or was cut: the next one starts unheard. What was
     /// learned of the echo and the room is kept for the call.
     pub(crate) fn rest(&mut self) -> Heard {
         self.voiced = false;
+        self.sounded = false;
         self.speaking = false;
         self.run = 0;
         self.suspect = 0;
         let mut heard = std::mem::take(&mut self.heard);
+        let (sum, count) = std::mem::take(&mut self.ratios);
+        heard.echo_mean = u32::try_from(sum / u64::from(count.max(1))).unwrap_or(u32::MAX);
+        heard.noise = self.noise;
         heard.coupling = self.coupling;
         heard
     }
@@ -228,6 +254,23 @@ mod tests {
         // The next reply starts unheard and keeps what was learned.
         assert_eq!(ear.rest().coupling, 850);
         assert!(!ear.heard(&[5000; 320], now));
+    }
+
+    /// T1, the device's deaf ear: under quiet reply audio the room's noise
+    /// read as an echo several times the reply, and no voice could top it.
+    #[tokio::test(start_paused = true)]
+    async fn ear_learns_nothing_of_the_echo_from_quiet_reply_audio() {
+        let (mut ear, mut now) = (Ear::default(), Instant::now());
+        for _ in 0..50 {
+            ear.played(&pcm(400), now);
+            assert!(!ear.heard(&[1200; 320], now));
+            now += PERIOD;
+        }
+        assert!(!listen(&mut ear, &mut now, 100, 8000, 0).contains(&true));
+        let heard = listen(&mut ear, &mut now, 10, 8000, 6000);
+        assert_eq!(heard.iter().position(|speech| *speech), Some(3));
+        let measured = ear.rest();
+        assert_eq!((measured.coupling, measured.echo_mean), (100, 100));
     }
 
     /// T1: a slow rise in level under the reply is the echo changing, such

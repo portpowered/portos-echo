@@ -136,7 +136,7 @@ impl Source {
             delegation: Delegation::default(),
             mouth: Mouth::default(),
             thinking: false,
-            meter: ReplyMeter::default(),
+            meter: meter(),
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),
             uplink: VecDeque::new(),
@@ -153,6 +153,11 @@ impl Source {
     /// completes. The Live session still hears that speech.
     pub fn heard_user(&mut self, trigger: BargeTrigger) {
         if self.delegation.in_flight() || !self.controller.speaking() {
+            return;
+        }
+        // Nobody talks over a reply that has not sounded yet: a transcript
+        // this early is of the turn the reply answers.
+        if trigger == BargeTrigger::UserTranscript && !self.ear.sounded() {
             return;
         }
         let now = Instant::now();
@@ -177,7 +182,13 @@ impl Source {
     /// Retire all old playback state together; never flush an abandoned tail.
     /// Stream order identifies the replacement at its next assistant delta.
     pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
-        let Some(trigger) = self.barge.fire(Instant::now(), self.reply.finished()) else {
+        let (now, alone) = (Instant::now(), self.barge.unbacked());
+        let Some(trigger) = self.barge.fire(now, self.reply.finished()) else {
+            // The microphone's hold ran out with no word from the session.
+            if alone == Some(true) && !self.barge.pending() {
+                self.meter.released(now);
+                self.ear.mistaken();
+            }
             return Ok(());
         };
         if self.delegation.in_flight() || !self.controller.speaking() {
@@ -293,6 +304,19 @@ impl Source {
         self.meter.discarded(reason, audible);
         Ok(())
     }
+}
+
+/// A call's first reply starts on the cushion calls on the Echo have needed.
+#[cfg(not(test))]
+fn meter() -> ReplyMeter {
+    ReplyMeter::call()
+}
+
+/// This crate's unit tests script their bursts against the floor; the T3
+/// tests run the call's own start (`bridge_reply_start.rs`).
+#[cfg(test)]
+fn meter() -> ReplyMeter {
+    ReplyMeter::default()
 }
 
 /// The call frame holds more than WebRTC silence.

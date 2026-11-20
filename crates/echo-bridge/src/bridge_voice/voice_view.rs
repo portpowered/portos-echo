@@ -241,7 +241,8 @@ impl<'a> View<'a> {
                     "holds":quality.holds, "hold_ms":quality.hold_ms},
                 "mic":{"onsets":quality.mic.onsets, "mistakes":quality.mic.mistakes,
                     "lead_ms":quality.mic_lead_ms, "echo_max":quality.mic.echo_max,
-                    "level_max":quality.mic.level_max, "coupling":quality.mic.coupling}
+                    "level_max":quality.mic.level_max, "coupling":quality.mic.coupling,
+                    "echo_mean":quality.mic.echo_mean, "noise":quality.mic.noise}
             }),
         )?;
         let Some(first) = quality.first_audio else {

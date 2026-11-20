@@ -327,3 +327,48 @@ async fn barge_in_echo_never_holds_the_reply_and_a_noise_holds_it_once() {
     assert_eq!((quality.mic.onsets, quality.mic.mistakes), (1, 1));
     assert_eq!((source.stats.reply_dropped, quality.mic_lead_ms), (0, None));
 }
+
+/// T1, the device's lost start: a short answer was held from its first
+/// frame by the transcript of the question, and dropped whole when it ended.
+#[tokio::test(start_paused = true)]
+async fn reply_start_is_not_held_by_the_transcript_of_the_turn_it_answers() {
+    let mut source = Source::new(200, false).unwrap();
+    let port = Narrow::default();
+    port.room.set(usize::MAX);
+    source.spoke();
+    // The question's transcript comes late: the answer has not sounded yet.
+    source.heard_user(BargeTrigger::UserTranscript);
+    assert!(!source.barge.pending());
+    for _ in 0..30 {
+        replying(&mut source, &port, 2000, 0).await;
+    }
+    // A transcript now is the user talking over the answer.
+    source.heard_user(BargeTrigger::UserTranscript);
+    assert!(source.barge.pending());
+}
+
+/// T1: a sound at the microphone as the model ends its turn held the reply
+/// and cut its last words. The microphone alone holds, and cuts nothing.
+#[tokio::test(start_paused = true)]
+async fn barge_in_from_the_microphone_alone_never_cuts_the_reply() {
+    let mut source = Source::new(200, false).unwrap();
+    let mut port = Narrow::default();
+    port.room.set(usize::MAX);
+    source.spoke();
+    for _ in 0..50 {
+        replying(&mut source, &port, 2000, 0).await;
+    }
+    for _ in 0..10 {
+        replying(&mut source, &port, 2000, 6000).await;
+    }
+    assert!(source.barge.pending());
+    // The model ends its turn: with a transcript that would be its yield.
+    source.reply.finish().unwrap();
+    source.interrupt(&mut port).unwrap();
+    assert!(source.barge.pending() && !source.stale());
+    tokio::time::advance(Duration::from_millis(900)).await;
+    source.interrupt(&mut port).unwrap();
+    assert!(!source.barge.pending() && !source.stale() && source.playable());
+    let quality = source.settle(0);
+    assert_eq!((quality.cuts, quality.holds, quality.mic.mistakes), (0, 1, 1));
+}

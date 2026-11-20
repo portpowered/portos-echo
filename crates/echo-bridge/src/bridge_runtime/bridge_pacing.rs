@@ -159,6 +159,15 @@ fn millis(duration: Duration) -> u32 {
 }
 
 impl ReplyMeter {
+    /// The meter of a call on the Echo: its first reply starts on the
+    /// cushion such calls have needed, not on the floor.
+    pub(crate) fn call() -> Self {
+        Self {
+            jitter: reply_jitter::Jitter::expecting(reply_jitter::EXPECTED_MS),
+            ..Self::default()
+        }
+    }
+
     /// One reply frame was accepted at `now`. Returns the playout cushion
     /// the call's lateness asks for.
     pub(crate) fn arrived(&mut self, now: Instant) -> Duration {

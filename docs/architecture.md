@@ -975,8 +975,15 @@ above what the reply audio written in the last 700 ms can explain, for 80 ms, is
 reply the microphone hears is learned per call, from the reply's first half second and from every frame not
 taken for speech. Speech at the microphone holds the reply for 800 ms; the transcript that follows extends
 the hold as before. A hold the session does not bear out is released with nothing lost, and the ear raises
-its estimate of the echo. The ear never cuts a reply by itself: without the model's yield there is no cut.
-Its calibration on the Echo is unmeasured; `reply.quality` `mic` reports what it heard.
+its estimate of the echo. The ear never cuts a reply by itself: a hold that only the microphone armed
+lapses after its 800 ms whether the model paused, talked on or ended its turn. The echo is learned only
+from reply audio above RMS 1500, with the room's noise taken off: against quiet reply audio the noise the
+Echo amplifies read as an echo several times the reply. Its calibration on the Echo is unmeasured;
+`reply.quality` `mic` reports what it heard.
+
+A transcript of the user that comes before any audio of the reply has been written to the Echo arms
+nothing: it is of the turn the reply answers. A call's first reply starts on a 300 ms jitter cushion, the
+one every measured call came to need in its first reply, not on the 100 ms floor.
 
 #### Why — Barge-in
 

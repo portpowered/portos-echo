@@ -67,6 +67,9 @@ struct Armed {
 /// dropped and the held audio plays, late but whole.
 /// A model that has ended its turn has said so itself: there is no stretch to
 /// wait out, and a pending barge-in fires at once.
+/// Only a sign from the Live session can cut. A barge-in that the microphone
+/// alone armed holds the reply and lapses when its window has passed, whether
+/// the model paused, talked on or ended its turn: a noise never costs audio.
 #[derive(Default)]
 pub(crate) struct Barge {
     armed: Option<Armed>,
@@ -131,14 +134,22 @@ impl Barge {
     /// already at `now` once the model has `ended` its turn.
     #[must_use]
     pub(crate) fn due(&self, now: Instant, ended: bool) -> Option<Instant> {
-        let due = self.armed?.quiet_since + BARGE_QUIET;
+        let armed = self.armed?;
+        if !armed.backed {
+            return Some(armed.until);
+        }
+        let due = armed.quiet_since + BARGE_QUIET;
         Some(if ended { due.min(now) } else { due })
     }
 
-    /// The trigger of a barge-in that is due at `now`; it is no longer pending.
+    /// The trigger of a barge-in that is due at `now`; it is no longer
+    /// pending. One the microphone alone armed lapses instead and cuts nothing.
     pub(crate) fn fire(&mut self, now: Instant, ended: bool) -> Option<BargeTrigger> {
         self.due(now, ended).filter(|due| *due <= now)?;
-        self.armed.take().map(|armed| armed.trigger)
+        self.armed
+            .take()
+            .filter(|armed| armed.backed)
+            .map(|armed| armed.trigger)
     }
 }
 
@@ -147,6 +158,23 @@ mod tests {
     use super::*;
 
     const FRAME: Duration = Duration::from_millis(20);
+
+    /// T1: the microphone alone holds for its window and never fires; with
+    /// the session's sign the same barge-in fires on the model's yield.
+    #[tokio::test(start_paused = true)]
+    async fn barge_from_the_microphone_alone_lapses_and_never_fires() {
+        let start = Instant::now();
+        let mut barge = Barge::default();
+        assert!(barge.arm(start, BargeTrigger::MicSpeech));
+        assert_eq!(barge.due(start, true), Some(start + MIC_WINDOW));
+        assert_eq!(barge.fire(start + BARGE_QUIET, true), None);
+        assert!(barge.pending());
+        assert_eq!(barge.fire(start + MIC_WINDOW, false), None);
+        assert!(!barge.pending());
+        assert!(barge.arm(start, BargeTrigger::MicSpeech));
+        assert!(!barge.arm(start, BargeTrigger::UserTranscript));
+        assert_eq!(barge.fire(start, true), Some(BargeTrigger::MicSpeech));
+    }
 
     /// T1: the model talks through the whole window, so nothing fires.
     #[tokio::test(start_paused = true)]

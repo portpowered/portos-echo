@@ -258,6 +258,17 @@ scripted T3 timeline (`bridge_barge_mic.rs`: transcript 700 ms after the speech,
 tenth of the reply) it was 785 ms with the transcript as the only sign and 133 ms with the microphone's.
 The 700 ms and the echo level are assumptions of that timeline, not measurements of the Echo.
 
+Third owner run, `echo-bridge` at c2844e60 (the microphone holds; cushion kept 120 s): one call, 3 replies.
+
+| Fact | Value |
+| --- | --- |
+| Reply 1 (first of the call) | `underruns` 1, `underrun_max_ms` 185, `reprimes` 2, `arrival_gap_max_ms` 262, `late_arrivals` 6, `rtp_lost` 4, `target_ms.min` 100 |
+| Reply 2 | 93 frames received, 0 played; `cuts` 1 by `user_transcript`, `hold_ms` 1748. hassmic: playback opened, `written=0`, flushed 1.9 s later |
+| Reply 3 | 462 frames received, 455 played; cut by `mic_speech` with `hold_ms` 12 |
+| Replies 2 and 3, arrival | `arrival_gap_max_ms` 29 and 37, `late_arrivals` 0, `underruns` 0, target held at 300 ms |
+| Microphone | `coupling` 4855 per mille; `echo_max` equals `level_max` in all three (15576, 6354, 5788); `onsets` 1, 0, 1; `lead_ms` null |
+| Echo load during the run | load average 14; audio HAL 72% and hassmic 62% of one core, of eight |
+
 ## Milestones
 
 | Fact | Value | Measured |

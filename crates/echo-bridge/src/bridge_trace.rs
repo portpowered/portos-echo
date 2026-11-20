@@ -24,7 +24,9 @@
 //! microphone heard under the reply: speech `onsets`, the `mistakes` among
 //! them that the Live session did not bear out, `lead_ms` from an onset to the
 //! session's own sign of it, the loudest frame taken for echo (`echo_max`) and
-//! of all (`level_max`) as RMS, and `coupling`, the echo per mille of reply level.
+//! of all (`level_max`) as RMS, `coupling`, the echo per mille of reply level,
+//! `echo_mean`, the mean of that ratio over this reply's loud frames, and
+//! `noise`, the room's RMS with the speaker silent.
 //! A reply a barge-in cut settles with `reply.played` `outcome` `cut`.
 //! `timing` follows a settled reply's `reply.quality` when that reply has a
 //! sample: `name` is `first_audio_after_endpoint_ms`, `duration_ms` is whole

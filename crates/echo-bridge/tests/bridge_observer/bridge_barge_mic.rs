@@ -27,12 +27,12 @@ const TRANSCRIPT_LAG: Duration = Duration::from_millis(700);
 
 /// The room the loopback device stands in.
 #[derive(Default)]
-struct Room {
+pub(super) struct Room {
     /// Amplitude of somebody speaking near the microphone.
     voice: AtomicI16,
     /// Each reply chunk the device was sent: when, and its loudest sample.
-    played: Mutex<Vec<(Instant, u16)>>,
-    flushed: Mutex<Option<Instant>>,
+    pub(super) played: Mutex<Vec<(Instant, u16)>>,
+    pub(super) flushed: Mutex<Option<Instant>>,
     /// When the voice began.
     onset: Mutex<Option<Instant>>,
 }
@@ -147,7 +147,9 @@ async fn device(listener: tokio::net::TcpListener, room: Arc<Room>) -> mpsc::Unb
 }
 
 /// Run one call against the room. `script` is the Live model's side.
-async fn call(script: impl AsyncFnOnce(&mpsc::Sender<MediaEvent>, &Room)) -> (Arc<Room>, Stats, Vec<ReplyQuality>) {
+pub(super) async fn call(
+    script: impl AsyncFnOnce(&mpsc::Sender<MediaEvent>, &Room),
+) -> (Arc<Room>, Stats, Vec<ReplyQuality>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let room = Arc::new(Room::default());
