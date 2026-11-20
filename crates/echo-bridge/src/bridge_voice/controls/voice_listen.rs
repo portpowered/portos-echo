@@ -1,7 +1,7 @@
 //! Keep capture and the run owned while a settled reply waits for activity.
 use super::{Error, Event, MediaEvent, Notice, Options, Source, VoicePort};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
-use std::future::Future;
+use std::{future::Future, time::Duration};
 
 pub(super) async fn replies<L: EchoLink>(
     client: &L,

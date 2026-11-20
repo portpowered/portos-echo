@@ -5,7 +5,9 @@ use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Cut, Discard, Ea
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
-use tokio::time::{Duration, Instant};
+#[cfg(test)]
+use tokio::time::Duration;
+use tokio::time::Instant;
 
 #[path = "earcon/voice_mouth.rs"]
 mod voice_mouth;

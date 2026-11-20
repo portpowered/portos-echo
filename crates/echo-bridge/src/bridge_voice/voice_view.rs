@@ -10,6 +10,13 @@ enum Startup {
     Ready,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MouthActivity {
+    AwaitingReady,
+    Paused,
+    ThinkingAfterEarcon,
+}
+
 pub(super) struct View<'a> {
     screen: &'a Screen,
     health: &'a Health,
@@ -18,7 +25,7 @@ pub(super) struct View<'a> {
     run: Option<String>,
     connected: bool,
     pending_connected: bool,
-    mouth_paused: bool,
+    mouth: MouthActivity,
     startup: Startup,
 }
 
@@ -58,7 +65,7 @@ impl<'a> View<'a> {
             run: None,
             connected: false,
             pending_connected: false,
-            mouth_paused: false,
+            mouth: MouthActivity::AwaitingReady,
             startup: Startup::Pending,
         }
     }
@@ -86,7 +93,7 @@ impl<'a> View<'a> {
                 self.closed("no_response")
             }
             ServeNotice::Probe => self.trace.record("wyoming.probe_ok", Some("connection-1"), json!({})),
-            ServeNotice::Device(event) => self.screen.observe(&event, self.trace).map(|_| ()),
+            ServeNotice::Device(event) => self.device(&event),
             ServeNotice::Session(notice) => self.session(notice),
         }
     }
@@ -109,7 +116,7 @@ impl<'a> View<'a> {
     }
 
     fn begin(&mut self) -> Result<(), Error> {
-        self.mouth_paused = false;
+        self.mouth = MouthActivity::AwaitingReady;
         self.sequence = self.sequence.checked_add(1).ok_or(Error::Unavailable)?;
         self.run = Some(format!("run-{}", self.sequence));
         self.trace.tool_run(self.run.as_deref())?;
@@ -142,7 +149,7 @@ impl<'a> View<'a> {
                 }
                 Ok(())
             }
-            SessionNotice::Run(Notice::Device(event)) => self.screen.observe(&event, self.trace).map(|_| ()),
+            SessionNotice::Run(Notice::Device(event)) => self.device(&event),
             SessionNotice::Run(Notice::EarconPlayed(duration)) => {
                 self.trace.record(
                     "wake.earcon_played",
@@ -152,18 +159,18 @@ impl<'a> View<'a> {
                 if std::mem::take(&mut self.pending_connected) {
                     self.screen.publish(UiState::Connected)?;
                 }
+                if self.mouth == MouthActivity::ThinkingAfterEarcon {
+                    self.show_thinking()?;
+                }
                 Ok(())
             }
-            SessionNotice::Run(Notice::Thinking) => {
-                self.mouth_paused = false;
-                self.screen.presentation.thinking()
-            }
+            SessionNotice::Run(Notice::Thinking) => self.thinking(),
             SessionNotice::Run(Notice::ReplyStarted) => {
-                self.mouth_paused = false;
+                self.mouth = MouthActivity::AwaitingReady;
                 self.screen.publish(UiState::Speaking)
             }
             SessionNotice::Run(Notice::ReplyPaused) => {
-                self.mouth_paused = true;
+                self.mouth = MouthActivity::Paused;
                 self.screen.ready()
             }
             SessionNotice::Run(Notice::SessionTool(receipt)) => {
@@ -179,6 +186,30 @@ impl<'a> View<'a> {
             SessionNotice::ReplyCompleted(stats) => self.reply_completed(&stats),
             SessionNotice::Completed(_) => self.completed(),
         }
+    }
+
+    fn device(&mut self, event: &echo_link::LinkEvent<()>) -> Result<(), Error> {
+        if matches!(event, echo_link::LinkEvent::Mute(true)) && self.mouth == MouthActivity::ThinkingAfterEarcon {
+            self.mouth = MouthActivity::AwaitingReady;
+        }
+        self.screen.observe(event, self.trace).map(|_| ())
+    }
+
+    fn thinking(&mut self) -> Result<(), Error> {
+        if self.screen.muted()? {
+            return Ok(());
+        }
+        if self.pending_connected || super::earcon::active() {
+            self.mouth = MouthActivity::ThinkingAfterEarcon;
+            Ok(())
+        } else {
+            self.show_thinking()
+        }
+    }
+
+    fn show_thinking(&mut self) -> Result<(), Error> {
+        self.mouth = MouthActivity::AwaitingReady;
+        self.screen.presentation.thinking()
     }
 
     fn microphone_completed(&mut self, stats: &Stats) -> Result<(), Error> {
@@ -208,7 +239,7 @@ impl<'a> View<'a> {
         let id = self.run.as_deref().ok_or(Error::Unavailable)?;
         self.trace.record("wyoming.run_ended", Some(id), json!({}))?;
         self.health.state.send_modify(|state| state.live = "idle");
-        if !self.mouth_paused {
+        if self.mouth != MouthActivity::Paused {
             self.screen.ready()?;
         }
         self.trace.record("bridge.run_completed", Some(id), json!({}))?;
@@ -263,6 +294,7 @@ impl<'a> View<'a> {
 
     pub fn closed(&mut self, reason: &'static str) -> Result<(), Error> {
         self.pending_connected = false;
+        self.mouth = MouthActivity::AwaitingReady;
         self.screen.presentation.clear_thinking()?;
         self.trace.tool_run(None)?;
         if self.connected {
@@ -291,7 +323,6 @@ impl<'a> View<'a> {
     /// failure shows; the trace names the retry instead of `bridge.error`.
     pub fn recovering(&mut self, error: &Error, retry: (u32, std::time::Duration), linked: bool) -> Result<(), Error> {
         let run = self.run.take();
-        self.mouth_paused = false;
         self.closed("failed")?;
         let relink = *error == Error::Authorization;
         if !relink {
