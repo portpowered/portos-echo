@@ -43,6 +43,7 @@ pub use voice_session::{
     ConversationOptions, SessionNotice, SessionOptions, conversation, open_conversation, tool_conversation,
 };
 pub use voice_tools::RunnerSkills;
+pub(crate) use voice_tools::normalize_skill_arguments;
 #[cfg(test)]
 mod voice_tests;
 

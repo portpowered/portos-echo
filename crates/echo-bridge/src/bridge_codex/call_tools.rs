@@ -244,7 +244,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                     self.active = None;
                 }
             }
-            Event::Tool { id, call } => {
+            Event::Tool { id, mut call } => {
                 if self.active.is_none()
                     && self
                         .dispatcher
@@ -255,6 +255,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 {
                     self.admit_turn(&call.thread_id, &call.turn_id)?;
                 }
+                crate::bridge_voice::normalize_skill_arguments(&mut call, self.session.is_some());
                 let mut dispatcher = self.dispatcher.take().ok_or(Error::Unavailable)?;
                 let (cancel, cancelled) = oneshot::channel();
                 self.request = Some(id);

@@ -1,12 +1,20 @@
 //! Owner skills are admitted once and read from the same snapshot for every call.
 use crate::{Error, bridge_notes::notes_files as files};
 use echo_agent_api::{ToolResult, ToolSpec};
-use echo_codex::codex_rpc::Limits;
+use echo_codex::{codex_protocol::ToolCall, codex_rpc::Limits};
 use echo_config::BridgeConfig;
 use serde_json::{Value, json};
 use std::{borrow::Cow, ffi::OsStr, fmt::Write as _, sync::Arc};
 
 pub(super) const READ_SKILL: &str = "read_skill";
+
+pub(crate) fn normalize_skill_arguments(call: &mut ToolCall, configured_session: bool) {
+    // The configured skill host owns its typed argument refusal. An empty
+    // object reaches that validator without admitting any name.
+    if configured_session && call.tool == READ_SKILL && !call.arguments.is_object() {
+        call.arguments = json!({});
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct RunnerSkills(Arc<[Skill]>);
