@@ -1,4 +1,5 @@
 //! Own and join Muse work, including a cancellation racing admission.
+use super::bridge_resolution::{Outcome, Resolution};
 use super::{MAX_DELEGATIONS, bridge_muse_work};
 use crate::bridge_runtime::{bridge_budget::Budget, journey::bridge_live::LivePort};
 use crate::{Error, bridge_trace::Trace};
@@ -12,7 +13,7 @@ use serde_json::json;
 use std::{collections::HashSet, sync::Arc};
 use tokio::{sync::oneshot, task::JoinHandle};
 
-type Output = Result<Option<String>, Error>;
+type Output = Result<Option<bridge_muse_work::Prepared>, Error>;
 
 pub(in crate::bridge_runtime) struct Muse<B = crate::bridge_muse::Backend> {
     backend: Arc<B>,
@@ -24,6 +25,7 @@ pub(in crate::bridge_runtime) struct Muse<B = crate::bridge_muse::Backend> {
     stop: Option<oneshot::Sender<()>>,
     pending: Option<JoinHandle<Output>>,
     completed: Option<Output>,
+    resolution: Option<Resolution>,
 }
 
 impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
@@ -38,6 +40,7 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
             stop: None,
             pending: None,
             completed: None,
+            resolution: None,
         }
     }
 
@@ -75,11 +78,19 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
             deadline_seconds: self.config.task_deadline_seconds,
             max_tool_calls: self.config.max_tool_calls,
         };
-        trace.record("session.delegation.created", Some(run), json!({"delegation_id":id}))?;
+        self.resolution = Some(Resolution::created(trace, run, &id, &task.context)?);
         self.active = Some((run.into(), task.delegation_id.clone()));
+        self.start(task, run, trace);
+        Ok(true)
+    }
+
+    fn start(&mut self, task: Task, run: &str, trace: &Trace) {
         if self.budget.reserve((self.utc_day)()).is_err() {
-            self.completed = Some(Ok(Some("daily request limit reached".into())));
-            return Ok(true);
+            self.completed = Some(Ok(Some(bridge_muse_work::Prepared::new(
+                "daily request limit reached",
+                Outcome::Completed,
+            ))));
+            return;
         }
         let (stop, receive) = oneshot::channel();
         self.stop = Some(stop);
@@ -89,7 +100,6 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
         self.pending = Some(tokio::spawn(async move {
             bridge_muse_work::execute(&*backend, task, &run, trace, receive).await
         }));
-        Ok(true)
     }
 
     pub async fn ready(&mut self) {
@@ -109,11 +119,28 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
         };
         self.stop = None;
         let (run, id) = self.active.take().ok_or(Error::Unavailable)?;
-        if let Some(text) = output? {
-            call.append_commentary(id.clone(), text).await?;
-            trace.record("session.commentary.append", Some(&run), json!({"delegation_id":id}))?;
+        let mut resolution = self.resolution.take().ok_or(Error::Unavailable)?;
+        let prepared = match output {
+            Ok(Some(prepared)) => prepared,
+            Ok(None) => return resolution.finish(Outcome::Cancelled, "unobserved", None),
+            Err(error) => {
+                let _ = resolution.finish(Outcome::Failed("worker_failed"), "unobserved", None);
+                return Err(error);
+            }
+        };
+        resolution.observed(prepared.outcome);
+        if let Err(error) = call.append_commentary(id.clone(), prepared.text.clone()).await {
+            let outcome = match prepared.outcome {
+                Outcome::Completed => Outcome::Failed("append_failed"),
+                outcome => outcome,
+            };
+            let _ = resolution.finish(outcome, "failed", Some(&prepared.text));
+            return Err(error.into());
         }
-        Ok(())
+        let receipt = trace.record("session.commentary.append", Some(&run), json!({"delegation_id":id}));
+        let terminal = resolution.finish(prepared.outcome, "submitted", Some(&prepared.text));
+        receipt?;
+        terminal
     }
 
     pub async fn abandon(&mut self) -> bool {
@@ -122,7 +149,15 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
             let _ = stop.send(());
         }
         if let Some(pending) = self.pending.take() {
-            let _ = pending.await;
+            self.completed = Some(pending.await.map_err(|_| Error::Unavailable).and_then(|value| value));
+        }
+        if let Some(mut resolution) = self.resolution.take() {
+            let (outcome, answer) = match self.completed.take() {
+                Some(Ok(Some(prepared))) => (prepared.outcome, Some(prepared.text)),
+                Some(Err(_)) => (Outcome::Failed("worker_failed"), None),
+                _ => (Outcome::Cancelled, None),
+            };
+            let _ = resolution.finish(outcome, "unobserved", answer.as_deref());
         }
         self.completed = None;
         abandoned

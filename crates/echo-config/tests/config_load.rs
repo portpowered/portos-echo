@@ -49,6 +49,7 @@ fn committed_example_loads_with_all_expected_values() {
         chatgpt_auth: echo_config::ChatGptAuthConfig::default(),
         audio: echo_config::AudioConfig::default(),
         voice: echo_config::VoiceConfig::default(),
+        trace: echo_config::TraceConfig::default(),
         echo: EchoConfig {
             host: "echo.example.invalid".into(),
             wyoming_port: 16700,

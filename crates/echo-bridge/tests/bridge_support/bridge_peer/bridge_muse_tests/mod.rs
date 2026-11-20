@@ -145,15 +145,48 @@ fn check_trace(path: &Path, id: Option<&str>) {
         }
     }
     assert_eq!(entries.iter().filter(|e| e["event"] == "tools/call").count(), 0);
+    let (outcome, answer, reason) = if id.is_some() {
+        ("completed", "Muse test job completed", None)
+    } else {
+        (
+            "failed",
+            "Muse is unavailable. Please try again.",
+            Some("submission_failed"),
+        )
+    };
+    check_resolution(path, outcome, "submitted", Some(answer), reason);
     let raw = std::fs::read_to_string(path).unwrap();
-    for private in [
-        "synthetic-api-key",
-        "Muse test job completed",
-        "Done!",
-        "server.der",
-        "muse-credential",
-    ] {
+    for private in ["synthetic-api-key", "Done!", "server.der", "muse-credential"] {
         assert!(!raw.contains(private), "private trace disclosure");
+    }
+}
+
+fn check_resolution(path: &Path, outcome: &str, handback: &str, answer: Option<&str>, reason: Option<&str>) {
+    let entries = trace(path);
+    let created: Vec<_> = entries
+        .iter()
+        .filter(|e| e["event"] == "session.delegation.created")
+        .collect();
+    let resolved: Vec<_> = entries.iter().filter(|e| e["event"] == "delegation.resolved").collect();
+    assert_eq!(created.len(), 1);
+    assert_eq!(resolved.len(), 1);
+    let row = resolved[0];
+    assert_eq!(row["delegation_id"], created[0]["delegation_id"]);
+    assert_eq!(row["run_id"], created[0]["run_id"]);
+    assert_eq!(row["outcome"], outcome);
+    assert_eq!(row["handback"], handback);
+    assert_eq!(row["tool_counts"], json!({}));
+    assert_eq!(row.get("answer").cloned(), answer.map(|text| json!({"text":text})));
+    assert_eq!(row.get("reason_class").and_then(Value::as_str), reason);
+    assert!(row["duration_ms"].as_u64().is_some());
+    assert!(row.get("thread_id").is_none());
+    assert!(row.get("turn_id").is_none());
+    assert_eq!(
+        created[0]["task"],
+        serde_json::from_str::<Value>(&bridge_wire_delegation::event("muse-d-1", "client")).unwrap()
+    );
+    for entry in [created[0], row] {
+        evidence(&entry.to_string());
     }
 }
 

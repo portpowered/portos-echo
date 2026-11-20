@@ -160,7 +160,8 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
             LiveMode::Chatgpt => "chatgpt",
             LiveMode::ApiKey => "api_key",
         },
-    )?;
+    )?
+    .with_payloads(options.delegation.is_none_or(|config| config.trace.payloads));
     super::prompts::publish(&mut trace)?;
     let (service, send) = settings.map_or((None, None), |(service, send)| (Some(service), Some(send)));
     let mut screen = Screen::bind_with_settings(options.screen, send).await?;

@@ -1,4 +1,4 @@
-//! Lossless semantic comparison after replacing only incidental trace fields.
+//! Semantic comparison of milestone receipts, excluding independent diagnostics.
 //! No recording/update path: callers must explicitly retain an observed trace.
 use std::collections::BTreeMap;
 
@@ -67,8 +67,7 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
         return Err("golden: missing actual trace".into());
     }
     let mut names = Names::default();
-    trace
-        .records
+    milestone_records(trace)
         .iter()
         // Reply quality and the bridge's `timing` samples are measurements with
         // their own budgets, not steps: their values follow the run's pace.
@@ -82,6 +81,26 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
             serde_json::to_string(&record).map_err(|_| "golden: cannot encode record".into())
         })
         .collect()
+}
+
+pub(super) fn milestone_records(trace: &Trace) -> Vec<Value> {
+    trace
+        .records
+        .iter()
+        .filter(|record| !delegation_diagnostic(record))
+        .cloned()
+        .collect()
+}
+
+fn delegation_diagnostic(record: &Value) -> bool {
+    // The milestone's delegation receipts come from its independent sideband
+    // observer. Bridge diagnostics remain in the raw trace and have dedicated
+    // configured-owner assertions; they cannot stand in for that native proof.
+    record.get("source").is_none()
+        && matches!(
+            record["event"].as_str(),
+            Some("delegation.created" | "delegation.tool" | "delegation.resolved")
+        )
 }
 
 fn incidental_probe(record: &Value) -> bool {

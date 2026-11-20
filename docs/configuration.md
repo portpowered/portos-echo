@@ -173,6 +173,8 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `screen.pairing_token_file` | Required literal private token-file path. | restart / no |
 | `audit` | Required audit table. | restart / no |
 | `audit.log_dir` | Required literal directory path; runtime creates private audit files. | restart / no |
+| `trace` | Optional private delegation trace table; omitted or empty uses defaults. Remove before restoring an older binary. | restart / no |
+| `trace.payloads` | Boolean, default `true`; `false` disables task/request/response/answer capture while retaining lifecycle metadata. Credentials and account/installation identifiers are redacted; captured objects are capped at 64 KiB. Invalid types and unknown trace keys fail offline with sanitized diagnostics. | restart / no |
 | `chatgpt_auth` | Optional legacy endpoint table, all defaults from config_auth.rs; current app-server ChatGPT path owns its own endpoints and ignores these overrides. | restart / no |
 | `chatgpt_auth.issuer` | Default `https://auth.openai.com`; safe endpoint URL as below. | restart / no |
 | `chatgpt_auth.client_id` | Default `app_EMoamEEZ73f0CkXaXp7hrann` (public Codex OAuth client); nonblank text, no controls. Not an account identifier or secret. | restart / no |

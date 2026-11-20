@@ -11,6 +11,7 @@ async fn m6_sink_ignores_errors_and_bounds_full_and_closed_queues_without_conten
     let sink = Sink {
         send,
         overflow: AtomicBool::new(false),
+        trace: bridge_client_trace::ClientTrace::default(),
     };
     sink.tool_result("ui.show_emotion", &content(), true);
     sink.tool_result("test.echo", &content(), false);
@@ -45,6 +46,7 @@ async fn m6_result_wakes_owner_before_terminal_and_abandon_discards_observation(
     let sink = Arc::new(Sink {
         send,
         overflow: AtomicBool::new(false),
+        trace: bridge_client_trace::ClientTrace::default(),
     });
     let mut host = Client {
         grant: None,

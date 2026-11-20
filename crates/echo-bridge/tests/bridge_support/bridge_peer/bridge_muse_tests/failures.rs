@@ -74,6 +74,18 @@ impl Rig {
         assert_eq!(terminals[0]["delegation_id"], "muse-d-1");
         assert_eq!(terminals[0]["run_id"], "run-1");
         assert_eq!(terminals[0]["status"], status);
+        let outcome = if text == "Muse did not report a result in time" {
+            "timed_out"
+        } else {
+            status
+        };
+        check_resolution(
+            &path,
+            outcome,
+            "submitted",
+            Some(text),
+            (outcome == "failed").then_some("task_failed"),
+        );
         if status == "failed" {
             assert_eq!(terminals[0]["retryable"], false);
         }
@@ -93,13 +105,7 @@ impl Rig {
         assert_eq!(microphone[0]["dropped_chunks"], 0);
         evidence(&format!("muse microphone: {}", microphone[0]));
         let raw = std::fs::read_to_string(self.path()).unwrap();
-        for private in [
-            "Late success",
-            "Muse test job",
-            "synthetic-api-key",
-            "muse-credential",
-            "Done!",
-        ] {
+        for private in ["Late success", "synthetic-api-key", "muse-credential", "Done!"] {
             assert!(!raw.contains(private));
         }
         self.muse.stop().await;
@@ -228,6 +234,7 @@ async fn muse_kill_cancels_once_and_late_report_never_speaks() {
         format!("Cancel task {}. Do not call echo.report.result for it.", rig.id)
     );
     let entries = trace(&rig.path());
+    check_resolution(&rig.path(), "cancelled", "unobserved", None, None);
     // hassmic acknowledges the empty audio-stop cut as played. Actual decoded
     // PCM and commentary, rather than that acknowledgement, witness no speech.
     for event in ["muse.terminal", "session.commentary.append"] {

@@ -246,7 +246,13 @@ where
         if let Some((requests, run)) = requests {
             session = session.with_session(requests, run);
         }
-        drive(device, &mut session, &mut options, cancelled, &mut observe).await
+        let result = drive(device, &mut session, &mut options, cancelled, &mut observe).await;
+        if matches!(result, Err(Error::Deadline | Error::NoResponse)) {
+            // The run deadline may precede the delegated turn's own timer.
+            // Observe its cause before the unchanged cleanup drops dispatch.
+            session.trace_deadline();
+        }
+        result
     };
     let result = work.await;
     // Drop the retained dispatch borrower before stopping its call generation.

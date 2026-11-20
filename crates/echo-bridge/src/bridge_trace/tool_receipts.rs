@@ -1,7 +1,7 @@
-//! Correlation-only dispatch receipts. Tool bodies never enter the trace.
+//! Legacy dispatch receipts plus bounded native completion observation.
 use super::Trace;
 use crate::Error;
-use echo_codex::codex_protocol::{RequestId, ToolCall, TurnInterrupt};
+use echo_codex::codex_protocol::{RequestId, ToolCall, ToolResult, TurnInterrupt};
 use echo_delegation::codex_dispatch::Catalog;
 use serde_json::json;
 use std::sync::Mutex;
@@ -53,11 +53,19 @@ impl PortosReceipts {
 pub(crate) struct ToolTrace {
     trace: Trace,
     names: Vec<(String, String)>,
+    native: super::native_delegation::Native,
+    pending: std::collections::BTreeMap<RequestId, serde_json::Value>,
 }
 
 impl ToolTrace {
+    pub fn server(&mut self, server: Option<&str>) {
+        self.native.server = server.map(str::to_owned);
+    }
+
     pub fn new(trace: Trace, catalog: &Catalog) -> Self {
         Self {
+            native: super::native_delegation::Native::new(trace.clone()),
+            pending: std::collections::BTreeMap::new(),
             trace,
             names: catalog
                 .tools()
@@ -69,6 +77,31 @@ impl ToolTrace {
                 })
                 .collect(),
         }
+    }
+
+    pub fn notification(&mut self, method: &str, params: &serde_json::Value) -> Result<(), Error> {
+        let pending = self.pending.iter().find(|(_, request)| {
+            request["threadId"] == params["threadId"]
+                && request["turnId"] == params["turnId"]
+                && request["item"]["id"] == params["item"]["id"]
+        });
+        let mut observed = params.clone();
+        if let Some((_, request)) = pending
+            && observed["item"].get("arguments").is_none()
+        {
+            observed["item"]["arguments"] = request["item"]["arguments"].clone();
+        }
+        self.native
+            .tool(method, &observed, &self.names, pending.map(|(id, _)| id))?;
+        self.native.notification(method, params)
+    }
+
+    pub fn close(&mut self, outcome: &str, reason: Option<&str>) -> Result<(), Error> {
+        self.native.close(outcome, reason)
+    }
+
+    pub fn timeout(&mut self, turn: &str) {
+        self.native.timeout(turn);
     }
 
     pub fn interrupt(&mut self, event: &str, turn: &TurnInterrupt) -> Result<(), Error> {
@@ -102,7 +135,39 @@ impl ToolTrace {
             json!({
                 "name":name,"thread_id":call.thread_id,"turn_id":call.turn_id,"call_id":call.call_id,"request_id":id
             }),
-        )
+        )?;
+        let mut payload = serde_json::Map::new();
+        payload.insert("request".into(), call.arguments.clone());
+        super::delegation_payload::prepare(&mut payload, self.trace.payloads)?;
+        let params = json!({"threadId":call.thread_id,"turnId":call.turn_id,"item":{
+            "type":"dynamicToolCall","id":call.call_id,"tool":call.tool,"arguments":payload.remove("request")}});
+        self.native.tool("item/started", &params, &self.names, None)?;
+        if self.pending.len() >= 1024 {
+            return Err(Error::Trace);
+        }
+        self.pending.entry(id.clone()).or_insert(params);
+        Ok(())
+    }
+
+    pub fn answer(&mut self, id: &RequestId, result: &ToolResult) -> Result<(), Error> {
+        let Some(mut params) = self.pending.remove(id) else {
+            return Ok(());
+        };
+        let declined = !result.success && result.content_items.iter().any(|content| {
+            matches!(content, echo_codex::codex_protocol::ToolContent::InputText { text }
+                if matches!(text.as_str(), "tool request denied" | "tool request refused" | "tool authorization required"))
+        });
+        params["item"]["status"] = if result.success {
+            "completed"
+        } else if declined {
+            "declined"
+        } else {
+            "failed"
+        }
+        .into();
+        params["item"]["success"] = result.success.into();
+        params["item"]["contentItems"] = serde_json::to_value(&result.content_items).map_err(|_| Error::Trace)?;
+        self.native.tool("item/completed", &params, &self.names, Some(id))
     }
 }
 

@@ -34,10 +34,16 @@ pub(super) fn assert_recorded_comparison(raw: &str) {
     let recorded = format!("{}\n", super::golden::normalize(&actual).unwrap().join("\n"));
     assert_eq!(super::golden::compare(&actual, recorded.as_bytes()), Ok(()));
     let index = actual.records.iter().position(|r| r["event"] == "tools/call").unwrap();
+    let line = super::golden::normalize(&actual)
+        .unwrap()
+        .iter()
+        .position(|line| serde_json::from_str::<Value>(line).unwrap()["event"] == "tools/call")
+        .unwrap()
+        + 1;
     let name = actual.records[index]["name"].as_str().unwrap().to_owned();
     actual.records[index]["name"] = json!("test.wait");
     let error = super::golden::compare(&actual, recorded.as_bytes()).unwrap_err();
-    assert!(error.contains(&format!("line {}\n- ", index + 1)), "{error}");
+    assert!(error.contains(&format!("line {line}\n- ")), "{error}");
     assert!(error.contains(&format!("\"name\":\"{name}\"")), "{error}");
     assert!(error.contains("\"name\":\"test.wait\""), "{error}");
 }

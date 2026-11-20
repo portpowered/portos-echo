@@ -1,10 +1,25 @@
 //! One admitted task, original deadline and terminal; no worker owns a Live writer.
+use super::bridge_resolution::Outcome;
 use crate::{Error, bridge_trace::Trace};
 use echo_agent_api::{AgentBackend, Task};
 use echo_contracts::{ids::TaskId, task::TaskEvent};
 use serde_json::json;
 use std::time::Duration;
 use tokio::{sync::oneshot, time::Instant};
+
+pub(super) struct Prepared {
+    pub text: String,
+    pub outcome: Outcome,
+}
+
+impl Prepared {
+    pub fn new(text: &str, outcome: Outcome) -> Self {
+        Self {
+            text: text.into(),
+            outcome,
+        }
+    }
+}
 
 const UNAVAILABLE: &str = "Muse is unavailable. Please try again.";
 const DEADLINE: &str = "Muse did not report a result in time";
@@ -15,14 +30,14 @@ pub(super) async fn execute(
     run: &str,
     mut trace: Trace,
     mut stop: oneshot::Receiver<()>,
-) -> Result<Option<String>, Error> {
+) -> Result<Option<Prepared>, Error> {
     let deadline = Instant::now() + Duration::from_secs(task.deadline_seconds);
     let delegation = task.delegation_id.clone();
     // Admission is a bounded single mutation. Do not drop an uncertain request on
     // cancellation: retain its admitted ID if possible and then cancel it.
     let Ok(id) = backend.submit(task).await else {
         return Ok(if stop.try_recv() == Err(oneshot::error::TryRecvError::Empty) {
-            Some(UNAVAILABLE.into())
+            Some(Prepared::new(UNAVAILABLE, Outcome::Failed("submission_failed")))
         } else {
             None
         });
@@ -34,18 +49,21 @@ pub(super) async fn execute(
             json!({"delegation_id":delegation,"task_id":id}),
         )?;
         loop {
-            let event = tokio::select! {
+            let (event, expired) = tokio::select! {
                 biased;
                 _ = &mut stop => return Ok(None),
-                () = tokio::time::sleep_until(deadline) => TaskEvent::Failed {
+                () = tokio::time::sleep_until(deadline) => (TaskEvent::Failed {
                     task_id: id.clone(), retryable: false, message: DEADLINE.into()
-                },
-                event = backend.next_event(&id) => event.unwrap_or_else(|| TaskEvent::Failed {
+                }, true),
+                event = backend.next_event(&id) => (event.unwrap_or_else(|| TaskEvent::Failed {
                     task_id: id.clone(), retryable: false, message: UNAVAILABLE.into()
-                }),
+                }), false),
             };
-            if let Some(text) = observe(event, &id, &delegation, run, &mut trace)? {
-                return Ok(Some(text));
+            if let Some(mut prepared) = observe(event, &id, &delegation, run, &mut trace)? {
+                if expired {
+                    prepared.outcome = Outcome::TimedOut;
+                }
+                return Ok(Some(prepared));
             }
         }
     }
@@ -64,9 +82,9 @@ fn observe(
     delegation: &echo_contracts::ids::DelegationId,
     run: &str,
     trace: &mut Trace,
-) -> Result<Option<String>, Error> {
+) -> Result<Option<Prepared>, Error> {
     let mut fields = json!({"delegation_id":delegation,"task_id":id});
-    let (received, text) = match event {
+    let (received, text, outcome) = match event {
         TaskEvent::Progress { task_id, .. } => {
             if task_id != *id {
                 return Err(Error::Decode);
@@ -76,7 +94,7 @@ fn observe(
         }
         TaskEvent::Completed { task_id, summary } => {
             fields["status"] = "completed".into();
-            (task_id, summary)
+            (task_id, summary, Outcome::Completed)
         }
         TaskEvent::Failed { task_id, message, .. } => {
             fields["status"] = "failed".into();
@@ -86,14 +104,19 @@ fn observe(
                 DEADLINE | "Muse test job failed" => message,
                 _ => UNAVAILABLE.into(),
             };
-            (task_id, message)
+            let outcome = if message == DEADLINE {
+                Outcome::TimedOut
+            } else {
+                Outcome::Failed("task_failed")
+            };
+            (task_id, message, outcome)
         }
     };
     if received != *id {
         return Err(Error::Decode);
     }
     trace.record("muse.terminal", Some(run), fields)?;
-    Ok(Some(text))
+    Ok(Some(Prepared { text, outcome }))
 }
 
 #[cfg(test)]

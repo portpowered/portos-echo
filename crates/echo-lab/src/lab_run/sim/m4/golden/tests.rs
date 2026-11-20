@@ -31,6 +31,42 @@ fn recorded(records: &[Value]) -> Vec<u8> {
 }
 
 #[test]
+fn bridge_delegation_diagnostics_never_replace_independent_native_receipts() {
+    let mut records = journey();
+    let native = json!({"event":"delegation.created","source":"provider.sideband", "elapsed_ms":6,
+        "delegation_id":"native-id","thread_id":"thread","turn_id":"turn","run_id":"r-a"});
+    records.push(native.clone());
+    let expected = recorded(&records);
+    for record in [
+        json!({"event":"delegation.created","elapsed_ms":7,"run_id":"r-a","delegation_id":"bridge-id","task":{"text":"synthetic-task"}}),
+        json!({"event":"delegation.tool","elapsed_ms":8,"delegation_id":"bridge-id","kind":"mcp","status":"completed"}),
+        json!({"event":"delegation.resolved","elapsed_ms":9,"delegation_id":"bridge-id","outcome":"completed"}),
+    ] {
+        records.push(record);
+    }
+    assert_eq!(compare(&trace(&records), &expected), Ok(()));
+    let selectors = crate::lab_run::sim::selectors::parse(&[json!("delegation.created")]).unwrap();
+    let check = |records: &[Value]| {
+        crate::lab_run::sim::selectors::check(&milestone_records(&trace(records)), &selectors, Some("r-a"))
+    };
+    assert_eq!(check(&records), Ok(()));
+    // Raw observations retain every row and payload for the diagnostic tests.
+    assert_eq!(trace(&records).records.len(), 9);
+    let mut missing = records.clone();
+    missing.remove(5);
+    assert!(compare(&trace(&missing), &expected).is_err());
+    assert!(check(&missing).is_err());
+    let mut duplicate = records.clone();
+    let mut native = native;
+    native["elapsed_ms"] = json!(10);
+    duplicate.push(native);
+    assert!(compare(&trace(&duplicate), &expected).is_err());
+    assert!(check(&duplicate).is_err());
+    records[2]["count"] = json!(2);
+    assert!(compare(&trace(&records), &expected).is_err());
+}
+
+#[test]
 fn periodic_payload_free_probes_do_not_change_golden_or_identity_assignment() {
     let original = journey();
     let expected = recorded(&original);

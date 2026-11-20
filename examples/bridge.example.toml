@@ -59,6 +59,10 @@ pairing_token_file = "credentials/screen-pairing.txt"
 session_listen_seconds = 15 # Integer 3..300.
 session_max_seconds = 600 # Integer 3..2147483647, at least listen; bounds tool-granted waiting.
 
+# Private delegation payload capture. Restart to apply; remove this table before rollback.
+[trace]
+payloads = true
+
 [audit]
 log_dir = "logs/audit"
 

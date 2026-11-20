@@ -8,6 +8,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::Notify;
+#[path = "trace_tests.rs"]
+mod trace_tests;
 
 #[derive(Default)]
 struct State {
@@ -123,7 +125,9 @@ async fn muse_work_progress_then_one_terminal_keeps_raw_ids_and_private_text_out
     let witness = Witness::new();
     let (_stop, receive) = oneshot::channel();
     assert_eq!(
-        execute(&fake, task(), "run-7", witness.trace.clone(), receive).await,
+        execute(&fake, task(), "run-7", witness.trace.clone(), receive)
+            .await
+            .map(|value| value.map(|prepared| prepared.text)),
         Ok(Some("completed test job".into()))
     );
     assert_eq!(*fake.state.tasks.lock().unwrap(), vec![task()]);
@@ -144,7 +148,9 @@ async fn muse_work_rejected_admission_has_no_remote_id_or_fabricated_terminal() 
     let witness = Witness::new();
     let (_stop, receive) = oneshot::channel();
     assert_eq!(
-        execute(&fake, task(), "run-7", witness.trace.clone(), receive).await,
+        execute(&fake, task(), "run-7", witness.trace.clone(), receive)
+            .await
+            .map(|value| value.map(|prepared| prepared.text)),
         Ok(Some(UNAVAILABLE.into()))
     );
     assert_eq!(*fake.state.tasks.lock().unwrap(), vec![task()]);
@@ -160,7 +166,9 @@ async fn muse_work_original_deadline_is_nonretryable_and_never_cancels_an_expire
     let (_stop, receive) = oneshot::channel();
     let start = Instant::now();
     assert_eq!(
-        execute(&fake, task(), "run-7", witness.trace.clone(), receive).await,
+        execute(&fake, task(), "run-7", witness.trace.clone(), receive)
+            .await
+            .map(|value| value.map(|prepared| prepared.text)),
         Ok(Some(DEADLINE.into()))
     );
     assert_eq!(Instant::now() - start, Duration::from_secs(5));
@@ -183,7 +191,10 @@ async fn muse_work_cancel_racing_admission_retains_the_id_then_joins_one_cancel_
     state.entered.notified().await;
     stop.send(()).unwrap();
     state.release.notify_one();
-    assert_eq!(worker.await.unwrap(), Ok(None));
+    assert_eq!(
+        worker.await.unwrap().map(|value| value.map(|prepared| prepared.text)),
+        Ok(None)
+    );
     assert_eq!(*state.tasks.lock().unwrap(), vec![task()]);
     assert_eq!(*state.polls.lock().unwrap(), vec![]);
     assert_eq!(*state.cancels.lock().unwrap(), vec![id()]);
@@ -200,7 +211,10 @@ async fn muse_work_cancel_drops_pending_poll_then_joins_cancel_without_terminal(
     let worker = tokio::spawn(async move { execute(&fake, task(), "run-7", trace, receive).await });
     state.polled.notified().await;
     stop.send(()).unwrap();
-    assert_eq!(worker.await.unwrap(), Ok(None));
+    assert_eq!(
+        worker.await.unwrap().map(|value| value.map(|prepared| prepared.text)),
+        Ok(None)
+    );
     assert_eq!(*state.polls.lock().unwrap(), vec![id()]);
     assert_eq!(*state.cancels.lock().unwrap(), vec![id()]);
     assert_eq!(witness.records(), vec![fields("muse.submit")]);
@@ -220,7 +234,9 @@ async fn muse_work_failure_sanitizes_untrusted_message_and_forces_nonretryable_t
         let witness = Witness::new();
         let (_stop, receive) = oneshot::channel();
         assert_eq!(
-            execute(&fake, task(), "run-7", witness.trace.clone(), receive).await,
+            execute(&fake, task(), "run-7", witness.trace.clone(), receive)
+                .await
+                .map(|value| value.map(|prepared| prepared.text)),
             Ok(Some(expected.into()))
         );
         let mut terminal = fields("muse.terminal");
@@ -231,7 +247,7 @@ async fn muse_work_failure_sanitizes_untrusted_message_and_forces_nonretryable_t
 }
 
 #[derive(Default)]
-struct Live(Vec<(DelegationId, String)>);
+struct Live(Vec<(DelegationId, String)>, bool);
 impl crate::bridge_runtime::journey::bridge_live::LivePort for Live {
     fn send_audio(
         &mut self,
@@ -252,7 +268,11 @@ impl crate::bridge_runtime::journey::bridge_live::LivePort for Live {
         text: String,
     ) -> impl std::future::Future<Output = Result<(), echo_live::call::CallError>> {
         self.0.push((id, text));
-        std::future::ready(Ok(()))
+        std::future::ready(if self.1 {
+            Err(echo_live::call::CallError::Decode)
+        } else {
+            Ok(())
+        })
     }
     fn pop_audio(&mut self) -> Option<echo_live::AudioFrame> {
         None
@@ -344,7 +364,7 @@ async fn muse_host_abandon_joins_cancel_and_suppresses_late_commentary() {
             .iter()
             .map(|v| v["event"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["session.delegation.created", "muse.submit"]
+        vec!["session.delegation.created", "muse.submit", "delegation.resolved"]
     );
 }
 

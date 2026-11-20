@@ -43,6 +43,7 @@ class Delegation:
         self.models = []
         self.delegations = []
         self.appends = []
+        self.append_receipts = []
         self.failure = None
         self.identity = 'delegation-local'
         self.history = []
@@ -157,6 +158,7 @@ class Delegation:
         assert len(self.models) == 2, 'append before verified output'
         assert value['delegation_item_id'] == self.identity, 'wrong delegation correlation'
         assert value['content'] == [{'type': 'input_text', 'text': self.reply}], 'wrong appended result'
+        self.append_receipts.append(deepcopy(value))
         self.appends.append(value['delegation_item_id'])
         assert len(self.appends) == 1, 'duplicate append'
 

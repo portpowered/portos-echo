@@ -119,7 +119,7 @@ async fn two_calls(io: &mut Io, home: &HomeConfig, trace: &Trace) {
         let (peer, _, _tx) = peer(true, None);
         let notes = Notes::new(Some(home), trace.clone());
         let mut call = MediaCall::new(io, peer);
-        call.trace_tools(trace.clone(), &catalog(&notes));
+        call.trace_tools(trace.clone(), &catalog(&notes), None);
         call.start(&options(), catalog(&notes).tools().to_vec(), deadline())
             .await
             .unwrap();
@@ -161,7 +161,7 @@ async fn scripted(home: Option<&HomeConfig>, trace: &Trace, steps: Vec<(&str, Va
 async fn drive(io: &mut Io, notes: &Notes, trace: &Trace) {
     let (peer, _, _audio) = peer(true, None);
     let mut call = MediaCall::new(io, peer);
-    call.trace_tools(trace.clone(), &catalog(notes));
+    call.trace_tools(trace.clone(), &catalog(notes), None);
     call.start(&options(), catalog(notes).tools().to_vec(), deadline())
         .await
         .unwrap();
