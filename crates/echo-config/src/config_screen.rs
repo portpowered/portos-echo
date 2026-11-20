@@ -1,5 +1,6 @@
 //! Offline screen-pack configuration and settings identifier validation.
-use crate::{BridgeConfig, ConfigError};
+use crate::{BridgeConfig, ConfigError, ScreenConfig, config_decode::Fields};
+use toml::de::DeValue as Value;
 
 /// One pinned archive. URLs and digests are data, never diagnostic text.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -7,6 +8,20 @@ use crate::{BridgeConfig, ConfigError};
 pub struct ScreenPackDownload {
     pub url: String,
     pub sha256: String,
+}
+
+pub(super) fn decode(value: Value<'_>) -> Result<ScreenConfig, ConfigError> {
+    let mut f = Fields::new(value, "screen")?;
+    let listen: String = f.optional("listen")?.unwrap_or_else(|| "0.0.0.0:16900".into());
+    let result = ScreenConfig {
+        listen: listen
+            .parse()
+            .map_err(|_| ConfigError::new("screen.listen", "expected socket address"))?,
+        pairing_token_file: f.required("pairing_token_file")?,
+        packs: f.optional("packs")?.unwrap_or_default(),
+    };
+    f.finish()?;
+    Ok(result)
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {

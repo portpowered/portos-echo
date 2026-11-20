@@ -6,7 +6,7 @@ use toml::{
 };
 
 use crate::{AgentConfig, AuditConfig, BridgeConfig, ConfigError, EchoConfig, LiveConfig, LiveMode};
-use crate::{McpConfig, McpServer, ScreenConfig};
+use crate::{McpConfig, McpServer};
 
 // Decode one field at a time so serde's input-bearing diagnostics never escape.
 pub(super) struct Fields<'a> {
@@ -128,7 +128,7 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .map(|v| crate::config_muse::decode(v.into_inner()))
             .transpose()?,
         mcp: mcp(root.node("mcp")?)?,
-        screen: screen(root.node("screen")?)?,
+        screen: crate::config_screen::decode(root.node("screen")?)?,
         audit: audit(root.node("audit")?)?,
         trace: root
             .table
@@ -231,20 +231,6 @@ fn server(value: Value<'_>, index: usize) -> Result<McpServer, ConfigError> {
         auth: f.required("auth")?,
         bearer_file: f.optional("bearer_file")?,
         allow_tools: f.optional("allow_tools")?.unwrap_or_default(),
-    };
-    f.finish()?;
-    Ok(result)
-}
-
-fn screen(value: Value<'_>) -> Result<ScreenConfig, ConfigError> {
-    let mut f = Fields::new(value, "screen")?;
-    let listen: String = f.optional("listen")?.unwrap_or_else(|| "0.0.0.0:16900".into());
-    let result = ScreenConfig {
-        listen: listen
-            .parse()
-            .map_err(|_| ConfigError::new("screen.listen", "expected socket address"))?,
-        pairing_token_file: f.required("pairing_token_file")?,
-        packs: f.optional("packs")?.unwrap_or_default(),
     };
     f.finish()?;
     Ok(result)
