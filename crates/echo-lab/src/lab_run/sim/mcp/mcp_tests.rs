@@ -1,6 +1,7 @@
 //! T3 component with delivered bridge/pin/media/OAuth/MCP and controlled Wyoming.
 use super::*;
 use echo_spoof_mcp::Options as SpoofOptions;
+use std::io::Write as _;
 
 #[tokio::test]
 async fn t3_m5_codex_provider_quiesces_and_closes_without_admitting_a_call() {
@@ -84,7 +85,6 @@ async fn t3_portos_read_only_delegation_replies_to_relink_without_retry() {
     let observed = portos_journey(Journey::ReadOnly, None).await;
     assert_eq!(observed["reply"], "Link Echo to Port OS again to control devices.");
     assert_eq!(observed["health"], "relink_for_scope");
-    use std::io::Write as _;
     writeln!(std::io::stdout(), "{}", observed["diagnostics"][0]).unwrap();
 }
 
