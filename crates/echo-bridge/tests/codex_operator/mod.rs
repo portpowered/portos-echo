@@ -128,14 +128,20 @@ async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_reso
         assert_eq!(process.line().await, "code: TEST-CODE");
         assert_eq!(process.line().await, "url: http://127.0.0.1:12345/verify");
         let mut control = fixture.control().await;
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
-        assert_eq!(bridge_wire_screen::state(&mut screen).await["state"], "ready");
+        let mut screen = bridge_wire_screen::ScreenEvents::connect(fixture.screen).await;
+        assert_eq!(
+            screen.next("waiting for sign-in Ready").await,
+            Some(json!({"seq":1,"state":{"state":"ready",
+                "message":"code: TEST-CODE\nurl: http://127.0.0.1:12345/verify\n"}}))
+        );
         control.write_all(outcome.as_bytes()).await.unwrap();
         assert_eq!(
-            bridge_wire_screen::state(&mut screen).await,
-            json!({"state":"error", "relink":true,
-            "message":"Run echo-bridge signin with your config, then restart the bridge."})
+            screen.next(&format!("{outcome}: waiting for relink Error")).await,
+            Some(json!({"seq":2,"state":{"state":"error", "relink":true,
+                "message":"Run echo-bridge signin with your config, then restart the bridge."}})),
+            "{outcome}: relink Error must precede screen EOF"
         );
+        assert_eq!(screen.next(&format!("{outcome}: waiting for screen EOF")).await, None);
         process.collect(1).await;
         assert_eq!(process.stderr().await, "echo-bridge: authorization\n");
         assert!(process.lines.next_line().await.unwrap().is_none());
@@ -144,8 +150,10 @@ async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_reso
             b"synthetic prior state"
         );
         drop(fixture.owner());
+        tokio::time::timeout(OBSERVATION_TIMEOUT, fixture.children_released())
+            .await
+            .expect("sign-in child exits");
         assert_eq!(process.child.id(), None);
-        voice_entry::screen_ended(&mut screen).await;
     }
 }
 

@@ -70,6 +70,7 @@ pub(super) async fn execute(
         let _ = release.send(screen.release_observer());
     }
     let deadline = Instant::now() + ACCOUNT_TIMEOUT;
+    let mut terminal_published = false;
     let result = codex_host::run(supervisor, cancelled, deadline, async |supervisor| {
         let result = signin_codex::execute(
             supervisor.io().map_err(codex_host::process_error)?,
@@ -93,12 +94,17 @@ pub(super) async fn execute(
                     relink: true,
                 })
                 .await?;
+            terminal_published = true;
         }
         result.map_err(account_error)
     })
     .await;
-    // Screen cleanup still runs when process cleanup or the command fails.
-    let screen = screen.close().await;
+    // Confirmation queues the Error. The HTTP connection still needs to drain it.
+    let screen = if terminal_published {
+        screen.close_gracefully().await.map(|_| ())
+    } else {
+        screen.close().await
+    };
     screen.and(result)
 }
 
