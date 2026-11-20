@@ -16,6 +16,9 @@ mod tool_policy;
 mod voice_admission;
 #[path = "controls/voice_config.rs"]
 mod voice_config;
+pub(crate) use voice_config::wake_time_context;
+#[cfg(test)]
+pub(crate) use voice_config::{TEST_WAKE_TIME, call_instructions};
 #[path = "controls/voice_entry.rs"]
 pub(crate) mod voice_entry;
 mod voice_host;

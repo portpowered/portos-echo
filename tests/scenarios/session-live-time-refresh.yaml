@@ -1,0 +1,10 @@
+id: session-live-time-refresh
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "What time is it?"
+  - say: "What time is it?"
+budgets:
+  session_listen_seconds: 3
+negative: []

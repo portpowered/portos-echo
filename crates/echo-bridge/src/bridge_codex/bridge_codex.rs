@@ -7,6 +7,7 @@ mod call_media;
 mod call_tools;
 pub use call_audio::{CaptureAudio, ReplyAudio};
 pub use call_host::{HostOptions, with_host, with_host_options};
+pub(crate) use call_media::RetainedCall;
 pub use call_media::{MediaCall, MediaEvent};
 pub use call_tools::{SessionCommand, SessionRequest, ToolBudget, ToolSession};
 #[cfg(test)]
@@ -24,7 +25,7 @@ use echo_codex::{
     codex_rpc::RpcError,
 };
 use serde_json::json;
-use std::collections::VecDeque;
+use std::{collections::VecDeque, future::Future, task::Poll};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::{Instant, timeout_at},
@@ -91,6 +92,7 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     io: &'a mut RpcIo<R, W>,
     phase: Phase,
     thread: Option<String>,
+    time_zone: Option<String>,
     early: VecDeque<Event>,
     interrupt: Option<(RequestId, Instant)>,
     interrupted: Option<TurnInterrupt>,
@@ -106,6 +108,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             io,
             phase: Phase::Fresh,
             thread: None,
+            time_zone: None,
             early: VecDeque::new(),
             interrupt: None,
             interrupted: None,
@@ -193,6 +196,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             return Err(Error::Decode);
         }
         self.thread = Some(thread);
+        self.time_zone = options.time_zone.map(str::to_owned);
         Ok(())
     }
 
@@ -235,17 +239,64 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
                     .map(str::to_owned)
                     .ok_or(Error::Decode);
             }
-            let event = self.project(message)?;
-            if matches!(event, Event::Closed) {
-                return Err(Error::Unavailable);
-            }
-            if !matches!(event, Event::Other) {
-                if self.early.len() == 32 {
-                    return Err(Error::Unavailable);
-                }
+            self.defer_event(message)?;
+        }
+    }
+
+    fn defer_event(&mut self, message: Message) -> Result<(), Error> {
+        match self.project(message)? {
+            Event::Closed => Err(Error::Unavailable),
+            Event::Other => Ok(()),
+            _ if self.early.len() == 32 => Err(Error::Unavailable),
+            event => {
                 self.early.push_back(event);
+                Ok(())
             }
         }
+    }
+
+    pub(super) async fn refresh_wake_time(
+        &mut self,
+        deadline: Instant,
+        cancelled: impl Future<Output = ()>,
+    ) -> Result<(), Error> {
+        tokio::pin!(cancelled);
+        if self.phase != Phase::Active {
+            return Err(Error::Unavailable);
+        }
+        let text = crate::bridge_voice::wake_time_context(self.time_zone.as_deref())?;
+        let params = json!({"threadId":self.thread, "role":"developer", "text":text});
+        let id = self
+            .io
+            .begin_request("thread/realtime/appendText", &params)
+            .map_err(rpc_error)?;
+        let mut replied = false;
+        let result = tokio::select! {
+            biased;
+            () = cancelled.as_mut() => Err(Error::Control),
+            () = tokio::time::sleep_until(deadline) => Err(Error::Deadline),
+            result = std::future::poll_fn(|cx| {
+                // Poll both cancellation-safe IO operations with one borrower.
+                // Project ready errors/closure before admitting audio even if
+                // their notification arrived in the same read as the reply.
+                loop {
+                    let notification = std::pin::pin!(self.io.next_event()).poll(cx);
+                    match notification {
+                        Poll::Ready(message) => self.defer_event(message.map_err(rpc_error)?)?,
+                        Poll::Pending if replied => return Poll::Ready(Ok(())),
+                        Poll::Pending => match std::pin::pin!(self.io.wait_reply(&id)).poll(cx) {
+                            Poll::Ready(reply) => {
+                                reply.map_err(rpc_error)?;
+                                replied = true;
+                            }
+                            Poll::Pending => return Poll::Pending,
+                        },
+                    }
+                }
+            }) => result,
+        };
+        self.io.cancel(&id);
+        result
     }
 
     /// Drive both IO directions even between wakes; no hidden notification task.

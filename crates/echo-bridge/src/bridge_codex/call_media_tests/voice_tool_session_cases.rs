@@ -83,6 +83,10 @@ async fn two_replies(
     echo(server, "idle-request", "call-2", "turn-2").await;
     turn(server, "turn/completed", "turn-2").await;
     wake(observer);
+    let request = read(server).await;
+    assert_eq!(request["method"], "thread/realtime/appendText");
+    assert_eq!(request["params"]["threadId"], "thread-1");
+    write(server, json!({"id":request["id"],"result":{}})).await;
     starts.recv().await.unwrap();
     done(server).await;
     completion.recv().await.unwrap();

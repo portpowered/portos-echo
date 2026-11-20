@@ -1,6 +1,8 @@
 //! T1: conversation owner, controlled JSONL/media/device ports, paused time.
 #[path = "voice_open_cases.rs"]
 mod opening;
+#[path = "voice_wake_time.rs"]
+mod wake_time;
 use super::*;
 use crate::bridge_voice::{SessionNotice, SessionOptions, conversation};
 use echo_link::{
@@ -183,7 +185,14 @@ fn assert_no_reply(stats: &[crate::bridge_voice::Stats], observer: &Observer) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_reuses_one_call_resets_idle_deadline_and_discards_old_pcm() {
+async fn voice_retained_wake_time_refresh_reuses_call_and_discards_old_pcm() {
+    use crate::bridge_voice::TEST_WAKE_TIME;
+    TEST_WAKE_TIME
+        .scope(std::cell::Cell::new(wake_time::t0()), refreshed())
+        .await;
+}
+
+async fn refreshed() {
     let (mut io, mut server) = fixture();
     let (peer, state, audio) = peer(true, None);
     let (link, mut events, microphone, observer) = device().await;
@@ -191,7 +200,7 @@ async fn session_reuses_one_call_resets_idle_deadline_and_discards_old_pcm() {
     let completed = Arc::new(Mutex::new(Vec::new()));
     let client = async {
         let mut call = MediaCall::new(&mut io, peer);
-        call.start(&options(), vec![], deadline()).await.unwrap();
+        wake_time::start_call(&mut call).await;
         conversation(
             (&link, &mut events, microphone),
             &mut call,
@@ -211,14 +220,7 @@ async fn session_reuses_one_call_resets_idle_deadline_and_discards_old_pcm() {
         )
         .await
     };
-    let remote = async {
-        start(&mut server).await;
-        receive.recv().await.unwrap();
-        reply(&mut server).await;
-        receive.recv().await.unwrap();
-        reply(&mut server).await;
-        stop(&mut server).await;
-    };
+    let remote = wake_time::two_wakes(&mut server, &mut receive, &state);
     let mut work = Box::pin(async { tokio::join!(client, remote).0 });
     pump(work.as_mut()).await;
     assert_eq!(observer.commands().last(), Some(&Command::Stop));
@@ -226,6 +228,7 @@ async fn session_reuses_one_call_resets_idle_deadline_and_discards_old_pcm() {
     pump(work.as_mut()).await;
     assert_eq!(completed.lock().unwrap().len(), 1);
     tokio::time::advance(Duration::from_secs(4)).await;
+    crate::bridge_voice::TEST_WAKE_TIME.with(|clock| clock.set(wake_time::t0() + Duration::from_secs(420)));
     audio.send([123; 320]).await.unwrap(); // belongs to the prior, idle reply
     wake(&observer);
     pump(work.as_mut()).await;
@@ -348,7 +351,7 @@ async fn session_cancellation_during_reply_or_idle_stops_once_before_return() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_expiry_wins_queued_wake_at_equality_and_muted_wakes_do_not_renew() {
+async fn voice_retained_wake_time_refresh_skips_muted_and_expired_wakes() {
     for muted in [false, true] {
         let (mut io, mut server) = fixture();
         let (peer, state, _audio) = peer(true, None);

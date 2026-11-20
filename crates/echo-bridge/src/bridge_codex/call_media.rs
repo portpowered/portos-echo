@@ -13,6 +13,14 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+pub(crate) trait RetainedCall: crate::bridge_voice::VoicePort {
+    fn refresh_wake_time(
+        &mut self,
+        deadline: Instant,
+        cancelled: impl std::future::Future<Output = ()>,
+    ) -> impl std::future::Future<Output = Result<(), Error>>;
+}
+
 /// Media and signaling remain independently observable. `ReplyDone` does not drain PCM.
 pub enum MediaEvent {
     Control(Event),
@@ -391,6 +399,16 @@ fn media_error(error: echo_media::Error) -> Error {
 #[cfg(test)]
 #[path = "call_media_tests/call_media_tests.rs"]
 mod tests;
+
+impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> RetainedCall for MediaCall<'_, R, W, P> {
+    async fn refresh_wake_time(
+        &mut self,
+        deadline: Instant,
+        cancelled: impl std::future::Future<Output = ()>,
+    ) -> Result<(), Error> {
+        self.call.refresh_wake_time(deadline, cancelled).await
+    }
+}
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> crate::bridge_voice::VoicePort
     for MediaCall<'a, R, W, P>

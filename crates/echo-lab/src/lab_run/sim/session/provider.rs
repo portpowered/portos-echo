@@ -15,6 +15,7 @@ pub(super) enum Control {
     Transcripts(usize),
     Events(&'static str, Vec<Value>),
     TimeQuestion(&'static str),
+    TimeQuestionOnAudio(&'static str, oneshot::Sender<()>),
     ReleaseGoodbye,
     Quiesce(oneshot::Sender<()>),
     Close,
@@ -79,6 +80,14 @@ impl Provider {
         let (done, finished) = oneshot::channel();
         self.control(Control::Quiesce(done)).await?;
         finished.await.map_err(|_| "session: media did not quiesce".into())
+    }
+
+    pub async fn arm_time_question(&self, question: &'static str) -> Result<(), String> {
+        let (armed, ready) = oneshot::channel();
+        self.control(Control::TimeQuestionOnAudio(question, armed)).await?;
+        ready
+            .await
+            .map_err(|_| "session: time question media trigger unavailable".into())
     }
 
     pub async fn close(mut self) -> Result<Value, String> {
@@ -162,6 +171,7 @@ async fn conversation(
 ) -> Result<(), String> {
     let mut quiesced = false;
     let mut sequence = Sequence::default();
+    let mut question = None;
     // Service the remote at the media frame cadence even without UDP traffic.
     let mut clock = tokio::time::interval(std::time::Duration::from_millis(20));
     loop {
@@ -173,13 +183,21 @@ async fn conversation(
             loop {
                 tokio::select! {
                     value = &mut line => break Some(value?),
-                    result = step(peer), if !quiesced => { result?; },
+                    result = step(peer), if !quiesced => {
+                        if result? && let Some(text) = question.take() {
+                            break Some(json!({"media_question":text}));
+                        }
+                    },
                     _ = clock.tick(), if !quiesced => {let _ = ticks.try_send(());},
                     control = commands.recv() => { action = control; break None; },
                 }
             }
         };
         if let Some(value) = value {
+            if value.get("media_question").is_some() {
+                process.send(&value).await?;
+                continue;
+            }
             observation(observed, &value)?;
             continue;
         }
@@ -188,6 +206,12 @@ async fn conversation(
             Some(Control::Transcripts(turn)) => process.send(&json!({"transcripts":turn})).await?,
             Some(Control::Events(tag, events)) => process.send(&json!({"tag":tag,"events":events})).await?,
             Some(Control::TimeQuestion(text)) => process.send(&json!({"time_question":text})).await?,
+            Some(Control::TimeQuestionOnAudio(text, armed)) => {
+                if question.replace(text).is_some() {
+                    return Err("session: overlapping time questions".into());
+                }
+                let _ = armed.send(());
+            }
             Some(Control::ReleaseGoodbye) => process.send(&json!({"release_goodbye":true})).await?,
             Some(Control::Audio(indices)) => sequence.send(peer, indices).await?,
             Some(Control::Quiesce(done)) => {
@@ -256,8 +280,7 @@ impl Sequence {
     }
 }
 
-async fn step(peer: &mut LivePeer) -> Result<(), String> {
-    while peer.pop_audio().is_some() {}
+async fn step(peer: &mut LivePeer) -> Result<bool, String> {
     let next = Instant::from_std(peer.flush().await.map_err(|_| "session: media flush")?);
     tokio::select! {
         ready = peer.readable() => {
@@ -266,5 +289,9 @@ async fn step(peer: &mut LivePeer) -> Result<(), String> {
         },
         () = tokio::time::sleep_until(next) => peer.timeout(Instant::now().into_std()).await.map_err(|_| "session: media timeout")?,
     }
-    Ok(())
+    let mut heard = false;
+    while peer.pop_audio().is_some() {
+        heard = true;
+    }
+    Ok(heard)
 }

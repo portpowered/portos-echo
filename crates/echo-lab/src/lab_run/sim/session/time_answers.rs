@@ -1,6 +1,7 @@
-//! A direct Live reply depends on the time instruction in the pinned call POST.
+//! Direct Live replies use the received startup and retained-wake time context.
 mod clock;
 mod oracle;
+mod refresh;
 
 use super::{duplex::World, provider::Control};
 use crate::lab_run::{Driver, Step, run_options::Options, run_report::Artifacts, sim::controlled};
@@ -8,7 +9,9 @@ use serde_json::{Value, json};
 use std::{net::SocketAddr, path::Path, time::Duration};
 use tokio::time::Instant;
 
-pub const ID: &str = "session-live-time-answers";
+const ID: &str = "session-live-time-answers";
+const REFRESH_ID: &str = "session-live-time-refresh";
+const REPEATED: [&str; 2] = ["What time is it?"; 2];
 const QUESTIONS: [&str; 4] = [
     "What time is it?",
     "What is today's date?",
@@ -16,6 +19,10 @@ const QUESTIONS: [&str; 4] = [
     "What time is it in my time zone?",
 ];
 const CONFIGURED_TURNS: usize = 3;
+
+pub fn admits(id: &str) -> bool {
+    matches!(id, ID | REFRESH_ID)
+}
 
 pub fn utterance(value: &str) -> Result<Step, String> {
     if !QUESTIONS.contains(&value) {
@@ -31,6 +38,7 @@ pub struct TimeAnswers<'a> {
     world: Option<TimeWorld>,
     turns: usize,
     reached_budget: bool,
+    refresh: bool,
 }
 
 impl<'a> TimeAnswers<'a> {
@@ -50,7 +58,12 @@ impl<'a> TimeAnswers<'a> {
             world: None,
             turns: 0,
             reached_budget: false,
+            refresh: scenario["id"] == REFRESH_ID,
         })
+    }
+
+    fn questions(&self) -> &'static [&'static str] {
+        if self.refresh { &REPEATED } else { &QUESTIONS }
     }
 }
 
@@ -61,14 +74,14 @@ impl Driver for TimeAnswers<'_> {
                 self.reached_budget = true;
                 return Ok(());
             }
-            Step::SayText(text) if QUESTIONS.get(self.turns) == Some(&text.as_str()) => {}
+            Step::SayText(text) if self.questions().get(self.turns) == Some(&text.as_str()) => {}
             _ => return Err("time answers: unexpected scenario step".into()),
         }
         self.runtime.block_on(controlled(
             async {
                 if self.world.is_none() {
                     let configured = self.turns == 0;
-                    self.world = Some(TimeWorld::start(self.options, &artifacts.root, configured).await?);
+                    self.world = Some(TimeWorld::start(self.options, &artifacts.root, configured, self.refresh).await?);
                 }
                 let world = self.world.as_mut().ok_or("time answers: world unavailable")?;
                 world.turn(self.turns, artifacts).await?;
@@ -91,14 +104,20 @@ impl Driver for TimeAnswers<'_> {
         if let Some(world) = self.world.take() {
             self.runtime.block_on(world.close(artifacts))?;
         }
-        let complete = self.turns == QUESTIONS.len();
-        artifacts.checks.insert("live_time_answers".into(), complete);
+        let questions = self.questions();
+        let complete = self.turns == questions.len();
+        let check = if self.refresh {
+            "live_time_refresh"
+        } else {
+            "live_time_answers"
+        };
+        artifacts.checks.insert(check.into(), complete);
         if self.reached_budget && !complete {
             return Err(format!(
                 "time answers: completed {} of {} questions; missing {:?}",
                 self.turns,
-                QUESTIONS.len(),
-                QUESTIONS[self.turns],
+                questions.len(),
+                questions[self.turns],
             ));
         }
         // Dispatch already reports the original error if a turn failed before the budget.
@@ -108,14 +127,15 @@ impl Driver for TimeAnswers<'_> {
 
 struct TimeWorld {
     world: World,
-    _clock: clock::Clock,
+    clock: clock::Clock,
     configured: bool,
+    refresh: bool,
     turns: usize,
     context: Option<Value>,
 }
 
 impl TimeWorld {
-    async fn start(options: &Options, output: &Path, configured: bool) -> Result<Self, String> {
+    async fn start(options: &Options, output: &Path, configured: bool, refresh: bool) -> Result<Self, String> {
         let (clock, address) = clock::Clock::start().await?;
         let private = if configured {
             "time-configured.private"
@@ -126,13 +146,14 @@ impl TimeWorld {
         // path accepts the runner request. It supplies no direct voice reply.
         let script = json!([[{"say":"The runner took the time question."}]]);
         let world = World::start(options, output.join(private), &script, |root| {
-            configure(root, address, configured)
+            configure(root, address, configured, refresh)
         })
         .await?;
         Ok(Self {
             world,
-            _clock: clock,
+            clock,
             configured,
+            refresh,
             turns: 0,
             context: None,
         })
@@ -140,12 +161,18 @@ impl TimeWorld {
 
     async fn turn(&mut self, question: usize, artifacts: &mut Artifacts) -> Result<(), String> {
         let world = &mut self.world;
-        world.satellite.speak(self.turns == 0).await?;
-        if self.turns == 0 {
-            world.connected().await?;
+        if self.refresh {
+            refresh::ask(world, &self.clock, self.turns).await?;
+        } else {
+            world.satellite.speak(self.turns == 0).await?;
+            if self.turns == 0 {
+                world.connected().await?;
+            }
+            world
+                .provider
+                .control(Control::TimeQuestion(QUESTIONS[question]))
+                .await?;
         }
-        let text = QUESTIONS[question];
-        world.provider.control(Control::TimeQuestion(text)).await?;
         world
             .wait(
                 "provider time decision",
@@ -164,11 +191,16 @@ impl TimeWorld {
                 .await?;
             return oracle::delegated(world, artifacts, &result);
         }
-        let answer = oracle::answer(&result, question)?;
-        let context = self.context.get_or_insert_with(|| result["context"].clone());
-        if *context != result["context"] {
-            return Err("time answers: retained call's context changed".into());
-        }
+        let answer = if self.refresh {
+            artifacts.event("session.live_time_decision", Some(question), Some(&result.to_string()))?;
+            refresh::answer(&result, question)?
+        } else {
+            let context = self.context.get_or_insert_with(|| result["context"].clone());
+            if *context != result["context"] {
+                return Err("time answers: retained run's context changed".into());
+            }
+            oracle::answer(&result, question)?
+        };
         let start_bytes = world.start_pcm(self.turns).await?;
         world.tail_pcm(start_bytes).await?;
         world.played(self.turns, answer).await?;
@@ -182,15 +214,18 @@ impl TimeWorld {
         let (snapshot, trace) = self.world.close().await?;
         let evidence = oracle::counts(&snapshot, &trace.records, self.configured);
         artifacts.event("session.live_time_counts", None, Some(&evidence.to_string()))?;
+        if self.refresh {
+            return refresh::check(&snapshot, &trace.records, &evidence, self.turns, artifacts);
+        }
         let expected = if self.configured { CONFIGURED_TURNS } else { 1 };
         if self.turns == expected {
-            oracle::direct_only(&evidence, expected)?;
+            oracle::direct_only(&evidence, expected, 1)?;
         }
         Ok(())
     }
 }
 
-fn configure(root: &Path, address: SocketAddr, configured: bool) -> Result<(), String> {
+fn configure(root: &Path, address: SocketAddr, configured: bool, refresh: bool) -> Result<(), String> {
     let path = root.join("configured.private/bridge.toml");
     let mut text = std::fs::read_to_string(&path).map_err(|_| "time answers: missing configuration")?;
     if configured {
@@ -207,6 +242,7 @@ fn configure(root: &Path, address: SocketAddr, configured: bool) -> Result<(), S
             home.display()
         );
     }
-    std::fs::write(path, format!("{text}\n[clock]\nservers = ['{address}']\n"))
+    let interval = if refresh { "interval_seconds = 60\n" } else { "" };
+    std::fs::write(path, format!("{text}\n[clock]\nservers = ['{address}']\n{interval}"))
         .map_err(|_| "time answers: cannot write private configuration".into())
 }

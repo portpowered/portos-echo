@@ -102,7 +102,7 @@ pub(super) fn counts(snapshot: &Value, records: &[Value], configured: bool) -> V
     })
 }
 
-pub(super) fn direct_only(evidence: &Value, replies: usize) -> Result<(), String> {
+pub(super) fn direct_only(evidence: &Value, replies: usize, runs: usize) -> Result<(), String> {
     if evidence["calls"] != 1
         || evidence["sidebands"] != 1
         || evidence["external"] != 0
@@ -111,12 +111,12 @@ pub(super) fn direct_only(evidence: &Value, replies: usize) -> Result<(), String
         || evidence["model_requests"] != 0
         || evidence["tool_calls"] != 0
         || evidence["bridge_errors"] != 0
-        || evidence["runs"] != 1
+        || evidence["runs"] != runs
         || evidence["replies_played"] != replies
         || evidence["replies_confirmed"] != replies
     {
         return Err(format!(
-            "time answers: expected {replies} direct replies in one local call, observed {evidence}"
+            "time answers: expected {replies} direct replies in {runs} runs on one local call, observed {evidence}"
         ));
     }
     Ok(())

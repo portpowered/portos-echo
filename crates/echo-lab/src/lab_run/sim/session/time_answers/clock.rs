@@ -1,8 +1,20 @@
 //! Loopback SNTP gives the real bridge a controlled call-start wall clock.
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use tokio::{net::UdpSocket, task::JoinHandle};
 
-pub(super) struct Clock(JoinHandle<()>);
+// 2026-02-03 03:30:05 UTC, expressed as NTP seconds.
+const INITIAL: u64 = 3_979_078_205;
+
+pub(super) struct Clock {
+    seconds: Arc<AtomicU64>,
+    task: JoinHandle<()>,
+}
 
 impl Clock {
     pub async fn start() -> Result<(Self, SocketAddr), String> {
@@ -12,21 +24,26 @@ impl Clock {
         let address = socket
             .local_addr()
             .map_err(|_| "time answers: SNTP address unavailable")?;
-        Ok((Self(tokio::spawn(serve(socket))), address))
+        let seconds = Arc::new(AtomicU64::new(INITIAL));
+        let task = tokio::spawn(serve(socket, seconds.clone()));
+        Ok((Self { seconds, task }, address))
+    }
+
+    pub fn select_later_sample(&self) {
+        self.seconds.store(INITIAL + 420, Ordering::Relaxed);
     }
 }
 
 impl Drop for Clock {
     fn drop(&mut self) {
-        self.0.abort();
+        self.task.abort();
     }
 }
 
-async fn serve(socket: UdpSocket) {
-    // 2026-02-03 03:30:05 UTC, expressed as a 32.32 NTP timestamp.
-    let timestamp = (3_979_078_205_u64 << 32).to_be_bytes();
+async fn serve(socket: UdpSocket, seconds: Arc<AtomicU64>) {
     let mut request = [0; 48];
     while let Ok((48, address)) = socket.recv_from(&mut request).await {
+        let timestamp = (seconds.load(Ordering::Relaxed) << 32).to_be_bytes();
         let mut response = [0; 48];
         response[0] = 0x24; // Version 4, server mode.
         response[1] = 1; // Primary reference.

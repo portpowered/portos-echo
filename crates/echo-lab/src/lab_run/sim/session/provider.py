@@ -29,7 +29,7 @@ release_goodbye = threading.Event()
 wake_read, wake_write = socket.socketpair()
 output_lock = threading.Lock()
 observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'models': [], 'delegations': [], 'appends': [],
-            'model_requests': 0}
+            'model_requests': 0, 'time_wire': [], 'media_time_turns': []}
 script = None
 TIME_RULE = ('Always answer time, date, and day-of-week questions directly '
              'from the call-start context and never hand them off.')
@@ -57,6 +57,7 @@ class Script:
         self.turns = turns
         self.step = 0
         self.instructions = ''
+        self.initial_history = ''
 
     def turn(self):
         return len(observed['delegations']) - 1
@@ -170,10 +171,12 @@ class Script:
         return values
 
 
-def time_reply(instructions, question):
-    """Model the direct path from the last context line of the actual call POST."""
+def time_reply(instructions, question, latest=None):
+    """Model a direct answer from Live's current time context."""
     base, _, context = instructions.rpartition('\n')
-    match = re.fullmatch(r'\[Call-start context: (\d{4}-\d{2}-\d{2}) ([A-Za-z]+) '
+    if latest is not None:
+        context = latest.splitlines()[0]
+    match = re.fullmatch(r'\[(?:Call-start|Wake-time) context: (\d{4}-\d{2}-\d{2}) ([A-Za-z]+) '
                          r'(\d{2}:\d{2}:\d{2}) UTC\+00:00; (.+)\]', context)
     assert match, 'missing or malformed call-start context'
     date, weekday, time, suffix = match.groups()
@@ -206,14 +209,25 @@ def send_delegation(connection, value):
           'request': value['item']['content'][0]['text']})
 
 
-def answer_time(connection, question):
-    context, answer = time_reply(script.instructions, question)
+def answer_time(connection, question, media=False):
+    instructions = script.initial_history if media else script.instructions
+    latest = next((row['item']['content'][0]['text'] for row in reversed(observed['time_wire'])
+                   if row['item'].get('type') == 'session.context.append'), None) if media else None
+    context, answer = time_reply(instructions, question, latest)
+    decision = {'event': 'provider.time_turn', 'question': question, 'context': context, 'answer': answer}
+    if media:
+        decision.update(trigger='uplink_audio', order=time_order())
+        observed['media_time_turns'].append(decision)
     frame(connection, {'type': 'turn.done', 'turn': {'role': 'user', 'transcript': question}})
     if answer is None:
         send_delegation(connection, script.begin(0, question))
     else:
         frame(connection, {'type': 'output_transcript.added', 'item': {'text': answer}})
-    emit({'event': 'provider.time_turn', 'question': question, 'context': context, 'answer': answer})
+    emit(decision)
+
+
+def time_order():
+    return len(observed['time_wire']) + len(observed['media_time_turns']) + 1
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -250,7 +264,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             observed['external'] += 1
             self.respond(403, b'{}')
             return
-        script.instructions = body.get('session', {}).get('instructions', '')
+        session = body.get('session', {})
+        script.instructions = session.get('instructions', '')
+        history = session.get('initial_items') or []
+        script.initial_history = next((part['text'] for item in history
+                                       if item.get('type') == 'message' and item.get('role') == 'developer'
+                                       for part in item['content'] if part.get('type') == 'input_text'), '')
         if script and any('request' in turn[0] for turn in script.turns):
             if 'hand off once so the background agent ends the session' not in script.instructions:
                 emit({'event': 'provider.failure', 'failure': 'missing goodbye Live prompt'})
@@ -289,6 +308,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                 emit({'event': 'provider.failure', 'failure': str(error)})
                                 continue
                             emit({'event': 'provider.append', 'delegation_id': value['delegation_item_id']})
+                        else:
+                            observed['time_wire'].append({'item': value, 'order': time_order()})
                 if wake_read in readable:
                     assert wake_read.recv(1) == b'e'
                     command = commands.get_nowait()
@@ -296,6 +317,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         send_delegation(self.connection, script.begin(command['delegate']))
                     elif 'time_question' in command:
                         answer_time(self.connection, command['time_question'])
+                    elif 'media_question' in command:
+                        answer_time(self.connection, command['media_question'], media=True)
                     elif 'events' in command:
                         for value in command['events']:
                             frame(self.connection, value)
@@ -329,7 +352,7 @@ try:
         elif 'script' in command:
             assert script is None
             script = Script(command['script'])
-        elif any(key in command for key in ('delegate', 'transcripts', 'events', 'time_question')):
+        elif any(key in command for key in ('delegate', 'transcripts', 'events', 'time_question', 'media_question')):
             commands.put(command)
             wake_write.sendall(b'e')
         elif command == {'release_goodbye': True}:

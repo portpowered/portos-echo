@@ -11,7 +11,7 @@ use tokio::{
     time::Instant,
 };
 
-type Input = (bool, oneshot::Sender<Result<(), String>>);
+type Input = ((bool, bool), oneshot::Sender<Result<(), String>>);
 
 pub(in crate::lab_run::sim::session) struct Satellite {
     pub address: SocketAddr,
@@ -41,9 +41,17 @@ impl Satellite {
     }
 
     pub async fn speak(&self, wake: bool) -> Result<(), String> {
+        self.input(wake, true).await
+    }
+
+    pub async fn wake(&self) -> Result<(), String> {
+        self.input(true, false).await
+    }
+
+    async fn input(&self, wake: bool, speak: bool) -> Result<(), String> {
         let (sent, received) = oneshot::channel();
         self.inputs
-            .send((wake, sent))
+            .send(((wake, speak), sent))
             .await
             .map_err(|_| "duplex: Wyoming peer ended")?;
         received.await.map_err(|_| "duplex: missing capture receipt")?
@@ -81,8 +89,8 @@ async fn serve(
             tokio::select! {
                 result = &mut next => break result?,
                 input = inputs.recv() => {
-                    let Some((wake, sent)) = input else { return Ok(()); };
-                    let result = capture(&mut write, &mut timing, started, wake).await;
+                    let Some((utterance, sent)) = input else { return Ok(()); };
+                    let result = capture(&mut write, &mut timing, started, utterance).await;
                     observed.send_replace(timing.clone());
                     let _ = sent.send(result.clone());
                     result?;
@@ -116,7 +124,7 @@ async fn capture(
     write: &mut (impl AsyncWrite + Unpin),
     timing: &mut Timing,
     started: Instant,
-    wake: bool,
+    (wake, speak): (bool, bool),
 ) -> Result<(), String> {
     let format = json!({"rate":16000,"width":2,"channels":1});
     if wake {
@@ -132,9 +140,11 @@ async fn capture(
         timing.capture(&event, usize::MAX, started.elapsed())?;
         send(write, "audio-start", format.clone(), vec![]).await?;
     }
-    for bytes in crate::lab_run::sim::m3::fixture().as_chunks::<640>().0 {
-        let event = send(write, "audio-chunk", format.clone(), bytes.to_vec()).await?;
-        timing.capture(&event, usize::MAX, started.elapsed())?;
+    if speak {
+        for bytes in crate::lab_run::sim::m3::fixture().as_chunks::<640>().0 {
+            let event = send(write, "audio-chunk", format.clone(), bytes.to_vec()).await?;
+            timing.capture(&event, usize::MAX, started.elapsed())?;
+        }
     }
     Ok(())
 }

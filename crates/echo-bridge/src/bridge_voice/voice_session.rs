@@ -2,7 +2,7 @@
 use super::{Notice, Options, Stats, VoicePort, run};
 use crate::{
     Error,
-    bridge_codex::{Event, MediaCall, MediaEvent},
+    bridge_codex::{Event, MediaCall, MediaEvent, RetainedCall},
 };
 use echo_codex::{DynamicTool, codex_io::RpcIo};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
@@ -303,7 +303,7 @@ pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
 
 async fn drive<L: EchoLink>(
     device: (&L, &mut L::Events, <L::Events as LinkEvents>::Run),
-    call: &mut impl VoicePort,
+    call: &mut impl RetainedCall,
     options: &mut SessionOptions,
     cancelled: impl Future<Output = ()>,
     observe: &mut impl FnMut(SessionNotice) -> Result<(), Error>,
@@ -349,15 +349,23 @@ async fn drive<L: EchoLink>(
             return Ok(completed);
         };
         microphone = next;
-        // The queue may contain the preceding reply's late idle PCM when the
-        // wake wins select. Drain accepted frames before admitting capture.
-        tokio::select! {
-            biased;
-            () = cancelled.as_mut() => return Err(Error::Control),
-            result = timeout_at(Instant::now().checked_add(options.response_timeout).ok_or(Error::Input)?, clear_idle(call)) => {
-                result.map_err(|_| Error::Deadline)??;
-            }
-        }
+        prepare_wake(call, options.response_timeout, cancelled.as_mut()).await?;
+    }
+}
+
+async fn prepare_wake(
+    call: &mut impl RetainedCall,
+    budget: Duration,
+    cancelled: impl Future<Output = ()>,
+) -> Result<(), Error> {
+    tokio::pin!(cancelled);
+    let deadline = Instant::now().checked_add(budget).ok_or(Error::Input)?;
+    call.refresh_wake_time(deadline, cancelled.as_mut()).await?;
+    // The preceding reply's late PCM can arrive while admitting the wake.
+    tokio::select! {
+        biased;
+        () = cancelled.as_mut() => Err(Error::Control),
+        result = timeout_at(deadline, clear_idle(call)) => result.map_err(|_| Error::Deadline)?,
     }
 }
 

@@ -339,7 +339,31 @@ pub(super) fn session_guidance((runner, voice): (String, String), advertised: bo
 }
 
 /// Append a call-local snapshot. Std has no portable local-zone discovery.
-pub(super) fn call_instructions(prefix: &str, now: std::time::SystemTime, zone: Option<&str>) -> Result<String, Error> {
+pub(crate) fn call_instructions(prefix: &str, now: std::time::SystemTime, zone: Option<&str>) -> Result<String, Error> {
+    Ok(format!("{prefix}\n{}", time_context("Call-start", now, zone)?))
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static TEST_WAKE_TIME: std::cell::Cell<std::time::SystemTime>;
+}
+
+pub(super) fn wake_time() -> std::time::SystemTime {
+    #[cfg(test)]
+    if let Ok(now) = TEST_WAKE_TIME.try_with(std::cell::Cell::get) {
+        return now;
+    }
+    crate::bridge_time::now()
+}
+
+pub(crate) fn wake_time_context(zone: Option<&str>) -> Result<String, Error> {
+    let context = time_context("Wake-time", wake_time(), zone)?;
+    Ok(format!(
+        "{context}\nUse this newer time snapshot for time answers. This is quiet context. Do not read it aloud or reply to it."
+    ))
+}
+
+fn time_context(label: &str, now: std::time::SystemTime, zone: Option<&str>) -> Result<String, Error> {
     let seconds = match now.duration_since(std::time::UNIX_EPOCH) {
         Ok(value) => i64::try_from(value.as_secs()).map_err(|_| Error::Input)?,
         Err(value) => {
@@ -367,7 +391,7 @@ pub(super) fn call_instructions(prefix: &str, now: std::time::SystemTime, zone: 
         |zone| format!("operator time zone: {zone}; answer time questions in {zone}"),
     );
     Ok(format!(
-        "{prefix}\n[Call-start context: {year:04}-{month:02}-{day:02} {weekday} {:02}:{:02}:{:02} UTC+00:00; {zone}]",
+        "[{label} context: {year:04}-{month:02}-{day:02} {weekday} {:02}:{:02}:{:02} UTC+00:00; {zone}]",
         time / 3600,
         time / 60 % 60,
         time % 60
