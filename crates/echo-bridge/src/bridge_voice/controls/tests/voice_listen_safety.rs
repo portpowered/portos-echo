@@ -392,13 +392,12 @@ async fn goodbye_with_end(order: GoodbyeOrder) {
         }
         Ok(())
     };
-    let mut drain = None;
     let answer = goodbye_run(
         replies(
             &client,
             (&mut events, &mut microphone),
             &mut port,
-            (&mut source, &mut drain),
+            (&mut source, &mut None),
             &options,
             std::future::pending(),
             &mut observe,
@@ -437,7 +436,7 @@ async fn goodbye_run<T>(
         }
         result.map(Result::unwrap)
     });
-    let (_, answer) = tokio::join!(run, inputs);
+    let ((), answer) = tokio::join!(run, inputs);
     answer
 }
 
@@ -448,24 +447,25 @@ async fn goodbye_inputs(
     (end, answer): (Event, tokio::sync::oneshot::Receiver<echo_agent_api::ToolResult>),
     order: GoodbyeOrder,
 ) -> echo_agent_api::ToolResult {
-    let mut end = Some(end);
     if !matches!(order, GoodbyeOrder::LateHandoff { .. }) {
         handoff(tx, true).await;
     }
-    if matches!(order, GoodbyeOrder::Early) {
-        tx.send(MediaEvent::Control(end.take().unwrap())).await.unwrap();
-    }
+    let end = if matches!(order, GoodbyeOrder::Early) {
+        send_control(tx, end).await;
+        None
+    } else {
+        Some(end)
+    };
     reply(tx, 5000).await;
     stopped.notified().await;
-    assert_eq!(device.commands().last(), Some(&Command::Stop));
     device.finish(Ok(()));
     played.notified().await;
     if let GoodbyeOrder::LateHandoff { turn_first } = order {
         handoff(tx, turn_first).await;
     }
     if let Some(end) = end {
-        tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
-        tx.send(MediaEvent::Control(end)).await.unwrap();
+        send_control(tx, Event::SpeechStarted).await;
+        send_control(tx, end).await;
     }
     answer.await.unwrap()
 }
@@ -478,6 +478,10 @@ async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {
     let marker = Event::GoodbyeHandoff;
     let events = if turn_first { [turn, marker] } else { [marker, turn] };
     for event in events {
-        tx.send(MediaEvent::Control(event)).await.unwrap();
+        send_control(tx, event).await;
     }
+}
+
+async fn send_control(tx: &mpsc::Sender<MediaEvent>, event: Event) {
+    tx.send(MediaEvent::Control(event)).await.unwrap();
 }

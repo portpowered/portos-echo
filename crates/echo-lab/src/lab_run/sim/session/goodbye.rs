@@ -345,6 +345,14 @@ impl World {
     async fn reply(&mut self, text: &'static str, index: usize, goodbye: Option<(usize, bool)>) -> Result<(), String> {
         let start_bytes = self.satellite.observed.borrow().played;
         self.transcript("reply-delta", "assistant", text, false).await?;
+        // Control and RTP travel independently. Wait for the device's
+        // audio-start before sending the finite audio burst.
+        self.wait(
+            "Wyoming reply start",
+            |world| world.satellite.observed.borrow().reply_frames().len() == index + 1,
+            0,
+        )
+        .await?;
         self.provider.control(Control::Audio(0..5)).await?;
         self.wait(
             "first reply PCM",
