@@ -1,17 +1,9 @@
 """T3 component CLI witness: real POSIX shell, recording adb, no device access."""
-import json
-import selectors
-import signal
 import os
 from pathlib import Path
-import shlex
-import shutil
-import subprocess
 import sys
-import tempfile
 import errno
 import stat
-from concurrent.futures import ThreadPoolExecutor
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE = "/data/local/echo-bridge"
 SENTINEL = "synthetic-private-content-do-not-print"
@@ -20,6 +12,10 @@ def require(condition, message):
         raise AssertionError(message)
 def fake_adb():
     """Translate the fixed remote filesystem into a fresh Linux sandbox."""
+    import json
+    import selectors
+    import shutil
+    import subprocess
     args = sys.argv[2:]
     base = Path(os.environ["FAKE_ROOT"])
     with (base / "ledger").open("a", encoding="utf-8") as output:
@@ -83,6 +79,9 @@ def fake_adb():
     return 1
 class Sandbox:
     def __init__(self):
+        import shlex
+        import shutil
+        import tempfile
         self.temp = tempfile.TemporaryDirectory(prefix="echo-install-")
         self.root = Path(self.temp.name)
         self.device = self.root / "remote/echo-bridge"
@@ -93,13 +92,19 @@ class Sandbox:
         for name in ("echo-install-release.sh", "echo-install-setup.sh"):
             shutil.copyfile(ROOT / "scripts" / name, scripts / name)
         (self.root / "remote-tools").mkdir()
-        ps = self.root / "remote-tools/ps"
-        ps.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
-                      + shlex.quote(str(Path(__file__).resolve())) + ' --tool ps "$@"\n')
-        ps.chmod(0o755)
-        for name in ("stat", "chown", "chmod"):
+        # Ordinary metadata reads and root mode changes can use the host tools
+        # directly. Projected ownership and nobody's access still go through the fake.
+        passthrough = {
+            "stat": '''if [ "${FAKE_UID:-0}" != 9999 ]; then
+  case "$2" in %u*) ;; *) exec /usr/bin/stat "$@" ;; esac
+fi
+''',
+            "chmod": 'if [ "${FAKE_UID:-0}" != 9999 ]; then exec /usr/bin/chmod "$@"; fi\n',
+        }
+        for name in ("ps", "stat", "chown", "chmod"):
             wrapper = self.root / "remote-tools" / name
-            wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+            wrapper.write_text("#!/bin/sh\n" + passthrough.get(name, "")
+                               + "exec " + shlex.quote(sys.executable) + " -S "
                                + shlex.quote(str(Path(__file__).resolve())) + " --tool " + name + ' "$@"\n')
             wrapper.chmod(0o755)
         self.tools = self.root / "tools"
@@ -112,12 +117,12 @@ class Sandbox:
             wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(executable) + ' "$@"\n')
             wrapper.chmod(0o755)
         adb = self.tools / "adb"
-        adb.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+        adb.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " -S "
                        + shlex.quote(str(Path(__file__).resolve())) + ' --fake-adb "$@"\n')
         adb.chmod(0o755)
         runas = self.root / "remote/hassmic/runas"
         runas.parent.mkdir(parents=True)
-        runas.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+        runas.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " -S "
                          + shlex.quote(str(Path(__file__).resolve())) + ' --tool runas "$@"\n')
         runas.chmod(0o755)
         (self.root / "devices").write_text("fixture\tdevice\n")
@@ -134,6 +139,7 @@ class Sandbox:
         return self
     def __exit__(self, *unused):
         # Only synthetic fixture children can be signalled by test teardown.
+        import signal
         for name in ("holder-pid", "child-pid"):
             path = self.root / name
             if path.exists():
@@ -148,9 +154,11 @@ class Sandbox:
                     pass
         self.temp.cleanup()
     def calls(self):
+        import json
         ledger = self.root / "ledger"
         return [json.loads(line) for line in ledger.read_text().splitlines()] if ledger.exists() else []
     def run(self, args, code=0):
+        import subprocess
         result = subprocess.run(["/bin/sh", str(self.script), *args], cwd=self.root,
                                 env=self.env, capture_output=True, text=True, timeout=15)
         stage = self.root / "failed-stage"
@@ -204,6 +212,7 @@ def prerequisite_cases():
         require(len(box.calls()) == 2 and not box.device.exists(), "missing hassmic caused effects")
     print("F03 F04: PASS")
 def modes_and_defaults():
+    import shutil
     for defaults in (False, True):
         with Sandbox() as box:
             box.prompt("voice.md", SENTINEL + "voice")
@@ -306,36 +315,6 @@ def set_owner(base, path, value):
     target, attribute = ownership_attribute(path)
     os.setxattr(target, attribute, value.encode("ascii"))
 
-def ownership_lifetime_case():
-    from unittest.mock import patch
-    with tempfile.TemporaryDirectory(prefix="echo-owner-") as directory:
-        base = Path(directory)
-        path = base / "stage"
-        path.touch()
-        set_owner(base, path, "9999:9999")
-        deleted = path.stat()
-        path.unlink()
-        path.touch()
-        # Deterministically model inode recycling; never wait for an allocator.
-        with patch.object(Path, "stat", return_value=deleted):
-            require(owner(base, path) == "0:0", "recycled inode inherited deleted ownership")
-        set_owner(base, path, "9999:3990")
-        published = base / "published"
-        path.rename(published)
-        os.link(published, path)
-        require(owner(base, published) == owner(base, path) == "9999:3990",
-                "publication or hardlink lost ownership")
-        published.write_text("retained bytes")
-        require(owner(base, path) == "9999:3990", "writing retained data reset ownership")
-        fifo = base / "stdin"
-        os.mkfifo(fifo, 0o600)
-        set_owner(base, fifo, "9999:3990")
-        require(owner(base, fifo) == "9999:3990", "FIFO ownership transfer lost")
-        fifo.unlink()
-        os.mkfifo(fifo, 0o600)
-        require(owner(base, fifo) == "0:0", "recreated FIFO inherited deleted ownership")
-    print("NR ownership-lifetime=PASS")
-
 def metadata_tool(base, name, args):
     if name == "runas":
         require(args[:2] == ["nobody", "3990,inet"], "wrong launch identity")
@@ -377,7 +356,7 @@ def metadata_tool(base, name, args):
             elif args[1] == "%u:%a": print(value.split(":")[0] + ":" + format(info.st_mode & 0o777, "o"))
             else: print(value + ":" + format(info.st_mode & 0o777, "o"))
         return 0
-    return subprocess.run(["/usr/bin/" + name, *args], check=False).returncode
+    os.execv("/usr/bin/" + name, [name, *args])
 
 def remote_tool():
     base = Path(os.environ["FAKE_ROOT"])
@@ -472,11 +451,12 @@ def setup_wake_cases():
         require(":0:" in box.run(["--device", "wake-cursor"]).stdout, "empty cursor refused")
     print("echo-install wake: fresh=PASS stale=PASS rotation=PASS partial=PASS privacy=PASS")
 def main():
+    from concurrent.futures import ThreadPoolExecutor
     require(sys.platform.startswith("linux"), "Linux is required for this runtime witness")
-    ownership_lifetime_case()
-    from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, setup_operator_cases
+    from test_echo_install_lifecycle import lifecycle_cases, nonroot_cases, ownership_lifetime_case, setup_operator_cases
     from test_echo_install_release import release_cases
     from test_echo_install_status import status_cases
+    ownership_lifetime_case()
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda function: function(),
                       (cli_cases, prerequisite_cases, modes_and_defaults, retention_cases,

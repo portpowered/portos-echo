@@ -12,6 +12,38 @@ from pathlib import Path
 import subprocess
 from unittest.mock import patch
 from test_echo_install import Sandbox, prepare_lifecycle, require, owner, set_owner
+
+def ownership_lifetime_case():
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="echo-owner-") as directory:
+        base = Path(directory)
+        path = base / "stage"
+        path.touch()
+        set_owner(base, path, "9999:9999")
+        deleted = path.stat()
+        path.unlink()
+        path.touch()
+        # Deterministically model inode recycling; never wait for an allocator.
+        with patch.object(Path, "stat", return_value=deleted):
+            require(owner(base, path) == "0:0", "recycled inode inherited deleted ownership")
+        set_owner(base, path, "9999:3990")
+        published = base / "published"
+        path.rename(published)
+        os.link(published, path)
+        require(owner(base, published) == owner(base, path) == "9999:3990",
+                "publication or hardlink lost ownership")
+        published.write_text("retained bytes")
+        require(owner(base, path) == "9999:3990", "writing retained data reset ownership")
+        fifo = base / "stdin"
+        os.mkfifo(fifo, 0o600)
+        set_owner(base, fifo, "9999:3990")
+        require(owner(base, fifo) == "9999:3990", "FIFO ownership transfer lost")
+        fifo.unlink()
+        os.mkfifo(fifo, 0o600)
+        require(owner(base, fifo) == "0:0", "recreated FIFO inherited deleted ownership")
+    print("NR ownership-lifetime=PASS")
+
+
 def recovered_metadata(box):
     for tree in ("private", "home"):
         root = box.device / tree
@@ -308,9 +340,9 @@ if mode != 'exit':
     bridge = bridge or box.files["bridge"]
     bridge.write_text("#!" + sys.executable + "\n" + fixture)
     (box.root / "mode").write_text(mode)
-    for name in ("ps", "date", "sleep"):
+    for name in ("date", "sleep"):
         wrapper = box.root / "remote-tools" / name
-        wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+        wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " -S "
                            + shlex.quote(str(Path(__file__).with_name("test_echo_install.py").resolve())) + " --tool " + name + ' "$@"\n')
         wrapper.chmod(0o755)
     bridge.chmod(0o755)
