@@ -100,6 +100,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
         const { style } = feedback;
         if (!status) {
             style.position = style.inset = style.width = style.margin = "";
+            style.transform = "";
             return;
         }
         const left = area.x + (status.x / 100) * area.width;
@@ -109,6 +110,7 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
         style.inset = `${top}dvh calc(${right}vw + 12px) auto ${left}vw`;
         style.width = "auto";
         style.margin = "0";
+        style.transform = "none";
     }
     slot(clock, "clock");
     slot(date, "date");

@@ -313,7 +313,7 @@ percentages within that safe area. Clock and date stay on screen in every state;
 the clock updates once a second. Their slot `x` is the line their `text-align`
 anchors to, so centred text centres on `x`. Card slots right of the stage, or in
 the right half over a full-page stage, are fitted to the right edge. Action
-feedback floats at the top left, opposite the Settings gear, and neither takes
+feedback floats at the top centre, between the corners, and neither takes
 layout space. The stage anchor is its center within the safe area;
 scale 1 occupies half its width and height. Text is clamped inside the area,
 with oversized cards scrollable and native approval controls retained. Character
