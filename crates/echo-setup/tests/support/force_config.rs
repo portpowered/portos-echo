@@ -100,7 +100,7 @@ fn assert_guided_start(ledger: &[Vec<String>], links: bool) -> Result {
 async fn t3_invalid_force_exits_before_contacting_mirror_or_adb() -> Result {
     let fixture = Fixture::new()?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let base = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
+    let base = "http://127.0.0.1:".to_owned() + &listener.local_addr()?.port().to_string();
     let missing = fixture.0.join("SYNTHETIC-PRIVATE-PATH.toml");
     for (args, code) in [
         (vec!["install", "--force"], 2),
