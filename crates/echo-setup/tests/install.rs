@@ -319,25 +319,18 @@ fn t3_offline_install_transfers_verified_bytes_after_source_changes() -> Result 
             .skip(1)
             .all(|args| args[..2] == ["-s", "SYNTHETIC-DEVICE"])
     );
-    let config_push = ledger
-        .iter()
-        .find(|args| args.get(3).is_some_and(|arg| arg == &config.to_string_lossy()))
-        .ok_or("config push absent")?;
-    assert_eq!(config_push.len(), 5);
+    let pushes: Vec<_> = ledger.iter().skip(1).filter(|args| args[2] == "push").collect();
+    let [_, bundle_push, config_push] = pushes.as_slice() else {
+        return Err("expected adapter, bundle and configuration pushes".into());
+    };
+    assert!(bundle_push[4].ends_with("/bundle"));
+    assert_eq!(config_push[3], config.to_string_lossy());
     assert!(config_push[4].ends_with("/config"));
-    let pushes: Vec<_> = ledger
-        .iter()
-        .filter(|args| args.get(2).is_some_and(|v| v == "push"))
-        .collect();
-    assert_eq!(pushes.len(), 3); // adapter, complete bundle directory, explicit configuration
-    assert!(pushes[1][4].ends_with("/bundle"));
     assert_eq!(fs::read(bundle.join("MANIFEST"))?, b"changed after verification");
     assert_eq!(fs::read(fixture.0.join("manifest"))?, manifest);
-    assert_eq!(fs::read(fixture.0.join("script"))?, b"synthetic public release bytes");
-    assert_eq!(
-        fs::read(fixture.0.join("attribution"))?,
-        b"synthetic public release bytes"
-    );
+    for file in ["script", "attribution"] {
+        assert_eq!(fs::read(fixture.0.join(file))?, b"synthetic public release bytes");
+    }
     Ok(())
 }
 
