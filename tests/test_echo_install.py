@@ -381,9 +381,13 @@ def metadata_tool(base, name, args):
             with (base / "ownership-ledger").open("a") as output:
                 output.write(str(target) + "=" + value + "\n")
         return 0
-    if name == "stat" and args[1] in ("%u", "%u:%g:%a"):
+    if name == "stat" and args[1] in ("%u", "%u:%g:%a", "%u:%h:%a"):
         value = owner(base, path)
-        print(value.split(":")[0] if args[1] == "%u" else value + ":" + format(path.stat().st_mode & 0o777, "o"))
+        info = path.stat()
+        if args[1] == "%u:%h:%a":
+            print(value.split(":")[0] + ":" + str(info.st_nlink) + ":" + format(info.st_mode & 0o777, "o"))
+        else:
+            print(value.split(":")[0] if args[1] == "%u" else value + ":" + format(info.st_mode & 0o777, "o"))
         return 0
     return subprocess.run(["/usr/bin/" + name, *args], check=False).returncode
 

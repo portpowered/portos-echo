@@ -267,8 +267,8 @@ if test -d '$device/private/run'; then
 fi"
 release_metadata
 versions=$(cat "$log")
-release_guard
 if [ "$command_name" = status ]; then
+  release_guard
   [ -z "$versions" ] || printf '%s\n' "$versions"
   # Read-only observation. Optional unsupported/missing proc data is explicit.
   run_adb shell "observed=\$(ps -A -o PID,NAME)

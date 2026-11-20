@@ -37,9 +37,9 @@ release_guard() {
   test -z \"\$bad\" || exit 1
   find \"\$root\" -exec sh -c '
     for p do
-      test \"\$(stat -c %u \"\$p\")\" = 0 || exit 1
-      case \$(stat -c %a \"\$p\") in 600 | 644 | 700 | 755) ;; *) exit 1 ;; esac
-      test -d \"\$p\" || test \"\$(stat -c %h \"\$p\")\" = 1 || exit 1
+      info=\$(stat -c %u:%h:%a \"\$p\") || exit 1
+      case \$info in 0:*:600 | 0:*:644 | 0:*:700 | 0:*:755) ;; *) exit 1 ;; esac
+      if test ! -d \"\$p\"; then case \$info in 0:1:*) ;; *) exit 1 ;; esac; fi
     done' sh {} + || exit 1
 done
 for name in pending metadata observed; do
