@@ -29,7 +29,7 @@ async fn t3_settings_v2_live_narrowing() {
             release.send(()).unwrap();
         };
         let (((), completion), ()) = tokio::join!(
-            service.scope_with_grant(work, || LinkStatusV1::Linked, || Some(grant.clone())),
+            Box::pin(service.scope_with_grant(work, || LinkStatusV1::Linked, || Some(grant.clone()))),
             inspect
         );
         assert!(completion.restart_requested);
@@ -137,6 +137,19 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
     );
     assert_eq!(saved["portos"]["server"]["allow_tools"], json!(["endpoint_query"]));
     assert_eq!(saved["portos"]["link_waiting_for_restart"], true);
+    let mut link = reqwest::Url::parse(url).unwrap();
+    link.set_path("/settings/v2/portos");
+    let refused = client
+        .post(link)
+        .json(&json!({"version":2,"operation":"link"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        refused.json::<Value>().await.unwrap(),
+        json!({"version":2,"message":"Port OS linking is waiting for the bridge restart."})
+    );
     assert_eq!(saved["prompts"], initial["prompts"]);
     let file = assert_disk_overlay(config);
     writeln!(
