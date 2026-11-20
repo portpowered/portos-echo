@@ -213,6 +213,21 @@ async fn voice_listen_goodbye_settles_without_arming_idle_in_either_tool_order()
     }
 }
 
+fn session_request(
+    command: crate::bridge_codex::SessionCommand,
+    owner: &std::sync::Arc<()>,
+    key: &str,
+) -> (Event, tokio::sync::oneshot::Receiver<echo_agent_api::ToolResult>) {
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    let event = Event::Session(crate::bridge_codex::SessionRequest {
+        command,
+        key: key.into(),
+        run: Some(owner.clone()),
+        reply,
+    });
+    (event, answer)
+}
+
 async fn goodbye_with_end(late: bool) {
     let device = Observer::default();
     let mut client = FakeConnector::new(device.clone()).connect().await.unwrap();
@@ -234,13 +249,11 @@ async fn goodbye_with_end(late: bool) {
     };
     source.session = super::super::session_tools::Grants::new(options.listen_timeout, options.session_max);
     source.controller.admit_response(options.response_deadline).unwrap();
-    let (reply_tx, answer) = tokio::sync::oneshot::channel();
-    let end = Event::Session(crate::bridge_codex::SessionRequest {
-        command: crate::bridge_codex::SessionCommand::End,
-        key: "farewell".into(),
-        run: Some(source.session.run.clone()),
-        reply: reply_tx,
-    });
+    let (end, answer) = session_request(
+        crate::bridge_codex::SessionCommand::End,
+        &source.session.run,
+        "farewell",
+    );
     let played = tokio::sync::Notify::new();
     let mut receipts = Vec::new();
     let mut observe = |notice| {

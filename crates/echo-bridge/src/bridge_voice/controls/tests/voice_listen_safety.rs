@@ -87,17 +87,12 @@ async fn voice_listen_goodbye_timeout_retires_end_authority_without_admitting_sp
         }
         Ok(())
     };
-    let (reply, answer) = tokio::sync::oneshot::channel();
-    tx.send(MediaEvent::Control(Event::Session(
-        crate::bridge_codex::SessionRequest {
-            command: crate::bridge_codex::SessionCommand::Invalid { end: true },
-            key: "refused".into(),
-            run: Some(old.clone()),
-            reply,
-        },
-    )))
-    .await
-    .unwrap();
+    let (event, answer) = session_request(
+        crate::bridge_codex::SessionCommand::Invalid { end: true },
+        &old,
+        "refused",
+    );
+    tx.send(MediaEvent::Control(event)).await.unwrap();
     tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
     wait_goodbye(
         (&mut input.events, &mut input.microphone),
@@ -115,18 +110,16 @@ async fn voice_listen_goodbye_timeout_retires_end_authority_without_admitting_sp
     );
     assert_eq!(source.controller.idle_deadline(), None);
     assert!(source.controller.has_played());
-    let (reply, answer) = tokio::sync::oneshot::channel();
-    super::super::super::session_tools::answer(
-        crate::bridge_codex::SessionRequest {
-            command: crate::bridge_codex::SessionCommand::End,
-            key: "obsolete".into(),
-            run: Some(old),
-            reply,
-        },
-        &mut source.session,
-        &mut source.controller,
+    let (event, answer) = session_request(crate::bridge_codex::SessionCommand::End, &old, "obsolete");
+    tx.send(MediaEvent::Control(event)).await.unwrap();
+    goodbye_step(
+        &mut input.events,
+        &mut input.microphone,
+        &mut port,
+        &mut source,
         &mut observe,
     )
+    .await
     .unwrap();
     assert_eq!(
         answer.await.unwrap().content,

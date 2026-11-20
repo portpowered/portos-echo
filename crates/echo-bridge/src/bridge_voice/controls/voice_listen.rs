@@ -263,6 +263,33 @@ fn settled(
     Ok(())
 }
 
+pub(super) async fn finish_reply(
+    text: String,
+    port: &mut impl VoicePort,
+    source: &mut Source,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    if source.stale() {
+        return Ok(());
+    }
+    observe(Notice::Transcript {
+        role: "assistant".into(),
+        text,
+        done: true,
+    })?;
+    if source.session.goodbye.is_none() && !source.delegation.answered() {
+        return Ok(());
+    }
+    if !source.reply.finished() {
+        while let Some(frame) = port.ready_audio().await? {
+            source.audio(&frame)?;
+            tokio::task::yield_now().await;
+        }
+        source.reply.finish()?;
+    }
+    Ok(())
+}
+
 async fn listen<E: LinkEvents>(
     input: (&mut E, &mut E::Run),
     port: &mut impl VoicePort,

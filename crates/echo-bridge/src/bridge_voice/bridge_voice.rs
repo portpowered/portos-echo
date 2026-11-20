@@ -451,27 +451,7 @@ async fn media(
 ) -> Result<(), Error> {
     match event {
         MediaEvent::Audio(frame) => source.audio(&frame),
-        MediaEvent::Control(Event::ReplyDone { text }) => {
-            if source.stale() {
-                return Ok(());
-            }
-            observe(Notice::Transcript {
-                role: "assistant".into(),
-                text,
-                done: true,
-            })?;
-            if source.session.goodbye.is_none() && !source.delegation.answered() {
-                return Ok(());
-            }
-            if !source.reply.finished() {
-                while let Some(frame) = port.ready_audio().await? {
-                    source.audio(&frame)?;
-                    tokio::task::yield_now().await;
-                }
-                source.reply.finish()?;
-            }
-            Ok(())
-        }
+        MediaEvent::Control(Event::ReplyDone { text }) => voice_listen::finish_reply(text, port, source, observe).await,
         MediaEvent::Control(Event::Transcript { role, text, done }) => {
             if role == "user" {
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);

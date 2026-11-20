@@ -21,6 +21,13 @@ use tokio::{
 
 type Work<H> = Pin<Box<dyn Future<Output = (Dispatcher<H>, Option<Outcome>)>>>;
 
+#[derive(Default)]
+enum TurnOwner {
+    #[default]
+    CurrentRun,
+    Handoff(Option<Arc<()>>),
+}
+
 /// Validated bridge-owned session control; raw arguments never leave the host.
 /// `Invalid` carries rejected arguments for the named builtin (`end` for
 /// `end_session`), so the controller still writes the receipt.
@@ -99,7 +106,7 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     session: Option<mpsc::Receiver<SessionRequest>>,
     run: Option<tokio::sync::watch::Sender<Option<Arc<()>>>>,
     current_run: Option<Arc<()>>,
-    next_turn_run: Option<Option<Arc<()>>>,
+    next_turn_owner: TurnOwner,
     session_answer_pending: bool,
 }
 
@@ -130,7 +137,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             session: None,
             run: None,
             current_run: None,
-            next_turn_run: None,
+            next_turn_owner: TurnOwner::CurrentRun,
             session_answer_pending: false,
         })
     }
@@ -191,7 +198,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 },
                 MediaEvent::Control(Event::GoodbyeHandoff) => {
                     if self.active.is_none() {
-                        self.next_turn_run = Some(self.current_run.clone());
+                        self.next_turn_owner = TurnOwner::Handoff(self.current_run.clone());
                     }
                     Ok(if self.current_run.is_some() { MediaEvent::Control(Event::GoodbyeHandoff) } else { other() })
                 },
@@ -298,7 +305,11 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         self.active = Some((thread.into(), turn.into()));
         // Keep the turn's owner even when the next wake wins the device poll.
         if let Some(owner) = &self.run {
-            owner.send_replace(self.next_turn_run.take().unwrap_or_else(|| self.current_run.clone()));
+            let run = match std::mem::take(&mut self.next_turn_owner) {
+                TurnOwner::CurrentRun => self.current_run.clone(),
+                TurnOwner::Handoff(run) => run,
+            };
+            owner.send_replace(run);
         }
         if self.budget.admit_turn().is_err()
             && let Some(params) = self.dispatcher.as_mut().and_then(Dispatcher::refuse_budget)
