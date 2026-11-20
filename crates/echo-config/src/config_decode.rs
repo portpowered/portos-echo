@@ -115,6 +115,12 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .map(|v| audio(v.into_inner()))
             .transpose()?
             .unwrap_or_default(),
+        clock: root
+            .table
+            .remove("clock")
+            .map(|v| crate::config_clock::decode(v.into_inner()))
+            .transpose()?
+            .unwrap_or_default(),
         agent: {
             let (agent, backend) = agent(root.node("agent")?)?;
             agent_backend = backend;

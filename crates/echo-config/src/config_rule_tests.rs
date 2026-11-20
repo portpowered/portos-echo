@@ -119,6 +119,42 @@ fn audio_lead_defaults_boundaries_and_safe_errors() {
 }
 
 #[test]
+fn clock_servers_default_to_the_pool_and_reject_unsafe_names() {
+    for suffix in ["", "\n[clock]\n"] {
+        let clock = BridgeConfig::from_toml_str(&format!("{EXAMPLE}{suffix}"))
+            .unwrap()
+            .clock;
+        assert_eq!((clock.servers.clone(), clock.interval_seconds), (None, 3600));
+        assert_eq!(clock.effective_servers(), crate::DEFAULT_TIME_SERVERS.map(String::from));
+    }
+    let named = format!("{EXAMPLE}\n[clock]\nservers=['127.0.0.1:1123','time.test']\ninterval_seconds=60\n");
+    let clock = BridgeConfig::from_toml_str(&named).unwrap().clock;
+    assert_eq!(clock.effective_servers(), ["127.0.0.1:1123", "time.test"]);
+    assert_eq!(clock.interval_seconds, 60);
+    let off = BridgeConfig::from_toml_str(&format!("{EXAMPLE}\n[clock]\nservers=[]\n")).unwrap();
+    assert_eq!(off.clock.effective_servers(), Vec::<String>::new());
+    for value in [
+        "['']",
+        "['SYNTHETIC_VALUE/path']",
+        "['user@SYNTHETIC_VALUE']",
+        "['bad name']",
+        "['127.0.0.1:0']",
+        "['a','b','c','d','e','f','g','h','i']",
+        "'SYNTHETIC_VALUE'",
+        "[1]",
+    ] {
+        error(&format!("{EXAMPLE}\n[clock]\nservers={value}\n"), "clock.servers");
+    }
+    for value in ["59", "86401", "-1", "'SYNTHETIC_VALUE'"] {
+        error(
+            &format!("{EXAMPLE}\n[clock]\ninterval_seconds={value}\n"),
+            "clock.interval_seconds",
+        );
+    }
+    error(&format!("{EXAMPLE}\n[clock]\nSYNTHETIC_VALUE=1\n"), "clock");
+}
+
+#[test]
 fn wyoming_port_nonzero_and_u16_boundaries() {
     for value in ["0", "-1", "65536", "\"SYNTHETIC_VALUE\""] {
         error(&change("wyoming_port", "16700", value), "echo.wyoming_port");

@@ -2,6 +2,7 @@
 use super::*;
 #[path = "configured/binary_turn.rs"]
 mod binary_turn;
+mod clock;
 #[path = "configured/restart.rs"]
 mod restart;
 mod startup;

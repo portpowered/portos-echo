@@ -54,6 +54,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "live",
             "voice",
             "audio",
+            "clock",
             "agent",
             "muse",
             "mcp",
@@ -64,6 +65,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         ],
         "home" => &["dir"],
         "audio" => &["reply_lead_ms"],
+        "clock" => &["servers", "interval_seconds"],
         "voice" => &[
             "session_listen_enabled",
             "session_listen_seconds",
@@ -110,6 +112,7 @@ pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
     crate::config_muse::validate(config)?;
     config.chatgpt_auth.validate()?;
     validate_mcp(&config.mcp)?;
+    crate::config_clock::validate(&config.clock)?;
     if config.audio.reply_lead_ms == 0 || !config.audio.reply_lead_ms.is_multiple_of(20) {
         return Err(ConfigError::new(
             "audio.reply_lead_ms",

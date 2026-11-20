@@ -301,6 +301,23 @@ set `codex.binary` and `codex.ca_file` under `bin/` as its help requires.
    exiting within a minute. A bridge stopped with installer `stop` stays stopped until installer `start`, the
    fork's `bridge.sh start` or a reboot; `uninstall` removes the launcher and with it the boot start. No init
    service, `.rc`, partition, SELinux or firewall change: the supervisor rides hassmic's existing service.
+9. **Nothing on the Echo sets its clock, so the bridge measures it** (coordinator decision 2026-11-19,
+   [decisions](program/decisions.md)). hassmic's firewall drops everything that is not gid 3990, Android's own
+   network time included (`BestClock: Missing NTP fix`), so the device runs on whatever its clock held: 17.5 h
+   behind when measured. The bridge asks the `[clock] servers` by SNTP at startup, before it admits the device,
+   and then every `clock.interval_seconds`. One answer per server counts, only from a synchronized server (leap
+   indicator not 3, stratum 1 to 15) that echoes the request; the answers within 1 s of their median must be a
+   majority and at least two, and their mean is the offset. While the system clock is more than 2 s from the
+   measured time, the call-start time both models are told and the UTC day of the daily request cap use the
+   measured time, carried on the monotonic clock; once the system clock is right it is used again. Each
+   measurement is traced as `clock.offset` (`synced`, `offset_ms` as network time minus system clock, `hosts`,
+   `servers`, `corrected`; no names or addresses); servers that are unreachable or disagree change nothing and
+   are traced once as `synced: false` with a `reason`. This needs no root. TLS certificate checks and file
+   times still read the system clock: `echo-bridge clock sync`, run as root with gid 3990, sets it when it is
+   off by a second or more and prints one line (`clock: offset_ms=N hosts=N action=set|none|denied`);
+   `clock check` only measures. The simulator's `bridge.clock_advanced` is unrelated: it steps the paused
+   test clock of `--sim-clock` runs and never looks at the wall clock. A run with `--model-loopback` measures
+   only against servers its configuration names.
 
 #### Why we need it — echo-bridge
 

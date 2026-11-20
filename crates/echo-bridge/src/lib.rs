@@ -15,6 +15,8 @@ mod bridge_private;
 pub mod bridge_runtime;
 #[path = "bridge_settings/bridge_settings.rs"]
 pub mod bridge_settings;
+#[path = "bridge_time/bridge_time.rs"]
+pub mod bridge_time;
 pub mod bridge_trace;
 #[path = "bridge_voice/bridge_voice.rs"]
 pub mod bridge_voice;
