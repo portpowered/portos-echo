@@ -43,6 +43,12 @@ pub struct MediaCall<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPe
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a, R, W, P> {
+    pub(super) fn trace_timeout(&mut self, turn: &str) {
+        if let Some(trace) = &mut self.call.tool_trace {
+            trace.timeout(turn);
+        }
+    }
+
     pub(crate) fn trace_tools(
         &mut self,
         trace: crate::bridge_trace::Trace,
