@@ -309,6 +309,7 @@ async fn listen<E: LinkEvents>(
     // A dispatch still in flight holds the run open past idle. It started
     // before this wait, so its own task deadline ends it inside this window.
     let hold = source.controller.replacement_deadline().ok();
+    let mut turn_started = false;
     loop {
         // A granted extension moves the deadline; a requested end closes now.
         let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
@@ -340,7 +341,7 @@ async fn listen<E: LinkEvents>(
             // turn still owns this reply; finish it before admitting cleanup.
             () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
             () = tokio::time::sleep_until(deadline) => return Ok(false),
-            result = listening_step(events, microphone, port, source, observe) => {
+            result = listening_step(events, microphone, port, source, &mut turn_started, observe) => {
                 if result? { return Ok(true); }
             },
             // Keep the same clock owner across replies. Acknowledge only after
@@ -356,6 +357,7 @@ async fn listening_step<E: LinkEvents>(
     microphone: &mut E::Run,
     port: &mut impl VoicePort,
     source: &mut Source,
+    turn_started: &mut bool,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<bool, Error> {
     tokio::select! {
@@ -369,11 +371,18 @@ async fn listening_step<E: LinkEvents>(
         },
         event = port.next() => {
             let event = event?;
-            // Neither the native hand-off nor a turn starting after Played
-            // owns new playback. The turn can precede its hand-off marker.
-            if matches!(event, MediaEvent::Control(Event::GoodbyeHandoff))
-                || (!source.stale() && matches!(event, MediaEvent::Control(Event::TurnStarted { .. })))
-            {
+            // The runner can start before the native hand-off identifies the
+            // request. Keep Played until the hand-off or speech opens a reply.
+            if matches!(event, MediaEvent::Control(Event::GoodbyeHandoff)) {
+                *turn_started = false;
+                super::media(event, port, source, observe).await?;
+                return Ok(false);
+            }
+            if !source.stale() && matches!(event, MediaEvent::Control(Event::TurnStarted { .. })) {
+                if !source.delegation.in_flight() {
+                    source.delegation = super::voice_source::Delegation::default();
+                }
+                *turn_started = true;
                 super::media(event, port, source, observe).await?;
                 return Ok(false);
             }
@@ -385,7 +394,14 @@ async fn listening_step<E: LinkEvents>(
                     super::media(event, port, source, observe).await?;
                     return Ok(false);
                 }
+                // An already-started follow-up still owes its acknowledgement
+                // and delegated answer in this reply.
+                let delegation = (*turn_started && source.delegation.in_flight())
+                    .then(|| std::mem::take(&mut source.delegation));
                 source.resume_reply()?;
+                if let Some(delegation) = delegation {
+                    source.delegation = delegation;
+                }
                 super::media(event, port, source, observe).await?;
                 return Ok(true);
             }
@@ -406,7 +422,7 @@ async fn listening_step<E: LinkEvents>(
 fn activity(event: &MediaEvent) -> bool {
     matches!(
         event,
-        MediaEvent::Control(Event::SpeechStarted | Event::TurnStarted { .. })
+        MediaEvent::Control(Event::SpeechStarted | Event::ReplyHandoff | Event::TurnStarted { .. })
     ) || matches!(event, MediaEvent::Control(Event::Transcript { role, done, .. })
             if role == "user" || (role == "assistant" && !done))
 }
@@ -423,8 +439,10 @@ fn window(source: &Source, options: &Options) -> Result<std::time::Duration, Err
 
 /// Activity that is the model's own: a delegated turn or assistant speech.
 fn answer(event: &MediaEvent) -> bool {
-    matches!(event, MediaEvent::Control(Event::TurnStarted { .. }))
-        || matches!(event, MediaEvent::Control(Event::Transcript { role, .. }) if role == "assistant")
+    matches!(
+        event,
+        MediaEvent::Control(Event::ReplyHandoff | Event::TurnStarted { .. })
+    ) || matches!(event, MediaEvent::Control(Event::Transcript { role, .. }) if role == "assistant")
 }
 
 #[cfg(test)]

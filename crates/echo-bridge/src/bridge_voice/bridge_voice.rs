@@ -483,7 +483,7 @@ async fn media(
         MediaEvent::Control(Event::Session(request)) => {
             session_tools::answer(request, &mut source.session, &mut source.controller, observe)
         }
-        MediaEvent::Control(Event::Other) => Ok(()),
+        MediaEvent::Control(Event::Other | Event::ReplyHandoff) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }
 }

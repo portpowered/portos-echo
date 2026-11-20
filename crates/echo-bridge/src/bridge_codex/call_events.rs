@@ -64,15 +64,19 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
     fn realtime_item(&mut self, item: &serde_json::Value) -> Event {
         match item["type"].as_str() {
             Some("input_audio_buffer.speech_started") => Event::SpeechStarted,
-            Some("handoff_request") if item["input_transcript"] == "end the session" => {
+            Some("handoff_request") => {
                 let id = item["handoff_id"]
                     .as_str()
                     .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control));
                 if let Some(id) = id
-                    && self.goodbye_handoffs.len() < 1024
-                    && self.goodbye_handoffs.insert(id.into())
+                    && self.handoffs.len() < 1024
+                    && self.handoffs.insert(id.into())
                 {
-                    return Event::GoodbyeHandoff;
+                    return if item["input_transcript"] == "end the session" {
+                        Event::GoodbyeHandoff
+                    } else {
+                        Event::ReplyHandoff
+                    };
                 }
                 Event::Other
             }
