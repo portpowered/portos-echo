@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 19
+last modified: 2026, november, 20
 status: active; decision log. Newest first within each list
 ---
 
@@ -13,6 +13,10 @@ decides. A decision that a later one replaces stays in the table, marked "supers
 one place.
 
 ## Decided
+
+On 2026-11-20 the owner confirmed that `template@0.2.0` is the hassmic-style eyes
+appearance. The downloadable pack supplies the procedural art. The home page
+cleanup belongs to `el-w5-screen-home-eyes-v2`.
 
 | Date | Decision | By | Where it applies |
 | --- | --- | --- | --- |
