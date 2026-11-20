@@ -47,9 +47,11 @@ async fn exercise(fast: bool) -> Vec<Value> {
         fs::read_to_string(settings).unwrap(),
         format!("[codex]\ndelegate_fast = {fast}\n\n[voice]\nsession_listen_seconds = 4\n")
     );
-    connect_call(root, &mut active, &mut provider_input, &mut provider_output).await;
+    let mut peer = connect_call(root, &mut active, &mut provider_input, &mut provider_output).await;
     drop(stdin);
+    acknowledge_cut(&mut active).await;
     let result = bridge.wait_with_output().await.unwrap();
+    peer.close();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     assert_eq!(count(root, "settings.restart_prepared"), 1);
     assert_eq!(count(root, "bridge.ready"), 2);
@@ -173,7 +175,7 @@ async fn connect_call(
     satellite: &mut TcpStream,
     input: &mut tokio::process::ChildStdin,
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
-) {
+) -> LivePeer {
     let mut screen = lifecycle::screen(root).await;
     wake(satellite).await;
     let request: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
@@ -194,7 +196,22 @@ async fn connect_call(
             () = step(&mut peer) => (),
         }
     }
-    peer.close();
+    peer
+}
+
+async fn acknowledge_cut(satellite: &mut TcpStream) {
+    loop {
+        let (header, payload) = read_wire(satellite).await;
+        match header["type"].as_str().unwrap() {
+            "audio-start" => assert!(payload.is_empty()),
+            "hassmic-flush" => {
+                assert!(payload.is_empty());
+                send(satellite, "played", json!({}), vec![]).await;
+                return;
+            }
+            unexpected => panic!("unexpected Wyoming frame before shutdown flush: {unexpected}"),
+        }
+    }
 }
 
 fn observations(root: &Path) -> Vec<Value> {
