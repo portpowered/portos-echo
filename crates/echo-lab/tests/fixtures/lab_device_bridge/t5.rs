@@ -74,6 +74,7 @@ fn present(socket: &mut std::net::TcpStream, fixture: &Value) -> io::Result<()> 
         json!({"state":"listening"}),
         json!({"state":"connected"}),
         json!({"state":"speaking"}),
+        json!({"state":"connected"}),
         json!({"state":"ready","message":"Echo Live ready"}),
         json!({"state":"ready","message":"Echo Live ready"}),
     ];
