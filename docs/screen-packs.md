@@ -310,29 +310,32 @@ On Linux with Python 3 and ffmpeg (libvpx-vp9 and libx264 enabled):
 
 ```sh
 pack_root=$(mktemp -d)
-sh scripts/make-template-screenpack.sh --version 0.1.0 --out "$pack_root/generated"
+sh scripts/make-template-screenpack.sh --version 0.2.0 --out "$pack_root/generated"
 cd "$pack_root/generated"
-sha256sum --check template-0.1.0.screenpack.tar.gz.sha256
+sha256sum --check template-0.2.0.screenpack.tar.gz.sha256
 ```
 
 The output directory must not exist. Generation publishes it only after every
 file and archive succeeds; failure leaves an existing output untouched. No media,
-fonts or artwork are downloaded. Python draws a labelled REST pose and ten silent
-clips: the nine current states and the `happy` emote. Each clip has 31 frames at
-30 fps and 640 × 640 pixels. Shapes and colors change smoothly between exactly
-equal neutral endpoints. The default layout retains page positions and centers
-the character stage. Generated files are data, never source assets to commit.
+fonts or artwork are downloaded. Template 0.2.0 draws two glowing eyes in a
+transparent still and ten silent 640 × 400 clips at 30 fps. The 16-second idle
+loop looks around and blinks. Listening holds a cyan gaze at center, thinking
+looks upward, and speaking animates a small mouth. Muted holds two still red
+slits, error narrows the eyes in red-orange, and the `happy` emote lifts the eyes
+into arcs before returning to rest. At 960 × 600 the stage occupies 696 × 435
+pixels, with the clock and date below and native prompts and controls in a
+column to its right. Earlier template versions retain their original art and
+layout.
 
 WebM uses lossless VP9 with alpha (`yuva420p`, `-auto-alt-ref 0`); MP4 uses H.264
 `yuv420p`, CRF 18 and fast-start metadata. MP4 has no alpha: transparent portions
-are rendered against the layout's `#101820` stage background. Authors must use the
-same neutral silhouette and colors at both ends of every clip, including enter,
-exit and emote clips. Loop endpoints must join seamlessly. Keep silent clips
-short and within the limits above; 640 × 640 at 30 fps is guidance, not a schema
-restriction. Export a PNG/WebP of that same neutral pose as `rest`.
+are rendered against the page and stage color `#101827`. Loop endpoints join in
+the state's pose so Listening and Muted hold their expression from the first
+frame. The `happy` emote returns to the centered idle pose used by `rest.png`.
+Keep any new clips silent and within the size limits above.
 
-`make dist DIST_VERSION=0.1.0` generates a separate
-`template-0.1.0.screenpack.tar.gz`, adds its exact digest to `SHA256SUMS`, and pins
+`make dist DIST_VERSION=0.2.0` generates a separate
+`template-0.2.0.screenpack.tar.gz`, adds its exact digest to `SHA256SUMS`, and pins
 that version's release URL and digest in the runtime archive's example config
 before computing `MANIFEST`. The checked-in example's zero digest is a placeholder;
 replace it from the release's `SHA256SUMS` when using that example directly.
@@ -342,10 +345,11 @@ release workflow uploads the separate pack and publishes it on tag releases;
 workers use manual workflow runs, never create release tags.
 
 For a local installation without device access, place the generated
-`template@0.1.0` directory under a fresh bridge home's `screens/` directory, then
-start the bridge with that home and open its paired page. Omitted selection uses
-the template; selecting **Built-in appearance** writes an empty selection to
-revert immediately. A download test must serve the generated archive from a
+`template@0.2.0` directory under a fresh bridge home's `screens/` directory, then
+start the bridge with that home and open its paired page. With both versions
+installed, omitted selection activates 0.2.0. Select `template@0.1.0` or
+**Built-in appearance** to roll back without deleting either pack or restarting
+the bridge. A download test must serve the generated archive from a
 local HTTPS peer trusted exclusively by the configured CA; never use public
 release downloads in tests.
 
@@ -354,13 +358,13 @@ release downloads in tests.
 On a Linux authoring host with Python 3 and adb:
 
 ```sh
-sh scripts/echo-screen-pack.sh push "$pack_root/generated/template@0.1.0"
+sh scripts/echo-screen-pack.sh push "$pack_root/generated/template@0.2.0"
 ```
 
 Physical device operations belong to the coordinator's authorized T5 procedure.
 Worker tests put a recording fake adb on PATH; they never contact a device. The
-helper uses adb's existing device selection and never prints its diagnostics or
-device identity. It targets the installed bridge home only:
+helper uses adb's existing device selection. It targets the installed bridge
+home only:
 `/data/local/echo-bridge/home/screens/<name>@<version>/`. A custom bridge home
 requires copying validated local data into that home's `screens/` directory
 through the operator's own file procedure.
@@ -372,20 +376,26 @@ directory must be stable while it is read; transfers consume the private snapsho
 The bridge independently revalidates local data when discovering or serving it.
 
 A private hidden directory under `screens/` holds transfers. An exclusive hidden
-lock refuses concurrent helper runs; a no-clobber atomic rename publishes the
-complete identity. Existing identities are refused, including a competing
-publication during transfer. Use a new version for replacement. Direct active-file
-editing remains available through the settled watcher described above.
+lock refuses concurrent helper runs. The staged directory has the final pack
+identity as its basename, so toybox `mv -n` can publish it into `screens/`
+without nesting it inside a competing pack. The helper refuses existing
+identities, including a competing publication during transfer. Use a new version
+for replacement. Direct active-file editing remains available through the settled
+watcher described above.
 Directories are private (0700), files are 0600, and ownership matches the installed
 bridge (9999:9999). Symlinked destination ancestors are refused. Transfer and
 publication failures remove this helper's staging and lock when adb remains
-reachable; if transport is lost during cleanup, the operator must inspect the
-hidden `.push-*` entry before removing it and retrying. Never remove another
-in-progress helper's lock.
+reachable. If cleanup fails, inspect the final identity, hidden `.push-*` entry
+and lock before removing this run's leftovers and retrying. A cleanup failure
+after publication may leave a complete pack installed. Leave another helper's
+lock in place.
 
-Success prints `screen-pack: pushed <name>@<version>`. Failure prints a fixed
-sanitized reason and exits nonzero. Push does not write settings or restart the
-bridge. Select the installed identity from the paired Settings page. Omitted
+Success prints `screen-pack: pushed <name>@<version>`. An adb failure names the
+step and reports a recognized reason from stderr.
+For example, `adb transfer failed: Permission denied`.
+Other stderr is redacted to protect serial numbers and paths. Cleanup errors
+appear separately after any original failure. Push does not write settings or
+restart the bridge. Select the installed identity from the paired Settings page. Omitted
 selection automatically adopts an installed template; an explicitly empty
 selection keeps the built-in appearance. Select **Built-in appearance** to roll
 back without deleting downloaded data.

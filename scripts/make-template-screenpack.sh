@@ -55,21 +55,115 @@ def picture(color, amount):
     return bytes(frame)
 
 
-def png(raw):
+EYE_SIZE = (640, 400)
+BACKGROUND = (16, 24, 39)
+PALE = (220, 235, 255)
+IDLE_PATH = ((0, 0, 0), (52, 0, 0), (76, -124, -44), (135, -124, -44),
+             (163, -45, 63), (216, -45, 63), (247, 124, 18), (310, 124, 18),
+             (338, 76, -63), (392, 76, -63), (423, 0, 0), (479, 0, 0))
+BLINKS = (99, 192, 366)
+BLINK_SHAPE = (0.75, 0.35, 0.08, 0.32, 0.72)
+SPEECH = ((0, 0), (3, 0), (7, 11), (12, 2), (14, 0), (21, 6), (25, 0),
+          (28, 0), (31, 16), (37, 4), (40, 9), (46, 0), (52, 0), (55, 12),
+          (60, 2), (64, 0), (70, 0))
+FRAME_COUNTS = {'idle': 480, 'speaking': 71, 'thinking': 91, 'happy': 43}
+EYE_COLORS = {
+    'idle': PALE, 'connecting': (156, 174, 255), 'listening': (111, 235, 255),
+    'thinking': (146, 207, 255), 'speaking': (209, 236, 255), 'muted': (255, 60, 75),
+    'setup': (255, 204, 139), 'approval': (255, 230, 171), 'error': (255, 119, 76),
+    'happy': PALE,
+}
+
+
+def interpolate(keys, frame):
+    for (start, *left), (end, *right) in zip(keys, keys[1:]):
+        if frame <= end:
+            t = (frame - start) / (end - start)
+            t = t * t * (3 - 2 * t)
+            return tuple(a + (b - a) * t for a, b in zip(left, right))
+    return tuple(keys[-1][1:])
+
+
+def rounded(frame, x, y, width, height, radius, color, arch=0):
+    stride = EYE_SIZE[0] * 4
+    pixel = bytes(color)
+    if not arch:
+        for dy in range(-height, height + 1):
+            corner = max(0, abs(dy) - height + radius)
+            half = width - radius + round(math.sqrt(radius * radius - corner * corner))
+            offset = (y + dy) * stride + (x - half) * 4
+            frame[offset:offset + (2 * half + 1) * 4] = pixel * (2 * half + 1)
+        return
+    # The happy pose lifts the middle of each eye into an arch.
+    for dx in range(-width, width + 1):
+        corner = max(0, abs(dx) - width + radius)
+        half = height - radius + round(math.sqrt(radius * radius - corner * corner))
+        tip = y - round(arch * (1 - (dx / width) ** 2))
+        for row in range(tip - half, tip + half + 1):
+            offset = row * stride + (x + dx) * 4
+            frame[offset:offset + 4] = pixel
+
+
+def glow(frame, x, y, width, height, color, arch=0):
+    radius = min(13, height)
+    for spread, strength in ((12, 0.06), (8, 0.14), (4, 0.27)):
+        tint = tuple(round(a + (b - a) * strength) for a, b in zip(BACKGROUND, color))
+        rounded(frame, x, y, width + spread, height + spread,
+                radius + spread, tint + (255,), arch)
+    rounded(frame, x, y, width, height, radius, color + (255,), arch)
+
+
+def eyes(name, number, last, still=False):
+    frame = bytearray(bytes(BACKGROUND + (0,)) * math.prod(EYE_SIZE))
+    width, height = 24, 48
+    dx = dy = arch = 0
+    phase = math.tau * number / last
+    if name == 'idle':
+        dx, dy = interpolate(IDLE_PATH, number)
+        for blink in BLINKS:
+            if blink <= number < blink + len(BLINK_SHAPE):
+                height = round(height * BLINK_SHAPE[number - blink])
+    elif name == 'listening':
+        width, height = 26, 53
+    elif name == 'thinking':
+        dx, dy, height = 12 * math.sin(phase), -24, 28
+    elif name == 'speaking':
+        height = 43
+    elif name == 'muted':
+        height = 4
+    elif name == 'error':
+        height = 24
+    elif name == 'connecting':
+        dy = -9 * (1 - math.cos(phase))
+    elif name == 'happy':
+        smile, = interpolate(((0, 0), (10, 1), (22, 1), (34, 0), (last, 0)), number)
+        height, arch = round(48 - 39 * smile), round(23 * smile)
+
+    for center in (281, 359):
+        if not still:
+            # The page composites VP9 over the rest PNG. Cover its two eye
+            # footprints so a shifted or narrowed pose fully replaces them.
+            rounded(frame, center, 200, 36, 60, 25, BACKGROUND + (255,))
+    for center in (281, 359):
+        glow(frame, center + round(dx), 200 + round(dy), width, height, EYE_COLORS[name], arch)
+    if name == 'speaking':
+        opening, = interpolate(SPEECH, number)
+        if opening >= 1:
+            glow(frame, 320, 277, 19, round(opening), EYE_COLORS[name])
+    return bytes(frame)
+
+
+def png(raw, size):
     def chunk(kind, content):
         return (struct.pack('!I', len(content)) + kind + content
                 + struct.pack('!I', binascii.crc32(kind + content)))
-    scanlines = b''.join(b'\0' + raw[start:start + 2560]
-                         for start in range(0, len(raw), 2560))
-    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', 640, 640, 8, 6, 0, 0, 0))
+    stride = size[0] * 4
+    scanlines = b''.join(b'\0' + raw[start:start + stride] for start in range(0, len(raw), stride))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', *size, 8, 6, 0, 0, 0))
             + chunk(b'IDAT', zlib.compress(scanlines)) + chunk(b'IEND', b''))
 
 
-def generate(stage, work, version):
-    pack = stage / ('template@' + version)
-    pack.mkdir()
-    rest = picture((160, 210, 230), 0)
-    (pack / 'rest.png').write_bytes(png(rest))
+def generate_clips(pack, work, use_eyes):
     colors = {
         'idle': (100, 200, 220), 'connecting': (160, 160, 245),
         'listening': (100, 235, 180), 'thinking': (205, 160, 240),
@@ -77,23 +171,39 @@ def generate(stage, work, version):
         'setup': (245, 210, 110), 'approval': (255, 190, 100),
         'error': (255, 110, 120), 'happy': (255, 210, 120),
     }
+    size = EYE_SIZE if use_eyes else (640, 640)
+    rest = eyes('idle', 0, 479, still=True) if use_eyes else picture((160, 210, 230), 0)
+    (pack / 'rest.png').write_bytes(png(rest, size))
     for name, color in colors.items():
+        count = FRAME_COUNTS.get(name, 31) if use_eyes else 31
         raw = work / 'frames.rgba'
         with raw.open('wb') as frames:
-            for number in range(31):
-                # Exact equal endpoints; derivative zero at both neutral joins.
-                amount = 0 if number in (0, 30) else math.sin(math.pi * number / 30) ** 2
-                frames.write(rest if amount == 0 else picture(color, amount))
+            for number in range(count):
+                if use_eyes:
+                    frames.write(eyes(name, number, count - 1))
+                else:
+                    # Preserve prior release poses and exact neutral boundaries.
+                    amount = 0 if number in (0, 30) else math.sin(math.pi * number / 30) ** 2
+                    frames.write(rest if amount == 0 else picture(color, amount))
         common = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
-                  '-f', 'rawvideo', '-pixel_format', 'rgba', '-video_size', '640x640',
+                  '-f', 'rawvideo', '-pixel_format', 'rgba', '-video_size', f'{size[0]}x{size[1]}',
                   '-framerate', '30', '-i', str(raw), '-an', '-threads', '1']
         subprocess.run([*common, '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p',
                         '-auto-alt-ref', '0', '-lossless', '1', '-metadata:s:v:0',
                         'alpha_mode=1', str(pack / (name + '.webm'))],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        quality = ['-g', '1', '-qp', '18'] if use_eyes and name == 'muted' else ['-crf', '18']
         subprocess.run([*common, '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-                        '-crf', '18', '-movflags', '+faststart', str(pack / (name + '.mp4'))],
+                        *quality, '-movflags', '+faststart', str(pack / (name + '.mp4'))],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    return colors
+
+
+def generate(stage, work, version):
+    pack = stage / ('template@' + version)
+    pack.mkdir()
+    use_eyes = tuple(map(int, version.split('-', 1)[0].split('.')[:2])) >= (0, 2)
+    names = generate_clips(pack, work, use_eyes)
     def clip(name, mode='loop'):
         return {'webm': name + '.webm', 'mp4': name + '.mp4', 'mode': mode}
     manifest = {
@@ -104,9 +214,21 @@ def generate(stage, work, version):
             'stage': {'anchor': {'x': 50, 'y': 50}, 'scale': 1, 'background': '#101820'},
         },
         'character': {'rest': 'rest.png',
-                      'states': {name: {'clip': clip(name)} for name in colors if name != 'happy'},
+                      'states': {name: {'clip': clip(name)} for name in names if name != 'happy'},
                       'emotes': {'happy': clip('happy', 'once')}},
     }
+    if use_eyes:
+        manifest['layout']['slots'] = {
+            'clock': {'x': 45, 'y': 86.5, 'font_scale': 1.1},
+            'date': {'x': 44.8, 'y': 94, 'font_scale': 0.7},
+            'status': {'x': 75, 'y': 17, 'font_scale': 0.9},
+            **{state: {'x': 75, 'y': 24.5, 'font_scale': 0.7}
+               for state in ('link_code', 'approval', 'error')},
+        }
+        manifest['layout']['stage'] = {
+            'anchor': {'x': 37, 'y': 45}, 'scale': 1.45,
+            'background': '#' + bytes(BACKGROUND).hex(),
+        }
     (pack / 'pack.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     files = sorted(pack.iterdir())
     if (len(files) > 64 or sum(path.stat().st_size for path in files) > 64 * 1024**2

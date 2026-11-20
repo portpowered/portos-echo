@@ -26,21 +26,23 @@ if (fixture.status !== 0) process.exit(fixture.status ?? 1);
 // Fixture preparation belongs to the suite owner. Integration tests consume
 // prebuilt executables and generated data; they never compile a binary.
 const packRoot = await mkdtemp(join(tmpdir(), "screen-pack-test-"));
-const generated = spawnSync(
-    "sh",
-    [
-        "scripts/make-template-screenpack.sh",
-        "--version",
-        "0.1.0",
-        "--out",
-        join(packRoot, "generated"),
-    ],
-    { cwd: new URL("../../../", import.meta.url), stdio: "inherit" },
-);
-if (generated.error || generated.status !== 0) {
-    await rm(packRoot, { recursive: true, force: true });
-    if (generated.error) throw generated.error;
-    process.exit(generated.status ?? 1);
+for (const version of ["0.1.0", "0.2.0"]) {
+    const generated = spawnSync(
+        "sh",
+        [
+            "scripts/make-template-screenpack.sh",
+            "--version",
+            version,
+            "--out",
+            join(packRoot, version),
+        ],
+        { cwd: new URL("../../../", import.meta.url), stdio: "inherit" },
+    );
+    if (generated.error || generated.status !== 0) {
+        await rm(packRoot, { recursive: true, force: true });
+        if (generated.error) throw generated.error;
+        process.exit(generated.status ?? 1);
+    }
 }
 const result = spawnSync(
     process.execPath,
@@ -55,7 +57,8 @@ const result = spawnSync(
         encoding: "utf8",
         env: {
             ...process.env,
-            SCREEN_PACK_FIXTURE: join(packRoot, "generated"),
+            SCREEN_PACK_FIXTURE: join(packRoot, "0.1.0"),
+            SCREEN_PACK_EYES_FIXTURE: join(packRoot, "0.2.0"),
         },
     },
 );

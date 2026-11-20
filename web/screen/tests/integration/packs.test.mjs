@@ -11,19 +11,23 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { archivePeer } from "./pack-peer.mjs";
 import { concurrentResources } from "./pack-resources.mjs";
+import { checkTemplateLayout } from "./pack-overlap.mjs";
 
 const token = "synthetic-pack-pair";
 const id = "template@0.1.0";
 const generated = process.env.SCREEN_PACK_FIXTURE;
 assert.ok(generated, "suite owner must prepare generated assets");
 
-async function open(t, { prepare, beforeNavigate, initialState } = {}) {
+async function open(
+    t,
+    { prepare, beforeNavigate, initialState, locale, packArchive } = {},
+) {
     const root = await mkdtemp(join(tmpdir(), "screen-pack-journey-"));
     const home = join(root, "home");
     await mkdir(home);
     await prepare?.(home, generated);
     const archive = await readFile(
-        join(generated, "template-0.1.0.screenpack.tar.gz"),
+        packArchive ?? join(generated, "template-0.1.0.screenpack.tar.gz"),
     );
     const sha256 = createHash("sha256").update(archive).digest("hex");
     const peer = await archivePeer(root, archive);
@@ -111,6 +115,7 @@ async function open(t, { prepare, beforeNavigate, initialState } = {}) {
     const origin = `http://127.0.0.1:${ready}`;
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
+        locale,
         serviceWorkers: "block",
     });
     const outside = [];
@@ -178,6 +183,10 @@ async function open(t, { prepare, beforeNavigate, initialState } = {}) {
 
 test("R1 native CSS, generated character and multiple previews retain selection", async (t) => {
     await concurrentResources(t, open, playing, refresh);
+});
+
+test("FACE 960×600 generated template keeps stage and native controls apart", async (t) => {
+    await checkTemplateLayout(t, { open, playing, reloads, refresh });
 });
 
 async function playing(page, name) {
