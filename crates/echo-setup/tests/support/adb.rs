@@ -8,10 +8,17 @@ fn main() -> io::Result<()> {
     let root = if let Some(root) = std::env::var_os("ECHO_SETUP_TEST_ROOT") {
         PathBuf::from(root)
     } else {
-        std::env::current_exe()?
-            .parent()
-            .ok_or_else(|| io::Error::other("missing fixture"))?
-            .to_path_buf()
+        // Preserve the invocation's per-case symlink directory on Unix. The
+        // immutable Cargo-built image can then be shared without rewriting an
+        // executable while other test threads are spawning children.
+        PathBuf::from(
+            std::env::args_os()
+                .next()
+                .ok_or_else(|| io::Error::other("missing argv"))?,
+        )
+        .parent()
+        .ok_or_else(|| io::Error::other("missing fixture"))?
+        .to_path_buf()
     };
     let mut args: Vec<_> = std::env::args_os().skip(1).collect();
     let mut ledger = OpenOptions::new().create(true).append(true).open(root.join("ledger"))?;

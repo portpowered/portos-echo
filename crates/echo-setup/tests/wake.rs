@@ -30,6 +30,9 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path)?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_echo-setup-test-adb"), path.join("adb.exe"))?;
+        #[cfg(not(unix))]
         fs::copy(env!("CARGO_BIN_EXE_echo-setup-test-adb"), path.join("adb.exe"))?;
         fs::write(path.join("devices"), "SYNTHETIC-DEVICE\tdevice\r\n")?;
         fs::write(path.join("wake-cursor"), cursor)?;
