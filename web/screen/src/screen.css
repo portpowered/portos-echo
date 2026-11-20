@@ -169,10 +169,6 @@ main.settings-open {
     font-size: 20px;
     line-height: 1.3;
 }
-.settings-fields :focus-visible {
-    outline: 4px solid #ffdb70;
-    outline-offset: 2px;
-}
 .settings-stepper {
     display: flex;
     gap: 8px;
@@ -226,4 +222,8 @@ main.settings-open {
 .settings-keyboard [aria-pressed="true"] {
     background: #c4d5ff;
     color: #101827;
+}
+.settings-fields :focus-visible {
+    outline: 4px solid #ffdb70;
+    outline-offset: 2px;
 }
