@@ -42,6 +42,18 @@ impl InstalledConnection {
         super::ForwardSession::selected(self.adb.clone(), self.remote_ports(), self.deadline).await
     }
 
+    /// Drive the existing shell account owner on this same selected device.
+    /// Poll concurrently with screen observation to present the public prompt.
+    /// The absolute connection deadline also bounds the local adb child. Drop
+    /// cancels that child; it does not establish remote command termination.
+    /// The guided setup owner must separately settle remote resources before
+    /// starting a competing screen/Codex owner or reporting terminal cleanup.
+    /// # Errors
+    /// Fixed account/deadline categories, never account labels or command logs.
+    pub async fn account(&self, command: super::AccountCommand) -> Result<()> {
+        super::account::run(&self.adb, command, self.deadline).await
+    }
+
     /// Call after the bridge's screen owner creates its pairing file. Absence
     /// is a refusal, never permission to generate/replace a credential here.
     /// # Errors

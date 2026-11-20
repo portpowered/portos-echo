@@ -119,7 +119,7 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
         if root.join("operation-failed").exists() {
             std::process::exit(1);
         }
-        if projection_read(root, command)? {
+        if projection_read(root, command)? || account_reply(root, command)? {
             return Ok(());
         }
         if command == "sh -s -- --device status" {
@@ -165,6 +165,21 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
         fs::write(root.join("process-user"), "nobody")?;
     }
     writeln!(io::stdout(), "SYNTHETIC-TOKEN SYNTHETIC-ACCOUNT SYNTHETIC-PRIVATE-PATH")
+}
+
+fn account_reply(root: &Path, command: &str) -> io::Result<bool> {
+    if !["signin", "ensure-signin", "link"]
+        .iter()
+        .any(|verb| command == format!("sh -s -- --device {verb}"))
+    {
+        return Ok(false);
+    }
+    notify(root, "account-barrier", b"ready")?;
+    io::stdout().write_all(&fs::read(root.join("account-reply"))?)?;
+    if root.join("account-failed").exists() {
+        std::process::exit(1);
+    }
+    Ok(true)
 }
 
 fn projection_read(root: &Path, command: &str) -> io::Result<bool> {
