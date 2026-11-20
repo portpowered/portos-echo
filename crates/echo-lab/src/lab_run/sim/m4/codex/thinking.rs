@@ -37,9 +37,6 @@ async fn exercise(muted: bool) -> Result<(), String> {
             let result = work(&mut case, &mut screen, latch, &phases).await?;
             assert_eq!(result, json!({"event":"bridge.run_completed","run_id":"run-1"}));
             if muted {
-                // Drain the retained call while its presentation is still muted.
-                // EOF during a call that received an active mute reports Control.
-                drain_live_idle(&mut case).await?;
                 unmute.send(()).unwrap();
                 observe(&mut screen, &mut case.ui_states, "ready").await?;
                 advance(&mut case, 0).await?;
@@ -49,7 +46,7 @@ async fn exercise(muted: bool) -> Result<(), String> {
         })
         .await;
     phases.next("held journey cleanup", phase::CLEANUP);
-    let closed = phases.wait(case.close()).await;
+    let closed = phases.wait(close(&mut case, muted && observed.is_ok())).await;
     let result = phase::finish(observed, closed);
     if result.is_err() {
         peer.abort();
@@ -142,27 +139,37 @@ async fn advance(case: &mut Case, milliseconds: u64) -> Result<(), String> {
     Ok(())
 }
 
-async fn drain_live_idle(case: &mut Case) -> Result<(), String> {
-    let bridge = case.bridge.as_mut().unwrap();
-    let milliseconds = world::LIVE_IDLE_SECONDS * 1000;
-    bridge
-        .send(&json!({"action":"advance_clock","milliseconds":milliseconds}))
-        .await?;
-    let events = [bridge.line().await?, bridge.line().await?];
-    assert!(
-        events.contains(&json!({"event":"bridge.clock_advanced","milliseconds":milliseconds})),
-        "{events:?}"
-    );
-    assert!(events.contains(&json!({"event":"bridge.ready"})), "{events:?}");
-    let epoch = case.clock["epoch_ms"].as_u64().unwrap();
-    case.clock["epoch_ms"] = json!(epoch + milliseconds);
-    Ok(())
+async fn close(case: &mut Case, active_mute_observed: bool) -> Result<(), String> {
+    let result = case.close().await;
+    if active_mute_observed {
+        // Configured shutdown retains the Control outcome of an active mute.
+        // Only accept that exact exit after the run and Ready were both observed.
+        assert_eq!(result, Err("cleanup: owned child exited nonzero".into()));
+        assert_eq!(
+            case.bridge_exit.as_deref(),
+            Some("exit status: 1; forced=false; diagnostic=echo-bridge: control")
+        );
+        return Ok(());
+    }
+    result
 }
 
 fn assert_observations(case: &Case, muted: bool) {
-    assert_eq!(receipts::screen(&case.ui_states, &case.clock), Ok(()));
+    let journey = if muted {
+        let (terminal, journey) = case.ui_states.split_last().unwrap();
+        assert_eq!(
+            terminal,
+            &json!({"seq":7,"state":{
+                "state":"error","message":"Conversation unavailable. Try another wake.","relink":false
+            }})
+        );
+        journey
+    } else {
+        &case.ui_states
+    };
+    assert_eq!(receipts::screen(journey, &case.clock), Ok(()));
     let ready = json!({"state":"ready","message":"Echo Live ready"});
-    let frames: Vec<_> = case.ui_states.iter().map(|frame| frame["state"].clone()).collect();
+    let frames: Vec<_> = journey.iter().map(|frame| frame["state"].clone()).collect();
     assert_eq!(
         frames,
         [
@@ -175,9 +182,9 @@ fn assert_observations(case: &Case, muted: bool) {
         ]
     );
     assert_eq!(case.transcript.as_deref(), Some(text(false)));
-    assert_eq!(case.released, ["bridge", "provider", "spoof", "relay"]);
     stages(&case.trace);
     if muted {
+        assert_eq!(case.released, ["provider", "spoof", "relay"]);
         let windows: Vec<_> = case
             .trace
             .records
@@ -189,6 +196,7 @@ fn assert_observations(case: &Case, muted: bool) {
         assert_eq!(windows[0]["received_frames"], 1);
         assert_eq!(windows[0]["forwarded_frames"], 0);
     } else {
+        assert_eq!(case.released, ["bridge", "provider", "spoof", "relay"]);
         assert_playout(&case.clock);
     }
 }
