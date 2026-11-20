@@ -440,3 +440,22 @@ fn t1_on_device_malformed_directory_identity_retains_uncertain_residue_without_l
         assert!(!world.borrow().ran("push") && !world.borrow().ran("rm -f") && !world.borrow().ran("setsid"));
     }
 }
+
+#[tokio::test]
+async fn t1_on_device_existing_bridge_is_refused_and_never_stopped_by_finalization() {
+    let root = tempfile::tempdir().unwrap();
+    let local = root.path().join("config");
+    std::fs::write(&local, "derived").unwrap();
+    let world = world();
+    let mut remote = remote(&world);
+    remote.stage(&local).unwrap();
+    world.borrow_mut().alive = true;
+    assert_eq!(
+        remote.start().await.unwrap_err(),
+        "device: refusing to replace an existing bridge process"
+    );
+    remote.stop().await.unwrap();
+    remote.release().unwrap();
+    assert!(world.borrow().alive);
+    assert!(!world.borrow().ran("kill $(cat") && !world.borrow().ran("setsid"));
+}
