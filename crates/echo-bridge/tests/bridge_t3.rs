@@ -24,6 +24,8 @@ mod bridge_latency;
 mod bridge_lifecycle;
 #[path = "bridge_support/bridge_peer.rs"]
 mod bridge_peer;
+#[path = "bridge_observer/bridge_reply_start.rs"]
+mod bridge_reply_start;
 #[path = "bridge_support/bridge_short.rs"]
 mod bridge_short;
 #[path = "bridge_support/bridge_spine_edges.rs"]

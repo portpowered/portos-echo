@@ -297,6 +297,25 @@ async fn reply_playout_first_stall_fades_out_reprimes_and_fades_in() {
     assert_eq!(altered.count(), 2);
 }
 
+/// The device's first reply: it started on the 100 ms floor and ran dry at
+/// the call's first stall, which every call measured has in its first reply.
+#[tokio::test(start_paused = true)]
+async fn reply_playout_first_reply_of_a_call_rides_out_a_stall_in_its_first_second() {
+    let mut script = talk(30);
+    script.extend(stall());
+    script.extend(talk(100));
+    let before = reply(&mut ReplyMeter::default(), ClockPacer::new(200), &script)
+        .await
+        .quality;
+    assert_eq!((before.underruns, before.reprimes), (1, 1));
+    let heard = reply(&mut ReplyMeter::call(), ClockPacer::new(200), &script).await;
+    let quality = heard.quality;
+    assert_eq!((quality.underruns, quality.reprimes, quality.concealment_ms), (0, 0, 0));
+    assert_eq!(target(&quality), [300, 300, 300]);
+    let sent: Vec<i16> = script.iter().map(|(_, level)| *level).collect();
+    assert_eq!(heard.written(), sent);
+}
+
 #[tokio::test(start_paused = true)]
 async fn reply_playout_next_reply_rides_out_the_stall_the_call_has_shown() {
     let mut script = talk(50);

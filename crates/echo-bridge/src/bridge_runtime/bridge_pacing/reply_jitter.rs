@@ -22,6 +22,11 @@ const HOLD: Duration = Duration::from_secs(120);
 const DECAY_MS_PER_SECOND: u128 = 5;
 /// A silence this long is the model pausing, not the network: start afresh.
 const RESYNC: Duration = Duration::from_secs(1);
+/// The lateness a call is taken to have before it has shown any: every call
+/// measured on the Echo stalled 146 to 299 ms in its first reply
+/// (`docs/program/baselines.md`), and a first reply that started on the floor
+/// ran the Echo dry there. It asks for 300 ms and is forgotten like a stall.
+pub(crate) const EXPECTED_MS: u32 = 260;
 /// Frames in one half of the sliding minimum the lateness is measured from.
 const WINDOW: u32 = 50;
 
@@ -34,6 +39,8 @@ const WINDOW: u32 = 50;
 pub(crate) struct Jitter {
     stream: Option<Stream>,
     peak: Option<(u32, Instant)>,
+    /// Lateness to assume from the call's first frame.
+    expected: Option<u32>,
 }
 
 struct Stream {
@@ -46,8 +53,19 @@ struct Stream {
 }
 
 impl Jitter {
+    /// A call that is taken to stall as calls on the Echo have.
+    pub(crate) fn expecting(late_ms: u32) -> Self {
+        Self {
+            expected: Some(late_ms),
+            ..Self::default()
+        }
+    }
+
     /// One reply frame was accepted at `now`.
     pub(crate) fn arrived(&mut self, now: Instant) {
+        if let Some(expected) = self.expected.take() {
+            self.peak = Some((expected, now));
+        }
         let stream = match &mut self.stream {
             Some(stream) if now.saturating_duration_since(stream.last) <= RESYNC => stream,
             stream => stream.insert(Stream {

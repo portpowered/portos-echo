@@ -1,11 +1,12 @@
 //! T3: speech at the Echo's microphone under a reply, on a scripted
-//! timeline. The Live session's transcript of it comes 700 ms after the
-//! speech begins; the reply must not play on until then.
+//! timeline. The Live session alone judges it: the reply plays on until the
+//! session's transcript of the speech, 700 ms after it begins, and is silent
+//! within the device's lead of that sign.
 use super::bridge_barge::{Model, said, stream};
 use super::*;
 use echo_bridge::{
     bridge_codex::{Event, MediaEvent},
-    bridge_voice::{Notice, Options, ReplyQuality, Stats, run},
+    bridge_voice::{Notice, Options, Stats, run},
 };
 use echo_link::{EchoLink, LinkConnector, LinkEvent, LinkEvents};
 use std::sync::{
@@ -27,14 +28,16 @@ const TRANSCRIPT_LAG: Duration = Duration::from_millis(700);
 
 /// The room the loopback device stands in.
 #[derive(Default)]
-struct Room {
+pub(super) struct Room {
     /// Amplitude of somebody speaking near the microphone.
     voice: AtomicI16,
     /// Each reply chunk the device was sent: when, and its loudest sample.
-    played: Mutex<Vec<(Instant, u16)>>,
-    flushed: Mutex<Option<Instant>>,
+    pub(super) played: Mutex<Vec<(Instant, u16)>>,
+    pub(super) flushed: Mutex<Option<Instant>>,
     /// When the voice began.
     onset: Mutex<Option<Instant>>,
+    /// When the Live session gave its sign of the voice.
+    sign: Mutex<Option<Instant>>,
 }
 
 impl Room {
@@ -62,10 +65,9 @@ impl Room {
             .collect()
     }
 
-    /// From the voice's first sound to the device having played out all the
-    /// reply audio it was sent: frames play back to back from the first.
-    fn onset_to_silence(&self) -> Duration {
-        let onset = self.onset.lock().unwrap().unwrap();
+    /// From `onset` to the device having played out all the reply audio it
+    /// was sent: frames play back to back from the first.
+    fn silence_after(&self, onset: Instant) -> Duration {
         let flushed = *self.flushed.lock().unwrap();
         let (mut clock, mut end) = (None, onset);
         for (at, level) in self.played.lock().unwrap().iter() {
@@ -147,7 +149,7 @@ async fn device(listener: tokio::net::TcpListener, room: Arc<Room>) -> mpsc::Unb
 }
 
 /// Run one call against the room. `script` is the Live model's side.
-async fn call(script: impl AsyncFnOnce(&mpsc::Sender<MediaEvent>, &Room)) -> (Arc<Room>, Stats, Vec<ReplyQuality>) {
+pub(super) async fn call(script: impl AsyncFnOnce(&mpsc::Sender<MediaEvent>, &Room)) -> (Arc<Room>, Stats, Vec<Stats>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let room = Arc::new(Room::default());
@@ -176,7 +178,7 @@ async fn call(script: impl AsyncFnOnce(&mpsc::Sender<MediaEvent>, &Room)) -> (Ar
     let work = async {
         let observe = |notice| {
             if let Notice::ReplySettled(stats) = notice {
-                settled.borrow_mut().push(stats.quality);
+                settled.borrow_mut().push(stats);
             }
             Ok(())
         };
@@ -203,6 +205,7 @@ async fn talked_over(model: &mpsc::Sender<MediaEvent>, room: &Room) {
     stream(model, 75, TALK).await;
     room.speak(VOICE);
     stream(model, 35, TALK).await;
+    *room.sign.lock().unwrap() = Some(Instant::now());
     model.send(said("user", "wait", false)).await.unwrap();
     stream(model, 15, TALK).await;
     stream(model, 40, 0).await;
@@ -219,28 +222,42 @@ async fn talked_over(model: &mpsc::Sender<MediaEvent>, room: &Room) {
 
 #[tokio::test]
 #[ignore = "T3 real Wyoming client and loopback device"]
-async fn barge_in_silences_the_reply_before_the_transcript_of_the_speech() {
+async fn barge_in_is_the_sessions_call_and_silences_the_reply_within_its_lead() {
     let (room, stats, settled) = tokio::time::timeout(OBSERVATION_TIMEOUT, Box::pin(call(talked_over)))
         .await
         .unwrap();
-    let silence = room.onset_to_silence();
+    let onset = room.onset.lock().unwrap().unwrap();
+    let sign = room.sign.lock().unwrap().unwrap();
+    let (heard, silence) = (room.silence_after(onset), room.silence_after(sign));
+    let (quality, cut) = (settled[0].quality, settled[0].cut.as_deref().unwrap());
     writeln!(
         std::io::stdout(),
-        "BARGE onset_to_silence_ms={} transcript_lag_ms={}",
+        "BARGE sign_to_silence_ms={} onset_to_silence_ms={} cut={cut:?}",
         silence.as_millis(),
-        TRANSCRIPT_LAG.as_millis()
+        heard.as_millis()
     )
     .unwrap();
-    // The device goes quiet on the speech itself, not 700 ms later on its
-    // transcript: detection, and the 200 ms the device already holds.
-    assert!(silence + FRAME * 5 < TRANSCRIPT_LAG, "{silence:?}");
-    let cuts: Vec<_> = settled.iter().map(|quality| quality.cuts).collect();
+    // The voice alone held nothing: the reply played until the session's sign.
+    assert!(heard >= TRANSCRIPT_LAG, "{heard:?}");
+    // From the sign the device plays out only what it holds: its 200 ms
+    // lead and the player's slots.
+    assert!(silence <= Duration::from_millis(300), "{silence:?}");
+    assert!(cut.silent_ms <= 200, "{cut:?}");
+    // The cut names its trigger and what the session heard.
+    assert_eq!(
+        (
+            quality.cut_trigger.map(echo_bridge::bridge_voice::BargeTrigger::name),
+            cut.text.as_str()
+        ),
+        (Some("user_transcript"), "wait")
+    );
+    let cuts: Vec<_> = settled.iter().map(|reply| reply.quality.cuts).collect();
     assert_eq!((cuts, stats.reply_dropped), (vec![1, 0], 0));
 }
 
 /// The reply gets three times louder and so does its echo; then a short
 /// loud noise that the session transcribes as nothing, while the model
-/// talks on.
+/// talks on. No sound at the microphone holds the reply.
 async fn noisy(model: &mpsc::Sender<MediaEvent>, room: &Room) {
     model.send(said("assistant", "A long answer", false)).await.unwrap();
     stream(model, 50, TALK).await;
@@ -271,11 +288,10 @@ async fn barge_in_echo_and_noise_at_the_microphone_lose_no_reply_audio() {
         .iter()
         .filter(|(_, level)| *level >= 1000)
         .count();
-    let quality = settled[0];
+    let quality = settled[0].quality;
     writeln!(std::io::stdout(), "BARGE noise: audible={audible} {quality:?}").unwrap();
-    // The 210 frames the model spoke, and the fades around a hold.
     assert!(audible >= 210 && stats.reply_dropped == 0, "{audible} {stats:?}");
-    // The louder reply held nothing; the noise held the reply at most once.
+    // Neither the louder reply nor the noise held it.
     assert_eq!((settled.len(), quality.cuts, quality.discarded_audible), (1, 0, 0));
-    assert!(quality.holds <= 1, "{quality:?}");
+    assert_eq!(quality.holds, 0, "{quality:?}");
 }
