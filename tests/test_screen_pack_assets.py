@@ -182,6 +182,8 @@ def push_adb():
             with (base / 'push-release').open('r') as release:
                 release.read()
         if count == int(os.environ.get('PACK_FAIL_PUSH', '0')):
+            print(f"adb: error: failed to copy '{args[1]}' for {SENTINEL}: Permission denied",
+                  file=sys.stderr)
             return 1
         target = base / ('device' + args[2])
         require(str(target).startswith(str(remote) + '/.push-'), 'transfer escaped private stage')
@@ -189,18 +191,42 @@ def push_adb():
         return 0
     require(args[0] == 'shell' and len(args) == 2, 'unexpected adb authority')
     command = args[1]
-    if 'mv -T -n' in command:
+    if any(line.startswith('mv ') for line in command.splitlines()):
         visible = sorted(p.name for p in remote.iterdir() if not p.name.startswith('.'))
         (base / 'visible-before-commit').write_text(json.dumps(visible))
-        if os.environ.get('PACK_RACE'):
-            (remote / 'template@0.1.0').mkdir()
-            (remote / 'template@0.1.0/prior.png').write_bytes(b'concurrent publication')
         if os.environ.get('PACK_FAIL_COMMIT'):
+            print(f"mv: {SENTINEL}: Read-only file system", file=sys.stderr)
             return 1
+    if os.environ.get('PACK_FAIL_CLEANUP') and 'rm -rf ' in command:
+        print(f"adb: lost transport for {SENTINEL}, {base}", file=sys.stderr)
+        return 1
     command = command.replace('/data', str(base / 'device/data'))
     completed = subprocess.run(['sh', '-c', command], capture_output=True, timeout=10,
                                env=dict(os.environ, PATH=str(base / 'tools') + ':/usr/bin:/bin'))
+    sys.stderr.buffer.write(completed.stderr)
     return completed.returncode
+
+
+def toybox_move():
+    args = sys.argv[2:]
+    if any(arg.startswith('-') and 'T' in arg for arg in args):
+        print('mv: Unknown option T', file=sys.stderr)
+        return 1
+    require(len(args) == 3 and args[0] == '-n', 'unexpected mv flags')
+    source, destination = map(Path, args[1:])
+    if os.environ.get('PACK_RACE'):
+        # Publish after the helper's destination check but just before mv
+        # resolves its leaf. A complete pack must never gain a nested stage.
+        rival = Path(os.environ['PACK_FAKE_ROOT']) / ('device' + REMOTE) / 'template@0.1.0'
+        rival.mkdir()
+        (rival / 'pack.json').write_bytes((source / 'pack.json').read_bytes())
+        (rival / 'nested').mkdir()
+        (rival / 'nested/rest.png').write_bytes(b'concurrent publication')
+    if destination.is_dir():
+        destination /= source.name
+    if not destination.exists() and not destination.is_symlink():
+        source.rename(destination)
+    return 0
 
 
 class PushBox:
@@ -212,10 +238,11 @@ class PushBox:
         self.tools = self.base / 'tools'
         self.tools.mkdir()
         # This is the only adb discoverable by the helper, never a real device.
-        adb = self.tools / 'adb'
-        adb.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' '
-                       + shlex.quote(str(Path(__file__).resolve())) + ' --fake-adb "$@"\n')
-        adb.chmod(0o700)
+        for name in ('adb', 'mv'):
+            tool = self.tools / name
+            tool.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' '
+                            + shlex.quote(str(Path(__file__).resolve())) + f' --fake-{name} "$@"\n')
+            tool.chmod(0o700)
         chown = self.tools / 'chown'
         chown.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$PACK_FAKE_ROOT/owners"\n')
         chown.chmod(0o700)
@@ -278,18 +305,28 @@ def push_cases(generated):
         require({p.name: p.read_bytes() for p in target.iterdir()} == actual,
                 'duplicate publication replaced original pack')
         box.settled(['template@0.1.0'])
-    for fault in ('PACK_FAIL_PUSH', 'PACK_FAIL_COMMIT', 'PACK_RACE'):
+    failures = {
+        'PACK_FAIL_PUSH': 'transfer failed: Permission denied',
+        'PACK_FAIL_COMMIT': 'publication failed: Read-only file system',
+        'PACK_RACE': 'publication failed: diagnostic redacted',
+    }
+    for fault, expected in failures.items():
         with PushBox() as box:
             box.remote.mkdir()
             prior = box.remote / 'prior@1.0.0'
             prior.mkdir()
             (prior / 'rest.png').write_bytes(b'prior-active-data')
             box.env[fault] = '2' if fault == 'PACK_FAIL_PUSH' else '1'
-            box.run(okay=False)
+            result = box.run(okay=False)
+            require(result.stderr == f'screen-pack: adb {expected}\n', 'failure step or reason differs')
             box.settled(['prior@1.0.0', 'template@0.1.0'] if fault == 'PACK_RACE' else ['prior@1.0.0'])
             require((prior / 'rest.png').read_bytes() == b'prior-active-data', 'failed push changed active data')
             if fault == 'PACK_RACE':
-                require((box.remote / 'template@0.1.0/prior.png').read_bytes() == b'concurrent publication',
+                rival = box.remote / 'template@0.1.0'
+                require(sorted(p.relative_to(rival).as_posix() for p in rival.rglob('*'))
+                        == ['nested', 'nested/rest.png', 'pack.json'],
+                        'competing pack gained unexpected data')
+                require((rival / 'nested/rest.png').read_bytes() == b'concurrent publication',
                         'no-clobber publication lost a racing identity')
     for ancestor in ('screens', 'home'):
         with PushBox() as box:
@@ -309,7 +346,29 @@ def push_cases(generated):
         box.settled(['.push-lock'])
     invalid_push_cases()
     interrupted_push_case()
+    cleanup_failure_cases()
     print('F24 local push: generated_bytes=PASS atomic=PASS duplicate=REFUSED failure_retention=PASS cleanup=PASS symlinks=REFUSED')
+    print('F24 toybox: publication=PASS competing_identity=RETAINED diagnostics=SANITIZED cleanup_precedence=PASS')
+
+
+def cleanup_failure_cases():
+    for fail_transfer in (False, True):
+        with PushBox() as box:
+            box.env['PACK_FAIL_CLEANUP'] = '1'
+            if fail_transfer:
+                box.env['PACK_FAIL_PUSH'] = '2'
+            result = box.run(okay=False)
+            expected = 'screen-pack: adb cleanup failed: diagnostic redacted\n'
+            if fail_transfer:
+                expected = 'screen-pack: adb transfer failed: Permission denied\n' + expected
+            require(result.stderr == expected, 'cleanup failure obscured the primary result')
+            stages = list(box.remote.glob('.push-*'))
+            require(len(stages) == 2 and all(path.is_dir() for path in stages)
+                    and (box.remote / '.push-lock').is_dir(), 'uncertain staging or lock was lost')
+            target = box.remote / 'template@0.1.0/nested/rest.png'
+            require(target.exists() != fail_transfer, 'cleanup changed publication status')
+            if target.exists():
+                require(target.read_bytes() == b'synthetic-still', 'cleanup damaged published art')
 
 
 def invalid_push_cases():
@@ -388,5 +447,8 @@ def interrupted_push_case():
     print('F24 cancellation: interrupted=PASS cleanup=PASS publication=0')
 
 
-if __name__ == '__main__' and sys.argv[1:2] == ['--fake-adb']:
-    sys.exit(push_adb())
+if __name__ == '__main__':
+    if sys.argv[1:2] == ['--fake-adb']:
+        sys.exit(push_adb())
+    if sys.argv[1:2] == ['--fake-mv']:
+        sys.exit(toybox_move())
