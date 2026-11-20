@@ -84,6 +84,61 @@ button:disabled {
 [hidden] {
     display: none !important;
 }
+.screen-presentation:is(
+        [data-ui-state="ready"],
+        [data-ui-state="connected"]
+    ):not(.screen-pack) {
+    position: fixed;
+    inset: 0;
+    max-height: none;
+}
+.home-clock {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 24px;
+    text-align: center;
+}
+.home-clock p {
+    margin: 0;
+    font-size: 20px;
+}
+.home-clock p:first-child {
+    font-size: 36px;
+}
+.home-tap {
+    position: absolute;
+    inset: 104px 16px 112px;
+    min-width: 0;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    touch-action: manipulation;
+}
+.home-tap:disabled {
+    background: transparent;
+}
+.screen-pack .home-tap {
+    inset: 8px;
+}
+.screen-presentation:is(
+        [data-ui-state="ready"],
+        [data-ui-state="connected"]
+    ):not(.screen-pack)
+    + [role="status"] {
+    position: fixed;
+    top: 12px;
+    inset-inline: 48px 112px;
+    margin: 0;
+    pointer-events: none;
+}
+.screen-pack + [role="status"] {
+    z-index: 1;
+    width: fit-content;
+    background: #101827;
+    pointer-events: none;
+}
 .settings-gear {
     position: fixed;
     top: 12px;

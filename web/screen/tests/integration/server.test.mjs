@@ -69,16 +69,16 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
     await page.goto(`${origin}/?${query}`);
     const update = async (state) => {
         command({ state });
-        await page
-            .getByRole("heading", { name: state.state, exact: true })
-            .waitFor();
+        await page.locator(`[data-ui-state="${state.state}"]`).waitFor();
     };
     await update({ state: "ready", message: "Echo Live ready" });
     assert.equal(
-        await page.locator("section p").textContent(),
-        "Echo Live ready",
+        await page.getByText(/^(ready|echo live ready|start)$/i).count(),
+        0,
     );
-    await page.getByRole("button", { name: "Start", exact: true }).click();
+    await page
+        .getByRole("button", { name: "Begin session", exact: true })
+        .click();
     assert.deepEqual(await next(), {
         action: { action: "tap", target: "primary" },
     });

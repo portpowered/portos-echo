@@ -90,7 +90,10 @@ test("F14 F15: exact long Unicode, quotes, markup and u64 expiry; scrolling leav
         { state: "error", message: long, relink: true },
     ].entries()) {
         await emit(page, frame(5 + index, JSON.stringify(state)));
-        assert.equal(await page.locator("section p").textContent(), long);
+        assert.deepEqual(
+            await page.locator(".details p").allTextContents(),
+            state.state === "ready" ? [] : [long],
+        );
         await bounds(page, true);
     }
     console.log(
@@ -102,14 +105,10 @@ test("F16: actual forward/reverse focus order, names, focus ring and keyboard ac
     const page = await pageFor(t);
     for (const [seq, wire] of states.entries()) {
         await emit(page, frame(seq + 1, wire));
-        const labels = await page.locator("button").allTextContents();
+        const targets = await page.getByRole("button").all();
         const before = (await calls(page)).length;
-        for (const label of labels) {
+        for (const target of targets) {
             await page.keyboard.press("Tab");
-            const target = page.getByRole("button", {
-                name: label,
-                exact: true,
-            });
             assert.equal(
                 await target.evaluate(
                     (node) => node === document.activeElement,
@@ -124,21 +123,23 @@ test("F16: actual forward/reverse focus order, names, focus ring and keyboard ac
             );
             await page.keyboard.press("Enter");
         }
-        assert.equal((await calls(page)).length, before + labels.length);
-        if (labels.length > 1) {
+        assert.equal((await calls(page)).length, before + targets.length);
+        if (targets.length > 1) {
             await page.keyboard.press("Shift+Tab");
             assert.equal(
-                await page.evaluate(() => document.activeElement.textContent),
-                labels[0],
+                await targets[0].evaluate(
+                    (node) => node === document.activeElement,
+                ),
+                true,
             );
             await page.keyboard.press("Space");
             assert.equal(
                 (await calls(page)).length,
-                before + labels.length + 1,
+                before + targets.length + 1,
             );
         }
         await page.keyboard.press("Tab");
-        if (labels.length === 0)
+        if (targets.length === 0)
             assert.equal(
                 await page.evaluate(() => document.activeElement.tagName),
                 "BODY",
@@ -163,8 +164,8 @@ test("F17: reconnect replay keeps order; replacement/unload abort pending action
     await page.getByRole("button", { name: "Allow", exact: true }).click();
     await emit(page, frame(12));
     assert.equal(await page.evaluate(() => window.aborted), 1);
-    assert.equal(await page.evaluate(() => window.timers.size), 0);
-    await page.getByRole("button", { name: "Start" }).click();
+    assert.equal(await page.evaluate(() => window.timers.size), 1);
+    await page.getByRole("button", { name: "Begin session" }).click();
     await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
     assert.equal(await page.evaluate(() => window.aborted), 2);
     assert.equal(await page.evaluate(() => window.timers.size), 0);

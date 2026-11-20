@@ -176,7 +176,7 @@ test("settings usability: steppers clamp to each field's range, repeat while hel
     await page.mouse.up();
     await page.clock.runFor(5000);
     assert.equal(await seconds.inputValue(), "55");
-    assert.equal(await page.evaluate(() => window.timers.size), 0);
+    assert.equal(await page.evaluate(() => window.timers.size), 1);
     await seconds.fill("295");
     await step(page, "Follow-up window (seconds)", "Increase").click({
         clickCount: 7,

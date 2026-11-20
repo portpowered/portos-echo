@@ -299,7 +299,7 @@ test("settings: cancellation and unload never render a late response or resubmit
         await page.locator('[aria-label="Screen presentation"]').isVisible(),
         true,
     );
-    assert.equal(await page.evaluate(() => window.timers.size), 0);
+    assert.equal(await page.evaluate(() => window.timers.size), 1);
     await response(page, undefined, "pending");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
@@ -372,7 +372,10 @@ test("settings: invalid pairing bootstrap remains local and the state stream sti
         assert.deepEqual(await calls(page), []);
         await emit(page, frame(1));
         await page.getByRole("button", { name: "Back", exact: true }).click();
-        assert.equal(await page.locator("h1:visible").textContent(), "ready");
+        assert.equal(
+            await page.locator("[data-ui-state=ready]:visible").count(),
+            1,
+        );
     }
 });
 

@@ -155,16 +155,25 @@ async function open(t, { prepare, beforeNavigate, initialState } = {}) {
     const update = async (state) => {
         command({ state });
         assert.deepEqual(await next(), { sent: true });
-        await page
-            .getByRole("heading", { name: state.state, exact: true })
-            .waitFor();
+        await page.locator(`[data-ui-state="${state.state}"]`).waitFor();
     };
     const api = async (path) => {
         const response = await fetch(`${origin}${path}?token=${token}`);
         assert.equal(response.status, 200);
         return response.json();
     };
-    return { page, context, home, peer, sha256, update, api, outside, origin };
+    return {
+        page,
+        context,
+        home,
+        peer,
+        sha256,
+        update,
+        api,
+        outside,
+        origin,
+        next,
+    };
 }
 
 test("R1 native CSS, generated character and multiple previews retain selection", async (t) => {
@@ -266,6 +275,43 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     assert.equal((await stat(join(home, "settings.toml"))).mode & 0o777, 0o600);
     await page.getByRole("button", { name: "Back", exact: true }).click();
     const sources = [await playing(page, "idle.webm")];
+    await page.setViewportSize({ width: 960, height: 600 });
+    assert.equal(
+        await page.getByText(/^(ready|echo live ready|start)$/i).count(),
+        0,
+    );
+    for (const name of [".pack-clock", ".pack-date"]) {
+        const slot = page.locator(name);
+        assert.equal(await slot.isVisible(), true);
+        assert.match(await slot.textContent(), /\d/);
+    }
+    assert.equal(await page.locator(".home-clock").count(), 0);
+    const stage = await page.locator(".pack-stage").boundingBox();
+    await page.mouse.click(
+        stage.x + stage.width / 2,
+        stage.y + stage.height / 2,
+    );
+    assert.deepEqual(await f.next(), {
+        action: { action: "tap", target: "primary" },
+    });
+    const feedback = page.getByText("Action sent; waiting for screen update", {
+        exact: true,
+    });
+    await feedback.waitFor();
+    const statusBox = await feedback.boundingBox();
+    const clockBox = await page.locator(".pack-clock").boundingBox();
+    assert.ok(statusBox && clockBox);
+    assert.ok(
+        statusBox.x >= clockBox.x + clockBox.width ||
+            clockBox.x >= statusBox.x + statusBox.width ||
+            statusBox.y >= clockBox.y + clockBox.height ||
+            clockBox.y >= statusBox.y + statusBox.height,
+        "Ready action feedback must leave the template clock readable",
+    );
+    await mkdir("test-results/screenshots", { recursive: true });
+    await page.screenshot({
+        path: "test-results/screenshots/template-home-960x600.png",
+    });
     for (const state of ["listening", "thinking", "speaking", "ready"]) {
         await f.update({
             state,
