@@ -255,8 +255,34 @@ mod tests {
         assert_eq!(server.url, "https://api.portoperatingsystem.com/mcp"); // lint-rules: allow-literal offline example assertion, never contacted
         assert_eq!(server.auth, crate::McpAuth::PortosDeviceCode);
         assert_eq!(server.bearer_file, None);
-        assert_eq!(server.allow_tools, ["endpoint_list", "endpoint_query", "control"]);
-        assert_eq!(config.mcp.scopes, ["endpoint:read"]);
+        assert_eq!(
+            server.allow_tools,
+            [
+                "control",
+                "endpoint_query",
+                "endpoint_show",
+                "endpoint_manage",
+                "group_query",
+                "group_manage",
+                "guide",
+                "subscription_list",
+                "subscription_inspect",
+                "subscription_cancel",
+                "subscription_label_edit"
+            ]
+        );
+        assert_eq!(
+            config.mcp.scopes,
+            [
+                "endpoint:read",
+                "endpoint:write",
+                "message:send",
+                "group:read",
+                "group:manage",
+                "subscription:read",
+                "subscription:write"
+            ]
+        );
         assert_eq!(
             config.mcp.state_dir,
             Some(PathBuf::from("/data/local/echo-bridge/private/portos"))

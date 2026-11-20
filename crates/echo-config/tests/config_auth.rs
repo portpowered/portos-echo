@@ -3,12 +3,67 @@ use std::fmt::Write;
 const MINIMAL: &str = "[echo]\nhost='local'\n[live]\ncredential_file='missing'\n[agent]\n[mcp]\n[screen]\npairing_token_file='missing'\n[audit]\nlog_dir='missing'\n";
 
 #[test]
+fn portos_default_tools_and_explicit_narrow_lists_are_offline() {
+    let expected = [
+        "control",
+        "endpoint_query",
+        "endpoint_show",
+        "endpoint_manage",
+        "group_query",
+        "group_manage",
+        "guide",
+        "subscription_list",
+        "subscription_inspect",
+        "subscription_cancel",
+        "subscription_label_edit",
+    ];
+    for (auth, defaults) in [
+        ("portos_device_code", expected.as_slice()),
+        ("none", [].as_slice()),
+        ("bearer_file", [].as_slice()),
+    ] {
+        for (selection, tools) in [
+            ("", defaults),
+            ("allow_tools=[]", [].as_slice()),
+            ("allow_tools=['endpoint_query']", ["endpoint_query"].as_slice()),
+        ] {
+            let input = format!(
+                "{MINIMAL}\n[[mcp.server]]\nname='local'\nurl='http://127.0.0.1:1/mcp'\nauth='{auth}'\n{selection}"
+            );
+            let input = if auth == "bearer_file" {
+                format!("{input}\nbearer_file='missing'")
+            } else {
+                input
+            };
+            let config = BridgeConfig::from_toml_str(&input).unwrap();
+            assert_eq!(config.mcp.server[0].allow_tools, tools, "{auth} {selection}");
+        }
+    }
+    let input = MINIMAL.replace("[mcp]", "[mcp]\nscopes=['endpoint:read']");
+    assert_eq!(
+        BridgeConfig::from_toml_str(&input).unwrap().mcp.scopes,
+        ["endpoint:read"]
+    );
+}
+
+#[test]
 fn mcp_link_defaults_and_explicit_overrides_remain_offline() {
     let old = BridgeConfig::from_toml_str(MINIMAL).unwrap().mcp;
     assert_eq!(old, echo_config::McpConfig::default());
     assert_eq!(old.state_dir, None);
     assert_eq!(old.client_id, "port1/systems/zero/oauth-clients/command-line-interface");
-    assert_eq!(old.scopes, ["endpoint:read"]);
+    assert_eq!(
+        old.scopes,
+        [
+            "endpoint:read",
+            "endpoint:write",
+            "message:send",
+            "group:read",
+            "group:manage",
+            "subscription:read",
+            "subscription:write"
+        ]
+    );
     assert_eq!(old.operator_listen.to_string(), "127.0.0.1:16902");
     let input = MINIMAL.replace("[mcp]", "[mcp]\nstate_dir='absent/mcp-state'\nclient_id='public-test-client'\nscopes=['endpoint:read','other:read']\noperator_listen='127.0.0.1:0'");
     let config = BridgeConfig::from_toml_str(&input).unwrap().mcp;

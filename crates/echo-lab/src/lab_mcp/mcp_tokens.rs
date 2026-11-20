@@ -43,9 +43,7 @@ fn valid_claims(state: &State, claims: &Value) -> bool {
         && claims["token_use"] == "access"
         && claims["sub"] == "synthetic-principal"
         && claims["grant_id"] == format!("grant-{}", state.device)
-        && claims["scope"]
-            .as_str()
-            .is_some_and(|scope| scope.split_whitespace().any(|s| s == "endpoint:read"))
+        && claims["scope"] == state.scopes
         && claims["exp"].as_u64().is_some_and(|expiry| expiry > state.now)
         && claims["iat"].as_u64().is_some_and(|issued| issued <= state.now)
 }
@@ -61,9 +59,9 @@ pub(super) fn pair(state: &mut State) -> Value {
     state.generation += 1;
     let claims = json!({"iss":state.issuer,"aud":if state.bound { state.resource.as_str() } else { "first-party" },
         "token_use":"access","sub":"synthetic-principal","grant_id":format!("grant-{}",state.device),
-        "iat":state.now,"exp":state.now.saturating_add(3600),"scope":"endpoint:read"});
+        "iat":state.now,"exp":state.now.saturating_add(3600),"scope":state.scopes});
     json!({"access_token":sign(state,&claims),"refresh_token":refresh(state),
-        "token_type":"Bearer","expires_in":3600,"scope":"endpoint:read"})
+        "token_type":"Bearer","expires_in":3600,"scope":state.scopes})
 }
 
 pub(super) fn refresh(state: &State) -> String {

@@ -179,7 +179,17 @@ impl Default for McpConfig {
             server: Vec::new(),
             state_dir: None,
             client_id: "port1/systems/zero/oauth-clients/command-line-interface".into(),
-            scopes: vec!["endpoint:read".into()],
+            scopes: [
+                "endpoint:read",
+                "endpoint:write",
+                "message:send",
+                "group:read",
+                "group:manage",
+                "subscription:read",
+                "subscription:write",
+            ]
+            .map(String::from)
+            .into(),
             operator_listen: (std::net::Ipv4Addr::LOCALHOST, 16902).into(),
         }
     }
@@ -200,6 +210,29 @@ pub enum McpAuth {
     None,
     PortosDeviceCode,
     BearerFile,
+}
+
+impl McpAuth {
+    pub(crate) fn default_tools(self) -> Vec<String> {
+        if self != Self::PortosDeviceCode {
+            return Vec::new();
+        }
+        [
+            "control",
+            "endpoint_query",
+            "endpoint_show",
+            "endpoint_manage",
+            "group_query",
+            "group_manage",
+            "guide",
+            "subscription_list",
+            "subscription_inspect",
+            "subscription_cancel",
+            "subscription_label_edit",
+        ]
+        .map(String::from)
+        .into()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -115,6 +115,16 @@ Configure your deployment's MCP resource URL and only the needed scopes/tools. T
 endpoints and the development CLI OAuth client; it is not proof of account access or a production registration.
 Review the [full reference](configuration.md#configuration-reference) before granting effects.
 
+The Port OS device-code default requests `endpoint:read`, `endpoint:write`, `message:send`, `group:read`,
+`group:manage`, `subscription:read` and `subscription:write`, and permits the eleven Port OS MCP tools:
+`control`, `endpoint_query`, `endpoint_show`, `endpoint_manage`, `group_query`, `group_manage`, `guide`,
+`subscription_list`, `subscription_inspect`, `subscription_cancel` and `subscription_label_edit`.
+You can set narrower `mcp.scopes` and `mcp.server.allow_tools` lists; an explicit empty tool list permits no tools.
+An existing grant keeps its granted permissions until you explicitly link again. These defaults request
+subscription permissions but do not start an event subscription consumer. Real-light control is authorized for
+installed use; factory validation uses local synthetic devices and never acts on real lamps.
+
+
 For source builds, from the checkout:
 
 ```sh
