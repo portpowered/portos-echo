@@ -255,7 +255,7 @@ async fn listen<E: LinkEvents>(
             () = cancelled.as_mut() => return Err(Error::Control),
             // Playback has settled before entering listen. A running delegated
             // turn still owns this reply; finish it before admitting cleanup.
-            () = crate::bridge_settings::settings_restart::requested(), if !delegated => return Ok(false),
+            () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
             () = until(deadline) => return if delegated { Err(Error::SessionCeiling) } else { Ok(false) },
             result = listening_step((events, microphone), port, source, &mut turn_started, observe) => {
                 if result? { return Ok(true); }
