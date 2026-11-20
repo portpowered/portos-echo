@@ -25,7 +25,7 @@ POSES = {
     "rest": ("reference", (166, 6, 564, 881)),
     "idle": ("poses", (97, 11, 327, 491)),
     "connecting": ("poses", (634, 12, 287, 490)),
-    "listening": ("poses", (1136, 21, 278, 481)),
+    "listening": ("listening", (191, 150, 614, 1227)),
     "thinking": ("poses", (113, 524, 309, 490)),
     "error": ("poses", (613, 523, 320, 491)),
     "happy": ("poses", (1159, 524, 264, 490)),
@@ -73,13 +73,8 @@ def raster(sheet, rect, output_size, pad=""):
                 "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
 
 
-def face_patch(idle, source, placement):
-    x, y, width, height = placement
-    x = HOME_CENTER + round((x - 128) * POSE_SCALE)
-    y = POSE_TOP + round((y - 12) * POSE_SCALE)
-    width, height = round(width * POSE_SCALE), round(height * POSE_SCALE)
-    pixels = raster("expression", source, (width, height))
-    pose = bytearray(idle)
+def blend_patch(frame, pixels, x, y, width, height):
+    pose = bytearray(frame)
     for row in range(height):
         for column in range(width):
             i = (row * width + column) * 4
@@ -92,6 +87,33 @@ def face_patch(idle, source, placement):
     return bytes(pose)
 
 
+def face_patch(idle, source, placement):
+    x, y, width, height = placement
+    x = HOME_CENTER + round((x - 128) * POSE_SCALE)
+    y = POSE_TOP + round((y - 12) * POSE_SCALE)
+    width, height = round(width * POSE_SCALE), round(height * POSE_SCALE)
+    pixels = raster("expression", source, (width, height))
+    return blend_patch(idle, pixels, x, y, width, height)
+
+
+def listening_mouth(listening, idle):
+    # Register the original closed lips with the new pose. The feathered
+    # margin blends the surrounding skin without changing the lip shape.
+    x, y, width, height = 463, 218, 76, 57
+    pixels = bytearray(b"".join(
+        idle[(row * WIDTH + x) * 4:(row * WIDTH + x + width) * 4]
+        for row in range(y, y + height)))
+    # Fade toward the cheek and nose instead of imposing a rectangle of
+    # Ready's face shading on the new pose.
+    for row in range(height):
+        for column in range(width):
+            radius = math.hypot((2 * column + 1) / width - 1, (2 * row + 1) / height - 1)
+            opacity = min(1, max(0, (1 - radius) / 0.56))
+            alpha = (row * width + column) * 4 + 3
+            pixels[alpha] = round(pixels[alpha] * opacity ** 2 * (3 - 2 * opacity))
+    return blend_patch(listening, pixels, x + 32, y - 6, width, height)
+
+
 def keyframes():
     frames = {}
     for name, (sheet, rect) in POSES.items():
@@ -101,6 +123,7 @@ def keyframes():
                               f",pad={WIDTH}:{HEIGHT}:{x}:{POSE_TOP}:color=black@0")
     for name, (source, placement) in PATCHES.items():
         frames[name] = face_patch(frames["idle"], source, placement)
+    frames["listening"] = listening_mouth(frames["listening"], frames["idle"])
     return frames
 
 
