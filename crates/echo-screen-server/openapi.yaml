@@ -6,7 +6,7 @@ paths:
   /screen-packs/v1:
     get:
       security: [{ pairingToken: [] }]
-      description: Revalidated installed catalog resolved against the settings owner's accepted overlay. Supplied foreign Origin refused. No paths, tokens or submitted URLs. Revision publication is pending; this increment returns revision zero. Jobs expose only id, status and fixed failure reason.
+      description: Revalidated installed catalog resolved against the settings owner's accepted overlay. Supplied foreign Origin refused. No paths, tokens or submitted URLs. Revision tracks named reload publications independently of ScreenFrame.seq. Jobs expose only id, status and fixed failure reason.
       responses:
         '200':
           description: Safe catalog and effective installed identity (or null for built-in)
@@ -135,10 +135,10 @@ paths:
   /events:
     get:
       security: [{ pairingToken: [] }]
-      description: Current frame if present, then ordered updates; no history replay; revocation closes streams
+      description: Current ordinary frame if present, then ordered updates; no history replay; revocation closes streams. Successful effective pack selection commits emit screen-pack-reload with PackReloadV1 data, once per change. No-op, alias and failed selections emit nothing. Install-completion and file-watcher notifications remain pending. Reconnect fetches the catalog for current pack revision.
       responses:
         '200':
-          description: Unnamed SSE messages; data is canonical ScreenFrame JSON, terminated by two newlines
+          description: Unnamed messages contain canonical ScreenFrame JSON. Named screen-pack-reload messages contain PackReloadV1 JSON and do not consume ScreenFrame.seq. Each message ends with two newlines.
           content:
             text/event-stream:
               schema: { type: string }
@@ -303,6 +303,14 @@ components:
                   - { type: 'null' }
                   - { $ref: '#/components/schemas/PackErrorV1/properties/reason' }
         warning: { type: [string, 'null'], enum: [null, invalid_selection] }
+    PackReloadV1:
+      type: object
+      additionalProperties: false
+      required: [version, revision, active]
+      properties:
+        version: { const: 1 }
+        revision: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        active: { type: [string, 'null'] }
     SettingsValuesV1:
       type: object
       additionalProperties: false
