@@ -18,8 +18,8 @@ Before making a decision, read these files in full:
 4. `factory/docs/standards/meta-planning-standards.md`;
 5. `factory/docs/standards/planning-standards.md`;
 6. `factory/docs/standards/task-template.md`;
-7. `docs/internal/standards/STANDARDS.md` and the standards relevant to the
-   affected surface;
+7. `docs/program/rules.md` (this repository's standing rules) and
+   `docs/program/baselines.md`; `docs/program/plan.md` wins over `docs/design/`;
 8. `docs/temp/customer-ask.md`, when it exists;
 9. `docs/temp/progress.md`, `docs/temp/checklist.md`, and `docs/temp/meta.md`,
    when they exist; and
