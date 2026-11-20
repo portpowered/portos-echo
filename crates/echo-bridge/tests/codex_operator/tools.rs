@@ -10,6 +10,8 @@ use std::sync::{
 };
 use tokio::sync::watch;
 
+mod trace_failures;
+
 pub(super) struct Media {
     pub state: watch::Sender<PeerState>,
     pub closed: Arc<AtomicUsize>,

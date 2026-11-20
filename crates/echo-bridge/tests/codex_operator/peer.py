@@ -55,9 +55,11 @@ for line in sys.stdin:
             # The RPC result and item completion name the same logical call.
             emit({"method": "item/completed", "params": {
                 "threadId": "fixture-thread", "turnId": "fixture-turn", "item": {
-                    "type": "dynamicToolCall", "id": "fixture-call", "tool": "test_echo",
-                    "arguments": {"text": "delegated echo"}, "status": "completed",
-                    "contentItems": request["result"]["contentItems"], "success": True}}})
+                    "type": "dynamicToolCall", "id": "fixture-call",
+                    "tool": "test_requires_approval" if home.joinpath("mode").read_text() == "tool-trace-approval" else "test_echo",
+                    "arguments": {} if home.joinpath("mode").read_text() == "tool-trace-approval" else {"text": "delegated echo"},
+                    "status": "completed", "contentItems": request["result"]["contentItems"],
+                    "success": request["result"]["success"]}}})
             emit({"method": "item/completed", "params": {
                 "threadId": "fixture-thread", "turnId": "fixture-turn", "item": {
                     "type": "agentMessage", "id": "answer-7", "phase": "final_answer",
@@ -197,7 +199,7 @@ for line in sys.stdin:
             emit({"method": "item/completed", "params": {
                 "threadId": "fixture-thread", "turnId": "fixture-turn", "item": search}})
         if not early:
-            tool_request(home.joinpath("mode").read_text() == "tool-approval")
+            tool_request(home.joinpath("mode").read_text() in ("tool-approval", "tool-trace-approval"))
     elif method == "thread/realtime/stop":
         if home.joinpath("mode").read_text() == "tool-binary-reply":
             signaling.write(b"closing\n")
