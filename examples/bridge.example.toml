@@ -62,6 +62,10 @@ session_max_seconds = 600 # Integer 3..2147483647, at least listen; bounds tool-
 [audit]
 log_dir = "logs/audit"
 
+# Private delegation payload capture. Restart to apply; remove this table before rollback.
+[trace]
+payloads = true
+
 # Optional non-secret agent home (absolute path; no environment expansion).
 # [home]
 # dir = "/tmp/echo-bridge-home"
