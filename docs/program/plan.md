@@ -196,7 +196,7 @@ need, since the Echo's disk is small.
   `assistant`, since `response.done` is not forwarded), `error` and `closed`.
 - **Delegated turns.** `delegation.created` becomes a normal Codex turn on the thread. It gets only the bridge's
   tools: `dynamicTools` on `thread/start`, each call arriving as an `item/tool/call` request the bridge answers.
-  Owner amendment (2026-11-19): hosted read-only web search is the sole exception, with
+  Owner amendment (2026-11-19): provider-backed read-only web search is the sole exception, with
   `[codex] web_search` selecting `live` (default), `cached` or `disabled`; enabled adds exactly one hosted
   declaration for conventional models or exactly the pin's standalone `web.run` for Responses Lite models;
   disabled adds neither. Both use provider search with no local fetch, process or file authority. Exact dynamic

@@ -105,6 +105,7 @@ class Delegation:
             assert body['tools'] == expected + hosted, 'model exposed tools beyond exact dynamic catalog: ' + json.dumps(body['tools'])
             return [tool['name'] for tool in expected]
         assert 'tools' not in body, 'unexpected conventional native tools field'
+        assert not any(item.get('additional_tools') for item in body['input']), 'unexpected hosted native tools'
         # Bundled sol uses Responses Lite: declarations are input tool blocks.
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
