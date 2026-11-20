@@ -61,6 +61,10 @@ impl SettingsHost {
         self.permissions.clone()
     }
 
+    pub(super) fn disable_restart(&mut self) {
+        self.store.restart_allowed = false;
+    }
+
     /// Call only inside `SettingsRequest::commit`; no detached work or retries.
     /// The returned pending flag records a request, not proof of an actual exec.
     pub fn transaction(&mut self, operation: SettingsOperation, link: LinkStatusV1) -> SettingsReply {
@@ -242,6 +246,9 @@ fn save_result(restart_pending: bool) -> SaveResultV1 {
 }
 
 fn error_reply(error: &SettingsError) -> SettingsReply {
+    if matches!(error, SettingsError::RestartUnavailable) {
+        return SettingsReply::Unavailable;
+    }
     let persistence = matches!(
         error,
         SettingsError::Persistence | SettingsError::Durability | SettingsError::Unavailable

@@ -22,6 +22,8 @@ pub(crate) const RESTART_FAILED: &str = "Could not restart bridge; saved setting
 pub enum SettingsError {
     #[error("home.dir: settings unavailable")]
     Unavailable,
+    #[error("Settings change requires a bridge restart")]
+    RestartUnavailable,
     #[error("{0}")]
     Validation(#[from] ConfigError),
     #[error("{0}")]
@@ -68,6 +70,7 @@ pub struct SettingsStore {
     effective: BridgeConfig,
     home: PathBuf,
     uncertain: bool,
+    restart_allowed: bool,
 }
 
 impl SettingsStore {
@@ -88,6 +91,7 @@ impl SettingsStore {
             effective,
             home,
             uncertain: false,
+            restart_allowed: true,
         })
     }
 
@@ -117,6 +121,9 @@ impl SettingsStore {
         let candidate = self.overlay.merge(patch);
         let config = candidate.apply_to(&self.base)?;
         let changed = !same_values(&self.effective, &config);
+        if changed && !self.restart_allowed {
+            return Err(SettingsError::RestartUnavailable);
+        }
         if candidate != self.overlay {
             let text = candidate.to_toml_string()?;
             let result = settings_atomic::replace(&self.home, "settings.toml", text.as_bytes(), check);

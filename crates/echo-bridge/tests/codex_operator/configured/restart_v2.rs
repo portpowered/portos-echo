@@ -2,6 +2,8 @@
 use super::{restart, *};
 use echo_lab::lab_mcp::Fixture as MockPortos;
 
+const ACCOUNT_OVERLAY: &str = "[agent]\nmax_tool_calls = 8\n";
+
 #[tokio::test]
 #[ignore = "T3 requires prebuilt Linux echo-bridge, local Python and echo-lab OAuth"]
 async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
@@ -170,12 +172,16 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
         r#"scopes = ["endpoint:read"]"#,
     );
     std::fs::write(fixture.directory.path().join("bridge.toml"), base).unwrap();
+    let overlay = fixture.directory.path().join("agent-home/settings.toml");
+    std::fs::create_dir(overlay.parent().unwrap()).unwrap();
+    std::fs::write(&overlay, ACCOUNT_OVERLAY).unwrap();
     std::fs::write(fixture.home.join("mode"), "screen-account").unwrap();
     std::fs::write(fixture.home.join("auth.json"), "synthetic-private-openai-value").unwrap();
     let mut process = account_process(&fixture, &mock, epoch);
     let mut first = restart::binary_ready(&listener, &mut process).await;
     let url = settings_runtime_url(&fixture, "/settings/v2/openai");
     let client = reqwest::Client::new();
+    assert_fixed_clock_save_refused(&fixture, &client, &overlay).await;
     assert_eq!(
         snapshot(&client, &url).await,
         json!({"version":2,"link_status":"linked","operation_state":"idle"})
@@ -213,6 +219,43 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
     assert_account_owner_receipts(&fixture);
 }
 
+async fn assert_fixed_clock_save_refused(fixture: &Fixture, client: &reqwest::Client, overlay: &Path) {
+    let v2 = settings_runtime_url(fixture, "/settings/v2");
+    let before = snapshot(client, &v2).await;
+    assert_eq!(before["restart_pending"], false);
+    assert_eq!(before["settings"]["agent"]["max_tool_calls"], 8);
+    for (request, version) in [
+        (client.patch(v2.clone()), 2),
+        (client.post(settings_runtime_url(fixture, "/settings/v1")), 1),
+    ] {
+        let response = request
+            .json(&json!({"version":version,"settings":{"agent":{"max_tool_calls":6}}}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.bytes().await.unwrap().as_ref(), b"");
+        assert_eq!(std::fs::read(overlay).unwrap(), ACCOUNT_OVERLAY.as_bytes());
+        assert_eq!(snapshot(client, &v2).await, before);
+    }
+    let noop = client
+        .patch(v2)
+        .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":8}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(noop.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        noop.json::<Value>().await.unwrap(),
+        json!({"version":2,"restart_pending":false})
+    );
+    writeln!(
+        std::io::stdout().lock(),
+        "Fixed clock: V2 PATCH=503 V1 POST=503 overlay_unchanged=true max_tool_calls=8 restart_pending=false noop=200"
+    )
+    .unwrap();
+}
+
 fn account_process(fixture: &Fixture, mock: &MockPortos, epoch: u64) -> Process {
     Process::spawn(super::super::voice_entry::command(fixture).args([
         "--live-loopback",
@@ -233,6 +276,9 @@ fn assert_account_owner_receipts(fixture: &Fixture) {
         .collect();
     assert_eq!(operations, ["account/logout", "account/login/start"]);
     let rows = trace(&fixture.directory.path().join("trace"));
+    for event in ["settings.reexec_pending", "settings.restart_prepared"] {
+        assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), 0);
+    }
     assert_eq!(
         rows.iter()
             .filter(|row| row["event"] == "mcp.operator.listening")

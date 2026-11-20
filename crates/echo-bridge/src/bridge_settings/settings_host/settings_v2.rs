@@ -191,6 +191,9 @@ fn portos_status(config: &BridgeConfig, launch_scopes: &[String], grant: Option<
 }
 
 pub(super) fn error_reply_v2(error: &SettingsError) -> SettingsReply {
+    if matches!(error, SettingsError::RestartUnavailable) {
+        return SettingsReply::Unavailable;
+    }
     let body = SettingsErrorV2 {
         version: SettingsVersionV2,
         message: error.to_string(),

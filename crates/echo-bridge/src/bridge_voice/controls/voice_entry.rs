@@ -103,9 +103,10 @@ pub(crate) async fn execute<C: LinkConnector>(settings: Settings, control: Contr
             .map_err(|_| Error::Unavailable)
     };
     // An explicit loopback epoch also drives the paired grant journey.
-    // The controlled owner runs a generation without taking over process exec.
+    // The controlled owner cannot replace the process, so refuse changes that require it.
     let result = if settings_witness {
         configured
+            .without_settings_restart()
             .execute_with_settings(connector, peer, vec![], cancelled)
             .await
             .map(|_| ())

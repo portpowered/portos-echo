@@ -205,7 +205,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SettingsErrorV1' }
-        '503': { description: Settings host absent, stopping, saturated or closed before commit; no queued retry }
+        '503':
+          description: Settings host unavailable, or a restart is required in the fixed-clock simulator. Empty body. Nothing written or queued.
   /settings/v2:
     get:
       security: [{ pairingToken: [] }]
@@ -253,7 +254,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SettingsErrorV2' }
-        '503': { description: Settings host absent, stopping or saturated; no queued retry }
+        '503':
+          description: Settings host unavailable, or a restart is required in the fixed-clock simulator. Empty body. Nothing written or queued.
   /settings/v2/openai:
     get:
       security: [{ pairingToken: [] }]

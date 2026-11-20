@@ -82,6 +82,11 @@ impl SettingsService {
         )
     }
 
+    pub(crate) fn without_restart(mut self) -> Self {
+        self.host.disable_restart();
+        self
+    }
+
     pub(crate) fn permissions(&self) -> PortosPermissions {
         self.host.permissions()
     }
