@@ -26,11 +26,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                 }
                 self.trace_notification(&method, &params)?;
                 if method == "thread/realtime/itemAdded" {
-                    return Ok(if params["item"]["type"] == "input_audio_buffer.speech_started" {
-                        Event::SpeechStarted
-                    } else {
-                        Event::Other
-                    });
+                    return Ok(self.realtime_item(&params["item"]));
                 }
                 if matches!(method.as_str(), "turn/started" | "turn/completed") {
                     let turn = params["turn"]["id"]
@@ -63,6 +59,29 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
             }
             _ => Ok(Event::Other),
         }
+    }
+
+    fn realtime_item(&mut self, item: &serde_json::Value) -> Event {
+        match item["type"].as_str() {
+            Some("input_audio_buffer.speech_started") => Event::SpeechStarted,
+            Some("handoff_request") if item["input_transcript"] == "end the session" => {
+                let id = item["handoff_id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control));
+                if let Some(id) = id
+                    && self.goodbye_handoffs.len() < 1024
+                    && self.goodbye_handoffs.insert(id.into())
+                {
+                    return Event::GoodbyeHandoff;
+                }
+                Event::Other
+            }
+            _ => Event::Other,
+        }
+    }
+
+    pub(super) async fn flush_tool_answer(&mut self) -> Result<(), Error> {
+        self.io.flush().await.map_err(super::rpc_error)
     }
 
     fn trace_notification(&mut self, method: &str, params: &serde_json::Value) -> Result<(), Error> {

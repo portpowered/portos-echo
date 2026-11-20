@@ -56,6 +56,9 @@ use voice_source::Source;
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
     fn bind_session(&mut self, _run: Option<std::sync::Arc<()>>) {}
+    fn flush_session_answer(&mut self) -> impl Future<Output = Result<(), Error>> {
+        std::future::ready(Ok(()))
+    }
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
@@ -457,7 +460,7 @@ async fn media(
                 text,
                 done: true,
             })?;
-            if !source.delegation.answered() {
+            if source.session.goodbye.is_none() && !source.delegation.answered() {
                 return Ok(());
             }
             if !source.reply.finished() {
@@ -480,11 +483,17 @@ async fn media(
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
             source.meter.endpoint(Instant::now(), Endpoint::DelegatedTurn);
-            source.delegation.started();
+            if source.session.goodbye.is_none() {
+                source.delegation.started();
+            }
             Ok(())
         }
         MediaEvent::Control(Event::TurnCompleted { .. }) => {
-            source.delegation.completed();
+            voice_listen::complete_turn(source);
+            Ok(())
+        }
+        MediaEvent::Control(Event::GoodbyeHandoff) => {
+            voice_listen::goodbye_handoff(source);
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStarted) => {

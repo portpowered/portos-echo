@@ -206,6 +206,112 @@ async fn idle_noise(tx: &mpsc::Sender<MediaEvent>) {
         .unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn voice_listen_goodbye_settles_without_arming_idle_in_either_tool_order() {
+    for late in [false, true] {
+        goodbye_with_end(late).await;
+    }
+}
+
+async fn goodbye_with_end(late: bool) {
+    let device = Observer::default();
+    let mut client = FakeConnector::new(device.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    device.wake("Computer", vec![]);
+    let Some(LinkEvent::Wake(mut microphone)) = events.recv().await.unwrap() else {
+        unreachable!()
+    };
+    let (tx, rx) = mpsc::channel(64);
+    let mut port = Port(rx, std::rc::Rc::default());
+    let mut source = Source::new(200, false).unwrap();
+    let options = Options {
+        listen_timeout: Some(Duration::from_secs(3)),
+        session_max: Duration::from_secs(60),
+        response_deadline: Instant::now() + Duration::from_secs(10),
+        played_timeout: Duration::from_secs(1),
+        reply_lead_ms: 200,
+        muted: false,
+    };
+    source.session = super::super::session_tools::Grants::new(options.listen_timeout, options.session_max);
+    source.controller.admit_response(options.response_deadline).unwrap();
+    let (reply_tx, answer) = tokio::sync::oneshot::channel();
+    let end = Event::Session(crate::bridge_codex::SessionRequest {
+        command: crate::bridge_codex::SessionCommand::End,
+        key: "farewell".into(),
+        run: Some(source.session.run.clone()),
+        reply: reply_tx,
+    });
+    let played = tokio::sync::Notify::new();
+    let mut receipts = Vec::new();
+    let mut observe = |notice| {
+        match notice {
+            Notice::SessionTool(receipt) => receipts.push(receipt.outcome),
+            Notice::ReplyPlayed => played.notify_one(),
+            _ => (),
+        }
+        Ok(())
+    };
+    let mut drain = None;
+    let run = replies(
+        &client,
+        (&mut events, &mut microphone),
+        &mut port,
+        (&mut source, &mut drain),
+        &options,
+        std::future::pending(),
+        &mut observe,
+    );
+    let (result, answer) = tokio::join!(run, goodbye_inputs(&device, &tx, &played, end, answer, late));
+    assert_eq!(result, Ok(()));
+    assert_eq!(answer.content, serde_json::json!({"ending_after_reply": true}));
+    assert_eq!(receipts, ["applied"]);
+    assert_eq!(source.controller.idle_deadline(), None);
+    assert!(source.controller.ready_to_close(true, true));
+    assert_eq!(source.stats.reply_sent, 12);
+    assert!(
+        !device
+            .commands()
+            .iter()
+            .any(|command| matches!(command, Command::Cut(_)))
+    );
+}
+
+async fn goodbye_inputs(
+    device: &Observer,
+    tx: &mpsc::Sender<MediaEvent>,
+    played: &tokio::sync::Notify,
+    end: Event,
+    answer: tokio::sync::oneshot::Receiver<echo_agent_api::ToolResult>,
+    late: bool,
+) -> echo_agent_api::ToolResult {
+    tx.send(MediaEvent::Control(Event::TurnStarted {
+        thread: "thread".into(),
+        turn: "turn".into(),
+    }))
+    .await
+    .unwrap();
+    tx.send(MediaEvent::Control(Event::GoodbyeHandoff)).await.unwrap();
+    let mut end = Some(end);
+    if !late {
+        tx.send(MediaEvent::Control(end.take().unwrap())).await.unwrap();
+    }
+    reply(tx, 5000).await;
+    for _ in 0..50 {
+        if device.commands().last() == Some(&Command::Stop) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(device.commands().last(), Some(&Command::Stop));
+    device.finish(Ok(()));
+    played.notified().await;
+    if let Some(end) = end {
+        tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+        tx.send(MediaEvent::Control(end)).await.unwrap();
+    }
+    answer.await.unwrap()
+}
+
 // T1: the real idle loop must release the guarded clock's voice fence.
 // No screen is installed: Control proves the fence reached screen admission;
 // a missing voice acknowledgement instead leaves the receipt pending.

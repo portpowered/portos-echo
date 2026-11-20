@@ -29,7 +29,14 @@ pub(super) struct Grants {
     max: Duration,
     granted: Option<Instant>,
     ending: bool,
+    pub(super) goodbye: Option<Goodbye>,
     answered: Vec<(String, ToolResult)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Goodbye {
+    Pending,
+    Finished,
 }
 
 impl Grants {

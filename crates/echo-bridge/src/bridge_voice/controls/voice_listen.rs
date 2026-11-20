@@ -1,7 +1,8 @@
 //! Keep capture and the run owned while a settled reply waits for activity.
-use super::{Error, Event, MediaEvent, Notice, Options, Source, VoicePort};
+use super::{Error, Event, MediaEvent, Notice, Options, Source, VoicePort, session_tools::Goodbye};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
 use std::{future::Future, time::Duration};
+use tokio::time::Instant;
 
 pub(super) async fn replies<L: EchoLink>(
     client: &L,
@@ -32,6 +33,9 @@ pub(super) async fn replies<L: EchoLink>(
         )
         .await;
         if result == Err(Error::Control) && source.controller.cutting() {
+            if source.session.goodbye.take().is_some() && !source.session.ending() {
+                retire_goodbye(source, port);
+            }
             source.controller.cut_settled();
             observe(Notice::ReplyPaused)?;
             if options.listen_timeout.is_none() {
@@ -44,6 +48,26 @@ pub(super) async fn replies<L: EchoLink>(
         } else {
             result?;
         }
+        if options.listen_timeout.is_some() {
+            settled(source, port, &mut previous, observe)?;
+        }
+        if source.session.goodbye == Some(Goodbye::Pending) && !source.session.ending() {
+            wait_goodbye(
+                (events, microphone),
+                port,
+                (source, drain),
+                generation_options.response_deadline,
+                cancelled.as_mut(),
+                observe,
+            )
+            .await?;
+        }
+        // A requested end closes right after this reply settles; no idle wait.
+        if source.session.ending() {
+            flush_end(port, options.played_timeout).await?;
+            return Ok(());
+        }
+        source.session.goodbye = None;
         if options.listen_timeout.is_none() && !source.delegation.in_flight() {
             return Ok(());
         }
@@ -51,13 +75,6 @@ pub(super) async fn replies<L: EchoLink>(
         // Waiting granted during the reply outlives it, within the run's cap.
         if let Some(granted) = source.session.granted() {
             source.controller.extend_idle(granted);
-        }
-        if options.listen_timeout.is_some() {
-            settled(source, port, &mut previous, observe)?;
-        }
-        // A requested end closes right after this reply settles; no idle wait.
-        if source.session.ending() {
-            return Ok(());
         }
         // A dispatch that outlives its spoken acknowledgement shows as thinking.
         think(client, source, observe).await?;
@@ -71,9 +88,103 @@ pub(super) async fn replies<L: EchoLink>(
         )
         .await?
         {
-            return Ok(());
+            return if source.session.ending() {
+                flush_end(port, options.played_timeout).await
+            } else {
+                Ok(())
+            };
         }
         generation_options.response_deadline = source.controller.replacement_deadline()?;
+    }
+}
+
+async fn flush_end(port: &mut impl VoicePort, ceiling: Duration) -> Result<(), Error> {
+    tokio::time::timeout(ceiling, port.flush_session_answer())
+        .await
+        .map_err(|_| Error::Deadline)?
+}
+
+pub(super) fn goodbye_handoff(source: &mut Source) {
+    if !source.stale() && source.session.listen().is_some() && source.session.goodbye.is_none() {
+        source.session.goodbye = Some(Goodbye::Pending);
+        // The native turn can start before its hand-off notification arrives.
+        // Its only audio is the farewell already owned by this reply.
+        source.delegation = super::voice_source::Delegation::default();
+    }
+}
+
+pub(super) fn complete_turn(source: &mut Source) {
+    if source.session.goodbye.is_some() {
+        source.session.goodbye = Some(Goodbye::Finished);
+    } else {
+        source.delegation.completed();
+    }
+}
+
+fn retire_goodbye(source: &mut Source, port: &mut impl VoicePort) {
+    source.session.run = std::sync::Arc::new(());
+    port.bind_session(Some(source.session.run.clone()));
+}
+
+async fn wait_goodbye<E: LinkEvents>(
+    (events, microphone): (&mut E, &mut E::Run),
+    port: &mut impl VoicePort,
+    (source, drain): (
+        &mut Source,
+        &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
+    ),
+    deadline: Instant,
+    cancelled: impl Future<Output = ()>,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    tokio::pin!(cancelled);
+    while source.session.goodbye == Some(Goodbye::Pending) && !source.session.ending() {
+        tokio::select! {
+            biased;
+            () = cancelled.as_mut() => return Err(Error::Control),
+            () = tokio::time::sleep_until(deadline) => {
+                // Retire this turn's run token before normal listening resumes.
+                retire_goodbye(source, port);
+                break;
+            },
+            result = goodbye_step(events, microphone, port, source, observe) => result?,
+            () = clock_step(drain) => {},
+        }
+        tokio::task::yield_now().await;
+    }
+    Ok(())
+}
+
+async fn goodbye_step<E: LinkEvents>(
+    events: &mut E,
+    microphone: &mut E::Run,
+    port: &mut impl VoicePort,
+    source: &mut Source,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    tokio::select! {
+        event = events.recv() => super::device(&event?.ok_or(Error::Wyoming)?, true, source, observe),
+        frame = super::earcon::microphone(microphone), if !source.controller.microphone_finished() => {
+            if frame?.is_none() {
+                source.controller.microphone_ended();
+            }
+            Ok(())
+        },
+        event = port.next() => match event? {
+            MediaEvent::Control(Event::Session(request)) => {
+                super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)
+            }
+            MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
+            MediaEvent::Control(Event::TurnCompleted { .. }) => { complete_turn(source); Ok(()) },
+            _ => Ok(()),
+        },
+    }
+}
+
+async fn clock_step(drain: &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>) {
+    match drain {
+        Some(drain) => drain.acknowledge().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -161,12 +272,7 @@ async fn listen<E: LinkEvents>(
             },
             // Keep the same clock owner across replies. Acknowledge only after
             // due idle expiry, cancellation and ready capture/control work.
-            () = async {
-                match drain {
-                    Some(drain) => drain.acknowledge().await,
-                    None => std::future::pending().await,
-                }
-            } => {},
+            () = clock_step(drain) => {},
         }
         tokio::task::yield_now().await;
     }
@@ -219,7 +325,7 @@ async fn listening_step<E: LinkEvents>(
 fn activity(event: &MediaEvent) -> bool {
     matches!(
         event,
-        MediaEvent::Control(Event::SpeechStarted | Event::TurnStarted { .. })
+        MediaEvent::Control(Event::SpeechStarted | Event::TurnStarted { .. } | Event::GoodbyeHandoff)
     ) || matches!(event, MediaEvent::Control(Event::Transcript { role, done, .. })
             if role == "user" || (role == "assistant" && !done))
 }

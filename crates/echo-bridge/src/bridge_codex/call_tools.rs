@@ -98,6 +98,9 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     budget: ToolBudget,
     session: Option<mpsc::Receiver<SessionRequest>>,
     run: Option<tokio::sync::watch::Sender<Option<Arc<()>>>>,
+    current_run: Option<Arc<()>>,
+    next_turn_run: Option<Option<Arc<()>>>,
+    session_answer_pending: bool,
 }
 
 impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static>
@@ -126,6 +129,9 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             budget,
             session: None,
             run: None,
+            current_run: None,
+            next_turn_run: None,
+            session_answer_pending: false,
         })
     }
 
@@ -174,11 +180,20 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 Ok(other())
             },
             // The pending dispatch awaits this answer; never block it on media.
-            request = requested(&mut self.session) => Ok(MediaEvent::Control(Event::Session(request))),
+            request = requested(&mut self.session) => {
+                self.session_answer_pending = true;
+                Ok(MediaEvent::Control(Event::Session(request)))
+            },
             // Keep nested real-media polling off the Windows main stack.
             event = Box::pin(self.port.next()) => match event? {
                 MediaEvent::Control(event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => {
                     self.observed_control(event)
+                },
+                MediaEvent::Control(Event::GoodbyeHandoff) => {
+                    if self.active.is_none() {
+                        self.next_turn_run = Some(self.current_run.clone());
+                    }
+                    Ok(if self.current_run.is_some() { MediaEvent::Control(Event::GoodbyeHandoff) } else { other() })
                 },
                 event => Ok(event),
             },
@@ -281,6 +296,10 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
 
     fn admit_turn(&mut self, thread: &str, turn: &str) -> Result<(), Error> {
         self.active = Some((thread.into(), turn.into()));
+        // Keep the turn's owner even when the next wake wins the device poll.
+        if let Some(owner) = &self.run {
+            owner.send_replace(self.next_turn_run.take().unwrap_or_else(|| self.current_run.clone()));
+        }
         if self.budget.admit_turn().is_err()
             && let Some(params) = self.dispatcher.as_mut().and_then(Dispatcher::refuse_budget)
         {
@@ -291,6 +310,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
 
     fn settle(&mut self, (dispatcher, outcome): (Dispatcher<H>, Option<Outcome>)) -> Result<(), Error> {
         self.work = None;
+        self.session_answer_pending = false;
         self.cancel = None;
         self.dispatcher = Some(dispatcher);
         let id = self.request.take().ok_or(Error::Unavailable)?;
@@ -336,9 +356,14 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         self.port.dropped_frames().lost
     }
     fn bind_session(&mut self, run: Option<Arc<()>>) {
-        if let Some(owner) = &self.run {
-            owner.send_replace(run);
+        self.current_run = run;
+    }
+    async fn flush_session_answer(&mut self) -> Result<(), Error> {
+        if self.session_answer_pending {
+            let result = completed(&mut self.work).await;
+            self.settle(result)?;
         }
+        self.port.flush_tool_answer().await
     }
 }
 
