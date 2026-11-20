@@ -245,21 +245,22 @@ impl Session {
         .map_err(|_| "M5: cannot bind operator config".into())
     }
 
-    fn invoke(&self, verb: &str) -> Pending {
-        let mut command = mcp_wire::command(&self.binary, &self.directory);
-        command.args([verb, "--config", "bridge.toml"]);
-        tokio::spawn(async move { command.output().await })
-    }
-
     pub async fn link(&mut self) -> Result<(), String> {
         if self.pending.is_some() {
             return Err("M5: link already pending".into());
         }
-        self.pending = Some(self.invoke("link"));
+        let (pending, guidance) = mcp_wire::link_command(&self.binary, &self.directory);
+        self.pending = Some(pending);
+        let guidance = guidance.await.map_err(|_| "M5: missing pre-approval stdout")?;
         self.receive_screen().await?;
         let fixture = self.fixture.as_ref().ok_or("M5: missing authorization fixture")?;
         if self.screen != mcp_wire::link_code(EPOCH, fixture.base()) {
             return Err("M5: link code mismatch".into());
+        }
+        if guidance != format!("Verification URL: {}/approve\nUser code: TEST-CODE\n", fixture.base()).as_bytes()
+            || !self.grant()?.expose()["grant"].is_null()
+        {
+            return Err("M5: pre-approval guidance/grant mismatch".into());
         }
         Ok(())
     }

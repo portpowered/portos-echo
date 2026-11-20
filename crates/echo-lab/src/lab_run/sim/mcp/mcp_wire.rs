@@ -99,6 +99,44 @@ pub fn completion(output: &std::process::Output, expected: &str) -> Result<(), S
     Ok(())
 }
 
+pub fn link_command(
+    binary: &Path,
+    root: &Path,
+) -> (
+    tokio::task::JoinHandle<std::io::Result<std::process::Output>>,
+    tokio::sync::oneshot::Receiver<Vec<u8>>,
+) {
+    let mut command = command(binary, root);
+    command.args(["link", "--config", "bridge.toml"]);
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut child = command.spawn()?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("missing link stdout"))?;
+        let mut prefix = Vec::new();
+        while prefix.iter().filter(|byte| **byte == b'\n').count() != 2 {
+            if prefix.len() == 4096 {
+                return Err(std::io::Error::other("oversized link guidance"));
+            }
+            prefix.push(stdout.read_u8().await?);
+        }
+        send.send(prefix.clone())
+            .map_err(|_| std::io::Error::other("link observer closed"))?;
+        child.stdout = Some(stdout);
+        let mut output = child.wait_with_output().await?;
+        prefix.extend_from_slice(&output.stdout);
+        output.stdout = prefix;
+        Ok(output)
+    });
+    (task, receive)
+}
+
 pub fn link_code(epoch: u64, issuer: &str) -> Value {
     json!({"state":"link_code","user_code":"TEST-CODE",
         "verification_uri":format!("{issuer}/approve"),"expires_at_unix":epoch + 1800})
