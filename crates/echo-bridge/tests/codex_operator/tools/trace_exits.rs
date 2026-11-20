@@ -177,7 +177,7 @@ fn assert_counts(rows: &[Value], resolved: &Value, cause: &str) {
     let tools: Vec<_> = rows.iter().filter(|row| row["event"] == "delegation.tool").collect();
     if cause == "interrupt" {
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["status"], "declined");
+        assert_eq!(tools[0]["status"], "failed");
         assert_eq!(resolved["tool_counts"], json!({"mcp":1}));
         for event in ["turn/interrupt", "turn.interrupt_acknowledged", "turn.interrupted"] {
             let receipts: Vec<_> = rows.iter().filter(|row| row["event"] == event).collect();
