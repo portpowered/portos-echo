@@ -61,6 +61,12 @@ runs:
       with:
         tool: cargo-nextest@0.9.152
         fallback: none
+    - name: Generated screen media tools
+      if: inputs.target == 'test-unit'
+      shell: sh
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
     - name: Documentation link checker
       if: contains(fromJSON('["lint-docs","lint-docs-online","lint-self-tests"]'), inputs.target)
       shell: sh
