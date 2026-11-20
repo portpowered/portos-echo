@@ -82,17 +82,17 @@ async fn delegation_trace_early_request_keeps_duration_and_function_duplicate_is
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("trace");
         let trace = crate::bridge_trace::Trace::open(&path, "api_key").unwrap();
-        let (mut io, _server) = fixture();
+        let (mut io, mut server) = fixture();
         let mut call = traced_tools(&mut io, trace);
         project(&mut call, "thread/realtime/itemAdded", handoff("delegation-7")).unwrap();
-        let raw = serde_json::to_vec(&json!({"id":7,"method":"item/tool/call","params":{
-        "threadId":"thread-1","turnId":"turn-1","callId":"tool-1","tool":"test_echo",
-        "arguments":{"text":"synthetic-request"}}}))
-        .unwrap();
-        assert!(matches!(
-            call.project(echo_codex::codex_protocol::decode(&raw).unwrap()).unwrap(),
-            Event::Tool { .. }
-        ));
+        write(
+            &mut server,
+            json!({"id":7,"method":"item/tool/call","params":{
+            "threadId":"thread-1","turnId":"turn-1","callId":"tool-1","tool":"test_echo",
+            "arguments":{"text":"synthetic-request"}}}),
+        )
+        .await;
+        assert!(matches!(call.next().await.unwrap(), Event::Tool { .. }));
         tokio::time::advance(Duration::from_millis(7)).await;
         project(
             &mut call,
