@@ -6,7 +6,7 @@ use echo_screen_contract::settings_v1::{LinkStatusV1, PromptTextsV1, SettingsSna
 use echo_screen_server::{ScreenServer, serve_with_settings, settings_channel};
 use reqwest::{Client, StatusCode};
 use std::io::Write as _;
-use std::{fs, time::Duration};
+use std::{fs, path::Path, time::Duration};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 const TOKEN: &str = "synthetic-settings-pair";
@@ -266,6 +266,7 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
     use serde_json::{Value, json};
     let fixture = Fixture::open().await;
     let url = fixture.url("/settings/v2");
+    let before = snapshot_v2(&fixture, &url).await;
     assert_v2_guards(&fixture, &url).await;
     let response = fixture
         .client
@@ -283,6 +284,7 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
     writeln!(std::io::stdout().lock(), "Refused invalid config with {body}").unwrap();
     assert!(!fixture.path("settings.toml").exists());
     assert!(!fixture.snapshot().await.restart_pending);
+    assert_eq!(snapshot_v2(&fixture, &url).await, before);
     fixture.close().await;
 }
 
@@ -396,6 +398,7 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     );
     assert_eq!(data["prompts"], serde_json::to_value(&v1.prompts).unwrap());
     assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 6);
+    disable_fast_mode(&fixture, &url, &path).await;
     assert_eq!(fs::read(base).unwrap(), original_base);
     owner_only(&path);
     writeln!(
@@ -405,6 +408,29 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     )
     .unwrap();
     fixture.close().await;
+}
+
+async fn disable_fast_mode(fixture: &Fixture, url: &str, path: &Path) {
+    use serde_json::{Value, json};
+    let response = fixture
+        .client
+        .patch(url)
+        .json(&json!({"version":2,"settings":{"codex":{"delegate_fast":false}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.json::<Value>().await.unwrap(),
+        json!({"version":2,"restart_pending":true})
+    );
+    let after = snapshot_v2(fixture, url).await;
+    assert_eq!(after["settings"]["codex"]["delegate_fast"], false);
+    assert_eq!(after["settings"]["codex"]["delegate_model"], "synthetic-runner");
+    assert_eq!(after["settings"]["codex"]["web_search"], "cached");
+    assert_eq!(after["settings"]["agent"]["max_tool_calls"], 6);
+    let overlay = fs::read_to_string(path).unwrap();
+    assert!(overlay.contains("delegate_fast = false\n"));
 }
 
 async fn snapshot_v2(fixture: &Fixture, url: &str) -> serde_json::Value {

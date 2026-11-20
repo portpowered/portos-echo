@@ -100,7 +100,7 @@ priority for `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-s
 `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5`. The provider controls eligibility, cost and speed.
 The Live voice uses its own start parameters.
 
-For standard processing, clear the checkbox and save, or set `[codex] delegate_fast = false` in TOML.
+For standard processing, clear the checkbox and save, or set `delegate_fast = false` under `[codex]` in TOML.
 A saved false overrides a true base value. To return to the base preference, stop the bridge, remove just
 `delegate_fast` from the home's `settings.toml`, and start the bridge again. Before downgrading to a bridge
 without this key, remove it from both TOML files.

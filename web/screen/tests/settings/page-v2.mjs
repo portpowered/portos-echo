@@ -251,6 +251,9 @@ test("settings V2 observes replacement without resending a successful save", asy
     assert.ok(box.width >= 64 && box.height >= 64 && box.y + box.height <= 480);
     await fast.press("Space");
     assert.equal(await fast.isChecked(), true);
+    await page.screenshot({
+        path: "test-results/screenshots/settings-fast-on-960x480.png",
+    });
     await response(page, { version: 2, restart_pending: true });
     await page
         .getByRole("button", { name: "Save settings", exact: true })
@@ -310,6 +313,11 @@ test("settings V2 keeps an explicit fast-mode off edit after a failed save", asy
     assert.equal(await fast.isChecked(), true);
     await fast.press("Space");
     assert.equal(await fast.isChecked(), false);
+    const box = await fast.boundingBox();
+    assert.ok(box.width >= 64 && box.height >= 64 && box.y + box.height <= 600);
+    await page.screenshot({
+        path: "test-results/screenshots/settings-fast-off-960x600.png",
+    });
     const save = page.getByRole("button", {
         name: "Save settings",
         exact: true,
@@ -424,7 +432,7 @@ test("settings V2 shows Port OS approval and confirms unlink exactly once", asyn
         },
     });
     await page.clock.runFor(500);
-    const code = page.getByText(/^Code: TEST-CODE Â· Expires at /);
+    const code = page.getByText(/^Code: TEST-CODE · Expires at /);
     await code.waitFor();
     await page
         .getByText("On a phone or PC, open https://127.0.0.1/approve")
